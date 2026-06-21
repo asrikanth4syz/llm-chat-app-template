@@ -1,23 +1,26 @@
-/**
- * Type definitions for the LLM chat application.
- */
-
 export interface Env {
-	/**
-	 * Binding for the Workers AI API.
-	 */
-	AI: Ai;
-
-	/**
-	 * Binding for static assets.
-	 */
-	ASSETS: { fetch: (request: Request) => Promise<Response> };
+  DB: D1Database;
+  ASSETS: { fetch: (request: Request) => Promise<Response> };
+  JWT_SECRET: string;
 }
 
-/**
- * Represents a chat message.
- */
-export interface ChatMessage {
-	role: "system" | "user" | "assistant";
-	content: string;
+export interface JWTPayload {
+  sub: string;
+  email: string;
+  role: string;
+  name: string;
+  org: string;
+  initials: string;
+  iat: number;
+  exp: number;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  role: string;
+  name: string;
+  org: string;
+  initials: string;
+  active: number;
 }
