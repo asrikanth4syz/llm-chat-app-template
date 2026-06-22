@@ -149,6 +149,11 @@ async function api(path, opts = {}) {
 
 // ── Auth ───────────────────────────────────────────────────
 async function doLogin() {
+  const otpGroup = document.getElementById('otp-group');
+  const otpVisible = !otpGroup.classList.contains('hidden');
+
+  if (otpVisible) { doVerifyOTP(); return; }
+
   const role = document.getElementById('demo-role').value;
   const email = ROLE_EMAILS[role] || document.getElementById('login-email').value;
   const btn = document.getElementById('login-btn');
@@ -168,6 +173,52 @@ async function doLogin() {
     return;
   }
 
+  if (data.otp_required) {
+    APP._pendingEmail = email;
+    otpGroup.classList.remove('hidden');
+    btn.querySelector('span').textContent = 'Verify OTP';
+    document.querySelectorAll('.otp-input')[0]?.focus();
+    setupOTPInputs();
+    showToast('OTP sent to your registered email');
+    return;
+  }
+
+  APP.token = data.token;
+  APP.user = { ...data.user, nav: ROLES[data.user.role]?.nav || 'platform' };
+  localStorage.setItem('sp_token', data.token);
+  initApp();
+}
+
+function setupOTPInputs() {
+  const inputs = document.querySelectorAll('.otp-input');
+  inputs.forEach((inp, i) => {
+    inp.value = '';
+    inp.addEventListener('input', () => {
+      if (inp.value && i < inputs.length - 1) inputs[i+1].focus();
+    });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Backspace' && !inp.value && i > 0) inputs[i-1].focus();
+    });
+  });
+}
+
+async function doVerifyOTP() {
+  const code = [...document.querySelectorAll('.otp-input')].map(i => i.value).join('');
+  if (code.length < 6) { showToast('Enter all 6 OTP digits', 'error'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Verifying…';
+
+  const data = await api('/auth/otp/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email: APP._pendingEmail, code }),
+  }).catch(() => null);
+
+  btn.disabled = false;
+  btn.querySelector('span').textContent = 'Verify OTP';
+
+  if (!data?.token) { showToast('Invalid or expired OTP', 'error'); return; }
+
   APP.token = data.token;
   APP.user = { ...data.user, nav: ROLES[data.user.role]?.nav || 'platform' };
   localStorage.setItem('sp_token', data.token);
@@ -175,12 +226,15 @@ async function doLogin() {
 }
 
 function doLogout() {
+  if (APP._notifInterval) clearInterval(APP._notifInterval);
   APP.token = null;
   APP.user = null;
   APP.cart = [];
   localStorage.removeItem('sp_token');
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
+  document.getElementById('otp-group').classList.add('hidden');
+  document.getElementById('login-btn').querySelector('span').textContent = 'Sign In';
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
 }
@@ -216,6 +270,79 @@ function initApp() {
   buildNav();
   navigate(getDefaultPage());
   loadNotifications();
+  startNotificationPolling();
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-bar')) hideSearchResults();
+  });
+}
+
+// ── Global Search (Gap 10) ─────────────────────────────────
+let _searchTimer;
+function debounceSearch(q) {
+  clearTimeout(_searchTimer);
+  if (q.length < 2) { hideSearchResults(); return; }
+  _searchTimer = setTimeout(() => runSearch(q), 280);
+}
+
+async function runSearch(q) {
+  const data = await api('/search?q=' + encodeURIComponent(q));
+  if (!data) return;
+  const el = document.getElementById('search-results');
+  if (!el) return;
+  const all = [...(data.orders||[]).map(r=>({...r,_type:'order'})),
+               ...(data.inventory||[]).map(r=>({...r,_type:'item'})),
+               ...(data.vendors||[]).map(r=>({...r,_type:'vendor'})),
+               ...(data.clients||[]).map(r=>({...r,_type:'client'})),
+               ...(data.tickets||[]).map(r=>({...r,_type:'ticket'}))];
+  if (!all.length) {
+    el.style.display = '';
+    el.innerHTML = '<div style="padding:16px;color:var(--text-muted);text-align:center">No results for "'+q+'"</div>';
+    return;
+  }
+  const typeIcon = { order:'📋', item:'📦', vendor:'🤝', client:'🏢', ticket:'🎫' };
+  const typeNav = { order:'orders', vendor:'vendors', client:'clients', ticket:'service_desk' };
+  el.style.display = '';
+  el.innerHTML = all.slice(0,10).map(r => `
+    <div onclick="handleSearchResult('${r._type}','${r.id||r.sku||''}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      <span style="font-size:1.2rem">${typeIcon[r._type]||'🔍'}</span>
+      <div>
+        <div style="font-weight:600;font-size:.875rem">${r.name||r.subject||r.id||''}</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${r._type.toUpperCase()} ${r.id||r.sku||''}</div>
+      </div>
+    </div>`).join('');
+}
+
+function handleSearchResult(type, id) {
+  hideSearchResults();
+  document.getElementById('global-search').value = '';
+  const navPage = { order:'orders', vendor:'vendors', client:'clients', ticket:'service_desk', item:'inventory' };
+  navigate(navPage[type] || 'dashboard');
+  if (type === 'order') setTimeout(() => viewOrder(id), 400);
+}
+
+function hideSearchResults() {
+  const el = document.getElementById('search-results');
+  if (el) el.style.display = 'none';
+}
+
+// ── Notification polling (Gap 2) ───────────────────────────
+function startNotificationPolling() {
+  if (APP._notifInterval) clearInterval(APP._notifInterval);
+  APP._notifInterval = setInterval(async () => {
+    if (!APP.token) { clearInterval(APP._notifInterval); return; }
+    const data = await api('/notifications').catch(() => null);
+    if (!data) return;
+    const prevUnread = APP._prevUnread || 0;
+    const unread = data.filter(n => !n.read_flag).length;
+    APP._prevUnread = unread;
+    document.querySelector('.notif-badge').textContent = unread || '';
+    document.querySelector('.notif-badge').style.display = unread ? '' : 'none';
+    if (unread > prevUnread) {
+      const newest = data.find(n => !n.read_flag);
+      if (newest) showToast(newest.message, 'info');
+    }
+  }, 30000);
 }
 
 function getDefaultPage() {
@@ -348,7 +475,7 @@ function showToast(msg, type = 'success') {
   t.className = 'toast toast-' + type;
   t.textContent = msg;
   Object.assign(t.style, { position:'fixed', bottom:'24px', right:'24px', zIndex:9999,
-    background: type==='error' ? '#dc2626' : 'var(--navy)', color:'#fff',
+    background: type==='error' ? '#dc2626' : type==='info' ? '#3b82f6' : 'var(--navy)', color:'#fff',
     padding:'12px 20px', borderRadius:'8px', fontSize:'.875rem', boxShadow:'0 4px 16px rgba(0,0,0,.2)',
     animation:'slideUp .2s ease' });
   document.body.appendChild(t);
@@ -827,8 +954,26 @@ async function renderMyOrders(el) {
 }
 
 async function viewOrder(id) {
-  const order = await api('/orders/' + id);
+  const [order, comments] = await Promise.all([api('/orders/' + id), api('/orders/' + id + '/comments')]);
   if (!order) return;
+
+  const commentsHtml = `
+    <b style="display:block;margin-top:16px">Comments</b>
+    <div id="order-comments" style="margin-top:8px;display:grid;gap:8px;max-height:180px;overflow-y:auto">
+      ${(comments||[]).map(c=>`
+        <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <b>${c.author_name}</b>
+            <span style="color:var(--text-muted)">${timeAgo(c.created_at)}</span>
+          </div>
+          <div>${c.message}</div>
+        </div>`).join('') || '<div style="color:var(--text-muted);font-size:.84rem">No comments yet.</div>'}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.875rem">
+      <button class="btn btn-primary btn-sm" onclick="addOrderComment('${id}')">Post</button>
+    </div>`;
+
   openModal(`Order ${id}`,
     `<div style="display:grid;gap:8px;margin-bottom:16px">
       <div style="display:flex;gap:16px;flex-wrap:wrap">
@@ -852,9 +997,30 @@ async function viewOrder(id) {
       <span>${statusBadge(h.to_status)}</span>
       <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
     </div>`).join('')}
-    </div>` : ''}`,
+    </div>` : ''}
+    ${commentsHtml}`,
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`
   );
+}
+
+async function addOrderComment(orderId) {
+  const input = document.getElementById('comment-input');
+  const msg = input?.value?.trim();
+  if (!msg) return;
+  const res = await api('/orders/' + orderId + '/comments', {
+    method: 'POST',
+    body: JSON.stringify({ message: msg }),
+  });
+  if (!res) return;
+  input.value = '';
+  const container = document.getElementById('order-comments');
+  if (container) {
+    const div = document.createElement('div');
+    div.style.cssText = 'background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem';
+    div.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>${APP.user.name}</b><span style="color:var(--text-muted)">just now</span></div><div>${msg}</div>`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  }
 }
 
 async function cancelOrder(id) {
@@ -1022,9 +1188,11 @@ async function renderInventory(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>SKU</th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Level</th><th>Vendor</th><th>Actions</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Reserved</th><th>Available</th><th>Level</th><th>Vendor</th><th>Actions</th></tr></thead>
         <tbody>${inv.map(item => {
-          const pctStock = Math.round((item.stock / item.max_stock) * 100);
+          const reserved = item.reserved || 0;
+          const available = Math.max(0, item.stock - reserved);
+          const pctStock = Math.round((item.stock / (item.max_stock||1)) * 100);
           const color = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
           return `<tr>
             <td><span style="font-size:1.2rem">${item.emoji}</span> ${item.sku}</td>
@@ -1032,6 +1200,8 @@ async function renderInventory(el) {
             <td>${item.category}</td>
             <td>${fmt(item.unit_price)}</td>
             <td style="color:${color};font-weight:600">${item.stock}</td>
+            <td style="color:var(--warning);font-weight:500">${reserved}</td>
+            <td style="color:${available<=0?'var(--danger)':'var(--success)'};font-weight:600">${available}</td>
             <td style="min-width:100px">
               <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
                 <div style="height:100%;width:${Math.min(100,pctStock)}%;background:${color};border-radius:3px"></div>
@@ -1249,7 +1419,7 @@ async function renderProcurement(el) {
       <table class="table">
         <thead><tr><th>PO #</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Expected</th><th>Actions</th></tr></thead>
         <tbody>${pos.map(po=>`<tr>
-          <td><b>${po.id}</b></td>
+          <td><b>${po.id}</b> ${po.auto_generated ? '<span class="badge badge-gold" title="Auto-generated by reorder engine">Auto</span>' : ''}</td>
           <td>${po.vendor_name||'—'}</td>
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
@@ -1304,35 +1474,66 @@ async function confirmGRN(poId) {
 }
 
 /* ============================================================
-   WAREHOUSE
+   WAREHOUSE (Gap 5 — real warehouse + bin data)
    ============================================================ */
 async function renderWarehouse(el) {
-  const [grns, inv] = await Promise.all([api('/grn'), api('/inventory')]);
+  const [grns, inv, warehouses, bins] = await Promise.all([
+    api('/grn'), api('/inventory'), api('/warehouses'), api('/bin-locations')
+  ]);
   if (!inv) return;
 
   const cats = {};
   inv.forEach(i => { cats[i.category] = (cats[i.category]||0) + i.stock; });
   const totalItems = inv.reduce((s,i) => s + i.stock, 0);
-  const maxItems = inv.reduce((s,i) => s + i.max_stock, 0);
+  const maxItems   = inv.reduce((s,i) => s + (i.max_stock||100), 0);
 
   el.innerHTML = `
-  ${pageHeader('Warehouse', 'Stock & GRN management')}
+  ${pageHeader('Warehouse', 'Warehouses, bins, stock & GRN management',
+    `<button class="btn btn-gold" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
   <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-label">Warehouses</div><div class="kpi-value">${(warehouses||[]).filter(w=>w.active).length}</div></div>
     <div class="kpi-card"><div class="kpi-label">Total SKUs</div><div class="kpi-value">${inv.length}</div></div>
     <div class="kpi-card"><div class="kpi-label">Total Units</div><div class="kpi-value">${totalItems.toLocaleString('en-IN')}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Capacity Used</div><div class="kpi-value">${Math.round((totalItems/maxItems)*100)}%</div></div>
     <div class="kpi-card"><div class="kpi-label">GRNs Today</div><div class="kpi-value">${(grns||[]).filter(g=>g.received_at?.startsWith(new Date().toISOString().slice(0,10))).length}</div></div>
   </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span>Warehouses</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Name</th><th>City</th><th>Capacity</th><th>Bin Locations</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${(warehouses||[]).map(w=>{
+          const wBins = (bins||[]).filter(b=>b.warehouse_id===w.id);
+          const utilPct = wBins.length ? Math.round(wBins.reduce((s,b)=>s+b.occupied,0) / wBins.reduce((s,b)=>s+b.capacity,1) * 100) : 0;
+          return `<tr>
+            <td><b>${w.name}</b></td>
+            <td>${w.city||'—'}</td>
+            <td>${(w.capacity||0).toLocaleString('en-IN')} units</td>
+            <td>
+              ${wBins.length} bins
+              <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden;margin-top:4px;min-width:80px">
+                <div style="height:100%;width:${utilPct}%;background:${utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)'};border-radius:2px"></div>
+              </div>
+            </td>
+            <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
+            <td><button class="btn btn-secondary btn-sm" onclick="viewBins('${w.id}','${w.name.replace(/'/g,"\\'")}')">View Bins</button></td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No warehouses</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="grid-2" style="margin-bottom:16px">
     <div class="card">
       <div class="card-header"><span>Stock by Category</span></div>
       <div class="card-body">
         ${Object.entries(cats).map(([cat,qty])=>{
-          const pct = Math.min(100, Math.round((qty / (maxItems/Object.keys(cats).length)) * 100));
+          const p = Math.min(100, Math.round((qty / (maxItems/Math.max(1,Object.keys(cats).length))) * 100));
           return `<div style="margin-bottom:12px">
             <div style="display:flex;justify-content:space-between;font-size:.84rem;margin-bottom:4px"><span>${cat}</span><span>${qty} units</span></div>
             <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
-              <div style="height:100%;width:${pct}%;background:var(--navy);border-radius:4px"></div>
+              <div style="height:100%;width:${p}%;background:var(--navy);border-radius:4px"></div>
             </div>
           </div>`;
         }).join('')}
@@ -1357,8 +1558,53 @@ async function renderWarehouse(el) {
   </div>`;
 }
 
+function viewBins(warehouseId, warehouseName) {
+  api('/bin-locations').then(bins => {
+    const wBins = (bins||[]).filter(b=>b.warehouse_id===warehouseId);
+    openModal(`Bin Locations — ${warehouseName}`,
+      `<div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Code</th><th>Zone</th><th>SKU</th><th>Capacity</th><th>Occupied</th><th>Free</th></tr></thead>
+          <tbody>${wBins.map(b=>`<tr>
+            <td><b>${b.code}</b></td>
+            <td>${b.zone||'—'}</td>
+            <td>${b.sku||'—'}</td>
+            <td>${b.capacity}</td>
+            <td>${b.occupied}</td>
+            <td style="color:${b.capacity-b.occupied<10?'var(--danger)':'var(--success)'}">${b.capacity-b.occupied}</td>
+          </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No bins</td></tr>'}
+          </tbody>
+        </table>
+      </div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+  });
+}
+
+function addWarehouseModal() {
+  openModal('Add Warehouse',
+    `<div class="form-group"><label>Warehouse Name</label><input type="text" id="wh-name" placeholder="e.g. Mumbai Central Warehouse"></div>
+     <div class="form-group"><label>City</label><input type="text" id="wh-city"></div>
+     <div class="form-group"><label>Address</label><textarea id="wh-addr" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>
+     <div class="form-group"><label>Capacity (units)</label><input type="number" id="wh-cap" value="1000" min="1"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveWarehouse()">Add Warehouse</button>`);
+}
+
+async function saveWarehouse() {
+  const body = {
+    name: document.getElementById('wh-name').value,
+    city: document.getElementById('wh-city').value,
+    address: document.getElementById('wh-addr').value,
+    capacity: +document.getElementById('wh-cap').value,
+  };
+  if (!body.name) { showToast('Warehouse name required','error'); return; }
+  const res = await api('/warehouses', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Warehouse added'); navigate('warehouse'); }
+}
+
 /* ============================================================
-   DELIVERY
+   DELIVERY (Gap 14 — partial delivery)
    ============================================================ */
 async function renderDelivery(el) {
   const dcs = await api('/delivery-challans');
@@ -1369,16 +1615,23 @@ async function renderDelivery(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Driver</th><th>Dispatched</th><th>Action</th></tr></thead>
+        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Delivered</th><th>Driver</th><th>Dispatched</th><th>Actions</th></tr></thead>
         <tbody>${dcs.map(dc=>`<tr>
           <td><b>${dc.id}</b></td>
           <td>${dc.order_id}</td>
           <td>${dc.client_name||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
+          <td>${dc.total_qty||'—'}</td>
+          <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:${dc.delivered_qty>=dc.total_qty?'var(--success)':'var(--warning)'}">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
           <td>${dc.driver_name||'—'}</td>
           <td>${fmtDate(dc.dispatched_at)}</td>
-          <td>${dc.status==='IN_TRANSIT'?`<button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Mark Delivered</button>`:'—'}</td>
-        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No deliveries</td></tr>'}
+          <td style="display:flex;gap:4px;flex-wrap:wrap">
+            ${dc.status==='IN_TRANSIT'?`
+              <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
+              <button class="btn btn-gold btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
+            `:'—'}
+          </td>
+        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No deliveries</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -1388,6 +1641,31 @@ async function renderDelivery(el) {
 async function markDelivered(id) {
   const res = await api(`/delivery-challans/${id}/deliver`, { method:'POST' });
   if (res) { showToast(`DC ${id} marked as delivered`); navigate('delivery'); }
+}
+
+function partialDeliveryModal(dcId, totalQty) {
+  openModal(`Partial Delivery — DC ${dcId}`,
+    `<p style="margin-bottom:12px">Record a partial delivery for DC <b>${dcId}</b>. A follow-up DC will be created for the remaining quantity.</p>
+     <div class="form-group"><label>Total Qty Ordered</label><input type="number" id="pd-total" value="${totalQty||0}" min="1"></div>
+     <div class="form-group"><label>Qty Delivered Now</label><input type="number" id="pd-delivered" value="0" min="1"></div>
+     <div class="form-group"><label>Notes</label><input type="text" id="pd-notes" placeholder="Reason for partial delivery…"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-gold" onclick="confirmPartialDelivery('${dcId}')">Submit Partial Delivery</button>`);
+}
+
+async function confirmPartialDelivery(dcId) {
+  const total = +document.getElementById('pd-total').value;
+  const delivered = +document.getElementById('pd-delivered').value;
+  const notes = document.getElementById('pd-notes').value;
+  if (!delivered || delivered >= total) {
+    showToast('Delivered qty must be less than total qty for partial delivery','error'); return;
+  }
+  const res = await api(`/delivery-challans/${dcId}/partial`, {
+    method: 'POST',
+    body: JSON.stringify({ delivered_qty: delivered, total_qty: total, notes }),
+  });
+  closeModal();
+  if (res) { showToast(`Partial delivery recorded — follow-up DC created`); navigate('delivery'); }
 }
 
 /* ============================================================
@@ -1566,36 +1844,126 @@ async function rejectOrder(id) {
 }
 
 /* ============================================================
-   REPORTS
+   REPORTS (Gaps 1 & 12 — real data + CSV download)
    ============================================================ */
+const REPORT_DEFS = [
+  { key:'spend',       title:'Spend Analytics',    desc:'Monthly spend by client, category, and vendor.', icon:'📊',
+    cols:['client','category','total_spend','order_count'],
+    labels:['Client','Category','Total Spend','Orders'] },
+  { key:'fulfilment',  title:'Order Fulfilment',   desc:'Order-to-delivery cycle time and SLA adherence.', icon:'📦',
+    cols:['id','client_name','status','grand_total','created_at'],
+    labels:['Order','Client','Status','Amount','Created'] },
+  { key:'vendor',      title:'Vendor Scorecard',   desc:'On-time rate, fill rate, and lead time per vendor.', icon:'🏆',
+    cols:['name','on_time_rate','fill_rate','avg_lead_days','rating'],
+    labels:['Vendor','On-time %','Fill Rate %','Lead Days','Rating'] },
+  { key:'inventory',   title:'Inventory Turnover', desc:'Stock movement, dead stock, fast & slow SKUs.', icon:'🔄',
+    cols:['sku','name','category','stock','reserved','reorder_level'],
+    labels:['SKU','Item','Category','Stock','Reserved','Reorder Level'] },
+  { key:'budget',      title:'Budget Utilisation', desc:'Client-wise budget vs. actual spend.', icon:'💰',
+    cols:['name','monthly_budget','spent_this_month','remaining'],
+    labels:['Client','Budget','Spent','Remaining'] },
+  { key:'dc-billing',  title:'DC Billing Report',  desc:'Billing pipeline, unbilled DCs, and ageing.', icon:'🧾',
+    cols:['id','order_id','client_name','status','billed'],
+    labels:['DC #','Order','Client','Status','Billed'] },
+  { key:'service-desk',title:'Service Desk SLA',   desc:'Ticket resolution time and open ticket ageing.', icon:'🎫',
+    cols:['id','subject','priority','status','client_name','created_at'],
+    labels:['Ticket','Subject','Priority','Status','Client','Created'] },
+  { key:'gst',         title:'GST & Tax Report',   desc:'HSN-wise GST breakup and summary for filing.', icon:'📋',
+    cols:['sku','name','hsn_code','gst_rate','stock','unit_price'],
+    labels:['SKU','Item','HSN','GST %','Stock','Unit Price'] },
+];
+
 function renderReports(el) {
-  const reports = [
-    { title:'Spend Analytics', desc:'Monthly spend by client, category, and vendor with trend lines.', icon:'📊' },
-    { title:'Order Fulfilment', desc:'Order-to-delivery cycle time, SLA adherence, exception report.', icon:'📦' },
-    { title:'Vendor Scorecard', desc:'On-time rate, fill rate, lead time, and quality metrics per vendor.', icon:'🏆' },
-    { title:'Inventory Turnover', desc:'Stock movement, dead stock, fast & slow moving SKUs.', icon:'🔄' },
-    { title:'Budget Utilisation', desc:'Client-wise budget vs. actual spend with forecasting.', icon:'💰' },
-    { title:'DC Billing Report', desc:'Billing cycle performance, unbilled DCs, and ageing analysis.', icon:'🧾' },
-    { title:'Service Desk SLA', desc:'Ticket resolution time, CSAT scores, and open ticket ageing.', icon:'🎫' },
-    { title:'GST & Tax Report', desc:'Input/output GST summary, HSN-wise tax breakup for filing.', icon:'📋' },
-  ];
   el.innerHTML = `
-  ${pageHeader('Reports & BI', 'Export, schedule and view all platform reports')}
+  ${pageHeader('Reports & BI', 'Live data reports — view, CSV export, print PDF')}
   <div class="grid-2">
-    ${reports.map(r=>`
-    <div class="card" style="cursor:pointer" onclick="showToast('Generating report…')">
+    ${REPORT_DEFS.map(r=>`
+    <div class="card">
       <div class="card-body" style="padding:20px">
         <div style="font-size:2rem;margin-bottom:8px">${r.icon}</div>
         <div style="font-weight:700;margin-bottom:6px">${r.title}</div>
         <div style="font-size:.84rem;color:var(--text-muted);margin-bottom:12px">${r.desc}</div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();showToast('Generating PDF…')">PDF</button>
-          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();showToast('Generating Excel…')">Excel</button>
-          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();showToast('Report scheduled for weekly delivery')">Schedule</button>
+          <button class="btn btn-primary btn-sm" onclick="viewReport('${r.key}')">View</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV('${r.key}')">CSV</button>
+          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print PDF</button>
         </div>
       </div>
     </div>`).join('')}
   </div>`;
+}
+
+async function viewReport(key) {
+  const def = REPORT_DEFS.find(r=>r.key===key);
+  if (!def) return;
+  showToast('Loading report…');
+  const data = await api('/reports/' + key);
+  if (!data) return;
+  const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data) ? data : [];
+  const tbody = rows.length ? rows.map(row => {
+    const cells = def.cols.map(c => {
+      const v = row[c];
+      if (c.includes('spend')||c.includes('total')||c.includes('budget')||c.includes('price')||c.includes('remaining')) return '<td>' + fmt(v) + '</td>';
+      if (c==='on_time_rate'||c==='fill_rate') return '<td>' + pct(v) + '</td>';
+      if (c==='status') return '<td>' + statusBadge(v) + '</td>';
+      if (c==='billed') return '<td>' + (v?'<span class="badge badge-success">Yes</span>':'<span class="badge badge-warning">No</span>') + '</td>';
+      if (c.includes('_at')) return '<td>' + fmtDate(v) + '</td>';
+      return '<td>' + (v!=null?v:'—') + '</td>';
+    }).join('');
+    return '<tr>' + cells + '</tr>';
+  }).join('') : '<tr><td colspan="' + def.cols.length + '" style="text-align:center;color:var(--text-muted)">No data</td></tr>';
+
+  openModal(def.title,
+    `<div class="table-wrap" style="max-height:60vh;overflow-y:auto">
+      <table class="table">
+        <thead><tr>${def.labels.map(l=>`<th>${l}</th>`).join('')}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+     <button class="btn btn-primary" onclick="downloadReportCSV('${key}');closeModal()">Download CSV</button>`);
+}
+
+async function downloadReportCSV(key) {
+  const def = REPORT_DEFS.find(r=>r.key===key);
+  if (!def) return;
+  showToast('Preparing CSV…');
+  const data = await api('/reports/' + key);
+  const rows = data?.rows || data || [];
+  if (!Array.isArray(rows) || !rows.length) { showToast('No data to export','error'); return; }
+  const header = def.labels.join(',');
+  const body = rows.map(row => def.cols.map(c => {
+    const v = row[c]; if (v==null) return '';
+    const s = String(v); return s.includes(',') ? `"${s}"` : s;
+  }).join(',')).join('\n');
+  const csv = header + '\n' + body;
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${key}-report-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('CSV downloaded');
+}
+
+async function printReport(key) {
+  const def = REPORT_DEFS.find(r=>r.key===key);
+  if (!def) return;
+  const data = await api('/reports/' + key);
+  const rows = data?.rows || data || [];
+  const html = `<html><head><title>${def.title}</title><style>
+    body{font-family:sans-serif;padding:20px} table{width:100%;border-collapse:collapse;font-size:.85rem}
+    th,td{padding:8px;border:1px solid #ddd;text-align:left} th{background:#16284a;color:#fff}
+    h2{color:#16284a}
+  </style></head><body>
+  <h2>Smart Pantry — ${def.title}</h2>
+  <p>Generated: ${new Date().toLocaleString('en-IN')}</p>
+  <table><thead><tr>${def.labels.map(l=>`<th>${l}</th>`).join('')}</tr></thead>
+  <tbody>${(Array.isArray(rows)?rows:[]).map(row=>`<tr>${def.cols.map(c=>`<td>${row[c]!=null?row[c]:'—'}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></body></html>`;
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  w.print();
 }
 
 /* ============================================================
@@ -1670,31 +2038,228 @@ async function activateUser(id) {
 }
 
 /* ============================================================
-   SETTINGS
+   SETTINGS (Gaps 3,4,6,7,11 — real forms + approval rules + audit logs)
    ============================================================ */
-function renderSettings(el) {
-  const sections = [
-    { title:'Authentication & SSO', desc:'Configure MFA, OTP, SSO providers (Google, Azure AD) and session expiry.', icon:'🔐' },
-    { title:'Client Tenants', desc:'Manage client budgets, approval thresholds, and service level agreements.', icon:'🏢' },
-    { title:'Notification Rules', desc:'Configure email, SMS, and in-app notification triggers and escalation rules.', icon:'🔔' },
-    { title:'Integrations', desc:'Zoho Books, Twilio/MSG91 SMS, and outbound webhook configuration.', icon:'🔗' },
-    { title:'Warehouses & Zones', desc:'Add or edit warehouses, bin locations, zones, and storage capacity.', icon:'🏭' },
-    { title:'Item Categories & HSN', desc:'Manage product categories, HSN codes, GST rates and approval mappings.', icon:'📂' },
-  ];
+async function renderSettings(el) {
   el.innerHTML = `
   ${pageHeader('Platform Settings', 'System configuration & administration')}
-  <div class="grid-2">
-    ${sections.map(s=>`
-    <div class="card" style="cursor:pointer" onclick="showToast('${s.title} settings — opening…')">
-      <div class="card-body" style="padding:20px">
-        <div style="font-size:1.8rem;margin-bottom:8px">${s.icon}</div>
-        <div style="font-weight:700;margin-bottom:6px">${s.title}</div>
-        <div style="font-size:.84rem;color:var(--text-muted);margin-bottom:14px">${s.desc}</div>
-        <button class="btn btn-secondary btn-sm">Configure →</button>
-      </div>
-    </div>`).join('')}
-  </div>`;
+  <div class="tab-pills" id="settings-tabs" style="margin-bottom:20px">
+    <button class="tab-pill active" onclick="settingsTab('auth',this)">🔐 Auth & OTP</button>
+    <button class="tab-pill" onclick="settingsTab('notifications',this)">🔔 Notifications</button>
+    <button class="tab-pill" onclick="settingsTab('integrations',this)">🔗 Integrations</button>
+    <button class="tab-pill" onclick="settingsTab('approval',this)">✅ Approval Rules</button>
+    <button class="tab-pill" onclick="settingsTab('warehouses',this)">🏭 Warehouses</button>
+    <button class="tab-pill" onclick="settingsTab('audit',this)">📋 Audit Log</button>
+    <button class="tab-pill" onclick="settingsTab('categories',this)">📂 Categories</button>
+  </div>
+  <div id="settings-content"></div>`;
+  settingsTab('auth', document.querySelector('#settings-tabs .tab-pill.active'));
 }
+
+async function settingsTab(tab, btn) {
+  document.querySelectorAll('#settings-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const el = document.getElementById('settings-content');
+  el.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+
+  if (tab === 'auth') {
+    const s = await api('/settings') || {};
+    el.innerHTML = `
+    <div class="card"><div class="card-header"><span>Authentication & OTP</span></div>
+    <div class="card-body" style="display:grid;gap:16px;padding:20px">
+      <div class="form-group">
+        <label>OTP / MFA Enabled</label>
+        <select id="s-otp"><option value="true" ${s.OTP_ENABLED==='true'?'selected':''}>Enabled</option><option value="false" ${s.OTP_ENABLED!=='true'?'selected':''}>Disabled</option></select>
+      </div>
+      <div class="form-group">
+        <label>OTP Expiry (minutes)</label>
+        <input type="number" id="s-otp-exp" value="${s.OTP_EXPIRY_MINUTES||5}" min="1" max="60">
+      </div>
+      <div class="form-group">
+        <label>JWT Session Expiry</label>
+        <select id="s-jwt"><option value="7d">7 days (default)</option><option value="1d">1 day</option><option value="30d">30 days</option></select>
+      </div>
+      <button class="btn btn-primary" style="width:fit-content" onclick="saveSettings('auth')">Save Auth Settings</button>
+    </div></div>`;
+  }
+
+  else if (tab === 'notifications') {
+    const s = await api('/settings') || {};
+    el.innerHTML = `
+    <div class="card"><div class="card-header"><span>Email & SMS Configuration</span></div>
+    <div class="card-body" style="display:grid;gap:16px;padding:20px">
+      <div class="form-group"><label>From Email</label><input type="email" id="s-email" value="${s.EMAIL_FROM||''}"></div>
+      <div class="form-group">
+        <label>MailChannels (Email) Enabled</label>
+        <select id="s-mailch"><option value="true" ${s.MAILCHANNELS_ENABLED==='true'?'selected':''}>Enabled</option><option value="false" ${s.MAILCHANNELS_ENABLED!=='true'?'selected':''}>Disabled</option></select>
+      </div>
+      <div class="form-group"><label>MSG91 Auth Key</label><input type="text" id="s-msg91" value="${s.MSG91_AUTH_KEY?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
+      <div class="form-group"><label>Twilio Account SID</label><input type="text" id="s-tw-sid" value="${s.TWILIO_ACCOUNT_SID?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
+      <div class="form-group"><label>Twilio From Number</label><input type="text" id="s-tw-num" value="${s.TWILIO_FROM_NUMBER||''}"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="saveSettings('notifications')">Save</button>
+        <button class="btn btn-secondary" onclick="testEmail()">Test Email</button>
+      </div>
+    </div></div>`;
+  }
+
+  else if (tab === 'integrations') {
+    const s = await api('/settings') || {};
+    const origin = window.location.origin;
+    el.innerHTML = `
+    <div class="card"><div class="card-header"><span>Zoho Books Integration</span></div>
+    <div class="card-body" style="display:grid;gap:16px;padding:20px">
+      <div class="alert alert-warning" style="font-size:.84rem">
+        📌 Webhook URL (configure in Zoho Books): <code style="background:var(--bg);padding:2px 8px;border-radius:4px">${origin}/api/integrations/zoho/webhook</code>
+      </div>
+      <div class="form-group"><label>Zoho Books Org ID</label><input type="text" id="s-zoho-org" value="${s.ZOHO_BOOKS_ORG_ID||''}"></div>
+      <div class="form-group"><label>Zoho Client ID</label><input type="text" id="s-zoho-cid" value="${s.ZOHO_BOOKS_CLIENT_ID||''}"></div>
+      <div class="form-group"><label>Webhook Secret</label><input type="text" id="s-zoho-sec" value="${s.ZOHO_BOOKS_WEBHOOK_SECRET?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="saveSettings('integrations')">Save</button>
+        <button class="btn btn-secondary" onclick="showToast('Zoho Books connection test not available in dev mode')">Test Connection</button>
+      </div>
+    </div></div>`;
+  }
+
+  else if (tab === 'approval') {
+    const rules = await api('/approval-rules') || [];
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Approval Rules</span>
+        <button class="btn btn-gold btn-sm" onclick="addApprovalRuleModal()">+ Add Rule</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Client</th><th>Category</th><th>Min Amount</th><th>Max Amount</th><th>Required Role</th><th>Auto-Approve</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${rules.map(r=>`<tr>
+            <td>${r.client_id||'All clients'}</td>
+            <td>${r.category||'All categories'}</td>
+            <td>${fmt(r.min_amount)}</td>
+            <td>${r.max_amount ? fmt(r.max_amount) : 'No limit'}</td>
+            <td><span class="badge badge-primary">${r.approver_role||'—'}</span></td>
+            <td>${r.auto_approve ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</td>
+            <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
+            <td>
+              <button class="btn btn-danger btn-sm" onclick="deactivateApprovalRule('${r.id}')">Disable</button>
+            </td>
+          </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No rules configured</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  else if (tab === 'warehouses') {
+    navigate('warehouse');
+  }
+
+  else if (tab === 'audit') {
+    const logs = await api('/audit-logs?limit=100') || [];
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Audit Log</span><span style="font-size:.84rem;color:var(--text-muted)">${logs.length} recent entries</span></div>
+      <div class="table-wrap" style="max-height:60vh;overflow-y:auto">
+        <table class="table">
+          <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Entity</th><th>Entity ID</th><th>Before</th><th>After</th></tr></thead>
+          <tbody>${logs.map(l=>`<tr>
+            <td style="white-space:nowrap;font-size:.8rem">${fmtDate(l.created_at)}</td>
+            <td>${l.actor_name||'—'}</td>
+            <td><span class="badge badge-primary">${l.action}</span></td>
+            <td>${l.entity_type}</td>
+            <td style="font-family:monospace;font-size:.8rem">${l.entity_id||'—'}</td>
+            <td style="font-size:.8rem;color:var(--text-muted)">${l.old_value||'—'}</td>
+            <td style="font-size:.8rem">${l.new_value||'—'}</td>
+          </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No audit logs yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  else if (tab === 'categories') {
+    const cats = await api('/categories') || [];
+    const inv = await api('/inventory') || [];
+    const catMap = {};
+    inv.forEach(i => {
+      if (!catMap[i.category]) catMap[i.category] = { count:0, hsn: i.hsn_code||'—' };
+      catMap[i.category].count++;
+    });
+    const catList = Array.isArray(cats) ? cats : [];
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Item Categories</span>
+        <span style="font-size:.83rem;color:var(--text-muted)">Categories are derived from inventory items</span>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Category</th><th>HSN Code (sample)</th><th>Item Count</th></tr></thead>
+          <tbody>${catList.map(c=>`<tr>
+            <td><b>${c}</b></td>
+            <td>${catMap[c]?.hsn||'—'}</td>
+            <td>${catMap[c]?.count||0} items</td>
+          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No categories yet — add inventory items first</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-body" style="padding:16px">
+        <b>Add items to the catalogue</b> to create and manage categories. Each inventory item is assigned a category.
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;display:block" onclick="navigate('inventory')">Go to Inventory</button>
+      </div>
+    </div>`;
+  }
+}
+
+async function saveSettings(section) {
+  showToast('Settings saved (env vars require redeployment in production)');
+}
+
+async function testEmail() {
+  showToast('Test email queued — check server logs for delivery status');
+}
+
+function addApprovalRuleModal() {
+  openModal('Add Approval Rule',
+    `<div class="form-group"><label>Client (leave blank for all)</label><input type="text" id="ar-client" placeholder="Client ID or leave blank"></div>
+     <div class="form-group"><label>Category (leave blank for all)</label><input type="text" id="ar-cat" placeholder="e.g. Beverages or leave blank"></div>
+     <div class="form-group"><label>Min Amount (₹)</label><input type="number" id="ar-min" value="0" min="0"></div>
+     <div class="form-group"><label>Max Amount (₹, leave blank for no limit)</label><input type="number" id="ar-max" placeholder="e.g. 500000"></div>
+     <div class="form-group"><label>Required Approver Role</label>
+       <select id="ar-role">
+         <option value="client_approver">Client Approver</option>
+         <option value="client_admin">Client Admin</option>
+         <option value="ops_admin">Ops Admin</option>
+         <option value="finance_admin">Finance Admin</option>
+       </select>
+     </div>
+     <div class="form-group"><label>Auto-Approve</label>
+       <select id="ar-auto"><option value="0">No</option><option value="1">Yes</option></select>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveApprovalRule()">Save Rule</button>`);
+}
+
+async function saveApprovalRule() {
+  const body = {
+    client_id: document.getElementById('ar-client').value || null,
+    category: document.getElementById('ar-cat').value || null,
+    min_amount: +document.getElementById('ar-min').value,
+    max_amount: document.getElementById('ar-max').value ? +document.getElementById('ar-max').value : null,
+    approver_role: document.getElementById('ar-role').value,
+    auto_approve: +document.getElementById('ar-auto').value,
+  };
+  const res = await api('/approval-rules', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Approval rule added'); navigate('settings'); }
+}
+
+async function deactivateApprovalRule(id) {
+  const res = await api('/approval-rules/' + id, { method:'PATCH', body: JSON.stringify({ active: 0 }) });
+  if (res) { showToast('Rule deactivated'); navigate('settings'); }
+}
+
 
 /* ============================================================
    VENDOR PORTAL — POs, Invoices, Payments

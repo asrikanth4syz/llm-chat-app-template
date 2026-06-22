@@ -25,6 +25,18 @@
 		}
 	],
 	"vars": {
-		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod"
+		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod",
+		"APP_ENV": "development",
+		"EMAIL_FROM": "noreply@smartpantry.4syz.com",
+		"MAILCHANNELS_ENABLED": "false",
+		"ZOHO_BOOKS_ORG_ID": "",
+		"ZOHO_BOOKS_CLIENT_ID": "",
+		"ZOHO_BOOKS_WEBHOOK_SECRET": "",
+		"TWILIO_ACCOUNT_SID": "",
+		"TWILIO_AUTH_TOKEN": "",
+		"TWILIO_FROM_NUMBER": "",
+		"MSG91_AUTH_KEY": "",
+		"OTP_EXPIRY_MINUTES": "5",
+		"OTP_ENABLED": "false"
 	}
 }
