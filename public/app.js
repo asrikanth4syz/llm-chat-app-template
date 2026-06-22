@@ -968,8 +968,23 @@ async function renderMyOrders(el) {
 }
 
 async function viewOrder(id) {
-  const [order, comments] = await Promise.all([api('/orders/' + id), api('/orders/' + id + '/comments')]);
+  const [order, comments, dcRes] = await Promise.all([api('/orders/' + id), api('/orders/' + id + '/comments'), api('/delivery-challans').catch(()=>null)]);
   if (!order) return;
+
+  const orderDCs = (dcRes||[]).filter(d => d.order_id === id);
+  const dcSection = orderDCs.length ? `
+  <div style="margin-top:20px">
+    <div style="font-weight:600;margin-bottom:10px">Delivery Status</div>
+    ${orderDCs.map(dc=>`
+      <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
+          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+        </div>
+        ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
+        ${dc.delivered_qty!=null&&dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Delivered: <b style="color:var(--success)">${dc.delivered_qty}</b> / ${dc.total_qty}</div>`:''}
+      </div>`).join('')}
+  </div>` : '';
 
   const commentsHtml = `
     <b style="display:block;margin-top:16px">Comments</b>
@@ -1012,6 +1027,7 @@ async function viewOrder(id) {
       <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
     </div>`).join('')}
     </div>` : ''}
+    ${dcSection}
     ${commentsHtml}`,
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`
   );
@@ -1224,6 +1240,7 @@ async function renderInventory(el) {
             <td>${item.vendor_name||'—'}</td>
             <td>
               <button class="btn btn-secondary btn-sm" onclick="editStock('${item.sku}',${item.stock},${item.reorder_level})">Edit Stock</button>
+              <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${item.name.replace(/'/g,"\\'")}')">History</button>
               <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${item.name.replace(/'/g,"\\'")}',${item.unit_price},'${item.vendor_id||''}')">Reorder</button>
             </td>
           </tr>`;
@@ -1232,6 +1249,27 @@ async function renderInventory(el) {
       </table>
     </div>
   </div>`;
+}
+
+async function viewStockHistory(sku, itemName) {
+  const movements = await api('/stock-movements?sku=' + sku);
+  if (!movements) return;
+  const rows = movements.length ? movements.map(m => `<tr>
+    <td>${fmtDate(m.created_at)}</td>
+    <td><span class="badge ${m.qty_change>0?'badge-success':'badge-danger'}">${m.type}</span></td>
+    <td style="font-weight:600;color:${m.qty_change>0?'var(--success)':'var(--danger)'}">${m.qty_change>0?'+':''}${m.qty_change}</td>
+    <td>${m.reference_id||'—'}</td>
+    <td>${m.note||'—'}</td>
+    <td>${m.actor||'—'}</td>
+  </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No movements recorded</td></tr>';
+  openModal(`Stock History — ${itemName}`,
+    `<div class="table-wrap" style="max-height:50vh;overflow-y:auto">
+      <table class="table">
+        <thead><tr><th>Date</th><th>Type</th><th>Qty Change</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
 function editStock(sku, stock, reorder) {
@@ -1625,32 +1663,120 @@ async function renderDelivery(el) {
   const dcs = await api('/delivery-challans');
   if (!dcs) return;
 
+  const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
+  const inTransit  = dcs.filter(d => d.status === 'IN_TRANSIT');
+  const delivered  = dcs.filter(d => d.status === 'DELIVERED');
+
   el.innerHTML = `
-  ${pageHeader('Deliveries', `${dcs.length} total challans`)}
-  <div class="card">
+  ${pageHeader('Deliveries', `${dcs.length} challans — ${inTransit.length} in transit`)}
+
+  ${scheduled.length ? `
+  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">Scheduled — Ready to Dispatch (${scheduled.length})</div>
+  <div class="card" style="margin-bottom:20px">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Delivered</th><th>Driver</th><th>Dispatched</th><th>Actions</th></tr></thead>
-        <tbody>${dcs.map(dc=>`<tr>
+        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Actions</th></tr></thead>
+        <tbody>${scheduled.map(dc=>`<tr>
           <td><b>${dc.id}</b></td>
           <td>${dc.order_id}</td>
           <td>${dc.client_name||'—'}</td>
-          <td>${statusBadge(dc.status)}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
           <td>${dc.total_qty||'—'}</td>
-          <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:${dc.delivered_qty>=dc.total_qty?'var(--success)':'var(--warning)'}">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
+          <td>
+            <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch</button>
+          </td>
+        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">None</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>` : ''}
+
+  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">In Transit (${inTransit.length})</div>
+  <div class="card" style="margin-bottom:20px">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Delivered</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Actions</th></tr></thead>
+        <tbody>${inTransit.map(dc=>`<tr>
+          <td><b>${dc.id}</b></td>
+          <td>${dc.order_id}</td>
+          <td>${dc.client_name||'—'}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
+          <td>${dc.total_qty||'—'}</td>
+          <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:${dc.delivered_qty>=(dc.total_qty||1)?'var(--success)':'var(--warning)'}">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
+          <td>${dc.vehicle_no||'—'}</td>
           <td>${dc.driver_name||'—'}</td>
           <td>${fmtDate(dc.dispatched_at)}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
-            ${dc.status==='IN_TRANSIT'?`
-              <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
-              <button class="btn btn-gold btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
-            `:'—'}
+            <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
+            <button class="btn btn-gold btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
           </td>
-        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No deliveries</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No active deliveries</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">Delivered (${delivered.length})</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Delivered Qty</th><th>Driver</th><th>Delivered At</th><th>Billed</th></tr></thead>
+        <tbody>${delivered.map(dc=>`<tr>
+          <td><b>${dc.id}</b></td>
+          <td>${dc.order_id}</td>
+          <td>${dc.client_name||'—'}</td>
+          <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+          <td>${dc.driver_name||'—'}</td>
+          <td>${fmtDate(dc.delivered_at)}</td>
+          <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'<span class="badge badge-warning">Pending</span>'}</td>
+        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">None</td></tr>'}
         </tbody>
       </table>
     </div>
   </div>`;
+}
+
+async function viewDCItems(dcId) {
+  const items = await api('/delivery-challans/' + dcId + '/items');
+  if (!items) return;
+  const rows = items.length ? items.map(i => `<tr>
+    <td>${i.sku}</td>
+    <td><b>${i.name}</b></td>
+    <td>${i.qty_ordered}</td>
+    <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered}</td>
+    <td style="color:${(i.qty_ordered-i.qty_delivered)>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-i.qty_delivered}</td>
+  </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No items</td></tr>';
+  openModal(`DC Items — ${dcId}`,
+    `<div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Pending</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+function dispatchDCModal(dcId) {
+  openModal(`Dispatch DC — ${dcId}`,
+    `<p style="margin-bottom:12px;color:var(--text-muted)">Enter vehicle and driver details to dispatch DC <b>${dcId}</b>. Order status will advance to IN_SHIPMENT.</p>
+     <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234"></div>
+     <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar"></div>
+     <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="confirmDispatch('${dcId}')">Dispatch Now</button>`);
+}
+
+async function confirmDispatch(dcId) {
+  const vehicle_no  = document.getElementById('dp-vehicle').value;
+  const driver_name = document.getElementById('dp-driver').value;
+  const driver_phone= document.getElementById('dp-phone').value;
+  if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
+  const res = await api('/delivery-challans/' + dcId + '/dispatch', {
+    method:'POST',
+    body: JSON.stringify({vehicle_no, driver_name, driver_phone})
+  });
+  closeModal();
+  if (res) { showToast(`DC ${dcId} dispatched — in transit`); navigate('delivery'); }
 }
 
 async function markDelivered(id) {
