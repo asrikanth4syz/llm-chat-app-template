@@ -1894,6 +1894,9 @@ const REPORT_DEFS = [
   { key:'budget-forecast', title:'Budget Forecasting', desc:'3-month rolling average forecast per client for next month.', icon:'🔮',
     cols:['client','forecast_month','predicted'],
     labels:['Client','Forecast Month','Predicted Spend'] },
+  { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: qty ordered, qty delivered, and qty due per client.', icon:'📦',
+    cols:['client_name','order_id','order_status','items_summary','qty_ordered','qty_delivered','qty_due','delivery_status','grand_total'],
+    labels:['Client','Order ID','Order Status','Items','Qty Ordered','Qty Delivered','Qty Due','Delivery Status','Order Value'] },
 ];
 
 function renderReports(el) {
@@ -1929,11 +1932,14 @@ async function viewReport(key) {
   const tbody = rows.length ? rows.map(row => {
     const cells = def.cols.map(c => {
       const v = row[c];
-      if (c.includes('spend')||c.includes('total')||c.includes('budget')||c.includes('price')||c.includes('remaining')) return '<td>' + fmt(v) + '</td>';
+      if (c.includes('spend')||c.includes('total')||c.includes('budget')||c.includes('price')||c.includes('remaining')||c==='grand_total') return '<td>' + fmt(v) + '</td>';
       if (c==='on_time_rate'||c==='fill_rate') return '<td>' + pct(v) + '</td>';
-      if (c==='status') return '<td>' + statusBadge(v) + '</td>';
+      if (c==='order_status'||c==='status') return '<td>' + statusBadge(v) + '</td>';
+      if (c==='delivery_status') return '<td><span class="badge ' + (v==='DELIVERED'?'badge-success':v==='IN_TRANSIT'?'badge-warning':'badge-secondary') + '">' + (v||'—') + '</span></td>';
+      if (c==='qty_due') return '<td><strong style="color:' + (Number(v)>0?'#dc2626':'#16a34a') + '">' + (v!=null?v:'—') + '</strong></td>';
       if (c==='billed') return '<td>' + (v?'<span class="badge badge-success">Yes</span>':'<span class="badge badge-warning">No</span>') + '</td>';
       if (c.includes('_at')) return '<td>' + fmtDate(v) + '</td>';
+      if (c==='items_summary') return '<td style="max-width:220px;white-space:normal;font-size:.8rem">' + (v||'—') + '</td>';
       return '<td>' + (v!=null?v:'—') + '</td>';
     }).join('');
     return '<tr>' + cells + '</tr>';
@@ -1955,7 +1961,7 @@ async function downloadReportCSV(key) {
   if (!def) return;
   showToast('Preparing CSV…');
   const data = await api('/reports/' + key);
-  const rows = data?.rows || data || [];
+  const rows = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : []));
   if (!Array.isArray(rows) || !rows.length) { showToast('No data to export','error'); return; }
   const header = def.labels.join(',');
   const body = rows.map(row => def.cols.map(c => {
