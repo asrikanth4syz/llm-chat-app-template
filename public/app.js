@@ -1894,9 +1894,9 @@ const REPORT_DEFS = [
   { key:'budget-forecast', title:'Budget Forecasting', desc:'3-month rolling average forecast per client for next month.', icon:'🔮',
     cols:['client','forecast_month','predicted'],
     labels:['Client','Forecast Month','Predicted Spend'] },
-  { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: qty ordered, qty delivered, and qty due per client.', icon:'📦',
-    cols:['client_name','order_id','order_status','items_summary','qty_ordered','qty_delivered','qty_due','delivery_status','grand_total'],
-    labels:['Client','Order ID','Order Status','Items','Qty Ordered','Qty Delivered','Qty Due','Delivery Status','Order Value'] },
+  { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: items ordered, quantities, and delivery status per client.', icon:'📦',
+    cols:['client_name','order_id','order_status','item_count','items_summary','qty_ordered','delivery_status','grand_total'],
+    labels:['Client','Order ID','Status','# Items','Items Detail','Total Qty Ordered','Delivery Status','Order Value'] },
 ];
 
 function renderReports(el) {

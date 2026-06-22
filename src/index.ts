@@ -1370,24 +1370,22 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
     case "order-items": {
       const {results} = await env.DB.prepare(`
         SELECT
-          c.name                                                                          AS client_name,
-          o.id                                                                            AS order_id,
-          o.status                                                                        AS order_status,
+          c.name                                                                              AS client_name,
+          o.id                                                                                AS order_id,
+          o.status                                                                            AS order_status,
           o.created_at,
           o.grand_total,
-          (SELECT GROUP_CONCAT(name || ' ×' || qty, ' | ') FROM order_items WHERE order_id=o.id) AS items_summary,
-          COALESCE((SELECT SUM(qty)          FROM order_items        WHERE order_id=o.id), 0) AS qty_ordered,
-          COALESCE((SELECT SUM(delivered_qty) FROM delivery_challans WHERE order_id=o.id), 0) AS qty_delivered,
-          COALESCE((SELECT SUM(qty) FROM order_items WHERE order_id=o.id), 0) -
-            COALESCE((SELECT SUM(delivered_qty) FROM delivery_challans WHERE order_id=o.id), 0) AS qty_due,
-          COALESCE((SELECT status FROM delivery_challans WHERE order_id=o.id ORDER BY created_at DESC LIMIT 1), 'NOT_DISPATCHED') AS delivery_status
+          (SELECT COUNT(*)                                        FROM order_items WHERE order_id=o.id) AS item_count,
+          (SELECT GROUP_CONCAT(name || ' x' || qty, ', ')        FROM order_items WHERE order_id=o.id) AS items_summary,
+          COALESCE((SELECT SUM(qty)                              FROM order_items WHERE order_id=o.id), 0) AS qty_ordered,
+          COALESCE((SELECT status FROM delivery_challans WHERE order_id=o.id LIMIT 1), 'NOT_DISPATCHED') AS delivery_status
         FROM orders o
         JOIN clients c ON o.client_id=c.id
         WHERE o.status NOT IN ('CANCELLED','DRAFT')
           AND o.created_at >= ?
           AND o.created_at <= ?
         ORDER BY c.name, o.created_at DESC
-        LIMIT 300`).bind(from, to).all();
+        LIMIT 200`).bind(from, to).all();
       return json({type,from,to,data:results});
     }
     default: return json({error:"Unknown report type"}, 400);
