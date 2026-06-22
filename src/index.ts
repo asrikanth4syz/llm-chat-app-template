@@ -277,6 +277,53 @@ export default {
       // Categories
       if (path==="/api/categories"  && method==="GET") return handleListCategories(request,env);
 
+      // Feature 16: Delivery routes
+      if (path==="/api/delivery-routes"                         && method==="GET")   return handleListDeliveryRoutes(request,env);
+      if (path==="/api/delivery-routes"                         && method==="POST")  return handleCreateDeliveryRoute(request,env);
+      if (path.match(/^\/api\/delivery-routes\/[^/]+$/)         && method==="PATCH") return handlePatchDeliveryRoute(request,env,path);
+
+      // Feature 17: Dunning
+      if (path==="/api/dunning-rules"                           && method==="GET")   return handleListDunningRules(request,env);
+      if (path==="/api/dunning-rules"                           && method==="POST")  return handleCreateDunningRule(request,env);
+      if (path==="/api/dunning/run"                             && method==="POST")  return handleRunDunning(request,env);
+      if (path==="/api/dunning-events"                          && method==="GET")   return handleListDunningEvents(request,env);
+
+      // Feature 18: CSV Import
+      if (path==="/api/import/inventory"                        && method==="POST")  return handleImportInventory(request,env);
+      if (path==="/api/import/orders"                           && method==="POST")  return handleImportOrders(request,env);
+      if (path==="/api/import-jobs"                             && method==="GET")   return handleListImportJobs(request,env);
+
+      // Feature 19: Templates
+      if (path==="/api/order-templates"                         && method==="GET")   return handleListOrderTemplates(request,env);
+      if (path==="/api/order-templates"                         && method==="POST")  return handleCreateOrderTemplate(request,env);
+      if (path.match(/^\/api\/order-templates\/[^/]+$/)         && method==="DELETE") return handleDeleteOrderTemplate(request,env,path);
+      if (path==="/api/po-templates"                            && method==="GET")   return handleListPOTemplates(request,env);
+      if (path==="/api/po-templates"                            && method==="POST")  return handleCreatePOTemplate(request,env);
+      if (path.match(/^\/api\/po-templates\/[^/]+$/)            && method==="DELETE") return handleDeletePOTemplate(request,env,path);
+
+      // Feature 20: Vendor feedback
+      if (path.match(/^\/api\/vendors\/[^/]+\/feedback$/)       && method==="GET")   return handleListVendorFeedback(request,env,path);
+      if (path.match(/^\/api\/vendors\/[^/]+\/feedback$/)       && method==="POST")  return handleCreateVendorFeedback(request,env,path);
+
+      // Feature 21: SLA
+      if (path==="/api/sla-rules"                               && method==="GET")   return handleListSLARules(request,env);
+      if (path==="/api/sla-rules"                               && method==="POST")  return handleCreateSLARule(request,env);
+      if (path==="/api/sla-breaches"                            && method==="GET")   return handleListSLABreaches(request,env);
+      if (path==="/api/sla/check"                               && method==="POST")  return handleSLACheck(request,env);
+
+      // Feature 22: 2FA
+      if (path.match(/^\/api\/users\/[^/]+\/2fa$/)              && method==="PATCH") return handleToggle2FA(request,env,path);
+
+      // Feature 23: Credit
+      if (path.match(/^\/api\/clients\/[^/]+\/credit$/)         && method==="GET")   return handleGetClientCredit(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/credit-adjust$/)  && method==="POST")  return handleCreditAdjust(request,env,path);
+
+      // Feature 24: Approval chains
+      if (path==="/api/approval-chains"                         && method==="GET")   return handleListApprovalChains(request,env);
+      if (path==="/api/approval-chains"                         && method==="POST")  return handleCreateApprovalChain(request,env);
+      if (path==="/api/approval-chain-instances"                && method==="GET")   return handleListApprovalChainInstances(request,env);
+      if (path.match(/^\/api\/approval-chain-instances\/[^/]+\/act$/) && method==="POST") return handleApprovalChainAct(request,env,path);
+
       return json({error:"Not found"}, 404);
     } catch (err) {
       console.error(err);
@@ -1302,6 +1349,24 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
         GROUP BY i.hsn_code,i.name ORDER BY gst_amount DESC`).bind(from).all();
       return json({type,from,to,data:results});
     }
+    case "budget-forecast": {
+      const {results: clients2} = await env.DB.prepare("SELECT id,name FROM clients WHERE active=1").all();
+      const forecast = [];
+      for (const cl of clients2 as Record<string,unknown>[]) {
+        const {results: history} = await env.DB.prepare(`
+          SELECT strftime('%Y-%m',created_at) as month, SUM(grand_total) as actual
+          FROM orders WHERE client_id=? AND status NOT IN ('CANCELLED')
+          AND created_at >= datetime('now','-6 months')
+          GROUP BY month ORDER BY month ASC`).bind(cl.id).all();
+        const actuals = (history as Record<string,unknown>[]).map(r => ({ month: r.month as string, actual: r.actual as number }));
+        const last3 = actuals.slice(-3);
+        const avg = last3.length ? last3.reduce((s,r) => s + (r.actual||0), 0) / last3.length : 0;
+        const nextMonth = new Date(); nextMonth.setMonth(nextMonth.getMonth() + 1);
+        const nextLabel = nextMonth.toISOString().slice(0,7);
+        forecast.push({ client: cl.name, history: actuals, forecast: { month: nextLabel, predicted: Math.round(avg) } });
+      }
+      return json({ type, data: forecast });
+    }
     default: return json({error:"Unknown report type"}, 400);
   }
 }
@@ -1316,3 +1381,520 @@ async function handleListCategories(request: Request, env: Env): Promise<Respons
   const {results} = await env.DB.prepare("SELECT DISTINCT category FROM inventory WHERE active=1 ORDER BY category").all();
   return json(results.map((r: Record<string,unknown>)=>r.category));
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 16: DELIVERY ROUTES
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListDeliveryRoutes(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM delivery_routes ORDER BY route_date DESC LIMIT 50"
+  ).all();
+  return json(results);
+}
+
+async function handleCreateDeliveryRoute(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  const dcIds = (body.dc_ids as string[]) || [];
+  const stops = dcIds.map((dcId, i) => ({ seq: i + 1, dc_id: dcId }));
+  const id = uid();
+  const name = (body.name as string) || `Route ${new Date().toISOString().slice(0,10)}`;
+  const routeDate = (body.route_date as string) || new Date().toISOString().slice(0,10);
+  await env.DB.prepare(
+    "INSERT INTO delivery_routes (id,name,route_date,stops,status,created_by) VALUES (?,?,?,?,?,?)"
+  ).bind(id, name, routeDate, JSON.stringify(stops), "PLANNED", user!.sub).run();
+  await audit(env, user, "CREATE", "delivery_route", id, undefined, JSON.stringify({name, stops: stops.length}));
+  return json({id, name, route_date: routeDate, stops, status: "PLANNED"}, 201);
+}
+
+async function handlePatchDeliveryRoute(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as Record<string,unknown>;
+  const fields: string[] = ["updated_at=datetime('now')"];
+  const vals: unknown[] = [];
+  if (body.status) { fields.push("status=?"); vals.push(body.status); }
+  if (body.stops)  { fields.push("stops=?");  vals.push(JSON.stringify(body.stops)); }
+  if (body.name)   { fields.push("name=?");   vals.push(body.name); }
+  vals.push(id);
+  await env.DB.prepare(`UPDATE delivery_routes SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 17: DUNNING / PAYMENT ESCALATION
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListDunningRules(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare("SELECT * FROM dunning_rules WHERE active=1 ORDER BY days_overdue").all();
+  return json(results);
+}
+
+async function handleCreateDunningRule(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","finance_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Record<string,unknown>;
+  const id = uid();
+  await env.DB.prepare(
+    "INSERT INTO dunning_rules (id,days_overdue,action,message_template) VALUES (?,?,?,?)"
+  ).bind(id, body.days_overdue, body.action, body.message_template||null).run();
+  return json({id}, 201);
+}
+
+async function handleRunDunning(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","finance_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const {results: rules} = await env.DB.prepare("SELECT * FROM dunning_rules WHERE active=1").all();
+  const {results: overdue} = await env.DB.prepare(`
+    SELECT o.id, o.client_id, o.grand_total, o.created_at, c.name as client_name, c.contact_email
+    FROM orders o JOIN clients c ON o.client_id=c.id
+    WHERE o.status IN ('CLOSED','PARTIALLY_CLOSED')
+    AND o.id NOT IN (SELECT DISTINCT order_id FROM delivery_challans WHERE billed=1)
+    AND julianday('now') - julianday(o.created_at) > 0
+  `).all();
+
+  let triggered = 0;
+  for (const rule of rules as Record<string,unknown>[]) {
+    for (const order of overdue as Record<string,unknown>[]) {
+      const daysDiff = Math.floor((Date.now() - new Date(order.created_at as string).getTime()) / 86400000);
+      if (daysDiff >= (rule.days_overdue as number)) {
+        const existing = await env.DB.prepare(
+          "SELECT id FROM dunning_events WHERE rule_id=? AND order_id=?"
+        ).bind(rule.id, order.id).first();
+        if (existing) continue;
+        const evId = uid();
+        await env.DB.prepare(
+          "INSERT INTO dunning_events (id,rule_id,client_id,order_id,action_taken,notes) VALUES (?,?,?,?,?,?)"
+        ).bind(evId, rule.id, order.client_id, order.id, rule.action,
+          `${daysDiff} days overdue — ₹${order.grand_total}`).run();
+        await pushNotification(env, "finance_admin",
+          `Dunning ${rule.action}: ${order.client_name} order ${order.id} is ${daysDiff} days overdue`);
+        triggered++;
+      }
+    }
+  }
+  await audit(env, user, "RUN_DUNNING", "dunning", "global", undefined, `triggered:${triggered}`);
+  return json({ok:true, triggered});
+}
+
+async function handleListDunningEvents(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT de.*,c.name as client_name FROM dunning_events de LEFT JOIN clients c ON de.client_id=c.id ORDER BY de.created_at DESC LIMIT 100"
+  ).all();
+  return json(results);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 18: CSV IMPORT
+// ════════════════════════════════════════════════════════════════════
+
+async function handleImportInventory(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const rows = await request.json() as Record<string,unknown>[];
+  let success = 0; const errors: string[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name required`); continue; }
+    try {
+      const existing = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(row.sku).first();
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE inventory SET name=?,stock=?,unit_price=?,category=? WHERE sku=?"
+        ).bind(row.name, row.stock||0, row.unit_price||0, row.category||"General", row.sku).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO inventory (sku,name,stock,unit_price,category,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?)"
+        ).bind(row.sku, row.name, row.stock||0, row.unit_price||0, row.category||"General",
+          row.reorder_level||10, row.max_stock||500).run();
+      }
+      success++;
+    } catch (e) {
+      errors.push(`Row ${i+1}: ${String(e)}`);
+    }
+  }
+  const jobId = uid();
+  await env.DB.prepare(
+    "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
+  ).bind(jobId, "inventory", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
+  return json({job_id: jobId, success, failed: errors.length, errors});
+}
+
+async function handleImportOrders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const rows = await request.json() as Record<string,unknown>[];
+  let success = 0; const errors: string[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row.client_id || !row.grand_total) { errors.push(`Row ${i+1}: client_id and grand_total required`); continue; }
+    try {
+      const orderId = (row.id as string) || `SP-IMP-${Math.floor(Math.random()*9000+1000)}`;
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO orders (id,client_id,status,grand_total,subtotal,gst,notes) VALUES (?,?,'DRAFT',?,?,?,?)"
+      ).bind(orderId, row.client_id, row.grand_total, row.subtotal||row.grand_total, row.gst||0, row.notes||"Imported").run();
+      success++;
+    } catch (e) {
+      errors.push(`Row ${i+1}: ${String(e)}`);
+    }
+  }
+  const jobId = uid();
+  await env.DB.prepare(
+    "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
+  ).bind(jobId, "orders", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
+  return json({job_id: jobId, success, failed: errors.length, errors});
+}
+
+async function handleListImportJobs(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  return json(results);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 19: ORDER / PO TEMPLATES
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListOrderTemplates(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM order_templates ORDER BY created_at DESC"
+  ).all();
+  return json(results);
+}
+
+async function handleCreateOrderTemplate(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.name) return json({error:"Template name required"}, 400);
+  const id = uid();
+  await env.DB.prepare(
+    "INSERT INTO order_templates (id,name,client_id,items,notes,created_by) VALUES (?,?,?,?,?,?)"
+  ).bind(id, body.name, body.client_id||null, JSON.stringify(body.items||[]), body.notes||null, user!.sub).run();
+  return json({id}, 201);
+}
+
+async function handleDeleteOrderTemplate(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  await env.DB.prepare("DELETE FROM order_templates WHERE id=?").bind(id).run();
+  return json({id});
+}
+
+async function handleListPOTemplates(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM po_templates ORDER BY created_at DESC"
+  ).all();
+  return json(results);
+}
+
+async function handleCreatePOTemplate(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.name) return json({error:"Template name required"}, 400);
+  const id = uid();
+  await env.DB.prepare(
+    "INSERT INTO po_templates (id,name,vendor_id,items,notes,created_by) VALUES (?,?,?,?,?,?)"
+  ).bind(id, body.name, body.vendor_id||null, JSON.stringify(body.items||[]), body.notes||null, user!.sub).run();
+  return json({id}, 201);
+}
+
+async function handleDeletePOTemplate(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  await env.DB.prepare("DELETE FROM po_templates WHERE id=?").bind(id).run();
+  return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 20: VENDOR FEEDBACK
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListVendorFeedback(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const vendorId = path.split("/")[3];
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM vendor_feedback WHERE vendor_id=? ORDER BY created_at DESC"
+  ).bind(vendorId).all();
+  return json(results);
+}
+
+async function handleCreateVendorFeedback(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const vendorId = path.split("/")[3];
+  const body = await request.json() as Record<string,unknown>;
+  const id = uid();
+  const q = Math.min(5, Math.max(1, Number(body.quality_rating)||3));
+  const d = Math.min(5, Math.max(1, Number(body.delivery_rating)||3));
+  const s = Math.min(5, Math.max(1, Number(body.service_rating)||3));
+  await env.DB.prepare(
+    "INSERT INTO vendor_feedback (id,vendor_id,po_id,grn_id,quality_rating,delivery_rating,service_rating,comments,submitted_by) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).bind(id, vendorId, body.po_id||null, body.grn_id||null, q, d, s, body.comments||null, user!.sub).run();
+
+  const {results: allFb} = await env.DB.prepare(
+    "SELECT quality_rating,delivery_rating,service_rating FROM vendor_feedback WHERE vendor_id=?"
+  ).bind(vendorId).all();
+  const avgRating = allFb.length
+    ? allFb.reduce((sum, r: Record<string,unknown>) =>
+        sum + ((r.quality_rating as number) + (r.delivery_rating as number) + (r.service_rating as number)) / 3, 0) / allFb.length
+    : (q + d + s) / 3;
+  await env.DB.prepare("UPDATE vendors SET rating=? WHERE id=?").bind(Math.round(avgRating * 10) / 10, vendorId).run();
+  await audit(env, user, "FEEDBACK", "vendor", vendorId, undefined, `rating:${avgRating.toFixed(1)}`);
+  return json({id, avg_rating: avgRating}, 201);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 21: SLA TRACKING
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListSLARules(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare("SELECT * FROM sla_rules WHERE active=1 ORDER BY max_hours").all();
+  return json(results);
+}
+
+async function handleCreateSLARule(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Record<string,unknown>;
+  const id = uid();
+  await env.DB.prepare(
+    "INSERT INTO sla_rules (id,name,entity_type,trigger_status,max_hours,action) VALUES (?,?,?,?,?,?)"
+  ).bind(id, body.name, body.entity_type||"order", body.trigger_status, body.max_hours, body.action||"NOTIFY").run();
+  return json({id}, 201);
+}
+
+async function handleListSLABreaches(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT sb.*,sr.name as rule_name,sr.max_hours,sr.trigger_status
+    FROM sla_breaches sb LEFT JOIN sla_rules sr ON sb.rule_id=sr.id
+    WHERE sb.status='OPEN' ORDER BY sb.breached_at DESC LIMIT 100
+  `).all();
+  return json(results);
+}
+
+async function handleSLACheck(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const {results: rules} = await env.DB.prepare("SELECT * FROM sla_rules WHERE active=1").all();
+  let newBreaches = 0;
+
+  for (const rule of rules as Record<string,unknown>[]) {
+    const {results: entities} = await env.DB.prepare(`
+      SELECT id, status, updated_at FROM orders
+      WHERE status=? AND (julianday('now') - julianday(updated_at)) * 24 > ?
+    `).bind(rule.trigger_status, rule.max_hours).all();
+
+    for (const entity of entities as Record<string,unknown>[]) {
+      const existing = await env.DB.prepare(
+        "SELECT id FROM sla_breaches WHERE rule_id=? AND entity_id=? AND status='OPEN'"
+      ).bind(rule.id, entity.id).first();
+      if (existing) continue;
+
+      const breachId = uid();
+      await env.DB.prepare(
+        "INSERT INTO sla_breaches (id,rule_id,entity_id,entity_type,status) VALUES (?,?,?,?,?)"
+      ).bind(breachId, rule.id, entity.id, rule.entity_type||"order", "OPEN").run();
+      await pushNotification(env, "ops_admin",
+        `SLA breach: ${rule.name} — order ${entity.id} exceeded ${rule.max_hours}h in status ${rule.trigger_status}`);
+      newBreaches++;
+    }
+  }
+  return json({ok:true, new_breaches: newBreaches});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 22: TWO-FACTOR AUTHENTICATION
+// ════════════════════════════════════════════════════════════════════
+
+async function handleToggle2FA(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const targetId = path.split("/")[3];
+  if (user!.sub !== targetId && !["super_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Record<string,unknown>;
+  const enabled = body.two_fa_enabled ? 1 : 0;
+  await env.DB.prepare("UPDATE users SET two_fa_enabled=? WHERE id=?").bind(enabled, targetId).run();
+  await audit(env, user, enabled ? "ENABLE_2FA" : "DISABLE_2FA", "user", targetId);
+  return json({id: targetId, two_fa_enabled: enabled});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 23: CLIENT CREDIT LIMITS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleGetClientCredit(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const clientId = path.split("/")[3];
+  const row = await env.DB.prepare(
+    "SELECT id,name,credit_limit,credit_used FROM clients WHERE id=?"
+  ).bind(clientId).first() as Record<string,unknown>|null;
+  if (!row) return json({error:"Client not found"}, 404);
+  return json({...row, credit_available: (row.credit_limit as number) - (row.credit_used as number)});
+}
+
+async function handleCreditAdjust(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","finance_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const clientId = path.split("/")[3];
+  const body = await request.json() as Record<string,unknown>;
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  if (body.credit_limit !== undefined) { fields.push("credit_limit=?"); vals.push(body.credit_limit); }
+  if (body.credit_used  !== undefined) { fields.push("credit_used=?");  vals.push(body.credit_used); }
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(clientId);
+  await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  await audit(env, user, "CREDIT_ADJUST", "client", clientId, undefined, JSON.stringify(body));
+  return json({id: clientId});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Feature 24: MULTI-LEVEL APPROVAL CHAINS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListApprovalChains(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results: chains} = await env.DB.prepare(
+    "SELECT * FROM approval_chains WHERE active=1 ORDER BY min_amount"
+  ).all();
+  for (const chain of chains as Record<string,unknown>[]) {
+    const {results: steps} = await env.DB.prepare(
+      "SELECT * FROM approval_chain_steps WHERE chain_id=? ORDER BY step_order"
+    ).bind(chain.id).all();
+    chain.steps = steps;
+  }
+  return json(chains);
+}
+
+async function handleCreateApprovalChain(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.name) return json({error:"Chain name required"}, 400);
+  const chainId = uid();
+  await env.DB.prepare(
+    "INSERT INTO approval_chains (id,name,entity_type,min_amount) VALUES (?,?,?,?)"
+  ).bind(chainId, body.name, body.entity_type||"order", body.min_amount||0).run();
+
+  const steps = (body.steps as Array<{role:string;label?:string}>) || [];
+  for (let i = 0; i < steps.length; i++) {
+    const stepId = uid();
+    await env.DB.prepare(
+      "INSERT INTO approval_chain_steps (id,chain_id,step_order,role,label) VALUES (?,?,?,?,?)"
+    ).bind(stepId, chainId, i+1, steps[i].role, steps[i].label||null).run();
+  }
+  await audit(env, user, "CREATE", "approval_chain", chainId, undefined, body.name as string);
+  return json({id: chainId}, 201);
+}
+
+async function handleListApprovalChainInstances(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT aci.*,ac.name as chain_name,ac.min_amount
+    FROM approval_chain_instances aci
+    LEFT JOIN approval_chains ac ON aci.chain_id=ac.id
+    WHERE aci.status='PENDING'
+    ORDER BY aci.created_at DESC LIMIT 50
+  `).all();
+  return json(results);
+}
+
+async function handleApprovalChainAct(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const instanceId = path.split("/")[3];
+  const body = await request.json() as Record<string,unknown>;
+  const action = (body.action as string) || "APPROVED";
+
+  const instance = await env.DB.prepare(
+    "SELECT * FROM approval_chain_instances WHERE id=?"
+  ).bind(instanceId).first() as Record<string,unknown>|null;
+  if (!instance) return json({error:"Instance not found"}, 404);
+
+  const actionId = uid();
+  await env.DB.prepare(
+    "INSERT INTO approval_chain_actions (id,instance_id,step_order,actor_id,actor_name,action,comments) VALUES (?,?,?,?,?,?,?)"
+  ).bind(actionId, instanceId, instance.current_step, user!.sub, user!.name, action, body.comments||null).run();
+
+  if (action === "REJECTED") {
+    await env.DB.prepare(
+      "UPDATE approval_chain_instances SET status='REJECTED',updated_at=datetime('now') WHERE id=?"
+    ).bind(instanceId).run();
+    await env.DB.prepare("UPDATE orders SET status='CANCELLED' WHERE id=?").bind(instance.entity_id).run();
+    await pushNotification(env, null, `Approval chain rejected for order ${instance.entity_id} by ${user!.name}`);
+    return json({ok:true, status:"REJECTED"});
+  }
+
+  const {results: steps} = await env.DB.prepare(
+    "SELECT * FROM approval_chain_steps WHERE chain_id=? ORDER BY step_order"
+  ).bind(instance.chain_id).all();
+  const totalSteps = steps.length;
+  const nextStep = (instance.current_step as number) + 1;
+
+  if (nextStep > totalSteps) {
+    await env.DB.prepare(
+      "UPDATE approval_chain_instances SET status='APPROVED',current_step=?,updated_at=datetime('now') WHERE id=?"
+    ).bind(nextStep - 1, instanceId).run();
+    await env.DB.prepare(
+      "UPDATE orders SET status='APPROVED' WHERE id=? AND status='PENDING_APPROVAL'"
+    ).bind(instance.entity_id).run();
+    await pushNotification(env, null, `Order ${instance.entity_id} fully approved via chain`);
+    await audit(env, user, "CHAIN_APPROVED", "order", instance.entity_id as string);
+    return json({ok:true, status:"APPROVED", all_steps_done:true});
+  } else {
+    await env.DB.prepare(
+      "UPDATE approval_chain_instances SET current_step=?,updated_at=datetime('now') WHERE id=?"
+    ).bind(nextStep, instanceId).run();
+    const nextStepRow = steps.find((s: Record<string,unknown>) => s.step_order === nextStep) as Record<string,unknown>|undefined;
+    await pushNotification(env, nextStepRow?.role as string || null,
+      `Approval needed for order ${instance.entity_id} — step ${nextStep} of ${totalSteps}`);
+    return json({ok:true, status:"PENDING", next_step: nextStep});
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// FEATURE 16: DELIVERY ROUTE OPTIMIZATION
+// ════════════════════════════════════════════════════════════════════
+

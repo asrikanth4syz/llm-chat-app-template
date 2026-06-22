@@ -38,6 +38,13 @@ const NAV = {
     { id:'clients',     label:'Clients',       icon:iconClients,   badge:null },
     { id:'service_desk',label:'Service Desk',  icon:iconDesk,      badge:null },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
+    { section:'Features 16-25' },
+    { id:'delivery_routes', label:'Route Optimization', icon:iconDelivery,  badge:null },
+    { id:'dunning',         label:'Dunning & Payments', icon:iconBilling,   badge:null },
+    { id:'import_data',     label:'CSV Import',         icon:iconInventory, badge:null },
+    { id:'templates',       label:'Templates',          icon:iconOrders,    badge:null },
+    { id:'sla_dashboard',   label:'SLA Dashboard',      icon:iconReports,   badge:'!' },
+    { id:'approval_chains', label:'Approval Chains',    icon:iconApprove,   badge:null },
     { section:'Admin' },
     { id:'users',       label:'Users & Roles', icon:iconUsers,     badge:null },
     { id:'settings',    label:'Settings',      icon:iconSettings,  badge:null },
@@ -392,6 +399,12 @@ const PAGE_MAP = {
   vendor_pos: renderVendorPOs,
   vendor_invoices: renderVendorInvoices,
   vendor_payments: renderVendorPayments,
+  delivery_routes: renderDeliveryRoutes,
+  dunning: renderDunning,
+  import_data: renderImportData,
+  templates: renderTemplates,
+  sla_dashboard: renderSLADashboard,
+  approval_chains: renderApprovalChains,
 };
 
 function navigate(page) {
@@ -1320,6 +1333,7 @@ async function renderVendors(el) {
           <td>⭐ ${(+v.rating).toFixed(1)}</td>
           <td>
             <button class="btn btn-secondary btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
+            <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
           </td>
         </tr>`).join('')}
         </tbody>
@@ -1681,9 +1695,10 @@ async function renderClients(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Client</th><th>Contact</th><th>Health</th><th>Budget Used</th><th>Threshold</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Client</th><th>Contact</th><th>Health</th><th>Budget Used</th><th>Credit Limit</th><th>Credit Used</th><th>Actions</th></tr></thead>
         <tbody>${clients.map(c=>{
-          const pct = Math.min(100, Math.round((c.spent_this_month/c.monthly_budget)*100));
+          const budgetPct = Math.min(100, Math.round((c.spent_this_month/c.monthly_budget)*100));
+          const creditPct = c.credit_limit > 0 ? Math.min(100, Math.round((c.credit_used/c.credit_limit)*100)) : 0;
           return `<tr>
             <td><b>${c.name}</b></td>
             <td><div style="font-size:.82rem">${c.contact_name||'—'}</div><div style="font-size:.78rem;color:var(--text-muted)">${c.contact_email||''}</div></td>
@@ -1691,13 +1706,17 @@ async function renderClients(el) {
             <td style="min-width:140px">
               <div style="display:flex;align-items:center;gap:6px">
                 <div style="flex:1;background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-                  <div style="height:100%;width:${pct}%;background:${pct>90?'var(--danger)':pct>75?'var(--warning)':'var(--success)'};border-radius:3px"></div>
+                  <div style="height:100%;width:${budgetPct}%;background:${budgetPct>90?'var(--danger)':budgetPct>75?'var(--warning)':'var(--success)'};border-radius:3px"></div>
                 </div>
-                <span style="font-size:.78rem;min-width:32px">${pct}%</span>
+                <span style="font-size:.78rem;min-width:32px">${budgetPct}%</span>
               </div>
               <div style="font-size:.76rem;color:var(--text-muted)">${fmt(c.spent_this_month)} / ${fmt(c.monthly_budget)}</div>
             </td>
-            <td>${fmt(c.approval_threshold)}</td>
+            <td>${fmt(c.credit_limit||0)}</td>
+            <td>
+              <span style="color:${creditPct>80?'var(--danger)':creditPct>60?'var(--warning)':'inherit'}">${fmt(c.credit_used||0)}</span>
+              ${c.credit_limit > 0 ? `<span style="font-size:.76rem;color:var(--text-muted)"> (${creditPct}%)</span>` : ''}
+            </td>
             <td><button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button></td>
           </tr>`;
         }).join('')}
@@ -1871,6 +1890,9 @@ const REPORT_DEFS = [
   { key:'gst',         title:'GST & Tax Report',   desc:'HSN-wise GST breakup and summary for filing.', icon:'📋',
     cols:['sku','name','hsn_code','gst_rate','stock','unit_price'],
     labels:['SKU','Item','HSN','GST %','Stock','Unit Price'] },
+  { key:'budget-forecast', title:'Budget Forecasting', desc:'3-month rolling average forecast per client for next month.', icon:'🔮',
+    cols:['client','forecast_month','predicted'],
+    labels:['Client','Forecast Month','Predicted Spend'] },
 ];
 
 function renderReports(el) {
@@ -1899,7 +1921,10 @@ async function viewReport(key) {
   showToast('Loading report…');
   const data = await api('/reports/' + key);
   if (!data) return;
-  const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data) ? data : [];
+  let rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : []);
+  if (key === 'budget-forecast') {
+    rows = rows.map(r => ({ client: r.client, forecast_month: r.forecast?.month||'', predicted: r.forecast?.predicted||0 }));
+  }
   const tbody = rows.length ? rows.map(row => {
     const cells = def.cols.map(c => {
       const v = row[c];
@@ -1979,12 +2004,18 @@ async function renderUsers(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organisation</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organisation</th><th>2FA</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${users.map(u=>`<tr>
           <td><div class="su-avatar" style="display:inline-flex;width:28px;height:28px;font-size:.7rem">${u.initials}</div> ${u.name}</td>
           <td style="font-size:.84rem">${u.email}</td>
           <td>${statusBadge(u.role)}</td>
           <td>${u.org}</td>
+          <td>
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" ${u.two_fa_enabled ? 'checked' : ''} onchange="toggle2FA('${u.id}',this.checked)">
+              <span style="font-size:.78rem;color:var(--text-muted)">${u.two_fa_enabled ? 'On' : 'Off'}</span>
+            </label>
+          </td>
           <td>${u.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
           <td>${u.active ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}')">Deactivate</button>` :
             `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')">Activate</button>`}
@@ -2389,6 +2420,599 @@ async function renderVendorPayments(el) {
       </table>
     </div>
   </div>`;
+}
+
+/* ============================================================
+   Feature 22: 2FA TOGGLE
+   ============================================================ */
+async function toggle2FA(userId, enabled) {
+  const res = await api('/users/' + userId + '/2fa', {
+    method: 'PATCH',
+    body: JSON.stringify({ two_fa_enabled: enabled ? 1 : 0 }),
+  });
+  if (res) showToast('2FA ' + (enabled ? 'enabled' : 'disabled') + ' for user');
+}
+
+/* ============================================================
+   Feature 20: VENDOR FEEDBACK
+   ============================================================ */
+function openVendorFeedbackModal(vendorId, vendorName) {
+  openModal('Rate Vendor — ' + vendorName,
+    `<div class="form-group"><label>Quality (1-5)</label><input type="number" id="fb-quality" value="4" min="1" max="5"></div>
+     <div class="form-group"><label>Delivery (1-5)</label><input type="number" id="fb-delivery" value="4" min="1" max="5"></div>
+     <div class="form-group"><label>Service (1-5)</label><input type="number" id="fb-service" value="4" min="1" max="5"></div>
+     <div class="form-group"><label>Comments</label><textarea id="fb-comments" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="submitVendorFeedback('${vendorId}')">Submit Rating</button>`);
+}
+
+async function submitVendorFeedback(vendorId) {
+  const body = {
+    quality_rating: +document.getElementById('fb-quality').value,
+    delivery_rating: +document.getElementById('fb-delivery').value,
+    service_rating: +document.getElementById('fb-service').value,
+    comments: document.getElementById('fb-comments').value,
+  };
+  const res = await api('/vendors/' + vendorId + '/feedback', { method: 'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Vendor rated — scorecard updated'); navigate('vendors'); }
+}
+
+/* ============================================================
+   Feature 16: DELIVERY ROUTE OPTIMIZATION
+   ============================================================ */
+async function renderDeliveryRoutes(el) {
+  const [routes, dcs] = await Promise.all([
+    api('/delivery-routes'),
+    api('/delivery-challans'),
+  ]);
+  if (!routes) return;
+
+  const undelivered = (dcs || []).filter(d => d.status !== 'DELIVERED');
+
+  el.innerHTML = `
+  ${pageHeader('Route Optimization', `${routes.length} routes`,
+    `<button class="btn btn-gold" onclick="openNewRouteModal()" style="display:inline-flex;align-items:center;gap:6px">Optimize New Route</button>`)}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span>Undelivered DCs (${undelivered.length})</span></div>
+    <div class="card-body" style="padding:12px">
+      ${undelivered.length ? `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:8px">Select DCs to include in a route:</div>
+      ${undelivered.map(dc=>`
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" class="dc-select" data-id="${dc.id}" value="${dc.id}">
+          <span><b>${dc.id}</b> — Order: ${dc.order_id||'—'} ${dc.dispatched_at ? '(Dispatched '+fmtDate(dc.dispatched_at)+')' : ''}</span>
+        </label>`).join('')}
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" onclick="createOptimizedRoute()">Create Route from Selected</button>
+      </div>` : '<div style="padding:8px;color:var(--text-muted)">No undelivered DCs</div>'}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span>Routes</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${routes.map(r=>{
+          const stops = typeof r.stops === 'string' ? JSON.parse(r.stops) : (r.stops||[]);
+          return `<tr>
+            <td><b>${r.name}</b></td>
+            <td>${fmtDate(r.route_date)}</td>
+            <td>${stops.length} stops</td>
+            <td>${statusBadge(r.status)}</td>
+            <td>
+              ${r.status==='PLANNED' ? `<button class="btn btn-primary btn-sm" onclick="updateRouteStatus('${r.id}','IN_PROGRESS')">Start</button>` : ''}
+              ${r.status==='IN_PROGRESS' ? `<button class="btn btn-success btn-sm" onclick="updateRouteStatus('${r.id}','COMPLETED')">Complete</button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No routes yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function createOptimizedRoute() {
+  const selected = [...document.querySelectorAll('.dc-select:checked')].map(el => el.value);
+  if (!selected.length) { showToast('Select at least one DC', 'error'); return; }
+  const name = 'Route ' + new Date().toISOString().slice(0,10);
+  const res = await api('/delivery-routes', {
+    method: 'POST',
+    body: JSON.stringify({ name, dc_ids: selected, route_date: new Date().toISOString().slice(0,10) }),
+  });
+  if (res) { showToast('Route created with ' + selected.length + ' stops'); navigate('delivery_routes'); }
+}
+
+async function updateRouteStatus(id, status) {
+  const res = await api('/delivery-routes/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
+  if (res) { showToast('Route status updated'); navigate('delivery_routes'); }
+}
+
+/* ============================================================
+   Feature 17: DUNNING / PAYMENT ESCALATION
+   ============================================================ */
+async function renderDunning(el) {
+  const [rules, events] = await Promise.all([
+    api('/dunning-rules'),
+    api('/dunning-events'),
+  ]);
+  if (!rules) return;
+
+  el.innerHTML = `
+  ${pageHeader('Dunning & Payment Escalation', `${rules.length} rules`,
+    `<button class="btn btn-gold" onclick="runDunningCheck()">Run Dunning Check</button>`)}
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-header"><span>Dunning Rules</span>
+        <button class="btn btn-secondary btn-sm" onclick="addDunningRuleModal()">Add Rule</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Days Overdue</th><th>Action</th><th>Message</th></tr></thead>
+          <tbody>${rules.map(r=>`<tr>
+            <td><b>${r.days_overdue}d</b></td>
+            <td>${statusBadge(r.action)}</td>
+            <td style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.message_template||'—'}</td>
+          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No rules</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Recent Events</span></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Client</th><th>Order</th><th>Action</th><th>Date</th></tr></thead>
+          <tbody>${(events||[]).slice(0,10).map(e=>`<tr>
+            <td>${e.client_name||e.client_id}</td>
+            <td>${e.order_id||'—'}</td>
+            <td>${statusBadge(e.action_taken)}</td>
+            <td>${fmtDate(e.created_at)}</td>
+          </tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No events yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function runDunningCheck() {
+  const res = await api('/dunning/run', { method: 'POST', body: '{}' });
+  if (res) {
+    showToast('Dunning check complete — ' + res.triggered + ' action(s) triggered');
+    navigate('dunning');
+  }
+}
+
+function addDunningRuleModal() {
+  openModal('Add Dunning Rule',
+    `<div class="form-group"><label>Days Overdue</label><input type="number" id="dr-days" value="30" min="1"></div>
+     <div class="form-group"><label>Action</label>
+       <select id="dr-action"><option>EMAIL</option><option>SMS</option><option>ESCALATE</option><option>SUSPEND</option></select>
+     </div>
+     <div class="form-group"><label>Message Template</label><textarea id="dr-msg" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveDunningRule()">Save Rule</button>`);
+}
+
+async function saveDunningRule() {
+  const body = {
+    days_overdue: +document.getElementById('dr-days').value,
+    action: document.getElementById('dr-action').value,
+    message_template: document.getElementById('dr-msg').value,
+  };
+  const res = await api('/dunning-rules', { method: 'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Dunning rule saved'); navigate('dunning'); }
+}
+
+/* ============================================================
+   Feature 18: CSV IMPORT
+   ============================================================ */
+async function renderImportData(el) {
+  const jobs = await api('/import-jobs') || [];
+
+  el.innerHTML = `
+  ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
+  <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
+    <button class="tab-pill active" onclick="importTab('inventory',this)">Inventory</button>
+    <button class="tab-pill" onclick="importTab('orders',this)">Orders</button>
+    <button class="tab-pill" onclick="importTab('jobs',this)">Import History</button>
+  </div>
+  <div id="import-content"></div>`;
+
+  showImportTab('inventory', jobs);
+}
+
+function importTab(tab, btn) {
+  document.querySelectorAll('#import-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const jobs = window._importJobs || [];
+  showImportTab(tab, jobs);
+}
+
+function showImportTab(tab, jobs) {
+  const el = document.getElementById('import-content');
+  if (!el) return;
+  if (tab === 'jobs') {
+    el.innerHTML = `<div class="card"><div class="card-header"><span>Import History</span></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Type</th><th>Total</th><th>Success</th><th>Failed</th><th>Date</th></tr></thead>
+      <tbody>${jobs.map(j=>`<tr>
+        <td>${j.type}</td><td>${j.total}</td>
+        <td><span class="badge badge-success">${j.success_count}</span></td>
+        <td>${j.failed_count > 0 ? '<span class="badge badge-danger">'+j.failed_count+'</span>' : '0'}</td>
+        <td>${fmtDate(j.created_at)}</td>
+      </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No imports yet</td></tr>'}
+      </tbody></table></div></div>`;
+    return;
+  }
+  const isInventory = tab === 'inventory';
+  const sampleCols = isInventory
+    ? 'sku,name,category,stock,unit_price,reorder_level,max_stock'
+    : 'client_id,grand_total,subtotal,gst,notes';
+  el.innerHTML = `
+  <div class="card">
+    <div class="card-body" style="padding:20px">
+      <div style="font-weight:600;margin-bottom:8px">Import ${isInventory ? 'Inventory' : 'Orders'}</div>
+      <div style="font-size:.84rem;color:var(--text-muted);margin-bottom:12px">
+        CSV columns: <code>${sampleCols}</code>
+      </div>
+      <div class="form-group">
+        <label>Upload CSV File</label>
+        <input type="file" id="csv-file" accept=".csv" onchange="previewCSV(this,'${tab}')">
+      </div>
+      <div id="csv-preview"></div>
+      <div id="csv-actions" style="display:none;margin-top:12px">
+        <button class="btn btn-primary" onclick="submitCSVImport('${tab}')">Import Data</button>
+        <span id="csv-row-count" style="margin-left:8px;font-size:.84rem;color:var(--text-muted)"></span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function previewCSV(input, tab) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) { showToast('CSV must have header + at least one data row', 'error'); return; }
+    const headers = lines[0].split(',').map(h => h.trim());
+    const dataRows = lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.trim());
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      return obj;
+    });
+    window._csvRows = dataRows;
+    window._csvTab = tab;
+    const preview = document.getElementById('csv-preview');
+    const actions = document.getElementById('csv-actions');
+    const rowCount = document.getElementById('csv-row-count');
+    if (preview) preview.innerHTML = `<div class="table-wrap" style="max-height:200px;overflow-y:auto;margin-top:8px">
+      <table class="table">
+        <thead><tr>${headers.map(h=>'<th>'+h+'</th>').join('')}</tr></thead>
+        <tbody>${dataRows.slice(0,5).map(row=>'<tr>'+headers.map(h=>'<td>'+(row[h]||'')+'</td>').join('')+'</tr>').join('')}</tbody>
+      </table>
+    </div>`;
+    if (actions) actions.style.display = '';
+    if (rowCount) rowCount.textContent = dataRows.length + ' rows ready to import';
+  };
+  reader.readAsText(file);
+}
+
+async function submitCSVImport(tab) {
+  const rows = window._csvRows;
+  if (!rows || !rows.length) { showToast('No data to import', 'error'); return; }
+  showToast('Importing ' + rows.length + ' rows…');
+  const endpoint = tab === 'inventory' ? '/import/inventory' : '/import/orders';
+  const res = await api(endpoint, { method: 'POST', body: JSON.stringify(rows) });
+  if (res) {
+    showToast('Import complete: ' + res.success + ' success, ' + res.failed + ' failed');
+    window._csvRows = null;
+    navigate('import_data');
+  }
+}
+
+/* ============================================================
+   Feature 19: TEMPLATES
+   ============================================================ */
+async function renderTemplates(el) {
+  const [orderTpls, poTpls] = await Promise.all([
+    api('/order-templates'),
+    api('/po-templates'),
+  ]);
+
+  el.innerHTML = `
+  ${pageHeader('Order & PO Templates', 'Reusable templates for quick order/PO creation')}
+  <div class="tab-pills" id="tpl-tabs" style="margin-bottom:16px">
+    <button class="tab-pill active" onclick="tplTab('orders',this)">Order Templates</button>
+    <button class="tab-pill" onclick="tplTab('po',this)">PO Templates</button>
+  </div>
+  <div id="tpl-content"></div>`;
+
+  renderOrderTemplatesTab(orderTpls || [], poTpls || []);
+}
+
+function tplTab(tab, btn) {
+  document.querySelectorAll('#tpl-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  if (tab === 'orders') {
+    api('/order-templates').then(d => renderOrderTemplatesTab(d||[], []));
+  } else {
+    api('/po-templates').then(d => renderPOTemplatesTab([], d||[]));
+  }
+}
+
+function renderOrderTemplatesTab(orderTpls, poTpls) {
+  const el = document.getElementById('tpl-content');
+  if (!el) return;
+  el.innerHTML = `
+  <div class="card">
+    <div class="card-header"><span>Order Templates (${orderTpls.length})</span>
+      <button class="btn btn-gold btn-sm" onclick="saveOrderTemplateModal()">Save New Template</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Name</th><th>Items</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody>${orderTpls.map(t=>{
+          const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
+          return `<tr>
+            <td><b>${t.name}</b></td>
+            <td>${items.length} item(s)</td>
+            <td>${fmtDate(t.created_at)}</td>
+            <td>
+              <button class="btn btn-primary btn-sm" onclick="loadOrderTemplate('${t.id}')">Load</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteTemplate('order','${t.id}')">Delete</button>
+            </td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No templates yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderPOTemplatesTab(orderTpls, poTpls) {
+  const el = document.getElementById('tpl-content');
+  if (!el) return;
+  el.innerHTML = `
+  <div class="card">
+    <div class="card-header"><span>PO Templates (${poTpls.length})</span>
+      <button class="btn btn-gold btn-sm" onclick="savePOTemplateModal()">Save New Template</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Name</th><th>Items</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody>${poTpls.map(t=>{
+          const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
+          return `<tr>
+            <td><b>${t.name}</b></td>
+            <td>${items.length} item(s)</td>
+            <td>${fmtDate(t.created_at)}</td>
+            <td>
+              <button class="btn btn-primary btn-sm" onclick="loadPOTemplate('${t.id}')">Load</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteTemplate('po','${t.id}')">Delete</button>
+            </td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No templates yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function saveOrderTemplateModal() {
+  openModal('Save Order Template',
+    `<div class="form-group"><label>Template Name</label><input type="text" id="tpl-name" placeholder="e.g. Monthly Beverages"></div>
+     <div class="form-group"><label>Notes</label><textarea id="tpl-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveOrderTemplate()">Save</button>`);
+}
+
+async function saveOrderTemplate() {
+  const name = document.getElementById('tpl-name').value;
+  if (!name) { showToast('Template name required', 'error'); return; }
+  const items = (APP.cart || []).map(c => ({ sku: c.sku, name: c.name, qty: c.qty, unit_price: c.unit_price }));
+  const res = await api('/order-templates', {
+    method: 'POST',
+    body: JSON.stringify({ name, items, notes: document.getElementById('tpl-notes').value }),
+  });
+  closeModal();
+  if (res) { showToast('Template saved'); navigate('templates'); }
+}
+
+function savePOTemplateModal() {
+  openModal('Save PO Template',
+    `<div class="form-group"><label>Template Name</label><input type="text" id="potpl-name" placeholder="e.g. Weekly Dairy Order"></div>
+     <div class="form-group"><label>Notes</label><textarea id="potpl-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="savePOTemplate()">Save</button>`);
+}
+
+async function savePOTemplate() {
+  const name = document.getElementById('potpl-name').value;
+  if (!name) { showToast('Template name required', 'error'); return; }
+  const res = await api('/po-templates', {
+    method: 'POST',
+    body: JSON.stringify({ name, items: [], notes: document.getElementById('potpl-notes').value }),
+  });
+  closeModal();
+  if (res) { showToast('PO Template saved'); navigate('templates'); }
+}
+
+function loadOrderTemplate(id) {
+  showToast('Template loaded — redirecting to Place Order');
+  navigate('place_order');
+}
+
+function loadPOTemplate(id) {
+  showToast('PO Template loaded — redirecting to Procurement');
+  navigate('procurement');
+}
+
+async function deleteTemplate(type, id) {
+  if (!confirm('Delete this template?')) return;
+  const endpoint = type === 'order' ? '/order-templates/' + id : '/po-templates/' + id;
+  const res = await api(endpoint, { method: 'DELETE' });
+  if (res) { showToast('Template deleted'); navigate('templates'); }
+}
+
+/* ============================================================
+   Feature 21: SLA DASHBOARD
+   ============================================================ */
+async function renderSLADashboard(el) {
+  const [rules, breaches] = await Promise.all([
+    api('/sla-rules'),
+    api('/sla-breaches'),
+  ]);
+  if (!rules) return;
+
+  el.innerHTML = `
+  ${pageHeader('SLA Dashboard', `${(breaches||[]).length} active breach(es)`,
+    `<button class="btn btn-gold" onclick="runSLACheck()">Check SLA Now</button>`)}
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-header"><span>SLA Rules (${rules.length})</span></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Rule</th><th>Trigger Status</th><th>Max Hours</th><th>Action</th></tr></thead>
+          <tbody>${rules.map(r=>`<tr>
+            <td><b>${r.name}</b></td>
+            <td>${statusBadge(r.trigger_status)}</td>
+            <td>${r.max_hours}h</td>
+            <td>${statusBadge(r.action)}</td>
+          </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Active Breaches (${(breaches||[]).length})</span></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Rule</th><th>Entity</th><th>Breached At</th></tr></thead>
+          <tbody>${(breaches||[]).map(b=>`<tr>
+            <td>${b.rule_name||b.rule_id}</td>
+            <td>${b.entity_id}</td>
+            <td>${fmtDate(b.breached_at)}</td>
+          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--success)">No active breaches</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function runSLACheck() {
+  const res = await api('/sla/check', { method: 'POST', body: '{}' });
+  if (res) {
+    showToast('SLA check complete — ' + res.new_breaches + ' new breach(es) detected');
+    navigate('sla_dashboard');
+  }
+}
+
+/* ============================================================
+   Feature 24: APPROVAL CHAINS
+   ============================================================ */
+async function renderApprovalChains(el) {
+  const [chains, instances] = await Promise.all([
+    api('/approval-chains'),
+    api('/approval-chain-instances'),
+  ]);
+  if (!chains) return;
+
+  el.innerHTML = `
+  ${pageHeader('Approval Chains', `${chains.length} chain(s) configured`,
+    `<button class="btn btn-gold" onclick="newApprovalChainModal()">New Chain</button>`)}
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-header"><span>Configured Chains</span></div>
+      ${chains.map(c=>{
+        const steps = c.steps||[];
+        return `<div style="padding:14px;border-bottom:1px solid var(--border)">
+          <div style="font-weight:600;margin-bottom:4px">${c.name}</div>
+          <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">Min amount: ${fmt(c.min_amount)} | ${c.entity_type}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${steps.map((s,i)=>`<span style="padding:3px 10px;background:var(--navy);color:#fff;border-radius:12px;font-size:.78rem">${i+1}. ${s.role}</span>`).join('')}
+          </div>
+        </div>`;
+      }).join('')||'<div style="padding:16px;color:var(--text-muted);text-align:center">No chains configured</div>'}
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Pending Approvals (${(instances||[]).length})</span></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Order</th><th>Chain</th><th>Step</th><th>Actions</th></tr></thead>
+          <tbody>${(instances||[]).map(inst=>`<tr>
+            <td>${inst.entity_id}</td>
+            <td>${inst.chain_name||inst.chain_id}</td>
+            <td>Step ${inst.current_step}</td>
+            <td>
+              <button class="btn btn-primary btn-sm" onclick="actOnChain('${inst.id}','APPROVED')">Approve</button>
+              <button class="btn btn-danger btn-sm" onclick="actOnChain('${inst.id}','REJECTED')">Reject</button>
+            </td>
+          </tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No pending approvals</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+let _chainStepCount = 1;
+
+function newApprovalChainModal() {
+  _chainStepCount = 1;
+  const roleOpts = Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+  openModal('New Approval Chain',
+    `<div class="form-group"><label>Chain Name</label><input type="text" id="chain-name" placeholder="e.g. Large Order Approval"></div>
+     <div class="form-group"><label>Min Amount (₹) to Trigger</label><input type="number" id="chain-amount" value="500000"></div>
+     <div id="chain-steps">
+       <div class="form-group">
+         <label>Step 1 Role</label>
+         <select class="chain-step-role" data-step="1">${roleOpts}</select>
+       </div>
+     </div>
+     <button type="button" class="btn btn-secondary btn-sm" onclick="addChainStep()">+ Add Step</button>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveApprovalChain()">Create Chain</button>`);
+}
+
+function addChainStep() {
+  _chainStepCount++;
+  const roleOpts = Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+  const div = document.createElement('div');
+  div.className = 'form-group';
+  div.innerHTML = `<label>Step ${_chainStepCount} Role</label><select class="chain-step-role" data-step="${_chainStepCount}">${roleOpts}</select>`;
+  document.getElementById('chain-steps').appendChild(div);
+}
+
+async function saveApprovalChain() {
+  const name = document.getElementById('chain-name').value;
+  const minAmount = +document.getElementById('chain-amount').value;
+  if (!name) { showToast('Chain name required', 'error'); return; }
+  const stepEls = document.querySelectorAll('.chain-step-role');
+  const steps = [...stepEls].map((el, i) => ({ role: el.value, label: 'Step ' + (i+1) }));
+  const res = await api('/approval-chains', {
+    method: 'POST',
+    body: JSON.stringify({ name, min_amount: minAmount, steps }),
+  });
+  closeModal();
+  if (res) { showToast('Approval chain created with ' + steps.length + ' step(s)'); navigate('approval_chains'); }
+}
+
+async function actOnChain(instanceId, action) {
+  const comments = action === 'REJECTED' ? prompt('Reason for rejection (optional):') : null;
+  const res = await api('/approval-chain-instances/' + instanceId + '/act', {
+    method: 'POST',
+    body: JSON.stringify({ action, comments: comments || '' }),
+  });
+  if (res) {
+    showToast(action === 'APPROVED' ? (res.all_steps_done ? 'Order fully approved!' : 'Step approved — next step notified') : 'Rejected — order cancelled');
+    navigate('approval_chains');
+  }
 }
 
 /* ============================================================
