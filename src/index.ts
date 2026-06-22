@@ -271,6 +271,18 @@ export default {
       // Gap 4: Zoho Books webhook
       if (path==="/api/integrations/zoho/webhook" && method==="POST") return handleZohoWebhook(request,env);
 
+      // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
+      if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
+      if (path==="/api/reports/brand-procurement"    && method==="GET") return handleRptBrandProcurement(request,env);
+      if (path==="/api/reports/due-items"            && method==="GET") return handleRptDueItems(request,env);
+      if (path==="/api/reports/dc-per-order"         && method==="GET") return handleRptDCPerOrder(request,env);
+      if (path==="/api/reports/dc-reconciliation"    && method==="GET") return handleRptDCReconciliation(request,env);
+      if (path==="/api/reports/pending-supply"       && method==="GET") return handleRptPendingSupply(request,env);
+      if (path==="/api/reports/due-ageing"           && method==="GET") return handleRptDueAgeing(request,env);
+      if (path==="/api/reports/brand-shortfall"      && method==="GET") return handleRptBrandShortfall(request,env);
+      if (path==="/api/reports/client-fulfilment"    && method==="GET") return handleRptClientFulfilment(request,env);
+      if (path==="/api/reports/procurement-forecast" && method==="GET") return handleRptProcurementForecast(request,env);
+
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
 
@@ -1525,6 +1537,329 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
     }
     default: return json({error:"Unknown report type"}, 400);
   }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// FULFILMENT REPORTS (15.X series)
+// ════════════════════════════════════════════════════════════════════
+
+async function handleRptOrderVsDelivery(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const clientId = url.searchParams.get('client_id') || '';
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const dueOnly = url.searchParams.get('due_only') === '1';
+
+  let query = `
+    SELECT
+      o.id AS order_number,
+      o.created_at AS order_date,
+      c.name AS client_name,
+      COALESCE(c.location,'') AS client_location,
+      COALESCE(i.brand, i.category,'') AS brand_name,
+      oi.name AS item_name,
+      oi.qty AS ordered_qty,
+      COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS delivered_qty,
+      oi.qty - COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS due_qty,
+      (oi.qty - COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) * oi.unit_price AS due_value,
+      (SELECT COUNT(*) FROM delivery_challans dc3 WHERE dc3.order_id=o.id) AS dc_count,
+      (SELECT MAX(dc4.delivered_at) FROM delivery_challans dc4 WHERE dc4.order_id=o.id AND dc4.status='DELIVERED') AS last_delivery_date,
+      CASE
+        WHEN o.status='CLOSED' THEN 'Complete'
+        WHEN COALESCE((SELECT SUM(dci2.qty_delivered) FROM dc_items dci2 JOIN delivery_challans dc5 ON dci2.dc_id=dc5.id WHERE dc5.order_id=o.id AND dci2.sku=oi.sku),0) > 0 THEN 'Partial'
+        ELSE 'Open'
+      END AS order_status
+    FROM orders o
+    JOIN clients c ON o.client_id=c.id
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    WHERE o.status NOT IN ('CANCELLED','DRAFT')
+      AND date(o.created_at) >= ? AND date(o.created_at) <= ?`;
+  const params: (string|number)[] = [from, to];
+  if (clientId) { query += ` AND o.client_id=?`; params.push(clientId); }
+  if (dueOnly) { query += ` AND oi.qty > COALESCE((SELECT SUM(dci3.qty_delivered) FROM dc_items dci3 JOIN delivery_challans dc6 ON dci3.dc_id=dc6.id WHERE dc6.order_id=o.id AND dci3.sku=oi.sku),0)`; }
+  query += ` ORDER BY o.created_at DESC, c.name, oi.name LIMIT 500`;
+  const {results} = await env.DB.prepare(query).bind(...params).all();
+  return json(results);
+}
+
+async function handleRptBrandProcurement(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const {results} = await env.DB.prepare(`
+    SELECT
+      COALESCE(i.brand, i.category) AS brand_name,
+      i.category,
+      SUM(oi.qty) AS total_ordered_qty,
+      COALESCE(SUM(dci_sum.qty_delivered),0) AS total_delivered_qty,
+      SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0) AS shortfall_qty,
+      SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0) AS suggested_po_qty,
+      GROUP_CONCAT(DISTINCT c.name) AS clients,
+      COALESCE(v.name,'') AS primary_vendor,
+      COUNT(DISTINCT o.client_id) AS client_count,
+      COUNT(DISTINCT o.id) AS order_count
+    FROM orders o
+    JOIN clients c ON o.client_id=c.id
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    LEFT JOIN vendors v ON v.id=i.vendor_id
+    LEFT JOIN (
+      SELECT dci.sku, dc.order_id, SUM(dci.qty_delivered) AS qty_delivered
+      FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+      GROUP BY dci.sku, dc.order_id
+    ) dci_sum ON dci_sum.sku=oi.sku AND dci_sum.order_id=o.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT')
+      AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+    GROUP BY COALESCE(i.brand,i.category)
+    ORDER BY total_ordered_qty DESC`).bind(from, to).all();
+  return json(results);
+}
+
+async function handleRptDueItems(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const clientId = url.searchParams.get('client_id') || '';
+  const from = url.searchParams.get('from') || new Date(Date.now()-60*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  let query = `
+    SELECT
+      c.name AS client_name,
+      COALESCE(c.location,'') AS location,
+      o.id AS order_number,
+      COALESCE(i.brand, i.category,'') AS brand_name,
+      oi.name AS item_name,
+      oi.qty AS ordered_qty,
+      COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS delivered_qty,
+      oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS due_qty,
+      o.created_at AS due_since_date,
+      CAST(julianday('now') - julianday(o.created_at) AS INTEGER) AS due_ageing_days,
+      COALESCE(v.name,'') AS responsible_vendor,
+      CASE
+        WHEN CAST(julianday('now') - julianday(o.created_at) AS INTEGER) >= 15 THEN 'Critical Due'
+        WHEN CAST(julianday('now') - julianday(o.created_at) AS INTEGER) >= 8 THEN 'Delayed'
+        WHEN CAST(julianday('now') - julianday(o.created_at) AS INTEGER) >= 4 THEN 'Due'
+        ELSE 'Due'
+      END AS due_status
+    FROM orders o
+    JOIN clients c ON o.client_id=c.id
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    LEFT JOIN vendors v ON v.id=i.vendor_id
+    WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')
+      AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+      AND oi.qty > COALESCE((SELECT SUM(d2.qty_delivered) FROM dc_items d2 JOIN delivery_challans dc2 ON d2.dc_id=dc2.id WHERE dc2.order_id=o.id AND d2.sku=oi.sku),0)`;
+  const params: (string|number)[] = [from, to];
+  if (clientId) { query += ` AND o.client_id=?`; params.push(clientId); }
+  query += ` ORDER BY due_ageing_days DESC, c.name LIMIT 300`;
+  const {results} = await env.DB.prepare(query).bind(...params).all();
+  return json(results);
+}
+
+async function handleRptDCPerOrder(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const {results: orders} = await env.DB.prepare(`
+    SELECT o.id, c.name AS client_name, o.grand_total, o.status, o.created_at,
+      (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id) AS dc_count,
+      (SELECT COALESCE(SUM(oi.qty),0) FROM order_items oi WHERE oi.order_id=o.id) AS total_ordered,
+      (SELECT COALESCE(SUM(dci.qty_delivered),0) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=o.id) AS total_delivered
+    FROM orders o JOIN clients c ON o.client_id=c.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT')
+      AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+    ORDER BY o.created_at DESC LIMIT 200`).bind(from, to).all();
+  const totalOrders = (orders as Record<string,unknown>[]).length;
+  const singleDC = (orders as Record<string,unknown>[]).filter(o => (o.dc_count as number) === 1).length;
+  const multiDC = (orders as Record<string,unknown>[]).filter(o => (o.dc_count as number) > 1).length;
+  const avgDCsPerOrder = totalOrders ? ((orders as Record<string,unknown>[]).reduce((s,o) => s + (o.dc_count as number||0), 0) / totalOrders).toFixed(1) : '0';
+  return json({ orders, kpis: { totalOrders, singleDC, multiDC, avgDCsPerOrder } });
+}
+
+async function handleRptDCReconciliation(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const {results} = await env.DB.prepare(`
+    SELECT
+      dc.id AS dc_number,
+      date(dc.dispatched_at) AS dc_date,
+      c.name AS client_name,
+      dc.order_id AS order_number,
+      dc.delivered_qty,
+      COALESCE(dc.driver_name,'') AS delivery_executive,
+      dc.pod_uploaded,
+      dc.dc_scan_uploaded,
+      dc.billed AS is_billed,
+      dc.status
+    FROM delivery_challans dc
+    JOIN orders o ON dc.order_id=o.id
+    JOIN clients c ON o.client_id=c.id
+    WHERE date(dc.dispatched_at) >= ? AND date(dc.dispatched_at) <= ?
+    ORDER BY dc.dispatched_at DESC LIMIT 300`).bind(from, to).all();
+  const rows = results as Record<string,unknown>[];
+  const kpis = {
+    total_dcs: rows.length,
+    pod_uploaded: rows.filter(r => r.pod_uploaded).length,
+    dc_scan_uploaded: rows.filter(r => r.dc_scan_uploaded).length,
+    missing_pod: rows.filter(r => !r.pod_uploaded && r.status === 'DELIVERED').length,
+    missing_dc_scan: rows.filter(r => !r.dc_scan_uploaded).length,
+  };
+  return json({ dcs: results, kpis });
+}
+
+async function handleRptPendingSupply(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const [openR, partialR, dueQtyR, delayedR] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS cnt FROM orders WHERE status NOT IN ('CLOSED','CANCELLED','DRAFT') AND (SELECT COALESCE(SUM(dci.qty_delivered),0) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=orders.id) = 0`).first() as Promise<Record<string,unknown>|null>,
+    env.DB.prepare(`SELECT COUNT(*) AS cnt FROM orders WHERE status NOT IN ('CLOSED','CANCELLED','DRAFT') AND (SELECT COALESCE(SUM(dci.qty_delivered),0) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=orders.id) > 0`).first() as Promise<Record<string,unknown>|null>,
+    env.DB.prepare(`SELECT COALESCE(SUM(oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0)),0) AS due_qty, COALESCE(SUM((oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0))*oi.unit_price),0) AS due_value FROM orders o JOIN order_items oi ON oi.order_id=o.id WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')`).first() as Promise<Record<string,unknown>|null>,
+    env.DB.prepare(`SELECT COUNT(*) AS cnt FROM orders WHERE status='IN_SHIPMENT' AND julianday('now')-julianday(updated_at) > 3`).first() as Promise<Record<string,unknown>|null>,
+  ]);
+  const {results: clientRows} = await env.DB.prepare(`
+    SELECT c.name, c.id, COUNT(DISTINCT o.id) AS order_count,
+      SUM(oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0)) AS due_qty,
+      SUM((oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0))*oi.unit_price) AS due_value
+    FROM orders o JOIN clients c ON o.client_id=c.id JOIN order_items oi ON oi.order_id=o.id
+    WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')
+    GROUP BY c.id ORDER BY due_qty DESC`).all();
+  return json({
+    kpis: {
+      open_orders: (openR as Record<string,number>)?.cnt || 0,
+      partial_orders: (partialR as Record<string,number>)?.cnt || 0,
+      due_qty: (dueQtyR as Record<string,number>)?.due_qty || 0,
+      due_value: (dueQtyR as Record<string,number>)?.due_value || 0,
+      delayed_deliveries: (delayedR as Record<string,number>)?.cnt || 0,
+    },
+    clients: clientRows
+  });
+}
+
+async function handleRptDueAgeing(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT
+      CASE
+        WHEN CAST(julianday('now')-julianday(o.created_at) AS INTEGER) <= 1 THEN '0-1 Days'
+        WHEN CAST(julianday('now')-julianday(o.created_at) AS INTEGER) <= 3 THEN '2-3 Days'
+        WHEN CAST(julianday('now')-julianday(o.created_at) AS INTEGER) <= 7 THEN '4-7 Days'
+        WHEN CAST(julianday('now')-julianday(o.created_at) AS INTEGER) <= 15 THEN '8-15 Days'
+        ELSE '15+ Days'
+      END AS age_bucket,
+      COUNT(DISTINCT o.id) AS order_count,
+      COUNT(DISTINCT o.client_id) AS client_count,
+      COALESCE(SUM(oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0)),0) AS due_qty,
+      COALESCE(SUM((oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0))*oi.unit_price),0) AS due_value,
+      COUNT(DISTINCT i.vendor_id) AS vendor_count
+    FROM orders o
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')
+      AND oi.qty > COALESCE((SELECT SUM(d2.qty_delivered) FROM dc_items d2 JOIN delivery_challans dc2 ON d2.dc_id=dc2.id WHERE dc2.order_id=o.id AND d2.sku=oi.sku),0)
+    GROUP BY age_bucket
+    ORDER BY MIN(CAST(julianday('now')-julianday(o.created_at) AS INTEGER))`).all();
+  return json(results);
+}
+
+async function handleRptBrandShortfall(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const {results} = await env.DB.prepare(`
+    SELECT
+      COALESCE(i.brand, i.category) AS brand_name,
+      SUM(oi.qty) AS ordered_qty,
+      COALESCE(SUM(dlvd.qty_delivered),0) AS delivered_qty,
+      SUM(oi.qty) - COALESCE(SUM(dlvd.qty_delivered),0) AS due_qty,
+      CASE WHEN SUM(oi.qty) > 0 THEN ROUND(COALESCE(SUM(dlvd.qty_delivered),0)*100.0/SUM(oi.qty),1) ELSE 100 END AS fulfilment_pct,
+      COALESCE(v.name,'') AS primary_vendor
+    FROM orders o
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    LEFT JOIN vendors v ON v.id=i.vendor_id
+    LEFT JOIN (
+      SELECT dci.sku, dc.order_id, SUM(dci.qty_delivered) AS qty_delivered
+      FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id GROUP BY dci.sku, dc.order_id
+    ) dlvd ON dlvd.sku=oi.sku AND dlvd.order_id=o.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT') AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+    GROUP BY COALESCE(i.brand,i.category)
+    HAVING due_qty > 0
+    ORDER BY due_qty DESC`).bind(from, to).all();
+  return json(results);
+}
+
+async function handleRptClientFulfilment(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  const {results} = await env.DB.prepare(`
+    SELECT
+      c.name AS client_name,
+      COALESCE(c.location,'') AS location,
+      COUNT(DISTINCT o.id) AS total_orders,
+      SUM(oi.qty) AS ordered_qty,
+      COALESCE(SUM(dlvd.qty_delivered),0) AS delivered_qty,
+      SUM(oi.qty) - COALESCE(SUM(dlvd.qty_delivered),0) AS due_qty,
+      CASE WHEN SUM(oi.qty) > 0 THEN ROUND(COALESCE(SUM(dlvd.qty_delivered),0)*100.0/SUM(oi.qty),1) ELSE 100 END AS fulfilment_pct,
+      SUM((oi.qty - COALESCE(dlvd.qty_delivered,0))*oi.unit_price) AS due_value,
+      ROUND(AVG(CASE WHEN dc.delivered_at IS NOT NULL THEN julianday(dc.delivered_at)-julianday(o.created_at) END),1) AS avg_delivery_days
+    FROM orders o
+    JOIN clients c ON o.client_id=c.id
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN delivery_challans dc ON dc.order_id=o.id AND dc.status='DELIVERED'
+    LEFT JOIN (
+      SELECT dci.sku, dc2.order_id, SUM(dci.qty_delivered) AS qty_delivered
+      FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id GROUP BY dci.sku, dc2.order_id
+    ) dlvd ON dlvd.sku=oi.sku AND dlvd.order_id=o.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT') AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+    GROUP BY c.id ORDER BY fulfilment_pct ASC`).bind(from, to).all();
+  return json(results);
+}
+
+async function handleRptProcurementForecast(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT
+      COALESCE(i.brand, i.category) AS brand_name,
+      oi.name AS item_name,
+      oi.sku,
+      SUM(oi.qty - COALESCE(dlvd.qty_delivered,0)) AS due_qty,
+      i.stock AS current_stock,
+      CASE WHEN i.stock < SUM(oi.qty - COALESCE(dlvd.qty_delivered,0))
+           THEN SUM(oi.qty - COALESCE(dlvd.qty_delivered,0)) - i.stock
+           ELSE 0 END AS suggested_procurement_qty,
+      COALESCE(v.name,'') AS vendor_name,
+      v.id AS vendor_id
+    FROM orders o
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    LEFT JOIN vendors v ON v.id=i.vendor_id
+    LEFT JOIN (
+      SELECT dci.sku, dc.order_id, SUM(dci.qty_delivered) AS qty_delivered
+      FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id GROUP BY dci.sku, dc.order_id
+    ) dlvd ON dlvd.sku=oi.sku AND dlvd.order_id=o.id
+    WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')
+      AND oi.qty > COALESCE(dlvd.qty_delivered,0)
+    GROUP BY oi.sku
+    HAVING suggested_procurement_qty > 0
+    ORDER BY suggested_procurement_qty DESC`).all();
+  return json(results);
 }
 
 // ════════════════════════════════════════════════════════════════════
