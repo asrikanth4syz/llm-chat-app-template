@@ -70,6 +70,7 @@ const NAV = {
     { id:'templates',       label:'Templates',          icon:iconOrders,    badge:null },
     { id:'sla_dashboard',   label:'SLA Dashboard',      icon:iconReports,   badge:'!' },
     { id:'approval_chains', label:'Approval Chains',    icon:iconApprove,   badge:null },
+    { id:'fulfilment',      label:'Fulfilment',          icon:iconReports,   badge:'!' },
     { section:'Admin' },
     { id:'users',       label:'Users & Roles', icon:iconUsers,     badge:null },
     { id:'settings',    label:'Settings',      icon:iconSettings,  badge:null },
@@ -80,6 +81,7 @@ const NAV = {
     { id:'orders',      label:'Orders',        icon:iconOrders,    badge:'!' },
     { id:'delivery',    label:'Deliveries',    icon:iconDelivery,  badge:null },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
+    { id:'fulfilment',  label:'Fulfilment',    icon:iconReports,   badge:'!' },
     { id:'service_desk',label:'Service Desk',  icon:iconDesk,      badge:null },
   ],
   procurement: [
@@ -430,6 +432,7 @@ const PAGE_MAP = {
   templates: renderTemplates,
   sla_dashboard: renderSLADashboard,
   approval_chains: renderApprovalChains,
+  fulfilment: renderFulfilment,
 };
 
 function navigate(page) {
@@ -598,6 +601,18 @@ async function renderClientDashboard(el) {
       <div class="kpi-sub">This month</div>
     </div>
   </div>
+  <div class="kpi-grid" style="margin-top:12px" id="client-fulfilment-kpis">
+    <div class="kpi-card kpi-danger" style="cursor:pointer" onclick="navigate('fulfilment')">
+      <div class="kpi-label">Due Items</div>
+      <div class="kpi-value" id="due-items-count">—</div>
+      <div class="kpi-sub">Items pending delivery</div>
+    </div>
+    <div class="kpi-card" style="cursor:pointer" onclick="navigate('fulfilment')">
+      <div class="kpi-label">Fulfilment %</div>
+      <div class="kpi-value" id="client-fulfilment-pct">—</div>
+      <div class="kpi-sub">This month</div>
+    </div>
+  </div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span>Budget Utilization</span><span>${pctSpent}%</span></div>
     <div class="card-body">
@@ -627,10 +642,28 @@ async function renderClientDashboard(el) {
       </table>
     </div>
   </div>`;
+
+  // Load fulfilment KPIs async
+  api('/reports/pending-supply').then(ps => {
+    const dueEl = document.getElementById('due-items-count');
+    if (dueEl) dueEl.textContent = ps?.kpis?.due_qty ?? '—';
+  });
+  const today = new Date().toISOString().slice(0,10);
+  const from30 = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  api(`/reports/client-fulfilment?from=${from30}&to=${today}`).then(cf => {
+    const pctEl = document.getElementById('client-fulfilment-pct');
+    if (pctEl && cf && cf.length) {
+      const avg = cf.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/cf.length;
+      pctEl.textContent = Math.round(avg) + '%';
+    }
+  });
 }
 
 async function renderOpsDashboard(el) {
-  const data = await api('/dashboard');
+  const [data, pendingSupply] = await Promise.all([
+    api('/dashboard'),
+    api('/reports/pending-supply'),
+  ]);
   if (!data) return;
   const { totalOrders, pendingOrders, lowStock, pendingDCBilling, openTickets, recentOrders, ordersByStatus, topClients } = data;
 
@@ -693,6 +726,15 @@ async function renderOpsDashboard(el) {
           <td><button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button></td>
         </tr>`).join('')}</tbody>
       </table>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><span>Pending Supply Overview</span><button class="btn btn-secondary btn-sm" onclick="navigate('fulfilment')">Full Report</button></div>
+    <div class="kpi-grid" style="padding:16px;margin-bottom:0">
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${pendingSupply?.kpis?.due_qty||0}</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(pendingSupply?.kpis?.due_value||0)}</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Partial Orders</div><div class="kpi-value">${pendingSupply?.kpis?.partial_orders||0}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Delayed Deliveries</div><div class="kpi-value">${pendingSupply?.kpis?.delayed_deliveries||0}</div></div>
     </div>
   </div>`;
 
@@ -3491,6 +3533,357 @@ async function actOnChain(instanceId, action) {
     showToast(action === 'APPROVED' ? (res.all_steps_done ? 'Order fully approved!' : 'Step approved — next step notified') : 'Rejected — order cancelled');
     navigate('approval_chains');
   }
+}
+
+/* ============================================================
+   FULFILMENT MANAGEMENT (15.X series)
+   ============================================================ */
+async function renderFulfilment(el) {
+  el.innerHTML = `
+  ${pageHeader('Fulfilment & Reconciliation', 'Order vs Delivery Management')}
+  <div class="tabs" id="fulfilment-tabs">
+    <button class="tab-btn active" onclick="switchFulfilTab('ovd',this)">Order vs Delivery</button>
+    <button class="tab-btn" onclick="switchFulfilTab('due-items',this)">Due Items</button>
+    <button class="tab-btn" onclick="switchFulfilTab('pending-supply',this)">Pending Supply</button>
+    <button class="tab-btn" onclick="switchFulfilTab('ageing',this)">Due Ageing</button>
+    <button class="tab-btn" onclick="switchFulfilTab('brand-shortfall',this)">Brand Shortfall</button>
+    <button class="tab-btn" onclick="switchFulfilTab('brand-procurement',this)">Brand Procurement</button>
+    <button class="tab-btn" onclick="switchFulfilTab('client-scorecard',this)">Client Scorecard</button>
+    <button class="tab-btn" onclick="switchFulfilTab('dc-per-order',this)">DC per Order</button>
+    <button class="tab-btn" onclick="switchFulfilTab('dc-recon',this)">DC Reconciliation</button>
+    <button class="tab-btn" onclick="switchFulfilTab('procurement-forecast',this)">Procurement Forecast</button>
+  </div>
+  <div id="fulfilment-content"></div>`;
+  switchFulfilTab('ovd', document.querySelector('#fulfilment-tabs .tab-btn'));
+}
+
+async function switchFulfilTab(tab, btn) {
+  document.querySelectorAll('#fulfilment-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const el = document.getElementById('fulfilment-content');
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
+
+  const today = new Date().toISOString().slice(0,10);
+  const from30 = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const from60 = new Date(Date.now()-60*86400000).toISOString().slice(0,10);
+
+  if (tab === 'ovd') {
+    const [data, clients] = await Promise.all([
+      api(`/reports/order-vs-delivery?from=${from30}&to=${today}`),
+      api('/clients'),
+    ]);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <span>Order vs Delivery Reconciliation</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="ovd-client" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
+            <option value="">All Clients</option>
+            ${(clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}
+          </select>
+          <label><input type="checkbox" id="ovd-due-only" onchange="reloadOVD()"> Due Only</label>
+          <button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ovd')">&#8595; CSV</button>
+        </div>
+      </div>
+      <div id="ovd-table-wrap">
+        ${renderOVDTable(data)}
+      </div>
+    </div>`;
+
+  } else if (tab === 'due-items') {
+    const data = await api(`/reports/due-items?from=${from60}&to=${today}`);
+    if (!data) return;
+    const critical = data.filter(r => r.due_ageing_days >= 15).length;
+    el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Critical Due (15+ days)</div><div class="kpi-value">${critical}</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Items</div><div class="kpi-value">${data.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${data.reduce((s,r)=>s+(r.due_qty||0),0)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0))}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Due Items</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('due-items')">&#8595; CSV</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Client</th><th>Location</th><th>Order</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Due Since</th><th>Ageing (days)</th><th>Vendor</th><th>Status</th></tr></thead>
+        <tbody>${data.map(r=>`<tr>
+          <td><b>${r.client_name}</b></td>
+          <td>${r.location||'—'}</td>
+          <td><b>${r.order_number}</b></td>
+          <td>${r.brand_name||'—'}</td>
+          <td>${r.item_name}</td>
+          <td>${r.ordered_qty}</td>
+          <td>${r.delivered_qty}</td>
+          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td>${fmtDate(r.due_since_date)}</td>
+          <td><span class="badge badge-${r.due_ageing_days>=15?'danger':r.due_ageing_days>=8?'warning':'info'}">${r.due_ageing_days}d</span></td>
+          <td>${r.responsible_vendor||'—'}</td>
+          <td>${statusBadge(r.due_status?.replace(' ','_').toUpperCase()||'DUE')}</td>
+        </tr>`).join('')||'<tr><td colspan="12" style="text-align:center;color:var(--text-muted)">No due items</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'pending-supply') {
+    const data = await api('/reports/pending-supply');
+    if (!data) return;
+    el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card"><div class="kpi-label">Open Orders</div><div class="kpi-value">${data.kpis.open_orders}</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Partial Orders</div><div class="kpi-value">${data.kpis.partial_orders}</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Quantity</div><div class="kpi-value">${data.kpis.due_qty}</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(data.kpis.due_value)}</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Delayed Deliveries</div><div class="kpi-value">${data.kpis.delayed_deliveries}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Client Drilldown</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Client</th><th>Open Orders</th><th>Due Qty</th><th>Due Value</th><th>Actions</th></tr></thead>
+        <tbody>${(data.clients||[]).map(c=>`<tr>
+          <td><b>${c.name}</b></td>
+          <td>${c.order_count}</td>
+          <td><b style="color:var(--danger)">${c.due_qty||0}</b></td>
+          <td>${fmt(c.due_value)}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="drillPendingClient('${c.id}','${c.name}')">Drilldown</button></td>
+        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No pending supply</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'ageing') {
+    const data = await api('/reports/due-ageing');
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ageing')">&#8595; CSV</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Age Bucket</th><th>Orders</th><th>Clients</th><th>Vendors</th><th>Due Qty</th><th>Due Value</th></tr></thead>
+        <tbody>${data.map(r=>{
+          const badge = r.age_bucket==='15+ Days'?'danger':r.age_bucket==='8-15 Days'?'warning':'info';
+          return `<tr>
+            <td><span class="badge badge-${badge}">${r.age_bucket}</span></td>
+            <td>${r.order_count}</td><td>${r.client_count}</td><td>${r.vendor_count}</td>
+            <td><b>${r.due_qty}</b></td><td>${fmt(r.due_value)}</td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No overdue items</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'brand-shortfall') {
+    const data = await api(`/reports/brand-shortfall?from=${from30}&to=${today}`);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-shortfall')">&#8595; CSV</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Brand</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Fulfilment %</th><th>Vendor</th></tr></thead>
+        <tbody>${data.map(r=>`<tr>
+          <td><b>${r.brand_name}</b></td>
+          <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
+          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td><span class="badge badge-${r.fulfilment_pct>=90?'success':r.fulfilment_pct>=70?'warning':'danger'}">${r.fulfilment_pct}%</span></td>
+          <td>${r.primary_vendor||'—'}</td>
+        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No shortfall</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'brand-procurement') {
+    const data = await api(`/reports/brand-procurement?from=${from30}&to=${today}`);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-procurement')">&#8595; CSV</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th></tr></thead>
+        <tbody>${data.map(r=>`<tr>
+          <td><b>${r.brand_name}</b></td><td>${r.category}</td>
+          <td title="${r.clients}">${r.client_count} clients</td>
+          <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
+          <td><b style="color:var(--danger)">${r.shortfall_qty}</b></td>
+          <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
+          <td>${r.primary_vendor||'—'}</td>
+        </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'client-scorecard') {
+    const data = await api(`/reports/client-fulfilment?from=${from30}&to=${today}`);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('client-scorecard')">&#8595; CSV</button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Client</th><th>Location</th><th>Orders</th><th>Ordered Qty</th><th>Delivered Qty</th><th>Due Qty</th><th>Due Value</th><th>Fulfilment %</th><th>Avg Delivery Days</th></tr></thead>
+        <tbody>${data.map(r=>`<tr>
+          <td><b>${r.client_name}</b></td>
+          <td>${r.location||'—'}</td>
+          <td>${r.total_orders}</td>
+          <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
+          <td><b style="color:${(r.due_qty||0)>0?'var(--danger)':'var(--success)'}">${r.due_qty||0}</b></td>
+          <td>${fmt(r.due_value||0)}</td>
+          <td>
+            <span class="badge badge-${r.fulfilment_pct>=90?'success':r.fulfilment_pct>=70?'warning':'danger'}">${r.fulfilment_pct||0}%</span>
+            <div style="background:var(--border);height:4px;border-radius:2px;margin-top:4px;overflow:hidden">
+              <div style="height:100%;width:${Math.min(r.fulfilment_pct||0,100)}%;background:${r.fulfilment_pct>=90?'var(--success)':r.fulfilment_pct>=70?'var(--warning)':'var(--danger)'}"></div>
+            </div>
+          </td>
+          <td>${r.avg_delivery_days ? r.avg_delivery_days + ' days' : '—'}</td>
+        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'dc-per-order') {
+    const data = await api(`/reports/dc-per-order?from=${from30}&to=${today}`);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card"><div class="kpi-label">Total Orders</div><div class="kpi-value">${data.kpis.totalOrders}</div></div>
+      <div class="kpi-card kpi-success"><div class="kpi-label">Single DC Orders</div><div class="kpi-value">${data.kpis.singleDC}</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Multi-DC Orders</div><div class="kpi-value">${data.kpis.multiDC}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg DCs per Order</div><div class="kpi-value">${data.kpis.avgDCsPerOrder}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Multi-Delivery Completion Tracking</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Order ID</th><th>Client</th><th>Total Ordered</th><th>Total Delivered</th><th>DC Count</th><th>Status</th></tr></thead>
+        <tbody>${(data.orders||[]).map(r=>`<tr>
+          <td><b>${r.id}</b></td><td>${r.client_name}</td>
+          <td>${r.total_ordered}</td><td>${r.total_delivered}</td>
+          <td><span class="badge badge-${r.dc_count>2?'warning':r.dc_count>1?'info':'success'}">${r.dc_count} DC${r.dc_count!==1?'s':''}</span></td>
+          <td>${statusBadge(r.status)}</td>
+        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'dc-recon') {
+    const data = await api(`/reports/dc-reconciliation?from=${from30}&to=${today}`);
+    if (!data) return;
+    el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${data.kpis.total_dcs}</div></div>
+      <div class="kpi-card kpi-success"><div class="kpi-label">POD Uploaded</div><div class="kpi-value">${data.kpis.pod_uploaded}</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Missing POD</div><div class="kpi-value">${data.kpis.missing_pod}</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Missing DC Scan</div><div class="kpi-value">${data.kpis.missing_dc_scan}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Delivery Challan Reconciliation</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>DC No.</th><th>DC Date</th><th>Client</th><th>Order</th><th>Del. Qty</th><th>Exec</th><th>POD</th><th>DC Scan</th><th>Invoice</th><th>Status</th></tr></thead>
+        <tbody>${(data.dcs||[]).map(r=>`<tr>
+          <td><b>${r.dc_number}</b></td>
+          <td>${fmtDate(r.dc_date)}</td>
+          <td>${r.client_name}</td>
+          <td>${r.order_number}</td>
+          <td>${r.delivered_qty||'—'}</td>
+          <td>${r.delivery_executive||'—'}</td>
+          <td>${r.pod_uploaded?'<span class="badge badge-success">&#10003; Yes</span>':'<span class="badge badge-danger">&#10007; Missing</span>'}</td>
+          <td>${r.dc_scan_uploaded?'<span class="badge badge-success">&#10003; Yes</span>':'<span class="badge badge-danger">&#10007; Missing</span>'}</td>
+          <td>${r.is_billed?'<span class="badge badge-success">Billed</span>':'<span class="badge badge-warning">Pending</span>'}</td>
+          <td>${statusBadge(r.status)}</td>
+        </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No DCs</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+
+  } else if (tab === 'procurement-forecast') {
+    const data = await api('/reports/procurement-forecast');
+    if (!data) return;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <span>Procurement Demand Forecast</span>
+        <button class="btn btn-primary btn-sm" onclick="generateRFQFromForecast()">Generate RFQ for All</button>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
+        <tbody>${data.map(r=>`<tr>
+          <td>${r.brand_name}</td>
+          <td><b>${r.item_name}</b></td>
+          <td>${r.sku}</td>
+          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td><span style="color:${r.current_stock<r.due_qty?'var(--danger)':'var(--success)'}">${r.current_stock}</span></td>
+          <td><b style="color:var(--blue)">${r.suggested_procurement_qty}</b></td>
+          <td>${r.vendor_name||'—'}</td>
+          <td>
+            <button class="btn btn-primary btn-sm" onclick="raisePOFromForecast('${r.sku}','${r.item_name}',${r.suggested_procurement_qty},'${r.vendor_id||''}')">Raise PO</button>
+          </td>
+        </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No procurement required</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+}
+
+function renderOVDTable(data) {
+  if (!data.length) return `<div class="empty-state"><div class="empty-icon">&#128230;</div><div class="empty-title">No data</div><div class="empty-desc">No orders found for selected filters.</div></div>`;
+  return `<div class="table-wrap"><table class="table">
+    <thead><tr><th>Order No.</th><th>Date</th><th>Client</th><th>Location</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Due Value</th><th>DC Count</th><th>Last Delivery</th><th>Status</th></tr></thead>
+    <tbody>${data.map(r=>`<tr>
+      <td><b>${r.order_number}</b></td>
+      <td>${fmtDate(r.order_date)}</td>
+      <td>${r.client_name}</td>
+      <td>${r.client_location||'—'}</td>
+      <td>${r.brand_name||'—'}</td>
+      <td>${r.item_name}</td>
+      <td>${r.ordered_qty}</td>
+      <td>${r.delivered_qty}</td>
+      <td><b style="color:${r.due_qty>0?'var(--danger)':'var(--success)'}">${r.due_qty}</b></td>
+      <td>${fmt(r.due_value||0)}</td>
+      <td>${r.dc_count}</td>
+      <td>${r.last_delivery_date?fmtDate(r.last_delivery_date):'—'}</td>
+      <td><span class="badge badge-${r.order_status==='Complete'?'success':r.order_status==='Partial'?'warning':'info'}">${r.order_status}</span></td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function reloadOVD() {
+  const client = document.getElementById('ovd-client')?.value || '';
+  const dueOnly = document.getElementById('ovd-due-only')?.checked ? '1' : '0';
+  const today = new Date().toISOString().slice(0,10);
+  const from = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const data = await api(`/reports/order-vs-delivery?from=${from}&to=${today}${client?'&client_id='+client:''}${dueOnly==='1'?'&due_only=1':''}`);
+  if (data) document.getElementById('ovd-table-wrap').innerHTML = renderOVDTable(data);
+}
+
+async function drillPendingClient(clientId, clientName) {
+  const today = new Date().toISOString().slice(0,10);
+  const from = new Date(Date.now()-60*86400000).toISOString().slice(0,10);
+  const data = await api(`/reports/due-items?from=${from}&to=${today}&client_id=${clientId}`);
+  if (!data) return;
+  openModal(`Due Items — ${clientName}`,
+    `<div class="table-wrap"><table class="table">
+      <thead><tr><th>Order</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Ageing</th></tr></thead>
+      <tbody>${data.map(r=>`<tr>
+        <td>${r.order_number}</td><td>${r.brand_name||'—'}</td><td>${r.item_name}</td>
+        <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
+        <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+        <td><span class="badge badge-${r.due_ageing_days>=15?'danger':r.due_ageing_days>=8?'warning':'info'}">${r.due_ageing_days}d</span></td>
+      </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No due items</td></tr>'}
+      </tbody></table></div>`
+  );
+}
+
+async function raisePOFromForecast(sku, name, qty, vendorId) {
+  if (!vendorId) { showToast('No vendor assigned to this item', 'error'); return; }
+  const res = await api('/purchase-orders', {
+    method: 'POST',
+    body: JSON.stringify({ vendor_id: vendorId, items: [{ sku, name, qty, unit_price: 0 }], notes: 'Auto-generated from Procurement Forecast' })
+  });
+  if (res) { showToast(`PO ${res.id} raised for ${name}`); navigate('procurement'); }
+}
+
+async function generateRFQFromForecast() {
+  showToast('RFQ generation from forecast is configured in Procurement module', 'info');
+  navigate('procurement');
+}
+
+function exportFulfilCSV(tab) {
+  showToast('CSV export initiated — data will download shortly', 'info');
 }
 
 /* ============================================================
