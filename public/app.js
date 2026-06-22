@@ -762,7 +762,7 @@ async function renderVendorDashboard(el) {
 
 function poActions(po) {
   if (po.status === 'SENT') return `
-    <button class="btn btn-primary btn-sm" onclick="acceptPO('${po.id}')">Accept</button>
+    <button class="btn btn-primary btn-sm" onclick="acceptPO('${po.id}',${po.grand_total||0})">Accept</button>
     <button class="btn btn-danger btn-sm" onclick="rejectPO('${po.id}')">Reject</button>`;
   if (po.status === 'ACCEPTED') return `
     <button class="btn btn-gold btn-sm" onclick="dispatchPO('${po.id}')">Mark Dispatched</button>`;
@@ -773,7 +773,7 @@ function poActions(po) {
 
 
 /* ============================================================
-   PLACE ORDER — catalog + cart
+   PLACE ORDER — catalog + cart (with tabs)
    ============================================================ */
 async function renderPlaceOrder(el) {
   const [inventory] = await Promise.all([api('/inventory')]);
@@ -782,10 +782,28 @@ async function renderPlaceOrder(el) {
   const cats = [...new Set(inventory.map(i => i.category))];
   APP._catalog = inventory;
   APP._catFilter = 'All';
+  if (!APP._orderTab) APP._orderTab = 'catalogue';
 
   el.innerHTML = `
   ${pageHeader('Place Order', 'Browse catalogue and add items to cart')}
-  <div style="display:flex;gap:16px;align-items:flex-start">
+  <div class="tabs" style="margin-bottom:20px">
+    <button class="tab-btn${APP._orderTab==='catalogue'?' active':''}" onclick="switchOrderTab('catalogue')">Catalogue</button>
+    <button class="tab-btn${APP._orderTab==='excel_upload'?' active':''}" onclick="switchOrderTab('excel_upload')">Excel Upload</button>
+    <button class="tab-btn${APP._orderTab==='quick_reorder'?' active':''}" onclick="switchOrderTab('quick_reorder')">Quick Reorder</button>
+    <button class="tab-btn${APP._orderTab==='standing_orders'?' active':''}" onclick="switchOrderTab('standing_orders')">Standing Orders</button>
+  </div>
+  <div id="order-tab-content">
+    ${renderOrderTabContent(APP._orderTab, inventory, cats)}
+  </div>`;
+  if (APP._orderTab === 'catalogue') refreshCartUI();
+}
+
+function renderOrderTabContent(tab, inventory, cats) {
+  inventory = inventory || APP._catalog || [];
+  cats = cats || [...new Set(inventory.map(i => i.category))];
+
+  if (tab === 'catalogue') {
+    return `<div style="display:flex;gap:16px;align-items:flex-start">
     <div style="flex:1;min-width:0">
       <div class="tab-pills" style="margin-bottom:16px">
         ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
@@ -807,13 +825,174 @@ async function renderPlaceOrder(el) {
         <div id="approval-hint" class="alert alert-warning" style="display:none;margin-top:8px;font-size:.8rem">
           ⚠️ Amount exceeds ₹1L — approval required
         </div>
+        <div id="budget-bar-wrap" style="margin-top:12px;display:none">
+          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px;color:var(--text-muted)">Monthly Budget Used</div>
+          <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
+            <div id="budget-bar-fill" style="height:100%;border-radius:5px;transition:width .3s"></div>
+          </div>
+          <div id="budget-bar-label" style="font-size:.75rem;margin-top:3px;color:var(--text-muted)"></div>
+        </div>
         <button class="btn btn-gold" style="width:100%;margin-top:12px" onclick="submitOrder()">
           ${iconCheck(14)} Place Order
         </button>
       </div>
     </div>
   </div>`;
-  refreshCartUI();
+  }
+
+  if (tab === 'excel_upload') {
+    return `<div class="card" style="max-width:640px">
+      <div class="card-header"><span>Upload CSV / Excel Order</span></div>
+      <div class="card-body" style="padding:24px">
+        <p style="color:var(--text-muted);margin-bottom:16px">Download the template, fill in SKU and quantity, then upload.</p>
+        <a href="#" onclick="downloadOrderTemplate();return false" class="btn btn-secondary" style="margin-bottom:20px">⬇ Download CSV Template</a>
+        <div class="form-group">
+          <label style="font-weight:600">Upload CSV File</label>
+          <input type="file" id="csv-upload-input" accept=".csv,.xlsx" style="display:block;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;width:100%">
+        </div>
+        <button class="btn btn-gold" style="margin-top:12px" onclick="processCSVUpload()">Import Order</button>
+        <div id="csv-import-feedback" style="margin-top:16px"></div>
+      </div>
+    </div>`;
+  }
+
+  if (tab === 'quick_reorder') {
+    return `<div id="quick-reorder-content"><div class="card"><div class="card-body" style="padding:24px;text-align:center;color:var(--text-muted)">Loading recent orders…</div></div></div>`;
+  }
+
+  if (tab === 'standing_orders') {
+    return `<div id="standing-orders-content"><div class="card"><div class="card-body" style="padding:24px;text-align:center;color:var(--text-muted)">Loading standing orders…</div></div></div>`;
+  }
+  return '';
+}
+
+async function switchOrderTab(tab) {
+  APP._orderTab = tab;
+  document.querySelectorAll('.tabs .tab-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim().toLowerCase().replace(/ /g,'_') === tab ||
+      (tab==='catalogue' && b.textContent.trim()==='Catalogue') ||
+      (tab==='excel_upload' && b.textContent.trim()==='Excel Upload') ||
+      (tab==='quick_reorder' && b.textContent.trim()==='Quick Reorder') ||
+      (tab==='standing_orders' && b.textContent.trim()==='Standing Orders'));
+  });
+  const contentEl = document.getElementById('order-tab-content');
+  contentEl.innerHTML = renderOrderTabContent(tab);
+  if (tab === 'catalogue') { refreshCartUI(); loadBudgetBar(); }
+  if (tab === 'quick_reorder') loadQuickReorder();
+  if (tab === 'standing_orders') loadStandingOrders();
+}
+
+async function loadBudgetBar() {
+  const wrap = document.getElementById('budget-bar-wrap');
+  if (!wrap) return;
+  try {
+    const clientId = APP.user && APP.user.client_id;
+    if (!clientId) return;
+    const budget = await api('/clients/' + clientId + '/budget');
+    if (!budget || budget.monthly_budget == null) return;
+    const pct = Math.min(100, Math.round((budget.used / budget.monthly_budget) * 100));
+    const color = pct >= 90 ? 'var(--danger)' : pct >= 70 ? 'var(--warning)' : 'var(--success)';
+    wrap.style.display = '';
+    document.getElementById('budget-bar-fill').style.cssText = `height:100%;border-radius:5px;transition:width .3s;width:${pct}%;background:${color}`;
+    document.getElementById('budget-bar-label').textContent = `${pct}% used — ₹${budget.used?.toLocaleString('en-IN')||0} of ₹${budget.monthly_budget?.toLocaleString('en-IN')||0}`;
+  } catch(e) { /* hide bar on error */ }
+}
+
+function downloadOrderTemplate() {
+  const csv = 'sku,quantity\nSKU-001,10\nSKU-002,5';
+  const blob = new Blob([csv], { type:'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'order_template.csv';
+  a.click();
+}
+
+async function processCSVUpload() {
+  const input = document.getElementById('csv-upload-input');
+  const fb = document.getElementById('csv-import-feedback');
+  if (!input || !input.files.length) { if(fb) fb.innerHTML = '<div class="alert alert-warning">Please select a CSV file.</div>'; return; }
+  const file = input.files[0];
+  const text = await file.text();
+  const lines = text.trim().split('\n').filter(l => l.trim());
+  const headers = lines[0].toLowerCase().split(',').map(h=>h.trim());
+  const skuIdx = headers.indexOf('sku');
+  const qtyIdx = headers.indexOf('quantity') !== -1 ? headers.indexOf('quantity') : headers.indexOf('qty');
+  if (skuIdx === -1 || qtyIdx === -1) {
+    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" columns.</div>'; return;
+  }
+  let imported = 0, skipped = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',').map(c=>c.trim());
+    const sku = cols[skuIdx];
+    const qty = parseInt(cols[qtyIdx], 10);
+    if (!sku || isNaN(qty) || qty < 1) { skipped++; continue; }
+    const item = APP._catalog && APP._catalog.find(it => it.sku === sku);
+    if (!item) { skipped++; continue; }
+    const existing = APP.cart.find(c => c.sku === sku);
+    if (existing) existing.qty += qty;
+    else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
+    imported++;
+  }
+  if(fb) fb.innerHTML = `<div class="alert ${imported?'alert-success':'alert-warning'}">${imported} item(s) added to cart${skipped?`, ${skipped} skipped`:''}.${imported?' <a href="#" onclick="switchOrderTab(\'catalogue\');return false">Go to Catalogue</a>':''}</div>`;
+}
+
+async function loadQuickReorder() {
+  const orders = await api('/orders');
+  const el = document.getElementById('quick-reorder-content');
+  if (!el) return;
+  const recent = (orders || []).slice(0, 5);
+  if (!recent.length) {
+    el.innerHTML = `<div class="card"><div class="card-body" style="padding:32px;text-align:center">${emptyState('🛒','No recent orders','Place your first order to see it here.')}</div></div>`;
+    return;
+  }
+  el.innerHTML = recent.map(o=>`
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>${o.id}</b> &nbsp;${statusBadge(o.status)} &nbsp;<span style="color:var(--text-muted);font-size:.84rem">${fmtDate(o.created_at)}</span></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-weight:600">${fmt(o.grand_total)}</span>
+          <button class="btn btn-gold btn-sm" onclick="reorderFromHistory('${o.id}')">Reorder</button>
+        </div>
+      </div>
+      <div class="card-body" style="padding:10px 16px;font-size:.84rem;color:var(--text-muted)">
+        ${(o.items||[]).map(i=>`${i.name} ×${i.qty}`).join(' · ')||'—'}
+      </div>
+    </div>`).join('');
+}
+
+async function reorderFromHistory(orderId) {
+  const order = await api('/orders/' + orderId);
+  if (!order || !order.items) return;
+  order.items.forEach(i => {
+    const item = APP._catalog && APP._catalog.find(it => it.sku === i.sku || it.name === i.name);
+    const price = item ? item.unit_price : (i.unit_price || 0);
+    const existing = APP.cart.find(c => c.sku === (i.sku || i.name));
+    if (existing) existing.qty += i.qty;
+    else APP.cart.push({ sku: i.sku || i.name, name: i.name, qty: i.qty, unit_price: price });
+  });
+  showToast('Items added to cart');
+  switchOrderTab('catalogue');
+}
+
+async function loadStandingOrders() {
+  const el = document.getElementById('standing-orders-content');
+  if (!el) return;
+  let standing = null;
+  try { standing = await api('/standing-orders'); } catch(e) {}
+  if (!standing || !standing.length) {
+    el.innerHTML = `<div class="card"><div class="card-body" style="padding:32px;text-align:center">${emptyState('🔄','No standing orders','Set up recurring orders to appear here.')}</div></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="card"><div class="table-wrap"><table class="table">
+    <thead><tr><th>ID</th><th>Description</th><th>Frequency</th><th>Next Run</th><th>Status</th></tr></thead>
+    <tbody>${standing.map(s=>`<tr>
+      <td><b>${s.id}</b></td>
+      <td>${s.description||'—'}</td>
+      <td>${s.frequency||'—'}</td>
+      <td>${fmtDate(s.next_run_at||s.next_run)}</td>
+      <td>${statusBadge(s.status||'ACTIVE')}</td>
+    </tr>`).join('')}
+    </tbody></table></div></div>`;
 }
 
 function renderCatalogItems(items) {
@@ -1067,9 +1246,20 @@ async function renderTrackDelivery(el) {
   if (!dcs) return;
 
   const active = dcs.filter(d => d.status !== 'DELIVERED' && d.status !== 'CANCELLED');
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const activeShipments = dcs.filter(d => d.status !== 'DELIVERED' && d.status !== 'CANCELLED').length;
+  const itemsInTransit = dcs.filter(d => d.status === 'IN_TRANSIT').reduce((s, d) => s + (d.total_qty || 0), 0);
+  const pendingDeliveries = dcs.filter(d => d.status === 'SCHEDULED').length;
+  const deliveredThisMonth = dcs.filter(d => d.status === 'DELIVERED' && (d.delivered_at||'').startsWith(nowMonth)).length;
 
   el.innerHTML = `
   ${pageHeader('Track Delivery', `${active.length} active shipments`)}
+  <div class="kpi-row" style="margin-bottom:20px">
+    <div class="kpi-card"><div class="kpi-label">Active Shipments</div><div class="kpi-value">${activeShipments}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Items In Transit</div><div class="kpi-value">${itemsInTransit}</div></div>
+    <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Deliveries</div><div class="kpi-value kpi-warning">${pendingDeliveries}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Delivered This Month</div><div class="kpi-value" style="color:var(--success)">${deliveredThisMonth}</div></div>
+  </div>
   ${active.length ? active.map(dc=>`
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
@@ -1104,25 +1294,80 @@ async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
   const active = orders.filter(o => !['CLOSED','CANCELLED'].includes(o.status));
+  if (!APP._oqTab) APP._oqTab = 'All';
+  APP._oqOrders = orders;
+
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+
+  function oqTabsHtml() {
+    return `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
+      ${STATUS_TABS.map(s=>{
+        const cnt = s==='All' ? orders.length : orders.filter(o=>o.status===s).length;
+        return `<button class="tab-btn${APP._oqTab===s?' active':''}" onclick="switchOQTab('${s}')">
+          ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  function oqTableHtml(tab) {
+    const filtered = tab==='All' ? orders : orders.filter(o=>o.status===tab);
+    return `<tbody id="oq-tbody">${filtered.map(o=>`<tr>
+      <td><b>${o.id}</b></td>
+      <td>${o.client_name||'—'}</td>
+      <td>${fmt(o.grand_total)}</td>
+      <td>${statusBadge(o.status)}</td>
+      <td>${fmtDate(o.created_at)}</td>
+      <td>${orderQueueActions(o)}</td>
+    </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders</td></tr>'}</tbody>`;
+  }
+
+  APP._oqTabsHtml = oqTabsHtml;
+  APP._oqTableHtml = oqTableHtml;
 
   el.innerHTML = `
   ${pageHeader('Order Queue', `${active.length} active orders`)}
+  <div id="oq-tabs">${oqTabsHtml()}</div>
   <div class="card">
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${orders.map(o=>`<tr>
-          <td><b>${o.id}</b></td>
-          <td>${o.client_name||'—'}</td>
-          <td>${fmt(o.grand_total)}</td>
-          <td>${statusBadge(o.status)}</td>
-          <td>${fmtDate(o.created_at)}</td>
-          <td>${orderQueueActions(o)}</td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders</td></tr>'}
-        </tbody>
+        ${oqTableHtml(APP._oqTab)}
       </table>
     </div>
   </div>`;
+}
+
+function switchOQTab(tab) {
+  APP._oqTab = tab;
+  const orders = APP._oqOrders || [];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+  // re-render tabs
+  const tabsEl = document.getElementById('oq-tabs');
+  if (tabsEl) {
+    tabsEl.innerHTML = `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
+      ${STATUS_TABS.map(s=>{
+        const cnt = s==='All' ? orders.length : orders.filter(o=>o.status===s).length;
+        return `<button class="tab-btn${tab===s?' active':''}" onclick="switchOQTab('${s}')">
+          ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+  // re-render tbody
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody) {
+    const filtered = tab==='All' ? orders : orders.filter(o=>o.status===tab);
+    tbody.outerHTML = `<tbody id="oq-tbody">${filtered.map(o=>`<tr>
+      <td><b>${o.id}</b></td>
+      <td>${o.client_name||'—'}</td>
+      <td>${fmt(o.grand_total)}</td>
+      <td>${statusBadge(o.status)}</td>
+      <td>${fmtDate(o.created_at)}</td>
+      <td>${orderQueueActions(o)}</td>
+    </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders</td></tr>'}
+    </tbody>`;
+  }
 }
 
 function orderQueueActions(o) {
@@ -1149,46 +1394,107 @@ async function renderDCBilling(el) {
   if (!dcs) return;
   const unbilled = dcs.filter(d => d.status==='DELIVERED' && !d.billed);
   const billed   = dcs.filter(d => d.billed);
+  if (!APP._financeTab) APP._financeTab = 'dc_tracker';
+
+  function agingBadge(dc) {
+    const agingDays = Math.floor((Date.now() - new Date(dc.created_at).getTime()) / 86400000);
+    if (agingDays <= 7) return `<span class="badge badge-success">0-7 days</span>`;
+    if (agingDays <= 15) return `<span class="badge badge-warning">8-15 days</span>`;
+    return `<span class="badge badge-danger">16+ days</span>`;
+  }
+
+  function financeTabContent(tab) {
+    if (tab === 'dc_tracker') {
+      return `
+      <div class="kpi-row">
+        <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Billing</div><div class="kpi-value kpi-warning">${unbilled.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Billed Today</div><div class="kpi-value">${billed.filter(d=>d.billed_at?.startsWith(new Date().toISOString().slice(0,10))).length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${dcs.length}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span>Delivered — Pending Billing (${unbilled.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Order Value</th><th>Delivered</th><th>Aging</th><th>Action</th></tr></thead>
+            <tbody>${unbilled.map(dc=>`<tr>
+              <td><b>${dc.id}</b></td>
+              <td>${dc.order_id}</td>
+              <td>${dc.client_name||'—'}</td>
+              <td>${fmt(dc.order_value)}</td>
+              <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
+              <td>${agingBadge(dc)}</td>
+              <td><button class="btn btn-gold btn-sm" onclick="billDC('${dc.id}')">Bill DC</button></td>
+            </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No unbilled DCs</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-header"><span>Billed DCs (${billed.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Billed On</th><th>Aging</th></tr></thead>
+            <tbody>${billed.map(dc=>`<tr>
+              <td><b>${dc.id}</b></td><td>${dc.order_id}</td>
+              <td>${dc.client_name||'—'}</td>
+              <td>${fmt(dc.order_value)}</td>
+              <td>${fmtDate(dc.billed_at)}</td>
+              <td>${agingBadge(dc)}</td>
+            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">None yet</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }
+    if (tab === 'ar_aging') {
+      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
+        <div style="font-size:1.5rem;margin-bottom:12px">📊</div>
+        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">AR Aging</div>
+        <div style="color:var(--text-muted)">Coming soon — this module will show accounts receivable aging buckets (0-30, 31-60, 61-90, 90+ days) across all clients.</div>
+      </div></div>`;
+    }
+    if (tab === 'ap_aging') {
+      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
+        <div style="font-size:1.5rem;margin-bottom:12px">📋</div>
+        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">AP Aging</div>
+        <div style="color:var(--text-muted)">Coming soon — this module will show accounts payable aging for vendor invoices and outstanding POs.</div>
+      </div></div>`;
+    }
+    if (tab === 'margin_analysis') {
+      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
+        <div style="font-size:1.5rem;margin-bottom:12px">📈</div>
+        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">Margin Analysis</div>
+        <div style="color:var(--text-muted)">Coming soon — this module will show gross margin by product, category, and client with trend charts.</div>
+      </div></div>`;
+    }
+    return '';
+  }
+
+  const FINANCE_TABS = [
+    { id: 'dc_tracker', label: 'DC Tracker' },
+    { id: 'ar_aging', label: 'AR Aging' },
+    { id: 'ap_aging', label: 'AP Aging' },
+    { id: 'margin_analysis', label: 'Margin Analysis' },
+  ];
 
   el.innerHTML = `
   ${pageHeader('DC Billing', 'Delivery challan billing pipeline')}
-  <div class="kpi-row">
-    <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Billing</div><div class="kpi-value kpi-warning">${unbilled.length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Billed Today</div><div class="kpi-value">${billed.filter(d=>d.billed_at?.startsWith(new Date().toISOString().slice(0,10))).length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${dcs.length}</div></div>
+  <div class="tabs" style="margin-bottom:20px">
+    ${FINANCE_TABS.map(t=>`<button class="tab-btn${APP._financeTab===t.id?' active':''}" onclick="switchFinanceTab('${t.id}')">${t.label}</button>`).join('')}
   </div>
-  <div class="card">
-    <div class="card-header"><span>Delivered — Pending Billing (${unbilled.length})</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Order Value</th><th>Delivered</th><th>Action</th></tr></thead>
-        <tbody>${unbilled.map(dc=>`<tr>
-          <td><b>${dc.id}</b></td>
-          <td>${dc.order_id}</td>
-          <td>${dc.client_name||'—'}</td>
-          <td>${fmt(dc.order_value)}</td>
-          <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
-          <td><button class="btn btn-gold btn-sm" onclick="billDC('${dc.id}')">Bill DC</button></td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No unbilled DCs</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <div class="card-header"><span>Billed DCs (${billed.length})</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Billed On</th></tr></thead>
-        <tbody>${billed.map(dc=>`<tr>
-          <td><b>${dc.id}</b></td><td>${dc.order_id}</td>
-          <td>${dc.client_name||'—'}</td>
-          <td>${fmt(dc.order_value)}</td>
-          <td>${fmtDate(dc.billed_at)}</td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">None yet</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
+  <div id="finance-tab-content">${financeTabContent(APP._financeTab)}</div>`;
+
+  APP._financeTabContent = financeTabContent;
+}
+
+function switchFinanceTab(tab) {
+  APP._financeTab = tab;
+  document.querySelectorAll('.tabs .tab-btn').forEach(b => {
+    const map = { 'dc_tracker':'DC Tracker','ar_aging':'AR Aging','ap_aging':'AP Aging','margin_analysis':'Margin Analysis' };
+    b.classList.toggle('active', b.textContent.trim() === (map[tab]||tab));
+  });
+  const el = document.getElementById('finance-tab-content');
+  if (el && APP._financeTabContent) el.innerHTML = APP._financeTabContent(tab);
 }
 
 async function billDC(id) {
@@ -2459,18 +2765,57 @@ async function renderVendorPOs(el) {
   </div>`;
 }
 
-async function acceptPO(id) {
-  openModal(`Accept PO ${id}`,
-    `<p>Confirm acceptance of PO <b>${id}</b>. The buyer will be notified and you commit to the delivery schedule.</p>`,
+async function acceptPO(id, vendorTotal) {
+  const amountLabel = vendorTotal ? `<div style="margin-bottom:12px"><b>Amount:</b> ${fmt(vendorTotal)}</div>` : '';
+  openModal(`Accept PO & Confirm Delivery`,
+    `<div style="margin-bottom:16px">
+      <div><b>PO ID:</b> ${id}</div>
+      ${amountLabel}
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label style="font-weight:600;display:block;margin-bottom:6px">Confirm Delivery Date <span style="color:var(--danger)">*</span></label>
+      <input type="date" id="po-delivery-date" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
+        min="${new Date().toISOString().slice(0,10)}">
+    </div>
+    <div class="form-group">
+      <label style="font-weight:600;display:block;margin-bottom:6px">Notes (optional)</label>
+      <textarea id="po-accept-notes" rows="3" placeholder="Any delivery notes or commitments…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical"></textarea>
+    </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmPOAction('${id}','ACCEPTED','PO accepted — delivery committed')">Confirm Acceptance</button>`);
+     <button class="btn btn-primary" onclick="confirmAcceptPO('${id}')">Accept PO</button>`);
+}
+
+async function confirmAcceptPO(id) {
+  const delivery_date = document.getElementById('po-delivery-date')?.value;
+  if (!delivery_date) { showToast('Please select a delivery date', 'error'); return; }
+  const notes = document.getElementById('po-accept-notes')?.value || '';
+  const res = await api(`/purchase-orders/${id}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ delivery_date, notes }),
+  });
+  closeModal();
+  if (res) { showToast(`PO ${id} accepted — delivery confirmed for ${delivery_date}`); navigate('vendor_pos'); }
 }
 
 async function rejectPO(id) {
   openModal(`Reject PO ${id}`,
-    `<div class="form-group"><label>Reason for rejection</label><textarea id="rej-reason" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+    `<div class="form-group">
+      <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
+      <textarea id="rej-reason" rows="4" placeholder="Explain why you are rejecting this PO…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical"></textarea>
+    </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmPOAction('${id}','REJECTED','PO rejected')">Reject PO</button>`);
+     <button class="btn btn-danger" onclick="confirmRejectPO('${id}')">Reject PO</button>`);
+}
+
+async function confirmRejectPO(id) {
+  const reason = document.getElementById('rej-reason')?.value?.trim();
+  if (!reason) { showToast('Please provide a reason for rejection', 'error'); return; }
+  const res = await api(`/purchase-orders/${id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+  closeModal();
+  if (res) { showToast(`PO ${id} rejected`); navigate('vendor_pos'); }
 }
 
 async function dispatchPO(id) {
