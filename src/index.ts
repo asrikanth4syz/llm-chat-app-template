@@ -324,6 +324,10 @@ export default {
       if (path==="/api/approval-chain-instances"                && method==="GET")   return handleListApprovalChainInstances(request,env);
       if (path.match(/^\/api\/approval-chain-instances\/[^/]+\/act$/) && method==="POST") return handleApprovalChainAct(request,env,path);
 
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/dispatch$/) && method==="POST") return handleDispatchDC(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/items$/) && method==="GET") return handleListDCItems(request,env,path);
+      if (path==="/api/stock-movements" && method==="GET") return handleListStockMovements(request,env);
+
       return json({error:"Not found"}, 404);
     } catch (err) {
       console.error(err);
@@ -542,10 +546,17 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     }
   }
 
-  // Auto-create DC when IN_SHIPMENT
+  // Auto-create DC when IN_SHIPMENT — include total_qty and dc_items
   if (body.to === "IN_SHIPMENT") {
-    await env.DB.prepare(`INSERT OR IGNORE INTO delivery_challans (id,order_id,status) VALUES (?,?,'SCHEDULED')`)
-      .bind(`DC-${Math.floor(Math.random()*9000+1000)}`, id).run();
+    const {results: orderItems} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+    const totalQty = orderItems.reduce((s, i) => s + (i.qty as number), 0);
+    const dcId = `DC-${Math.floor(Math.random()*9000+1000)}`;
+    await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
+      .bind(dcId, id, totalQty).run();
+    for (const item of orderItems) {
+      await env.DB.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
+        .bind(uid(), dcId, item.sku, item.name, item.qty).run();
+    }
   }
 
   await pushNotification(env, null, `Order ${id} → ${body.to.replace(/_/g," ")}`);
@@ -798,8 +809,41 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_at=datetime('now') WHERE id=?").bind(id).run();
-  await pushNotification(env, "client_admin", `Delivery ${id} marked as delivered`);
+
+  // Get dc_items to deduct stock
+  const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+  const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+
+  // Deduct stock and release reservation for each item
+  for (const item of dcItems) {
+    const qty = item.qty_ordered as number;
+    await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
+      .bind(qty, qty, item.sku).run();
+    await env.DB.prepare("UPDATE dc_items SET qty_delivered=qty_ordered WHERE dc_id=? AND sku=?").bind(id, item.sku).run();
+    await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), item.sku, 'DELIVERY', -(qty), id, 'delivery_challan', `Delivered via DC ${id}`, user!.name).run();
+  }
+
+  // Fallback: if no dc_items, release reservation from order_items
+  if (dcItems.length === 0 && dc?.order_id) {
+    const {results: ois} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
+    for (const item of ois) {
+      await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
+    }
+  }
+
+  // Mark DC delivered
+  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=total_qty,delivered_at=datetime('now') WHERE id=?").bind(id).run();
+
+  // Close the order
+  if (dc?.order_id) {
+    await env.DB.prepare("UPDATE orders SET status='CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')")
+      .bind(dc.order_id).run();
+    await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
+      .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Auto-closed on DC ${id} full delivery`).run();
+  }
+
+  await pushNotification(env, "client_admin", `Delivery ${id} completed — order closed`);
   await audit(env, user, "DELIVER", "delivery_challan", id);
   return json({id, status:"DELIVERED"});
 }
@@ -809,22 +853,91 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const {delivered_qty, total_qty, notes} = await request.json() as {delivered_qty:number;total_qty:number;notes?:string};
+  const body = await request.json() as {delivered_qty:number;total_qty:number;notes?:string;items?:{sku:string;qty_delivered:number}[]};
+  const {delivered_qty, total_qty, notes} = body;
 
+  if (!delivered_qty || delivered_qty >= total_qty) {
+    return json({error:"delivered_qty must be less than total_qty"}, 400);
+  }
+
+  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
+  const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+
+  // Update this DC's delivered qty
   await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,total_qty=?,delivered_at=datetime('now') WHERE id=?")
     .bind(delivered_qty, total_qty, id).run();
 
-  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
-  if (dc?.order_id && delivered_qty < total_qty) {
+  // Proportionally deduct stock for delivered items
+  const ratio = delivered_qty / total_qty;
+  for (const item of dcItems) {
+    const deliveredNow = Math.floor((item.qty_ordered as number) * ratio);
+    const pendingQty = (item.qty_ordered as number) - deliveredNow;
+    await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?").bind(deliveredNow, id, item.sku).run();
+    if (deliveredNow > 0) {
+      await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
+        .bind(deliveredNow, deliveredNow, item.sku).run();
+      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(uid(), item.sku as string, 'DELIVERY', -deliveredNow, id, 'delivery_challan', `Partial delivery via DC ${id}`, user!.name).run();
+    }
+  }
+
+  // Create new DC for remaining
+  if (dc?.order_id) {
     await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(dc.order_id).run();
-    // Create a new DC for remaining
     const remaining = total_qty - delivered_qty;
     const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
     await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)").bind(newDCId, dc.order_id, remaining).run();
+    // Create dc_items for the new DC with remaining qtys
+    for (const item of dcItems) {
+      const pendingQty = (item.qty_ordered as number) - Math.floor((item.qty_ordered as number) * ratio);
+      if (pendingQty > 0) {
+        await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
+          .bind(uid(), newDCId, item.sku, item.name, pendingQty).run();
+      }
+    }
     await pushNotification(env, "ops_admin", `Partial delivery for DC ${id} — ${remaining} units pending. New DC ${newDCId} created.`);
   }
+
   await audit(env, user, "PARTIAL_DELIVERY", "delivery_challan", id, undefined, `delivered:${delivered_qty}/${total_qty}`);
   return json({id, delivered_qty, total_qty});
+}
+
+async function handleDispatchDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string};
+  await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,dispatched_at=datetime('now') WHERE id=?")
+    .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, id).run();
+  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
+  if (dc?.order_id) {
+    await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status='READY_TO_PICK'")
+      .bind(dc.order_id).run();
+  }
+  await pushNotification(env, "client_admin", `DC ${id} dispatched — vehicle ${body.vehicle_no||'TBD'}`);
+  await audit(env, user, "DISPATCH", "delivery_challan", id, undefined, JSON.stringify({vehicle:body.vehicle_no,driver:body.driver_name}));
+  return json({id, status:"IN_TRANSIT"});
+}
+
+async function handleListDCItems(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const {results} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=? ORDER BY name").bind(id).all();
+  return json(results);
+}
+
+async function handleListStockMovements(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const sku = url.searchParams.get("sku");
+  let query = "SELECT sm.*, i.name as item_name FROM stock_movements sm LEFT JOIN inventory i ON sm.sku=i.sku";
+  const params: string[] = [];
+  if (sku) { query += " WHERE sm.sku=?"; params.push(sku); }
+  query += " ORDER BY sm.created_at DESC LIMIT 100";
+  const {results} = await env.DB.prepare(query).bind(...params).all();
+  return json(results);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1045,23 +1158,45 @@ async function handleListGRN(request: Request, env: Env): Promise<Response> {
 async function handleCreateGRN(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const body = await request.json() as {po_id:string;qty_received:number;notes?:string};
-  const id = `GRN-${Math.floor(Math.random()*9000+1000)}`;
+  const body = await request.json() as {po_id:string;sku:string;qty_received:number;notes?:string};
+  const {po_id, sku, qty_received, notes} = body;
+  if (!po_id || !qty_received) return json({error:"po_id and qty_received required"}, 400);
 
-  await env.DB.prepare("INSERT INTO grn_records (id,po_id,received_by,qty_received,notes) VALUES (?,?,?,?,?)")
-    .bind(id, body.po_id, user!.sub, body.qty_received||0, body.notes||null).run();
-  await env.DB.prepare("UPDATE purchase_orders SET status='RECEIVED',updated_at=datetime('now') WHERE id=?").bind(body.po_id).run();
+  const id = uid();
+  await env.DB.prepare("INSERT INTO grn_records (id,po_id,received_at,received_by,qty_received,notes) VALUES (?,?,datetime('now'),?,?,?)")
+    .bind(id, po_id, user!.sub, qty_received, notes||null).run();
 
-  // Update inventory stock from PO items
-  const {results:poItems} = await env.DB.prepare("SELECT * FROM po_items WHERE po_id=?").bind(body.po_id).all();
-  for (const item of poItems as Record<string,unknown>[]) {
-    await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(item.qty, item.sku).run();
+  // Update inventory stock
+  if (sku) {
+    await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(qty_received, sku).run();
+    await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), sku, 'GRN', qty_received, id, 'grn', `Received via GRN for PO ${po_id}`, user!.name).run();
   }
 
-  // Gap 8: run auto-reorder check after stock increase
+  // Update PO status to INVOICED and vendor metrics
+  const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(po_id).first() as Record<string,unknown>|null;
+  if (po) {
+    await env.DB.prepare("UPDATE purchase_orders SET status='INVOICED',updated_at=datetime('now') WHERE id=?").bind(po_id).run();
+    // Vendor metrics: on_time = delivered before expected_delivery
+    const expectedDate = po.expected_delivery ? new Date(po.expected_delivery as string) : null;
+    const isOnTime = expectedDate ? new Date() <= expectedDate : true;
+    const leadDays = Math.max(1, Math.round((Date.now() - new Date(po.created_at as string).getTime()) / 86400000));
+    // Recalculate vendor averages using recent POs
+    const {results: recentGRNs} = await env.DB.prepare(`
+      SELECT p.expected_delivery, g.received_at, julianday(g.received_at)-julianday(p.created_at) as lead
+      FROM grn_records g JOIN purchase_orders p ON g.po_id=p.id
+      WHERE p.vendor_id=? ORDER BY g.received_at DESC LIMIT 10`).bind(po.vendor_id).all() as {results: Record<string,unknown>[]};
+    const onTimeCount = recentGRNs.filter(g => !g.expected_delivery || new Date(g.received_at as string) <= new Date(g.expected_delivery as string)).length;
+    const avgLead = recentGRNs.reduce((s, g) => s + (g.lead as number || 3), 0) / (recentGRNs.length || 1);
+    const onTimeRate = Math.round((onTimeCount / (recentGRNs.length || 1)) * 100);
+    await env.DB.prepare("UPDATE vendors SET on_time_rate=?,avg_lead_days=? WHERE id=?")
+      .bind(onTimeRate, Math.round(avgLead), po.vendor_id).run();
+  }
+
+  // Check auto-reorder after stock increase
   await checkAutoReorder(env, user);
-  await audit(env, user, "CREATE", "grn", id, undefined, `po:${body.po_id},qty:${body.qty_received}`);
-  return json({id}, 201);
+  await audit(env, user, "GRN", "inventory", sku||po_id, undefined, `qty_received:${qty_received}`);
+  return json({id, qty_received}, 201);
 }
 
 // ════════════════════════════════════════════════════════════════════
