@@ -340,6 +340,19 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/items$/) && method==="GET") return handleListDCItems(request,env,path);
       if (path==="/api/stock-movements" && method==="GET") return handleListStockMovements(request,env);
 
+      // New bin-location routes
+      if (path==="/api/bin-locations" && method==="POST") return handleAddBin(request,env);
+      if (path.match(/^\/api\/bin-locations\/[^/]+$/) && method==="PATCH") return handlePatchBin(request,env,path);
+
+      // New delivery-challan routes
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/pod$/) && method==="POST") return handleMarkPOD(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan$/) && method==="POST") return handleMarkScan(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/return$/) && method==="POST") return handleReturnDC(request,env,path);
+
+      // Picklist and stock transfers
+      if (path==="/api/orders/picklist" && method==="GET") return handlePickList(request,env);
+      if (path==="/api/stock-transfers" && method==="POST") return handleStockTransfer(request,env);
+
       return json({error:"Not found"}, 404);
     } catch (err) {
       console.error(err);
@@ -925,9 +938,9 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string};
-  await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,dispatched_at=datetime('now') WHERE id=?")
-    .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, id).run();
+  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string};
+  await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,dispatched_at=datetime('now'),expected_delivery_date=? WHERE id=?")
+    .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, body.expected_delivery_date||null, id).run();
   const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (dc?.order_id) {
     await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status='READY_TO_PICK'")
@@ -951,12 +964,161 @@ async function handleListStockMovements(request: Request, env: Env): Promise<Res
   const denied = requireUser(user); if (denied) return denied;
   const url = new URL(request.url);
   const sku = url.searchParams.get("sku");
-  let query = "SELECT sm.*, i.name as item_name FROM stock_movements sm LEFT JOIN inventory i ON sm.sku=i.sku";
+  const type = url.searchParams.get("type");
+  let query = "SELECT sm.*, i.name as item_name FROM stock_movements sm LEFT JOIN inventory i ON sm.sku=i.sku WHERE 1=1";
   const params: string[] = [];
-  if (sku) { query += " WHERE sm.sku=?"; params.push(sku); }
+  if (sku)  { query += " AND sm.sku=?";  params.push(sku); }
+  if (type) { query += " AND sm.type=?"; params.push(type); }
   query += " ORDER BY sm.created_at DESC LIMIT 100";
   const {results} = await env.DB.prepare(query).bind(...params).all();
   return json(results);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// NEW BIN-LOCATION HANDLERS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleAddBin(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as {warehouse_id:string;code:string;zone?:string;capacity?:number;sku?:string};
+  if (!body.warehouse_id || !body.code) return json({error:"warehouse_id and code required"}, 400);
+  const id = `bin${uid().slice(0,6)}`;
+  await env.DB.prepare("INSERT INTO bin_locations (id,warehouse_id,code,zone,sku,capacity,occupied) VALUES (?,?,?,?,?,?,0)")
+    .bind(id, body.warehouse_id, body.code, body.zone||null, body.sku||null, body.capacity||100).run();
+  await audit(env, user, "CREATE", "bin_location", id, undefined, `${body.code} in ${body.warehouse_id}`);
+  return json({id}, 201);
+}
+
+async function handlePatchBin(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as {sku?:string|null;capacity?:number;zone?:string;occupied?:number};
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  if (body.sku !== undefined)      { fields.push("sku=?");      vals.push(body.sku||null); }
+  if (body.capacity !== undefined) { fields.push("capacity=?"); vals.push(body.capacity); }
+  if (body.zone !== undefined)     { fields.push("zone=?");     vals.push(body.zone||null); }
+  if (body.occupied !== undefined) { fields.push("occupied=?"); vals.push(body.occupied); }
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE bin_locations SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  await audit(env, user, "UPDATE", "bin_location", id, undefined, JSON.stringify(body));
+  return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// NEW DELIVERY-CHALLAN HANDLERS (POD, Scan, Return)
+// ════════════════════════════════════════════════════════════════════
+
+async function handleMarkPOD(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  await env.DB.prepare("UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?").bind(id).run();
+  await audit(env, user, "POD_UPLOAD", "delivery_challan", id);
+  return json({id, pod_uploaded:true});
+}
+
+async function handleMarkScan(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  await env.DB.prepare("UPDATE delivery_challans SET dc_scan_uploaded=1 WHERE id=?").bind(id).run();
+  await audit(env, user, "DC_SCAN_UPLOAD", "delivery_challan", id);
+  return json({id, dc_scan_uploaded:true});
+}
+
+async function handleReturnDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json() as {reason?:string};
+
+  // Get DC and items before cancelling
+  const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!dc) return json({error:"DC not found"}, 404);
+
+  const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+
+  // Mark DC as cancelled
+  await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=?").bind(id).run();
+
+  // Restore inventory stock for returned items
+  for (const item of dcItems) {
+    if ((item.qty_delivered as number) > 0) {
+      await env.DB.prepare("UPDATE inventory SET stock=stock+?,reserved=MAX(0,reserved-?) WHERE sku=?")
+        .bind(item.qty_delivered, item.qty_delivered, item.sku).run();
+      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(uid(), item.sku as string, 'RETURN', item.qty_delivered as number, id, 'delivery_challan',
+          `Returned DC ${id}${body.reason ? ': ' + body.reason : ''}`, user!.name).run();
+    }
+  }
+
+  // Revert order status
+  if (dc.order_id) {
+    await env.DB.prepare("UPDATE orders SET status='APPROVED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')")
+      .bind(dc.order_id).run();
+    await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,'IN_SHIPMENT','APPROVED',?,?,?)`)
+      .bind(uid(), dc.order_id, user!.sub, user!.name, `DC ${id} returned: ${body.reason||'No reason given'}`).run();
+  }
+
+  await pushNotification(env, "ops_admin", `DC ${id} returned/rejected — stock restored`);
+  await audit(env, user, "RETURN", "delivery_challan", id, "IN_TRANSIT", "CANCELLED");
+  return json({id, status:'CANCELLED'});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PICK LIST
+// ════════════════════════════════════════════════════════════════════
+
+async function handlePickList(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT o.id as order_id, c.name as client_name, o.status, o.created_at,
+      oi.sku, oi.name as item_name, oi.qty,
+      COALESCE(i.stock,0) as stock_available
+    FROM orders o JOIN clients c ON o.client_id=c.id
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    WHERE o.status='READY_TO_PICK'
+    ORDER BY o.created_at ASC
+  `).all();
+  return json(results);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// STOCK TRANSFERS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleStockTransfer(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as {sku:string;from_bin_id:string;to_bin_id:string;qty:number;note?:string};
+  if (!body.sku || !body.from_bin_id || !body.to_bin_id || !body.qty) {
+    return json({error:"sku, from_bin_id, to_bin_id, and qty are required"}, 400);
+  }
+
+  const fromBin = await env.DB.prepare("SELECT * FROM bin_locations WHERE id=?").bind(body.from_bin_id).first() as Record<string,number>|null;
+  if (!fromBin) return json({error:"Source bin not found"}, 404);
+  if ((fromBin.occupied||0) < body.qty) return json({error:"Insufficient stock in source bin"}, 400);
+
+  // Deduct from source bin
+  await env.DB.prepare("UPDATE bin_locations SET occupied=MAX(0,occupied-?) WHERE id=?").bind(body.qty, body.from_bin_id).run();
+  // Add to destination bin
+  await env.DB.prepare("UPDATE bin_locations SET occupied=occupied+? WHERE id=?").bind(body.qty, body.to_bin_id).run();
+
+  // Record movement
+  const movId = uid();
+  await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(movId, body.sku, 'TRANSFER', body.qty, body.from_bin_id, 'bin_location',
+      body.note || `Transfer from bin ${body.from_bin_id} to ${body.to_bin_id}`, user!.name).run();
+
+  await audit(env, user, "STOCK_TRANSFER", "bin_location", body.from_bin_id, undefined,
+    `sku:${body.sku},qty:${body.qty},to:${body.to_bin_id}`);
+  return json({id: movId, sku: body.sku, qty: body.qty}, 201);
 }
 
 // ════════════════════════════════════════════════════════════════════

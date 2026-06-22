@@ -1906,88 +1906,392 @@ async function confirmGRN(poId) {
 }
 
 /* ============================================================
-   WAREHOUSE (Gap 5 — real warehouse + bin data)
+   WAREHOUSE — Tabbed view (Section 6 rebuild)
    ============================================================ */
 async function renderWarehouse(el) {
-  const [grns, inv, warehouses, bins] = await Promise.all([
-    api('/grn'), api('/inventory'), api('/warehouses'), api('/bin-locations')
-  ]);
-  if (!inv) return;
+  el.innerHTML = `
+  ${pageHeader('Warehouse', 'Warehouses, bins, GRN, picklist & stock transfers',
+    `<button class="btn btn-primary" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
+  <div class="tabs" id="wh-tabs" style="margin-bottom:16px">
+    <button class="tab-btn active" onclick="switchWHTab('overview',this)">Overview</button>
+    <button class="tab-btn" onclick="switchWHTab('grn',this)">GRN Records</button>
+    <button class="tab-btn" onclick="switchWHTab('bins',this)">Bin Locations</button>
+    <button class="tab-btn" onclick="switchWHTab('picklist',this)">Pick List</button>
+    <button class="tab-btn" onclick="switchWHTab('transfers',this)">Stock Transfers</button>
+  </div>
+  <div id="wh-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
 
-  const cats = {};
-  inv.forEach(i => { cats[i.category] = (cats[i.category]||0) + i.stock; });
-  const totalItems = inv.reduce((s,i) => s + i.stock, 0);
-  const maxItems   = inv.reduce((s,i) => s + (i.max_stock||100), 0);
+  switchWHTab('overview', document.querySelector('#wh-tabs .tab-btn'));
+}
+
+async function switchWHTab(tab, btn) {
+  document.querySelectorAll('#wh-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const content = document.getElementById('wh-tab-content');
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>';
+
+  try {
+    if (tab === 'overview') {
+      const [warehouses, bins, inv, grns] = await Promise.all([
+        api('/warehouses'), api('/bin-locations'), api('/inventory'), api('/grn')
+      ]);
+      renderWHOverview(content, warehouses||[], bins||[], inv||[], grns||[]);
+    } else if (tab === 'grn') {
+      const grns = await api('/grn');
+      renderWHGRN(content, grns||[]);
+    } else if (tab === 'bins') {
+      const [bins, warehouses] = await Promise.all([api('/bin-locations'), api('/warehouses')]);
+      renderWHBins(content, bins||[], warehouses||[]);
+    } else if (tab === 'picklist') {
+      const picklist = await api('/orders/picklist');
+      renderWHPickList(content, picklist||[]);
+    } else if (tab === 'transfers') {
+      const [movements, bins] = await Promise.all([
+        api('/stock-movements?type=TRANSFER'), api('/bin-locations')
+      ]);
+      renderWHTransfers(content, movements||[], bins||[]);
+    }
+  } catch(e) {
+    content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
+      Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchWHTab('${tab}',document.querySelectorAll('#wh-tabs .tab-btn')[['overview','grn','bins','picklist','transfers'].indexOf('${tab}')])">Retry</button>
+    </div>`;
+  }
+}
+
+function renderWHOverview(el, warehouses, bins, inv, grns) {
+  const totalUnits = inv.reduce((s,i) => s+i.stock, 0);
+  const totalSKUs  = inv.length;
+  const thisMonth  = new Date().toISOString().slice(0,7);
+  const grnsThisMonth = grns.filter(g => (g.received_at||'').startsWith(thisMonth)).length;
 
   el.innerHTML = `
-  ${pageHeader('Warehouse', 'Warehouses, bins, stock & GRN management',
-    `<button class="btn btn-gold" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
   <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-label">Warehouses</div><div class="kpi-value">${(warehouses||[]).filter(w=>w.active).length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Total SKUs</div><div class="kpi-value">${inv.length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Total Units</div><div class="kpi-value">${totalItems.toLocaleString('en-IN')}</div></div>
-    <div class="kpi-card"><div class="kpi-label">GRNs Today</div><div class="kpi-value">${(grns||[]).filter(g=>g.received_at?.startsWith(new Date().toISOString().slice(0,10))).length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Active Warehouses</div><div class="kpi-value">${warehouses.filter(w=>w.active).length}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total SKUs</div><div class="kpi-value">${totalSKUs}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Units In Stock</div><div class="kpi-value">${totalUnits.toLocaleString('en-IN')}</div></div>
+    <div class="kpi-card"><div class="kpi-label">GRNs This Month</div><div class="kpi-value">${grnsThisMonth}</div></div>
   </div>
-
-  <div class="card" style="margin-bottom:16px">
+  <div class="card">
     <div class="card-header"><span>Warehouses</span></div>
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Name</th><th>City</th><th>Capacity</th><th>Bin Locations</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${(warehouses||[]).map(w=>{
-          const wBins = (bins||[]).filter(b=>b.warehouse_id===w.id);
-          const utilPct = wBins.length ? Math.round(wBins.reduce((s,b)=>s+b.occupied,0) / wBins.reduce((s,b)=>s+b.capacity,1) * 100) : 0;
+        <thead><tr><th>Name</th><th>City</th><th>Capacity</th><th>Bins</th><th>Utilization</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${warehouses.map(w=>{
+          const wBins = bins.filter(b=>b.warehouse_id===w.id);
+          const occupied = wBins.reduce((s,b)=>s+(b.occupied||0),0);
+          const cap = wBins.reduce((s,b)=>s+(b.capacity||1),1);
+          const utilPct = Math.min(100, Math.round(occupied/cap*100));
           return `<tr>
             <td><b>${w.name}</b></td>
             <td>${w.city||'—'}</td>
             <td>${(w.capacity||0).toLocaleString('en-IN')} units</td>
+            <td>${wBins.length}</td>
             <td>
-              ${wBins.length} bins
-              <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden;margin-top:4px;min-width:80px">
-                <div style="height:100%;width:${utilPct}%;background:${utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)'};border-radius:2px"></div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="background:var(--border);height:6px;border-radius:3px;flex:1;overflow:hidden">
+                  <div style="height:100%;width:${utilPct}%;background:${utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)'};border-radius:3px"></div>
+                </div>
+                <span style="font-size:.8rem;white-space:nowrap">${utilPct}%</span>
               </div>
             </td>
             <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
-            <td><button class="btn btn-secondary btn-sm" onclick="viewBins('${w.id}','${w.name.replace(/'/g,"\\'")}')">View Bins</button></td>
+            <td style="display:flex;gap:4px">
+              <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
+              <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
+              <button class="btn btn-primary btn-sm" onclick="addBinModal('${w.id}')">Add Bin</button>
+            </td>
           </tr>`;
-        }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No warehouses</td></tr>'}
+        }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No warehouses yet</td></tr>'}
         </tbody>
       </table>
     </div>
-  </div>
+  </div>`;
+}
 
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span>Stock by Category</span></div>
-      <div class="card-body">
-        ${Object.entries(cats).map(([cat,qty])=>{
-          const p = Math.min(100, Math.round((qty / (maxItems/Math.max(1,Object.keys(cats).length))) * 100));
-          return `<div style="margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;font-size:.84rem;margin-bottom:4px"><span>${cat}</span><span>${qty} units</span></div>
-            <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
-              <div style="height:100%;width:${p}%;background:var(--navy);border-radius:4px"></div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span>Recent GRN Records</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>GRN #</th><th>PO #</th><th>Vendor</th><th>Qty</th><th>Date</th></tr></thead>
-          <tbody>${(grns||[]).slice(0,8).map(g=>`<tr>
-            <td><b>${g.id}</b></td>
-            <td>${g.po_id}</td>
-            <td>${g.vendor_name||'—'}</td>
-            <td>${g.qty_received}</td>
-            <td>${fmtDate(g.received_at)}</td>
-          </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No GRNs yet</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+function renderWHGRN(el, grns) {
+  el.innerHTML = `
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button class="btn btn-primary" onclick="recordGRNModal()">${iconPlus(14)} Record GRN</button>
+  </div>
+  <div class="card">
+    <div class="card-header"><span>GRN Records</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>GRN #</th><th>PO #</th><th>Vendor</th><th>SKU</th><th>Qty Received</th><th>Received By</th><th>Date</th></tr></thead>
+        <tbody>${grns.map(g=>`<tr>
+          <td><b>${g.id}</b></td>
+          <td>${g.po_id||'—'}</td>
+          <td>${g.vendor_name||'—'}</td>
+          <td>${g.sku||'—'}</td>
+          <td><b style="color:var(--success)">${g.qty_received}</b></td>
+          <td>${g.receiver_name||g.received_by||'—'}</td>
+          <td>${fmtDate(g.received_at)}</td>
+        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No GRN records yet</td></tr>'}
+        </tbody>
+      </table>
     </div>
   </div>`;
+}
+
+function renderWHBins(el, bins, warehouses) {
+  const whMap = {};
+  warehouses.forEach(w => { whMap[w.id] = w.name; });
+
+  const whOptions = warehouses.map(w=>`<option value="${w.id}">${w.name}</option>`).join('');
+
+  el.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center">
+      <label style="font-size:.875rem;color:var(--text-muted)">Filter by Warehouse:</label>
+      <select id="bin-wh-filter" onchange="filterBinsTable()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px">
+        <option value="">All Warehouses</option>
+        ${whOptions}
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="addBinModal()">${iconPlus(14)} Add Bin</button>
+  </div>
+  <div class="card">
+    <div class="card-header"><span>Bin Locations</span></div>
+    <div class="table-wrap">
+      <table class="table" id="bins-table">
+        <thead><tr><th>Code</th><th>Warehouse</th><th>Zone</th><th>SKU Assigned</th><th>Capacity</th><th>Occupied</th><th>Free Space</th><th>Actions</th></tr></thead>
+        <tbody id="bins-tbody">
+          ${bins.map(b=>{
+            const freeSpace = (b.capacity||0)-(b.occupied||0);
+            const fillPct = Math.min(100, Math.round((b.occupied||0)/(b.capacity||1)*100));
+            return `<tr data-wh="${b.warehouse_id}">
+              <td><b>${b.code}</b></td>
+              <td>${whMap[b.warehouse_id]||b.warehouse_id||'—'}</td>
+              <td>${b.zone||'—'}</td>
+              <td>${b.sku||'<em style="color:var(--text-muted)">Unassigned</em>'}</td>
+              <td>${b.capacity||0}</td>
+              <td>${b.occupied||0}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <div style="background:var(--border);height:6px;border-radius:3px;width:80px;overflow:hidden">
+                    <div style="height:100%;width:${fillPct}%;background:${fillPct>85?'var(--danger)':fillPct>60?'var(--warning)':'var(--success)'};border-radius:3px"></div>
+                  </div>
+                  <span style="font-size:.8rem">${freeSpace} free</span>
+                </div>
+              </td>
+              <td style="display:flex;gap:4px">
+                <button class="btn btn-secondary btn-sm" onclick="editBinModal('${b.id}','${(b.code||'').replace(/'/g,"\\'")}','${(b.zone||'').replace(/'/g,"\\'")}',${b.capacity||0},'${b.sku||''}')">Edit</button>
+              </td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No bins yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function filterBinsTable() {
+  const whId = document.getElementById('bin-wh-filter').value;
+  document.querySelectorAll('#bins-tbody tr[data-wh]').forEach(row => {
+    row.style.display = (!whId || row.dataset.wh === whId) ? '' : 'none';
+  });
+}
+
+function renderWHPickList(el, picklist) {
+  // Group by order
+  const orders = {};
+  picklist.forEach(row => {
+    if (!orders[row.order_id]) orders[row.order_id] = { order_id: row.order_id, client_name: row.client_name, created_at: row.created_at, items: [] };
+    orders[row.order_id].items.push(row);
+  });
+  const orderList = Object.values(orders);
+
+  el.innerHTML = `
+  <div class="card">
+    <div class="card-header"><span>Pick List — Orders Ready to Pick (${orderList.length})</span></div>
+    ${orderList.length === 0
+      ? '<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders in READY_TO_PICK state</div>'
+      : orderList.map(order => `
+        <div style="border-bottom:1px solid var(--border);padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <b>${order.order_id}</b>
+              <span style="margin-left:8px;color:var(--text-muted)">${order.client_name}</span>
+              <span style="margin-left:8px;font-size:.8rem;color:var(--text-muted)">${fmtDate(order.created_at)}</span>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="createDCFromPicklist('${order.order_id}')">Create DC &rarr;</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" style="margin:0">
+              <thead><tr><th>SKU</th><th>Item</th><th>Qty Required</th><th>Stock Available</th></tr></thead>
+              <tbody>${order.items.map(item=>`<tr>
+                <td>${item.sku}</td>
+                <td>${item.item_name}</td>
+                <td>${item.qty}</td>
+                <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
+                  <b>${item.stock_available}</b>
+                  ${item.stock_available<item.qty?'<span style="margin-left:4px;font-size:.75rem">(short by '+(item.qty-item.stock_available)+')</span>':''}
+                </td>
+              </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `).join('')
+    }
+  </div>`;
+}
+
+function renderWHTransfers(el, movements, bins) {
+  const binOptions = bins.map(b=>`<option value="${b.id}">${b.code} (${b.warehouse_id||''})</option>`).join('');
+
+  el.innerHTML = `
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span>New Stock Transfer</span></div>
+    <div class="card-body" style="padding:16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end">
+        <div class="form-group" style="margin:0">
+          <label>SKU</label>
+          <input type="text" id="st-sku" placeholder="e.g. SKU001">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>From Bin</label>
+          <select id="st-from">${binOptions}</select>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>To Bin</label>
+          <select id="st-to">${binOptions}</select>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Qty</label>
+          <input type="number" id="st-qty" value="1" min="1">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Note</label>
+          <input type="text" id="st-note" placeholder="Optional note">
+        </div>
+        <div>
+          <button class="btn btn-primary" onclick="submitStockTransfer()">Transfer Stock</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span>Recent Transfers</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Date</th><th>SKU</th><th>Item</th><th>Qty</th><th>From Bin</th><th>Note</th><th>By</th></tr></thead>
+        <tbody>${movements.map(m=>`<tr>
+          <td>${fmtDate(m.created_at)}</td>
+          <td>${m.sku}</td>
+          <td>${m.item_name||'—'}</td>
+          <td>${m.qty_change}</td>
+          <td>${m.reference_id||'—'}</td>
+          <td>${m.note||'—'}</td>
+          <td>${m.actor||'—'}</td>
+        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No transfers yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function recordGRNModal() {
+  api('/purchase-orders').then(pos => {
+    const poOptions = (pos||[]).filter(p=>['SENT','ACCEPTED'].includes(p.status))
+      .map(p=>`<option value="${p.id}">${p.id} — ${p.vendor_name||p.vendor_id}</option>`).join('');
+    openModal('Record GRN',
+      `<div class="form-group"><label>Purchase Order</label>
+         <select id="grn-po"><option value="">Select PO...</option>${poOptions}</select></div>
+       <div class="form-group"><label>SKU</label><input type="text" id="grn-sku" placeholder="e.g. SKU001"></div>
+       <div class="form-group"><label>Qty Received</label><input type="number" id="grn-qty" value="1" min="1"></div>
+       <div class="form-group"><label>Notes</label><input type="text" id="grn-notes" placeholder="Optional notes"></div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" onclick="saveGRN()">Record GRN</button>`);
+  });
+}
+
+async function saveGRN() {
+  const body = {
+    po_id:        document.getElementById('grn-po').value,
+    sku:          document.getElementById('grn-sku').value,
+    qty_received: +document.getElementById('grn-qty').value,
+    notes:        document.getElementById('grn-notes').value,
+  };
+  if (!body.po_id)        { showToast('Please select a Purchase Order','error'); return; }
+  if (!body.qty_received) { showToast('Quantity must be > 0','error'); return; }
+  const res = await api('/grn', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast(`GRN recorded — ${body.qty_received} units received`); switchWHTab('grn', document.querySelectorAll('#wh-tabs .tab-btn')[1]); }
+}
+
+function addBinModal(warehouseId) {
+  api('/warehouses').then(warehouses => {
+    const whOptions = (warehouses||[]).map(w=>`<option value="${w.id}" ${w.id===warehouseId?'selected':''}>${w.name}</option>`).join('');
+    openModal('Add Bin Location',
+      `<div class="form-group"><label>Warehouse</label>
+         <select id="bin-wh">${whOptions}</select></div>
+       <div class="form-group"><label>Bin Code</label><input type="text" id="bin-code" placeholder="e.g. A-01-01"></div>
+       <div class="form-group"><label>Zone</label><input type="text" id="bin-zone" placeholder="e.g. A, Cold Storage, Dry"></div>
+       <div class="form-group"><label>Capacity (units)</label><input type="number" id="bin-cap" value="100" min="1"></div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" onclick="saveBin()">Add Bin</button>`);
+  });
+}
+
+async function saveBin() {
+  const body = {
+    warehouse_id: document.getElementById('bin-wh').value,
+    code:         document.getElementById('bin-code').value,
+    zone:         document.getElementById('bin-zone').value,
+    capacity:     +document.getElementById('bin-cap').value,
+  };
+  if (!body.warehouse_id || !body.code) { showToast('Warehouse and bin code required','error'); return; }
+  const res = await api('/bin-locations', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Bin added'); switchWHTab('bins', document.querySelectorAll('#wh-tabs .tab-btn')[2]); }
+}
+
+function editBinModal(binId, code, zone, cap, sku) {
+  openModal('Edit Bin Location',
+    `<div class="form-group"><label>Bin Code</label><input type="text" id="ebin-code" value="${code}"></div>
+     <div class="form-group"><label>Zone</label><input type="text" id="ebin-zone" value="${zone}"></div>
+     <div class="form-group"><label>Capacity (units)</label><input type="number" id="ebin-cap" value="${cap}" min="1"></div>
+     <div class="form-group"><label>Assigned SKU</label><input type="text" id="ebin-sku" value="${sku}" placeholder="Leave blank to unassign"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveBinEdit('${binId}')">Save Changes</button>`);
+}
+
+async function saveBinEdit(binId) {
+  const body = {
+    code:     document.getElementById('ebin-code').value,
+    zone:     document.getElementById('ebin-zone').value,
+    capacity: +document.getElementById('ebin-cap').value,
+    sku:      document.getElementById('ebin-sku').value || null,
+  };
+  const res = await api('/bin-locations/' + binId, { method:'PATCH', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Bin updated'); switchWHTab('bins', document.querySelectorAll('#wh-tabs .tab-btn')[2]); }
+}
+
+async function createDCFromPicklist(orderId) {
+  if (!confirm(`Transition order ${orderId} to IN_SHIPMENT and create a Delivery Challan?`)) return;
+  const res = await api(`/orders/${orderId}/transition`, {
+    method: 'POST',
+    body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Picked from warehouse — DC created' })
+  });
+  if (res) { showToast(`Order ${orderId} advanced to IN_SHIPMENT — DC created`); switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]); }
+}
+
+async function submitStockTransfer() {
+  const body = {
+    sku:         document.getElementById('st-sku').value,
+    from_bin_id: document.getElementById('st-from').value,
+    to_bin_id:   document.getElementById('st-to').value,
+    qty:         +document.getElementById('st-qty').value,
+    note:        document.getElementById('st-note').value,
+  };
+  if (!body.sku || !body.from_bin_id || !body.to_bin_id || !body.qty) {
+    showToast('All fields except note are required','error'); return;
+  }
+  if (body.from_bin_id === body.to_bin_id) { showToast('Source and destination bins must be different','error'); return; }
+  const res = await api('/stock-transfers', { method:'POST', body: JSON.stringify(body) });
+  if (res) { showToast(`Transferred ${body.qty} units of ${body.sku}`); switchWHTab('transfers', document.querySelectorAll('#wh-tabs .tab-btn')[4]); }
 }
 
 function viewBins(warehouseId, warehouseName) {
@@ -2035,84 +2339,199 @@ async function saveWarehouse() {
   if (res) { showToast('Warehouse added'); navigate('warehouse'); }
 }
 
+function editWarehouseModal(id, name, capacity) {
+  openModal('Edit Warehouse',
+    `<div class="form-group"><label>Warehouse Name</label><input type="text" id="ewh-name" value="${name}"></div>
+     <div class="form-group"><label>Capacity (units)</label><input type="number" id="ewh-cap" value="${capacity}" min="1"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveWarehouseEdit('${id}')">Save Changes</button>`);
+}
+
+async function saveWarehouseEdit(id) {
+  const body = {
+    name:     document.getElementById('ewh-name').value,
+    capacity: +document.getElementById('ewh-cap').value,
+  };
+  if (!body.name) { showToast('Warehouse name required','error'); return; }
+  const res = await api('/warehouses/' + id, { method:'PATCH', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Warehouse updated'); switchWHTab('overview', document.querySelectorAll('#wh-tabs .tab-btn')[0]); }
+}
+
 /* ============================================================
-   DELIVERY (Gap 14 — partial delivery)
+   DELIVERY — Tabbed view (Section 7 rebuild)
    ============================================================ */
 async function renderDelivery(el) {
-  const dcs = await api('/delivery-challans');
-  if (!dcs) return;
-
-  const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
-  const inTransit  = dcs.filter(d => d.status === 'IN_TRANSIT');
-  const delivered  = dcs.filter(d => d.status === 'DELIVERED');
-
   el.innerHTML = `
-  ${pageHeader('Deliveries', `${dcs.length} challans — ${inTransit.length} in transit`)}
-
-  ${scheduled.length ? `
-  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">Scheduled — Ready to Dispatch (${scheduled.length})</div>
-  <div class="card" style="margin-bottom:20px">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Actions</th></tr></thead>
-        <tbody>${scheduled.map(dc=>`<tr>
-          <td><b>${dc.id}</b></td>
-          <td>${dc.order_id}</td>
-          <td>${dc.client_name||'—'}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
-          <td>${dc.total_qty||'—'}</td>
-          <td>
-            <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch</button>
-          </td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">None</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>` : ''}
-
-  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">In Transit (${inTransit.length})</div>
-  <div class="card" style="margin-bottom:20px">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Delivered</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Actions</th></tr></thead>
-        <tbody>${inTransit.map(dc=>`<tr>
-          <td><b>${dc.id}</b></td>
-          <td>${dc.order_id}</td>
-          <td>${dc.client_name||'—'}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
-          <td>${dc.total_qty||'—'}</td>
-          <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:${dc.delivered_qty>=(dc.total_qty||1)?'var(--success)':'var(--warning)'}">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
-          <td>${dc.vehicle_no||'—'}</td>
-          <td>${dc.driver_name||'—'}</td>
-          <td>${fmtDate(dc.dispatched_at)}</td>
-          <td style="display:flex;gap:4px;flex-wrap:wrap">
-            <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
-            <button class="btn btn-gold btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
-          </td>
-        </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No active deliveries</td></tr>'}
-        </tbody>
-      </table>
-    </div>
+  ${pageHeader('Deliveries', 'Delivery challans, dispatch, POD & returns')}
+  <div class="tabs" id="dc-tabs" style="margin-bottom:16px">
+    <button class="tab-btn active" onclick="switchDeliveryTab('scheduled',this)">Scheduled</button>
+    <button class="tab-btn" onclick="switchDeliveryTab('transit',this)">In Transit</button>
+    <button class="tab-btn" onclick="switchDeliveryTab('delivered',this)">Delivered</button>
+    <button class="tab-btn" onclick="switchDeliveryTab('returns',this)">Returns</button>
+    <button class="tab-btn" onclick="switchDeliveryTab('all',this)">All</button>
   </div>
+  <div id="dc-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
 
-  <div class="section-label" style="margin-bottom:8px;font-weight:600;color:var(--text-muted);text-transform:uppercase;font-size:.75rem;letter-spacing:.05em">Delivered (${delivered.length})</div>
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Delivered Qty</th><th>Driver</th><th>Delivered At</th><th>Billed</th></tr></thead>
-        <tbody>${delivered.map(dc=>`<tr>
-          <td><b>${dc.id}</b></td>
-          <td>${dc.order_id}</td>
-          <td>${dc.client_name||'—'}</td>
-          <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
-          <td>${dc.driver_name||'—'}</td>
-          <td>${fmtDate(dc.delivered_at)}</td>
-          <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'<span class="badge badge-warning">Pending</span>'}</td>
-        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">None</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
+  switchDeliveryTab('scheduled', document.querySelector('#dc-tabs .tab-btn'));
+}
+
+async function switchDeliveryTab(tab, btn) {
+  document.querySelectorAll('#dc-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const content = document.getElementById('dc-tab-content');
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>';
+
+  try {
+    const dcs = await api('/delivery-challans');
+    if (!dcs) { content.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--danger)">Failed to load delivery challans.</div>'; return; }
+    const today = new Date();
+
+    if (tab === 'scheduled') {
+      const items = dcs.filter(d => d.status === 'SCHEDULED');
+      content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><span>Scheduled — Ready to Dispatch (${items.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Actions</th></tr></thead>
+            <tbody>${items.map(dc=>`<tr>
+              <td><b>${dc.id}</b></td>
+              <td>${dc.order_id}</td>
+              <td>${dc.client_name||'—'}</td>
+              <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
+              <td>${dc.total_qty||'—'}</td>
+              <td><button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch</button></td>
+            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No scheduled challans</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    } else if (tab === 'transit') {
+      const items = dcs.filter(d => d.status === 'IN_TRANSIT');
+      content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><span>In Transit (${items.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Delivered</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Actions</th></tr></thead>
+            <tbody>${items.map(dc=>{
+              const overdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today;
+              return `<tr style="${overdue?'background:var(--warning-bg,#fff8e6)':''}">
+                <td><b>${dc.id}</b>${overdue?'<span class="badge badge-warning" style="margin-left:4px">Overdue</span>':''}</td>
+                <td>${dc.order_id}</td>
+                <td>${dc.client_name||'—'}</td>
+                <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
+                <td>${dc.total_qty||'—'}</td>
+                <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:var(--warning)">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
+                <td>${dc.vehicle_no||'—'}</td>
+                <td>${dc.driver_name||'—'}</td>
+                <td>${fmtDate(dc.dispatched_at)}</td>
+                <td>${dc.expected_delivery_date ? `<span style="color:${overdue?'var(--danger)':'var(--text)'}">${fmtDate(dc.expected_delivery_date)}</span>` : '—'}</td>
+                <td style="display:flex;gap:4px;flex-wrap:wrap">
+                  <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
+                  <button class="btn btn-secondary btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
+                  <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
+                </td>
+              </tr>`;
+            }).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No challans in transit</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    } else if (tab === 'delivered') {
+      const items = dcs.filter(d => d.status === 'DELIVERED');
+      content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><span>Delivered (${items.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Delivered Qty</th><th>Driver</th><th>Delivered At</th><th>Expected</th><th>POD</th><th>DC Scan</th><th>Billed</th></tr></thead>
+            <tbody>${items.map(dc=>`<tr>
+              <td><b>${dc.id}</b></td>
+              <td>${dc.order_id}</td>
+              <td>${dc.client_name||'—'}</td>
+              <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+              <td>${dc.driver_name||'—'}</td>
+              <td>${fmtDate(dc.delivered_at)}</td>
+              <td>${dc.expected_delivery_date ? fmtDate(dc.expected_delivery_date) : '—'}</td>
+              <td>${dc.pod_uploaded ? '<span class="badge badge-success">&#10003; Uploaded</span>' : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark</button>`}</td>
+              <td>${dc.dc_scan_uploaded ? '<span class="badge badge-success">&#10003; Uploaded</span>' : `<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark</button>`}</td>
+              <td>${dc.billed ? '<span class="badge badge-success">Billed</span>' : `<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
+            </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No delivered challans</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    } else if (tab === 'returns') {
+      const items = dcs.filter(d => d.status === 'CANCELLED');
+      content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><span>Returns / Rejected (${items.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead>
+            <tbody>${items.map(dc=>`<tr>
+              <td><b>${dc.id}</b></td>
+              <td>${dc.order_id}</td>
+              <td>${dc.client_name||'—'}</td>
+              <td>${dc.total_qty||'—'}</td>
+              <td>${dc.driver_name||'—'}</td>
+              <td>${fmtDate(dc.dispatched_at)}</td>
+            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No returns</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    } else if (tab === 'all') {
+      const statusColors = {SCHEDULED:'info',IN_TRANSIT:'warning',DELIVERED:'success',CANCELLED:'danger'};
+      content.innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        ${['','SCHEDULED','IN_TRANSIT','DELIVERED','CANCELLED'].map(s=>`
+          <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')" id="dc-filter-${s||'all'}">${s||'All'}</button>
+        `).join('')}
+      </div>
+      <div class="card">
+        <div class="card-header"><span>All Delivery Challans (${dcs.length})</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Delivered At</th><th>Billed</th></tr></thead>
+            <tbody id="dc-all-tbody">${dcs.map(dc=>{
+              const overdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
+              return `<tr data-status="${dc.status}" style="${overdue?'background:var(--warning-bg,#fff8e6)':''}">
+                <td><b>${dc.id}</b></td>
+                <td>${dc.order_id}</td>
+                <td>${dc.client_name||'—'}</td>
+                <td>${statusBadge(dc.status)}</td>
+                <td>${dc.total_qty||'—'}</td>
+                <td>${dc.vehicle_no||'—'}</td>
+                <td>${dc.driver_name||'—'}</td>
+                <td>${fmtDate(dc.dispatched_at)}</td>
+                <td>${dc.expected_delivery_date ? fmtDate(dc.expected_delivery_date) : '—'}</td>
+                <td>${fmtDate(dc.delivered_at)}</td>
+                <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'—'}</td>
+              </tr>`;
+            }).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No challans</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }
+  } catch(e) {
+    content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
+      Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchDeliveryTab('${tab}',null)">Retry</button>
+    </div>`;
+  }
+}
+
+function filterDCTable(status) {
+  document.querySelectorAll('#dc-all-tbody tr[data-status]').forEach(row => {
+    row.style.display = (!status || row.dataset.status === status) ? '' : 'none';
+  });
 }
 
 async function viewDCItems(dcId) {
@@ -2140,27 +2559,65 @@ function dispatchDCModal(dcId) {
     `<p style="margin-bottom:12px;color:var(--text-muted)">Enter vehicle and driver details to dispatch DC <b>${dcId}</b>. Order status will advance to IN_SHIPMENT.</p>
      <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234"></div>
      <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar"></div>
-     <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>`,
+     <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>
+     <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="confirmDispatch('${dcId}')">Dispatch Now</button>`);
 }
 
 async function confirmDispatch(dcId) {
-  const vehicle_no  = document.getElementById('dp-vehicle').value;
-  const driver_name = document.getElementById('dp-driver').value;
-  const driver_phone= document.getElementById('dp-phone').value;
+  const vehicle_no             = document.getElementById('dp-vehicle').value;
+  const driver_name            = document.getElementById('dp-driver').value;
+  const driver_phone           = document.getElementById('dp-phone').value;
+  const expected_delivery_date = document.getElementById('dp-expected').value;
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
   const res = await api('/delivery-challans/' + dcId + '/dispatch', {
     method:'POST',
-    body: JSON.stringify({vehicle_no, driver_name, driver_phone})
+    body: JSON.stringify({vehicle_no, driver_name, driver_phone, expected_delivery_date: expected_delivery_date||null})
   });
   closeModal();
-  if (res) { showToast(`DC ${dcId} dispatched — in transit`); navigate('delivery'); }
+  if (res) { showToast(`DC ${dcId} dispatched — in transit`); switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]); }
 }
 
 async function markDelivered(id) {
   const res = await api(`/delivery-challans/${id}/deliver`, { method:'POST' });
-  if (res) { showToast(`DC ${id} marked as delivered`); navigate('delivery'); }
+  if (res) { showToast(`DC ${id} marked as delivered`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+}
+
+async function markPOD(dcId) {
+  const res = await api(`/delivery-challans/${dcId}/pod`, { method:'POST' });
+  if (res) { showToast('POD marked as uploaded'); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+}
+
+async function markScan(dcId) {
+  const res = await api(`/delivery-challans/${dcId}/scan`, { method:'POST' });
+  if (res) { showToast('DC scan marked as uploaded'); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+}
+
+async function billDC(id) {
+  const res = await api(`/delivery-challans/${id}/bill`, { method:'POST' });
+  if (res) { showToast(`DC ${id} billed`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+}
+
+function returnDCModal(dcId) {
+  openModal(`Return / Reject DC — ${dcId}`,
+    `<p style="margin-bottom:12px;color:var(--text-muted)">Marking DC <b>${dcId}</b> as returned will restore inventory and revert the order status.</p>
+     <div class="form-group"><label>Reason for Return</label>
+       <textarea id="return-reason" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. Goods damaged in transit, wrong items delivered..."></textarea>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" style="background:var(--danger)" onclick="confirmReturnDC('${dcId}')">Confirm Return</button>`);
+}
+
+async function confirmReturnDC(dcId) {
+  const reason = document.getElementById('return-reason').value;
+  if (!reason.trim()) { showToast('Please provide a reason for the return','error'); return; }
+  const res = await api(`/delivery-challans/${dcId}/return`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  });
+  closeModal();
+  if (res) { showToast(`DC ${dcId} marked as returned — stock restored`); switchDeliveryTab('returns', document.querySelectorAll('#dc-tabs .tab-btn')[3]); }
 }
 
 function partialDeliveryModal(dcId, totalQty) {
@@ -2170,7 +2627,7 @@ function partialDeliveryModal(dcId, totalQty) {
      <div class="form-group"><label>Qty Delivered Now</label><input type="number" id="pd-delivered" value="0" min="1"></div>
      <div class="form-group"><label>Notes</label><input type="text" id="pd-notes" placeholder="Reason for partial delivery…"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="confirmPartialDelivery('${dcId}')">Submit Partial Delivery</button>`);
+     <button class="btn btn-secondary" onclick="confirmPartialDelivery('${dcId}')">Submit Partial Delivery</button>`);
 }
 
 async function confirmPartialDelivery(dcId) {
@@ -2185,7 +2642,7 @@ async function confirmPartialDelivery(dcId) {
     body: JSON.stringify({ delivered_qty: delivered, total_qty: total, notes }),
   });
   closeModal();
-  if (res) { showToast(`Partial delivery recorded — follow-up DC created`); navigate('delivery'); }
+  if (res) { showToast(`Partial delivery recorded — follow-up DC created`); switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]); }
 }
 
 /* ============================================================
