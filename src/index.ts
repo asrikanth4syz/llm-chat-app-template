@@ -1522,7 +1522,7 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
     env.DB.prepare("SELECT id,'ticket' as type,subject as title,status as subtitle FROM tickets WHERE subject LIKE ? OR id LIKE ? LIMIT 5").bind(like,like).all(),
   ]);
 
-  return json({results:[...orders,...inventory,...vendors,...clients,...tickets]});
+  return json({orders, inventory, vendors, clients, tickets});
 }
 
 // ════════════════════════════════════════════════════════════════════

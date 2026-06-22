@@ -355,6 +355,10 @@ function handleSearchResult(type, id) {
   if (type === 'order') setTimeout(() => viewOrder(id), 400);
 }
 
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-bar')) hideSearchResults();
+});
+
 function hideSearchResults() {
   const el = document.getElementById('search-results');
   if (el) el.style.display = 'none';
