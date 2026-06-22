@@ -657,7 +657,14 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
   const vals: unknown[] = [];
   if (body.stock !== undefined)         { fields.push("stock=?");         vals.push(body.stock); }
   if (body.reorder_level !== undefined) { fields.push("reorder_level=?"); vals.push(body.reorder_level); }
+  if (body.max_stock !== undefined)     { fields.push("max_stock=?");     vals.push(body.max_stock); }
   if (body.unit_price !== undefined)    { fields.push("unit_price=?");    vals.push(body.unit_price); }
+  if (body.name !== undefined)          { fields.push("name=?");          vals.push(body.name); }
+  if (body.category !== undefined)      { fields.push("category=?");      vals.push(body.category); }
+  if (body.emoji !== undefined)         { fields.push("emoji=?");         vals.push(body.emoji); }
+  if (body.vendor_id !== undefined)     { fields.push("vendor_id=?");     vals.push(body.vendor_id || null); }
+  if (body.hsn_code !== undefined)      { fields.push("hsn_code=?");      vals.push(body.hsn_code); }
+  if (body.gst_rate !== undefined)      { fields.push("gst_rate=?");      vals.push(body.gst_rate); }
   if (body.active !== undefined)        { fields.push("active=?");        vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(sku);
@@ -1434,6 +1441,7 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
   const from = url.searchParams.get("from") || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const to   = url.searchParams.get("to")   || new Date().toISOString().slice(0,10);
 
+  try {
   switch (type) {
     case "spend": {
       const {results} = await env.DB.prepare(`SELECT c.name as client, strftime('%Y-%m',o.created_at) as month,
@@ -1517,25 +1525,28 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
     case "order-items": {
       const {results} = await env.DB.prepare(`
         SELECT
-          c.name                                                                              AS client_name,
-          o.id                                                                                AS order_id,
-          o.status                                                                            AS order_status,
+          c.name AS client_name,
+          o.id AS order_id,
+          o.status AS order_status,
           o.created_at,
           o.grand_total,
-          (SELECT COUNT(*)                                        FROM order_items WHERE order_id=o.id) AS item_count,
-          (SELECT GROUP_CONCAT(name || ' x' || qty, ', ')        FROM order_items WHERE order_id=o.id) AS items_summary,
-          COALESCE((SELECT SUM(qty)                              FROM order_items WHERE order_id=o.id), 0) AS qty_ordered,
-          COALESCE((SELECT status FROM delivery_challans WHERE order_id=o.id LIMIT 1), 'NOT_DISPATCHED') AS delivery_status
+          COALESCE((SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id), 0) AS item_count,
+          COALESCE((SELECT SUM(oi.qty) FROM order_items oi WHERE oi.order_id=o.id), 0) AS qty_ordered,
+          COALESCE((SELECT dc.status FROM delivery_challans dc WHERE dc.order_id=o.id LIMIT 1), 'NOT_DISPATCHED') AS delivery_status
         FROM orders o
         JOIN clients c ON o.client_id=c.id
         WHERE o.status NOT IN ('CANCELLED','DRAFT')
           AND o.created_at >= ?
-          AND o.created_at <= ?
+          AND o.created_at < date(?, '+1 day')
         ORDER BY c.name, o.created_at DESC
         LIMIT 200`).bind(from, to).all();
       return json({type,from,to,data:results});
     }
     default: return json({error:"Unknown report type"}, 400);
+  }
+  } catch(e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return json({error:"Report query failed", detail: msg}, 500);
   }
 }
 

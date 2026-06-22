@@ -1554,9 +1554,13 @@ async function confirmBillDC(id) {
 /* ============================================================
    INVENTORY
    ============================================================ */
+let _invCache = {};
+
 async function renderInventory(el) {
   const inv = await api('/inventory');
   if (!inv) return;
+  _invCache = {};
+  inv.forEach(i => { _invCache[i.sku] = i; });
   const lowStock = inv.filter(i => i.stock <= i.reorder_level);
 
   el.innerHTML = `
@@ -1587,7 +1591,7 @@ async function renderInventory(el) {
             </td>
             <td>${item.vendor_name||'—'}</td>
             <td>
-              <button class="btn btn-secondary btn-sm" onclick="editStock('${item.sku}',${item.stock},${item.reorder_level})">Edit Stock</button>
+              <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
               <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${item.name.replace(/'/g,"\\'")}')">History</button>
               <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${item.name.replace(/'/g,"\\'")}',${item.unit_price},'${item.vendor_id||''}')">Reorder</button>
             </td>
@@ -1620,20 +1624,47 @@ async function viewStockHistory(sku, itemName) {
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
-function editStock(sku, stock, reorder) {
-  openModal('Edit Stock — ' + sku,
-    `<div class="form-group"><label>Current Stock</label><input type="number" id="edit-stock" value="${stock}" min="0"></div>
-     <div class="form-group"><label>Reorder Level</label><input type="number" id="edit-reorder" value="${reorder}" min="0"></div>`,
+async function editInventoryItem(sku) {
+  const item = _invCache[sku];
+  if (!item) return;
+  const vendors = await api('/vendors') || [];
+  const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
+  const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Other'];
+  const catOpts = cats.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('');
+  openModal(`Edit Item — ${sku}`,
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+       <div class="form-group" style="grid-column:1/-1"><label>Item Name</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
+       <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
+       <div class="form-group"><label>Emoji</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
+       <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="ei-price" value="${item.unit_price}" min="0" step="0.01"></div>
+       <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}"></div>
+       <div class="form-group"><label>GST Rate (%)</label><input type="number" id="ei-gst" value="${item.gst_rate||18}" min="0" max="28"></div>
+       <div class="form-group"><label>Vendor</label><select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select></div>
+       <div class="form-group"><label>Current Stock</label><input type="number" id="ei-stock" value="${item.stock}" min="0"></div>
+       <div class="form-group"><label>Reorder Level</label><input type="number" id="ei-reorder" value="${item.reorder_level}" min="0"></div>
+       <div class="form-group"><label>Max Stock</label><input type="number" id="ei-maxstock" value="${item.max_stock||200}" min="0"></div>
+     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveStock('${sku}')">Save</button>`);
+     <button class="btn btn-primary" onclick="saveInventoryItem('${sku}')">Save Changes</button>`);
 }
 
-async function saveStock(sku) {
-  const stock = +document.getElementById('edit-stock').value;
-  const reorder = +document.getElementById('edit-reorder').value;
-  const res = await api(`/inventory/${sku}`, { method:'PATCH', body: JSON.stringify({ stock, reorder_level: reorder }) });
+async function saveInventoryItem(sku) {
+  const body = {
+    name:          document.getElementById('ei-name').value,
+    category:      document.getElementById('ei-cat').value,
+    emoji:         document.getElementById('ei-emoji').value,
+    unit_price:    +document.getElementById('ei-price').value,
+    hsn_code:      document.getElementById('ei-hsn').value,
+    gst_rate:      +document.getElementById('ei-gst').value,
+    vendor_id:     document.getElementById('ei-vendor').value || null,
+    stock:         +document.getElementById('ei-stock').value,
+    reorder_level: +document.getElementById('ei-reorder').value,
+    max_stock:     +document.getElementById('ei-maxstock').value,
+  };
+  if (!body.name) { showToast('Item name is required', 'error'); return; }
+  const res = await api(`/inventory/${sku}`, { method:'PATCH', body: JSON.stringify(body) });
   closeModal();
-  if (res) { showToast('Stock updated'); navigate('inventory'); }
+  if (res) { showToast('Item updated'); navigate('inventory'); }
 }
 
 async function reorderItem(sku, name, price, vendorId) {
@@ -2369,8 +2400,8 @@ const REPORT_DEFS = [
     cols:['client','forecast_month','predicted'],
     labels:['Client','Forecast Month','Predicted Spend'] },
   { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: items ordered, quantities, and delivery status per client.', icon:'📦',
-    cols:['client_name','order_id','order_status','item_count','items_summary','qty_ordered','delivery_status','grand_total'],
-    labels:['Client','Order ID','Status','# Items','Items Detail','Total Qty Ordered','Delivery Status','Order Value'] },
+    cols:['client_name','order_id','order_status','item_count','qty_ordered','delivery_status','grand_total'],
+    labels:['Client','Order ID','Status','# Items','Total Qty Ordered','Delivery Status','Order Value'] },
 ];
 
 function renderReports(el) {
