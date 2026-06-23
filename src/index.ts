@@ -595,16 +595,34 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     }
   }
 
-  // Auto-create DC when IN_SHIPMENT — include total_qty and dc_items
+  // Auto-create DC when IN_SHIPMENT — use picked allocations if available, else order items
   if (body.to === "IN_SHIPMENT") {
+    const {results: allocations} = await env.DB.prepare(
+      "SELECT sku, item_name as name, SUM(qty) as qty FROM order_allocations WHERE order_id=? GROUP BY sku"
+    ).bind(id).all() as {results: Record<string,unknown>[]};
     const {results: orderItems} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as {results: Record<string,unknown>[]};
-    const totalQty = orderItems.reduce((s, i) => s + (i.qty as number), 0);
+
+    // Use allocations if pick was done, otherwise fall back to order quantities
+    const dispatchItems = allocations.length > 0 ? allocations : orderItems;
+    const totalQty = dispatchItems.reduce((s, i) => s + (i.qty as number), 0);
     const dcId = `DC-${Math.floor(Math.random()*9000+1000)}`;
     await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
       .bind(dcId, id, totalQty).run();
-    for (const item of orderItems) {
+    for (const item of dispatchItems) {
       await env.DB.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
         .bind(uid(), dcId, item.sku, item.name, item.qty).run();
+    }
+
+    // If partial pick, release the reservation for un-dispatched qty now
+    if (allocations.length > 0) {
+      for (const oi of orderItems) {
+        const alloc = allocations.find(a => a.sku === oi.sku);
+        const pickedQty = alloc ? (alloc.qty as number) : 0;
+        const remaining = (oi.qty as number) - pickedQty;
+        if (remaining > 0) {
+          await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(remaining, oi.sku).run();
+        }
+      }
     }
   }
 
