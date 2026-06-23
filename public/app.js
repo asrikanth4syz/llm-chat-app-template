@@ -1172,12 +1172,15 @@ async function submitOrder() {
   openModal('Confirm Order',
     `<div style="margin-bottom:16px">
       <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
-      <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${clientOpts}</select>
+      <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="document.getElementById('confirm-order-btn').disabled=!this.value">
+        <option value="">— Select a client —</option>
+        ${clientOpts}
+      </select>
     </div>
     <div class="cart-row cart-total"><span>Grand Total</span><span>${fmt(APP.cart.reduce((s,i)=>s+i.qty*i.unit_price,0)*1.18)}</span></div>
     <p style="font-size:.85rem;color:var(--text-muted);margin-top:8px">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="confirmOrder()">Confirm & Submit</button>`
+     <button id="confirm-order-btn" class="btn btn-gold" onclick="confirmOrder()" disabled>Confirm & Submit</button>`
   );
 }
 
@@ -1251,13 +1254,18 @@ async function viewOrder(id) {
   <div style="margin-top:20px">
     <div style="font-weight:600;margin-bottom:10px">Delivery Status</div>
     ${orderDCs.map(dc=>`
-      <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="border:1px solid ${dc.status==='SCHEDULED'?'var(--warning)':'var(--border)'};border-radius:8px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
-          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+            ${dc.status==='SCHEDULED'?`<button class="btn btn-primary btn-sm" onclick="closeModal();viewDCModal('${dc.id}')">Dispatch</button>`:''}
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="closeModal();markDelivered('${dc.id}')">Confirm Delivery</button>`:''}
+          </div>
         </div>
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
         ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
+        ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch — remaining items from partial delivery</div>`:''}
       </div>`).join('')}
   </div>` : '';
 
@@ -1321,7 +1329,11 @@ async function viewOrder(id) {
     </div>` : ''}
     ${dcSection}
     ${commentsHtml}`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+     ${order.status==='PARTIALLY_CLOSED' ? `
+       <button class="btn btn-primary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>
+       <button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>` : ''}
+     ${order.status==='SUBMITTED'||order.status==='APPROVED' ? `<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>` : ''}`
   );
 }
 
@@ -1488,15 +1500,52 @@ function orderQueueActions(o) {
   const next = { SUBMITTED:'ACKNOWLEDGED', APPROVED:'ACKNOWLEDGED',
     INVENTORY_CHECK:'VENDOR_PO_RAISED', VENDOR_PO_RAISED:'READY_TO_PICK',
     IN_SHIPMENT:'CLOSED' };
-  // ACKNOWLEDGED and READY_TO_PICK → Pick Items modal
   if (o.status === 'ACKNOWLEDGED' || o.status === 'READY_TO_PICK') {
     btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
   } else if (o.status === 'PICKED') {
     btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">Dispatch &rarr; DC</button>`);
+  } else if (o.status === 'PARTIALLY_CLOSED') {
+    btns.push(`<button class="btn btn-primary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
+    btns.push(`<button class="btn btn-danger btn-sm" onclick="preCloseOrder('${o.id}')">Pre-Close</button>`);
   } else if (next[o.status]) {
     btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','${next[o.status]}')">→ ${next[o.status].replace(/_/g,' ')}</button>`);
   }
   return btns.join(' ');
+}
+
+async function dispatchRemainingModal(orderId) {
+  const dcs = await api('/delivery-challans');
+  if (!dcs) return;
+  const pending = (dcs||[]).filter(d => d.order_id === orderId && d.status === 'SCHEDULED');
+  if (!pending.length) {
+    showToast('No scheduled DCs found for this order. All remaining items may already be dispatched.', 'error');
+    return;
+  }
+  const dcList = pending.map(dc => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
+      <div>
+        <div style="font-weight:600">${dc.id}</div>
+        <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units scheduled</div>
+      </div>
+      <button class="btn btn-success btn-sm" onclick="closeModal();viewDCModal('${dc.id}')">Dispatch</button>
+    </div>`).join('');
+  openModal(`Dispatch Remaining — Order ${orderId}`,
+    `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.87rem">These DCs were created for the remaining undelivered items:</p>${dcList}`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+async function preCloseOrder(orderId) {
+  openModal('Pre-Close Order',
+    `<p>Pre-closing <b>${orderId}</b> will mark it as <b>CLOSED</b> without completing all deliveries.</p>
+     <p style="color:var(--warning);margin-top:8px;font-size:.87rem">⚠️ Any remaining scheduled DCs will be left undelivered. This action cannot be undone.</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="confirmPreClose('${orderId}')">Pre-Close Order</button>`);
+}
+
+async function confirmPreClose(orderId) {
+  const res = await api(`/orders/${orderId}/transition`, { method:'POST', body: JSON.stringify({ to:'CLOSED', note:'Pre-closed by ops — partial delivery accepted' }) });
+  closeModal();
+  if (res) { showToast(`Order ${orderId} pre-closed`); navigate('orders'); }
 }
 
 async function advanceOrder(id, to) {
