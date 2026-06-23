@@ -585,94 +585,184 @@ async function renderDashboard(el) {
 }
 
 async function renderClientDashboard(el) {
-  const data = await api('/dashboard');
+  const [data, dcs] = await Promise.all([
+    api('/dashboard'),
+    api('/delivery-challans').catch(()=>[]),
+  ]);
   if (!data) return;
   const { client, recentOrders, totalSpend, pendingApproval } = data;
-  const budget = client?.monthly_budget || 500000;
-  const spent  = client?.spent_this_month || totalSpend || 0;
-  const pctSpent = Math.min(100, Math.round((spent / budget) * 100));
-  const health = client?.health_score || 85;
+  const budget    = client?.monthly_budget || 500000;
+  const spent     = client?.spent_this_month || totalSpend || 0;
+  const pctSpent  = Math.min(100, Math.round((spent / budget) * 100));
+  const health    = client?.health_score || 85;
+  const remaining = Math.max(0, budget - spent);
+
+  // Filter DCs belonging to this client's orders
+  const myOrderIds = new Set((recentOrders||[]).map(o=>o.id));
+  const allDCs = dcs || [];
+  const inTransitDCs = allDCs.filter(d => myOrderIds.has(d.order_id) && d.status === 'IN_TRANSIT');
+  const scheduledDCs = allDCs.filter(d => myOrderIds.has(d.order_id) && d.status === 'SCHEDULED');
+  const deliveredThisMonth = allDCs.filter(d => myOrderIds.has(d.order_id) && d.status === 'DELIVERED' && (d.delivered_at||'').startsWith(new Date().toISOString().slice(0,7)));
+
+  const activeOrders = (recentOrders||[]).filter(o => !['CLOSED','CANCELLED'].includes(o.status)).length;
+  const closedOrders = (recentOrders||[]).filter(o => o.status === 'CLOSED').length;
 
   el.innerHTML = `
-  ${pageHeader('Client Dashboard', client?.name || 'My Organization',
-    `<button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>`)}
-  <div class="kpi-row">
-    <div class="kpi-card">
-      <div class="kpi-label">Health Score</div>
-      <div class="kpi-value" style="color:var(--success)">${health}/100</div>
-      <div class="kpi-sub">Service quality rating</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Welcome back, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
+      <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">${client?.name||'My Organization'} · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
     </div>
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('approvals')">
-      <div class="kpi-label">Pending Approvals</div>
-      <div class="kpi-value${pendingApproval>0?' kpi-warning':''}">${pendingApproval}</div>
-      <div class="kpi-sub">Orders awaiting approval</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Monthly Spend</div>
-      <div class="kpi-value">${fmt(spent)}</div>
-      <div class="kpi-sub">Budget: ${fmt(budget)}</div>
-    </div>
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('my_orders')">
-      <div class="kpi-label">Total Orders</div>
-      <div class="kpi-value">${recentOrders?.length || 0}</div>
-      <div class="kpi-sub">This month</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="navigate('my_orders')">My Orders</button>
+      <button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>
     </div>
   </div>
-  <div class="kpi-grid" style="margin-top:12px" id="client-fulfilment-kpis">
-    <div class="kpi-card kpi-danger" style="cursor:pointer" onclick="navigate('fulfilment')">
+
+  <!-- KPI Tiles -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary);cursor:pointer" onclick="navigate('my_orders')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Active Orders</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${activeOrders}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${closedOrders} delivered</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'var(--warning)':'#d1d5db'};cursor:pointer" onclick="document.getElementById('track-delivery-section')?.scrollIntoView({behavior:'smooth'})">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">In Transit</div>
+      <div style="font-size:2rem;font-weight:800;color:${inTransitDCs.length?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${inTransitDCs.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${scheduledDCs.length} scheduled</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'};cursor:pointer" onclick="navigate('approvals')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Approvals</div>
+      <div style="font-size:2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${pendingApproval}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">awaiting sign-off</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Budget Used</div>
+      <div style="font-size:2rem;font-weight:800;color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${pctSpent}%</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(remaining)} left</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Delivered</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${deliveredThisMonth.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">this month</div>
+    </div>
+  </div>
+
+  <!-- Budget progress bar -->
+  <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span style="font-weight:700;font-size:.88rem">Monthly Budget</span>
+      <span style="font-size:.82rem;color:var(--text-muted)">${fmt(spent)} spent of ${fmt(budget)}</span>
+    </div>
+    <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
+      <div style="height:100%;width:${pctSpent}%;background:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'};border-radius:5px;transition:width .5s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.76rem;color:var(--text-muted)">
+      <span style="color:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'}">▮ ${pctSpent}% used</span>
+      <span>Remaining: <b>${fmt(remaining)}</b></span>
+      <span>Health score: <b style="color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">${health}/100</b></span>
+    </div>
+  </div>
+
+  <!-- Track Delivery + Recent Orders -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+    <!-- Track Delivery -->
+    <div id="track-delivery-section" style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:.9rem">📦 Track Delivery</div>
+        <span style="font-size:.78rem;color:var(--text-muted)">${inTransitDCs.length + scheduledDCs.length} active</span>
+      </div>
+      <div style="padding:12px 16px">
+        ${inTransitDCs.length === 0 && scheduledDCs.length === 0 ? `
+        <div style="padding:24px;text-align:center;color:var(--text-muted)">
+          <div style="font-size:2rem;margin-bottom:8px">🚚</div>
+          <div style="font-weight:600">No active deliveries</div>
+          <div style="font-size:.82rem;margin-top:4px">Delivered DCs will appear here</div>
+        </div>` : `
+        ${inTransitDCs.map(dc=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+          <div style="width:36px;height:36px;background:#fef3c7;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">🚚</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.88rem">${dc.id}${dc.dc_number?' · '+dc.dc_number:''}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">
+              ${dc.driver_name?dc.driver_name+' · ':''}${dc.vehicle_no||'Vehicle TBD'}
+              ${dc.scheduled_time?' · ETA '+dc.scheduled_time:''}
+            </div>
+          </div>
+          <span class="badge badge-warning">In Transit</span>
+        </div>`).join('')}
+        ${scheduledDCs.map(dc=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+          <div style="width:36px;height:36px;background:#f3f4f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">📋</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.88rem">${dc.id}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">${dc.total_qty||'?'} units · Order ${dc.order_id}</div>
+          </div>
+          <span class="badge badge-secondary">Scheduled</span>
+        </div>`).join('')}
+        ${deliveredThisMonth.slice(0,2).map(dc=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:.65">
+          <div style="width:36px;height:36px;background:#d1fae5;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">✅</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.88rem">${dc.id}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">Delivered ${fmtDate(dc.delivered_at)}</div>
+          </div>
+          <span class="badge badge-success">Delivered</span>
+        </div>`).join('')}
+        `}
+      </div>
+    </div>
+
+    <!-- Recent Orders -->
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:.9rem">🧾 Recent Orders</div>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
+      </div>
+      <div style="padding:0">
+        ${(recentOrders||[]).slice(0,6).map(o=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="viewOrder('${o.id}')">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.88rem">${o.id}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-weight:700;font-size:.88rem">${fmt(o.grand_total)}</div>
+            <div style="margin-top:2px">${statusBadge(o.status)}</div>
+          </div>
+        </div>`).join('')||`<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders yet</div>`}
+      </div>
+    </div>
+  </div>
+
+  <!-- Due Items KPI (loaded async) -->
+  <div id="due-kpi-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="kpi-card" style="cursor:pointer" onclick="navigate('fulfilment')">
       <div class="kpi-label">Due Items</div>
-      <div class="kpi-value" id="due-items-count">—</div>
-      <div class="kpi-sub">Items pending delivery</div>
+      <div class="kpi-value kpi-danger" id="due-items-count">—</div>
+      <div class="kpi-sub">items pending delivery</div>
     </div>
     <div class="kpi-card" style="cursor:pointer" onclick="navigate('fulfilment')">
-      <div class="kpi-label">Fulfilment %</div>
+      <div class="kpi-label">Fulfilment Rate</div>
       <div class="kpi-value" id="client-fulfilment-pct">—</div>
-      <div class="kpi-sub">This month</div>
-    </div>
-  </div>
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header"><span>Budget Utilization</span><span>${pctSpent}%</span></div>
-    <div class="card-body">
-      <div class="progress-bar" style="height:12px;border-radius:6px;background:var(--border);overflow:hidden">
-        <div style="height:100%;width:${pctSpent}%;background:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'};border-radius:6px;transition:width .5s"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:.8rem;color:var(--text-muted)">
-        <span>Spent: ${fmt(spent)}</span><span>Remaining: ${fmt(budget-spent)}</span>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-header"><span>Recent Orders</span>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
-    </div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Order ID</th><th>Amount</th><th>Status</th><th>Date</th><th></th></tr></thead>
-        <tbody>${(recentOrders||[]).map(o=>`<tr>
-          <td><b>${o.id}</b></td>
-          <td>${fmt(o.grand_total)}</td>
-          <td>${statusBadge(o.status)}</td>
-          <td>${fmtDate(o.created_at)}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button></td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No orders yet</td></tr>'}
-        </tbody>
-      </table>
+      <div class="kpi-sub">this month</div>
     </div>
   </div>`;
 
-  // Load fulfilment KPIs async
+  // Load async KPIs
   api('/reports/pending-supply').then(ps => {
-    const dueEl = document.getElementById('due-items-count');
-    if (dueEl) dueEl.textContent = ps?.kpis?.due_qty ?? '—';
+    const el = document.getElementById('due-items-count');
+    if (el) el.textContent = ps?.kpis?.due_qty ?? '0';
   });
-  const today = new Date().toISOString().slice(0,10);
-  const from30 = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const today   = new Date().toISOString().slice(0,10);
+  const from30  = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   api(`/reports/client-fulfilment?from=${from30}&to=${today}`).then(cf => {
-    const pctEl = document.getElementById('client-fulfilment-pct');
-    if (pctEl && cf && cf.length) {
+    const el = document.getElementById('client-fulfilment-pct');
+    if (el && cf?.length) {
       const avg = cf.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/cf.length;
-      pctEl.textContent = Math.round(avg) + '%';
-    }
+      el.textContent = Math.round(avg) + '%';
+    } else if (el) el.textContent = '100%';
   });
 }
 
@@ -859,44 +949,73 @@ function poActions(po) {
 
 
 /* ============================================================
-   PLACE ORDER — catalog + cart (with tabs)
+   PLACE ORDER — optimised: search + quick reorder + catalogue + cart
    ============================================================ */
 async function renderPlaceOrder(el) {
-  const [inventory] = await Promise.all([api('/inventory')]);
+  const [inventory, recentOrders] = await Promise.all([
+    api('/inventory'),
+    api('/orders').catch(()=>[])
+  ]);
   if (!inventory) return;
 
   const cats = [...new Set(inventory.map(i => i.category))];
   APP._catalog = inventory;
   APP._catFilter = 'All';
-  if (!APP._orderTab) APP._orderTab = 'catalogue';
+  APP._catalogSearch = '';
+
+  const last3 = (recentOrders||[]).slice(0,3);
 
   el.innerHTML = `
-  ${pageHeader('Place Order', 'Browse catalogue and add items to cart')}
-  <div class="tabs" style="margin-bottom:20px">
-    <button class="tab-btn${APP._orderTab==='catalogue'?' active':''}" onclick="switchOrderTab('catalogue')">Catalogue</button>
-    <button class="tab-btn${APP._orderTab==='excel_upload'?' active':''}" onclick="switchOrderTab('excel_upload')">Excel Upload</button>
-    <button class="tab-btn${APP._orderTab==='quick_reorder'?' active':''}" onclick="switchOrderTab('quick_reorder')">Quick Reorder</button>
-    <button class="tab-btn${APP._orderTab==='standing_orders'?' active':''}" onclick="switchOrderTab('standing_orders')">Standing Orders</button>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Place Order</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse catalogue, search items, or reorder from history</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">⬆ Import CSV</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">My Orders</button>
+    </div>
   </div>
-  <div id="order-tab-content">
-    ${renderOrderTabContent(APP._orderTab, inventory, cats)}
-  </div>`;
-  if (APP._orderTab === 'catalogue') refreshCartUI();
-}
 
-function renderOrderTabContent(tab, inventory, cats) {
-  inventory = inventory || APP._catalog || [];
-  cats = cats || [...new Set(inventory.map(i => i.category))];
+  <!-- Quick Reorder strip -->
+  ${last3.length ? `
+  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:.82rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">🔄 Quick Reorder</span>
+      <span style="font-size:.75rem;color:var(--text-muted)">from recent history</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${last3.map(o=>`
+      <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="min-width:0">
+          <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${o.id}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
+          <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}</div>
+        </div>
+        <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder</button>
+      </div>`).join('')}
+    </div>
+  </div>` : ''}
 
-  if (tab === 'catalogue') {
-    return `<div style="display:flex;gap:16px;align-items:flex-start">
+  <!-- Search + category pills -->
+  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+    <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
+      style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
+      oninput="searchCatalog(this.value)" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+    <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
+      ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
+    </div>
+  </div>
+
+  <!-- Catalogue + Cart -->
+  <div style="display:flex;gap:16px;align-items:flex-start">
     <div style="flex:1;min-width:0">
-      <div class="tab-pills" style="margin-bottom:16px">
-        ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
-      </div>
+      <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">${inventory.length} items in catalogue</div>
       <div id="catalog-grid" class="catalog-grid">${renderCatalogItems(inventory)}</div>
     </div>
-    <div class="cart-panel" id="cart-panel">
+
+    <!-- Sticky cart panel -->
+    <div class="cart-panel" id="cart-panel" style="position:sticky;top:16px">
       <div class="cart-header">
         <div class="cart-title">${iconCart(16)} Cart</div>
         <span class="cart-count" id="cart-count">0 items</span>
@@ -913,56 +1032,68 @@ function renderOrderTabContent(tab, inventory, cats) {
         </div>
         <div id="budget-bar-wrap" style="margin-top:12px;display:none">
           <div style="font-size:.8rem;font-weight:600;margin-bottom:4px;color:var(--text-muted)">Monthly Budget Used</div>
-          <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
-            <div id="budget-bar-fill" style="height:100%;border-radius:5px;transition:width .3s"></div>
+          <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
+            <div id="budget-bar-fill" style="height:100%;border-radius:4px;transition:width .3s"></div>
           </div>
-          <div id="budget-bar-label" style="font-size:.75rem;margin-top:3px;color:var(--text-muted)"></div>
+          <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
         </div>
         <button class="btn btn-gold" style="width:100%;margin-top:12px" onclick="submitOrder()">
           ${iconCheck(14)} Place Order
         </button>
+        <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.8rem" onclick="APP.cart=[];refreshCartUI();showToast('Cart cleared')">
+          Clear Cart
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSV Upload Modal (hidden) -->
+  <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:16px;padding:28px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+      <div style="font-weight:800;font-size:1rem;color:var(--navy);margin-bottom:4px">Import Order via CSV</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px">Download the template, fill in SKU and quantity, then upload.</div>
+      <a href="#" onclick="downloadOrderTemplate();return false" class="btn btn-secondary btn-sm" style="margin-bottom:16px">⬇ Download CSV Template</a>
+      <div class="form-group" style="margin-bottom:12px">
+        <label style="font-weight:600;font-size:.86rem">Upload CSV File</label>
+        <input type="file" id="csv-upload-input" accept=".csv,.xlsx" style="display:block;margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;width:100%;box-sizing:border-box">
+      </div>
+      <div id="csv-import-feedback" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-gold" onclick="processCSVUpload()">Import Order</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('csv-upload-modal').style.display='none'">Cancel</button>
       </div>
     </div>
   </div>`;
-  }
 
-  if (tab === 'excel_upload') {
-    return `<div class="card" style="max-width:640px">
-      <div class="card-header"><span>Upload CSV / Excel Order</span></div>
-      <div class="card-body" style="padding:24px">
-        <p style="color:var(--text-muted);margin-bottom:16px">Download the template, fill in SKU and quantity, then upload.</p>
-        <a href="#" onclick="downloadOrderTemplate();return false" class="btn btn-secondary" style="margin-bottom:20px">⬇ Download CSV Template</a>
-        <div class="form-group">
-          <label style="font-weight:600">Upload CSV File</label>
-          <input type="file" id="csv-upload-input" accept=".csv,.xlsx" style="display:block;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;width:100%">
-        </div>
-        <button class="btn btn-gold" style="margin-top:12px" onclick="processCSVUpload()">Import Order</button>
-        <div id="csv-import-feedback" style="margin-top:16px"></div>
-      </div>
-    </div>`;
-  }
+  refreshCartUI();
+  loadBudgetBar();
+}
 
-  if (tab === 'quick_reorder') {
-    return `<div id="quick-reorder-content"><div class="card"><div class="card-body" style="padding:24px;text-align:center;color:var(--text-muted)">Loading recent orders…</div></div></div>`;
-  }
+function showCSVUploadModal() {
+  const m = document.getElementById('csv-upload-modal');
+  if (m) m.style.display = 'flex';
+}
 
-  if (tab === 'standing_orders') {
-    return `<div id="standing-orders-content"><div class="card"><div class="card-body" style="padding:24px;text-align:center;color:var(--text-muted)">Loading standing orders…</div></div></div>`;
+function searchCatalog(q) {
+  APP._catalogSearch = q.trim().toLowerCase();
+  const filtered = getFilteredCatalog();
+  const info = document.getElementById('catalog-results-info');
+  if (info) info.textContent = `${filtered.length} item${filtered.length!==1?'s':''} found`;
+  document.getElementById('catalog-grid').innerHTML = renderCatalogItems(filtered);
+}
+
+function getFilteredCatalog() {
+  let items = APP._catalog || [];
+  if (APP._catFilter && APP._catFilter !== 'All') items = items.filter(i => i.category === APP._catFilter);
+  if (APP._catalogSearch) {
+    const q = APP._catalogSearch;
+    items = items.filter(i => i.name.toLowerCase().includes(q) || (i.sku||'').toLowerCase().includes(q) || (i.category||'').toLowerCase().includes(q));
   }
-  return '';
+  return items;
 }
 
 async function switchOrderTab(tab) {
-  APP._orderTab = tab;
-  document.querySelectorAll('.tabs .tab-btn').forEach(b => {
-    b.classList.toggle('active', b.textContent.trim().toLowerCase().replace(/ /g,'_') === tab ||
-      (tab==='catalogue' && b.textContent.trim()==='Catalogue') ||
-      (tab==='excel_upload' && b.textContent.trim()==='Excel Upload') ||
-      (tab==='quick_reorder' && b.textContent.trim()==='Quick Reorder') ||
-      (tab==='standing_orders' && b.textContent.trim()==='Standing Orders'));
-  });
-  const contentEl = document.getElementById('order-tab-content');
-  contentEl.innerHTML = renderOrderTabContent(tab);
+  // legacy stub — no longer used but kept to avoid JS errors if called
   if (tab === 'catalogue') { refreshCartUI(); loadBudgetBar(); }
   if (tab === 'quick_reorder') loadQuickReorder();
   if (tab === 'standing_orders') loadStandingOrders();
@@ -1019,7 +1150,7 @@ async function processCSVUpload() {
     else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
-  if(fb) fb.innerHTML = `<div class="alert ${imported?'alert-success':'alert-warning'}">${imported} item(s) added to cart${skipped?`, ${skipped} skipped`:''}.${imported?' <a href="#" onclick="switchOrderTab(\'catalogue\');return false">Go to Catalogue</a>':''}</div>`;
+  if(fb) fb.innerHTML = `<div class="alert ${imported?'alert-success':'alert-warning'}">${imported} item(s) added to cart${skipped?`, ${skipped} skipped`:''}.${imported?' <a href="#" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';refreshCartUI()">Done</a>':''}</div>`;
 }
 
 async function loadQuickReorder() {
@@ -1057,7 +1188,8 @@ async function reorderFromHistory(orderId) {
     else APP.cart.push({ sku: i.sku || i.name, name: i.name, qty: i.qty, unit_price: price });
   });
   showToast('Items added to cart');
-  switchOrderTab('catalogue');
+  refreshCartUI();
+  document.getElementById('catalog-grid')?.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 async function loadStandingOrders() {
@@ -1105,8 +1237,10 @@ function filterCatalog(cat, btn) {
   APP._catFilter = cat;
   document.querySelectorAll('.tab-pill').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  const items = cat === 'All' ? APP._catalog : APP._catalog.filter(i => i.category === cat);
-  document.getElementById('catalog-grid').innerHTML = renderCatalogItems(items);
+  const filtered = getFilteredCatalog();
+  const info = document.getElementById('catalog-results-info');
+  if (info) info.textContent = `${filtered.length} item${filtered.length!==1?'s':''} found`;
+  document.getElementById('catalog-grid').innerHTML = renderCatalogItems(filtered);
 }
 
 function changeQty(sku, delta, price, btnOrName) {
