@@ -677,62 +677,99 @@ async function renderClientDashboard(el) {
 }
 
 async function renderOpsDashboard(el) {
-  const [data, pendingSupply] = await Promise.all([
+  const [data, pendingSupply, dueItems] = await Promise.all([
     api('/dashboard'),
-    api('/reports/pending-supply'),
+    api('/reports/pending-supply').catch(()=>null),
+    api('/reports/consolidated-due').catch(()=>[])
   ]);
   if (!data) return;
   const { totalOrders, pendingOrders, lowStock, pendingDCBilling, openTickets, recentOrders, ordersByStatus, topClients } = data;
 
+  const byStatus = {};
+  (ordersByStatus||[]).forEach(r => { byStatus[r.status] = r.cnt; });
+
+  const dueCount = (dueItems||[]).length;
+  const dueValue = (dueItems||[]).reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0);
+  const pendingApproval = byStatus['PENDING_APPROVAL']||0;
+  const inShipment = (byStatus['IN_SHIPMENT']||0)+(byStatus['PARTIALLY_CLOSED']||0);
+  const pickedPending = byStatus['PICKED']||0;
+
   el.innerHTML = `
   ${pageHeader('Control Tower', 'Platform-wide operations overview')}
-  <div class="kpi-row">
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('orders')">
-      <div class="kpi-label">Total Orders</div>
-      <div class="kpi-value">${totalOrders||0}</div>
-      <div class="kpi-sub">${pendingOrders||0} active</div>
-    </div>
-    <div class="kpi-card${lowStock>0?' kpi-warning':''}" style="cursor:pointer" onclick="navigate('inventory')">
-      <div class="kpi-label">Low Stock SKUs</div>
-      <div class="kpi-value${lowStock>0?' kpi-warning':''}">${lowStock||0}</div>
-      <div class="kpi-sub">Need reorder</div>
-    </div>
-    <div class="kpi-card${pendingDCBilling>0?' kpi-warning':''}" style="cursor:pointer" onclick="navigate('dc_billing')">
-      <div class="kpi-label">Pending Billing</div>
-      <div class="kpi-value${pendingDCBilling>0?' kpi-warning':''}">${pendingDCBilling||0}</div>
-      <div class="kpi-sub">DCs unbilled</div>
-    </div>
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('service_desk')">
-      <div class="kpi-label">Open Tickets</div>
-      <div class="kpi-value">${openTickets||0}</div>
-      <div class="kpi-sub">Service desk</div>
-    </div>
-  </div>
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-header"><span>Orders by Status</span></div>
-      <div class="card-body"><canvas id="statusChart" height="200"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span>Top Clients by Spend</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Client</th><th>Orders</th><th>Spend</th></tr></thead>
-          <tbody>${(topClients||[]).map(c=>`<tr>
-            <td><b>${c.name}</b></td>
-            <td>${c.order_count}</td>
-            <td>${fmt(c.total)}</td>
-          </tr>`).join('')}</tbody>
-        </table>
+
+  <!-- ROW 1: Primary KPIs -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div onclick="navigate('orders')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid var(--blue)">
+      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Total Orders</div>
+      <div style="font-size:2.2rem;font-weight:800;color:var(--navy);line-height:1">${totalOrders||0}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 8px;font-size:.75rem;font-weight:600">${pendingOrders||0} active</span>
       </div>
     </div>
+    <div onclick="navigate('orders')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Approval</div>
+      <div style="font-size:2.2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
+      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">${pickedPending} orders picked · ${inShipment} in transit</div>
+    </div>
+    <div onclick="navigate('fulfilment')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${dueCount>0?'#ef4444':'#d1d5db'}">
+      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Due Line Items</div>
+      <div style="font-size:2.2rem;font-weight:800;color:${dueCount>0?'#dc2626':'var(--navy)'};line-height:1">${dueCount}</div>
+      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)} value</div>
+    </div>
+    <div onclick="navigate('dc_billing')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${pendingDCBilling>0?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Billing</div>
+      <div style="font-size:2.2rem;font-weight:800;color:${pendingDCBilling>0?'#d97706':'var(--navy)'};line-height:1">${pendingDCBilling||0}</div>
+      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">DCs awaiting invoice</div>
+    </div>
   </div>
-  <div class="card" style="margin-top:16px">
-    <div class="card-header"><span>Recent Orders</span>
+
+  <!-- ROW 2: Charts + Alerts -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 320px;gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Orders by Status</div>
+      <canvas id="statusChart" height="180"></canvas>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Top Clients by Spend</div>
+      ${(topClients||[]).map((c,i)=>`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--blue);color:#fff;font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}</div>
+            <div style="height:4px;background:#e6f1fb;border-radius:2px;margin-top:3px">
+              <div style="height:4px;background:var(--blue);border-radius:2px;width:${Math.min(100,Math.round((c.total/(topClients[0]?.total||1))*100))}%"></div>
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${fmt(c.total)}</div>
+            <div style="font-size:.7rem;color:var(--text-muted)">${c.order_count} orders</div>
+          </div>
+        </div>`).join('')||'<div style="color:var(--text-muted);font-size:.84rem">No data</div>'}
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Action Required</div>
+      ${[
+        { label:'Low Stock SKUs', val:lowStock||0, color:'#f59e0b', page:'inventory', icon:'📦', urgent: lowStock>0 },
+        { label:'Pending Approval', val:pendingApproval, color:'#3b82f6', page:'orders', icon:'⏳', urgent: pendingApproval>0 },
+        { label:'Orders to Pick', val:byStatus['ACKNOWLEDGED']||0, color:'#8b5cf6', page:'warehouse', icon:'🏭', urgent: (byStatus['ACKNOWLEDGED']||0)>0 },
+        { label:'Open Tickets', val:openTickets||0, color:'#6b7280', page:'service_desk', icon:'🎫', urgent: openTickets>0 },
+        { label:'Overdue Deliveries', val:pendingSupply?.kpis?.delayed_deliveries||0, color:'#ef4444', page:'delivery', icon:'🚚', urgent: (pendingSupply?.kpis?.delayed_deliveries||0)>0 },
+      ].map(a=>`
+        <div onclick="navigate('${a.page}')" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;margin-bottom:6px;background:${a.urgent?'rgba(239,68,68,.05)':'#f8f9fa'};border:1px solid ${a.urgent?'rgba(239,68,68,.15)':'#e5e7eb'}">
+          <div style="font-size:.8rem;color:var(--text-muted)">${a.icon} ${a.label}</div>
+          <div style="font-weight:700;color:${a.urgent?a.color:'var(--text-muted)'};font-size:.9rem;min-width:24px;text-align:right">${a.val}</div>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- ROW 3: Recent Orders -->
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;color:var(--navy);font-size:.9rem">Recent Orders</div>
       <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All</button>
     </div>
     <div class="table-wrap">
-      <table class="table">
+      <table class="table" style="margin:0">
         <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Date</th><th></th></tr></thead>
         <tbody>${(recentOrders||[]).map(o=>`<tr>
           <td><b>${o.id}</b></td>
@@ -744,28 +781,18 @@ async function renderOpsDashboard(el) {
         </tr>`).join('')}</tbody>
       </table>
     </div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <div class="card-header"><span>Pending Supply Overview</span><button class="btn btn-secondary btn-sm" onclick="navigate('fulfilment')">Full Report</button></div>
-    <div class="kpi-grid" style="padding:16px;margin-bottom:0">
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${pendingSupply?.kpis?.due_qty||0}</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(pendingSupply?.kpis?.due_value||0)}</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Partial Orders</div><div class="kpi-value">${pendingSupply?.kpis?.partial_orders||0}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Delayed Deliveries</div><div class="kpi-value">${pendingSupply?.kpis?.delayed_deliveries||0}</div></div>
-    </div>
   </div>`;
 
   // Chart
-  const byStatus = {};
-  (ordersByStatus||[]).forEach(r => { byStatus[r.status] = r.cnt; });
-  const labels = ['SUBMITTED','APPROVED','IN_SHIPMENT','CLOSED','CANCELLED'];
-  const counts = labels.map(l => byStatus[l]||0);
+  const labels = ['SUBMITTED','ACKNOWLEDGED','PICKED','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
+  const colors  = ['#3b82f6','#8b5cf6','#f97316','#06b6d4','#f59e0b','#1f8a5b','#ef4444'];
+  const counts  = labels.map(l => byStatus[l]||0);
   const ctx = document.getElementById('statusChart');
   if (ctx) {
     APP.charts.status = new Chart(ctx, {
       type: 'bar',
-      data: { labels, datasets: [{ data: counts, backgroundColor: ['#3b82f6','#1f8a5b','#f97316','#6b7280','#dc2626'], borderRadius: 4 }] },
-      options: { plugins:{ legend:{display:false} }, scales:{ x:{grid:{display:false}}, y:{beginAtZero:true,ticks:{precision:0}} } }
+      data: { labels: labels.map(l=>l.replace(/_/g,' ')), datasets: [{ data: counts, backgroundColor: colors, borderRadius: 6, borderSkipped: false }] },
+      options: { plugins:{ legend:{display:false} }, scales:{ x:{grid:{display:false},ticks:{font:{size:9}}}, y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#f0f0f0'}} } }
     });
   }
 }
@@ -1874,68 +1901,117 @@ async function renderProcurement(el) {
   const [pos, vendors] = await Promise.all([api('/purchase-orders'), api('/vendors')]);
   if (!pos) return;
 
+  const byStatus = s => pos.filter(p=>p.status===s);
+  const valByStatus = s => byStatus(s).reduce((sum,p)=>sum+(p.grand_total||0),0);
+  const pendingGRN = byStatus('DISPATCHED');
+  const totalOpen = ['SENT','ACCEPTED','DISPATCHED'].reduce((s,st)=>s+byStatus(st).length,0);
+
+  const statusTiles = [
+    { key:'SENT',      label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
+    { key:'ACCEPTED',  label:'Accepted',       icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
+    { key:'DISPATCHED',label:'In Transit',     icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: pendingGRN.length>0 },
+    { key:'RECEIVED',  label:'GRN Pending',    icon:'📦', color:'#1f8a5b', bg:'#f0fdf4', urgent: false },
+    { key:'INVOICED',  label:'Invoiced',       icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
+  ];
+
   el.innerHTML = `
-  ${pageHeader('Procurement', `${pos.length} purchase orders`,
+  ${pageHeader('Procurement', `${totalOpen} open POs`,
     `<button class="btn btn-gold" onclick="navigate('vendors')">${iconPlus(14)} New PO</button>`)}
-  <div class="kpi-row">
-    ${['SENT','ACCEPTED','DISPATCHED','RECEIVED'].map(s=>`
-    <div class="kpi-card">
-      <div class="kpi-label">${s}</div>
-      <div class="kpi-value">${pos.filter(p=>p.status===s).length}</div>
+
+  <!-- Status tiles -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+    ${statusTiles.map(t=>`
+    <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" onclick="filterPO('${t.key}')">
+      <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${t.color};margin-bottom:4px">${t.label}</div>
+      <div style="font-size:1.8rem;font-weight:800;color:#1f2937;line-height:1">${byStatus(t.key).length}</div>
+      <div style="font-size:.72rem;color:#6b7280;margin-top:4px">${fmt(valByStatus(t.key))}</div>
     </div>`).join('')}
   </div>
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span>Vendor Performance</span></div>
-      <div class="card-body"><canvas id="vendorChart" height="220"></canvas></div>
+
+  <!-- Charts + GRN alert -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="font-weight:700;color:var(--navy);font-size:.9rem;margin-bottom:14px">Vendor Performance</div>
+      <canvas id="vendorChart" height="200"></canvas>
     </div>
-    <div class="card">
-      <div class="card-header"><span>PO Aging by Status</span></div>
-      <div class="card-body"><canvas id="agingChart" height="220"></canvas></div>
+    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-weight:700;color:var(--navy);font-size:.9rem">GRN Pending Receipt</div>
+        <span style="background:#f5f3ff;color:#8b5cf6;border-radius:20px;padding:2px 10px;font-size:.75rem;font-weight:700">${pendingGRN.length} DCs</span>
+      </div>
+      ${pendingGRN.length === 0
+        ? '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:.84rem">No pending GRNs</div>'
+        : pendingGRN.map(po=>`
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;background:#f8f9fa;margin-bottom:8px;border:1px solid #e5e7eb">
+            <div>
+              <div style="font-weight:700;font-size:.84rem">${po.id} <span style="font-weight:400;color:var(--text-muted)">· ${po.vendor_name||'—'}</span></div>
+              <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(po.grand_total)} · Expected ${fmtDate(po.expected_delivery)}</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="receiveGRN('${po.id}')">Receive GRN</button>
+          </div>`).join('')
+      }
     </div>
   </div>
-  <div class="card">
-    <div class="card-header"><span>All Purchase Orders</span></div>
-    <div class="table-wrap">
-      <table class="table">
+
+  <!-- PO table -->
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;color:var(--navy);font-size:.9rem">All Purchase Orders</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" onchange="filterPOTable()">
+          <option value="">All Status</option>
+          ${['SENT','ACCEPTED','DISPATCHED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap" id="po-table-wrap">
+      <table class="table" style="margin:0">
         <thead><tr><th>PO #</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Expected</th><th>Actions</th></tr></thead>
-        <tbody>${pos.map(po=>`<tr>
-          <td><b>${po.id}</b> ${po.auto_generated ? '<span class="badge badge-gold" title="Auto-generated by reorder engine">Auto</span>' : ''}</td>
+        <tbody id="po-tbody">${pos.map(po=>`<tr data-status="${po.status}">
+          <td><b>${po.id}</b>${po.auto_generated?` <span class="badge badge-gold">Auto</span>`:''}</td>
           <td>${po.vendor_name||'—'}</td>
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
-          <td>${fmtDate(po.expected_delivery)}</td>
-          <td>${po.status==='DISPATCHED'?`<button class="btn btn-primary btn-sm" onclick="receiveGRN('${po.id}')">Receive GRN</button>`:'<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+          <td>${fmtDate(po.expected_delivery)||'—'}</td>
+          <td>${po.status==='DISPATCHED'
+            ? `<button class="btn btn-primary btn-sm" onclick="receiveGRN('${po.id}')">Receive GRN</button>`
+            : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No POs</td></tr>'}
         </tbody>
       </table>
     </div>
   </div>`;
 
+  // Vendor performance chart
   if (vendors?.length) {
     const ctx = document.getElementById('vendorChart');
     if (ctx) {
       APP.charts.vendor = new Chart(ctx, {
         type:'bar',
-        data:{ labels: vendors.map(v=>v.name.split(' ')[0]),
+        data:{
+          labels: vendors.map(v=>v.name.split(' ')[0]),
           datasets:[
-            { label:'On-time %', data: vendors.map(v=>v.on_time_rate), backgroundColor:'#1f8a5b', borderRadius:4 },
-            { label:'Fill Rate %', data: vendors.map(v=>v.fill_rate), backgroundColor:'#3b82f6', borderRadius:4 },
-          ]},
-        options:{ plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true,max:100}} }
-      });
-    }
-    const aCtx = document.getElementById('agingChart');
-    const statuses = ['SENT','ACCEPTED','DISPATCHED','RECEIVED','INVOICED'];
-    if (aCtx) {
-      APP.charts.aging = new Chart(aCtx, {
-        type:'doughnut',
-        data:{ labels: statuses, datasets:[{ data: statuses.map(s=>pos.filter(p=>p.status===s).length),
-          backgroundColor:['#f59e0b','#3b82f6','#f97316','#1f8a5b','#6b7280'], borderWidth:0 }]},
-        options:{ plugins:{legend:{position:'bottom'}}, cutout:'65%' }
+            { label:'On-time %', data: vendors.map(v=>v.on_time_rate||0), backgroundColor:'#1f8a5b', borderRadius:4 },
+            { label:'Fill Rate %', data: vendors.map(v=>v.fill_rate||0), backgroundColor:'#3b82f6', borderRadius:4 },
+          ]
+        },
+        options:{ plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true,max:100,grid:{color:'#f0f0f0'}},x:{grid:{display:false}}} }
       });
     }
   }
+}
+
+function filterPO(status) {
+  const sel = document.getElementById('po-status-filter');
+  if (sel) { sel.value = status; filterPOTable(); }
+}
+
+function filterPOTable() {
+  const status = document.getElementById('po-status-filter')?.value || '';
+  document.querySelectorAll('#po-tbody tr[data-status]').forEach(row => {
+    row.style.display = (!status || row.dataset.status === status) ? '' : 'none';
+  });
 }
 
 async function receiveGRN(poId) {
