@@ -664,75 +664,120 @@ async function renderClientDashboard(el) {
     </div>
   </div>
 
-  <!-- Track Delivery + Recent Orders -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-
-    <!-- Track Delivery -->
-    <div id="track-delivery-section" style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
-      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <div style="font-weight:700;font-size:.9rem">📦 Track Delivery</div>
-        <span style="font-size:.78rem;color:var(--text-muted)">${inTransitDCs.length + scheduledDCs.length} active</span>
+  <!-- Track Delivery — full width -->
+  <div id="track-delivery-section" style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Track Delivery</div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">${inTransitDCs.length} in transit · ${scheduledDCs.length} scheduled · ${deliveredThisMonth.length} delivered this month</div>
       </div>
-      <div style="padding:12px 16px">
-        ${inTransitDCs.length === 0 && scheduledDCs.length === 0 ? `
-        <div style="padding:24px;text-align:center;color:var(--text-muted)">
-          <div style="font-size:2rem;margin-bottom:8px">🚚</div>
-          <div style="font-weight:600">No active deliveries</div>
-          <div style="font-size:.82rem;margin-top:4px">Delivered DCs will appear here</div>
-        </div>` : `
-        ${inTransitDCs.map(dc=>`
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
-          <div style="width:36px;height:36px;background:#fef3c7;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">🚚</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.88rem">${dc.id}${dc.dc_number?' · '+dc.dc_number:''}</div>
-            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">
-              ${dc.driver_name?dc.driver_name+' · ':''}${dc.vehicle_no||'Vehicle TBD'}
-              ${dc.scheduled_time?' · ETA '+dc.scheduled_time:''}
-            </div>
-          </div>
-          <span class="badge badge-warning">In Transit</span>
-        </div>`).join('')}
-        ${scheduledDCs.map(dc=>`
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
-          <div style="width:36px;height:36px;background:#f3f4f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">📋</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.88rem">${dc.id}</div>
-            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">${dc.total_qty||'?'} units · Order ${dc.order_id}</div>
-          </div>
-          <span class="badge badge-secondary">Scheduled</span>
-        </div>`).join('')}
-        ${deliveredThisMonth.slice(0,2).map(dc=>`
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:.65">
-          <div style="width:36px;height:36px;background:#d1fae5;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">✅</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.88rem">${dc.id}</div>
-            <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">Delivered ${fmtDate(dc.delivered_at)}</div>
-          </div>
-          <span class="badge badge-success">Delivered</span>
-        </div>`).join('')}
-        `}
+      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All Orders</button>
+    </div>
+
+    <!-- Pipeline header -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:#f8f9fa;border-bottom:1px solid var(--border)">
+      <div style="padding:10px 20px;border-right:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:10px;height:10px;border-radius:50%;background:#3b82f6;flex-shrink:0"></div>
+          <span style="font-size:.76rem;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:.06em">Scheduled</span>
+          <span style="margin-left:auto;background:#e0e7ff;color:#3b82f6;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${scheduledDCs.length}</span>
+        </div>
+      </div>
+      <div style="padding:10px 20px;border-right:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:10px;height:10px;border-radius:50%;background:#f59e0b;flex-shrink:0"></div>
+          <span style="font-size:.76rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em">In Transit</span>
+          <span style="margin-left:auto;background:#fef3c7;color:#d97706;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${inTransitDCs.length}</span>
+        </div>
+      </div>
+      <div style="padding:10px 20px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:10px;height:10px;border-radius:50%;background:#10b981;flex-shrink:0"></div>
+          <span style="font-size:.76rem;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.06em">Delivered</span>
+          <span style="margin-left:auto;background:#d1fae5;color:#059669;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${deliveredThisMonth.length}</span>
+        </div>
       </div>
     </div>
 
-    <!-- Recent Orders -->
-    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
-      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <div style="font-weight:700;font-size:.9rem">🧾 Recent Orders</div>
-        <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
+    <!-- Pipeline columns -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;min-height:120px">
+
+      <!-- Scheduled -->
+      <div style="padding:14px 16px;border-right:1px solid var(--border)">
+        ${scheduledDCs.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No upcoming deliveries</div>` :
+          scheduledDCs.map(dc=>`
+          <div style="border:1.5px solid #dbeafe;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f8fbff">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
+              <span style="font-size:.68rem;font-weight:700;background:#e0e7ff;color:#3b82f6;border-radius:4px;padding:2px 6px">SCHEDULED</span>
+            </div>
+            <div style="font-size:.75rem;color:var(--text-muted);line-height:1.5">
+              <div>📦 Order: <b>${dc.order_id}</b></div>
+              ${dc.total_qty?`<div>📊 ${dc.total_qty} units</div>`:''}
+              ${dc.scheduled_time?`<div>📅 ${dc.scheduled_time}</div>`:''}
+            </div>
+          </div>`).join('')}
       </div>
-      <div style="padding:0">
-        ${(recentOrders||[]).slice(0,6).map(o=>`
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="viewOrder('${o.id}')">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.88rem">${o.id}</div>
-            <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}</div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-weight:700;font-size:.88rem">${fmt(o.grand_total)}</div>
-            <div style="margin-top:2px">${statusBadge(o.status)}</div>
-          </div>
-        </div>`).join('')||`<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders yet</div>`}
+
+      <!-- In Transit -->
+      <div style="padding:14px 16px;border-right:1px solid var(--border)">
+        ${inTransitDCs.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No deliveries in transit</div>` :
+          inTransitDCs.map(dc=>`
+          <div style="border:1.5px solid #fde68a;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#fffbeb">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
+              <span style="font-size:.68rem;font-weight:700;background:#fef3c7;color:#d97706;border-radius:4px;padding:2px 6px">IN TRANSIT</span>
+            </div>
+            <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">
+              <div>📦 Order: <b>${dc.order_id}</b></div>
+              ${dc.driver_name?`<div>🧑‍✈️ ${dc.driver_name}</div>`:''}
+              ${dc.vehicle_no?`<div>🚚 ${dc.vehicle_no}</div>`:`<div style="color:#d97706">🚚 En route</div>`}
+              ${dc.scheduled_time?`<div>⏱ ETA: <b>${dc.scheduled_time}</b></div>`:''}
+            </div>
+            ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:.74rem;font-weight:600;color:#d97706;text-decoration:none;background:#fef3c7;border-radius:6px;padding:3px 8px">📞 Call Driver</a>`:''}
+          </div>`).join('')}
       </div>
+
+      <!-- Delivered this month -->
+      <div style="padding:14px 16px">
+        ${deliveredThisMonth.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No deliveries yet this month</div>` :
+          deliveredThisMonth.slice(0,4).map(dc=>`
+          <div style="border:1.5px solid #a7f3d0;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f0fdf4">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
+              <span style="font-size:.68rem;font-weight:700;background:#d1fae5;color:#059669;border-radius:4px;padding:2px 6px">DELIVERED</span>
+            </div>
+            <div style="font-size:.75rem;color:var(--text-muted);line-height:1.5">
+              <div>📦 Order: <b>${dc.order_id}</b></div>
+              ${dc.delivered_at?`<div>✅ ${fmtDate(dc.delivered_at)}</div>`:''}
+              ${dc.total_qty?`<div>📊 ${dc.total_qty} units</div>`:''}
+            </div>
+          </div>`).join('')}
+        ${deliveredThisMonth.length > 4 ? `<div style="text-align:center;font-size:.76rem;color:var(--text-muted);padding-top:4px">+${deliveredThisMonth.length-4} more this month</div>` : ''}
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Orders -->
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Recent Orders</div>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
+    </div>
+    <div style="padding:0">
+      ${(recentOrders||[]).slice(0,5).map(o=>`
+      <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''" onclick="viewOrder('${o.id}')">
+        <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">🧾</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${fmtDate(o.created_at)}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:700;font-size:.9rem">${fmt(o.grand_total)}</div>
+          <div style="margin-top:3px">${statusBadge(o.status)}</div>
+        </div>
+        <div style="color:var(--text-muted);font-size:.8rem">›</div>
+      </div>`).join('')||`<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders yet</div>`}
     </div>
   </div>
 
