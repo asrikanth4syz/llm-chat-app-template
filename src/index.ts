@@ -163,10 +163,11 @@ const ORDER_FSM: Record<string, string[]> = {
   SUBMITTED:        ["PENDING_APPROVAL","APPROVED","CANCELLED"],
   PENDING_APPROVAL: ["APPROVED","CANCELLED"],
   APPROVED:         ["ACKNOWLEDGED","CANCELLED"],
-  ACKNOWLEDGED:     ["INVENTORY_CHECK","CANCELLED"],
+  ACKNOWLEDGED:     ["PICKED","INVENTORY_CHECK","CANCELLED"],
   INVENTORY_CHECK:  ["VENDOR_PO_RAISED","CANCELLED"],
   VENDOR_PO_RAISED: ["READY_TO_PICK","CANCELLED"],
-  READY_TO_PICK:    ["IN_SHIPMENT"],
+  READY_TO_PICK:    ["PICKED","IN_SHIPMENT"],
+  PICKED:           ["IN_SHIPMENT","CANCELLED"],
   IN_SHIPMENT:      ["PARTIALLY_CLOSED","CLOSED"],
   PARTIALLY_CLOSED: ["CLOSED"],
   CLOSED: [], CANCELLED: [],
@@ -196,9 +197,11 @@ export default {
       if (path==="/api/orders"          && method==="POST") return handleCreateOrder(request,env);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
-      if (path.match(/^\/api\/orders\/[^/]+\/transition$/) && method==="POST") return handleTransitionOrder(request,env,path);
-      if (path.match(/^\/api\/orders\/[^/]+\/comments$/)   && method==="GET")  return handleListComments(request,env,path);
-      if (path.match(/^\/api\/orders\/[^/]+\/comments$/)   && method==="POST") return handleAddComment(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/allocations$/)  && method==="GET")  return handleGetAllocations(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/comments$/)     && method==="GET")  return handleListComments(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/comments$/)     && method==="POST") return handleAddComment(request,env,path);
 
       // Inventory
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
@@ -608,6 +611,47 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   await pushNotification(env, null, `Order ${id} → ${body.to.replace(/_/g," ")}`);
   await audit(env, user, "TRANSITION", "order", id, order.status, body.to);
   return json({id, status: body.to});
+}
+
+// POST /api/orders/:id/pick — save allocations, transition to PICKED, consume no stock yet
+async function handlePickOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string}[]};
+
+  const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
+  if (!order) return json({error:"Not found"}, 404);
+  if (!["ACKNOWLEDGED","READY_TO_PICK"].includes(order.status))
+    return json({error:`Cannot pick from status ${order.status}`}, 400);
+
+  // Save allocation records
+  await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
+  for (const item of body.items) {
+    await env.DB.prepare(
+      "INSERT INTO order_allocations (id,order_id,sku,item_name,qty,bin_code,picked_by,picked_at) VALUES (?,?,?,?,?,?,?,datetime('now'))"
+    ).bind(uid(), id, item.sku, item.name, item.qty, item.bin_code||null, user!.name).run();
+  }
+
+  // Transition order to PICKED
+  await env.DB.prepare(
+    "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),updated_at=datetime('now') WHERE id=?"
+  ).bind(user!.sub, user!.name, id).run();
+  await env.DB.prepare(
+    "INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)"
+  ).bind(uid(), id, order.status, "PICKED", user!.sub, user!.name, `Picked by ${user!.name}`).run();
+
+  await audit(env, user, "PICKED", "order", id, order.status, "PICKED");
+  return json({id, status:"PICKED"});
+}
+
+// GET /api/orders/:id/allocations — fetch allocation records for an order
+async function handleGetAllocations(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const {results} = await env.DB.prepare("SELECT * FROM order_allocations WHERE order_id=? ORDER BY sku").bind(id).all();
+  return json(results);
 }
 
 async function handlePatchOrder(request: Request, env: Env, path: string): Promise<Response> {
@@ -1099,12 +1143,15 @@ async function handlePickList(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   const {results} = await env.DB.prepare(`
     SELECT o.id as order_id, c.name as client_name, o.status, o.created_at,
+      o.picker_name, o.picked_at,
       oi.sku, oi.name as item_name, oi.qty,
-      COALESCE(i.stock,0) as stock_available
+      COALESCE(i.stock,0) as stock_available,
+      oa.bin_code
     FROM orders o JOIN clients c ON o.client_id=c.id
     JOIN order_items oi ON oi.order_id=o.id
     LEFT JOIN inventory i ON i.sku=oi.sku
-    WHERE o.status='READY_TO_PICK'
+    LEFT JOIN order_allocations oa ON oa.order_id=o.id AND oa.sku=oi.sku
+    WHERE o.status IN ('ACKNOWLEDGED','READY_TO_PICK','PICKED')
     ORDER BY o.created_at ASC
   `).all();
   return json(results);

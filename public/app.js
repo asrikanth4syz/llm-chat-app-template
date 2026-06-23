@@ -517,7 +517,7 @@ function statusBadge(s) {
   const map = {
     CLOSED:'success', DELIVERED:'success', RESOLVED:'success', INVOICED:'success', RECEIVED:'success',
     IN_SHIPMENT:'info', IN_TRANSIT:'info', IN_PROGRESS:'info', DISPATCHED:'info', ACCEPTED:'info',
-    PENDING_APPROVAL:'warning', SENT:'warning', SCHEDULED:'warning', OPEN:'warning', READY_TO_PICK:'warning',
+    PENDING_APPROVAL:'warning', SENT:'warning', SCHEDULED:'warning', OPEN:'warning', READY_TO_PICK:'warning', PICKED:'warning',
     CANCELLED:'danger', REJECTED:'danger',
     SUBMITTED:'primary', APPROVED:'primary', ACKNOWLEDGED:'primary',
     VENDOR_PO_RAISED:'purple', INVENTORY_CHECK:'purple',
@@ -1356,7 +1356,7 @@ async function renderOrderQueue(el) {
   if (!APP._oqTab) APP._oqTab = 'All';
   APP._oqOrders = orders;
 
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
 
   function oqTabsHtml() {
     return `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
@@ -1400,7 +1400,7 @@ async function renderOrderQueue(el) {
 function switchOQTab(tab) {
   APP._oqTab = tab;
   const orders = APP._oqOrders || [];
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
   // re-render tabs
   const tabsEl = document.getElementById('oq-tabs');
   if (tabsEl) {
@@ -1431,10 +1431,15 @@ function switchOQTab(tab) {
 
 function orderQueueActions(o) {
   const btns = [`<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>`];
-  const next = { SUBMITTED:'ACKNOWLEDGED', APPROVED:'ACKNOWLEDGED', ACKNOWLEDGED:'INVENTORY_CHECK',
-    INVENTORY_CHECK:'VENDOR_PO_RAISED', VENDOR_PO_RAISED:'READY_TO_PICK', READY_TO_PICK:'IN_SHIPMENT',
+  const next = { SUBMITTED:'ACKNOWLEDGED', APPROVED:'ACKNOWLEDGED',
+    INVENTORY_CHECK:'VENDOR_PO_RAISED', VENDOR_PO_RAISED:'READY_TO_PICK',
     IN_SHIPMENT:'CLOSED' };
-  if (next[o.status]) {
+  // ACKNOWLEDGED and READY_TO_PICK → Pick Items modal
+  if (o.status === 'ACKNOWLEDGED' || o.status === 'READY_TO_PICK') {
+    btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
+  } else if (o.status === 'PICKED') {
+    btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">Dispatch &rarr; DC</button>`);
+  } else if (next[o.status]) {
     btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','${next[o.status]}')">→ ${next[o.status].replace(/_/g,' ')}</button>`);
   }
   return btns.join(' ');
@@ -2120,9 +2125,9 @@ function renderWHPickList(el, picklist) {
 
   el.innerHTML = `
   <div class="card">
-    <div class="card-header"><span>Pick List — Orders Ready to Pick (${orderList.length})</span></div>
+    <div class="card-header"><span>Pick List — Orders Pending Pick &amp; Dispatch (${orderList.length})</span></div>
     ${orderList.length === 0
-      ? '<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders in READY_TO_PICK state</div>'
+      ? '<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders pending picking</div>'
       : orderList.map(order => `
         <div style="border-bottom:1px solid var(--border);padding:16px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2130,20 +2135,28 @@ function renderWHPickList(el, picklist) {
               <b>${order.order_id}</b>
               <span style="margin-left:8px;color:var(--text-muted)">${order.client_name}</span>
               <span style="margin-left:8px;font-size:.8rem;color:var(--text-muted)">${fmtDate(order.created_at)}</span>
+              <span class="badge badge-${order.status==='PICKED'?'success':'warning'}" style="margin-left:8px">${order.status}</span>
+              ${order.status==='PICKED'&&order.picker_name?`<span style="margin-left:6px;font-size:.78rem;color:var(--text-muted)">Picked by ${order.picker_name}</span>`:''}
             </div>
-            <button class="btn btn-primary btn-sm" onclick="createDCFromPicklist('${order.order_id}')">Create DC &rarr;</button>
+            <div>
+              ${order.status!=='PICKED'
+                ? `<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${order.order_id}')">Pick Items</button>`
+                : `<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${order.order_id}')">Dispatch &rarr; DC</button>`
+              }
+            </div>
           </div>
           <div class="table-wrap">
             <table class="table" style="margin:0">
-              <thead><tr><th>SKU</th><th>Item</th><th>Qty Required</th><th>Stock Available</th></tr></thead>
+              <thead><tr><th>SKU</th><th>Item</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
               <tbody>${order.items.map(item=>`<tr>
                 <td>${item.sku}</td>
                 <td>${item.item_name}</td>
                 <td>${item.qty}</td>
                 <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
                   <b>${item.stock_available}</b>
-                  ${item.stock_available<item.qty?'<span style="margin-left:4px;font-size:.75rem">(short by '+(item.qty-item.stock_available)+')</span>':''}
+                  ${item.stock_available<item.qty?`<span style="margin-left:4px;font-size:.75rem">(short by ${item.qty-item.stock_available})</span>`:''}
                 </td>
+                ${order.status==='PICKED'?`<td>${item.bin_code||'—'}</td>`:''}
               </tr>`).join('')}
               </tbody>
             </table>
@@ -2287,12 +2300,63 @@ async function saveBinEdit(binId) {
 }
 
 async function createDCFromPicklist(orderId) {
-  if (!confirm(`Transition order ${orderId} to IN_SHIPMENT and create a Delivery Challan?`)) return;
+  if (!confirm(`Dispatch order ${orderId}? This will deduct stock and create a Delivery Challan.`)) return;
   const res = await api(`/orders/${orderId}/transition`, {
     method: 'POST',
-    body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Picked from warehouse — DC created' })
+    body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
   });
-  if (res) { showToast(`Order ${orderId} advanced to IN_SHIPMENT — DC created`); switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]); }
+  if (res) { showToast(`Order ${orderId} dispatched — DC created`); switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]); }
+}
+
+async function pickOrderModal(orderId) {
+  const [order, bins] = await Promise.all([
+    api(`/orders/${orderId}`),
+    api('/bin-locations').catch(()=>[])
+  ]);
+  const items = order?.items || [];
+  const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
+  openModal(`Pick Items — ${orderId}`, `
+    <p style="color:var(--text-muted);margin-bottom:12px">
+      Confirm items picked from shelf. Select the bin location for each item.
+    </p>
+    <table class="table" style="margin-bottom:16px">
+      <thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Bin Location</th></tr></thead>
+      <tbody id="pick-items-body">
+        ${(items||[]).map(item=>`<tr>
+          <td><b>${item.sku}</b></td>
+          <td>${item.name||item.item_name}</td>
+          <td>${item.qty}</td>
+          <td>
+            <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-qty="${item.qty}" style="min-width:140px">
+              <option value="">— select bin —</option>
+              ${binOptions}
+            </select>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmPick('${orderId}')">Confirm Pick</button>
+    </div>
+  `);
+}
+
+async function confirmPick(orderId) {
+  const rows = document.querySelectorAll('.pick-bin');
+  const items = Array.from(rows).map(sel => ({
+    sku: sel.dataset.sku,
+    name: sel.dataset.name,
+    qty: parseInt(sel.dataset.qty),
+    bin_code: sel.value
+  }));
+  const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items }) });
+  if (res) {
+    showToast(`Order ${orderId} marked as PICKED`);
+    closeModal();
+    switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]);
+    navigate('orders');
+  }
 }
 
 async function submitStockTransfer() {
