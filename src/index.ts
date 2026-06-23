@@ -353,6 +353,28 @@ export default {
       if (path==="/api/orders/picklist" && method==="GET") return handlePickList(request,env);
       if (path==="/api/stock-transfers" && method==="POST") return handleStockTransfer(request,env);
 
+      // Staff master
+      if (path==="/api/staff"                              && method==="GET")   return handleListStaff(request,env);
+      if (path==="/api/staff"                              && method==="POST")  return handleAddStaff(request,env);
+      if (path.match(/^\/api\/staff\/[^/]+$/)              && method==="PATCH") return handlePatchStaff(request,env,path);
+
+      // Delivery schedule
+      if (path==="/api/delivery/today"                     && method==="GET")   return handleTodaySchedule(request,env);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+$/)  && method==="PATCH") return handlePatchDC(request,env,path);
+
+      // Porter expenses
+      if (path==="/api/porter-expenses"                    && method==="GET")   return handleListPorterExpenses(request,env);
+      if (path==="/api/porter-expenses"                    && method==="POST")  return handleAddPorterExpense(request,env);
+
+      // Delivery returns
+      if (path==="/api/delivery-returns"                   && method==="GET")   return handleListDeliveryReturns(request,env);
+      if (path==="/api/delivery-returns"                   && method==="POST")  return handleAddDeliveryReturn(request,env);
+
+      // Consolidated reports
+      if (path==="/api/reports/consolidated-orders"        && method==="GET")   return handleRptConsolidatedOrders(request,env);
+      if (path==="/api/reports/consolidated-due"           && method==="GET")   return handleRptConsolidatedDue(request,env);
+      if (path==="/api/reports/client-summary"             && method==="GET")   return handleRptClientSummary(request,env);
+
       return json({error:"Not found"}, 404);
     } catch (err) {
       console.error(err);
@@ -1137,8 +1159,8 @@ async function handleAddClient(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const id = `c${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold) VALUES (?,?,?,?,?,?)")
-    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000).run();
+  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin) VALUES (?,?,?,?,?,?,?,?,?)")
+    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'').run();
   await audit(env, user, "CREATE", "client", id, undefined, body.name as string);
   return json({id}, 201);
 }
@@ -1153,6 +1175,9 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   if (body.monthly_budget !== undefined)    { fields.push("monthly_budget=?");    vals.push(body.monthly_budget); }
   if (body.approval_threshold !== undefined){ fields.push("approval_threshold=?"); vals.push(body.approval_threshold); }
   if (body.health_score !== undefined)      { fields.push("health_score=?");       vals.push(body.health_score); }
+  if (body.zone          !== undefined) { fields.push("zone=?");          vals.push(body.zone||''); }
+  if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(body.contact_phone||''); }
+  if (body.map_pin       !== undefined) { fields.push("map_pin=?");       vals.push(body.map_pin||''); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
   await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
@@ -2561,4 +2586,240 @@ async function handleApprovalChainAct(request: Request, env: Env, path: string):
 // ════════════════════════════════════════════════════════════════════
 // FEATURE 16: DELIVERY ROUTE OPTIMIZATION
 // ════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════
+// STAFF MASTER
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListStaff(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM staff ORDER BY name"
+  ).all();
+  return json(results);
+}
+
+async function handleAddStaff(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.name) return json({error:"name required"}, 400);
+  const id = `staff-${uid().slice(0,8)}`;
+  await env.DB.prepare("INSERT INTO staff (id,name,phone,role,active) VALUES (?,?,?,?,1)")
+    .bind(id, body.name, body.phone||null, body.role||'delivery_staff').run();
+  return json({id}, 201);
+}
+
+async function handlePatchStaff(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as Record<string,unknown>;
+  const fields: string[] = []; const vals: unknown[] = [];
+  if (body.name   !== undefined) { fields.push("name=?");   vals.push(body.name); }
+  if (body.phone  !== undefined) { fields.push("phone=?");  vals.push(body.phone||null); }
+  if (body.role   !== undefined) { fields.push("role=?");   vals.push(body.role); }
+  if (body.active !== undefined) { fields.push("active=?"); vals.push(body.active); }
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE staff SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// TODAY'S DELIVERY SCHEDULE
+// ════════════════════════════════════════════════════════════════════
+
+async function handleTodaySchedule(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const today = new Date().toISOString().slice(0,10);
+  const {results} = await env.DB.prepare(`
+    SELECT
+      dc.id, dc.status, dc.dc_number, dc.scheduled_time,
+      dc.vehicle_no, dc.driver_name, dc.delivered_at,
+      dc.staff_id, s.name as staff_name,
+      dc.order_id, c.name as client_name,
+      COALESCE(c.zone,'') as zone,
+      dc.total_qty, dc.delivered_qty,
+      dc.expected_delivery_date
+    FROM delivery_challans dc
+    LEFT JOIN orders o ON dc.order_id=o.id
+    LEFT JOIN clients c ON o.client_id=c.id
+    LEFT JOIN staff s ON dc.staff_id=s.id
+    WHERE (date(dc.dispatched_at)=? OR date(dc.expected_delivery_date)=? OR dc.status='SCHEDULED')
+    ORDER BY dc.scheduled_time ASC, s.name ASC
+  `).bind(today, today).all();
+  return json(results);
+}
+
+async function handlePatchDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as Record<string,unknown>;
+  const fields: string[] = []; const vals: unknown[] = [];
+  if (body.dc_number       !== undefined) { fields.push("dc_number=?");       vals.push(body.dc_number||null); }
+  if (body.staff_id        !== undefined) { fields.push("staff_id=?");        vals.push(body.staff_id||null); }
+  if (body.scheduled_time  !== undefined) { fields.push("scheduled_time=?");  vals.push(body.scheduled_time||null); }
+  if (body.driver_name     !== undefined) { fields.push("driver_name=?");     vals.push(body.driver_name||null); }
+  if (body.vehicle_no      !== undefined) { fields.push("vehicle_no=?");      vals.push(body.vehicle_no||null); }
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE delivery_challans SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PORTER EXPENSES
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListPorterExpenses(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT pe.*, c.name as client_name, s.name as staff_name
+    FROM porter_expenses pe
+    LEFT JOIN clients c ON pe.client_id=c.id
+    LEFT JOIN staff s ON pe.staff_id=s.id
+    ORDER BY pe.trip_date DESC, pe.created_at DESC
+    LIMIT 100
+  `).all();
+  return json(results);
+}
+
+async function handleAddPorterExpense(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.trip_date || !body.amount) return json({error:"trip_date and amount required"}, 400);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO porter_expenses (id,trip_date,route,amount,client_id,staff_id,notes) VALUES (?,?,?,?,?,?,?)")
+    .bind(id, body.trip_date, body.route||null, body.amount, body.client_id||null, body.staff_id||null, body.notes||null).run();
+  return json({id}, 201);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// DELIVERY RETURNS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListDeliveryReturns(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const dcId = url.searchParams.get("dc_id");
+  let q = "SELECT dr.*, s.name as staff_name FROM delivery_returns dr LEFT JOIN staff s ON dr.staff_id=s.id WHERE 1=1";
+  const params: string[] = [];
+  if (dcId) { q += " AND dr.dc_id=?"; params.push(dcId); }
+  q += " ORDER BY dr.returned_at DESC LIMIT 100";
+  const {results} = await env.DB.prepare(q).bind(...params).all();
+  return json(results);
+}
+
+async function handleAddDeliveryReturn(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as Record<string,unknown>;
+  if (!body.dc_id || !body.sku || !body.qty_returned) return json({error:"dc_id, sku, qty_returned required"}, 400);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO delivery_returns (id,dc_id,sku,item_name,qty_returned,reason,staff_id) VALUES (?,?,?,?,?,?,?)")
+    .bind(id, body.dc_id, body.sku, body.item_name||null, body.qty_returned, body.reason||null, body.staff_id||null).run();
+  // Restore stock for returned items
+  await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(body.qty_returned, body.sku).run();
+  // Update dc_items delivered qty
+  await env.DB.prepare("UPDATE dc_items SET qty_delivered=MAX(0,qty_delivered-?) WHERE dc_id=? AND sku=?")
+    .bind(body.qty_returned, body.dc_id, body.sku).run();
+  await audit(env, user, "RETURN", "delivery", body.dc_id as string, undefined, `Returned ${body.qty_returned} x ${body.sku}`);
+  return json({id}, 201);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CONSOLIDATED REPORTS
+// ════════════════════════════════════════════════════════════════════
+
+async function handleRptConsolidatedOrders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  // All open orders grouped by item — procurement view
+  const {results} = await env.DB.prepare(`
+    SELECT
+      oi.sku, oi.name as item_name,
+      SUM(oi.qty) as total_ordered_qty,
+      COALESCE(SUM(
+        COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+          JOIN delivery_challans dc ON dci.dc_id=dc.id
+          WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)
+      ),0) as total_delivered_qty,
+      SUM(oi.qty) - COALESCE(SUM(
+        COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+          JOIN delivery_challans dc ON dci.dc_id=dc.id
+          WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)
+      ),0) as total_due_qty,
+      COUNT(DISTINCT o.client_id) as client_count,
+      GROUP_CONCAT(DISTINCT c.name) as clients
+    FROM order_items oi
+    JOIN orders o ON oi.order_id=o.id
+    JOIN clients c ON o.client_id=c.id
+    WHERE o.status NOT IN ('CANCELLED','CLOSED','DRAFT')
+    GROUP BY oi.sku, oi.name
+    HAVING total_due_qty > 0
+    ORDER BY total_due_qty DESC
+  `).all();
+  return json(results);
+}
+
+async function handleRptConsolidatedDue(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT
+      c.name as client_name,
+      COALESCE(c.zone,'—') as zone,
+      o.id as order_id,
+      o.created_at as order_date,
+      oi.sku, oi.name as item_name,
+      oi.qty as ordered_qty,
+      COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+        JOIN delivery_challans dc ON dci.dc_id=dc.id
+        WHERE dc.order_id=o.id AND dci.sku=oi.sku),0) as delivered_qty,
+      oi.qty - COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+        JOIN delivery_challans dc ON dci.dc_id=dc.id
+        WHERE dc.order_id=o.id AND dci.sku=oi.sku),0) as due_qty,
+      CAST(julianday('now') - julianday(o.created_at) AS INTEGER) as days_overdue
+    FROM order_items oi
+    JOIN orders o ON oi.order_id=o.id
+    JOIN clients c ON o.client_id=c.id
+    WHERE o.status NOT IN ('CANCELLED','CLOSED','DRAFT')
+      AND oi.qty > COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+        JOIN delivery_challans dc ON dci.dc_id=dc.id
+        WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)
+    ORDER BY days_overdue DESC, c.name ASC
+  `).all();
+  return json(results);
+}
+
+async function handleRptClientSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const {results} = await env.DB.prepare(`
+    SELECT
+      c.id, c.name as client_name, COALESCE(c.zone,'—') as zone,
+      COUNT(DISTINCT o.id) as total_orders,
+      COALESCE(SUM(o.grand_total),0) as total_value,
+      COUNT(DISTINCT CASE WHEN o.status='CLOSED' THEN o.id END) as closed_orders,
+      COUNT(DISTINCT CASE WHEN o.status NOT IN ('CLOSED','CANCELLED','DRAFT') THEN o.id END) as open_orders,
+      COALESCE(SUM(CASE WHEN o.status NOT IN ('CLOSED','CANCELLED','DRAFT') THEN
+        o.grand_total - COALESCE((SELECT SUM(dci.qty_delivered * oi2.unit_price)
+          FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+          JOIN order_items oi2 ON oi2.sku=dci.sku AND oi2.order_id=dc.order_id
+          WHERE dc.order_id=o.id),0) END),0) as outstanding_value
+    FROM clients c
+    LEFT JOIN orders o ON o.client_id=c.id AND o.status != 'CANCELLED'
+    WHERE c.active=1
+    GROUP BY c.id, c.name, c.zone
+    ORDER BY total_orders DESC
+  `).all();
+  return json(results);
+}
 
