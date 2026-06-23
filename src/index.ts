@@ -1858,14 +1858,14 @@ async function handleRptOrderVsDelivery(request: Request, env: Env): Promise<Res
       COALESCE(i.brand, i.category,'') AS brand_name,
       oi.name AS item_name,
       oi.qty AS ordered_qty,
-      COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS delivered_qty,
-      oi.qty - COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS due_qty,
-      (oi.qty - COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) * oi.unit_price AS due_value,
-      (SELECT COUNT(*) FROM delivery_challans dc3 WHERE dc3.order_id=o.id) AS dc_count,
+      COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS delivered_qty,
+      oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS due_qty,
+      (oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) * oi.unit_price AS due_value,
+      (SELECT COUNT(*) FROM delivery_challans dc3 WHERE dc3.order_id=o.id AND dc3.status NOT IN ('CANCELLED')) AS dc_count,
       (SELECT MAX(dc4.delivered_at) FROM delivery_challans dc4 WHERE dc4.order_id=o.id AND dc4.status='DELIVERED') AS last_delivery_date,
       CASE
-        WHEN o.status='CLOSED' THEN 'Complete'
-        WHEN COALESCE((SELECT SUM(dci2.qty_delivered) FROM dc_items dci2 JOIN delivery_challans dc5 ON dci2.dc_id=dc5.id WHERE dc5.order_id=o.id AND dci2.sku=oi.sku),0) > 0 THEN 'Partial'
+        WHEN o.status IN ('CLOSED','PARTIALLY_CLOSED') AND oi.qty <= COALESCE((SELECT SUM(CASE WHEN dc2b.status='DELIVERED' AND dci2.qty_delivered=0 THEN dci2.qty_ordered ELSE dci2.qty_delivered END) FROM dc_items dci2 JOIN delivery_challans dc2b ON dci2.dc_id=dc2b.id WHERE dc2b.order_id=o.id AND dci2.sku=oi.sku),0) THEN 'Complete'
+        WHEN COALESCE((SELECT SUM(CASE WHEN dc2c.status='DELIVERED' AND dci3.qty_delivered=0 THEN dci3.qty_ordered ELSE dci3.qty_delivered END) FROM dc_items dci3 JOIN delivery_challans dc2c ON dci3.dc_id=dc2c.id WHERE dc2c.order_id=o.id AND dci3.sku=oi.sku),0) > 0 THEN 'Partial'
         ELSE 'Open'
       END AS order_status
     FROM orders o
@@ -1876,7 +1876,7 @@ async function handleRptOrderVsDelivery(request: Request, env: Env): Promise<Res
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?`;
   const params: (string|number)[] = [from, to];
   if (clientId) { query += ` AND o.client_id=?`; params.push(clientId); }
-  if (dueOnly) { query += ` AND oi.qty > COALESCE((SELECT SUM(dci3.qty_delivered) FROM dc_items dci3 JOIN delivery_challans dc6 ON dci3.dc_id=dc6.id WHERE dc6.order_id=o.id AND dci3.sku=oi.sku),0)`; }
+  if (dueOnly) { query += ` AND oi.qty > COALESCE((SELECT SUM(CASE WHEN dc6.status='DELIVERED' AND dci3.qty_delivered=0 THEN dci3.qty_ordered ELSE dci3.qty_delivered END) FROM dc_items dci3 JOIN delivery_challans dc6 ON dci3.dc_id=dc6.id WHERE dc6.order_id=o.id AND dci3.sku=oi.sku),0)`; }
   query += ` ORDER BY o.created_at DESC, c.name, oi.name LIMIT 500`;
   const {results} = await env.DB.prepare(query).bind(...params).all();
   return json(results);
@@ -1932,8 +1932,8 @@ async function handleRptDueItems(request: Request, env: Env): Promise<Response> 
       COALESCE(i.brand, i.category,'') AS brand_name,
       oi.name AS item_name,
       oi.qty AS ordered_qty,
-      COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS delivered_qty,
-      oi.qty - COALESCE((SELECT SUM(d.qty_delivered) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS due_qty,
+      COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND d.qty_delivered=0 THEN d.qty_ordered ELSE d.qty_delivered END) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS delivered_qty,
+      oi.qty - COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND d.qty_delivered=0 THEN d.qty_ordered ELSE d.qty_delivered END) FROM dc_items d JOIN delivery_challans dc ON d.dc_id=dc.id WHERE dc.order_id=o.id AND d.sku=oi.sku),0) AS due_qty,
       o.created_at AS due_since_date,
       CAST(julianday('now') - julianday(o.created_at) AS INTEGER) AS due_ageing_days,
       COALESCE(v.name,'') AS responsible_vendor,
@@ -1950,7 +1950,7 @@ async function handleRptDueItems(request: Request, env: Env): Promise<Response> 
     LEFT JOIN vendors v ON v.id=i.vendor_id
     WHERE o.status NOT IN ('CLOSED','CANCELLED','DRAFT')
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?
-      AND oi.qty > COALESCE((SELECT SUM(d2.qty_delivered) FROM dc_items d2 JOIN delivery_challans dc2 ON d2.dc_id=dc2.id WHERE dc2.order_id=o.id AND d2.sku=oi.sku),0)`;
+      AND oi.qty > COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND d2.qty_delivered=0 THEN d2.qty_ordered ELSE d2.qty_delivered END) FROM dc_items d2 JOIN delivery_challans dc2 ON d2.dc_id=dc2.id WHERE dc2.order_id=o.id AND d2.sku=oi.sku),0)`;
   const params: (string|number)[] = [from, to];
   if (clientId) { query += ` AND o.client_id=?`; params.push(clientId); }
   query += ` ORDER BY due_ageing_days DESC, c.name LIMIT 300`;

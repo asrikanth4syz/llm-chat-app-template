@@ -1523,32 +1523,60 @@ async function renderDCBilling(el) {
 
   function financeTabContent(tab) {
     if (tab === 'dc_tracker') {
+      const today = new Date().toISOString().slice(0,10);
+      const billedToday = billed.filter(d=>d.billed_at?.startsWith(today));
+      const critical = unbilled.filter(d => Math.floor((Date.now()-new Date(d.created_at).getTime())/86400000) > 15);
+      const pendingValue = unbilled.reduce((s,d)=>s+(d.order_value||0),0);
+      const billedMonthValue = billed.filter(d=>(d.billed_at||'').startsWith(new Date().toISOString().slice(0,7))).reduce((s,d)=>s+(d.order_value||0),0);
       return `
-      <div class="kpi-row">
-        <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Billing</div><div class="kpi-value kpi-warning">${unbilled.length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Billed Today</div><div class="kpi-value">${billed.filter(d=>d.billed_at?.startsWith(new Date().toISOString().slice(0,10))).length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${dcs.length}</div></div>
+      <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="kpi-card kpi-warning">
+          <div class="kpi-label">Pending Billing</div>
+          <div class="kpi-value">${unbilled.length}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(pendingValue)} outstanding</div>
+        </div>
+        <div class="kpi-card ${critical.length>0?'kpi-danger':''}">
+          <div class="kpi-label">Critical (16+ days)</div>
+          <div class="kpi-value">${critical.length}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(critical.reduce((s,d)=>s+(d.order_value||0),0))} at risk</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Billed Today</div>
+          <div class="kpi-value">${billedToday.length}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Billed This Month</div>
+          <div class="kpi-value">${billed.filter(d=>(d.billed_at||'').startsWith(new Date().toISOString().slice(0,7))).length}</div>
+          <div style="font-size:.75rem;color:var(--success);margin-top:4px">${fmt(billedMonthValue)}</div>
+        </div>
       </div>
       <div class="card">
-        <div class="card-header"><span>Delivered — Pending Billing (${unbilled.length})</span></div>
+        <div class="card-header">
+          <span>Delivered — Pending Billing (${unbilled.length})</span>
+          ${critical.length ? `<span class="badge badge-danger">${critical.length} overdue</span>` : ''}
+        </div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Order Value</th><th>Delivered</th><th>Aging</th><th>Action</th></tr></thead>
-            <tbody>${unbilled.map(dc=>`<tr>
+            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Delivered</th><th>Aging</th><th>Action</th></tr></thead>
+            <tbody>${unbilled.sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(dc=>`<tr ${Math.floor((Date.now()-new Date(dc.created_at).getTime())/86400000)>15?'style="background:rgba(220,38,38,.04)"':''}>
               <td><b>${dc.id}</b></td>
-              <td>${dc.order_id}</td>
-              <td>${dc.client_name||'—'}</td>
-              <td>${fmt(dc.order_value)}</td>
+              <td><span style="font-size:.82rem">${dc.order_id}</span></td>
+              <td><b>${dc.client_name||'—'}</b></td>
+              <td><b>${fmt(dc.order_value)}</b></td>
               <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
               <td>${agingBadge(dc)}</td>
               <td><button class="btn btn-gold btn-sm" onclick="billDC('${dc.id}')">Bill DC</button></td>
-            </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No unbilled DCs</td></tr>'}
+            </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">All DCs are billed</td></tr>'}
             </tbody>
           </table>
         </div>
       </div>
       <div class="card" style="margin-top:16px">
-        <div class="card-header"><span>Billed DCs (${billed.length})</span></div>
+        <div class="card-header">
+          <span>Billed DCs (${billed.length})</span>
+          <span style="font-size:.83rem;color:var(--text-muted)">${fmt(billed.reduce((s,d)=>s+(d.order_value||0),0))} total billed</span>
+        </div>
         <div class="table-wrap">
           <table class="table">
             <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Billed On</th><th>Aging</th></tr></thead>
@@ -2084,52 +2112,94 @@ async function switchWHTab(tab, btn) {
 }
 
 function renderWHOverview(el, warehouses, bins, inv, grns) {
-  const totalUnits = inv.reduce((s,i) => s+i.stock, 0);
-  const totalSKUs  = inv.length;
-  const thisMonth  = new Date().toISOString().slice(0,7);
-  const grnsThisMonth = grns.filter(g => (g.received_at||'').startsWith(thisMonth)).length;
+  const totalUnits  = inv.reduce((s,i) => s+i.stock, 0);
+  const totalSKUs   = inv.length;
+  const lowStock    = inv.filter(i => i.stock <= (i.reorder_level||0)).length;
+  const thisMonth   = new Date().toISOString().slice(0,7);
+  const grnsMonth   = grns.filter(g => (g.received_at||'').startsWith(thisMonth));
+  const grnsThisMonth = grnsMonth.length;
+  const activeWH    = warehouses.filter(w=>w.active).length;
+  const totalBins   = bins.length;
+  const occupiedBins= bins.filter(b=>(b.occupied||0)>0).length;
+  const binFillPct  = totalBins ? Math.round(occupiedBins/totalBins*100) : 0;
+  const pendingGRNs = grns.filter(g => g.status && g.status !== 'RECEIVED').length;
 
   el.innerHTML = `
-  <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-label">Active Warehouses</div><div class="kpi-value">${warehouses.filter(w=>w.active).length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Total SKUs</div><div class="kpi-value">${totalSKUs}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Total Units In Stock</div><div class="kpi-value">${totalUnits.toLocaleString('en-IN')}</div></div>
-    <div class="kpi-card"><div class="kpi-label">GRNs This Month</div><div class="kpi-value">${grnsThisMonth}</div></div>
-  </div>
-  <div class="card">
-    <div class="card-header"><span>Warehouses</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Name</th><th>City</th><th>Capacity</th><th>Bins</th><th>Utilization</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${warehouses.map(w=>{
-          const wBins = bins.filter(b=>b.warehouse_id===w.id);
-          const occupied = wBins.reduce((s,b)=>s+(b.occupied||0),0);
-          const cap = wBins.reduce((s,b)=>s+(b.capacity||1),1);
-          const utilPct = Math.min(100, Math.round(occupied/cap*100));
-          return `<tr>
-            <td><b>${w.name}</b></td>
-            <td>${w.city||'—'}</td>
-            <td>${(w.capacity||0).toLocaleString('en-IN')} units</td>
-            <td>${wBins.length}</td>
-            <td>
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="background:var(--border);height:6px;border-radius:3px;flex:1;overflow:hidden">
-                  <div style="height:100%;width:${utilPct}%;background:${utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)'};border-radius:3px"></div>
-                </div>
-                <span style="font-size:.8rem;white-space:nowrap">${utilPct}%</span>
-              </div>
-            </td>
-            <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
-            <td style="display:flex;gap:4px">
-              <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
-              <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
-              <button class="btn btn-primary btn-sm" onclick="addBinModal('${w.id}')">Add Bin</button>
-            </td>
-          </tr>`;
-        }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No warehouses yet</td></tr>'}
-        </tbody>
-      </table>
+  <div class="kpi-row" style="grid-template-columns:repeat(5,1fr)">
+    <div class="kpi-card">
+      <div class="kpi-label">Active Warehouses</div>
+      <div class="kpi-value">${activeWH}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${warehouses.length} total</div>
     </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Total SKUs</div>
+      <div class="kpi-value">${totalSKUs}</div>
+      <div style="font-size:.75rem;color:${lowStock>0?'var(--warning)':'var(--text-muted)'};margin-top:4px">${lowStock} low stock</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Units In Stock</div>
+      <div class="kpi-value">${totalUnits.toLocaleString('en-IN')}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all bins</div>
+    </div>
+    <div class="kpi-card ${binFillPct>85?'kpi-danger':binFillPct>60?'kpi-warning':''}">
+      <div class="kpi-label">Bin Utilisation</div>
+      <div class="kpi-value">${binFillPct}%</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${occupiedBins}/${totalBins} bins used</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">GRNs This Month</div>
+      <div class="kpi-value">${grnsThisMonth}</div>
+      <div style="font-size:.75rem;color:${pendingGRNs>0?'var(--warning)':'var(--text-muted)'};margin-top:4px">${pendingGRNs} pending</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    ${warehouses.map(w=>{
+      const wBins = bins.filter(b=>b.warehouse_id===w.id);
+      const occupied = wBins.reduce((s,b)=>s+(b.occupied||0),0);
+      const cap = wBins.reduce((s,b)=>s+(b.capacity||1),1);
+      const utilPct = Math.min(100, Math.round(occupied/cap*100));
+      const color = utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)';
+      return `
+      <div class="card" style="margin-bottom:0">
+        <div class="card-header">
+          <span style="font-weight:600">${w.name}</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}
+          </div>
+        </div>
+        <div style="padding:16px">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+            <div style="text-align:center">
+              <div style="font-size:.75rem;color:var(--text-muted)">City</div>
+              <div style="font-weight:600;font-size:.9rem">${w.city||'—'}</div>
+            </div>
+            <div style="text-align:center">
+              <div style="font-size:.75rem;color:var(--text-muted)">Capacity</div>
+              <div style="font-weight:600;font-size:.9rem">${(w.capacity||0).toLocaleString('en-IN')}</div>
+            </div>
+            <div style="text-align:center">
+              <div style="font-size:.75rem;color:var(--text-muted)">Bins</div>
+              <div style="font-weight:600;font-size:.9rem">${wBins.length}</div>
+            </div>
+          </div>
+          <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px">
+              <span>Bin Utilisation</span>
+              <span style="font-weight:600;color:${color}">${utilPct}%</span>
+            </div>
+            <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
+              <div style="height:100%;width:${utilPct}%;background:${color};border-radius:4px;transition:width .3s"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:12px">
+            <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
+            <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
+            <button class="btn btn-primary btn-sm" onclick="addBinModal('${w.id}')">${iconPlus(12)} Bin</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('')||'<div class="card" style="padding:40px;text-align:center;color:var(--text-muted);grid-column:1/-1">No warehouses configured yet</div>'}
   </div>`;
 }
 
@@ -3112,24 +3182,72 @@ const REPORT_DEFS = [
     labels:['Client','Order ID','Status','# Items','Total Qty Ordered','Delivery Status','Order Value'] },
 ];
 
+const REPORT_CATEGORIES = [
+  { label:'Operations', color:'#1e40af', bg:'#eff6ff', icon:'⚙️',
+    keys:['fulfilment','order-items','dc-billing','service-desk'] },
+  { label:'Finance', color:'#065f46', bg:'#ecfdf5', icon:'💰',
+    keys:['spend','budget','budget-forecast','gst'] },
+  { label:'Supply Chain', color:'#92400e', bg:'#fffbeb', icon:'🔗',
+    keys:['vendor','inventory'] },
+];
+
 function renderReports(el) {
+  const byKey = Object.fromEntries(REPORT_DEFS.map(r=>[r.key,r]));
+  const usedKeys = new Set(REPORT_CATEGORIES.flatMap(c=>c.keys));
+  const otherDefs = REPORT_DEFS.filter(r=>!usedKeys.has(r.key));
+
   el.innerHTML = `
-  ${pageHeader('Reports & BI', 'Live data reports — view, CSV export, print PDF')}
-  <div class="grid-2">
-    ${REPORT_DEFS.map(r=>`
-    <div class="card">
-      <div class="card-body" style="padding:20px">
-        <div style="font-size:2rem;margin-bottom:8px">${r.icon}</div>
-        <div style="font-weight:700;margin-bottom:6px">${r.title}</div>
-        <div style="font-size:.84rem;color:var(--text-muted);margin-bottom:12px">${r.desc}</div>
-        <div style="display:flex;gap:8px">
+  ${pageHeader('Reports & BI', 'Live data — view inline, export CSV, or print PDF')}
+  ${REPORT_CATEGORIES.map(cat=>`
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:1.1rem">${cat.icon}</span>
+      <span style="font-weight:700;font-size:1rem;color:${cat.color}">${cat.label} Reports</span>
+      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+      ${cat.keys.map(k=>{const r=byKey[k];if(!r)return '';return `
+      <div style="background:${cat.bg};border:1px solid ${cat.color}22;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:1.6rem;line-height:1">${r.icon}</div>
+          <div>
+            <div style="font-weight:700;font-size:.92rem;color:${cat.color}">${r.title}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${r.desc}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" onclick="viewReport('${r.key}')">View</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV('${r.key}')">CSV</button>
-          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print PDF</button>
+          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print</button>
         </div>
-      </div>
-    </div>`).join('')}
-  </div>`;
+      </div>`;}).join('')}
+    </div>
+  </div>`).join('')}
+  ${otherDefs.length?`
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:1.1rem">📈</span>
+      <span style="font-weight:700;font-size:1rem;color:var(--text-muted)">Analytics</span>
+      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+      ${otherDefs.map(r=>`
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:1.6rem;line-height:1">${r.icon}</div>
+          <div>
+            <div style="font-weight:700;font-size:.92rem">${r.title}</div>
+            <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${r.desc}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-primary btn-sm" onclick="viewReport('${r.key}')">View</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV('${r.key}')">CSV</button>
+          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print</button>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`:''}`;
 }
 
 async function viewReport(key) {
@@ -3291,25 +3409,44 @@ async function activateUser(id) {
 /* ============================================================
    SETTINGS (Gaps 3,4,6,7,11 — real forms + approval rules + audit logs)
    ============================================================ */
+const SETTINGS_NAV = [
+  { id:'auth',          icon:'🔐', label:'Auth & OTP',       desc:'OTP, MFA, JWT session' },
+  { id:'notifications', icon:'🔔', label:'Notifications',    desc:'Email & SMS config' },
+  { id:'integrations',  icon:'🔗', label:'Integrations',     desc:'Zoho Books, webhooks' },
+  { id:'approval',      icon:'✅', label:'Approval Rules',   desc:'Order approval thresholds' },
+  { id:'warehouses',    icon:'🏭', label:'Warehouses',       desc:'Manage warehouse config' },
+  { id:'audit',         icon:'📋', label:'Audit Log',        desc:'All system actions' },
+  { id:'categories',    icon:'📂', label:'Categories',       desc:'Item category setup' },
+];
+
 async function renderSettings(el) {
+  if (!APP._settingsTab) APP._settingsTab = 'auth';
   el.innerHTML = `
   ${pageHeader('Platform Settings', 'System configuration & administration')}
-  <div class="tab-pills" id="settings-tabs" style="margin-bottom:20px">
-    <button class="tab-pill active" onclick="settingsTab('auth',this)">🔐 Auth & OTP</button>
-    <button class="tab-pill" onclick="settingsTab('notifications',this)">🔔 Notifications</button>
-    <button class="tab-pill" onclick="settingsTab('integrations',this)">🔗 Integrations</button>
-    <button class="tab-pill" onclick="settingsTab('approval',this)">✅ Approval Rules</button>
-    <button class="tab-pill" onclick="settingsTab('warehouses',this)">🏭 Warehouses</button>
-    <button class="tab-pill" onclick="settingsTab('audit',this)">📋 Audit Log</button>
-    <button class="tab-pill" onclick="settingsTab('categories',this)">📂 Categories</button>
-  </div>
-  <div id="settings-content"></div>`;
-  settingsTab('auth', document.querySelector('#settings-tabs .tab-pill.active'));
+  <div style="display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start">
+    <div class="card" style="padding:8px">
+      ${SETTINGS_NAV.map(n=>`
+      <button onclick="settingsTab('${n.id}',this)" class="settings-nav-btn ${APP._settingsTab===n.id?'active':''}"
+        style="width:100%;text-align:left;background:${APP._settingsTab===n.id?'var(--primary)':'transparent'};color:${APP._settingsTab===n.id?'#fff':'inherit'};border:none;border-radius:8px;padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:2px;transition:background .15s">
+        <span style="font-size:1.1rem;flex-shrink:0">${n.icon}</span>
+        <div>
+          <div style="font-weight:600;font-size:.88rem">${n.label}</div>
+          <div style="font-size:.72rem;opacity:.7">${n.desc}</div>
+        </div>
+      </button>`).join('')}
+    </div>
+    <div id="settings-content"><div class="loading-state"><div class="spinner"></div></div></div>
+  </div>`;
+  settingsTab(APP._settingsTab, document.querySelector('.settings-nav-btn.active'));
 }
 
 async function settingsTab(tab, btn) {
-  document.querySelectorAll('#settings-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
+  APP._settingsTab = tab;
+  document.querySelectorAll('.settings-nav-btn').forEach(b=>{
+    b.classList.remove('active');
+    b.style.background = 'transparent'; b.style.color = 'inherit';
+  });
+  if (btn) { btn.classList.add('active'); btn.style.background = 'var(--primary)'; btn.style.color = '#fff'; }
   const el = document.getElementById('settings-content');
   el.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
 
@@ -4743,33 +4880,90 @@ async function renderTodaysSchedule(el) {
   const inTransit = schedule.filter(d=>d.status==='IN_TRANSIT').length;
   const pending = schedule.filter(d=>d.status==='SCHEDULED').length;
 
+  const donePct = totalDCs ? Math.round(delivered/totalDCs*100) : 0;
+  const staffCount = Object.keys(grouped).length;
+
   el.innerHTML = `
-  ${pageHeader("Today's Delivery Schedule", today)}
-  <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${totalDCs}</div></div>
-    <div class="kpi-card"><div class="kpi-label" style="color:var(--success)">Delivered</div><div class="kpi-value" style="color:var(--success)">${delivered}</div></div>
-    <div class="kpi-card"><div class="kpi-label" style="color:var(--warning)">In Transit</div><div class="kpi-value" style="color:var(--warning)">${inTransit}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value">${pending}</div></div>
+  ${pageHeader("Today's Delivery Schedule", today,
+    `<button class="btn btn-secondary" onclick="navigate('todays_schedule')">&#8635; Refresh</button>`)}
+
+  <div class="kpi-row" style="grid-template-columns:repeat(5,1fr);margin-bottom:0">
+    <div class="kpi-card" style="position:relative;overflow:hidden">
+      <div class="kpi-label">Total DCs</div>
+      <div class="kpi-value">${totalDCs}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${staffCount} staff on route</div>
+    </div>
+    <div class="kpi-card" style="border-top:3px solid var(--success)">
+      <div class="kpi-label">Delivered</div>
+      <div class="kpi-value" style="color:var(--success)">${delivered}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${donePct}% complete</div>
+    </div>
+    <div class="kpi-card" style="border-top:3px solid var(--warning)">
+      <div class="kpi-label">In Transit</div>
+      <div class="kpi-value" style="color:var(--warning)">${inTransit}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">out for delivery</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Scheduled</div>
+      <div class="kpi-value">${pending}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">not yet started</div>
+    </div>
+    <div class="kpi-card ${unassigned.length>0?'kpi-warning':''}">
+      <div class="kpi-label">Unassigned</div>
+      <div class="kpi-value">${unassigned.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${unassigned.length?'needs staff':'all assigned'}</div>
+    </div>
   </div>
 
-  ${Object.entries(grouped).map(([staffId, dcs])=>`
+  <div style="margin:12px 0 20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+    <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:6px">
+      <span style="font-weight:600">Overall Progress</span>
+      <span style="color:${donePct===100?'var(--success)':donePct>60?'var(--warning)':'var(--text-muted)'}"><b>${delivered}</b> of ${totalDCs} delivered</span>
+    </div>
+    <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
+      <div style="height:100%;width:${donePct}%;background:${donePct===100?'var(--success)':donePct>60?'var(--warning)':'var(--primary)'};border-radius:5px;transition:width .4s"></div>
+    </div>
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:.76rem;color:var(--text-muted)">
+      <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--success);border-radius:50%"></span>Delivered ${delivered}</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--warning);border-radius:50%"></span>In Transit ${inTransit}</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--border);border-radius:50%"></span>Pending ${pending}</span>
+    </div>
+  </div>
+
+  ${Object.entries(grouped).map(([staffId, dcs])=>{
+    const staffDone = dcs.filter(d=>d.status==='DELIVERED').length;
+    const staffPct  = dcs.length ? Math.round(staffDone/dcs.length*100) : 0;
+    return `
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
-      <span>👤 ${staffMap[staffId]} — ${dcs.length} delivery${dcs.length!==1?'s':''}</span>
-      <span style="font-size:.8rem;color:var(--text-muted)">${dcs.filter(d=>d.status==='DELIVERED').length}/${dcs.length} done</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:32px;height:32px;background:var(--primary);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.8rem;font-weight:700">${(staffMap[staffId]||'?')[0]}</div>
+        <div>
+          <div style="font-weight:700">${staffMap[staffId]}</div>
+          <div style="font-size:.76rem;color:var(--text-muted)">${dcs.length} delivery${dcs.length!==1?'s':''}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="text-align:right">
+          <div style="font-size:.75rem;color:var(--text-muted)">${staffDone}/${dcs.length} done</div>
+          <div style="background:var(--border);height:4px;border-radius:2px;width:80px;margin-top:4px;overflow:hidden">
+            <div style="height:100%;width:${staffPct}%;background:${staffPct===100?'var(--success)':'var(--primary)'};border-radius:2px"></div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Time</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${(dcs).map(dc=>`<tr>
+        <tbody>${dcs.sort((a,b)=>(a.scheduled_time||'').localeCompare(b.scheduled_time||'')).map(dc=>`<tr ${dc.status==='DELIVERED'?'style="opacity:.7"':''}>
           <td><b>${dc.dc_number||dc.id}</b></td>
-          <td>${dc.client_name||'—'}</td>
+          <td><b>${dc.client_name||'—'}</b></td>
           <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
-          <td>${dc.scheduled_time||'—'}</td>
+          <td style="font-weight:600">${dc.scheduled_time||'—'}</td>
           <td>${dc.total_qty||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
-            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>`:''}
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Deliver</button>`:''}
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" onclick="logReturnModal('${dc.id}')">Return</button>`:''}
             <button class="btn btn-secondary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Edit</button>
           </td>
@@ -4777,17 +4971,20 @@ async function renderTodaysSchedule(el) {
         </tbody>
       </table>
     </div>
-  </div>`).join('')}
+  </div>`;}).join('')}
 
   ${unassigned.length ? `
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header"><span>⚠️ Unassigned Deliveries (${unassigned.length})</span></div>
+  <div class="card" style="margin-bottom:16px;border:1px solid var(--warning)">
+    <div class="card-header" style="background:rgba(217,119,6,.08)">
+      <span style="font-weight:700;color:var(--warning)">⚠️ Unassigned Deliveries (${unassigned.length})</span>
+      <span style="font-size:.8rem;color:var(--text-muted)">Assign staff before dispatching</span>
+    </div>
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${unassigned.map(dc=>`<tr>
           <td><b>${dc.dc_number||dc.id}</b></td>
-          <td>${dc.client_name||'—'}</td>
+          <td><b>${dc.client_name||'—'}</b></td>
           <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
           <td>${dc.total_qty||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
@@ -4796,7 +4993,9 @@ async function renderTodaysSchedule(el) {
         </tbody>
       </table>
     </div>
-  </div>` : ''}`;
+  </div>` : ''}
+
+  ${totalDCs===0 ? `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No deliveries scheduled today</div><div class="empty-desc">Dispatch orders to create delivery challans for today.</div></div>` : ''}`;
 }
 
 async function assignDCModal(dcId, currentDcNum, currentTime) {
