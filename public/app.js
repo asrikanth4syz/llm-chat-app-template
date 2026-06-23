@@ -1259,7 +1259,7 @@ async function viewOrder(id) {
           <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
           <div style="display:flex;gap:4px">
             <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
-            ${dc.status==='SCHEDULED'?`<button class="btn btn-primary btn-sm" onclick="closeModal();viewDCModal('${dc.id}')">Dispatch</button>`:''}
+            ${dc.status==='SCHEDULED'?`<button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>`:''}
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="closeModal();markDelivered('${dc.id}')">Confirm Delivery</button>`:''}
           </div>
         </div>
@@ -1422,7 +1422,7 @@ async function renderOrderQueue(el) {
   if (!APP._oqTab) APP._oqTab = 'All';
   APP._oqOrders = orders;
 
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
   function oqTabsHtml() {
     return `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
@@ -1466,7 +1466,7 @@ async function renderOrderQueue(el) {
 function switchOQTab(tab) {
   APP._oqTab = tab;
   const orders = APP._oqOrders || [];
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT'];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
   // re-render tabs
   const tabsEl = document.getElementById('oq-tabs');
   if (tabsEl) {
@@ -1518,19 +1518,25 @@ async function dispatchRemainingModal(orderId) {
   if (!dcs) return;
   const pending = (dcs||[]).filter(d => d.order_id === orderId && d.status === 'SCHEDULED');
   if (!pending.length) {
-    showToast('No scheduled DCs found for this order. All remaining items may already be dispatched.', 'error');
+    showToast('No pending DCs — remaining items may already be in transit or delivered.', 'error');
     return;
   }
+  // Single pending DC → go straight to dispatch form
+  if (pending.length === 1) {
+    dispatchDCModal(pending[0].id);
+    return;
+  }
+  // Multiple pending DCs — let user pick
   const dcList = pending.map(dc => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div>
         <div style="font-weight:600">${dc.id}</div>
-        <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units scheduled</div>
+        <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units — ready to dispatch</div>
       </div>
-      <button class="btn btn-success btn-sm" onclick="closeModal();viewDCModal('${dc.id}')">Dispatch</button>
+      <button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>
     </div>`).join('');
   openModal(`Dispatch Remaining — Order ${orderId}`,
-    `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.87rem">These DCs were created for the remaining undelivered items:</p>${dcList}`,
+    `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.87rem">Select a pending DC to dispatch:</p>${dcList}`,
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
