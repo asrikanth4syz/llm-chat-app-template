@@ -2571,9 +2571,15 @@ async function viewDCItems(dcId) {
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
-function dispatchDCModal(dcId) {
+async function dispatchDCModal(dcId) {
+  const staff = await api('/staff') || [];
+  const staffOpts = staff.filter(s=>s.active && s.role==='delivery_staff')
+    .map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   openModal(`Dispatch DC — ${dcId}`,
     `<p style="margin-bottom:12px;color:var(--text-muted)">Enter vehicle and driver details to dispatch DC <b>${dcId}</b>. Order status will advance to IN_SHIPMENT.</p>
+     <div class="form-group"><label>DC Number</label><input type="text" id="dp-dcnum" placeholder="e.g. 702037"></div>
+     <div class="form-group"><label>Assign Staff</label><select id="dp-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
+     <div class="form-group"><label>Scheduled Time</label><input type="time" id="dp-time"></div>
      <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234"></div>
      <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar"></div>
      <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>
@@ -2587,13 +2593,29 @@ async function confirmDispatch(dcId) {
   const driver_name            = document.getElementById('dp-driver').value;
   const driver_phone           = document.getElementById('dp-phone').value;
   const expected_delivery_date = document.getElementById('dp-expected').value;
+  const dc_number              = document.getElementById('dp-dcnum').value;
+  const staff_id               = document.getElementById('dp-staff').value;
+  const scheduled_time         = document.getElementById('dp-time').value;
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
   const res = await api('/delivery-challans/' + dcId + '/dispatch', {
     method:'POST',
     body: JSON.stringify({vehicle_no, driver_name, driver_phone, expected_delivery_date: expected_delivery_date||null})
   });
-  closeModal();
-  if (res) { showToast(`DC ${dcId} dispatched — in transit`); switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]); }
+  if (res) {
+    // Also PATCH dc_number, staff_id, scheduled_time
+    const patchBody = {};
+    if (dc_number) patchBody.dc_number = dc_number;
+    if (staff_id) patchBody.staff_id = staff_id;
+    if (scheduled_time) patchBody.scheduled_time = scheduled_time;
+    if (Object.keys(patchBody).length) {
+      await api(`/delivery-challans/${dcId}`, { method:'PATCH', body: JSON.stringify(patchBody) });
+    }
+    closeModal();
+    showToast(`DC ${dcId} dispatched — in transit`);
+    switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
+  } else {
+    closeModal();
+  }
 }
 
 async function markDelivered(id) {
@@ -2675,13 +2697,14 @@ async function renderClients(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Client</th><th>Contact</th><th>Health</th><th>Budget Used</th><th>Credit Limit</th><th>Credit Used</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Client</th><th>Zone</th><th>Contact</th><th>Health</th><th>Budget Used</th><th>Credit Limit</th><th>Credit Used</th><th>Actions</th></tr></thead>
         <tbody>${clients.map(c=>{
           const budgetPct = Math.min(100, Math.round((c.spent_this_month/c.monthly_budget)*100));
           const creditPct = c.credit_limit > 0 ? Math.min(100, Math.round((c.credit_used/c.credit_limit)*100)) : 0;
           return `<tr>
             <td><b>${c.name}</b></td>
-            <td><div style="font-size:.82rem">${c.contact_name||'—'}</div><div style="font-size:.78rem;color:var(--text-muted)">${c.contact_email||''}</div></td>
+            <td>${c.zone ? `<span class="badge badge-secondary">${c.zone}</span>` : '—'}</td>
+            <td><div style="font-size:.82rem">${c.contact_name||'—'}</div><div style="font-size:.78rem;color:var(--text-muted)">${c.contact_email||''}${c.contact_phone?` · ${c.contact_phone}`:''}</div></td>
             <td><span style="font-weight:700;color:${c.health_score>=85?'var(--success)':c.health_score>=70?'var(--warning)':'var(--danger)'}">${c.health_score}/100</span></td>
             <td style="min-width:140px">
               <div style="display:flex;align-items:center;gap:6px">
@@ -2711,6 +2734,19 @@ function addClientModal() {
     `<div class="form-group"><label>Company Name</label><input type="text" id="cl-name"></div>
      <div class="form-group"><label>Contact Name</label><input type="text" id="cl-cname"></div>
      <div class="form-group"><label>Contact Email</label><input type="email" id="cl-email"></div>
+     <div class="form-group"><label>Contact Phone</label><input type="tel" id="cl-phone" placeholder="+91 98765 43210"></div>
+     <div class="form-group">
+       <label>Location Zone</label>
+       <select id="cl-zone">
+         <option value="">— Select Zone —</option>
+         <option value="EGL">EGL</option>
+         <option value="BTP">BTP</option>
+         <option value="BTM">BTM</option>
+         <option value="PV">PV</option>
+         <option value="FW">FW</option>
+         <option value="Other">Other</option>
+       </select>
+     </div>
      <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="cl-budget" value="500000"></div>
      <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="cl-threshold" value="100000"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -2722,6 +2758,8 @@ async function saveClient() {
     name: document.getElementById('cl-name').value,
     contact_name: document.getElementById('cl-cname').value,
     contact_email: document.getElementById('cl-email').value,
+    contact_phone: document.getElementById('cl-phone').value,
+    zone: document.getElementById('cl-zone').value,
     monthly_budget: +document.getElementById('cl-budget').value,
     approval_threshold: +document.getElementById('cl-threshold').value,
   };
@@ -4389,6 +4427,379 @@ async function generateRFQFromForecast() {
 
 function exportFulfilCSV(tab) {
   showToast('CSV export initiated — data will download shortly', 'info');
+}
+
+/* ============================================================
+   STAFF MANAGEMENT
+   ============================================================ */
+async function renderStaff(el) {
+  const staff = await api('/staff');
+  if (!staff) return;
+  el.innerHTML = `
+  ${pageHeader('Staff', `${staff.length} staff members`,
+    `<button class="btn btn-primary" onclick="addStaffModal()">${iconPlus(14)} Add Staff</button>`)}
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Name</th><th>Phone</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${staff.map(s=>`<tr>
+          <td><b>${s.name}</b></td>
+          <td>${s.phone||'—'}</td>
+          <td><span class="badge badge-secondary">${s.role.replace('_',' ')}</span></td>
+          <td>${s.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
+          <td>
+            <button class="btn btn-secondary btn-sm" onclick="editStaffModal('${s.id}','${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.role}')">Edit</button>
+            <button class="btn btn-${s.active?'danger':'success'} btn-sm" onclick="toggleStaff('${s.id}',${s.active?0:1})">${s.active?'Disable':'Enable'}</button>
+          </td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function addStaffModal() {
+  openModal('Add Staff Member',
+    `<div class="form-group"><label>Full Name</label><input type="text" id="sm-name" placeholder="e.g. Bimal"></div>
+     <div class="form-group"><label>Phone</label><input type="tel" id="sm-phone" placeholder="+91 98765 43210"></div>
+     <div class="form-group"><label>Role</label>
+       <select id="sm-role">
+         <option value="delivery_staff">Delivery Staff</option>
+         <option value="order_entry">Order Entry</option>
+         <option value="viewer">Viewer</option>
+       </select>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveStaff()">Add</button>`);
+}
+
+async function saveStaff() {
+  const body = {
+    name:  document.getElementById('sm-name').value,
+    phone: document.getElementById('sm-phone').value,
+    role:  document.getElementById('sm-role').value,
+  };
+  if (!body.name) { showToast('Name required','error'); return; }
+  const res = await api('/staff', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Staff member added'); navigate('staff'); }
+}
+
+function editStaffModal(id, name, phone, role) {
+  openModal('Edit Staff Member',
+    `<div class="form-group"><label>Full Name</label><input type="text" id="em-name" value="${name}"></div>
+     <div class="form-group"><label>Phone</label><input type="tel" id="em-phone" value="${phone}"></div>
+     <div class="form-group"><label>Role</label>
+       <select id="em-role">
+         <option value="delivery_staff" ${role==='delivery_staff'?'selected':''}>Delivery Staff</option>
+         <option value="order_entry" ${role==='order_entry'?'selected':''}>Order Entry</option>
+         <option value="viewer" ${role==='viewer'?'selected':''}>Viewer</option>
+       </select>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveStaffEdit('${id}')">Save</button>`);
+}
+
+async function saveStaffEdit(id) {
+  const res = await api(`/staff/${id}`, { method:'PATCH', body: JSON.stringify({
+    name:  document.getElementById('em-name').value,
+    phone: document.getElementById('em-phone').value,
+    role:  document.getElementById('em-role').value,
+  })});
+  closeModal();
+  if (res) { showToast('Staff updated'); navigate('staff'); }
+}
+
+async function toggleStaff(id, active) {
+  await api(`/staff/${id}`, { method:'PATCH', body: JSON.stringify({active}) });
+  showToast(active ? 'Staff enabled' : 'Staff disabled');
+  navigate('staff');
+}
+
+/* ============================================================
+   TODAY'S DELIVERY SCHEDULE
+   ============================================================ */
+async function renderTodaysSchedule(el) {
+  const [schedule, staff] = await Promise.all([
+    api('/delivery/today'),
+    api('/staff')
+  ]);
+  if (!schedule) return;
+
+  const today = new Date().toLocaleDateString('en-IN', {weekday:'long',day:'numeric',month:'short',year:'numeric'});
+  const staffMap = {};
+  (staff||[]).forEach(s => { staffMap[s.id] = s.name; });
+
+  // Group by staff
+  const grouped = {};
+  const unassigned = [];
+  (schedule||[]).forEach(dc => {
+    if (dc.staff_id && staffMap[dc.staff_id]) {
+      if (!grouped[dc.staff_id]) grouped[dc.staff_id] = [];
+      grouped[dc.staff_id].push(dc);
+    } else {
+      unassigned.push(dc);
+    }
+  });
+
+  const totalDCs = schedule.length;
+  const delivered = schedule.filter(d=>d.status==='DELIVERED').length;
+  const inTransit = schedule.filter(d=>d.status==='IN_TRANSIT').length;
+  const pending = schedule.filter(d=>d.status==='SCHEDULED').length;
+
+  el.innerHTML = `
+  ${pageHeader("Today's Delivery Schedule", today)}
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${totalDCs}</div></div>
+    <div class="kpi-card"><div class="kpi-label" style="color:var(--success)">Delivered</div><div class="kpi-value" style="color:var(--success)">${delivered}</div></div>
+    <div class="kpi-card"><div class="kpi-label" style="color:var(--warning)">In Transit</div><div class="kpi-value" style="color:var(--warning)">${inTransit}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value">${pending}</div></div>
+  </div>
+
+  ${Object.entries(grouped).map(([staffId, dcs])=>`
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span>👤 ${staffMap[staffId]} — ${dcs.length} delivery${dcs.length!==1?'s':''}</span>
+      <span style="font-size:.8rem;color:var(--text-muted)">${dcs.filter(d=>d.status==='DELIVERED').length}/${dcs.length} done</span>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Time</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${(dcs).map(dc=>`<tr>
+          <td><b>${dc.dc_number||dc.id}</b></td>
+          <td>${dc.client_name||'—'}</td>
+          <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
+          <td>${dc.scheduled_time||'—'}</td>
+          <td>${dc.total_qty||'—'}</td>
+          <td>${statusBadge(dc.status)}</td>
+          <td style="display:flex;gap:4px;flex-wrap:wrap">
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>`:''}
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" onclick="logReturnModal('${dc.id}')">Return</button>`:''}
+            <button class="btn btn-secondary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Edit</button>
+          </td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`).join('')}
+
+  ${unassigned.length ? `
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span>⚠️ Unassigned Deliveries (${unassigned.length})</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${unassigned.map(dc=>`<tr>
+          <td><b>${dc.dc_number||dc.id}</b></td>
+          <td>${dc.client_name||'—'}</td>
+          <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
+          <td>${dc.total_qty||'—'}</td>
+          <td>${statusBadge(dc.status)}</td>
+          <td><button class="btn btn-primary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Assign Staff</button></td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>` : ''}`;
+}
+
+async function assignDCModal(dcId, currentDcNum, currentTime) {
+  const staff = await api('/staff') || [];
+  const staffOpts = staff.filter(s=>s.active && s.role==='delivery_staff')
+    .map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  openModal(`Assign & Schedule — DC ${dcId}`,
+    `<div class="form-group"><label>DC Number</label><input type="text" id="dc-num" value="${currentDcNum}" placeholder="e.g. 702037"></div>
+     <div class="form-group"><label>Assign Staff</label><select id="dc-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
+     <div class="form-group"><label>Scheduled Time</label><input type="time" id="dc-time" value="${currentTime}"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveAssignDC('${dcId}')">Save</button>`);
+}
+
+async function saveAssignDC(dcId) {
+  const res = await api(`/delivery-challans/${dcId}`, { method:'PATCH', body: JSON.stringify({
+    dc_number:      document.getElementById('dc-num').value || null,
+    staff_id:       document.getElementById('dc-staff').value || null,
+    scheduled_time: document.getElementById('dc-time').value || null,
+  })});
+  closeModal();
+  if (res) { showToast('DC updated'); navigate('todays_schedule'); }
+}
+
+function logReturnModal(dcId) {
+  openModal(`Log Return — DC ${dcId}`,
+    `<p style="color:var(--text-muted);margin-bottom:12px">Record items rejected or not accepted by the client.</p>
+     <div class="form-group"><label>SKU</label><input type="text" id="ret-sku" placeholder="e.g. SKU001"></div>
+     <div class="form-group"><label>Item Name</label><input type="text" id="ret-name"></div>
+     <div class="form-group"><label>Qty Returned</label><input type="number" id="ret-qty" value="1" min="1"></div>
+     <div class="form-group"><label>Reason</label><input type="text" id="ret-reason" placeholder="e.g. Expired, Quality issue, Not ordered"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="confirmReturn('${dcId}')">Log Return</button>`);
+}
+
+async function confirmReturn(dcId) {
+  const body = {
+    dc_id: dcId,
+    sku: document.getElementById('ret-sku').value,
+    item_name: document.getElementById('ret-name').value,
+    qty_returned: +document.getElementById('ret-qty').value,
+    reason: document.getElementById('ret-reason').value,
+  };
+  if (!body.sku || !body.qty_returned) { showToast('SKU and qty required','error'); return; }
+  const res = await api('/delivery-returns', { method:'POST', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast('Return logged — stock restored'); navigate('todays_schedule'); }
+}
+
+/* ============================================================
+   CONSOLIDATED ORDERS (PROCUREMENT VIEW)
+   ============================================================ */
+async function renderConsolidatedOrders(el) {
+  const data = await api('/reports/consolidated-orders');
+  if (!data) return;
+  const totalDue = data.reduce((s,r)=>s+(r.total_due_qty||0),0);
+  el.innerHTML = `
+  ${pageHeader('Procurement View', `${data.length} items needed · ${totalDue} total units due`,
+    `<button class="btn btn-secondary" onclick="exportConsolidated()">Export CSV</button>`)}
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Clients</th><th>Client Names</th></tr></thead>
+        <tbody>${data.length ? data.map(r=>`<tr>
+          <td>${r.sku}</td>
+          <td><b>${r.item_name}</b></td>
+          <td>${r.total_ordered_qty}</td>
+          <td style="color:var(--success)">${r.total_delivered_qty}</td>
+          <td style="color:${r.total_due_qty>0?'var(--danger)':'var(--success)'};font-weight:700">${r.total_due_qty}</td>
+          <td>${r.client_count}</td>
+          <td style="font-size:.8rem;color:var(--text-muted)">${r.clients||'—'}</td>
+        </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">All items delivered — nothing pending</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function exportConsolidated() {
+  api('/reports/consolidated-orders').then(data => {
+    if (!data||!data.length) { showToast('No data','error'); return; }
+    const header = 'SKU,Item,Total Ordered,Total Delivered,Due Qty,Clients';
+    const body = data.map(r=>`${r.sku},"${r.item_name}",${r.total_ordered_qty},${r.total_delivered_qty},${r.total_due_qty},${r.client_count}`).join('\n');
+    const blob = new Blob([header+'\n'+body],{type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `procurement-view-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    showToast('CSV downloaded');
+  });
+}
+
+/* ============================================================
+   CONSOLIDATED DUE ITEMS
+   ============================================================ */
+async function renderConsolidatedDue(el) {
+  const data = await api('/reports/consolidated-due');
+  if (!data) return;
+  el.innerHTML = `
+  ${pageHeader('Due Items', `${data.length} pending line items`,
+    `<button class="btn btn-secondary" onclick="exportDue()">Export CSV</button>`)}
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Client</th><th>Zone</th><th>Order</th><th>Order Date</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Days</th></tr></thead>
+        <tbody>${data.length ? data.map(r=>{
+          const daysColor = r.days_overdue>7?'var(--danger)':r.days_overdue>3?'var(--warning)':'var(--text)';
+          return `<tr style="${r.days_overdue>7?'background:#fff5f5':''}">
+            <td><b>${r.client_name}</b></td>
+            <td><span class="badge badge-secondary">${r.zone}</span></td>
+            <td>${r.order_id}</td>
+            <td>${fmtDate(r.order_date)}</td>
+            <td>${r.item_name}</td>
+            <td>${r.ordered_qty}</td>
+            <td style="color:var(--success)">${r.delivered_qty}</td>
+            <td style="color:var(--danger);font-weight:700">${r.due_qty}</td>
+            <td style="color:${daysColor};font-weight:600">${r.days_overdue}d</td>
+          </tr>`;
+        }).join('') : '<tr><td colspan="9" style="text-align:center;color:var(--success)">✓ No pending due items</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function exportDue() {
+  api('/reports/consolidated-due').then(data => {
+    if (!data||!data.length) { showToast('No due items','error'); return; }
+    const header = 'Client,Zone,Order ID,Order Date,Item,Ordered Qty,Delivered Qty,Due Qty,Days Overdue';
+    const body = data.map(r=>`"${r.client_name}","${r.zone}","${r.order_id}","${r.order_date}","${r.item_name}",${r.ordered_qty},${r.delivered_qty},${r.due_qty},${r.days_overdue}`).join('\n');
+    const blob = new Blob([header+'\n'+body],{type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `due-items-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    showToast('CSV downloaded');
+  });
+}
+
+/* ============================================================
+   PORTER EXPENSES
+   ============================================================ */
+async function renderPorterExpenses(el) {
+  const [expenses, clients, staff] = await Promise.all([
+    api('/porter-expenses'),
+    api('/clients'),
+    api('/staff')
+  ]);
+  const total = (expenses||[]).reduce((s,e)=>s+(e.amount||0),0);
+  const clientOpts = (clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  const staffOpts = (staff||[]).filter(s=>s.active).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+
+  el.innerHTML = `
+  ${pageHeader('Porter Expenses', `${(expenses||[]).length} trips · Total: ${fmt(total)}`)}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span>Log New Trip</span></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+        <div class="form-group"><label>Trip Date</label><input type="date" id="pe-date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="form-group"><label>Route</label><input type="text" id="pe-route" placeholder="e.g. BTP → EGL"></div>
+        <div class="form-group"><label>Amount (₹)</label><input type="number" id="pe-amount" min="0" step="1"></div>
+        <div class="form-group"><label>Client</label><select id="pe-client"><option value="">— All clients —</option>${clientOpts}</select></div>
+        <div class="form-group"><label>Staff</label><select id="pe-staff"><option value="">— Unspecified —</option>${staffOpts}</select></div>
+        <div class="form-group"><label>Notes</label><input type="text" id="pe-notes" placeholder="e.g. Morning route"></div>
+      </div>
+      <button class="btn btn-primary" onclick="savePorterExpense()">Log Trip</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span>Trip Log</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Date</th><th>Route</th><th>Amount</th><th>Client</th><th>Staff</th><th>Notes</th></tr></thead>
+        <tbody>${(expenses||[]).length ? (expenses||[]).map(e=>`<tr>
+          <td>${fmtDate(e.trip_date)}</td>
+          <td>${e.route||'—'}</td>
+          <td style="font-weight:600">${fmt(e.amount)}</td>
+          <td>${e.client_name||'—'}</td>
+          <td>${e.staff_name||'—'}</td>
+          <td style="color:var(--text-muted)">${e.notes||'—'}</td>
+        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No trips logged</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function savePorterExpense() {
+  const body = {
+    trip_date: document.getElementById('pe-date').value,
+    route:     document.getElementById('pe-route').value,
+    amount:    +document.getElementById('pe-amount').value,
+    client_id: document.getElementById('pe-client').value||null,
+    staff_id:  document.getElementById('pe-staff').value||null,
+    notes:     document.getElementById('pe-notes').value,
+  };
+  if (!body.trip_date || !body.amount) { showToast('Date and amount required','error'); return; }
+  const res = await api('/porter-expenses', { method:'POST', body: JSON.stringify(body) });
+  if (res) { showToast('Trip logged'); navigate('porter_expenses'); }
 }
 
 /* ============================================================
