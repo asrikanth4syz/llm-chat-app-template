@@ -618,7 +618,7 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string}[]};
+  const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string}[];partial?:boolean};
 
   const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!order) return json({error:"Not found"}, 404);
@@ -637,9 +637,12 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
   await env.DB.prepare(
     "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),updated_at=datetime('now') WHERE id=?"
   ).bind(user!.sub, user!.name, id).run();
+  const pickNote = body.partial
+    ? `Partial pick by ${user!.name} — ${body.items.map(i=>`${i.sku}:${i.qty}`).join(', ')}`
+    : `Picked by ${user!.name}`;
   await env.DB.prepare(
     "INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)"
-  ).bind(uid(), id, order.status, "PICKED", user!.sub, user!.name, `Picked by ${user!.name}`).run();
+  ).bind(uid(), id, order.status, "PICKED", user!.sub, user!.name, pickNote).run();
 
   await audit(env, user, "PICKED", "order", id, order.status, "PICKED");
   return json({id, status:"PICKED"});

@@ -2317,17 +2317,24 @@ async function pickOrderModal(orderId) {
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
   openModal(`Pick Items — ${orderId}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
-      Confirm items picked from shelf. Select the bin location for each item.
+      Enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Bin Location</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
         ${(items||[]).map(item=>`<tr>
           <td><b>${item.sku}</b></td>
           <td>${item.name||item.item_name}</td>
-          <td>${item.qty}</td>
+          <td style="color:var(--text-muted)">${item.qty}</td>
           <td>
-            <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-qty="${item.qty}" style="min-width:140px">
+            <input type="number" class="form-control form-control-sm pick-qty"
+              data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
+              value="${item.qty}" min="0" max="${item.qty}"
+              style="width:72px;text-align:center"
+              oninput="this.style.color=+this.value<+this.dataset.ordered?'var(--warning)':'inherit'">
+          </td>
+          <td>
+            <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
               <option value="">— select bin —</option>
               ${binOptions}
             </select>
@@ -2343,16 +2350,17 @@ async function pickOrderModal(orderId) {
 }
 
 async function confirmPick(orderId) {
-  const rows = document.querySelectorAll('.pick-bin');
-  const items = Array.from(rows).map(sel => ({
-    sku: sel.dataset.sku,
-    name: sel.dataset.name,
-    qty: parseInt(sel.dataset.qty),
-    bin_code: sel.value
-  }));
-  const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items }) });
+  const qtyInputs = document.querySelectorAll('.pick-qty');
+  const items = Array.from(qtyInputs).map(inp => {
+    const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
+    const qty = parseInt(inp.value) || 0;
+    return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
+  }).filter(i => i.qty > 0);
+  if (!items.length) { showToast('Enter at least 1 item to pick', 'error'); return; }
+  const hasPartial = Array.from(qtyInputs).some(inp => +inp.value < +inp.dataset.ordered);
+  const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial }) });
   if (res) {
-    showToast(`Order ${orderId} marked as PICKED`);
+    showToast(`Order ${orderId} marked as PICKED${hasPartial ? ' (partial)' : ''}`);
     closeModal();
     switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]);
     navigate('orders');
