@@ -458,6 +458,7 @@ async function issueToken(row: Record<string,string>, env: Env): Promise<Respons
   const payload: JWTPayload = {
     sub: row.id, email: row.email, role: row.role,
     name: row.name, org: row.org, initials: row.initials,
+    ...(row.client_id ? { client_id: row.client_id } : {}),
     iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 86400*7,
   };
   const token = await signJWT(payload, env.JWT_SECRET);
@@ -536,6 +537,12 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     items: Array<{sku:string;name:string;qty:number;unit_price:number}>;
     notes?: string;
   };
+  // Client roles must order for their own linked client only
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  if (isClientRole) {
+    if (!user!.client_id) return json({error:"Your account is not linked to a client. Contact your administrator."}, 400);
+    body.client_id = user!.client_id;
+  }
   if (!body.client_id || !body.items?.length) return json({error:"client_id and items required"}, 400);
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;

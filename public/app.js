@@ -1166,27 +1166,50 @@ function refreshCartUI() {
 
 async function submitOrder() {
   if (!APP.cart.length) { showToast('Cart is empty', 'error'); return; }
-  const clients = await api('/clients');
-  const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
 
-  openModal('Confirm Order',
-    `<div style="margin-bottom:16px">
-      <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
-      <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="document.getElementById('confirm-order-btn').disabled=!this.value">
-        <option value="">— Select a client —</option>
-        ${clientOpts}
-      </select>
-    </div>
-    <div class="cart-row cart-total"><span>Grand Total</span><span>${fmt(APP.cart.reduce((s,i)=>s+i.qty*i.unit_price,0)*1.18)}</span></div>
-    <p style="font-size:.85rem;color:var(--text-muted);margin-top:8px">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button id="confirm-order-btn" class="btn btn-gold" onclick="confirmOrder()" disabled>Confirm & Submit</button>`
-  );
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+  const grand = APP.cart.reduce((s,i)=>s+i.qty*i.unit_price,0)*1.18;
+  const summary = `
+    <div class="cart-row cart-total" style="margin-bottom:8px"><span>Grand Total</span><span>${fmt(grand)}</span></div>
+    <p style="font-size:.85rem;color:var(--text-muted)">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`;
+
+  if (isClientRole) {
+    // Client users order for their own account — no dropdown needed
+    const clientName = APP.user.org || 'your account';
+    openModal('Confirm Order',
+      `<div style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+        <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:2px">Ordering for</div>
+        <div style="font-weight:700;font-size:1rem">${clientName}</div>
+      </div>
+      ${summary}`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-gold" onclick="confirmOrder()">Confirm & Submit</button>`
+    );
+  } else {
+    // Ops / admin roles pick the client from the list
+    const clients = await api('/clients');
+    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    openModal('Confirm Order',
+      `<div style="margin-bottom:16px">
+        <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
+        <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
+          onchange="document.getElementById('confirm-order-btn').disabled=!this.value">
+          <option value="">— Select a client —</option>
+          ${clientOpts}
+        </select>
+      </div>
+      ${summary}`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button id="confirm-order-btn" class="btn btn-gold" onclick="confirmOrder()" disabled>Confirm & Submit</button>`
+    );
+  }
 }
 
 async function confirmOrder() {
-  const clientId = document.getElementById('order-client')?.value;
-  if (!clientId) { showToast('Select a client', 'error'); return; }
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+  // For client roles, client_id comes from their JWT — backend enforces it
+  const clientId = isClientRole ? (APP.user.client_id || '__self__') : document.getElementById('order-client')?.value;
+  if (!isClientRole && !clientId) { showToast('Select a client', 'error'); return; }
 
   const btn = document.querySelector('#modal-footer .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }

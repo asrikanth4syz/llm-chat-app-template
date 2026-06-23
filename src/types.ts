@@ -23,6 +23,7 @@ export interface JWTPayload {
   name: string;
   org: string;
   initials: string;
+  client_id?: string;
   iat: number;
   exp: number;
 }
