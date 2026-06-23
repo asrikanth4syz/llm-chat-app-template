@@ -282,6 +282,9 @@ export default {
       if (path==="/api/reports/brand-shortfall"      && method==="GET") return handleRptBrandShortfall(request,env);
       if (path==="/api/reports/client-fulfilment"    && method==="GET") return handleRptClientFulfilment(request,env);
       if (path==="/api/reports/procurement-forecast" && method==="GET") return handleRptProcurementForecast(request,env);
+      if (path==="/api/reports/consolidated-orders"  && method==="GET") return handleRptConsolidatedOrders(request,env);
+      if (path==="/api/reports/consolidated-due"     && method==="GET") return handleRptConsolidatedDue(request,env);
+      if (path==="/api/reports/client-summary"       && method==="GET") return handleRptClientSummary(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -370,10 +373,6 @@ export default {
       if (path==="/api/delivery-returns"                   && method==="GET")   return handleListDeliveryReturns(request,env);
       if (path==="/api/delivery-returns"                   && method==="POST")  return handleAddDeliveryReturn(request,env);
 
-      // Consolidated reports
-      if (path==="/api/reports/consolidated-orders"        && method==="GET")   return handleRptConsolidatedOrders(request,env);
-      if (path==="/api/reports/consolidated-due"           && method==="GET")   return handleRptConsolidatedDue(request,env);
-      if (path==="/api/reports/client-summary"             && method==="GET")   return handleRptClientSummary(request,env);
 
       return json({error:"Not found"}, 404);
     } catch (err) {
