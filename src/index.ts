@@ -160,8 +160,8 @@ async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<voi
 // ── ORDER FSM ─────────────────────────────────────────────────────────
 const ORDER_FSM: Record<string, string[]> = {
   DRAFT:            ["SUBMITTED","CANCELLED"],
-  SUBMITTED:        ["PENDING_APPROVAL","APPROVED","CANCELLED"],
-  PENDING_APPROVAL: ["APPROVED","CANCELLED"],
+  SUBMITTED:        ["PENDING_APPROVAL","APPROVED","ACKNOWLEDGED","CANCELLED"],
+  PENDING_APPROVAL: ["APPROVED","ACKNOWLEDGED","CANCELLED"],
   APPROVED:         ["ACKNOWLEDGED","CANCELLED"],
   ACKNOWLEDGED:     ["PICKED","INVENTORY_CHECK","CANCELLED"],
   INVENTORY_CHECK:  ["VENDOR_PO_RAISED","CANCELLED"],
