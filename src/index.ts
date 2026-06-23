@@ -928,42 +928,74 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
 
-  // Get dc_items to deduct stock
+  const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]};
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!dc) return json({error:"Not found"}, 404);
 
-  // Deduct stock and release reservation for each item
-  for (const item of dcItems) {
-    const qty = item.qty_ordered as number;
-    await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
-      .bind(qty, qty, item.sku).run();
-    await env.DB.prepare("UPDATE dc_items SET qty_delivered=qty_ordered WHERE dc_id=? AND sku=?").bind(id, item.sku).run();
-    await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uid(), item.sku, 'DELIVERY', -(qty), id, 'delivery_challan', `Delivered via DC ${id}`, user!.name).run();
-  }
+  // Merge per-item delivered qtys (body.items if provided, else full dispatched qty)
+  const deliveries = dcItems.map(di => {
+    const override = body.items?.find(i => i.sku === di.sku);
+    const qty_delivered = override !== undefined ? Math.max(0, Math.min(override.qty_delivered, di.qty_ordered as number)) : (di.qty_ordered as number);
+    return { sku: di.sku as string, name: di.name as string, qty_delivered, qty_dispatched: di.qty_ordered as number };
+  });
 
-  // Fallback: if no dc_items, release reservation from order_items
-  if (dcItems.length === 0 && dc?.order_id) {
-    const {results: ois} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
-    for (const item of ois) {
-      await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
+  const totalDelivered = deliveries.reduce((s, i) => s + i.qty_delivered, 0);
+
+  // Update dc_items and deduct stock for actually delivered quantities
+  for (const item of deliveries) {
+    await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?")
+      .bind(item.qty_delivered, id, item.sku).run();
+    if (item.qty_delivered > 0) {
+      await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
+        .bind(item.qty_delivered, item.qty_delivered, item.sku).run();
+      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(uid(), item.sku, 'DELIVERY', -item.qty_delivered, id, 'delivery_challan', `Delivered via DC ${id}`, user!.name).run();
     }
   }
 
-  // Mark DC delivered
-  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=total_qty,delivered_at=datetime('now') WHERE id=?").bind(id).run();
+  // Mark this DC as delivered
+  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,delivered_at=datetime('now') WHERE id=?")
+    .bind(totalDelivered, id).run();
 
-  // Close the order
-  if (dc?.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')")
-      .bind(dc.order_id).run();
-    await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
-      .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Auto-closed on DC ${id} full delivery`).run();
+  // Create follow-up DC for any items not fully delivered from this DC
+  const shortItems = deliveries.filter(i => i.qty_delivered < i.qty_dispatched);
+  if (shortItems.length > 0 && dc.order_id) {
+    const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
+    const remainingTotal = shortItems.reduce((s, i) => s + (i.qty_dispatched - i.qty_delivered), 0);
+    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
+      .bind(newDCId, dc.order_id, remainingTotal).run();
+    for (const r of shortItems) {
+      await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
+        .bind(uid(), newDCId, r.sku, r.name, r.qty_dispatched - r.qty_delivered).run();
+    }
+    await pushNotification(env, "ops_admin", `DC ${id} partial delivery — follow-up DC ${newDCId} created for ${remainingTotal} units`);
   }
 
-  await pushNotification(env, "client_admin", `Delivery ${id} completed — order closed`);
+  // Check if order is fully delivered across ALL DCs (sum of qty_delivered >= order_items.qty for each SKU)
+  let orderFullyClosed = false;
+  if (dc.order_id) {
+    const {results: orderItems} = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
+    let allDelivered = true;
+    for (const oi of orderItems) {
+      const row = await env.DB.prepare(
+        "SELECT COALESCE(SUM(di.qty_delivered),0) as total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.sku=?"
+      ).bind(dc.order_id, oi.sku).first() as Record<string,unknown>|null;
+      if ((row?.total as number || 0) < (oi.qty as number)) { allDelivered = false; break; }
+    }
+    if (allDelivered) {
+      await env.DB.prepare("UPDATE orders SET status='CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+      await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Fully delivered — DC ${id}`).run();
+      orderFullyClosed = true;
+    } else {
+      await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    }
+  }
+
+  await pushNotification(env, "client_admin", `Delivery ${id} confirmed — ${totalDelivered} units`);
   await audit(env, user, "DELIVER", "delivery_challan", id);
-  return json({id, status:"DELIVERED"});
+  return json({id, status:"DELIVERED", delivered: totalDelivered, order_closed: orderFullyClosed, partial: shortItems.length > 0});
 }
 
 // Gap 14: Partial delivery

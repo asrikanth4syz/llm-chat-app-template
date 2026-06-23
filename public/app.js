@@ -2546,8 +2546,7 @@ async function switchDeliveryTab(tab, btn) {
                 <td>${fmtDate(dc.dispatched_at)}</td>
                 <td>${dc.expected_delivery_date ? `<span style="color:${overdue?'var(--danger)':'var(--text)'}">${fmtDate(dc.expected_delivery_date)}</span>` : '—'}</td>
                 <td style="display:flex;gap:4px;flex-wrap:wrap">
-                  <button class="btn btn-primary btn-sm" onclick="markDelivered('${dc.id}')">Full Delivery</button>
-                  <button class="btn btn-secondary btn-sm" onclick="partialDeliveryModal('${dc.id}',${dc.total_qty||0})">Partial</button>
+                  <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Confirm Delivery</button>
                   <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
                 </td>
               </tr>`;
@@ -2720,9 +2719,50 @@ async function confirmDispatch(dcId) {
   }
 }
 
-async function markDelivered(id) {
-  const res = await api(`/delivery-challans/${id}/deliver`, { method:'POST' });
-  if (res) { showToast(`DC ${id} marked as delivered`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+async function markDelivered(dcId) {
+  const items = await api(`/delivery-challans/${dcId}/items`);
+  if (!items) return;
+  if (!items.length) {
+    // No line items tracked — just confirm
+    const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({}) });
+    if (res) { showToast(`DC ${dcId} marked as delivered`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+    return;
+  }
+  openModal(`Confirm Delivery — ${dcId}`, `
+    <p style="color:var(--text-muted);margin-bottom:12px">
+      Enter actual qty delivered for each item. If less than dispatched, a follow-up DC will be created automatically.
+    </p>
+    <table class="table" style="margin-bottom:16px">
+      <thead><tr><th>SKU</th><th>Item</th><th>Dispatched</th><th>Delivered</th></tr></thead>
+      <tbody>
+        ${items.map(i=>`<tr>
+          <td><b>${i.sku}</b></td>
+          <td>${i.name}</td>
+          <td style="color:var(--text-muted)">${i.qty_ordered}</td>
+          <td><input type="number" class="form-control form-control-sm deliver-qty"
+            data-sku="${i.sku}" value="${i.qty_ordered}" min="0" max="${i.qty_ordered}"
+            style="width:80px;text-align:center"
+            oninput="this.style.color=+this.value<+this.max?'var(--warning)':'inherit'"></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-success" onclick="confirmDelivery('${dcId}')">Confirm Delivery</button>
+    </div>
+  `);
+}
+
+async function confirmDelivery(dcId) {
+  const inputs = document.querySelectorAll('.deliver-qty');
+  const items = Array.from(inputs).map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
+  const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items }) });
+  if (res) {
+    closeModal();
+    const msg = res.partial ? `Partial delivery recorded — follow-up DC created` : `DC ${dcId} fully delivered${res.order_closed?' — order closed':''}`;
+    showToast(msg);
+    switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]);
+  }
 }
 
 async function markPOD(dcId) {
@@ -2761,30 +2801,8 @@ async function confirmReturnDC(dcId) {
   if (res) { showToast(`DC ${dcId} marked as returned — stock restored`); switchDeliveryTab('returns', document.querySelectorAll('#dc-tabs .tab-btn')[3]); }
 }
 
-function partialDeliveryModal(dcId, totalQty) {
-  openModal(`Partial Delivery — DC ${dcId}`,
-    `<p style="margin-bottom:12px">Record a partial delivery for DC <b>${dcId}</b>. A follow-up DC will be created for the remaining quantity.</p>
-     <div class="form-group"><label>Total Qty Ordered</label><input type="number" id="pd-total" value="${totalQty||0}" min="1"></div>
-     <div class="form-group"><label>Qty Delivered Now</label><input type="number" id="pd-delivered" value="0" min="1"></div>
-     <div class="form-group"><label>Notes</label><input type="text" id="pd-notes" placeholder="Reason for partial delivery…"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-secondary" onclick="confirmPartialDelivery('${dcId}')">Submit Partial Delivery</button>`);
-}
-
-async function confirmPartialDelivery(dcId) {
-  const total = +document.getElementById('pd-total').value;
-  const delivered = +document.getElementById('pd-delivered').value;
-  const notes = document.getElementById('pd-notes').value;
-  if (!delivered || delivered >= total) {
-    showToast('Delivered qty must be less than total qty for partial delivery','error'); return;
-  }
-  const res = await api(`/delivery-challans/${dcId}/partial`, {
-    method: 'POST',
-    body: JSON.stringify({ delivered_qty: delivered, total_qty: total, notes }),
-  });
-  closeModal();
-  if (res) { showToast(`Partial delivery recorded — follow-up DC created`); switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]); }
-}
+function partialDeliveryModal(dcId) { markDelivered(dcId); }
+async function confirmPartialDelivery() {}
 
 /* ============================================================
    CLIENTS
