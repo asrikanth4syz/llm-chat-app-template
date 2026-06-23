@@ -1206,8 +1206,18 @@ async function renderMyOrders(el) {
 }
 
 async function viewOrder(id) {
-  const [order, comments, dcRes] = await Promise.all([api('/orders/' + id), api('/orders/' + id + '/comments'), api('/delivery-challans').catch(()=>null)]);
+  const [order, comments, dcRes, allocations] = await Promise.all([
+    api('/orders/' + id),
+    api('/orders/' + id + '/comments'),
+    api('/delivery-challans').catch(()=>null),
+    api('/orders/' + id + '/allocations').catch(()=>[])
+  ]);
   if (!order) return;
+
+  // Build allocation map: sku → picked qty
+  const allocMap = {};
+  (allocations||[]).forEach(a => { allocMap[a.sku] = (allocMap[a.sku]||0) + a.qty; });
+  const hasPartialPick = Object.keys(allocMap).length > 0;
 
   const orderDCs = (dcRes||[]).filter(d => d.order_id === id);
   const dcSection = orderDCs.length ? `
@@ -1220,9 +1230,28 @@ async function viewOrder(id) {
           <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
         </div>
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
-        ${dc.delivered_qty!=null&&dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Delivered: <b style="color:var(--success)">${dc.delivered_qty}</b> / ${dc.total_qty}</div>`:''}
+        ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
       </div>`).join('')}
   </div>` : '';
+
+  const itemsTableHeader = hasPartialPick
+    ? `<tr><th>Item</th><th>Ordered</th><th>Picked</th><th>Unit</th><th>Total</th></tr>`
+    : `<tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>`;
+
+  const itemsTableRows = (order.items||[]).map(i => {
+    const picked = allocMap[i.sku];
+    const isShort = hasPartialPick && picked !== undefined && picked < i.qty;
+    if (hasPartialPick) {
+      return `<tr>
+        <td>${i.name}</td>
+        <td style="color:var(--text-muted)">${i.qty}</td>
+        <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
+        <td>${fmt(i.unit_price)}</td>
+        <td>${fmt(i.total)}</td>
+      </tr>`;
+    }
+    return `<tr><td>${i.name}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
+  }).join('');
 
   const commentsHtml = `
     <b style="display:block;margin-top:16px">Comments</b>
@@ -1249,12 +1278,10 @@ async function viewOrder(id) {
         <div><b>Date:</b> ${fmtDate(order.created_at)}</div>
       </div>
     </div>
-    <b>Items</b>
+    <b>Items</b>${hasPartialPick?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
     <table class="table" style="margin-top:8px">
-      <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead>
-      <tbody>${(order.items||[]).map(i=>`<tr>
-        <td>${i.name}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td>
-      </tr>`).join('')}</tbody>
+      <thead>${itemsTableHeader}</thead>
+      <tbody>${itemsTableRows}</tbody>
     </table>
     <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>
     ${order.history?.length ? `<b style="display:block;margin-top:16px">Timeline</b>
@@ -2630,13 +2657,16 @@ async function viewDCItems(dcId) {
     <td>${i.sku}</td>
     <td><b>${i.name}</b></td>
     <td>${i.qty_ordered}</td>
-    <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered}</td>
-    <td style="color:${(i.qty_ordered-i.qty_delivered)>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-i.qty_delivered}</td>
+    <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
+    <td style="color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
   </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No items</td></tr>';
   openModal(`DC Items — ${dcId}`,
-    `<div class="table-wrap">
+    `<p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px">
+      "Dispatched" = qty in this DC (picked from warehouse). "Delivered" = confirmed at drop-off. "Pending" = yet to be confirmed delivered.
+    </p>
+    <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Pending</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Item</th><th>Dispatched</th><th>Delivered</th><th>Pending</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`,
