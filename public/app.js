@@ -2204,6 +2204,7 @@ async function renderInventory(el) {
   _invCache = {};
   inv.forEach(i => { _invCache[i.sku] = i; });
   APP._invFilter = APP._invFilter || 'All';
+  APP._invSubFilter = APP._invSubFilter || 'All';
   APP._invSearch = '';
 
   const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
@@ -2213,6 +2214,7 @@ async function renderInventory(el) {
   function getFiltered() {
     let items = inv;
     if (APP._invFilter !== 'All') items = items.filter(i => i.category === APP._invFilter);
+    if (APP._invSubFilter !== 'All') items = items.filter(i => (i.sub_category||'Normal') === APP._invSubFilter);
     if (APP._invSearch) { const q = APP._invSearch.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(q)||i.sku.toLowerCase().includes(q)||(i.brand||'').toLowerCase().includes(q)); }
     return items;
   }
@@ -2345,8 +2347,10 @@ async function renderInventory(el) {
     <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
       style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
       oninput="APP._invSearch=this.value.toLowerCase();refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
       ${cats.map(c=>`<button class="tab-pill inv-cat-pill${APP._invFilter===c?' active':''}" onclick="APP._invFilter='${c}';document.querySelectorAll('.inv-cat-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active');refreshInvTable()">${c}</button>`).join('')}
+      <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
+      ${['All','Healthy','Normal'].map(s=>`<button class="tab-pill inv-sub-pill${APP._invSubFilter===s?' active':''}" style="${s==='Healthy'&&APP._invSubFilter===s?'background:#d1fae5;color:#059669;border-color:#059669':''}" onclick="APP._invSubFilter='${s}';document.querySelectorAll('.inv-sub-pill').forEach(b=>{b.classList.remove('active');b.style.cssText='';});this.classList.add('active');${s==='Healthy'?"this.style.cssText='background:#d1fae5;color:#059669;border-color:#059669'":''};refreshInvTable()">${s==='All'?'All Sub-Cat':s}</button>`).join('')}
     </div>
   </div>
 
