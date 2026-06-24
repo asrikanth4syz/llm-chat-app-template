@@ -124,13 +124,14 @@ const NAV = {
   ],
   client: [
     { section:'Procurement' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
-    { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
-    { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
-    { id:'track_delivery',label:'Track Delivery',icon:iconDelivery,badge:null },
-    { id:'approvals',   label:'Approvals',     icon:iconApprove,   badge:null },
+    { id:'dashboard',      label:'Dashboard',      icon:iconDashboard, badge:null },
+    { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
+    { id:'my_orders',      label:'My Orders',      icon:iconOrders,    badge:null },
+    { id:'track_delivery', label:'Track Delivery', icon:iconDelivery,  badge:null },
+    { id:'approvals',      label:'Approvals',      icon:iconApprove,   badge:null },
+    { id:'client_budget',  label:'Budget & Spend', icon:iconReports,   badge:null },
     { section:'Support' },
-    { id:'service_desk',label:'Service Desk',  icon:iconDesk,      badge:null },
+    { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
   approver: [
     { section:'Approvals' },
@@ -450,6 +451,7 @@ const PAGE_MAP = {
   todays_schedule: renderTodaysSchedule,
   consolidated_orders: renderConsolidatedOrders,
   consolidated_due: renderConsolidatedDue,
+  client_budget: renderClientBudget,
 };
 
 function navigate(page) {
@@ -811,6 +813,123 @@ async function renderClientDashboard(el) {
   });
 }
 
+/* ============================================================
+   CLIENT BUDGET & SPEND PAGE
+   ============================================================ */
+async function renderClientBudget(el) {
+  const [data, orders] = await Promise.all([
+    api('/dashboard'),
+    api('/orders').catch(()=>[])
+  ]);
+  const client = data?.client || {};
+  const budget   = client.monthly_budget || 500000;
+  const spent    = client.spent_this_month || data?.totalSpend || 0;
+  const pct      = Math.min(100, Math.round((spent / budget) * 100));
+  const remain   = Math.max(0, budget - spent);
+  const health   = client.health_score || 85;
+  const color    = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
+
+  // Build spend by status
+  const closed   = (orders||[]).filter(o=>o.status==='CLOSED');
+  const active   = (orders||[]).filter(o=>!['CLOSED','CANCELLED'].includes(o.status));
+  const cancelled= (orders||[]).filter(o=>o.status==='CANCELLED');
+
+  // Monthly spend from closed orders (group by month)
+  const byMonth = {};
+  closed.forEach(o => {
+    const m = (o.created_at||'').slice(0,7);
+    if (m) byMonth[m] = (byMonth[m]||0) + (o.grand_total||0);
+  });
+  const months = Object.keys(byMonth).sort().slice(-6);
+
+  el.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Budget & Spend</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${client.name||APP.user?.org} · ${new Date().toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</div>
+    </div>
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${color}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Spent This Month</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(spent)}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${pct}% of budget</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Monthly Budget</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(budget)}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(remain)} remaining</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Health Score</div>
+      <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'#d97706':'var(--danger)'};margin-top:6px">${health}/100</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Orders</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${(orders||[]).length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${active.length} active · ${closed.length} closed</div>
+    </div>
+  </div>
+
+  <!-- Budget bar -->
+  <div style="background:#fff;border-radius:14px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span style="font-weight:700;font-size:.9rem">Monthly Budget Utilisation</span>
+      <span style="font-size:.82rem;color:var(--text-muted)">${fmt(spent)} of ${fmt(budget)}</span>
+    </div>
+    <div style="background:var(--border);height:14px;border-radius:7px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:${color};border-radius:7px;transition:width .5s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:.78rem">
+      <span style="color:${color};font-weight:600">${pct}% used</span>
+      <span style="color:var(--text-muted)">Remaining: <b>${fmt(remain)}</b></span>
+      ${pct>80?`<span style="color:var(--danger);font-weight:600">⚠️ Budget alert</span>`:`<span style="color:var(--success);font-weight:600">✓ On track</span>`}
+    </div>
+  </div>
+
+  <!-- Spend by month + recent orders -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <!-- Monthly trend -->
+    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:.9rem;color:var(--navy)">Monthly Spend Trend</div>
+      <div style="padding:16px">
+        ${months.length===0?`<div style="text-align:center;padding:24px;color:var(--text-muted)">No historical spend data</div>`:
+        months.map(m=>{
+          const v = byMonth[m]||0;
+          const maxV = Math.max(...months.map(mm=>byMonth[mm]||0));
+          const barW = maxV > 0 ? Math.round((v/maxV)*100) : 0;
+          return `
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <div style="width:60px;font-size:.75rem;color:var(--text-muted);flex-shrink:0">${m}</div>
+            <div style="flex:1;background:#f3f4f6;border-radius:4px;height:8px;overflow:hidden">
+              <div style="height:100%;width:${barW}%;background:var(--primary);border-radius:4px"></div>
+            </div>
+            <div style="width:70px;text-align:right;font-size:.75rem;font-weight:600">${fmt(v)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Recent closed orders -->
+    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:.9rem;color:var(--navy)">Recent Spend</div>
+      <div>
+        ${closed.slice(0,6).map(o=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer" onclick="viewOrder('${o.id}')">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:.86rem">${o.id}</div>
+            <div style="font-size:.74rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
+          </div>
+          <div style="font-weight:700;color:var(--navy)">${fmt(o.grand_total)}</div>
+        </div>`).join('')||`<div style="padding:32px;text-align:center;color:var(--text-muted)">No completed orders yet</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
 async function renderOpsDashboard(el) {
   const [data, pendingSupply, dueItems] = await Promise.all([
     api('/dashboard'),
@@ -1082,7 +1201,14 @@ async function renderPlaceOrder(el) {
           </div>
           <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
         </div>
-        <button class="btn btn-gold" style="width:100%;margin-top:12px" onclick="submitOrder()">
+        <!-- Delivery notes -->
+        <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+          <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px">Delivery Notes (optional)</label>
+          <textarea id="cart-notes" rows="2" placeholder="Special instructions, delivery address, contact…"
+            style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.8rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
+            onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+        </div>
+        <button class="btn btn-gold" style="width:100%;margin-top:10px" onclick="submitOrder()">
           ${iconCheck(14)} Place Order
         </button>
         <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.8rem" onclick="APP.cart=[];refreshCartUI();showToast('Cart cleared')">
@@ -1393,9 +1519,10 @@ async function confirmOrder() {
   const btn = document.querySelector('#modal-footer .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
 
+  const notes = document.getElementById('cart-notes')?.value?.trim() || '';
   const result = await api('/orders', {
     method: 'POST',
-    body: JSON.stringify({ client_id: clientId, items: APP.cart }),
+    body: JSON.stringify({ client_id: clientId, items: APP.cart, ...(notes ? { notes } : {}) }),
   });
 
   closeModal();
@@ -1412,7 +1539,103 @@ async function confirmOrder() {
 async function renderMyOrders(el) {
   const orders = await api('/orders');
   if (!orders) return;
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
+  if (isClient) {
+    // Client-specific card view
+    const statuses = ['All','DRAFT','SUBMITTED','PENDING_APPROVAL','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
+    if (!APP._moTab) APP._moTab = 'All';
+
+    function moFiltered() {
+      return APP._moTab === 'All' ? orders : orders.filter(o => o.status === APP._moTab);
+    }
+
+    function moRender() {
+      const filtered = moFiltered();
+      document.getElementById('mo-count').textContent = `${filtered.length} order${filtered.length!==1?'s':''}`;
+      document.getElementById('mo-cards').innerHTML = filtered.length === 0
+        ? `<div style="padding:48px;text-align:center;color:var(--text-muted)">
+            <div style="font-size:2.5rem;margin-bottom:12px">📋</div>
+            <div style="font-weight:600">No orders in this status</div>
+            <div style="font-size:.82rem;margin-top:6px">Try "All" or place a new order</div>
+           </div>`
+        : filtered.map(o => {
+          const statusColor = {DRAFT:'#6b7280',SUBMITTED:'#3b82f6',PENDING_APPROVAL:'#f59e0b',ACKNOWLEDGED:'#8b5cf6',PICKED:'#f97316',IN_SHIPMENT:'#06b6d4',PARTIALLY_CLOSED:'#f59e0b',CLOSED:'#10b981',CANCELLED:'#ef4444'}[o.status]||'#6b7280';
+          return `
+          <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:12px;border-left:4px solid ${statusColor};cursor:pointer;transition:box-shadow .15s" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.12)'" onmouseout="this.style.boxShadow='0 1px 4px rgba(0,0,0,.08)'" onclick="viewOrder('${o.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+              <div style="min-width:0">
+                <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${o.id}</div>
+                <div style="font-size:.76rem;color:var(--text-muted);margin-top:3px">${fmtDate(o.created_at)}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div style="font-weight:800;font-size:1rem;color:var(--navy)">${fmt(o.grand_total)}</div>
+                <div style="margin-top:4px">${statusBadge(o.status)}</div>
+              </div>
+            </div>
+            ${o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">📝 ${o.notes}</div>` : ''}
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();viewOrder('${o.id}')">View Details</button>
+              ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();cancelOrder('${o.id}')">Cancel</button>`:''}
+              ${o.status==='PARTIALLY_CLOSED'?`<span style="font-size:.74rem;color:#d97706;background:#fef3c7;padding:3px 8px;border-radius:6px;font-weight:600">⚠️ Partial delivery — awaiting balance</span>`:''}
+            </div>
+          </div>`;
+        }).join('');
+    }
+
+    // Summary tiles
+    const active   = orders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length;
+    const closed   = orders.filter(o=>o.status==='CLOSED').length;
+    const partial  = orders.filter(o=>o.status==='PARTIALLY_CLOSED').length;
+    const totalSpend = orders.filter(o=>o.status==='CLOSED').reduce((s,o)=>s+(o.grand_total||0),0);
+
+    el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Orders</div>
+        <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count">${orders.length} orders</div>
+      </div>
+      <button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>
+    </div>
+
+    <!-- Summary tiles -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+        <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active Orders</div>
+        <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${active}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">in progress</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${partial>0?'#f59e0b':'#d1d5db'}">
+        <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Partial Delivery</div>
+        <div style="font-size:2rem;font-weight:800;color:${partial>0?'#d97706':'var(--navy)'};margin-top:6px">${partial}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">balance pending</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+        <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered</div>
+        <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${closed}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">orders complete</div>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+        <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Spend</div>
+        <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalSpend)}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">on closed orders</div>
+      </div>
+    </div>
+
+    <!-- Status filter pills -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      ${statuses.map(s=>`<button onclick="APP._moTab='${s}';document.querySelectorAll('.mo-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active');moRender()" class="tab-pill mo-pill${APP._moTab===s?' active':''}">${s==='All'?'All':s.replace(/_/g,' ')}</button>`).join('')}
+    </div>
+
+    <!-- Order cards -->
+    <div id="mo-cards"></div>`;
+
+    moRender();
+    window.moRender = moRender;
+    return;
+  }
+
+  // Ops/admin table view
   el.innerHTML = `
   ${pageHeader('My Orders', `${orders.length} orders`,
     `<button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>`)}
@@ -1569,48 +1792,106 @@ async function cancelOrder(id) {
    TRACK DELIVERY
    ============================================================ */
 async function renderTrackDelivery(el) {
-  const [dcs, orders] = await Promise.all([api('/delivery-challans'), api('/orders?status=IN_SHIPMENT')]);
+  const [dcs, orders] = await Promise.all([
+    api('/delivery-challans'),
+    api('/orders').catch(()=>[])
+  ]);
   if (!dcs) return;
 
-  const active = dcs.filter(d => d.status !== 'DELIVERED' && d.status !== 'CANCELLED');
-  const nowMonth = new Date().toISOString().slice(0, 7);
-  const activeShipments = dcs.filter(d => d.status !== 'DELIVERED' && d.status !== 'CANCELLED').length;
-  const itemsInTransit = dcs.filter(d => d.status === 'IN_TRANSIT').reduce((s, d) => s + (d.total_qty || 0), 0);
-  const pendingDeliveries = dcs.filter(d => d.status === 'SCHEDULED').length;
-  const deliveredThisMonth = dcs.filter(d => d.status === 'DELIVERED' && (d.delivered_at||'').startsWith(nowMonth)).length;
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+  const nowMonth = new Date().toISOString().slice(0,7);
+  const scheduledDCs  = dcs.filter(d => d.status === 'SCHEDULED');
+  const inTransitDCs  = dcs.filter(d => d.status === 'IN_TRANSIT');
+  const deliveredAll  = dcs.filter(d => d.status === 'DELIVERED');
+  const deliveredMonth= deliveredAll.filter(d => (d.delivered_at||'').startsWith(nowMonth));
+  const itemsInTransit= inTransitDCs.reduce((s,d)=>s+(d.total_qty||0),0);
 
-  el.innerHTML = `
-  ${pageHeader('Track Delivery', `${active.length} active shipments`)}
-  <div class="kpi-row" style="margin-bottom:20px">
-    <div class="kpi-card"><div class="kpi-label">Active Shipments</div><div class="kpi-value">${activeShipments}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Items In Transit</div><div class="kpi-value">${itemsInTransit}</div></div>
-    <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Deliveries</div><div class="kpi-value kpi-warning">${pendingDeliveries}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Delivered This Month</div><div class="kpi-value" style="color:var(--success)">${deliveredThisMonth}</div></div>
-  </div>
-  ${active.length ? active.map(dc=>`
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header">
-      <span><b>${dc.id}</b> — Order ${dc.order_id}</span>
-      ${statusBadge(dc.status)}
-    </div>
-    <div class="card-body">
-      <div class="timeline">
-        ${['SCHEDULED','IN_TRANSIT','DELIVERED'].map((step,i)=>{
-          const done = ['SCHEDULED','IN_TRANSIT','DELIVERED'].indexOf(dc.status) >= i;
-          return `<div class="timeline-step ${done?'done':''}">
-            <div class="timeline-dot"></div>
-            <div class="timeline-label">${step.replace('_',' ')}</div>
+  function dcCard(dc, type) {
+    const colors = { SCHEDULED:['#dbeafe','#f8fbff','#3b82f6','#e0e7ff'], IN_TRANSIT:['#fde68a','#fffbeb','#d97706','#fef3c7'], DELIVERED:['#a7f3d0','#f0fdf4','#059669','#d1fae5'] };
+    const [border,bg,textColor,badgeBg] = colors[type]||colors.SCHEDULED;
+    const label = {SCHEDULED:'SCHEDULED',IN_TRANSIT:'IN TRANSIT',DELIVERED:'DELIVERED'}[type];
+    return `
+    <div style="border:1.5px solid ${border};border-radius:10px;padding:14px 16px;margin-bottom:12px;background:${bg}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-weight:800;font-size:.9rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:1px">Order: <b>${dc.order_id}</b></div>
+        </div>
+        <span style="font-size:.68rem;font-weight:700;background:${badgeBg};color:${textColor};border-radius:4px;padding:2px 7px">${label}</span>
+      </div>
+      <!-- progress steps -->
+      <div style="display:flex;align-items:center;gap:0;margin-bottom:10px">
+        ${['SCHEDULED','IN_TRANSIT','DELIVERED'].map((step,i,arr)=>{
+          const reached = ['SCHEDULED','IN_TRANSIT','DELIVERED'].indexOf(type) >= i;
+          return `
+          <div style="display:flex;align-items:center;flex:1">
+            <div style="width:22px;height:22px;border-radius:50%;background:${reached?textColor:'#e5e7eb'};display:flex;align-items:center;justify-content:center;font-size:.65rem;color:#fff;font-weight:700;flex-shrink:0">${i+1}</div>
+            <div style="font-size:.62rem;color:${reached?textColor:'#9ca3af'};margin-left:3px;white-space:nowrap">${step.replace('_',' ')}</div>
+            ${i<arr.length-1?`<div style="flex:1;height:2px;background:${reached&&['SCHEDULED','IN_TRANSIT','DELIVERED'].indexOf(type)>i?textColor:'#e5e7eb'};margin:0 4px"></div>`:''}
           </div>`;
         }).join('')}
       </div>
-      <div style="display:flex;gap:24px;margin-top:12px;font-size:.84rem;color:var(--text-muted)">
-        ${dc.driver_name?`<span>🚗 ${dc.driver_name}</span>`:''}
-        ${dc.vehicle_no?`<span>🪪 ${dc.vehicle_no}</span>`:''}
-        ${dc.dispatched_at?`<span>📅 Dispatched: ${fmtDate(dc.dispatched_at)}</span>`:''}
-        <span>👤 ${dc.client_name||'—'}</span>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.7">
+        ${dc.total_qty?`<div>📦 <b>${dc.total_qty}</b> units</div>`:''}
+        ${dc.driver_name?`<div>🧑‍✈️ ${dc.driver_name}</div>`:''}
+        ${dc.vehicle_no?`<div>🚚 ${dc.vehicle_no}</div>`:''}
+        ${dc.scheduled_time?`<div>⏱ ETA: <b>${dc.scheduled_time}</b></div>`:''}
+        ${dc.delivered_at?`<div>✅ Delivered: <b>${fmtDate(dc.delivered_at)}</b></div>`:''}
+      </div>
+      ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:.75rem;font-weight:600;color:${textColor};text-decoration:none;background:${badgeBg};border-radius:6px;padding:4px 10px">📞 Call Driver</a>`:''}
+      ${type!=='DELIVERED'?`<button class="btn btn-secondary btn-sm" style="margin-top:8px;margin-left:6px" onclick="viewOrder('${dc.order_id}')">View Order</button>`:''}
+    </div>`;
+  }
+
+  el.innerHTML = `
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Scheduled</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${scheduledDCs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">upcoming deliveries</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Transit</div>
+      <div style="font-size:2rem;font-weight:800;color:${inTransitDCs.length?'#d97706':'var(--navy)'};margin-top:6px">${inTransitDCs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">on the way now</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered (Month)</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${deliveredMonth.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">this month</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Units In Transit</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${itemsInTransit}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">units en route</div>
+    </div>
+  </div>
+
+  <!-- 3-column pipeline -->
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:#f8f9fa;border-bottom:1px solid var(--border)">
+      ${[['🔵 Scheduled',scheduledDCs.length,'#3b82f6','#e0e7ff'],['🟡 In Transit',inTransitDCs.length,'#d97706','#fef3c7'],['🟢 Delivered',deliveredMonth.length,'#059669','#d1fae5']].map((col,i)=>`
+      <div style="padding:12px 20px;${i<2?'border-right:1px solid var(--border)':''}">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:.76rem;font-weight:700;color:${col[2]};text-transform:uppercase;letter-spacing:.06em">${col[0]}</span>
+          <span style="margin-left:auto;background:${col[3]};color:${col[2]};border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${col[1]}</span>
+        </div>
+      </div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;min-height:200px">
+      <div style="padding:16px;border-right:1px solid var(--border)">
+        ${scheduledDCs.length===0?`<div style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:.82rem">No upcoming deliveries</div>`:scheduledDCs.map(dc=>dcCard(dc,'SCHEDULED')).join('')}
+      </div>
+      <div style="padding:16px;border-right:1px solid var(--border)">
+        ${inTransitDCs.length===0?`<div style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:.82rem">No active deliveries</div>`:inTransitDCs.map(dc=>dcCard(dc,'IN_TRANSIT')).join('')}
+      </div>
+      <div style="padding:16px">
+        ${deliveredMonth.length===0?`<div style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:.82rem">No deliveries yet this month</div>`:deliveredMonth.slice(0,6).map(dc=>dcCard(dc,'DELIVERED')).join('')}
+        ${deliveredMonth.length>6?`<div style="text-align:center;font-size:.76rem;color:var(--text-muted);padding-top:4px">+${deliveredMonth.length-6} more this month</div>`:''}
       </div>
     </div>
-  </div>`).join('') : emptyState('🚚','No active deliveries','All deliveries are complete.')}`;
+  </div>`;
 }
 
 
@@ -3367,29 +3648,85 @@ async function startTicket(id) {
 async function renderApprovals(el) {
   const orders = await api('/orders');
   if (!orders) return;
-  const pending = orders.filter(o=>o.status==='PENDING_APPROVAL');
+  const pending  = orders.filter(o=>o.status==='PENDING_APPROVAL');
+  const approved = orders.filter(o=>['APPROVED','ACKNOWLEDGED','PICKED','IN_SHIPMENT'].includes(o.status));
+  const isApprover = APP.user?.role === 'client_approver';
 
   el.innerHTML = `
-  ${pageHeader('Approvals', `${pending.length} awaiting approval`)}
-  ${pending.length===0 ? emptyState('✅','All caught up','No orders pending approval.') :
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Approvals</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${pending.length} awaiting your approval</div>
+    </div>
+  </div>
+
+  <!-- Summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Approval</div>
+      <div style="font-size:2rem;font-weight:800;color:${pending.length?'#d97706':'var(--navy)'};margin-top:6px">${pending.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting decision</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Progress</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${approved.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">approved & processing</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Value</div>
+      <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(pending.reduce((s,o)=>s+(o.grand_total||0),0))}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">total value pending</div>
+    </div>
+  </div>
+
+  <!-- Pending approvals -->
+  ${pending.length===0 ?
+    `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+      <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
+      <div style="font-weight:700;font-size:1rem;color:var(--navy)">All caught up!</div>
+      <div style="font-size:.84rem;margin-top:6px">No orders are waiting for your approval.</div>
+    </div>` :
   pending.map(o=>`
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header">
-      <div><b>${o.id}</b> <span style="color:var(--text-muted);font-size:.85rem">— ${o.client_name||'—'}</span></div>
-      <div style="font-weight:700;font-size:1.1rem">${fmt(o.grand_total)}</div>
-    </div>
-    <div class="card-body">
-      <div style="display:flex;gap:24px;font-size:.85rem;margin-bottom:12px">
-        <div><span style="color:var(--text-muted)">Created:</span> ${fmtDate(o.created_at)}</div>
-        <div><span style="color:var(--text-muted)">By:</span> ${o.creator_name||'—'}</div>
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid #f59e0b">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+      <div>
+        <div style="font-weight:800;font-size:1rem;color:var(--navy)">${o.id}</div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-top:3px">
+          Submitted ${fmtDate(o.created_at)}
+          ${o.creator_name?' · by '+o.creator_name:''}
+          ${!isApprover&&o.client_name?' · '+o.client_name:''}
+        </div>
       </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-danger" onclick="rejectOrder('${o.id}')">Reject</button>
-        <button class="btn btn-primary" onclick="approveOrder('${o.id}')">Approve & Submit</button>
-        <button class="btn btn-secondary" onclick="viewOrder('${o.id}')">View Details</button>
+      <div style="text-align:right">
+        <div style="font-weight:800;font-size:1.2rem;color:var(--navy)">${fmt(o.grand_total)}</div>
+        ${o.grand_total>100000?`<div style="font-size:.72rem;color:#d97706;background:#fef3c7;border-radius:4px;padding:2px 6px;margin-top:4px">⚠️ High value — review carefully</div>`:''}
       </div>
     </div>
-  </div>`).join('')}`;
+    ${o.notes?`<div style="font-size:.78rem;color:var(--text-muted);background:#f8f9fa;padding:10px 12px;border-radius:8px;margin-bottom:14px">📝 ${o.notes}</div>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="approveOrder('${o.id}')">✓ Approve & Submit</button>
+      <button class="btn btn-danger" onclick="rejectOrder('${o.id}')">✕ Reject</button>
+      <button class="btn btn-secondary" onclick="viewOrder('${o.id}')">View Details</button>
+    </div>
+  </div>`).join('')}
+
+  <!-- Recently approved -->
+  ${approved.length?`
+  <div style="margin-top:20px">
+    <div style="font-size:.84rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recently Approved — In Progress</div>
+    ${approved.slice(0,4).map(o=>`
+    <div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="viewOrder('${o.id}')">
+      <div>
+        <div style="font-weight:700;font-size:.88rem">${o.id}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-weight:700">${fmt(o.grand_total)}</div>
+        ${statusBadge(o.status)}
+      </div>
+    </div>`).join('')}
+  </div>`:''}`
+  ;
 }
 
 async function approveOrder(id) {

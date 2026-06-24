@@ -491,9 +491,14 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const params: string[] = [];
 
   if (["client_admin","client_approver","client_user"].includes(user!.role)) {
-    const domain = user!.email.split("@")[1];
-    const c = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
-    if (c) { query += " AND o.client_id=?"; params.push(c.id); }
+    if (user!.client_id) {
+      query += " AND o.client_id=?"; params.push(user!.client_id);
+    } else {
+      // fallback: match by email domain
+      const domain = user!.email.split("@")[1];
+      const c = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
+      if (c) { query += " AND o.client_id=?"; params.push(c.id); }
+    }
   } else if (["vendor_admin","vendor_user"].includes(user!.role)) {
     const domain = user!.email.split("@")[1];
     query += ` AND o.id IN (SELECT DISTINCT order_id FROM purchase_orders WHERE vendor_id IN (SELECT id FROM vendors WHERE contact_email LIKE ?))`;
@@ -906,9 +911,25 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
 async function handleListDCs(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare(`SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value
+
+  const isClient = ["client_admin","client_approver","client_user"].includes(user!.role);
+  let query = `SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value
     FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
-    ORDER BY dc.dispatched_at DESC`).all();
+    WHERE 1=1`;
+  const params: string[] = [];
+
+  if (isClient) {
+    if (user!.client_id) {
+      query += " AND o.client_id=?"; params.push(user!.client_id);
+    } else {
+      const domain = user!.email.split("@")[1];
+      const cl = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
+      if (cl) { query += " AND o.client_id=?"; params.push(cl.id); }
+    }
+  }
+
+  query += " ORDER BY dc.dispatched_at DESC";
+  const {results} = await env.DB.prepare(query).bind(...params).all();
   return json(results);
 }
 
