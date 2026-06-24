@@ -748,10 +748,16 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const sku = `SKU${String(Math.floor(Math.random()*900+100)).padStart(3,"0")}`;
-  await env.DB.prepare(`INSERT INTO inventory (sku,name,category,unit_price,stock,reorder_level,max_stock,vendor_id,hsn_code,gst_rate,emoji)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+  await env.DB.prepare(`INSERT INTO inventory
+    (sku,name,category,unit_price,stock,reorder_level,max_stock,vendor_id,hsn_code,gst_rate,emoji,
+     uom,pack_size,units_per_case,weight_grams,barcode,batch_no,vendor_sku,vendor_lead_days,vendor_moq,
+     mrp,cost_excl_gst,margin_pct,brand)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .bind(sku,body.name,body.category,body.unit_price,body.stock||0,body.reorder_level||20,body.max_stock||200,
-      body.vendor_id||null,body.hsn_code||"2101",body.gst_rate||18,body.emoji||"📦").run();
+      body.vendor_id||null,body.hsn_code||"2101",body.gst_rate||18,body.emoji||"📦",
+      body.uom||"unit",body.pack_size||1,body.units_per_case||1,body.weight_grams||0,
+      body.barcode||"",body.batch_no||"",body.vendor_sku||"",body.vendor_lead_days||3,body.vendor_moq||1,
+      body.mrp||0,body.cost_excl_gst||0,body.margin_pct||0,body.brand||"").run();
   await audit(env, user, "CREATE", "inventory", sku, undefined, JSON.stringify({name:body.name,stock:body.stock}));
   return json({sku}, 201);
 }
@@ -766,17 +772,20 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
   const before = await env.DB.prepare("SELECT stock FROM inventory WHERE sku=?").bind(sku).first() as Record<string,number>|null;
   const fields: string[] = [];
   const vals: unknown[] = [];
-  if (body.stock !== undefined)         { fields.push("stock=?");         vals.push(body.stock); }
-  if (body.reorder_level !== undefined) { fields.push("reorder_level=?"); vals.push(body.reorder_level); }
-  if (body.max_stock !== undefined)     { fields.push("max_stock=?");     vals.push(body.max_stock); }
-  if (body.unit_price !== undefined)    { fields.push("unit_price=?");    vals.push(body.unit_price); }
-  if (body.name !== undefined)          { fields.push("name=?");          vals.push(body.name); }
-  if (body.category !== undefined)      { fields.push("category=?");      vals.push(body.category); }
-  if (body.emoji !== undefined)         { fields.push("emoji=?");         vals.push(body.emoji); }
-  if (body.vendor_id !== undefined)     { fields.push("vendor_id=?");     vals.push(body.vendor_id || null); }
-  if (body.hsn_code !== undefined)      { fields.push("hsn_code=?");      vals.push(body.hsn_code); }
-  if (body.gst_rate !== undefined)      { fields.push("gst_rate=?");      vals.push(body.gst_rate); }
-  if (body.active !== undefined)        { fields.push("active=?");        vals.push(body.active); }
+  const patchFields: [string, string][] = [
+    ["stock","stock"],["reorder_level","reorder_level"],["max_stock","max_stock"],
+    ["unit_price","unit_price"],["name","name"],["category","category"],["emoji","emoji"],
+    ["hsn_code","hsn_code"],["gst_rate","gst_rate"],["active","active"],
+    ["uom","uom"],["pack_size","pack_size"],["units_per_case","units_per_case"],
+    ["weight_grams","weight_grams"],["barcode","barcode"],["batch_no","batch_no"],
+    ["vendor_sku","vendor_sku"],["vendor_lead_days","vendor_lead_days"],["vendor_moq","vendor_moq"],
+    ["mrp","mrp"],["cost_excl_gst","cost_excl_gst"],["margin_pct","margin_pct"],["brand","brand"],
+  ];
+  for (const [col, key] of patchFields) {
+    if (body[key] !== undefined) { fields.push(`${col}=?`); vals.push(body[key] === "" ? null : body[key]); }
+  }
+  // vendor_id allows null
+  if (body.vendor_id !== undefined) { fields.push("vendor_id=?"); vals.push(body.vendor_id || null); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(sku);
   await env.DB.prepare(`UPDATE inventory SET ${fields.join(",")} WHERE sku=?`).bind(...vals).run();

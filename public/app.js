@@ -2203,46 +2203,188 @@ async function renderInventory(el) {
   if (!inv) return;
   _invCache = {};
   inv.forEach(i => { _invCache[i.sku] = i; });
+  APP._invFilter = APP._invFilter || 'All';
+  APP._invSearch = '';
+
+  const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
   const lowStock = inv.filter(i => i.stock <= i.reorder_level);
+  const outOfStock = inv.filter(i => i.stock === 0);
+
+  function getFiltered() {
+    let items = inv;
+    if (APP._invFilter !== 'All') items = items.filter(i => i.category === APP._invFilter);
+    if (APP._invSearch) { const q = APP._invSearch.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(q)||i.sku.toLowerCase().includes(q)||(i.brand||'').toLowerCase().includes(q)); }
+    return items;
+  }
+
+  function invTableRows(items) {
+    return items.map(item => {
+      const reserved  = item.reserved || 0;
+      const available = Math.max(0, item.stock - reserved);
+      const pctStock  = Math.round((item.stock / (item.max_stock||1)) * 100);
+      const color     = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
+      const safeName  = item.name.replace(/'/g,"\\'");
+      return `
+      <tr style="cursor:pointer" onclick="toggleInvDetail('${item.sku}',this)">
+        <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b></td>
+        <td><b>${item.name}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${item.brand}</div>`:''}</td>
+        <td style="font-size:.82rem">${item.category}</td>
+        <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
+        <td style="font-weight:700">${fmt(item.unit_price)}</td>
+        <td style="font-size:.8rem;color:var(--text-muted)">${item.mrp?fmt(item.mrp):'—'}</td>
+        <td style="color:${color};font-weight:700">${item.stock}</td>
+        <td style="color:var(--warning);font-weight:500">${reserved}</td>
+        <td style="color:${available<=0?'var(--danger)':'var(--success)'};font-weight:700">${available}</td>
+        <td style="min-width:90px">
+          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden;margin-bottom:2px">
+            <div style="height:100%;width:${Math.min(100,pctStock)}%;background:${color};border-radius:3px"></div>
+          </div>
+          <div style="font-size:.68rem;color:${color}">${pctStock}%</div>
+        </td>
+        <td style="font-size:.8rem">${item.vendor_name||'—'}</td>
+        <td onclick="event.stopPropagation()">
+          <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
+          <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">History</button>
+          <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
+        </td>
+      </tr>
+      <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff">
+        <td colspan="12" style="padding:0">
+          <div style="padding:16px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;border-top:2px solid var(--primary)">
+
+            <!-- 1. Product Identification -->
+            <div>
+              <div style="font-size:.72rem;font-weight:800;color:var(--primary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Product Identification</div>
+              ${invDetailRow('SKU', item.sku)}
+              ${invDetailRow('Name', item.name)}
+              ${invDetailRow('Brand', item.brand||'—')}
+              ${invDetailRow('Category', item.category)}
+              ${invDetailRow('Emoji / Icon', item.emoji||'📦')}
+              ${invDetailRow('Barcode', item.barcode||'—')}
+              ${invDetailRow('Batch No', item.batch_no||'—')}
+            </div>
+
+            <!-- 2. Packing Details -->
+            <div>
+              <div style="font-size:.72rem;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Packing Details</div>
+              ${invDetailRow('UOM', item.uom||'unit')}
+              ${invDetailRow('Pack Size', item.pack_size||1)}
+              ${invDetailRow('Units / Case', item.units_per_case||1)}
+              ${invDetailRow('Weight (grams)', item.weight_grams||'—')}
+              ${invDetailRow('HSN Code', item.hsn_code||'—')}
+              ${invDetailRow('Expiry Date', item.expiry_date||'—')}
+              ${invDetailRow('Location', item.inv_location||'instock')}
+            </div>
+
+            <!-- 3. Pricing -->
+            <div>
+              <div style="font-size:.72rem;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Pricing</div>
+              ${invDetailRow('Unit Price (Selling)', fmt(item.unit_price))}
+              ${invDetailRow('MRP', item.mrp?fmt(item.mrp):'—')}
+              ${invDetailRow('Cost Excl GST', item.cost_excl_gst?fmt(item.cost_excl_gst):'—')}
+              ${invDetailRow('GST Rate', (item.gst_rate||18)+'%')}
+              ${invDetailRow('Margin %', item.margin_pct?item.margin_pct+'%':'—')}
+              ${invDetailRow('Amazon URL', item.amazon_url?`<a href="${item.amazon_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
+              ${invDetailRow('Flipkart URL', item.flipkart_url?`<a href="${item.flipkart_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
+            </div>
+
+            <!-- 4. Vendor Information -->
+            <div>
+              <div style="font-size:.72rem;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
+              ${invDetailRow('Vendor', item.vendor_name||'—')}
+              ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
+              ${invDetailRow('Lead Time (days)', item.vendor_lead_days||3)}
+              ${invDetailRow('MOQ', item.vendor_moq||1)}
+              ${invDetailRow('Reorder Level', item.reorder_level)}
+              ${invDetailRow('Max Stock', item.max_stock||200)}
+              ${invDetailRow('Reserved', item.reserved||0)}
+            </div>
+          </div>
+          <div style="padding:8px 20px 14px;display:flex;gap:8px;border-top:1px solid var(--border)">
+            <button class="btn btn-primary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit All Fields</button>
+            <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">Stock History</button>
+            <button class="btn btn-gold btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">Raise PO</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  }
 
   el.innerHTML = `
-  ${pageHeader('Inventory', `${inv.length} SKUs · ${lowStock.length} low stock`,
+  ${pageHeader('Inventory', `${inv.length} SKUs`,
     `<button class="btn btn-secondary" onclick="renderAddItem()">${iconPlus(14)} Add Item</button>`)}
-  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:16px">⚠️ ${lowStock.length} SKU(s) below reorder level: ${lowStock.map(i=>i.name).join(', ')}</div>` : ''}
-  <div class="card">
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total SKUs</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inv.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">active items</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${lowStock.length?'var(--warning)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Low Stock</div>
+      <div style="font-size:2rem;font-weight:800;color:${lowStock.length?'#d97706':'var(--navy)'};margin-top:6px">${lowStock.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">below reorder level</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${outOfStock.length?'var(--danger)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Out of Stock</div>
+      <div style="font-size:2rem;font-weight:800;color:${outOfStock.length?'var(--danger)':'var(--navy)'};margin-top:6px">${outOfStock.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">zero stock</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inventory Value</div>
+      <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(inv.reduce((s,i)=>s+i.stock*i.unit_price,0))}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">at selling price</div>
+    </div>
+  </div>
+
+  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${i.name}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
+
+  <!-- Search + filter -->
+  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+    <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
+      style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
+      oninput="APP._invSearch=this.value.toLowerCase();refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${cats.map(c=>`<button class="tab-pill inv-cat-pill${APP._invFilter===c?' active':''}" onclick="APP._invFilter='${c}';document.querySelectorAll('.inv-cat-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active');refreshInvTable()">${c}</button>`).join('')}
+    </div>
+  </div>
+
+  <!-- Table — click row to expand 4-section detail -->
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--text-muted)">Click any row to see Product Identification · Packing Details · Pricing · Vendor Information</div>
     <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>SKU</th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Reserved</th><th>Available</th><th>Level</th><th>Vendor</th><th>Actions</th></tr></thead>
-        <tbody>${inv.map(item => {
-          const reserved = item.reserved || 0;
-          const available = Math.max(0, item.stock - reserved);
-          const pctStock = Math.round((item.stock / (item.max_stock||1)) * 100);
-          const color = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
-          return `<tr>
-            <td><span style="font-size:1.2rem">${item.emoji}</span> ${item.sku}</td>
-            <td><b>${item.name}</b></td>
-            <td>${item.category}</td>
-            <td>${fmt(item.unit_price)}</td>
-            <td style="color:${color};font-weight:600">${item.stock}</td>
-            <td style="color:var(--warning);font-weight:500">${reserved}</td>
-            <td style="color:${available<=0?'var(--danger)':'var(--success)'};font-weight:600">${available}</td>
-            <td style="min-width:100px">
-              <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-                <div style="height:100%;width:${Math.min(100,pctStock)}%;background:${color};border-radius:3px"></div>
-              </div>
-            </td>
-            <td>${item.vendor_name||'—'}</td>
-            <td>
-              <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
-              <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${item.name.replace(/'/g,"\\'")}')">History</button>
-              <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${item.name.replace(/'/g,"\\'")}',${item.unit_price},'${item.vendor_id||''}')">Reorder</button>
-            </td>
-          </tr>`;
-        }).join('')}
-        </tbody>
+      <table class="table" id="inv-table" style="margin:0">
+        <thead><tr>
+          <th>SKU</th><th>Item</th><th>Category</th><th>UOM</th>
+          <th>Price</th><th>MRP</th>
+          <th>Stock</th><th>Reserved</th><th>Available</th><th>Level</th>
+          <th>Vendor</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="inv-tbody">${invTableRows(getFiltered())}</tbody>
       </table>
     </div>
   </div>`;
+
+  window.refreshInvTable = function() {
+    document.getElementById('inv-tbody').innerHTML = invTableRows(getFiltered());
+  };
+}
+
+function invDetailRow(label, value) {
+  return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:.78rem">
+    <span style="color:var(--text-muted)">${label}</span>
+    <span style="font-weight:600;text-align:right;max-width:60%">${value}</span>
+  </div>`;
+}
+
+function toggleInvDetail(sku, row) {
+  const detailRow = document.getElementById('inv-detail-' + sku);
+  if (!detailRow) return;
+  const isOpen = detailRow.style.display !== 'none';
+  // close all open detail rows
+  document.querySelectorAll('[id^="inv-detail-"]').forEach(r => { r.style.display = 'none'; });
+  if (!isOpen) detailRow.style.display = '';
 }
 
 async function viewStockHistory(sku, itemName) {
@@ -2271,37 +2413,122 @@ async function editInventoryItem(sku) {
   if (!item) return;
   const vendors = await api('/vendors') || [];
   const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
-  const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Other'];
+  const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','Other'];
   const catOpts = cats.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('');
+  const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
+  const uomOpts = uoms.map(u => `<option value="${u}" ${(item.uom||'unit')===u?'selected':''}>${u}</option>`).join('');
+
   openModal(`Edit Item — ${sku}`,
-    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-       <div class="form-group" style="grid-column:1/-1"><label>Item Name</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
-       <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
-       <div class="form-group"><label>Emoji</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
-       <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="ei-price" value="${item.unit_price}" min="0" step="0.01"></div>
-       <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}"></div>
-       <div class="form-group"><label>GST Rate (%)</label><input type="number" id="ei-gst" value="${item.gst_rate||18}" min="0" max="28"></div>
-       <div class="form-group"><label>Vendor</label><select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select></div>
-       <div class="form-group"><label>Current Stock</label><input type="number" id="ei-stock" value="${item.stock}" min="0"></div>
-       <div class="form-group"><label>Reorder Level</label><input type="number" id="ei-reorder" value="${item.reorder_level}" min="0"></div>
-       <div class="form-group"><label>Max Stock</label><input type="number" id="ei-maxstock" value="${item.max_stock||200}" min="0"></div>
-     </div>`,
+    `<!-- Section tabs -->
+    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
+      ${[['prod','Product ID','var(--primary)'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
+        `<button class="ei-tab" data-tab="${id}" onclick="switchEITab('${id}')" style="padding:8px 16px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .2s;margin-bottom:-2px">${label}</button>`
+      ).join('')}
+    </div>
+
+    <!-- Product Identification -->
+    <div id="ei-tab-prod" class="ei-section">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
+        <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
+        <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
+        <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
+        <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>
+        <div class="form-group"><label>Batch No</label><input type="text" id="ei-batch" value="${item.batch_no||''}"></div>
+        <div class="form-group"><label>Expiry Date</label><input type="date" id="ei-expiry" value="${item.expiry_date||''}"></div>
+      </div>
+    </div>
+
+    <!-- Packing Details -->
+    <div id="ei-tab-pack" class="ei-section" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group"><label>UOM (Unit of Measure)</label><select id="ei-uom">${uomOpts}</select></div>
+        <div class="form-group"><label>Pack Size</label><input type="number" id="ei-packsize" value="${item.pack_size||1}" min="1"></div>
+        <div class="form-group"><label>Units per Case</label><input type="number" id="ei-upc" value="${item.units_per_case||1}" min="1"></div>
+        <div class="form-group"><label>Weight (grams)</label><input type="number" id="ei-weight" value="${item.weight_grams||0}" min="0" step="0.1"></div>
+        <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}"></div>
+        <div class="form-group"><label>Storage Location</label><input type="text" id="ei-location" value="${item.inv_location||'instock'}"></div>
+      </div>
+    </div>
+
+    <!-- Pricing -->
+    <div id="ei-tab-price" class="ei-section" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group"><label>Unit Price / Selling Price (₹)</label><input type="number" id="ei-price" value="${item.unit_price}" min="0" step="0.01"></div>
+        <div class="form-group"><label>MRP (₹)</label><input type="number" id="ei-mrp" value="${item.mrp||0}" min="0" step="0.01"></div>
+        <div class="form-group"><label>Cost Excl GST (₹)</label><input type="number" id="ei-cost" value="${item.cost_excl_gst||0}" min="0" step="0.01"></div>
+        <div class="form-group"><label>GST Rate (%)</label><input type="number" id="ei-gst" value="${item.gst_rate||18}" min="0" max="28"></div>
+        <div class="form-group"><label>Margin %</label><input type="number" id="ei-margin" value="${item.margin_pct||0}" min="0" max="100" step="0.1"></div>
+        <div class="form-group"><label>Amazon URL</label><input type="url" id="ei-amazon" value="${item.amazon_url||''}" placeholder="https://www.amazon.in/…"></div>
+        <div class="form-group" style="grid-column:1/-1"><label>Flipkart URL</label><input type="url" id="ei-flipkart" value="${item.flipkart_url||''}" placeholder="https://www.flipkart.com/…"></div>
+      </div>
+    </div>
+
+    <!-- Vendor Information -->
+    <div id="ei-tab-vendor" class="ei-section" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group" style="grid-column:1/-1"><label>Primary Vendor</label><select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select></div>
+        <div class="form-group"><label>Vendor SKU / Code</label><input type="text" id="ei-vendorsku" value="${item.vendor_sku||''}"></div>
+        <div class="form-group"><label>Lead Time (days)</label><input type="number" id="ei-leaddays" value="${item.vendor_lead_days||3}" min="0"></div>
+        <div class="form-group"><label>Min Order Qty (MOQ)</label><input type="number" id="ei-moq" value="${item.vendor_moq||1}" min="1"></div>
+        <div class="form-group"><label>Current Stock</label><input type="number" id="ei-stock" value="${item.stock}" min="0"></div>
+        <div class="form-group"><label>Reorder Level</label><input type="number" id="ei-reorder" value="${item.reorder_level}" min="0"></div>
+        <div class="form-group"><label>Max Stock</label><input type="number" id="ei-maxstock" value="${item.max_stock||200}" min="0"></div>
+      </div>
+    </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveInventoryItem('${sku}')">Save Changes</button>`);
+     <button class="btn btn-primary" onclick="saveInventoryItem('${sku}')">Save All Changes</button>`);
+
+  // activate first tab
+  switchEITab('prod');
 }
 
+function switchEITab(tab) {
+  document.querySelectorAll('.ei-section').forEach(s => s.style.display='none');
+  document.querySelectorAll('.ei-tab').forEach(b => {
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text-muted)';
+  });
+  const sec = document.getElementById('ei-tab-'+tab);
+  if (sec) sec.style.display='';
+  const btn = document.querySelector(`.ei-tab[data-tab="${tab}"]`);
+  if (btn) { btn.style.borderBottomColor='var(--primary)'; btn.style.color='var(--navy)'; }
+}
+
+function eiVal(id, num=false) { const el=document.getElementById(id); if(!el)return num?0:''; return num?+el.value:el.value; }
 async function saveInventoryItem(sku) {
   const body = {
-    name:          document.getElementById('ei-name').value,
-    category:      document.getElementById('ei-cat').value,
-    emoji:         document.getElementById('ei-emoji').value,
-    unit_price:    +document.getElementById('ei-price').value,
-    hsn_code:      document.getElementById('ei-hsn').value,
-    gst_rate:      +document.getElementById('ei-gst').value,
-    vendor_id:     document.getElementById('ei-vendor').value || null,
-    stock:         +document.getElementById('ei-stock').value,
-    reorder_level: +document.getElementById('ei-reorder').value,
-    max_stock:     +document.getElementById('ei-maxstock').value,
+    // Product ID
+    name:           eiVal('ei-name'),
+    brand:          eiVal('ei-brand'),
+    category:       eiVal('ei-cat'),
+    emoji:          eiVal('ei-emoji'),
+    barcode:        eiVal('ei-barcode'),
+    batch_no:       eiVal('ei-batch'),
+    expiry_date:    eiVal('ei-expiry') || null,
+    // Packing
+    uom:            eiVal('ei-uom'),
+    pack_size:      eiVal('ei-packsize',true),
+    units_per_case: eiVal('ei-upc',true),
+    weight_grams:   eiVal('ei-weight',true),
+    hsn_code:       eiVal('ei-hsn'),
+    inv_location:   eiVal('ei-location'),
+    // Pricing
+    unit_price:     eiVal('ei-price',true),
+    mrp:            eiVal('ei-mrp',true),
+    cost_excl_gst:  eiVal('ei-cost',true),
+    gst_rate:       eiVal('ei-gst',true),
+    margin_pct:     eiVal('ei-margin',true),
+    amazon_url:     eiVal('ei-amazon'),
+    flipkart_url:   eiVal('ei-flipkart'),
+    // Vendor
+    vendor_id:      eiVal('ei-vendor') || null,
+    vendor_sku:     eiVal('ei-vendorsku'),
+    vendor_lead_days: eiVal('ei-leaddays',true),
+    vendor_moq:     eiVal('ei-moq',true),
+    stock:          eiVal('ei-stock',true),
+    reorder_level:  eiVal('ei-reorder',true),
+    max_stock:      eiVal('ei-maxstock',true),
   };
   if (!body.name) { showToast('Item name is required', 'error'); return; }
   const res = await api(`/inventory/${sku}`, { method:'PATCH', body: JSON.stringify(body) });
