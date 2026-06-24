@@ -750,13 +750,13 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   const sku = `SKU${String(Math.floor(Math.random()*900+100)).padStart(3,"0")}`;
   await env.DB.prepare(`INSERT INTO inventory
     (sku,name,category,unit_price,stock,reorder_level,max_stock,vendor_id,hsn_code,gst_rate,emoji,
-     uom,pack_size,units_per_case,weight_grams,barcode,batch_no,vendor_sku,vendor_lead_days,vendor_moq,
+     uom,pack_size,units_per_case,weight_grams,barcode,sub_category,vendor_sku,vendor_lead_days,vendor_moq,
      mrp,cost_excl_gst,margin_pct,brand)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .bind(sku,body.name,body.category,body.unit_price,body.stock||0,body.reorder_level||20,body.max_stock||200,
       body.vendor_id||null,body.hsn_code||"2101",body.gst_rate||18,body.emoji||"📦",
       body.uom||"unit",body.pack_size||1,body.units_per_case||1,body.weight_grams||0,
-      body.barcode||"",body.batch_no||"",body.vendor_sku||"",body.vendor_lead_days||3,body.vendor_moq||1,
+      body.barcode||"",body.sub_category||"Normal",body.vendor_sku||"",body.vendor_lead_days||3,body.vendor_moq||1,
       body.mrp||0,body.cost_excl_gst||0,body.margin_pct||0,body.brand||"").run();
   await audit(env, user, "CREATE", "inventory", sku, undefined, JSON.stringify({name:body.name,stock:body.stock}));
   return json({sku}, 201);
@@ -777,7 +777,7 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
     ["unit_price","unit_price"],["name","name"],["category","category"],["emoji","emoji"],
     ["hsn_code","hsn_code"],["gst_rate","gst_rate"],["active","active"],
     ["uom","uom"],["pack_size","pack_size"],["units_per_case","units_per_case"],
-    ["weight_grams","weight_grams"],["barcode","barcode"],["batch_no","batch_no"],
+    ["weight_grams","weight_grams"],["barcode","barcode"],["sub_category","sub_category"],
     ["vendor_sku","vendor_sku"],["vendor_lead_days","vendor_lead_days"],["vendor_moq","vendor_moq"],
     ["mrp","mrp"],["cost_excl_gst","cost_excl_gst"],["margin_pct","margin_pct"],["brand","brand"],
   ];

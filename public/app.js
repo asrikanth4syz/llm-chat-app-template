@@ -2228,7 +2228,7 @@ async function renderInventory(el) {
       <tr style="cursor:pointer" onclick="toggleInvDetail('${item.sku}',this)">
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b></td>
         <td><b>${item.name}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${item.brand}</div>`:''}</td>
-        <td style="font-size:.82rem">${item.category}</td>
+        <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
         <td style="font-weight:700">${fmt(item.unit_price)}</td>
         <td style="font-size:.8rem;color:var(--text-muted)">${item.mrp?fmt(item.mrp):'—'}</td>
@@ -2259,9 +2259,9 @@ async function renderInventory(el) {
               ${invDetailRow('Name', item.name)}
               ${invDetailRow('Brand', item.brand||'—')}
               ${invDetailRow('Category', item.category)}
+              ${invDetailRow('Sub-Category', item.sub_category||'Normal')}
               ${invDetailRow('Emoji / Icon', item.emoji||'📦')}
               ${invDetailRow('Barcode', item.barcode||'—')}
-              ${invDetailRow('Batch No', item.batch_no||'—')}
             </div>
 
             <!-- 2. Packing Details -->
@@ -2432,9 +2432,12 @@ async function editInventoryItem(sku) {
         <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
         <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
         <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
+        <div class="form-group"><label>Sub-Category</label><select id="ei-subcat">
+          <option value="Normal" ${(item.sub_category||'Normal')==='Normal'?'selected':''}>Normal</option>
+          <option value="Healthy" ${item.sub_category==='Healthy'?'selected':''}>Healthy</option>
+        </select></div>
         <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
         <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>
-        <div class="form-group"><label>Batch No</label><input type="text" id="ei-batch" value="${item.batch_no||''}"></div>
         <div class="form-group"><label>Expiry Date</label><input type="date" id="ei-expiry" value="${item.expiry_date||''}"></div>
       </div>
     </div>
@@ -2504,7 +2507,7 @@ async function saveInventoryItem(sku) {
     category:       eiVal('ei-cat'),
     emoji:          eiVal('ei-emoji'),
     barcode:        eiVal('ei-barcode'),
-    batch_no:       eiVal('ei-batch'),
+    sub_category:   eiVal('ei-subcat'),
     expiry_date:    eiVal('ei-expiry') || null,
     // Packing
     uom:            eiVal('ei-uom'),
