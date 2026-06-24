@@ -197,6 +197,7 @@ export default {
       if (path==="/api/orders"          && method==="POST") return handleCreateOrder(request,env);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/allocations$/)  && method==="GET")  return handleGetAllocations(request,env,path);
@@ -530,6 +531,81 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
     env.DB.prepare("SELECT * FROM order_comments WHERE order_id=? ORDER BY created_at").bind(id).all(),
   ]);
   return json({...order, items, history, comments});
+}
+
+// GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)
+async function handleOrderDrilldown(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+
+  const [order, {results: orderItems}, {results: dcs}] = await Promise.all([
+    env.DB.prepare(`SELECT o.*,c.name as client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`).bind(id).first(),
+    env.DB.prepare("SELECT * FROM order_items WHERE order_id=? ORDER BY name").bind(id).all(),
+    env.DB.prepare(`SELECT dc.id, dc.status, dc.dc_number, dc.dispatched_at, dc.delivered_at
+      FROM delivery_challans dc WHERE dc.order_id=? ORDER BY dc.created_at`).bind(id).all(),
+  ]);
+  if (!order) return json({error:"Not found"}, 404);
+
+  // Aggregate delivered qty per SKU across all DELIVERED DCs
+  const deliveredBySku: Record<string, number> = {};
+  const dcMap: Record<string, {id:string;status:string;dc_number:string|null;delivered_at:string|null;items:Record<string,unknown>[]}> = {};
+
+  for (const dc of dcs as Record<string,string>[]) {
+    const {results: dcItems} = await env.DB.prepare(
+      "SELECT sku, name, qty_ordered, qty_delivered FROM dc_items WHERE dc_id=?"
+    ).bind(dc.id).all();
+    dcMap[dc.id] = { ...dc as unknown as {id:string;status:string;dc_number:string|null;delivered_at:string|null}, items: dcItems as Record<string,unknown>[] };
+
+    if (dc.status === 'DELIVERED') {
+      for (const item of dcItems as Record<string,number>[]) {
+        const delivered = (item.qty_delivered && item.qty_delivered > 0) ? item.qty_delivered : item.qty_ordered;
+        deliveredBySku[item.sku as unknown as string] = (deliveredBySku[item.sku as unknown as string] || 0) + delivered;
+      }
+    }
+  }
+
+  // Build line-level reconciliation
+  const lines = (orderItems as Record<string,unknown>[]).map(item => {
+    const ordered   = Number(item.qty) || 0;
+    const delivered = deliveredBySku[item.sku as string] || 0;
+    const due       = Math.max(0, ordered - delivered);
+    return {
+      sku:       item.sku,
+      name:      item.name,
+      unit_price: item.unit_price,
+      qty_ordered:   ordered,
+      qty_delivered: delivered,
+      qty_due:       due,
+      value_ordered:   ordered   * Number(item.unit_price),
+      value_delivered: delivered * Number(item.unit_price),
+      value_due:       due       * Number(item.unit_price),
+      status: delivered === 0 ? 'not_delivered' : due === 0 ? 'fully_delivered' : 'partial',
+    };
+  });
+
+  // Summary
+  const totalLines     = lines.length;
+  const deliveredLines = lines.filter(l => l.status === 'fully_delivered').length;
+  const partialLines   = lines.filter(l => l.status === 'partial').length;
+  const dueLines       = lines.filter(l => l.status !== 'fully_delivered').length;
+  const noDeliveryLines= lines.filter(l => l.status === 'not_delivered').length;
+
+  return json({
+    order,
+    lines,
+    dcs: Object.values(dcMap),
+    summary: {
+      total_lines: totalLines,
+      delivered_lines: deliveredLines,
+      partial_lines: partialLines,
+      due_lines: dueLines,
+      no_delivery_lines: noDeliveryLines,
+      total_ordered_value:   lines.reduce((s,l)=>s+l.value_ordered,0),
+      total_delivered_value: lines.reduce((s,l)=>s+l.value_delivered,0),
+      total_due_value:       lines.reduce((s,l)=>s+l.value_due,0),
+    },
+  });
 }
 
 async function handleCreateOrder(request: Request, env: Env): Promise<Response> {

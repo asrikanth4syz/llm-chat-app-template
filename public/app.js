@@ -1574,8 +1574,9 @@ async function renderMyOrders(el) {
               </div>
             </div>
             ${o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">📝 ${o.notes}</div>` : ''}
-            <div style="display:flex;gap:8px;margin-top:12px">
+            <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
               <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();viewOrder('${o.id}')">View Details</button>
+              ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();viewOrderDrilldown('${o.id}')">Delivery Breakdown</button>`:''}
               ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();cancelOrder('${o.id}')">Cancel</button>`:''}
               ${o.status==='PARTIALLY_CLOSED'?`<span style="font-size:.74rem;color:#d97706;background:#fef3c7;padding:3px 8px;border-radius:6px;font-weight:600">⚠️ Partial delivery — awaiting balance</span>`:''}
             </div>
@@ -1786,6 +1787,145 @@ async function cancelOrder(id) {
   if (!confirm(`Cancel order ${id}?`)) return;
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note:'Cancelled by user' }) });
   if (res) { showToast(`Order ${id} cancelled`); navigate('my_orders'); }
+}
+
+/* ============================================================
+   ORDER DRILL-DOWN — Delivery Reconciliation
+   ============================================================ */
+async function viewOrderDrilldown(orderId) {
+  openModal(`Loading…`, `<div style="text-align:center;padding:40px;color:var(--text-muted)">Fetching delivery breakdown…</div>`, '');
+
+  const data = await api(`/orders/${orderId}/drilldown`);
+  if (!data) return;
+
+  const { order, lines, dcs, summary } = data;
+
+  const statusColor = s => ({
+    fully_delivered: '#10b981',
+    partial: '#f59e0b',
+    not_delivered: '#ef4444',
+  }[s] || '#6b7280');
+
+  const statusLabel = s => ({
+    fully_delivered: 'Delivered',
+    partial: 'Partial',
+    not_delivered: 'Not Delivered',
+  }[s] || s);
+
+  const lineRows = (lines||[]).map(l => {
+    const sc = statusColor(l.status);
+    return `<tr>
+      <td style="font-family:monospace;font-size:.8rem;color:var(--text-muted)">${l.sku}</td>
+      <td style="font-weight:600">${l.name||l.sku}</td>
+      <td style="text-align:right">${l.qty_ordered}</td>
+      <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
+      <td style="text-align:right;color:${l.qty_due>0?'#ef4444':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
+      <td style="text-align:right">${fmt(l.value_ordered)}</td>
+      <td style="text-align:right;color:#10b981;font-weight:600">${fmt(l.value_delivered)}</td>
+      <td style="text-align:right;color:${l.value_due>0?'#ef4444':'var(--text-muted)'}">${fmt(l.value_due)}</td>
+      <td><span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(l.status)}</span></td>
+    </tr>`;
+  }).join('');
+
+  const dcRows = (dcs||[]).map(dc => {
+    const c = {DELIVERED:'#10b981',IN_TRANSIT:'#06b6d4',SCHEDULED:'#f59e0b',CANCELLED:'#ef4444'}[dc.status]||'#6b7280';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:8px;background:var(--bg);margin-bottom:6px;font-size:.83rem">
+      <div>
+        <span style="font-weight:700;color:var(--navy)">${dc.id}</span>
+        <span style="margin-left:8px;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${c}22;color:${c}">${dc.status}</span>
+      </div>
+      <div style="color:var(--text-muted)">
+        ${dc.driver_name?`${dc.driver_name} · `:''}${dc.vehicle_no||''}
+      </div>
+      <div style="font-weight:600">
+        ${dc.delivered_qty||0} delivered / ${dc.total_qty||0} dispatched
+      </div>
+    </div>`;
+  }).join('');
+
+  const deliveryRate = summary.total_lines > 0
+    ? Math.round((summary.delivered_lines / summary.total_lines) * 100)
+    : 0;
+
+  const body = `
+  <!-- Summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Line Items</div>
+      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.total_lines}</div>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #10b981">
+      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Fully Delivered</div>
+      <div style="font-size:1.8rem;font-weight:800;color:#10b981;margin-top:4px">${summary.delivered_lines}</div>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.due_lines>0?'#ef4444':'#d1d5db'}">
+      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Lines Due</div>
+      <div style="font-size:1.8rem;font-weight:800;color:${summary.due_lines>0?'#ef4444':'var(--navy)'};margin-top:4px">${summary.due_lines}</div>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.no_delivery_lines>0?'#6b7280':'#d1d5db'}">
+      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">No Delivery</div>
+      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.no_delivery_lines}</div>
+      <div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">zero units received</div>
+    </div>
+  </div>
+
+  <!-- Value summary row -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
+    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em">Ordered Value</div>
+      <div style="font-size:1.3rem;font-weight:800;color:var(--navy);margin-top:4px">${fmt(summary.total_ordered_value)}</div>
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:.7rem;color:#10b981;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Delivered Value</div>
+      <div style="font-size:1.3rem;font-weight:800;color:#10b981;margin-top:4px">${fmt(summary.total_delivered_value)}</div>
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:.7rem;color:${summary.total_due_value>0?'#ef4444':'var(--text-muted)'};font-weight:600;text-transform:uppercase;letter-spacing:.05em">Due Value</div>
+      <div style="font-size:1.3rem;font-weight:800;color:${summary.total_due_value>0?'#ef4444':'var(--text-muted)'};margin-top:4px">${fmt(summary.total_due_value)}</div>
+    </div>
+  </div>
+
+  <!-- Delivery rate bar -->
+  <div style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-size:.8rem;font-weight:700;color:var(--navy)">Delivery Completion</span>
+      <span style="font-size:.8rem;font-weight:800;color:${deliveryRate===100?'#10b981':deliveryRate>50?'#f59e0b':'#ef4444'}">${deliveryRate}%</span>
+    </div>
+    <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden">
+      <div style="height:100%;width:${deliveryRate}%;background:${deliveryRate===100?'#10b981':deliveryRate>50?'#f59e0b':'#ef4444'};border-radius:4px;transition:width .4s"></div>
+    </div>
+  </div>
+
+  <!-- Line items table -->
+  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Line Item Reconciliation</div>
+  <div style="overflow-x:auto;margin-bottom:16px">
+    <table class="table" style="font-size:.82rem">
+      <thead><tr>
+        <th>SKU</th><th>Item</th>
+        <th style="text-align:right">Ordered</th>
+        <th style="text-align:right">Delivered</th>
+        <th style="text-align:right">Due</th>
+        <th style="text-align:right">Ordered ₹</th>
+        <th style="text-align:right">Delivered ₹</th>
+        <th style="text-align:right">Due ₹</th>
+        <th>Status</th>
+      </tr></thead>
+      <tbody>${lineRows || '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  ${dcs && dcs.length ? `
+  <!-- DCs for this order -->
+  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Delivery Challans (${dcs.length})</div>
+  ${dcRows}
+  ` : ''}`;
+
+  openModal(
+    `Delivery Breakdown — ${orderId}`,
+    body,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+     <button class="btn btn-primary" onclick="closeModal();viewOrder('${orderId}')">Full Order View</button>`
+  );
 }
 
 /* ============================================================
