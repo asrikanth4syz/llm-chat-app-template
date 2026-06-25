@@ -2271,25 +2271,98 @@ async function renderDCBilling(el) {
       </div>`;
     }
     if (tab === 'ar_aging') {
-      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
-        <div style="font-size:1.5rem;margin-bottom:12px">📊</div>
-        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">AR Aging</div>
-        <div style="color:var(--text-muted)">Coming soon — this module will show accounts receivable aging buckets (0-30, 31-60, 61-90, 90+ days) across all clients.</div>
-      </div></div>`;
+      // AR Aging: billed DCs, bucketed by days since invoice
+      const buckets = [
+        { label: '0–30 days', min: 0, max: 30, cls: 'success' },
+        { label: '31–60 days', min: 31, max: 60, cls: 'warning' },
+        { label: '61–90 days', min: 61, max: 90, cls: 'danger' },
+        { label: '90+ days', min: 91, max: Infinity, cls: 'danger' },
+      ];
+      function ageDays(dc) {
+        return Math.floor((Date.now() - new Date(dc.billed_at || dc.delivered_at || dc.created_at).getTime()) / 86400000);
+      }
+      function bucket(dc) {
+        const d = ageDays(dc); return buckets.find(b => d >= b.min && d <= b.max) || buckets[3];
+      }
+      const billedTotal = billed.reduce((s,d)=>s+(d.order_value||0),0);
+      const overdue = billed.filter(d=>ageDays(d)>30);
+
+      // Per-client summary
+      const clientMap = {};
+      billed.forEach(d => {
+        const key = d.client_name || '—';
+        if (!clientMap[key]) clientMap[key] = { name:key, items:[] };
+        clientMap[key].items.push(d);
+      });
+
+      return `
+      <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+        ${buckets.map(b=>{
+          const items = billed.filter(d=>{ const age=ageDays(d); return age>=b.min && age<=b.max; });
+          return `<div class="kpi-card ${items.length?'kpi-'+b.cls:''}">
+            <div class="kpi-label">${b.label}</div>
+            <div class="kpi-value">${items.length}</div>
+            <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(items.reduce((s,d)=>s+(d.order_value||0),0))}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      ${overdue.length ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
+        <b>⚠ ${overdue.length} invoices past 30 days</b> — ${fmt(overdue.reduce((s,d)=>s+(d.order_value||0),0))} overdue
+      </div>` : ''}
+      <div class="card">
+        <div class="card-header">
+          <span>AR Aging by Client</span>
+          <span style="font-size:.83rem;color:var(--text-muted)">Total receivable: ${fmt(billedTotal)}</span>
+        </div>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Client</th><th>Invoices</th><th>0–30d</th><th>31–60d</th><th>61–90d</th><th>90+d</th><th>Total Outstanding</th><th>Risk</th></tr></thead>
+          <tbody>${Object.values(clientMap).map(c => {
+            const b0  = c.items.filter(d=>ageDays(d)<=30).reduce((s,d)=>s+(d.order_value||0),0);
+            const b30 = c.items.filter(d=>ageDays(d)>30&&ageDays(d)<=60).reduce((s,d)=>s+(d.order_value||0),0);
+            const b60 = c.items.filter(d=>ageDays(d)>60&&ageDays(d)<=90).reduce((s,d)=>s+(d.order_value||0),0);
+            const b90 = c.items.filter(d=>ageDays(d)>90).reduce((s,d)=>s+(d.order_value||0),0);
+            const total = c.items.reduce((s,d)=>s+(d.order_value||0),0);
+            const risk = b90>0?'High':b60>0?'Medium':b30>0?'Low':'Clean';
+            const riskCls = {High:'danger',Medium:'warning',Low:'info',Clean:'success'}[risk];
+            return `<tr>
+              <td><b>${c.name}</b></td>
+              <td>${c.items.length}</td>
+              <td style="color:var(--success)">${fmt(b0)}</td>
+              <td style="color:${b30>0?'var(--warning)':'var(--text-muted)'}">${fmt(b30)}</td>
+              <td style="color:${b60>0?'var(--danger)':'var(--text-muted)'}">${fmt(b60)}</td>
+              <td style="color:${b90>0?'var(--danger)':'var(--text-muted)'}"><b>${fmt(b90)}</b></td>
+              <td><b>${fmt(total)}</b></td>
+              <td><span class="badge badge-${riskCls}">${risk}</span></td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No billed invoices</td></tr>'}
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-header"><span>Invoice Detail</span></div>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>DC #</th><th>Client</th><th>Order</th><th>Value</th><th>Billed On</th><th>Age</th><th>Bucket</th></tr></thead>
+          <tbody>${billed.map(d => {
+            const age = ageDays(d); const b = bucket(d);
+            return `<tr>
+              <td><b>${d.id}</b></td>
+              <td>${d.client_name||'—'}</td>
+              <td>${d.order_id}</td>
+              <td>${fmt(d.order_value)}</td>
+              <td>${fmtDate(d.billed_at)}</td>
+              <td>${age}d</td>
+              <td><span class="badge badge-${b.cls}">${b.label}</span></td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No billed DCs</td></tr>'}
+          </tbody>
+        </table></div>
+      </div>`;
     }
     if (tab === 'ap_aging') {
-      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
-        <div style="font-size:1.5rem;margin-bottom:12px">📋</div>
-        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">AP Aging</div>
-        <div style="color:var(--text-muted)">Coming soon — this module will show accounts payable aging for vendor invoices and outstanding POs.</div>
-      </div></div>`;
+      return `<div class="loading-state"><div class="spinner"></div><p>Loading AP data…</p></div>`;
     }
     if (tab === 'margin_analysis') {
-      return `<div class="card"><div class="card-body" style="padding:32px;text-align:center">
-        <div style="font-size:1.5rem;margin-bottom:12px">📈</div>
-        <div style="font-weight:600;font-size:1.05rem;margin-bottom:8px">Margin Analysis</div>
-        <div style="color:var(--text-muted)">Coming soon — this module will show gross margin by product, category, and client with trend charts.</div>
-      </div></div>`;
+      return `<div class="loading-state"><div class="spinner"></div><p>Loading inventory data…</p></div>`;
     }
     return '';
   }
@@ -2311,14 +2384,207 @@ async function renderDCBilling(el) {
   APP._financeTabContent = financeTabContent;
 }
 
-function switchFinanceTab(tab) {
+async function switchFinanceTab(tab) {
   APP._financeTab = tab;
   document.querySelectorAll('.tabs .tab-btn').forEach(b => {
     const map = { 'dc_tracker':'DC Tracker','ar_aging':'AR Aging','ap_aging':'AP Aging','margin_analysis':'Margin Analysis' };
     b.classList.toggle('active', b.textContent.trim() === (map[tab]||tab));
   });
   const el = document.getElementById('finance-tab-content');
-  if (el && APP._financeTabContent) el.innerHTML = APP._financeTabContent(tab);
+  if (!el) return;
+
+  if (tab === 'dc_tracker' || tab === 'ar_aging') {
+    if (APP._financeTabContent) el.innerHTML = APP._financeTabContent(tab);
+  } else if (tab === 'ap_aging') {
+    el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading AP data…</p></div>`;
+    const pos = await api('/purchase-orders') || [];
+    el.innerHTML = renderAPAging(pos);
+  } else if (tab === 'margin_analysis') {
+    el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading inventory…</p></div>`;
+    const inv = await api('/inventory') || [];
+    el.innerHTML = renderMarginAnalysis(inv);
+  }
+}
+
+function renderAPAging(pos) {
+  const open = pos.filter(p => !['INVOICED','CANCELLED'].includes(p.status));
+  function ageDays(p) { return Math.floor((Date.now() - new Date(p.created_at).getTime()) / 86400000); }
+  const buckets = [
+    { label: '0–7 days',  min:0,  max:7,  cls:'success' },
+    { label: '8–15 days', min:8,  max:15, cls:'warning' },
+    { label: '16–30 days',min:16, max:30, cls:'danger' },
+    { label: '30+ days',  min:31, max:Infinity, cls:'danger' },
+  ];
+  const overdue = open.filter(p => ageDays(p) > 15);
+
+  const vendorMap = {};
+  open.forEach(p => {
+    const v = p.vendor_name || p.vendor_id || '—';
+    if (!vendorMap[v]) vendorMap[v] = { name:v, items:[] };
+    vendorMap[v].items.push(p);
+  });
+
+  return `
+  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+    ${buckets.map(b => {
+      const items = open.filter(p=>{ const a=ageDays(p); return a>=b.min && a<=b.max; });
+      return `<div class="kpi-card ${items.length?'kpi-'+b.cls:''}">
+        <div class="kpi-label">${b.label}</div>
+        <div class="kpi-value">${items.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(items.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+      </div>`;
+    }).join('')}
+  </div>
+  ${overdue.length ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
+    <b>⚠ ${overdue.length} POs outstanding 15+ days</b> — ${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))} payable
+  </div>` : ''}
+  <div class="card">
+    <div class="card-header">
+      <span>AP Aging by Vendor</span>
+      <span style="font-size:.83rem;color:var(--text-muted)">Total payable: ${fmt(open.reduce((s,p)=>s+(p.grand_total||0),0))}</span>
+    </div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Vendor</th><th>Open POs</th><th>0–7d</th><th>8–15d</th><th>16–30d</th><th>30+d</th><th>Total Payable</th><th>Status</th></tr></thead>
+      <tbody>${Object.values(vendorMap).map(v => {
+        const a0  = v.items.filter(p=>ageDays(p)<=7).reduce((s,p)=>s+(p.grand_total||0),0);
+        const a15 = v.items.filter(p=>ageDays(p)>7&&ageDays(p)<=15).reduce((s,p)=>s+(p.grand_total||0),0);
+        const a30 = v.items.filter(p=>ageDays(p)>15&&ageDays(p)<=30).reduce((s,p)=>s+(p.grand_total||0),0);
+        const a90 = v.items.filter(p=>ageDays(p)>30).reduce((s,p)=>s+(p.grand_total||0),0);
+        const total = v.items.reduce((s,p)=>s+(p.grand_total||0),0);
+        const risk = a90>0?'Overdue':a30>0?'Due Soon':'Current';
+        const riskCls = {Overdue:'danger','Due Soon':'warning',Current:'success'}[risk];
+        return `<tr>
+          <td><b>${v.name}</b></td>
+          <td>${v.items.length}</td>
+          <td style="color:var(--success)">${fmt(a0)}</td>
+          <td style="color:${a15>0?'var(--warning)':'var(--text-muted)'}">${fmt(a15)}</td>
+          <td style="color:${a30>0?'var(--danger)':'var(--text-muted)'}">${fmt(a30)}</td>
+          <td style="color:${a90>0?'var(--danger)':'var(--text-muted)'}"><b>${fmt(a90)}</b></td>
+          <td><b>${fmt(total)}</b></td>
+          <td><span class="badge badge-${riskCls}">${risk}</span></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No open POs</td></tr>'}
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-header"><span>Open PO Detail</span></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>PO ID</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Expected</th><th>Age</th></tr></thead>
+      <tbody>${open.map(p => {
+        const age = ageDays(p);
+        const ageCls = age>30?'danger':age>15?'warning':'success';
+        return `<tr>
+          <td><b>${p.id}</b></td>
+          <td>${p.vendor_name||p.vendor_id||'—'}</td>
+          <td>${fmt(p.grand_total)}</td>
+          <td>${statusBadge(p.status)}</td>
+          <td>${p.expected_delivery?fmtDate(p.expected_delivery):'—'}</td>
+          <td><span class="badge badge-${ageCls}">${age}d</span></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No open POs</td></tr>'}
+      </tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderMarginAnalysis(inv) {
+  const priced = inv.filter(i => i.unit_price > 0 && i.cost_excl_gst > 0);
+  const marginOf = i => i.unit_price > 0 ? ((i.unit_price - i.cost_excl_gst) / i.unit_price * 100) : 0;
+  const marginColor = m => m >= 30 ? '#10b981' : m >= 15 ? '#f59e0b' : '#ef4444';
+
+  // Category roll-up
+  const catMap = {};
+  priced.forEach(i => {
+    const c = i.category || 'Uncategorised';
+    if (!catMap[c]) catMap[c] = { items:[], revenue:0, cost:0 };
+    catMap[c].items.push(i);
+    catMap[c].revenue += (i.unit_price||0) * (i.stock||0);
+    catMap[c].cost    += (i.cost_excl_gst||0) * (i.stock||0);
+  });
+
+  const overallMargin = priced.length ? (priced.reduce((s,i)=>s+marginOf(i),0)/priced.length).toFixed(1) : 0;
+  const highMargin  = priced.filter(i=>marginOf(i)>=30).length;
+  const lowMargin   = priced.filter(i=>marginOf(i)<15).length;
+  const negative    = inv.filter(i=>i.unit_price>0 && i.cost_excl_gst > i.unit_price).length;
+
+  const topItems = [...priced].sort((a,b)=>marginOf(b)-marginOf(a)).slice(0,10);
+  const bottomItems = [...priced].sort((a,b)=>marginOf(a)-marginOf(b)).slice(0,10);
+
+  return `
+  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card"><div class="kpi-label">Avg Margin</div><div class="kpi-value" style="color:${marginColor(overallMargin)}">${overallMargin}%</div></div>
+    <div class="kpi-card kpi-success"><div class="kpi-label">High Margin (≥30%)</div><div class="kpi-value">${highMargin}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
+    <div class="kpi-card kpi-warning"><div class="kpi-label">Low Margin (&lt;15%)</div><div class="kpi-value">${lowMargin}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
+    <div class="kpi-card ${negative?'kpi-danger':''}"><div class="kpi-label">Below Cost</div><div class="kpi-value">${negative}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-header"><span>Margin by Category</span></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Category</th><th>SKUs</th><th>Avg Margin %</th><th>Revenue (on hand)</th><th>Cost (on hand)</th><th>Gross Profit</th><th>Health</th></tr></thead>
+      <tbody>${Object.entries(catMap).sort((a,b)=>{
+        const ma = a[1].items.reduce((s,i)=>s+marginOf(i),0)/a[1].items.length;
+        const mb = b[1].items.reduce((s,i)=>s+marginOf(i),0)/b[1].items.length;
+        return mb-ma;
+      }).map(([cat,data])=>{
+        const avgM = (data.items.reduce((s,i)=>s+marginOf(i),0)/data.items.length).toFixed(1);
+        const gp = data.revenue - data.cost;
+        const health = avgM>=30?'Excellent':avgM>=20?'Good':avgM>=10?'Thin':'Critical';
+        const hCls = {Excellent:'success',Good:'success',Thin:'warning',Critical:'danger'}[health];
+        return `<tr>
+          <td><b>${cat}</b></td>
+          <td>${data.items.length}</td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-weight:700;color:${marginColor(avgM)}">${avgM}%</span>
+              <div style="flex:1;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;min-width:60px">
+                <div style="height:100%;width:${Math.min(avgM,100)}%;background:${marginColor(avgM)};border-radius:3px"></div>
+              </div>
+            </div>
+          </td>
+          <td>${fmt(data.revenue)}</td>
+          <td>${fmt(data.cost)}</td>
+          <td style="color:${gp>=0?'#10b981':'#ef4444'};font-weight:700">${fmt(gp)}</td>
+          <td><span class="badge badge-${hCls}">${health}</span></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No priced items</td></tr>'}
+      </tbody>
+    </table></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="card">
+      <div class="card-header"><span>Top 10 by Margin</span></div>
+      <div class="table-wrap"><table class="table" style="font-size:.82rem">
+        <thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Cost</th><th>Margin %</th></tr></thead>
+        <tbody>${topItems.map(i=>{
+          const m = marginOf(i).toFixed(1);
+          return `<tr>
+            <td><b>${i.name}</b></td><td>${i.category||'—'}</td>
+            <td>${fmt(i.unit_price)}</td><td>${fmt(i.cost_excl_gst)}</td>
+            <td><span style="font-weight:700;color:${marginColor(m)}">${m}%</span></td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Bottom 10 by Margin</span></div>
+      <div class="table-wrap"><table class="table" style="font-size:.82rem">
+        <thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Cost</th><th>Margin %</th></tr></thead>
+        <tbody>${bottomItems.map(i=>{
+          const m = marginOf(i).toFixed(1);
+          return `<tr>
+            <td><b>${i.name}</b></td><td>${i.category||'—'}</td>
+            <td>${fmt(i.unit_price)}</td><td>${fmt(i.cost_excl_gst)}</td>
+            <td><span style="font-weight:700;color:${marginColor(m)}">${m}%</span></td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+  </div>`;
 }
 
 async function billDC(id) {
