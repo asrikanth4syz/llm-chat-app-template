@@ -583,6 +583,7 @@ async function renderDashboard(el) {
   const nav = APP.user.nav;
   if (nav==='client'||nav==='client_user'||nav==='approver') { renderClientDashboard(el); return; }
   if (nav==='vendor'||nav==='vendor_user') { renderVendorDashboard(el); return; }
+  if (nav==='delivery_exec') { renderDeliveryExecDashboard(el); return; }
   renderOpsDashboard(el);
 }
 
@@ -4180,11 +4181,180 @@ async function confirmReturnDC(dcId) {
     body: JSON.stringify({ reason })
   });
   closeModal();
-  if (res) { showToast(`DC ${dcId} marked as returned — stock restored`); switchDeliveryTab('returns', document.querySelectorAll('#dc-tabs .tab-btn')[3]); }
+  if (res) {
+    showToast(`DC ${dcId} marked as returned — stock restored`);
+    const tabs = document.querySelectorAll('#dc-tabs .tab-btn');
+    if (tabs.length) switchDeliveryTab('returns', tabs[3]);
+    else navigate('dashboard');
+  }
 }
 
 function partialDeliveryModal(dcId) { markDelivered(dcId); }
 async function confirmPartialDelivery() {}
+
+/* ============================================================
+   DELIVERY EXECUTIVE — Personal dashboard
+   ============================================================ */
+async function renderDeliveryExecDashboard(el) {
+  el.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading your deliveries…</p></div>';
+  const dcs = await api('/delivery-challans');
+  if (!dcs) { el.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--danger)">Failed to load.</div>'; return; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const myName = (APP.user?.name || '').toLowerCase();
+
+  // Filter: assigned to me (driver_name matches) OR all in-transit if no assignments yet (demo)
+  const assigned = dcs.filter(d => d.driver_name && d.driver_name.toLowerCase().includes(myName.split(' ')[0]));
+  const useMine = assigned.length > 0;
+  const pool = useMine ? assigned : dcs;
+
+  const inTransit   = pool.filter(d => d.status === 'IN_TRANSIT');
+  const scheduled   = pool.filter(d => d.status === 'SCHEDULED');
+  const delivToday  = pool.filter(d => d.status === 'DELIVERED' && (d.delivered_at || '').startsWith(today));
+  const totalItems  = inTransit.reduce((s, d) => s + (d.total_qty || 0), 0);
+  const overdue     = inTransit.filter(d => d.expected_delivery_date && d.expected_delivery_date < today);
+
+  el.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Good ${new Date().getHours()<12?'morning':'afternoon'}, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
+      <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">Delivery Executive · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
+    </div>
+    <button class="btn btn-secondary" onclick="navigate('delivery')">View All DCs</button>
+  </div>
+
+  <!-- KPI row -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">In Transit</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${inTransit.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${totalItems} items to deliver</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Overdue</div>
+      <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};line-height:1.2;margin-top:6px">${overdue.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${overdue.length?'requires attention':'on track'}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Delivered Today</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${delivToday.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">completed runs</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--warning)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Scheduled</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${scheduled.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">pending dispatch</div>
+    </div>
+  </div>
+
+  <!-- In-transit delivery cards -->
+  <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+    <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Active Deliveries${inTransit.length?' ('+inTransit.length+')':''}</div>
+    ${overdue.length ? '<span style="background:#fef2f2;color:var(--danger);font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:20px">'+overdue.length+' overdue</span>' : ''}
+  </div>
+
+  ${inTransit.length === 0 ? `
+    <div style="background:#fff;border-radius:12px;padding:40px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+      <div style="font-size:2.5rem;margin-bottom:8px">✅</div>
+      <div style="font-weight:700;color:var(--navy);font-size:1rem">All deliveries complete!</div>
+      <div style="color:var(--text-muted);font-size:.85rem;margin-top:4px">No active in-transit challans assigned to you.</div>
+    </div>
+  ` : `
+    <div id="exec-dc-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-bottom:20px">
+      ${inTransit.map(dc => execDCCard(dc, today)).join('')}
+    </div>
+  `}
+
+  <!-- Today's completed deliveries -->
+  ${delivToday.length > 0 ? `
+  <div style="margin-bottom:8px;font-weight:700;font-size:.95rem;color:var(--navy)">Completed Today (${delivToday.length})</div>
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
+    ${delivToday.map(dc => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:32px;height:32px;border-radius:50%;background:#d1fae5;display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
+        <div>
+          <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
+          <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id}</div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:.82rem;font-weight:700;color:var(--success)">Delivered</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${fmtDate(dc.delivered_at)}</div>
+      </div>
+    </div>`).join('')}
+  </div>` : ''}`;
+}
+
+function execDCCard(dc, today) {
+  const overdue = dc.expected_delivery_date && dc.expected_delivery_date < today;
+  const eta = dc.expected_delivery_date ? new Date(dc.expected_delivery_date).toLocaleDateString('en-IN',{day:'numeric',month:'short'}) : '—';
+  return `<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);border:1px solid ${overdue?'var(--danger)':'var(--border)'};overflow:hidden">
+    <!-- Card header -->
+    <div style="padding:14px 16px;background:${overdue?'#fef2f2':'#f8fafc'};border-bottom:1px solid ${overdue?'#fecaca':'var(--border)'};display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <span style="font-weight:800;font-size:.92rem;color:var(--navy)">DC #${dc.id}</span>
+        ${overdue ? '<span style="margin-left:8px;background:var(--danger);color:#fff;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase">Overdue</span>' : ''}
+      </div>
+      <span style="font-size:.8rem;font-weight:600;color:#0369a1;background:#e0f2fe;padding:3px 10px;border-radius:20px">In Transit</span>
+    </div>
+    <!-- Card body -->
+    <div style="padding:14px 16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;font-size:.82rem">
+        <div><span style="color:var(--text-muted)">Client</span><br><b>${dc.client_name||'—'}</b></div>
+        <div><span style="color:var(--text-muted)">Order</span><br><b>${dc.order_id}</b></div>
+        <div><span style="color:var(--text-muted)">Vehicle</span><br><b>${dc.vehicle_no||'—'}</b></div>
+        <div><span style="color:var(--text-muted)">ETA</span><br><b style="color:${overdue?'var(--danger)':'inherit'}">${eta}</b></div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--border-light,#f1f5f9);border-radius:8px;margin-bottom:12px;font-size:.82rem">
+        <span style="color:var(--text-muted)">Items to deliver</span>
+        <span style="font-weight:700;font-size:1rem;color:var(--navy)">${dc.total_qty||'?'}</span>
+      </div>
+      <!-- Action buttons -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="flex:1;min-width:140px" onclick="execMarkDelivered('${dc.id}')">✓ Mark Delivered</button>
+        <button class="btn btn-secondary" style="flex:0 0 auto" onclick="viewDCItems('${dc.id}')" title="View items">📋</button>
+        <button class="btn btn-secondary" style="flex:0 0 auto;color:var(--danger)" onclick="returnDCModal('${dc.id}')" title="Return DC">↩</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function execMarkDelivered(dcId) {
+  const items = await api('/delivery-challans/' + dcId + '/items');
+  if (!items) return;
+  if (!items.length) {
+    const res = await api('/delivery-challans/' + dcId + '/deliver', { method:'POST', body: JSON.stringify({}) });
+    if (res) { showToast('DC ' + dcId + ' marked as delivered'); navigate('dashboard'); }
+    return;
+  }
+  openModal('Confirm Delivery — ' + dcId, `
+    <p style="color:var(--text-muted);margin-bottom:12px">Enter actual qty delivered. If less than dispatched, a follow-up DC will be created.</p>
+    <table class="table" style="margin-bottom:16px">
+      <thead><tr><th>Item</th><th>Dispatched</th><th>Delivered</th></tr></thead>
+      <tbody>${items.map(it => `<tr>
+        <td>${it.item_name||it.sku}</td>
+        <td>${it.qty_ordered}</td>
+        <td><input type="number" data-sku="${it.sku}" value="${it.qty_ordered}" min="0" max="${it.qty_ordered}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      </tr>`).join('')}
+      </tbody>
+    </table>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="confirmExecDelivery('${dcId}')">Confirm Delivery</button>`
+  );
+}
+
+async function confirmExecDelivery(dcId) {
+  const inputs = document.querySelectorAll('#modal-body input[data-sku]');
+  const items = Array.from(inputs).map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
+  const res = await api('/delivery-challans/' + dcId + '/deliver', { method:'POST', body: JSON.stringify({ items }) });
+  if (res) {
+    closeModal();
+    const msg = res.partial ? 'Partial delivery recorded — follow-up DC created' : 'DC ' + dcId + ' fully delivered' + (res.order_closed ? ' — order closed' : '');
+    showToast(msg);
+    navigate('dashboard');
+  }
+}
 
 /* ============================================================
    CLIENTS
