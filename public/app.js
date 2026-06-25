@@ -2753,10 +2753,19 @@ async function renderInventory(el) {
     <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
       style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
       oninput="APP._invSearch=this.value.toLowerCase();refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
-      ${cats.map(c=>`<button class="tab-pill inv-cat-pill${APP._invFilter===c?' active':''}" onclick="APP._invFilter='${c}';document.querySelectorAll('.inv-cat-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active');refreshInvTable()">${c}</button>`).join('')}
-      <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
-      ${['All','Healthy','Normal'].map(s=>`<button class="tab-pill inv-sub-pill${APP._invSubFilter===s?' active':''}" style="${s==='Healthy'&&APP._invSubFilter===s?'background:#d1fae5;color:#059669;border-color:#059669':''}" onclick="APP._invSubFilter='${s}';document.querySelectorAll('.inv-sub-pill').forEach(b=>{b.classList.remove('active');b.style.cssText='';});this.classList.add('active');${s==='Healthy'?"this.style.cssText='background:#d1fae5;color:#059669;border-color:#059669'":''};refreshInvTable()">${s==='All'?'All Sub-Cat':s}</button>`).join('')}
+    <div id="inv-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
+      ${cats.map(c=>{
+        const active = APP._invFilter===c;
+        return `<button data-inv-cat="${c}" onclick="invFilterCat('${c}')" style="padding:4px 12px;border-radius:20px;border:1.5px solid ${active?'var(--blue)':'var(--border)'};background:${active?'var(--blue)':'#fff'};color:${active?'#fff':'var(--navy)'};font-size:.8rem;cursor:pointer;font-weight:${active?700:400};transition:all .15s">${c}</button>`;
+      }).join('')}
+      <div style="width:1px;height:20px;background:var(--border);margin:0 6px;flex-shrink:0"></div>
+      ${['All','Healthy','Normal'].map(s=>{
+        const label = s==='All'?'All Sub-Cat':s;
+        const active = APP._invSubFilter===s;
+        const activeStyle = s==='Healthy' ? 'background:#d1fae5;color:#059669;border-color:#059669' : 'background:var(--blue);color:#fff;border-color:var(--blue)';
+        const style = active ? activeStyle : 'background:#fff;color:var(--navy);border-color:var(--border)';
+        return `<button data-inv-sub="${s}" onclick="invFilterSubCat('${s}')" style="padding:4px 12px;border-radius:20px;border:1.5px solid;font-size:.8rem;cursor:pointer;font-weight:${active?700:400};transition:all .15s;${style}">${label}</button>`;
+      }).join('')}
     </div>
   </div>
 
@@ -2778,6 +2787,31 @@ async function renderInventory(el) {
 
   window.refreshInvTable = function() {
     document.getElementById('inv-tbody').innerHTML = invTableRows(getFiltered());
+  };
+
+  window.invFilterCat = function(cat) {
+    APP._invFilter = cat;
+    document.querySelectorAll('#inv-filter-bar [data-inv-cat]').forEach(b => {
+      const active = b.dataset.invCat === cat;
+      b.style.background = active ? 'var(--blue)' : '#fff';
+      b.style.color      = active ? '#fff' : 'var(--navy)';
+      b.style.borderColor= active ? 'var(--blue)' : 'var(--border)';
+      b.style.fontWeight = active ? 700 : 400;
+    });
+    refreshInvTable();
+  };
+
+  window.invFilterSubCat = function(sub) {
+    APP._invSubFilter = sub;
+    document.querySelectorAll('#inv-filter-bar [data-inv-sub]').forEach(b => {
+      const active = b.dataset.invSub === sub;
+      const isHealthy = b.dataset.invSub === 'Healthy';
+      b.style.background  = active ? (isHealthy ? '#d1fae5' : 'var(--blue)') : '#fff';
+      b.style.color       = active ? (isHealthy ? '#059669' : '#fff') : 'var(--navy)';
+      b.style.borderColor = active ? (isHealthy ? '#059669' : 'var(--blue)') : 'var(--border)';
+      b.style.fontWeight  = active ? 700 : 400;
+    });
+    refreshInvTable();
   };
 }
 
