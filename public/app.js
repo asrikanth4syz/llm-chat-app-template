@@ -4593,31 +4593,104 @@ async function saveClient() {
 async function renderServiceDesk(el) {
   const tickets = await api('/tickets');
   if (!tickets) return;
-  const open = tickets.filter(t=>t.status!=='RESOLVED');
+
+  const openT     = tickets.filter(t=>t.status==='OPEN');
+  const inProgT   = tickets.filter(t=>t.status==='IN_PROGRESS');
+  const resolvedT = tickets.filter(t=>t.status==='RESOLVED');
+
+  const PRIORITY_META = {
+    HIGH:   { color:'var(--danger)',  bg:'#fef2f2', label:'High' },
+    MEDIUM: { color:'#d97706',        bg:'#fef3c7', label:'Medium' },
+    LOW:    { color:'#2563eb',        bg:'#dbeafe', label:'Low' },
+  };
+  const STATUS_META = {
+    OPEN:        { color:'#d97706', bg:'#fef3c7', dot:'🟡' },
+    IN_PROGRESS: { color:'#2563eb', bg:'#dbeafe', dot:'🔵' },
+    RESOLVED:    { color:'#059669', bg:'#d1fae5', dot:'🟢' },
+  };
+
+  function ticketCard(t) {
+    const pm = PRIORITY_META[t.priority] || PRIORITY_META.MEDIUM;
+    const sm = STATUS_META[t.status] || STATUS_META.OPEN;
+    const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+    return `
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:700;font-size:.88rem;color:var(--navy)">${t.id}</span>
+            <span style="font-size:.68rem;font-weight:700;background:${pm.bg};color:${pm.color};border-radius:4px;padding:1px 7px">${pm.label}</span>
+            <span style="font-size:.68rem;font-weight:700;background:${sm.bg};color:${sm.color};border-radius:4px;padding:1px 7px">${sm.dot} ${t.status.replace('_',' ')}</span>
+          </div>
+          <div style="font-size:.88rem;font-weight:600;color:var(--navy);margin-top:6px">${t.subject}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">
+            ${fmtDate(t.created_at)}${t.client_name&&!isClient?' · '+t.client_name:''}
+          </div>
+          ${t.description?`<div style="font-size:.76rem;color:var(--text-muted);margin-top:6px;background:#f8f9fa;padding:8px 10px;border-radius:6px;line-height:1.5">${t.description.length>120?t.description.slice(0,120)+'…':t.description}</div>`:''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+          ${t.status!=='RESOLVED'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
+          ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">▶ Start</button>`:''}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   el.innerHTML = `
-  ${pageHeader('Service Desk', `${open.length} open tickets`,
-    `<button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Ticket</th><th>Client</th><th>Subject</th><th>Priority</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${tickets.map(t=>`<tr>
-          <td><b>${t.id}</b></td>
-          <td>${t.client_name||'—'}</td>
-          <td>${t.subject}</td>
-          <td>${statusBadge(t.priority)}</td>
-          <td>${statusBadge(t.status)}</td>
-          <td>${fmtDate(t.created_at)}</td>
-          <td>
-            ${t.status!=='RESOLVED'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">Resolve</button>`:''}
-            ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">Start</button>`:''}
-          </td>
-        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No tickets</td></tr>'}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Service Desk</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${openT.length+inProgT.length} open · ${resolvedT.length} resolved</div>
     </div>
-  </div>`;
+    <button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${openT.filter(t=>t.priority==='HIGH').length?'var(--danger)':'#f59e0b'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Open</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${openT.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${openT.filter(t=>t.priority==='HIGH').length} high priority</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Progress</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inProgT.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">being handled</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Resolved</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${resolvedT.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">all time</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--danger)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">High Priority</div>
+      <div style="font-size:2rem;font-weight:800;color:${tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length?'var(--danger)':'var(--navy)'};margin-top:6px">${tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">open high priority</div>
+    </div>
+  </div>
+
+  ${openT.length ? `
+  <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Open</div>
+  ${openT.sort((a,b)=>{const p={HIGH:0,MEDIUM:1,LOW:2}; return (p[a.priority]||1)-(p[b.priority]||1);}).map(t=>ticketCard(t)).join('')}` : ''}
+
+  ${inProgT.length ? `
+  <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;${openT.length?'margin-top:20px':''}">In Progress</div>
+  ${inProgT.map(t=>ticketCard(t)).join('')}` : ''}
+
+  ${openT.length===0&&inProgT.length===0?`
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted);margin-bottom:20px">
+    <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
+    <div style="font-weight:700;font-size:1rem;color:var(--navy)">All tickets resolved!</div>
+    <div style="font-size:.84rem;margin-top:6px">No open issues right now.</div>
+  </div>`:''}
+
+  ${resolvedT.length ? `
+  <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;${openT.length||inProgT.length?'margin-top:20px':''}">Recently Resolved</div>
+  ${resolvedT.slice(0,5).map(t=>ticketCard(t)).join('')}
+  ${resolvedT.length>5?`<div style="text-align:center;font-size:.76rem;color:var(--text-muted);margin-top:8px">+${resolvedT.length-5} more resolved tickets</div>`:''}`:''}
+  `;
 }
 
 function newTicketModal() {
@@ -4747,9 +4820,22 @@ async function approveOrder(id) {
   if (res) { showToast(`Order ${id} approved`); navigate('approvals'); }
 }
 
-async function rejectOrder(id) {
-  const reason = prompt('Rejection reason (optional):') || 'Rejected by approver';
+function rejectOrder(id) {
+  openModal(`Reject Order ${id}`,
+    `<div style="margin-bottom:16px;color:var(--text-muted);font-size:.88rem">This will cancel the order and notify the requester.</div>
+     <div class="form-group">
+       <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
+       <textarea id="reject-reason" rows="4" placeholder="Explain why this order is being rejected…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="confirmRejectOrder('${id}')">Reject Order</button>`);
+}
+
+async function confirmRejectOrder(id) {
+  const reason = (document.getElementById('reject-reason')?.value||'').trim();
+  if (!reason) { showToast('Please provide a rejection reason','error'); return; }
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note: reason }) });
+  closeModal();
   if (res) { showToast(`Order ${id} rejected`); navigate('approvals'); }
 }
 
@@ -5263,31 +5349,118 @@ async function renderVendorPOs(el) {
   const pos = await api('/purchase-orders');
   if (!pos) return;
 
+  const sentPOs       = pos.filter(p=>p.status==='SENT');
+  const acceptedPOs   = pos.filter(p=>p.status==='ACCEPTED');
+  const dispatchedPOs = pos.filter(p=>p.status==='DISPATCHED');
+  const invoicedPOs   = pos.filter(p=>p.status==='INVOICED');
+  const totalValue    = sentPOs.reduce((s,p)=>s+(p.grand_total||0),0);
+
+  const PO_META = {
+    SENT:       { label:'Action Required', color:'#d97706', bg:'#fef3c7', border:'#f59e0b', icon:'⚡' },
+    ACCEPTED:   { label:'Accepted',        color:'#2563eb', bg:'#dbeafe', border:'#3b82f6', icon:'✓' },
+    DISPATCHED: { label:'Dispatched',      color:'#7c3aed', bg:'#ede9fe', border:'#8b5cf6', icon:'🚚' },
+    INVOICED:   { label:'Invoiced',        color:'#059669', bg:'#d1fae5', border:'#10b981', icon:'📄' },
+  };
+
+  function poCard(po) {
+    const m = PO_META[po.status] || { label:po.status, color:'#6b7280', bg:'#f3f4f6', border:'#d1d5db', icon:'•' };
+    const steps = ['SENT','ACCEPTED','DISPATCHED','INVOICED'];
+    const stepIdx = steps.indexOf(po.status);
+    const isOverdue = po.expected_delivery && po.status!=='INVOICED' && new Date(po.expected_delivery)<new Date();
+    return `
+    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid ${isOverdue?'var(--danger)':m.border}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-weight:800;font-size:1rem;color:var(--navy)">${po.id}</span>
+            <span style="font-size:.68rem;font-weight:700;background:${m.bg};color:${m.color};border-radius:4px;padding:2px 8px">${m.icon} ${m.label}</span>
+            ${isOverdue?`<span style="font-size:.68rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:2px 8px">⚠ Overdue</span>`:''}
+          </div>
+          <div style="font-size:.76rem;color:var(--text-muted);margin-top:4px">
+            Created ${fmtDate(po.created_at)}${po.expected_delivery?' · Expected '+fmtDate(po.expected_delivery):''}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:800;font-size:1.2rem;color:var(--navy)">${fmt(po.grand_total)}</div>
+          <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">${(po.items||[]).length} line items</div>
+        </div>
+      </div>
+      <!-- progress bar -->
+      <div style="display:flex;align-items:center;gap:0;margin-bottom:14px">
+        ${steps.map((s,i)=>{
+          const done = stepIdx >= i;
+          const active = stepIdx === i;
+          return `<div style="display:flex;align-items:center;flex:1">
+            <div style="width:20px;height:20px;border-radius:50%;background:${done?m.color:'#e5e7eb'};display:flex;align-items:center;justify-content:center;font-size:.58rem;color:#fff;font-weight:700;flex-shrink:0;${active?'box-shadow:0 0 0 3px '+m.bg:''}">${i+1}</div>
+            <div style="font-size:.6rem;color:${done?m.color:'#9ca3af'};margin-left:3px;white-space:nowrap;font-weight:${active?700:400}">${s.replace('_',' ')}</div>
+            ${i<steps.length-1?`<div style="flex:1;height:2px;background:${stepIdx>i?m.color:'#e5e7eb'};margin:0 4px;min-width:8px"></div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+      <!-- items preview -->
+      ${(po.items||[]).length ? `
+      <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:12px;display:flex;flex-wrap:wrap;gap:4px">
+        ${(po.items||[]).slice(0,4).map(i=>`<span style="background:#f3f4f6;border-radius:4px;padding:2px 7px">${i.name} ×${i.qty}</span>`).join('')}
+        ${(po.items||[]).length>4?`<span style="background:#f3f4f6;border-radius:4px;padding:2px 7px;color:var(--text-muted)">+${(po.items||[]).length-4} more</span>`:''}
+      </div>`:''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${poActions(po)}</div>
+    </div>`;
+  }
+
   el.innerHTML = `
-  ${pageHeader('Purchase Orders', `${pos.length} POs`)}
-  <div class="kpi-row">
-    ${['SENT','ACCEPTED','DISPATCHED','INVOICED'].map(s=>`
-    <div class="kpi-card${s==='SENT'?' kpi-warning':''}">
-      <div class="kpi-label">${s}</div>
-      <div class="kpi-value${s==='SENT'?' kpi-warning':''}">${pos.filter(p=>p.status===s).length}</div>
-    </div>`).join('')}
-  </div>
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>PO #</th><th>Items</th><th>Amount</th><th>Expected</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${pos.map(po=>`<tr>
-          <td><b>${po.id}</b></td>
-          <td>${(po.items||[]).map(i=>`${i.name} ×${i.qty}`).join(', ')||'—'}</td>
-          <td>${fmt(po.grand_total)}</td>
-          <td>${fmtDate(po.expected_delivery)}</td>
-          <td>${statusBadge(po.status)}</td>
-          <td>${poActions(po)}</td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No POs</td></tr>'}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Purchase Orders</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${pos.length} total · ${sentPOs.length} need action</div>
     </div>
-  </div>`;
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #f59e0b;cursor:pointer" onclick="document.getElementById('vpo-sent').scrollIntoView({behavior:'smooth'})">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Action Required</div>
+      <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'#d97706':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)} pending</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Accepted</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">preparing to dispatch</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #8b5cf6">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Dispatched</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${dispatchedPOs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting invoice</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Invoiced</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoicedPOs.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">payment pending</div>
+    </div>
+  </div>
+
+  ${sentPOs.length ? `
+  <div id="vpo-sent" style="font-size:.84rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Action Required</div>
+  ${sentPOs.map(po=>poCard(po)).join('')}` : ''}
+
+  ${acceptedPOs.length ? `
+  <div style="font-size:.84rem;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length?20:0}px">✓ Accepted — Prepare Dispatch</div>
+  ${acceptedPOs.map(po=>poCard(po)).join('')}` : ''}
+
+  ${dispatchedPOs.length ? `
+  <div style="font-size:.84rem;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length?20:0}px">🚚 Dispatched — Upload Invoice</div>
+  ${dispatchedPOs.map(po=>poCard(po)).join('')}` : ''}
+
+  ${invoicedPOs.length ? `
+  <div style="font-size:.84rem;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length||dispatchedPOs.length?20:0}px">📄 Invoiced — Awaiting Payment</div>
+  ${invoicedPOs.map(po=>poCard(po)).join('')}` : ''}
+
+  ${pos.length===0?`<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+    <div style="font-size:2.5rem;margin-bottom:12px">📦</div>
+    <div style="font-weight:700;font-size:1rem;color:var(--navy)">No purchase orders yet</div>
+    <div style="font-size:.84rem;margin-top:6px">POs will appear here when the ops team sends them to you.</div>
+  </div>`:''}
+  `;
 }
 
 async function acceptPO(id, vendorTotal) {
@@ -5373,56 +5546,168 @@ async function confirmPOAction(id, status, msg) {
 async function renderVendorInvoices(el) {
   const pos = await api('/purchase-orders');
   if (!pos) return;
-  const invoiced = pos.filter(p => p.status === 'INVOICED' || p.invoice_url);
+  const invoiced  = pos.filter(p => p.status === 'INVOICED' || p.invoice_url);
+  const pending   = pos.filter(p => p.status === 'DISPATCHED' && !p.invoice_url);
+  const totalInv  = invoiced.reduce((s,p)=>s+(p.grand_total||0),0);
 
   el.innerHTML = `
-  ${pageHeader('Invoices', `${invoiced.length} invoices`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>PO #</th><th>Amount</th><th>Invoice Ref</th><th>Date</th><th>Status</th></tr></thead>
-        <tbody>${invoiced.map(po=>`<tr>
-          <td><b>${po.id}</b></td>
-          <td>${fmt(po.grand_total)}</td>
-          <td>${po.invoice_url ? `<a href="${po.invoice_url}" target="_blank" style="color:var(--navy)">${po.invoice_url.length>30?po.invoice_url.slice(0,30)+'…':po.invoice_url}</a>` : '—'}</td>
-          <td>${fmtDate(po.updated_at)}</td>
-          <td>${statusBadge(po.status)}</td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No invoices yet</td></tr>'}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Invoices</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${invoiced.length} submitted · ${pending.length} pending upload</div>
     </div>
-  </div>`;
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Invoices Submitted</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoiced.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalInv)} total</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Awaiting Upload</div>
+      <div style="font-size:2rem;font-weight:800;color:${pending.length?'#d97706':'var(--navy)'};margin-top:6px">${pending.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">dispatched, no invoice yet</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Net-30 Terms</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">30d</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">avg payment cycle</div>
+    </div>
+  </div>
+
+  ${pending.length ? `
+  <div style="font-size:.84rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Awaiting Invoice Upload</div>
+  ${pending.map(po=>`
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;gap:12px">
+    <div>
+      <div style="font-weight:700;font-size:.92rem;color:var(--navy)">${po.id}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">Dispatched ${fmtDate(po.updated_at)} · ${fmt(po.grand_total)}</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="uploadInvoice('${po.id}')">Upload Invoice</button>
+  </div>`).join('')}
+  <div style="margin-bottom:18px"></div>` : ''}
+
+  <div style="font-size:.84rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Submitted Invoices</div>
+  ${invoiced.length===0 ? `
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+    <div style="font-size:2rem;margin-bottom:10px">📄</div>
+    <div style="font-weight:600;color:var(--navy)">No invoices submitted yet</div>
+    <div style="font-size:.82rem;margin-top:6px">Invoices appear here once uploaded after dispatch.</div>
+  </div>` :
+  `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    ${invoiced.map((po,i)=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<invoiced.length-1?'border-bottom:1px solid var(--border)':''}">
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${po.id}</div>
+        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">Uploaded ${fmtDate(po.updated_at)}</div>
+      </div>
+      <div style="flex:1;min-width:0;text-align:center">
+        ${po.invoice_url ? `<a href="${po.invoice_url}" target="_blank" style="font-size:.76rem;color:var(--blue);word-break:break-all">${po.invoice_url.length>40?po.invoice_url.slice(0,40)+'…':po.invoice_url}</a>` : '<span style="font-size:.76rem;color:var(--text-muted)">—</span>'}
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-weight:700;font-size:.88rem">${fmt(po.grand_total)}</div>
+        ${statusBadge(po.status)}
+      </div>
+    </div>`).join('')}
+  </div>`}
+  `;
 }
 
 async function renderVendorPayments(el) {
   const pos = await api('/purchase-orders');
   if (!pos) return;
-  const paid = pos.filter(p => p.status === 'INVOICED');
-  const totalPending = paid.reduce((s,p) => s + (p.grand_total||0), 0);
+  const invoiced     = pos.filter(p => p.status === 'INVOICED');
+  const totalPending = invoiced.reduce((s,p) => s + (p.grand_total||0), 0);
+  const today        = new Date();
+
+  function daysUntilDue(po) {
+    const due = new Date(new Date(po.updated_at).getTime() + 30*86400000);
+    return Math.ceil((due - today) / 86400000);
+  }
+
+  const overdue    = invoiced.filter(p => daysUntilDue(p) < 0);
+  const dueSoon    = invoiced.filter(p => { const d=daysUntilDue(p); return d>=0 && d<=7; });
+  const upcoming   = invoiced.filter(p => daysUntilDue(p) > 7);
 
   el.innerHTML = `
-  ${pageHeader('Payments', 'Payment status for submitted invoices')}
-  <div class="kpi-row">
-    <div class="kpi-card kpi-warning"><div class="kpi-label">Pending Payment</div><div class="kpi-value kpi-warning">${fmt(totalPending)}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Invoices Submitted</div><div class="kpi-value">${paid.length}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Avg Payment Days</div><div class="kpi-value">30d</div><div class="kpi-sub">Net-30 terms</div></div>
-  </div>
-  <div class="card">
-    <div class="card-header"><span>Payment Tracker</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>PO #</th><th>Invoice Ref</th><th>Amount</th><th>Due Date</th><th>Payment Status</th></tr></thead>
-        <tbody>${paid.map(po=>`<tr>
-          <td><b>${po.id}</b></td>
-          <td>${po.invoice_url||'—'}</td>
-          <td>${fmt(po.grand_total)}</td>
-          <td>${fmtDate(new Date(new Date(po.updated_at).getTime()+30*86400000).toISOString())}</td>
-          <td><span class="badge badge-warning">PENDING</span></td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No pending payments</td></tr>'}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Payments</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track receivables and payment schedules</div>
     </div>
-  </div>`;
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--warning)'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Receivable</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalPending)}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Overdue</div>
+      <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};margin-top:6px">${overdue.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'#f59e0b':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Due This Week</div>
+      <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'#d97706':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Payment Terms</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">Net-30</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">from invoice date</div>
+    </div>
+  </div>
+
+  ${invoiced.length===0 ? `
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+    <div style="font-size:2.5rem;margin-bottom:12px">💰</div>
+    <div style="font-weight:700;font-size:1rem;color:var(--navy)">No pending payments</div>
+    <div style="font-size:.84rem;margin-top:6px">Submit invoices after dispatch to start tracking payments.</div>
+  </div>` : `
+
+  <!-- Payment tracker cards -->
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Payment Tracker</span>
+      <span style="font-size:.76rem;color:var(--text-muted)">All amounts due on Net-30 from invoice date</span>
+    </div>
+    ${invoiced.map((po,i)=>{
+      const d = daysUntilDue(po);
+      const dueDate = new Date(new Date(po.updated_at).getTime() + 30*86400000);
+      const isOv = d < 0;
+      const isSoon = d >= 0 && d <= 7;
+      const barColor = isOv ? 'var(--danger)' : isSoon ? '#f59e0b' : 'var(--success)';
+      const barPct = Math.min(100, Math.max(0, Math.round(((30+d)/30)*100)));
+      return `
+      <div style="padding:16px 20px;${i<invoiced.length-1?'border-bottom:1px solid var(--border)':''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px">
+          <div>
+            <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${po.id}</div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">Invoice: ${po.invoice_url ? `<a href="${po.invoice_url}" target="_blank" style="color:var(--blue)">${po.invoice_url.length>35?po.invoice_url.slice(0,35)+'…':po.invoice_url}</a>` : '—'}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-weight:800;font-size:1rem;color:var(--navy)">${fmt(po.grand_total)}</div>
+            <div style="font-size:.72rem;margin-top:3px;font-weight:600;color:${barColor}">
+              ${isOv ? `${Math.abs(d)}d overdue` : d===0 ? 'Due today' : `Due in ${d}d`}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;background:var(--border);height:6px;border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${barPct}%;background:${barColor};border-radius:3px;transition:width .5s"></div>
+          </div>
+          <div style="font-size:.7rem;color:var(--text-muted);white-space:nowrap">Due ${dueDate.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</div>
+          <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;background:${isOv?'#fef2f2':isSoon?'#fef3c7':'#d1fae5'};color:${barColor}">${isOv?'OVERDUE':isSoon?'DUE SOON':'ON TRACK'}</span>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`}
+  `;
 }
 
 /* ============================================================
