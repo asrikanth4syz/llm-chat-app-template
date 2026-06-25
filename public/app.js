@@ -1301,27 +1301,33 @@ async function processCSVUpload() {
   if (!input || !input.files.length) { if(fb) fb.innerHTML = '<div class="alert alert-warning">Please select a CSV file.</div>'; return; }
   const file = input.files[0];
   const text = await file.text();
-  const lines = text.trim().split('\n').filter(l => l.trim());
-  const headers = lines[0].toLowerCase().split(',').map(h=>h.trim());
+  const parsed = parseCSVText(text);
+  if (parsed.length < 2) { if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have a header row and at least one data row.</div>'; return; }
+  const headers = parsed[0].map(h => h.toLowerCase().trim());
   const skuIdx = headers.indexOf('sku');
   const qtyIdx = headers.indexOf('quantity') !== -1 ? headers.indexOf('quantity') : headers.indexOf('qty');
   if (skuIdx === -1 || qtyIdx === -1) {
-    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" columns.</div>'; return;
+    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" (or "qty") columns.</div>'; return;
   }
-  let imported = 0, skipped = 0;
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c=>c.trim());
-    const sku = cols[skuIdx];
+  let imported = 0, skipped = 0, notFound = [];
+  for (let i = 1; i < parsed.length; i++) {
+    const cols = parsed[i];
+    const sku = (cols[skuIdx] || '').trim();
     const qty = parseInt(cols[qtyIdx], 10);
     if (!sku || isNaN(qty) || qty < 1) { skipped++; continue; }
     const item = APP._catalog && APP._catalog.find(it => it.sku === sku);
-    if (!item) { skipped++; continue; }
+    if (!item) { notFound.push(sku); skipped++; continue; }
     const existing = APP.cart.find(c => c.sku === sku);
     if (existing) existing.qty += qty;
     else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
-  if(fb) fb.innerHTML = `<div class="alert ${imported?'alert-success':'alert-warning'}">${imported} item(s) added to cart${skipped?`, ${skipped} skipped`:''}.${imported?' <a href="#" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';refreshCartUI()">Done</a>':''}</div>`;
+  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not in catalogue: ${notFound.join(', ')}</div>` : '';
+  if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'#d1fae5':'#fef3c7'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'#92400e'}">
+    <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} skipped`:''}${notFoundNote}
+    ${imported?'<div style="margin-top:8px"><a href="#" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';refreshCartUI();return false" style="color:inherit;font-weight:700">✓ Done — view cart</a></div>':''}
+  </div>`;
+  if (imported) refreshCartUI();
 }
 
 async function loadQuickReorder() {
