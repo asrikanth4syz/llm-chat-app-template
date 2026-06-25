@@ -2756,16 +2756,9 @@ async function renderInventory(el) {
     <div id="inv-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
       ${cats.map(c=>{
         const active = APP._invFilter===c;
-        return `<button data-inv-cat="${c}" onclick="invFilterCat('${c}')" style="padding:4px 12px;border-radius:20px;border:1.5px solid ${active?'var(--blue)':'var(--border)'};background:${active?'var(--blue)':'#fff'};color:${active?'#fff':'var(--navy)'};font-size:.8rem;cursor:pointer;font-weight:${active?700:400};transition:all .15s">${c}</button>`;
+        return '<button data-inv-cat="' + c + '" onclick="invFilterCat(\'' + c + '\')" style="padding:4px 12px;border-radius:20px;border:1.5px solid ' + (active?'var(--blue)':'var(--border)') + ';background:' + (active?'var(--blue)':'#fff') + ';color:' + (active?'#fff':'var(--navy)') + ';font-size:.8rem;cursor:pointer;font-weight:' + (active?700:400) + ';transition:all .15s">' + c + '</button>';
       }).join('')}
-      <div style="width:1px;height:20px;background:var(--border);margin:0 6px;flex-shrink:0"></div>
-      ${['All','Healthy','Normal'].map(s=>{
-        const label = s==='All'?'All Sub-Cat':s;
-        const active = APP._invSubFilter===s;
-        const activeStyle = s==='Healthy' ? 'background:#d1fae5;color:#059669;border-color:#059669' : 'background:var(--blue);color:#fff;border-color:var(--blue)';
-        const style = active ? activeStyle : 'background:#fff;color:var(--navy);border-color:var(--border)';
-        return `<button data-inv-sub="${s}" onclick="invFilterSubCat('${s}')" style="padding:4px 12px;border-radius:20px;border:1.5px solid;font-size:.8rem;cursor:pointer;font-weight:${active?700:400};transition:all .15s;${style}">${label}</button>`;
-      }).join('')}
+      <div id="inv-subcat-pills" style="display:flex;align-items:center;gap:6px"></div>
     </div>
   </div>
 
@@ -2784,6 +2777,31 @@ async function renderInventory(el) {
       </table>
     </div>
   </div>`;
+
+  // Build sub-category pills via DOM to avoid template-literal escaping issues
+  (function buildSubCatPills() {
+    const container = document.getElementById('inv-subcat-pills');
+    if (!container) return;
+
+    const divider = document.createElement('div');
+    divider.style.cssText = 'width:1px;height:20px;background:#d1d5db;margin:0 6px;flex-shrink:0';
+    container.appendChild(divider);
+
+    ['All', 'Healthy', 'Normal'].forEach(function(s) {
+      const btn = document.createElement('button');
+      const label = s === 'All' ? 'All Sub-Cat' : s;
+      const active = APP._invSubFilter === s;
+      btn.textContent = label;
+      btn.dataset.invSub = s;
+      btn.style.cssText = 'padding:4px 12px;border-radius:20px;font-size:.8rem;cursor:pointer;transition:all .15s;border:1.5px solid;' +
+        (active
+          ? (s === 'Healthy' ? 'background:#d1fae5;color:#059669;border-color:#059669;font-weight:700'
+                              : 'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700')
+          : 'background:#fff;color:#374151;border-color:#d1d5db;font-weight:400');
+      btn.onclick = function() { invFilterSubCat(s); };
+      container.appendChild(btn);
+    });
+  })();
 
   window.refreshInvTable = function() {
     document.getElementById('inv-tbody').innerHTML = invTableRows(getFiltered());
