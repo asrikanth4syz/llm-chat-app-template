@@ -4508,42 +4508,106 @@ async function renderClients(el) {
   const clients = await api('/clients');
   if (!clients) return;
 
+  const totalBudget  = clients.reduce((s,c)=>s+(c.monthly_budget||0),0);
+  const totalSpent   = clients.reduce((s,c)=>s+(c.spent_this_month||0),0);
+  const atRisk       = clients.filter(c=>c.health_score<70).length;
+  const overBudget   = clients.filter(c=>c.spent_this_month/c.monthly_budget>0.9).length;
+
+  function clientCard(c) {
+    const budgetPct  = Math.min(100, Math.round((c.spent_this_month/(c.monthly_budget||1))*100));
+    const creditPct  = c.credit_limit > 0 ? Math.min(100, Math.round(((c.credit_used||0)/c.credit_limit)*100)) : 0;
+    const hColor     = c.health_score>=85?'var(--success)':c.health_score>=70?'#d97706':'var(--danger)';
+    const budColor   = budgetPct>90?'var(--danger)':budgetPct>75?'#f59e0b':'var(--success)';
+    const initials   = c.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+    return `
+    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${hColor}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
+          <div>
+            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${c.name}</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
+              ${c.zone?`<span style="font-size:.68rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.zone}</span>`:''}
+              <span style="font-size:.72rem;color:${hColor};font-weight:700">★ ${c.health_score||0}/100</span>
+            </div>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div>
+          <div style="font-weight:700;font-size:.9rem">${fmt(c.monthly_budget)}</div>
+        </div>
+      </div>
+
+      <!-- Budget bar -->
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-bottom:4px">
+          <span>Budget Used</span>
+          <span style="font-weight:600;color:${budColor}">${budgetPct}% · ${fmt(c.spent_this_month)}</span>
+        </div>
+        <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${budgetPct}%;background:${budColor};border-radius:3px;transition:width .4s"></div>
+        </div>
+      </div>
+
+      ${c.credit_limit > 0 ? `
+      <div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-bottom:4px">
+          <span>Credit Used</span>
+          <span style="font-weight:600;color:${creditPct>80?'var(--danger)':creditPct>60?'#d97706':'var(--text-muted)'}">${creditPct}% · ${fmt(c.credit_used||0)} / ${fmt(c.credit_limit)}</span>
+        </div>
+        <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${creditPct}%;background:${creditPct>80?'var(--danger)':creditPct>60?'#f59e0b':'#94a3b8'};border-radius:2px"></div>
+        </div>
+      </div>` : ''}
+
+      <!-- Contact -->
+      ${c.contact_name ? `<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px">
+        👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${c.contact_phone}</a>`:''}
+      </div>` : ''}
+
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button>
+      </div>
+    </div>`;
+  }
+
   el.innerHTML = `
-  ${pageHeader('Client Directory', `${clients.length} clients`,
-    `<button class="btn btn-gold" onclick="addClientModal()">${iconPlus(14)} Add Client</button>`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Client</th><th>Zone</th><th>Contact</th><th>Health</th><th>Budget Used</th><th>Credit Limit</th><th>Credit Used</th><th>Actions</th></tr></thead>
-        <tbody>${clients.map(c=>{
-          const budgetPct = Math.min(100, Math.round((c.spent_this_month/c.monthly_budget)*100));
-          const creditPct = c.credit_limit > 0 ? Math.min(100, Math.round((c.credit_used/c.credit_limit)*100)) : 0;
-          return `<tr>
-            <td><b>${c.name}</b></td>
-            <td>${c.zone ? `<span class="badge badge-secondary">${c.zone}</span>` : '—'}</td>
-            <td><div style="font-size:.82rem">${c.contact_name||'—'}</div><div style="font-size:.78rem;color:var(--text-muted)">${c.contact_email||''}${c.contact_phone?` · ${c.contact_phone}`:''}</div></td>
-            <td><span style="font-weight:700;color:${c.health_score>=85?'var(--success)':c.health_score>=70?'var(--warning)':'var(--danger)'}">${c.health_score}/100</span></td>
-            <td style="min-width:140px">
-              <div style="display:flex;align-items:center;gap:6px">
-                <div style="flex:1;background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-                  <div style="height:100%;width:${budgetPct}%;background:${budgetPct>90?'var(--danger)':budgetPct>75?'var(--warning)':'var(--success)'};border-radius:3px"></div>
-                </div>
-                <span style="font-size:.78rem;min-width:32px">${budgetPct}%</span>
-              </div>
-              <div style="font-size:.76rem;color:var(--text-muted)">${fmt(c.spent_this_month)} / ${fmt(c.monthly_budget)}</div>
-            </td>
-            <td>${fmt(c.credit_limit||0)}</td>
-            <td>
-              <span style="color:${creditPct>80?'var(--danger)':creditPct>60?'var(--warning)':'inherit'}">${fmt(c.credit_used||0)}</span>
-              ${c.credit_limit > 0 ? `<span style="font-size:.76rem;color:var(--text-muted)"> (${creditPct}%)</span>` : ''}
-            </td>
-            <td><button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button></td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Client Directory</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${clients.length} clients · ${fmt(totalSpent)} spent of ${fmt(totalBudget)} total budget</div>
     </div>
-  </div>`;
+    <button class="btn btn-gold" onclick="addClientModal()">${iconPlus(14)} Add Client</button>
+  </div>
+
+  <!-- Summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Clients</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${clients.length}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Budget</div>
+      <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalBudget)}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalSpent)} spent this month</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Near Budget Limit</div>
+      <div style="font-size:2rem;font-weight:800;color:${overBudget?'#d97706':'var(--navy)'};margin-top:6px">${overBudget}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">&gt;90% budget used</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
+      <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">health score &lt;70</div>
+    </div>
+  </div>
+
+  <!-- Client cards grid -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
+    ${clients.sort((a,b)=>(a.health_score||0)-(b.health_score||0)).map(c=>clientCard(c)).join('')}
+  </div>
+  `;
 }
 
 function addClientModal() {
@@ -5029,33 +5093,110 @@ async function renderUsers(el) {
   const users = await api('/users');
   if (!users) return;
 
+  const activeUsers   = users.filter(u=>u.active);
+  const inactiveUsers = users.filter(u=>!u.active);
+  const with2FA       = users.filter(u=>u.two_fa_enabled).length;
+
+  const ROLE_COLOR = {
+    super_admin:    '#7c3aed',
+    ops_admin:      '#2563eb',
+    ops_user:       '#3b82f6',
+    vendor_admin:   '#d97706',
+    vendor_user:    '#f59e0b',
+    client_admin:   '#059669',
+    client_user:    '#10b981',
+    client_approver:'#0891b2',
+    delivery_exec:  '#6b7280',
+  };
+
+  function userCard(u) {
+    const rc = ROLE_COLOR[u.role] || '#6b7280';
+    const roleName = (ROLES[u.role]?.label || u.role).replace(/_/g,' ');
+    return `
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${u.active?1:.6}">
+      <div style="width:44px;height:44px;border-radius:50%;background:${u.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${u.initials||u.name[0]}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:.9rem;color:var(--navy)">${u.name}</span>
+          ${u.active?'':'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 6px">INACTIVE</span>'}
+        </div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${u.email}</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
+          <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${roleName}</span>
+          <span style="font-size:.68rem;color:var(--text-muted)">${u.org}</span>
+          ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:#d1fae5;color:#059669;border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:.72rem;color:var(--text-muted)">
+          <input type="checkbox" ${u.two_fa_enabled?'checked':''} onchange="toggle2FA('${u.id}',this.checked)">
+          2FA
+        </label>
+        ${u.active
+          ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}','${u.name.replace(/'/g,"\\'")}')" style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
+          : `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')" style="font-size:.7rem;padding:3px 8px">Activate</button>`}
+      </div>
+    </div>`;
+  }
+
   el.innerHTML = `
-  ${pageHeader('Users & Roles', `${users.length} users`,
-    `<button class="btn btn-gold" onclick="addUserModal()">${iconPlus(14)} Add User</button>`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organisation</th><th>2FA</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${users.map(u=>`<tr>
-          <td><div class="su-avatar" style="display:inline-flex;width:28px;height:28px;font-size:.7rem">${u.initials}</div> ${u.name}</td>
-          <td style="font-size:.84rem">${u.email}</td>
-          <td>${statusBadge(u.role)}</td>
-          <td>${u.org}</td>
-          <td>
-            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" ${u.two_fa_enabled ? 'checked' : ''} onchange="toggle2FA('${u.id}',this.checked)">
-              <span style="font-size:.78rem;color:var(--text-muted)">${u.two_fa_enabled ? 'On' : 'Off'}</span>
-            </label>
-          </td>
-          <td>${u.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
-          <td>${u.active ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}')">Deactivate</button>` :
-            `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')">Activate</button>`}
-          </td>
-        </tr>`).join('')}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Users & Roles</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${users.length} total · ${activeUsers.length} active · ${with2FA} with 2FA</div>
     </div>
-  </div>`;
+    <button class="btn btn-gold" onclick="addUserModal()">${iconPlus(14)} Add User</button>
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Users</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${users.length}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeUsers.length}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'#d1d5db':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inactive</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inactiveUsers.length}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #7c3aed">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">2FA Enabled</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${with2FA}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${users.length?Math.round(with2FA/users.length*100):0}% of users</div>
+    </div>
+  </div>
+
+  <!-- Active users by role group -->
+  ${Object.entries(
+    activeUsers.reduce((g,u)=>{
+      const group = ROLES[u.role]?.nav==='client'||ROLES[u.role]?.nav==='client_user'||ROLES[u.role]?.nav==='approver' ? 'Client'
+                  : ROLES[u.role]?.nav==='vendor'||ROLES[u.role]?.nav==='vendor_user' ? 'Vendor'
+                  : ROLES[u.role]?.nav==='delivery_exec' ? 'Delivery'
+                  : u.role==='super_admin' ? 'Super Admin'
+                  : 'Operations';
+      if (!g[group]) g[group]=[];
+      g[group].push(u);
+      return g;
+    }, {})
+  ).map(([group, groupUsers])=>`
+  <div style="margin-bottom:18px">
+    <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">${group} (${groupUsers.length})</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">
+      ${groupUsers.map(u=>userCard(u)).join('')}
+    </div>
+  </div>`).join('')}
+
+  ${inactiveUsers.length ? `
+  <div style="margin-top:10px">
+    <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Inactive (${inactiveUsers.length})</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">
+      ${inactiveUsers.map(u=>userCard(u)).join('')}
+    </div>
+  </div>` : ''}
+  `;
 }
 
 function addUserModal() {
@@ -5088,9 +5229,16 @@ async function saveUser() {
   if (res) { showToast('User created — credentials sent via email'); navigate('users'); }
 }
 
-async function deactivateUser(id) {
-  if (!confirm('Deactivate this user?')) return;
+function deactivateUser(id, name) {
+  openModal('Deactivate User',
+    `<p style="margin:0;color:var(--text-muted)">Are you sure you want to deactivate <b>${name||'this user'}</b>? They will no longer be able to log in.</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="confirmDeactivateUser('${id}')">Deactivate</button>`);
+}
+
+async function confirmDeactivateUser(id) {
   const res = await api(`/users/${id}`, { method:'PATCH', body: JSON.stringify({ active:0 }) });
+  closeModal();
   if (res) { showToast('User deactivated'); navigate('users'); }
 }
 
@@ -6743,27 +6891,73 @@ function exportFulfilCSV(tab) {
 async function renderStaff(el) {
   const staff = await api('/staff');
   if (!staff) return;
+
+  const activeStaff = staff.filter(s=>s.active);
+  const byRole = staff.reduce((g,s)=>{ (g[s.role]=g[s.role]||[]).push(s); return g; },{});
+
+  const STAFF_ROLE_LABEL = { delivery_staff:'Delivery Staff', order_entry:'Order Entry', viewer:'Viewer' };
+  const STAFF_ROLE_COLOR = { delivery_staff:'#2563eb', order_entry:'#7c3aed', viewer:'#6b7280' };
+
+  function staffCard(s) {
+    const rc = STAFF_ROLE_COLOR[s.role] || '#6b7280';
+    const initials = s.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+    return `
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${s.active?1:.55}">
+      <div style="width:44px;height:44px;border-radius:50%;background:${s.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${s.name}
+          ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
+        </div>
+        ${s.phone?`<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px"><a href="tel:${s.phone}" style="color:inherit">📞 ${s.phone}</a></div>`:''}
+        <div style="margin-top:5px">
+          <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${STAFF_ROLE_LABEL[s.role]||s.role}</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+        <button class="btn btn-secondary btn-sm" onclick="editStaffModal('${s.id}','${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.role}')" style="font-size:.7rem;padding:3px 8px">Edit</button>
+        <button class="btn btn-${s.active?'danger':'success'} btn-sm" onclick="toggleStaff('${s.id}',${s.active?0:1})" style="font-size:.7rem;padding:3px 8px">${s.active?'Disable':'Enable'}</button>
+      </div>
+    </div>`;
+  }
+
   el.innerHTML = `
-  ${pageHeader('Staff', `${staff.length} staff members`,
-    `<button class="btn btn-primary" onclick="addStaffModal()">${iconPlus(14)} Add Staff</button>`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Name</th><th>Phone</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${staff.map(s=>`<tr>
-          <td><b>${s.name}</b></td>
-          <td>${s.phone||'—'}</td>
-          <td><span class="badge badge-secondary">${s.role.replace('_',' ')}</span></td>
-          <td>${s.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
-          <td>
-            <button class="btn btn-secondary btn-sm" onclick="editStaffModal('${s.id}','${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.role}')">Edit</button>
-            <button class="btn btn-${s.active?'danger':'success'} btn-sm" onclick="toggleStaff('${s.id}',${s.active?0:1})">${s.active?'Disable':'Enable'}</button>
-          </td>
-        </tr>`).join('')}
-        </tbody>
-      </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Staff</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${staff.length} total · ${activeStaff.length} active</div>
     </div>
-  </div>`;
+    <button class="btn btn-primary" onclick="addStaffModal()">${iconPlus(14)} Add Staff</button>
+  </div>
+
+  <!-- Role summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px">
+    ${Object.entries(byRole).map(([role, members])=>{
+      const rc = STAFF_ROLE_COLOR[role]||'#6b7280';
+      const activeCount = members.filter(s=>s.active).length;
+      return `<div style="background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${rc}">
+        <div style="font-size:.7rem;font-weight:700;color:${rc};text-transform:uppercase;letter-spacing:.06em">${STAFF_ROLE_LABEL[role]||role}</div>
+        <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${activeCount}</div>
+        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">active · ${members.length} total</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Staff by role -->
+  ${Object.entries(byRole).map(([role, members])=>`
+  <div style="margin-bottom:18px">
+    <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">${STAFF_ROLE_LABEL[role]||role} (${members.filter(s=>s.active).length} active)</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+      ${members.sort((a,b)=>b.active-a.active).map(s=>staffCard(s)).join('')}
+    </div>
+  </div>`).join('')}
+
+  ${staff.length===0?`
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+    <div style="font-size:2.5rem;margin-bottom:12px">👷</div>
+    <div style="font-weight:700;font-size:1rem;color:var(--navy)">No staff yet</div>
+    <div style="font-size:.84rem;margin-top:6px">Add your delivery staff and support team.</div>
+  </div>`:''}
+  `;
 }
 
 function addStaffModal() {
