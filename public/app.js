@@ -5528,7 +5528,7 @@ function showImportTab(tab, jobs) {
         <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" onchange="previewCSV(this,'${tab}')">
       </div>
       <div id="csv-preview" style="margin-top:12px"></div>
-      <div id="csv-actions" style="display:none;margin-top:12px;display:flex;align-items:center;gap:12px">
+      <div id="csv-actions" style="display:none;margin-top:12px;align-items:center;gap:12px">
         <button class="btn btn-primary" onclick="submitCSVImport('${tab}')">Import Data</button>
         <span id="csv-row-count" style="font-size:.84rem;color:var(--text-muted)"></span>
       </div>
@@ -5610,12 +5610,21 @@ async function submitCSVImport(tab) {
   if (!res) return;
 
   const preview = document.getElementById('csv-preview');
-  const successMsg = '<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:#065f46"><b>✓ Import complete</b> — ' + res.success + ' rows inserted/updated, ' + res.failed + ' failed.</div>';
+  const allFailed = res.success === 0 && res.failed > 0;
+  const partialFail = res.success > 0 && res.failed > 0;
+  const bg    = allFailed ? '#fef2f2' : partialFail ? '#fef3c7' : '#d1fae5';
+  const bdr   = allFailed ? '#fca5a5' : partialFail ? '#fcd34d' : '#6ee7b7';
+  const color = allFailed ? '#b91c1c' : partialFail ? '#92400e' : '#065f46';
+  const icon  = allFailed ? '✗' : '✓';
+  const label = allFailed ? 'Import failed' : 'Import complete';
+  const summaryMsg = '<div style="background:'+bg+';border:1px solid '+bdr+';border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:'+color+'"><b>'+icon+' '+label+'</b> — ' + res.success + ' row(s) imported' + (res.failed ? ', <b>' + res.failed + ' failed</b>' : '') + '.</div>';
   const errorsHtml = res.errors && res.errors.length
     ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Row errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
-      res.errors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul></div>'
+      res.errors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul>' +
+      (allFailed ? '<div style="margin-top:8px;font-size:.78rem">Tip: run <code>npx wrangler d1 migrations apply smart-pantry-db --local</code> if columns are missing.</div>' : '') +
+      '</div>'
     : '';
-  if (preview) preview.innerHTML = successMsg + errorsHtml;
+  if (preview) preview.innerHTML = summaryMsg + errorsHtml;
   window._csvRows = null;
   window._importJobs = null;
 }
@@ -5642,8 +5651,11 @@ function downloadSampleCSV(tab) {
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 /* ============================================================
