@@ -5536,9 +5536,9 @@ function showImportTab(tab, jobs) {
   </div>`;
 }
 
-// Proper RFC-4180 CSV parser — handles quoted fields, embedded commas, CRLF
+// Proper RFC-4180 CSV parser — handles quoted fields, embedded commas, CRLF, UTF-8 BOM
 function parseCSVText(text) {
-  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd();
+  text = text.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd();
   const rows = [];
   let row = [], field = '', inQ = false;
   for (let i = 0; i <= text.length; i++) {
@@ -5567,10 +5567,10 @@ function previewCSV(input, tab) {
   reader.onload = function(e) {
     const parsed = parseCSVText(e.target.result);
     if (parsed.length < 2) { showToast('CSV must have a header row + at least one data row', 'error'); return; }
-    const headers = parsed[0];
+    const headers = parsed[0].map(function(h){ return h.trim().toLowerCase().replace(/^﻿/, ''); });
     const dataRows = parsed.slice(1).map(function(vals) {
       const obj = {};
-      headers.forEach(function(h, i) { obj[h] = vals[i] !== undefined ? vals[i] : ''; });
+      headers.forEach(function(h, i) { obj[h] = vals[i] !== undefined ? vals[i].trim() : ''; });
       return obj;
     });
     window._csvRows = dataRows;
@@ -5648,14 +5648,12 @@ function downloadSampleCSV(tab) {
     ].join('\n');
     filename = 'orders_sample.csv';
   }
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = filename;
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 /* ============================================================
