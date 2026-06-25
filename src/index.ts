@@ -2416,13 +2416,35 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
       const existing = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(row.sku).first();
       if (existing) {
         await env.DB.prepare(
-          "UPDATE inventory SET name=?,stock=?,unit_price=?,category=? WHERE sku=?"
-        ).bind(row.name, row.stock||0, row.unit_price||0, row.category||"General", row.sku).run();
+          `UPDATE inventory SET name=?,stock=?,unit_price=?,mrp=?,cost_excl_gst=?,gst_rate=?,
+           category=?,sub_category=?,brand=?,uom=?,pack_size=?,units_per_case=?,weight_grams=?,
+           barcode=?,vendor_sku=?,vendor_lead_days=?,vendor_moq=?,reorder_level=?,max_stock=?
+           WHERE sku=?`
+        ).bind(
+          row.name, Number(row.stock)||0, Number(row.unit_price)||0, Number(row.mrp)||0,
+          Number(row.cost_excl_gst)||0, Number(row.gst_rate)||18,
+          row.category||"General", row.sub_category||"Normal", row.brand||"",
+          row.uom||"unit", Number(row.pack_size)||1, Number(row.units_per_case)||1,
+          Number(row.weight_grams)||0, row.barcode||"", row.vendor_sku||"",
+          Number(row.vendor_lead_days)||3, Number(row.vendor_moq)||1,
+          Number(row.reorder_level)||10, Number(row.max_stock)||500,
+          row.sku
+        ).run();
       } else {
         await env.DB.prepare(
-          "INSERT INTO inventory (sku,name,stock,unit_price,category,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?)"
-        ).bind(row.sku, row.name, row.stock||0, row.unit_price||0, row.category||"General",
-          row.reorder_level||10, row.max_stock||500).run();
+          `INSERT INTO inventory (sku,name,stock,unit_price,mrp,cost_excl_gst,gst_rate,
+           category,sub_category,brand,uom,pack_size,units_per_case,weight_grams,
+           barcode,vendor_sku,vendor_lead_days,vendor_moq,reorder_level,max_stock)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(
+          row.sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0, Number(row.mrp)||0,
+          Number(row.cost_excl_gst)||0, Number(row.gst_rate)||18,
+          row.category||"General", row.sub_category||"Normal", row.brand||"",
+          row.uom||"unit", Number(row.pack_size)||1, Number(row.units_per_case)||1,
+          Number(row.weight_grams)||0, row.barcode||"", row.vendor_sku||"",
+          Number(row.vendor_lead_days)||3, Number(row.vendor_moq)||1,
+          Number(row.reorder_level)||10, Number(row.max_stock)||500
+        ).run();
       }
       success++;
     } catch (e) {

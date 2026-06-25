@@ -5292,6 +5292,7 @@ async function saveDunningRule() {
    ============================================================ */
 async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
+  window._importJobs = jobs;
 
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
@@ -5308,8 +5309,7 @@ async function renderImportData(el) {
 function importTab(tab, btn) {
   document.querySelectorAll('#import-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  const jobs = window._importJobs || [];
-  showImportTab(tab, jobs);
+  showImportTab(tab, window._importJobs || []);
 }
 
 function showImportTab(tab, jobs) {
@@ -5329,56 +5329,93 @@ function showImportTab(tab, jobs) {
     return;
   }
   const isInventory = tab === 'inventory';
-  const sampleCols = isInventory
-    ? 'sku,name,category,stock,unit_price,reorder_level,max_stock'
-    : 'client_id,grand_total,subtotal,gst,notes';
+  const cols = isInventory
+    ? 'sku, name, category, sub_category, brand, stock, unit_price, mrp, cost_excl_gst, gst_rate, reorder_level, max_stock, uom, pack_size, units_per_case, weight_grams, barcode, vendor_sku, vendor_lead_days, vendor_moq'
+    : 'client_id, grand_total, subtotal, gst, notes';
+
   el.innerHTML = `
-  <div class="card">
-    <div class="card-body" style="padding:20px">
-      <div style="font-weight:600;margin-bottom:8px">Import ${isInventory ? 'Inventory' : 'Orders'}</div>
-      <div style="font-size:.84rem;color:var(--text-muted);margin-bottom:12px">
-        CSV columns: <code>${sampleCols}</code>
+  <div class="card" style="margin-bottom:14px">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import ${isInventory ? 'Inventory Items' : 'Orders'}</div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers</div>
       </div>
-      <div class="form-group">
-        <label>Upload CSV File</label>
-        <input type="file" id="csv-file" accept=".csv" onchange="previewCSV(this,'${tab}')">
+      <button class="btn btn-secondary btn-sm" onclick="downloadSampleCSV('${tab}')">⬇ Download Sample Template</button>
+    </div>
+    <div style="padding:16px 20px">
+      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
+        <div style="font-weight:700;color:var(--navy);margin-bottom:6px">Required columns</div>
+        <code style="color:var(--blue);word-break:break-all">${cols}</code>
       </div>
-      <div id="csv-preview"></div>
-      <div id="csv-actions" style="display:none;margin-top:12px">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="font-weight:600">Choose CSV file</label>
+        <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" onchange="previewCSV(this,'${tab}')">
+      </div>
+      <div id="csv-preview" style="margin-top:12px"></div>
+      <div id="csv-actions" style="display:none;margin-top:12px;display:flex;align-items:center;gap:12px">
         <button class="btn btn-primary" onclick="submitCSVImport('${tab}')">Import Data</button>
-        <span id="csv-row-count" style="margin-left:8px;font-size:.84rem;color:var(--text-muted)"></span>
+        <span id="csv-row-count" style="font-size:.84rem;color:var(--text-muted)"></span>
       </div>
     </div>
   </div>`;
+}
+
+// Proper RFC-4180 CSV parser — handles quoted fields, embedded commas, CRLF
+function parseCSVText(text) {
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd();
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i <= text.length; i++) {
+    const c = i < text.length ? text[i] : '\n';
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { field += '"'; i++; }
+      else if (c === '"') { inQ = false; }
+      else { field += c; }
+    } else {
+      if (c === '"') { inQ = true; }
+      else if (c === ',') { row.push(field.trim()); field = ''; }
+      else if (c === '\n') {
+        row.push(field.trim()); field = '';
+        if (row.some(v => v !== '')) rows.push(row);
+        row = [];
+      } else { field += c; }
+    }
+  }
+  return rows;
 }
 
 function previewCSV(input, tab) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
-    const text = e.target.result;
-    const lines = text.trim().split('\n');
-    if (lines.length < 2) { showToast('CSV must have header + at least one data row', 'error'); return; }
-    const headers = lines[0].split(',').map(h => h.trim());
-    const dataRows = lines.slice(1).map(line => {
-      const vals = line.split(',').map(v => v.trim());
+  reader.onload = function(e) {
+    const parsed = parseCSVText(e.target.result);
+    if (parsed.length < 2) { showToast('CSV must have a header row + at least one data row', 'error'); return; }
+    const headers = parsed[0];
+    const dataRows = parsed.slice(1).map(function(vals) {
       const obj = {};
-      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      headers.forEach(function(h, i) { obj[h] = vals[i] !== undefined ? vals[i] : ''; });
       return obj;
     });
     window._csvRows = dataRows;
     window._csvTab = tab;
+
     const preview = document.getElementById('csv-preview');
     const actions = document.getElementById('csv-actions');
     const rowCount = document.getElementById('csv-row-count');
-    if (preview) preview.innerHTML = `<div class="table-wrap" style="max-height:200px;overflow-y:auto;margin-top:8px">
-      <table class="table">
-        <thead><tr>${headers.map(h=>'<th>'+h+'</th>').join('')}</tr></thead>
-        <tbody>${dataRows.slice(0,5).map(row=>'<tr>'+headers.map(h=>'<td>'+(row[h]||'')+'</td>').join('')+'</tr>').join('')}</tbody>
-      </table>
-    </div>`;
-    if (actions) actions.style.display = '';
+
+    if (preview) preview.innerHTML =
+      '<div style="font-size:.8rem;font-weight:600;color:var(--navy);margin-bottom:6px">Preview (first 5 rows)</div>' +
+      '<div class="table-wrap" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">' +
+      '<table class="table" style="margin:0"><thead><tr>' +
+      headers.map(function(h){return '<th style="font-size:.75rem">'+h+'</th>';}).join('') +
+      '</tr></thead><tbody>' +
+      dataRows.slice(0,5).map(function(row){
+        return '<tr>' + headers.map(function(h){return '<td style="font-size:.78rem">'+(row[h]||'')+'</td>';}).join('') + '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    if (actions) actions.style.display = 'flex';
     if (rowCount) rowCount.textContent = dataRows.length + ' rows ready to import';
   };
   reader.readAsText(file);
@@ -5387,14 +5424,50 @@ function previewCSV(input, tab) {
 async function submitCSVImport(tab) {
   const rows = window._csvRows;
   if (!rows || !rows.length) { showToast('No data to import', 'error'); return; }
+  const btn = document.querySelector('#csv-actions .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
   showToast('Importing ' + rows.length + ' rows…');
+
   const endpoint = tab === 'inventory' ? '/import/inventory' : '/import/orders';
   const res = await api(endpoint, { method: 'POST', body: JSON.stringify(rows) });
-  if (res) {
-    showToast('Import complete: ' + res.success + ' success, ' + res.failed + ' failed');
-    window._csvRows = null;
-    navigate('import_data');
+  if (btn) { btn.disabled = false; btn.textContent = 'Import Data'; }
+  if (!res) return;
+
+  const preview = document.getElementById('csv-preview');
+  const successMsg = '<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:#065f46"><b>✓ Import complete</b> — ' + res.success + ' rows inserted/updated, ' + res.failed + ' failed.</div>';
+  const errorsHtml = res.errors && res.errors.length
+    ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Row errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
+      res.errors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul></div>'
+    : '';
+  if (preview) preview.innerHTML = successMsg + errorsHtml;
+  window._csvRows = null;
+  window._importJobs = null;
+}
+
+function downloadSampleCSV(tab) {
+  const isInventory = tab === 'inventory';
+  let csv, filename;
+  if (isInventory) {
+    csv = [
+      'sku,name,category,sub_category,brand,stock,unit_price,mrp,cost_excl_gst,gst_rate,reorder_level,max_stock,uom,pack_size,units_per_case,weight_grams,barcode,vendor_sku,vendor_lead_days,vendor_moq',
+      'SKU001,Organic Green Tea,Beverages,Healthy,Tata,50,180,220,140,18,10,200,box,12,24,250,,TV-GT-01,3,6',
+      'SKU002,Classic Biscuits,Snacks,Normal,Britannia,80,45,55,35,5,20,300,pack,20,40,150,,BB-CL-02,2,10',
+      'SKU003,Hand Sanitizer 500ml,Hygiene,Normal,Dettol,30,120,150,90,18,5,100,bottle,6,12,500,,DT-HS-03,4,5',
+    ].join('\n');
+    filename = 'inventory_sample.csv';
+  } else {
+    csv = [
+      'client_id,grand_total,subtotal,gst,notes',
+      'c1,11800,10000,1800,Monthly office supplies',
+      'c2,5900,5000,900,Pantry restock',
+    ].join('\n');
+    filename = 'orders_sample.csv';
   }
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ============================================================
