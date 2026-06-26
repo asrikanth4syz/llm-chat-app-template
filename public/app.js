@@ -1218,6 +1218,21 @@ async function renderPlaceOrder(el) {
       <div class="cart-items" id="cart-items">
         <div class="empty-cart">Add items from the catalogue</div>
       </div>
+      <!-- Order Type — always visible -->
+      <div style="padding:12px 16px;border-top:1px solid var(--border)">
+        <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:6px">Order Type</label>
+        <div style="display:flex;gap:6px">
+          ${['Regular','Urgent','Ad-Hoc'].map(t=>{
+            const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
+            return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
+              style="flex:1;padding:6px 0;border-radius:8px;border:1.5px solid ${colors[t]};
+              background:${(APP._orderType||'Regular')===t?colors[t]:'#fff'};
+              color:${(APP._orderType||'Regular')===t?'#fff':colors[t]};
+              font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
+          }).join('')}
+        </div>
+      </div>
+
       <div class="cart-totals" id="cart-totals" style="display:none">
         <div class="cart-row"><span>Subtotal</span><span id="cart-sub">₹0</span></div>
         <div class="cart-row"><span>GST (18%)</span><span id="cart-gst">₹0</span></div>
@@ -1231,20 +1246,6 @@ async function renderPlaceOrder(el) {
             <div id="budget-bar-fill" style="height:100%;border-radius:4px;transition:width .3s"></div>
           </div>
           <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
-        </div>
-        <!-- Order Type -->
-        <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
-          <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:6px">Order Type</label>
-          <div style="display:flex;gap:6px">
-            ${['Regular','Urgent','Ad-Hoc'].map(t=>{
-              const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
-              return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
-                style="flex:1;padding:6px 0;border-radius:8px;border:1.5px solid ${colors[t]};
-                background:${(APP._orderType||'Regular')===t?colors[t]:'#fff'};
-                color:${(APP._orderType||'Regular')===t?'#fff':colors[t]};
-                font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
-            }).join('')}
-          </div>
         </div>
 
         <!-- Delivery notes -->
