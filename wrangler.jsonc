@@ -21,8 +21,7 @@
 			"binding": "DB",
 			"database_name": "smart-pantry-db",
 			"database_id": "6cd22d64-eaf3-4711-9df9-edca9eb732cd",
-			"migrations_dir": "./migrations",
-			"remote": true
+			"migrations_dir": "./migrations"
 		}
 	],
 	"vars": {
