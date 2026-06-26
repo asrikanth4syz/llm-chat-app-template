@@ -4129,166 +4129,327 @@ async function saveWarehouseEdit(id) {
    DELIVERY — Tabbed view (Section 7 rebuild)
    ============================================================ */
 async function renderDelivery(el) {
+  const dcs = await api('/delivery-challans');
+  if (!dcs) { el.innerHTML = `${pageHeader('Deliveries','Delivery challans, dispatch, POD & returns')}<div class="card" style="padding:32px;text-align:center;color:var(--danger)">Failed to load delivery challans.</div>`; return; }
+
+  const today = new Date();
+  const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
+  const transit   = dcs.filter(d => d.status === 'IN_TRANSIT');
+  const delivered = dcs.filter(d => d.status === 'DELIVERED');
+  const returns   = dcs.filter(d => d.status === 'CANCELLED');
+  const overdue   = transit.filter(d => d.expected_delivery_date && new Date(d.expected_delivery_date) < today);
+  const pendingPOD  = delivered.filter(d => !d.pod_uploaded).length;
+  const pendingBill = delivered.filter(d => !d.billed).length;
+
+  const kpis = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Scheduled',val:scheduled.length,sub:'ready to dispatch',color:scheduled.length?'var(--primary)':'var(--success)'},
+      {label:'In Transit',val:transit.length,sub:overdue.length?`${overdue.length} overdue`:'all on time',color:overdue.length?'var(--danger)':transit.length?'var(--warning)':'var(--success)'},
+      {label:'Pending POD/Scan',val:pendingPOD,sub:'delivered, docs missing',color:pendingPOD?'var(--warning)':'var(--success)'},
+      {label:'Unbilled',val:pendingBill,sub:'delivered but not billed',color:pendingBill?'var(--danger)':'var(--success)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>`;
+
+  APP._dcData = dcs;
+  APP._dcTab  = APP._dcTab || 'scheduled';
+
+  function tabsHtml(active) {
+    return ['scheduled','transit','delivered','returns','all'].map((t,i)=>{
+      const labels = ['Scheduled','In Transit','Delivered','Returns','All'];
+      const counts = [scheduled.length, transit.length, delivered.length, returns.length, dcs.length];
+      return `<button class="tab-btn${active===t?' active':''}" onclick="switchDeliveryTab('${t}',this)">${labels[i]} <span style="font-size:.72rem;opacity:.7">(${counts[i]})</span></button>`;
+    }).join('');
+  }
+
+  function dcCardScheduled(dc) {
+    return `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+          <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
+        </div>
+        <div style="font-size:.82rem;color:var(--text-muted)">${dc.client_name||'Unknown Client'}</div>
+      </div>
+      <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:.82rem;color:var(--text-muted)">
+          ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+          <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function dcCardTransit(dc) {
+    const isOverdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today;
+    const borderColor = isOverdue ? 'var(--danger)' : 'var(--warning)';
+    const dQty = dc.delivered_qty != null ? dc.delivered_qty : null;
+    const tQty = dc.total_qty || 0;
+    const pct  = (dQty != null && tQty) ? Math.round(dQty / tQty * 100) : 0;
+    return `
+    <div class="card" style="padding:0;overflow:hidden;border-left:3px solid ${borderColor}">
+      <div style="padding:14px 16px 10px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
+          <div>
+            <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+            ${isOverdue ? '<span class="badge badge-danger" style="margin-left:6px">Overdue</span>' : ''}
+          </div>
+          <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
+        </div>
+        <div style="font-size:.82rem;font-weight:600;margin-bottom:2px">${dc.client_name||'Unknown Client'}</div>
+        ${dc.driver_name ? `<div style="font-size:.78rem;color:var(--text-muted)">🚚 ${dc.vehicle_no||'—'} · ${dc.driver_name}</div>` : ''}
+      </div>
+      ${dQty != null && tQty ? `
+      <div style="padding:0 16px 4px">
+        <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--text-muted);margin-bottom:4px">
+          <span>Delivered</span><span>${dQty}/${tQty}</span>
+        </div>
+        <div style="height:5px;background:var(--border);border-radius:3px">
+          <div style="height:100%;width:${pct}%;background:var(--warning);border-radius:3px"></div>
+        </div>
+      </div>` : ''}
+      <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+        <div style="font-size:.75rem;color:var(--text-muted)">
+          Dispatched ${fmtDate(dc.dispatched_at)}
+          ${dc.expected_delivery_date ? ` · Due ${fmtDate(dc.expected_delivery_date)}` : ''}
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">Items</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
+          <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function tabContent(tab) {
+    if (tab === 'scheduled') {
+      if (!scheduled.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📦</div>No challans scheduled for dispatch</div>`;
+      return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${scheduled.map(dcCardScheduled).join('')}</div>`;
+    }
+    if (tab === 'transit') {
+      if (!transit.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">🚚</div>No challans currently in transit</div>`;
+      const overdueItems = transit.filter(d => d.expected_delivery_date && new Date(d.expected_delivery_date) < today);
+      const onTimeItems  = transit.filter(d => !d.expected_delivery_date || new Date(d.expected_delivery_date) >= today);
+      let html = '';
+      if (overdueItems.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--danger);font-weight:600;margin-bottom:8px">⚠ Overdue (${overdueItems.length})</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">${overdueItems.map(dcCardTransit).join('')}</div>`;
+      if (onTimeItems.length)  html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">On Track (${onTimeItems.length})</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${onTimeItems.map(dcCardTransit).join('')}</div>`;
+      return html;
+    }
+    if (tab === 'delivered') {
+      if (!delivered.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">✅</div>No delivered challans yet</div>`;
+      const needsAction = delivered.filter(d => !d.pod_uploaded || !d.billed);
+      const complete    = delivered.filter(d => d.pod_uploaded && d.billed);
+      const rows = (list) => list.map(dc=>`<tr>
+        <td><b>${dc.id}</b></td>
+        <td>${dc.order_id}</td>
+        <td>${dc.client_name||'—'}</td>
+        <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+        <td>${dc.driver_name||'—'}</td>
+        <td>${fmtDate(dc.delivered_at)}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark Scan</button>`}</td>
+        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
+      </tr>`).join('');
+      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
+      let html = '';
+      if (needsAction.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Needs Action (${needsAction.length})</div>${tbl(needsAction)}<div style="margin-bottom:16px"></div>`;
+      if (complete.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Complete (${complete.length})</div>${tbl(complete)}`;
+      return html;
+    }
+    if (tab === 'returns') {
+      if (!returns.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
+      return `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
+        ${returns.map(dc=>`<tr><td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
+      </tbody></table></div></div>`;
+    }
+    // all
+    return `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      ${['','SCHEDULED','IN_TRANSIT','DELIVERED','CANCELLED'].map(s=>`
+        <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')">${s||'All'}</button>
+      `).join('')}
+    </div>
+    <div class="card"><div class="table-wrap"><table class="table">
+      <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Delivered At</th><th>Billed</th></tr></thead>
+      <tbody id="dc-all-tbody">${dcs.map(dc=>{
+        const od = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
+        return `<tr data-status="${dc.status}" style="${od?'background:#fff8e6':''}">
+          <td><b>${dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
+          <td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${statusBadge(dc.status)}</td>
+          <td>${dc.total_qty||'—'}</td><td>${dc.vehicle_no||'—'}</td><td>${dc.driver_name||'—'}</td>
+          <td>${fmtDate(dc.dispatched_at)}</td>
+          <td style="color:${od?'var(--danger)':'inherit'}">${dc.expected_delivery_date?fmtDate(dc.expected_delivery_date):'—'}</td>
+          <td>${fmtDate(dc.delivered_at)}</td>
+          <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'—'}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table></div></div>`;
+  }
+
   el.innerHTML = `
   ${pageHeader('Deliveries', 'Delivery challans, dispatch, POD & returns')}
-  <div class="tabs" id="dc-tabs" style="margin-bottom:16px">
-    <button class="tab-btn active" onclick="switchDeliveryTab('scheduled',this)">Scheduled</button>
-    <button class="tab-btn" onclick="switchDeliveryTab('transit',this)">In Transit</button>
-    <button class="tab-btn" onclick="switchDeliveryTab('delivered',this)">Delivered</button>
-    <button class="tab-btn" onclick="switchDeliveryTab('returns',this)">Returns</button>
-    <button class="tab-btn" onclick="switchDeliveryTab('all',this)">All</button>
-  </div>
-  <div id="dc-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
-
-  switchDeliveryTab('scheduled', document.querySelector('#dc-tabs .tab-btn'));
+  ${kpis}
+  <div class="tabs" id="dc-tabs" style="margin-bottom:16px">${tabsHtml(APP._dcTab)}</div>
+  <div id="dc-tab-content">${tabContent(APP._dcTab)}</div>`;
 }
 
 async function switchDeliveryTab(tab, btn) {
+  APP._dcTab = tab;
   document.querySelectorAll('#dc-tabs .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  const content = document.getElementById('dc-tab-content');
-  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>';
 
   try {
     const dcs = await api('/delivery-challans');
-    if (!dcs) { content.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--danger)">Failed to load delivery challans.</div>'; return; }
+    if (!dcs) return;
+
     const today = new Date();
+    APP._dcData = dcs;
+
+    const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
+    const transit   = dcs.filter(d => d.status === 'IN_TRANSIT');
+    const delivered = dcs.filter(d => d.status === 'DELIVERED');
+    const returns   = dcs.filter(d => d.status === 'CANCELLED');
+
+    const content = document.getElementById('dc-tab-content');
+    if (!content) return;
 
     if (tab === 'scheduled') {
-      const items = dcs.filter(d => d.status === 'SCHEDULED');
-      content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><span>Scheduled — Ready to Dispatch (${items.length})</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Actions</th></tr></thead>
-            <tbody>${items.map(dc=>`<tr>
-              <td><b>${dc.id}</b></td>
-              <td>${dc.order_id}</td>
-              <td>${dc.client_name||'—'}</td>
-              <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
-              <td>${dc.total_qty||'—'}</td>
-              <td><button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch</button></td>
-            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No scheduled challans</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
+      function dcSched(dc) {
+        return `
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+              <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+              <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
+            </div>
+            <div style="font-size:.82rem;color:var(--text-muted)">${dc.client_name||'Unknown Client'}</div>
+          </div>
+          <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div style="font-size:.82rem;color:var(--text-muted)">
+              ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+              <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>
+            </div>
+          </div>
+        </div>`;
+      }
+      content.innerHTML = scheduled.length
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${scheduled.map(dcSched).join('')}</div>`
+        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📦</div>No challans scheduled</div>`;
 
     } else if (tab === 'transit') {
-      const items = dcs.filter(d => d.status === 'IN_TRANSIT');
-      content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><span>In Transit (${items.length})</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Items</th><th>Total Qty</th><th>Delivered</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Actions</th></tr></thead>
-            <tbody>${items.map(dc=>{
-              const overdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today;
-              return `<tr style="${overdue?'background:var(--warning-bg,#fff8e6)':''}">
-                <td><b>${dc.id}</b>${overdue?'<span class="badge badge-warning" style="margin-left:4px">Overdue</span>':''}</td>
-                <td>${dc.order_id}</td>
-                <td>${dc.client_name||'—'}</td>
-                <td><button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button></td>
-                <td>${dc.total_qty||'—'}</td>
-                <td>${dc.delivered_qty!=null&&dc.total_qty ? `<span style="color:var(--warning)">${dc.delivered_qty}/${dc.total_qty}</span>` : '—'}</td>
-                <td>${dc.vehicle_no||'—'}</td>
-                <td>${dc.driver_name||'—'}</td>
-                <td>${fmtDate(dc.dispatched_at)}</td>
-                <td>${dc.expected_delivery_date ? `<span style="color:${overdue?'var(--danger)':'var(--text)'}">${fmtDate(dc.expected_delivery_date)}</span>` : '—'}</td>
-                <td style="display:flex;gap:4px;flex-wrap:wrap">
-                  <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Confirm Delivery</button>
-                  <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
-                </td>
-              </tr>`;
-            }).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No challans in transit</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
+      function dcTrans(dc) {
+        const isOverdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today;
+        const borderColor = isOverdue ? 'var(--danger)' : 'var(--warning)';
+        const dQty = dc.delivered_qty != null ? dc.delivered_qty : null;
+        const tQty = dc.total_qty || 0;
+        const pct  = (dQty != null && tQty) ? Math.round(dQty / tQty * 100) : 0;
+        return `
+        <div class="card" style="padding:0;overflow:hidden;border-left:3px solid ${borderColor}">
+          <div style="padding:14px 16px 10px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
+              <div><span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+                ${isOverdue?'<span class="badge badge-danger" style="margin-left:6px">Overdue</span>':''}</div>
+              <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
+            </div>
+            <div style="font-size:.82rem;font-weight:600;margin-bottom:2px">${dc.client_name||'Unknown Client'}</div>
+            ${dc.driver_name?`<div style="font-size:.78rem;color:var(--text-muted)">🚚 ${dc.vehicle_no||'—'} · ${dc.driver_name}</div>`:''}
+          </div>
+          ${dQty!=null&&tQty?`<div style="padding:0 16px 4px">
+            <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--text-muted);margin-bottom:4px"><span>Delivered</span><span>${dQty}/${tQty}</span></div>
+            <div style="height:5px;background:var(--border);border-radius:3px"><div style="height:100%;width:${pct}%;background:var(--warning);border-radius:3px"></div></div>
+          </div>`:''}
+          <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+            <div style="font-size:.75rem;color:var(--text-muted)">
+              Dispatched ${fmtDate(dc.dispatched_at)}
+              ${dc.expected_delivery_date?` · Due ${fmtDate(dc.expected_delivery_date)}`:''}
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">Items</button>
+              <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
+              <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>
+            </div>
+          </div>
+        </div>`;
+      }
+      const overdueItems = transit.filter(d => d.expected_delivery_date && new Date(d.expected_delivery_date) < today);
+      const onTimeItems  = transit.filter(d => !d.expected_delivery_date || new Date(d.expected_delivery_date) >= today);
+      let html = '';
+      if (!transit.length) html = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">🚚</div>No challans in transit</div>`;
+      else {
+        if (overdueItems.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--danger);font-weight:600;margin-bottom:8px">⚠ Overdue (${overdueItems.length})</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">${overdueItems.map(dcTrans).join('')}</div>`;
+        if (onTimeItems.length)  html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">On Track (${onTimeItems.length})</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${onTimeItems.map(dcTrans).join('')}</div>`;
+      }
+      content.innerHTML = html;
 
     } else if (tab === 'delivered') {
-      const items = dcs.filter(d => d.status === 'DELIVERED');
-      content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><span>Delivered (${items.length})</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Delivered Qty</th><th>Driver</th><th>Delivered At</th><th>Expected</th><th>POD</th><th>DC Scan</th><th>Billed</th></tr></thead>
-            <tbody>${items.map(dc=>`<tr>
-              <td><b>${dc.id}</b></td>
-              <td>${dc.order_id}</td>
-              <td>${dc.client_name||'—'}</td>
-              <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
-              <td>${dc.driver_name||'—'}</td>
-              <td>${fmtDate(dc.delivered_at)}</td>
-              <td>${dc.expected_delivery_date ? fmtDate(dc.expected_delivery_date) : '—'}</td>
-              <td>${dc.pod_uploaded ? '<span class="badge badge-success">&#10003; Uploaded</span>' : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark</button>`}</td>
-              <td>${dc.dc_scan_uploaded ? '<span class="badge badge-success">&#10003; Uploaded</span>' : `<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark</button>`}</td>
-              <td>${dc.billed ? '<span class="badge badge-success">Billed</span>' : `<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
-            </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No delivered challans</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
+      const needsAction = delivered.filter(d => !d.pod_uploaded || !d.billed);
+      const complete    = delivered.filter(d => d.pod_uploaded && d.billed);
+      const rows = (list) => list.map(dc=>`<tr>
+        <td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
+        <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+        <td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.delivered_at)}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark Scan</button>`}</td>
+        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
+      </tr>`).join('');
+      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
+      let html = '';
+      if (!delivered.length) html = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">✅</div>No delivered challans yet</div>`;
+      else {
+        if (needsAction.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Needs Action — POD/Billing (${needsAction.length})</div>${tbl(needsAction)}<div style="margin-bottom:16px"></div>`;
+        if (complete.length)    html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Complete (${complete.length})</div>${tbl(complete)}`;
+      }
+      content.innerHTML = html;
 
     } else if (tab === 'returns') {
-      const items = dcs.filter(d => d.status === 'CANCELLED');
-      content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><span>Returns / Rejected (${items.length})</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead>
-            <tbody>${items.map(dc=>`<tr>
-              <td><b>${dc.id}</b></td>
-              <td>${dc.order_id}</td>
-              <td>${dc.client_name||'—'}</td>
-              <td>${dc.total_qty||'—'}</td>
-              <td>${dc.driver_name||'—'}</td>
-              <td>${fmtDate(dc.dispatched_at)}</td>
-            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No returns</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
+      content.innerHTML = returns.length
+        ? `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
+            ${returns.map(dc=>`<tr><td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
+          </tbody></table></div></div>`
+        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
 
     } else if (tab === 'all') {
-      const statusColors = {SCHEDULED:'info',IN_TRANSIT:'warning',DELIVERED:'success',CANCELLED:'danger'};
       content.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         ${['','SCHEDULED','IN_TRANSIT','DELIVERED','CANCELLED'].map(s=>`
-          <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')" id="dc-filter-${s||'all'}">${s||'All'}</button>
+          <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')">${s||'All'}</button>
         `).join('')}
       </div>
-      <div class="card">
-        <div class="card-header"><span>All Delivery Challans (${dcs.length})</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Delivered At</th><th>Billed</th></tr></thead>
-            <tbody id="dc-all-tbody">${dcs.map(dc=>{
-              const overdue = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
-              return `<tr data-status="${dc.status}" style="${overdue?'background:var(--warning-bg,#fff8e6)':''}">
-                <td><b>${dc.id}</b></td>
-                <td>${dc.order_id}</td>
-                <td>${dc.client_name||'—'}</td>
-                <td>${statusBadge(dc.status)}</td>
-                <td>${dc.total_qty||'—'}</td>
-                <td>${dc.vehicle_no||'—'}</td>
-                <td>${dc.driver_name||'—'}</td>
-                <td>${fmtDate(dc.dispatched_at)}</td>
-                <td>${dc.expected_delivery_date ? fmtDate(dc.expected_delivery_date) : '—'}</td>
-                <td>${fmtDate(dc.delivered_at)}</td>
-                <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'—'}</td>
-              </tr>`;
-            }).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No challans</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
+      <div class="card"><div class="table-wrap"><table class="table">
+        <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Status</th><th>Total Qty</th><th>Vehicle</th><th>Driver</th><th>Dispatched</th><th>Expected</th><th>Delivered At</th><th>Billed</th></tr></thead>
+        <tbody id="dc-all-tbody">${dcs.map(dc=>{
+          const od = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
+          return `<tr data-status="${dc.status}" style="${od?'background:#fff8e6':''}">
+            <td><b>${dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
+            <td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${statusBadge(dc.status)}</td>
+            <td>${dc.total_qty||'—'}</td><td>${dc.vehicle_no||'—'}</td><td>${dc.driver_name||'—'}</td>
+            <td>${fmtDate(dc.dispatched_at)}</td>
+            <td style="color:${od?'var(--danger)':'inherit'}">${dc.expected_delivery_date?fmtDate(dc.expected_delivery_date):'—'}</td>
+            <td>${fmtDate(dc.delivered_at)}</td>
+            <td>${dc.billed?'<span class="badge badge-success">Billed</span>':'—'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div></div>`;
     }
   } catch(e) {
-    content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
+    const content = document.getElementById('dc-tab-content');
+    if (content) content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
       Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchDeliveryTab('${tab}',null)">Retry</button>
     </div>`;
   }
@@ -6398,85 +6559,140 @@ async function renderTemplates(el) {
     api('/order-templates'),
     api('/po-templates'),
   ]);
+  const oTpls = orderTpls || [];
+  const pTpls = poTpls || [];
+  APP._tplTab = APP._tplTab || 'orders';
+
+  const kpis = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Order Templates',val:oTpls.length,sub:'saved order templates',color:'var(--primary)'},
+      {label:'PO Templates',val:pTpls.length,sub:'saved PO templates',color:'var(--blue)'},
+      {label:'Total Templates',val:oTpls.length+pTpls.length,sub:'combined',color:'var(--navy)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>`;
+
+  function tplCard(t, type, loadFn, deleteFn) {
+    const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
+    const typeColor = type === 'order' ? 'var(--primary)' : 'var(--blue)';
+    const typeLabel = type === 'order' ? 'Order Template' : 'PO Template';
+    return `
+    <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${typeColor}">
+      <div style="padding:16px 18px 12px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+          <div style="font-weight:700;font-size:.95rem">${t.name}</div>
+          <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:${typeColor};white-space:nowrap;padding:2px 8px;background:${typeColor}1a;border-radius:10px">${typeLabel}</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:.8rem;color:var(--text-muted)">
+          <span><b style="color:var(--text)">${items.length}</b> item${items.length!==1?'s':''}</span>
+          <span>Created ${fmtDate(t.created_at)}</span>
+        </div>
+        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${t.notes}</div>` : ''}
+      </div>
+      ${items.length ? `
+      <div style="padding:0 18px 10px">
+        <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">
+          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
+          ${items.length>4?`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
+        </div>
+      </div>` : ''}
+      <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-danger btn-sm" onclick="${deleteFn}('${type}','${t.id}')">Delete</button>
+        <button class="btn btn-primary btn-sm" onclick="${loadFn}('${t.id}')">Load Template →</button>
+      </div>
+    </div>`;
+  }
+
+  function tabContent(tab) {
+    if (tab === 'orders') {
+      return oTpls.length
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${oTpls.map(t=>tplCard(t,'order','loadOrderTemplate','deleteTemplate')).join('')}</div>`
+        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📋</div>No order templates saved yet<br><small>Load items in Place Order and save as a template</small></div>`;
+    }
+    return pTpls.length
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${pTpls.map(t=>tplCard(t,'po','loadPOTemplate','deleteTemplate')).join('')}</div>`
+      : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📋</div>No PO templates saved yet<br><small>Save a PO as a template to reuse it</small></div>`;
+  }
 
   el.innerHTML = `
-  ${pageHeader('Order & PO Templates', 'Reusable templates for quick order/PO creation')}
-  <div class="tab-pills" id="tpl-tabs" style="margin-bottom:16px">
-    <button class="tab-pill active" onclick="tplTab('orders',this)">Order Templates</button>
-    <button class="tab-pill" onclick="tplTab('po',this)">PO Templates</button>
+  ${pageHeader('Order & PO Templates', 'Reusable templates for quick order/PO creation',
+    `<div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="savePOTemplateModal()">Save PO Template</button>
+      <button class="btn btn-gold" onclick="saveOrderTemplateModal()">Save Order Template</button>
+    </div>`)}
+  ${kpis}
+  <div class="tabs" id="tpl-tabs" style="margin-bottom:16px">
+    <button class="tab-btn${APP._tplTab==='orders'?' active':''}" onclick="tplTab('orders',this)">Order Templates <span style="font-size:.72rem;opacity:.7">(${oTpls.length})</span></button>
+    <button class="tab-btn${APP._tplTab==='po'?' active':''}" onclick="tplTab('po',this)">PO Templates <span style="font-size:.72rem;opacity:.7">(${pTpls.length})</span></button>
   </div>
-  <div id="tpl-content"></div>`;
-
-  renderOrderTemplatesTab(orderTpls || [], poTpls || []);
+  <div id="tpl-content">${tabContent(APP._tplTab)}</div>`;
 }
 
 function tplTab(tab, btn) {
-  document.querySelectorAll('#tpl-tabs .tab-pill').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
+  APP._tplTab = tab;
+  document.querySelectorAll('#tpl-tabs .tab-btn').forEach(b=>b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const el = document.getElementById('tpl-content');
+  if (!el) return;
+
+  function tplCard(t, type, loadFn, deleteFn) {
+    const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
+    const typeColor = type === 'order' ? 'var(--primary)' : 'var(--blue)';
+    const typeLabel = type === 'order' ? 'Order Template' : 'PO Template';
+    return `
+    <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${typeColor}">
+      <div style="padding:16px 18px 12px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+          <div style="font-weight:700;font-size:.95rem">${t.name}</div>
+          <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:${typeColor};white-space:nowrap;padding:2px 8px;background:${typeColor}1a;border-radius:10px">${typeLabel}</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:.8rem;color:var(--text-muted)">
+          <span><b style="color:var(--text)">${items.length}</b> item${items.length!==1?'s':''}</span>
+          <span>Created ${fmtDate(t.created_at)}</span>
+        </div>
+        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${t.notes}</div>` : ''}
+      </div>
+      ${items.length ? `
+      <div style="padding:0 18px 10px">
+        <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">
+          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
+          ${items.length>4?`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
+        </div>
+      </div>` : ''}
+      <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-danger btn-sm" onclick="${deleteFn}('${type}','${t.id}')">Delete</button>
+        <button class="btn btn-primary btn-sm" onclick="${loadFn}('${t.id}')">Load Template →</button>
+      </div>
+    </div>`;
+  }
+
   if (tab === 'orders') {
-    api('/order-templates').then(d => renderOrderTemplatesTab(d||[], []));
+    api('/order-templates').then(d => {
+      const list = d || [];
+      el.innerHTML = list.length
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${list.map(t=>tplCard(t,'order','loadOrderTemplate','deleteTemplate')).join('')}</div>`
+        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📋</div>No order templates saved yet</div>`;
+    });
   } else {
-    api('/po-templates').then(d => renderPOTemplatesTab([], d||[]));
+    api('/po-templates').then(d => {
+      const list = d || [];
+      el.innerHTML = list.length
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${list.map(t=>tplCard(t,'po','loadPOTemplate','deleteTemplate')).join('')}</div>`
+        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📋</div>No PO templates saved yet</div>`;
+    });
   }
 }
 
-function renderOrderTemplatesTab(orderTpls, poTpls) {
-  const el = document.getElementById('tpl-content');
-  if (!el) return;
-  el.innerHTML = `
-  <div class="card">
-    <div class="card-header"><span>Order Templates (${orderTpls.length})</span>
-      <button class="btn btn-gold btn-sm" onclick="saveOrderTemplateModal()">Save New Template</button>
-    </div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Name</th><th>Items</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${orderTpls.map(t=>{
-          const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
-          return `<tr>
-            <td><b>${t.name}</b></td>
-            <td>${items.length} item(s)</td>
-            <td>${fmtDate(t.created_at)}</td>
-            <td>
-              <button class="btn btn-primary btn-sm" onclick="loadOrderTemplate('${t.id}')">Load</button>
-              <button class="btn btn-danger btn-sm" onclick="deleteTemplate('order','${t.id}')">Delete</button>
-            </td>
-          </tr>`;
-        }).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No templates yet</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
-}
-
-function renderPOTemplatesTab(orderTpls, poTpls) {
-  const el = document.getElementById('tpl-content');
-  if (!el) return;
-  el.innerHTML = `
-  <div class="card">
-    <div class="card-header"><span>PO Templates (${poTpls.length})</span>
-      <button class="btn btn-gold btn-sm" onclick="savePOTemplateModal()">Save New Template</button>
-    </div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Name</th><th>Items</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>${poTpls.map(t=>{
-          const items = typeof t.items === 'string' ? JSON.parse(t.items) : (t.items||[]);
-          return `<tr>
-            <td><b>${t.name}</b></td>
-            <td>${items.length} item(s)</td>
-            <td>${fmtDate(t.created_at)}</td>
-            <td>
-              <button class="btn btn-primary btn-sm" onclick="loadPOTemplate('${t.id}')">Load</button>
-              <button class="btn btn-danger btn-sm" onclick="deleteTemplate('po','${t.id}')">Delete</button>
-            </td>
-          </tr>`;
-        }).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No templates yet</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
-}
+function renderOrderTemplatesTab(orderTpls, poTpls) { /* legacy — replaced by tplTab */ }
+function renderPOTemplatesTab(orderTpls, poTpls) { /* legacy — replaced by tplTab */ }
 
 function saveOrderTemplateModal() {
   openModal('Save Order Template',
@@ -6654,42 +6870,82 @@ async function renderApprovalChains(el) {
   ]);
   if (!chains) return;
 
-  el.innerHTML = `
-  ${pageHeader('Approval Chains', `${chains.length} chain(s) configured`,
-    `<button class="btn btn-gold" onclick="newApprovalChainModal()">New Chain</button>`)}
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span>Configured Chains</span></div>
-      ${chains.map(c=>{
-        const steps = c.steps||[];
-        return `<div style="padding:14px;border-bottom:1px solid var(--border)">
-          <div style="font-weight:600;margin-bottom:4px">${c.name}</div>
-          <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">Min amount: ${fmt(c.min_amount)} | ${c.entity_type}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${steps.map((s,i)=>`<span style="padding:3px 10px;background:var(--navy);color:#fff;border-radius:12px;font-size:.78rem">${i+1}. ${s.role}</span>`).join('')}
-          </div>
-        </div>`;
-      }).join('')||'<div style="padding:16px;color:var(--text-muted);text-align:center">No chains configured</div>'}
-    </div>
-    <div class="card">
-      <div class="card-header"><span>Pending Approvals (${(instances||[]).length})</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Order</th><th>Chain</th><th>Step</th><th>Actions</th></tr></thead>
-          <tbody>${(instances||[]).map(inst=>`<tr>
-            <td>${inst.entity_id}</td>
-            <td>${inst.chain_name||inst.chain_id}</td>
-            <td>Step ${inst.current_step}</td>
-            <td>
-              <button class="btn btn-primary btn-sm" onclick="actOnChain('${inst.id}','APPROVED')">Approve</button>
-              <button class="btn btn-danger btn-sm" onclick="actOnChain('${inst.id}','REJECTED')">Reject</button>
-            </td>
-          </tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No pending approvals</td></tr>'}
-          </tbody>
-        </table>
+  const insts = instances || [];
+  const pending = insts.length;
+  const avgSteps = chains.length ? Math.round(chains.reduce((s,c)=>s+(c.steps||[]).length,0)/chains.length*10)/10 : 0;
+
+  const kpis = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Configured Chains',val:chains.length,sub:'approval workflows',color:'var(--navy)'},
+      {label:'Pending Approvals',val:pending,sub:'awaiting action',color:pending?'var(--warning)':'var(--success)'},
+      {label:'Avg Steps per Chain',val:avgSteps||'—',sub:'approval levels',color:'var(--blue)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>`;
+
+  const pendingSection = pending ? `
+  <div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:10px">⏳ Pending Approvals (${pending})</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:22px">
+    ${insts.map(inst=>`
+    <div class="card" style="padding:0;overflow:hidden;border-left:3px solid var(--warning)">
+      <div style="padding:14px 16px 10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-weight:700">Entity #${inst.entity_id}</span>
+          <span style="font-size:.72rem;padding:2px 8px;background:#fff8e6;color:#d97706;border-radius:10px">Step ${inst.current_step}</span>
+        </div>
+        <div style="font-size:.82rem;color:var(--text-muted)">${inst.chain_name||'Chain #'+inst.chain_id}</div>
+      </div>
+      <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-danger btn-sm" onclick="actOnChain('${inst.id}','REJECTED')">Reject</button>
+        <button class="btn btn-success btn-sm" onclick="actOnChain('${inst.id}','APPROVED')">Approve</button>
       </div>
     </div>
+    `).join('')}
+  </div>` : `
+  <div class="card" style="padding:20px 24px;margin-bottom:22px;border-left:3px solid var(--success);display:flex;align-items:center;gap:12px">
+    <span style="font-size:1.4rem">✓</span>
+    <div><div style="font-weight:600;color:var(--success)">All caught up</div><div style="font-size:.82rem;color:var(--text-muted)">No pending approvals</div></div>
   </div>`;
+
+  const chainsSection = `
+  <div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:10px">Configured Chains (${chains.length})</div>
+  ${chains.length ? `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+    ${chains.map(c=>{
+      const steps = c.steps||[];
+      return `
+      <div class="card" style="padding:0;overflow:hidden;border-top:3px solid var(--navy)">
+        <div style="padding:14px 16px 10px">
+          <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">${c.name}</div>
+          <div style="font-size:.78rem;color:var(--text-muted)">
+            Min: ${fmt(c.min_amount||0)} · ${steps.length} step${steps.length!==1?'s':''}
+            ${c.entity_type?` · ${c.entity_type}`:''}
+          </div>
+        </div>
+        <div style="padding:0 16px 14px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          ${steps.map((s,i)=>`
+            <div style="display:flex;align-items:center;gap:4px">
+              ${i>0?'<span style="color:var(--text-muted);font-size:.75rem">→</span>':''}
+              <span style="padding:3px 10px;background:var(--navy);color:#fff;border-radius:12px;font-size:.75rem;white-space:nowrap">${i+1}. ${ROLES[s.role]?.label||s.role}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>` : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">No approval chains configured yet</div>`}`;
+
+  el.innerHTML = `
+  ${pageHeader('Approval Chains', 'Multi-step approval workflows for orders',
+    `<button class="btn btn-gold" onclick="newApprovalChainModal()">New Chain</button>`)}
+  ${kpis}
+  ${pendingSection}
+  ${chainsSection}`;
 }
 
 let _chainStepCount = 1;
