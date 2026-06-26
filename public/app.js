@@ -7169,7 +7169,17 @@ async function switchFulfilTab(tab, btn) {
   } else if (tab === 'ageing') {
     const data = await api('/reports/due-ageing');
     if (!data) return;
+    const totalDueQty   = data.reduce((s,r)=>s+(r.due_qty||0),0);
+    const totalDueValue = data.reduce((s,r)=>s+(r.due_value||0),0);
+    const critical      = data.find(r=>r.age_bucket==='15+ Days');
+    const totalOrders   = data.reduce((s,r)=>s+(r.order_count||0),0);
     el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card ${critical?.order_count?'kpi-danger':''}"><div class="kpi-label">Critical (15+ days)</div><div class="kpi-value">${critical?.order_count||0}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(critical?.due_value||0)} at risk</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Due Orders</div><div class="kpi-value">${totalOrders}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all buckets</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${totalDueQty}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units outstanding</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Due Value</div><div class="kpi-value">${fmt(totalDueValue)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">estimated at cost</div></div>
+    </div>
     <div class="card">
       <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ageing')">&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
@@ -7189,16 +7199,28 @@ async function switchFulfilTab(tab, btn) {
   } else if (tab === 'brand-shortfall') {
     const data = await api(`/reports/brand-shortfall?from=${from30}&to=${today}`);
     if (!data) return;
+    const critical = data.filter(r=>r.fulfilment_pct<70).length;
+    const totalDue = data.reduce((s,r)=>s+(r.due_qty||0),0);
+    const avgFill  = data.length ? Math.round(data.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/data.length) : 100;
     el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card ${critical?'kpi-danger':'kpi-success'}"><div class="kpi-label">Critical Brands (<70%)</div><div class="kpi-value">${critical}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">of ${data.length} brands</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Fulfilment</div><div class="kpi-value">${avgFill}%</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all brands</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Units</div><div class="kpi-value">${totalDue}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">outstanding</div></div>
+      <div class="kpi-card"><div class="kpi-label">Brands Tracked</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">last 30 days</div></div>
+    </div>
     <div class="card">
       <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-shortfall')">&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Fulfilment %</th><th>Vendor</th></tr></thead>
-        <tbody>${data.map(r=>`<tr>
+        <tbody>${data.sort((a,b)=>a.fulfilment_pct-b.fulfilment_pct).map(r=>`<tr>
           <td><b>${r.brand_name}</b></td>
           <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
           <td><b style="color:var(--danger)">${r.due_qty}</b></td>
-          <td><span class="badge badge-${r.fulfilment_pct>=90?'success':r.fulfilment_pct>=70?'warning':'danger'}">${r.fulfilment_pct}%</span></td>
+          <td>
+            <span class="badge badge-${r.fulfilment_pct>=90?'success':r.fulfilment_pct>=70?'warning':'danger'}">${r.fulfilment_pct}%</span>
+            <div style="background:var(--border);height:3px;border-radius:2px;margin-top:4px;overflow:hidden"><div style="height:100%;width:${Math.min(r.fulfilment_pct,100)}%;background:${r.fulfilment_pct>=90?'var(--success)':r.fulfilment_pct>=70?'var(--warning)':'var(--danger)'}"></div></div>
+          </td>
           <td>${r.primary_vendor||'—'}</td>
         </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No shortfall</td></tr>'}
         </tbody>
@@ -7208,7 +7230,16 @@ async function switchFulfilTab(tab, btn) {
   } else if (tab === 'brand-procurement') {
     const data = await api(`/reports/brand-procurement?from=${from30}&to=${today}`);
     if (!data) return;
+    const totalShortfall = data.reduce((s,r)=>s+(r.shortfall_qty||0),0);
+    const totalSuggestedPO = data.reduce((s,r)=>s+(r.suggested_po_qty||0),0);
+    const brandsWithShortfall = data.filter(r=>(r.shortfall_qty||0)>0).length;
     el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card ${brandsWithShortfall?'kpi-warning':'kpi-success'}"><div class="kpi-label">Brands w/ Shortfall</div><div class="kpi-value">${brandsWithShortfall}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">of ${data.length} brands</div></div>
+      <div class="kpi-card kpi-danger"><div class="kpi-label">Total Shortfall Qty</div><div class="kpi-value">${totalShortfall}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units to procure</div></div>
+      <div class="kpi-card"><div class="kpi-label">Suggested PO Qty</div><div class="kpi-value">${totalSuggestedPO}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">total units to order</div></div>
+      <div class="kpi-card"><div class="kpi-label">Brands Tracked</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">last 30 days</div></div>
+    </div>
     <div class="card">
       <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-procurement')">&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
@@ -7228,12 +7259,22 @@ async function switchFulfilTab(tab, btn) {
   } else if (tab === 'client-scorecard') {
     const data = await api(`/reports/client-fulfilment?from=${from30}&to=${today}`);
     if (!data) return;
+    const avgFill     = data.length ? Math.round(data.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/data.length) : 100;
+    const atRisk      = data.filter(r=>(r.fulfilment_pct||0)<70).length;
+    const totalDueVal = data.reduce((s,r)=>s+(r.due_value||0),0);
+    const avgDelivery = data.filter(r=>r.avg_delivery_days).length ? Math.round(data.filter(r=>r.avg_delivery_days).reduce((s,r)=>s+(r.avg_delivery_days||0),0)/data.filter(r=>r.avg_delivery_days).length*10)/10 : null;
     el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card ${atRisk?'kpi-danger':'kpi-success'}"><div class="kpi-label">At-Risk Clients</div><div class="kpi-value">${atRisk}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">fulfilment &lt;70%</div></div>
+      <div class="kpi-card ${avgFill<70?'kpi-danger':avgFill<90?'kpi-warning':'kpi-success'}"><div class="kpi-label">Avg Fulfilment</div><div class="kpi-value">${avgFill}%</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all clients</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Due Value</div><div class="kpi-value">${fmt(totalDueVal)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">outstanding</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Delivery Time</div><div class="kpi-value">${avgDelivery!=null?avgDelivery+'d':'—'}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">days from order</div></div>
+    </div>
     <div class="card">
       <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('client-scorecard')">&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Location</th><th>Orders</th><th>Ordered Qty</th><th>Delivered Qty</th><th>Due Qty</th><th>Due Value</th><th>Fulfilment %</th><th>Avg Delivery Days</th></tr></thead>
-        <tbody>${data.map(r=>`<tr>
+        <tbody>${data.sort((a,b)=>(a.fulfilment_pct||0)-(b.fulfilment_pct||0)).map(r=>`<tr>
           <td><b>${r.client_name}</b></td>
           <td>${r.location||'—'}</td>
           <td>${r.total_orders}</td>
@@ -7309,7 +7350,16 @@ async function switchFulfilTab(tab, btn) {
   } else if (tab === 'procurement-forecast') {
     const data = await api('/reports/procurement-forecast');
     if (!data) return;
+    const totalSuggestedPO = data.reduce((s,r)=>s+(r.suggested_procurement_qty||0),0);
+    const stockout         = data.filter(r=>r.current_stock<(r.due_qty||0)).length;
+    const totalDue         = data.reduce((s,r)=>s+(r.due_qty||0),0);
     el.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:16px">
+      <div class="kpi-card ${stockout?'kpi-danger':'kpi-success'}"><div class="kpi-label">Stockout Risk Items</div><div class="kpi-value">${stockout}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">stock &lt; due qty</div></div>
+      <div class="kpi-card kpi-warning"><div class="kpi-label">Items Needing PO</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">to be procured</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${totalDue}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units outstanding</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total PO Qty Needed</div><div class="kpi-value">${totalSuggestedPO}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">suggested order</div></div>
+    </div>
     <div class="card">
       <div class="card-header">
         <span>Procurement Demand Forecast</span>
@@ -7317,12 +7367,15 @@ async function switchFulfilTab(tab, btn) {
       </div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
-        <tbody>${data.map(r=>`<tr>
+        <tbody>${data.sort((a,b)=>(b.due_qty||0)-(a.due_qty||0)).map(r=>`<tr style="${r.current_stock<(r.due_qty||0)?'background:#fff5f5':''}">
           <td>${r.brand_name}</td>
           <td><b>${r.item_name}</b></td>
-          <td>${r.sku}</td>
+          <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
           <td><b style="color:var(--danger)">${r.due_qty}</b></td>
-          <td><span style="color:${r.current_stock<r.due_qty?'var(--danger)':'var(--success)'}">${r.current_stock}</span></td>
+          <td><span style="color:${r.current_stock<r.due_qty?'var(--danger)':'var(--success)'}${r.current_stock<r.due_qty?';font-weight:700':''}">
+            ${r.current_stock}
+            ${r.current_stock<r.due_qty?'<span title="Stockout risk" style="margin-left:4px">⚠</span>':''}
+          </span></td>
           <td><b style="color:var(--blue)">${r.suggested_procurement_qty}</b></td>
           <td>${r.vendor_name||'—'}</td>
           <td>
