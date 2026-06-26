@@ -7490,21 +7490,28 @@ async function switchFulfilTab(tab, btn) {
     ]);
     if (!data) return;
     el.innerHTML = `
-    <div class="card">
-      <div class="card-header">
-        <span>Order vs Delivery Reconciliation</span>
-        <div style="display:flex;gap:8px;align-items:center">
+    <!-- Filters bar -->
+    <div class="card" style="padding:12px 16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="font-weight:700;font-size:.85rem;color:var(--navy)">Order vs Delivery Reconciliation</span>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <select id="ovd-client" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
             <option value="">All Clients</option>
             ${(clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}
           </select>
-          <label><input type="checkbox" id="ovd-due-only" onchange="reloadOVD()"> Due Only</label>
+          <select id="ovd-range" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
+            <option value="30">Last 30 days</option>
+            <option value="60">Last 60 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="ovd-due-only" onchange="reloadOVD()"> Due Only</label>
           <button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ovd')">&#8595; CSV</button>
         </div>
       </div>
-      <div id="ovd-table-wrap">
-        ${renderOVDTable(data)}
-      </div>
+    </div>
+    <!-- KPI tiles + table -->
+    <div id="ovd-table-wrap">
+      ${renderOVDTable(data)}
     </div>`;
 
   } else if (tab === 'due-items') {
@@ -7937,34 +7944,139 @@ async function switchFulfilTab(tab, btn) {
 }
 
 function renderOVDTable(data) {
-  if (!data.length) return `<div class="empty-state"><div class="empty-icon">&#128230;</div><div class="empty-title">No data</div><div class="empty-desc">No orders found for selected filters.</div></div>`;
-  return `<div class="table-wrap"><table class="table">
-    <thead><tr><th>Order No.</th><th>Date</th><th>Client</th><th>Location</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Due Value</th><th>DC Count</th><th>Last Delivery</th><th>Status</th></tr></thead>
-    <tbody>${data.map(r=>`<tr>
-      <td><b>${r.order_number}</b></td>
-      <td>${fmtDate(r.order_date)}</td>
-      <td>${r.client_name}</td>
-      <td>${r.client_location||'—'}</td>
-      <td>${r.brand_name||'—'}</td>
-      <td>${r.item_name}</td>
-      <td>${r.ordered_qty}</td>
-      <td>${r.delivered_qty}</td>
-      <td><b style="color:${r.due_qty>0?'var(--danger)':'var(--success)'}">${r.due_qty}</b></td>
-      <td>${fmt(r.due_value||0)}</td>
-      <td>${r.dc_count}</td>
-      <td>${r.last_delivery_date?fmtDate(r.last_delivery_date):'—'}</td>
-      <td><span class="badge badge-${r.order_status==='Complete'?'success':r.order_status==='Partial'?'warning':'info'}">${r.order_status}</span></td>
-    </tr>`).join('')}
-    </tbody></table></div>`;
+  if (!data.length) return `<div class="empty-state"><div class="empty-icon">&#128230;</div><div class="empty-title">No orders</div><div class="empty-desc">No orders found for the selected filters.</div></div>`;
+
+  // Group flat item rows into per-order summaries
+  const orderMap = {};
+  data.forEach(r => {
+    if (!orderMap[r.order_number]) {
+      orderMap[r.order_number] = {
+        id: r.order_number,
+        date: r.order_date,
+        client: r.client_name,
+        location: r.client_location || '',
+        dc_count: r.dc_count || 0,
+        last_delivery: r.last_delivery_date || '',
+        total_ordered: 0, total_delivered: 0, total_due: 0, total_due_value: 0,
+        line_count: 0, due_lines: 0,
+        status: 'Complete',
+      };
+    }
+    const o = orderMap[r.order_number];
+    o.line_count++;
+    o.total_ordered  += r.ordered_qty   || 0;
+    o.total_delivered+= r.delivered_qty || 0;
+    o.total_due      += r.due_qty       || 0;
+    o.total_due_value+= r.due_value     || 0;
+    if ((r.due_qty||0) > 0) o.due_lines++;
+    // worst-case status: Open > Partial > Complete
+    if (r.order_status === 'Open')    o.status = 'Open';
+    else if (r.order_status === 'Partial' && o.status !== 'Open') o.status = 'Partial';
+  });
+
+  const orders = Object.values(orderMap);
+  const total    = orders.length;
+  const complete = orders.filter(o => o.status === 'Complete').length;
+  const partial  = orders.filter(o => o.status === 'Partial').length;
+  const open     = orders.filter(o => o.status === 'Open').length;
+  const totalDue = orders.reduce((s,o)=>s+o.total_due_value, 0);
+
+  const statusBadgeOVD = s => ({
+    Complete: `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#d1fae5;color:#059669">&#10003; Complete</span>`,
+    Partial:  `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#fef3c7;color:#d97706">&#9651; Partial</span>`,
+    Open:     `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#fee2e2;color:#dc2626">&#9679; Open</span>`,
+  }[s] || `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#f3f4f6;color:#6b7280">${s}</span>`);
+
+  const borderColor = s => s==='Complete'?'var(--success)':s==='Partial'?'#f59e0b':'var(--danger)';
+
+  return `
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Total Orders</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1">${total}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">in period</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Fully Delivered</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--success);line-height:1">${complete}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">${total?Math.round(complete/total*100):0}% of orders</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid #f59e0b;margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Partially Delivered</div>
+      <div style="font-size:2rem;font-weight:800;color:#d97706;line-height:1">${partial}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">balance pending</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${open>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Not Started</div>
+      <div style="font-size:2rem;font-weight:800;color:${open>0?'var(--danger)':'var(--navy)'};line-height:1">${open}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">no delivery yet</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Due Value</div>
+      <div style="font-size:1.4rem;font-weight:800;color:${totalDue>0?'var(--danger)':'var(--navy)'};line-height:1">${fmt(totalDue)}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">undelivered</div>
+    </div>
+  </div>
+
+  <!-- Order summary table -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Orders (${total})</span>
+      <span style="font-size:.78rem;color:var(--text-muted)">Click any row to view full line item breakdown</span>
+    </div>
+    <div class="table-wrap">
+      <table class="table" style="margin:0">
+        <thead><tr>
+          <th>Order ID</th>
+          <th>Date</th>
+          <th>Client</th>
+          <th>Location</th>
+          <th style="text-align:center">Status</th>
+          <th style="text-align:right">Lines</th>
+          <th style="text-align:right">Ordered Qty</th>
+          <th style="text-align:right">Delivered</th>
+          <th style="text-align:right">Due Qty</th>
+          <th style="text-align:right">Due Value</th>
+          <th style="text-align:right">DCs</th>
+          <th>Last Delivery</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" onclick="viewOrderDrilldown('${o.id}')" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''">
+            <td><b style="color:var(--navy)">${o.id}</b></td>
+            <td style="white-space:nowrap">${fmtDate(o.date)}</td>
+            <td style="font-weight:600">${o.client}</td>
+            <td style="color:var(--text-muted);font-size:.8rem">${o.location||'—'}</td>
+            <td style="text-align:center">${statusBadgeOVD(o.status)}</td>
+            <td style="text-align:right">
+              <span style="font-weight:700">${o.line_count}</span>
+              ${o.due_lines>0?`<span style="font-size:.7rem;color:var(--danger);margin-left:4px">(${o.due_lines} due)</span>`:''}
+            </td>
+            <td style="text-align:right;font-weight:600">${o.total_ordered}</td>
+            <td style="text-align:right;color:${o.total_delivered>0?'#059669':'var(--text-muted)'};font-weight:${o.total_delivered>0?700:400}">${o.total_delivered}</td>
+            <td style="text-align:right;font-weight:700;color:${o.total_due>0?'var(--danger)':'var(--success)'}">${o.total_due}</td>
+            <td style="text-align:right;color:${o.total_due_value>0?'var(--danger)':'var(--text-muted)'}">${o.total_due_value>0?fmt(o.total_due_value):'—'}</td>
+            <td style="text-align:right;color:var(--text-muted)">${o.dc_count||0}</td>
+            <td style="font-size:.8rem;color:var(--text-muted)">${o.last_delivery?fmtDate(o.last_delivery):'—'}</td>
+            <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();viewOrderDrilldown('${o.id}')">Details ›</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
 }
 
 async function reloadOVD() {
-  const client = document.getElementById('ovd-client')?.value || '';
+  const client  = document.getElementById('ovd-client')?.value  || '';
   const dueOnly = document.getElementById('ovd-due-only')?.checked ? '1' : '0';
-  const today = new Date().toISOString().slice(0,10);
-  const from = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const days    = parseInt(document.getElementById('ovd-range')?.value || '30', 10);
+  const today   = new Date().toISOString().slice(0,10);
+  const from    = new Date(Date.now()-days*86400000).toISOString().slice(0,10);
+  const wrap = document.getElementById('ovd-table-wrap');
+  if (wrap) wrap.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
   const data = await api(`/reports/order-vs-delivery?from=${from}&to=${today}${client?'&client_id='+client:''}${dueOnly==='1'?'&due_only=1':''}`);
-  if (data) document.getElementById('ovd-table-wrap').innerHTML = renderOVDTable(data);
+  if (data && wrap) wrap.innerHTML = renderOVDTable(data);
 }
 
 async function drillPendingClient(clientId, clientName) {
