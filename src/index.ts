@@ -280,6 +280,7 @@ export default {
       if (path==="/api/reports/brand-procurement"    && method==="GET") return handleRptBrandProcurement(request,env);
       if (path==="/api/reports/due-items"            && method==="GET") return handleRptDueItems(request,env);
       if (path==="/api/reports/dc-per-order"         && method==="GET") return handleRptDCPerOrder(request,env);
+      if (path==="/api/reports/order-dcs"             && method==="GET") return handleRptOrderDCs(request,env);
       if (path==="/api/reports/dc-reconciliation"    && method==="GET") return handleRptDCReconciliation(request,env);
       if (path==="/api/reports/pending-supply"       && method==="GET") return handleRptPendingSupply(request,env);
       if (path==="/api/reports/due-ageing"           && method==="GET") return handleRptDueAgeing(request,env);
@@ -2127,9 +2128,10 @@ async function handleRptDCPerOrder(request: Request, env: Env): Promise<Response
   const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
   const {results: orders} = await env.DB.prepare(`
     SELECT o.id, c.name AS client_name, o.grand_total, o.status, o.created_at,
-      (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id) AS dc_count,
+      (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status NOT IN ('CANCELLED')) AS dc_count,
       (SELECT COALESCE(SUM(oi.qty),0) FROM order_items oi WHERE oi.order_id=o.id) AS total_ordered,
-      (SELECT COALESCE(SUM(dci.qty_delivered),0) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=o.id) AS total_delivered
+      (SELECT COALESCE(SUM(dci.qty_delivered),0) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=o.id) AS total_delivered,
+      (SELECT MAX(dc.delivered_at) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status='DELIVERED') AS completion_date
     FROM orders o JOIN clients c ON o.client_id=c.id
     WHERE o.status NOT IN ('CANCELLED','DRAFT')
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?
@@ -2139,6 +2141,30 @@ async function handleRptDCPerOrder(request: Request, env: Env): Promise<Response
   const multiDC = (orders as Record<string,unknown>[]).filter(o => (o.dc_count as number) > 1).length;
   const avgDCsPerOrder = totalOrders ? ((orders as Record<string,unknown>[]).reduce((s,o) => s + (o.dc_count as number||0), 0) / totalOrders).toFixed(1) : '0';
   return json({ orders, kpis: { totalOrders, singleDC, multiDC, avgDCsPerOrder } });
+}
+
+async function handleRptOrderDCs(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const orderId = new URL(request.url).searchParams.get('order_id');
+  if (!orderId) return json({error:'order_id required'}, 400);
+  const {results} = await env.DB.prepare(`
+    SELECT dc.id,
+      COALESCE(dc.dc_number, dc.id) AS dc_number,
+      date(dc.dispatched_at) AS dc_date,
+      dc.delivered_at,
+      dc.status,
+      dc.driver_name,
+      dc.vehicle_no,
+      COUNT(dci.id) AS line_count,
+      COALESCE(SUM(dci.qty_ordered),0) AS total_qty_ordered,
+      COALESCE(SUM(dci.qty_delivered),0) AS total_qty_delivered
+    FROM delivery_challans dc
+    LEFT JOIN dc_items dci ON dci.dc_id = dc.id
+    WHERE dc.order_id = ?
+    GROUP BY dc.id
+    ORDER BY dc.dispatched_at`).bind(orderId).all();
+  return json(results);
 }
 
 async function handleRptDCReconciliation(request: Request, env: Env): Promise<Response> {

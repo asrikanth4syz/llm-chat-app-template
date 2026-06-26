@@ -7834,18 +7834,55 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">delivery challans</div>
       </div>
     </div>
-    <div class="card">
-      <div class="card-header"><span>Multi-Delivery Completion Tracking</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Order ID</th><th>Client</th><th>Total Ordered</th><th>Total Delivered</th><th>DC Count</th><th>Status</th></tr></thead>
-        <tbody>${(data.orders||[]).map(r=>`<tr>
-          <td><b>${r.id}</b></td><td>${r.client_name}</td>
-          <td>${r.total_ordered}</td><td>${r.total_delivered}</td>
-          <td><span class="badge badge-${r.dc_count>2?'warning':r.dc_count>1?'info':'success'}">${r.dc_count} DC${r.dc_count!==1?'s':''}</span></td>
-          <td>${statusBadge(r.status)}</td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
-        </tbody>
-      </table></div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Multi-Delivery Completion Tracking</span>
+        <span style="font-size:.78rem;color:var(--text-muted)">Click DC count to view challan breakdown</span>
+      </div>
+      <div class="table-wrap">
+        <table class="table" style="margin:0">
+          <thead><tr>
+            <th>Order ID</th>
+            <th>Client</th>
+            <th>Ordered Date</th>
+            <th style="text-align:right">Ordered Qty</th>
+            <th style="text-align:right">Delivered Qty</th>
+            <th style="text-align:center">DC Count</th>
+            <th>Completion Date</th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody>${(data.orders||[]).map(r=>{
+            const pct = r.total_ordered>0 ? Math.round((r.total_delivered/r.total_ordered)*100) : 0;
+            const complete = r.completion_date ? fmtDate(r.completion_date) : '—';
+            const completionColor = r.completion_date ? '#059669' : (r.status==='CLOSED'?'var(--danger)':'var(--text-muted)');
+            return `<tr>
+              <td><b style="color:var(--navy);cursor:pointer" onclick="viewOrderDrilldown('${r.id}')">${r.id}</b></td>
+              <td>${r.client_name}</td>
+              <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
+              <td style="text-align:right;font-weight:600">${r.total_ordered}</td>
+              <td style="text-align:right">
+                <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
+                  <div style="width:60px;height:5px;background:#e5e7eb;border-radius:3px;overflow:hidden">
+                    <div style="height:100%;width:${pct}%;background:${pct===100?'#059669':pct>50?'#f59e0b':'#ef4444'};border-radius:3px"></div>
+                  </div>
+                  <span style="font-weight:${r.total_delivered>0?700:400};color:${r.total_delivered>=r.total_ordered?'#059669':r.total_delivered>0?'#d97706':'var(--text-muted)'}">${r.total_delivered}</span>
+                  <span style="font-size:.7rem;color:var(--text-muted)">${pct}%</span>
+                </div>
+              </td>
+              <td style="text-align:center">
+                <span class="badge badge-${r.dc_count>2?'warning':r.dc_count>1?'info':'success'}"
+                  style="cursor:pointer" onclick="drillOrderDCs('${r.id}','${r.id}')"
+                  title="Click to view DC breakdown">
+                  ${r.dc_count} DC${r.dc_count!==1?'s':''}
+                </span>
+              </td>
+              <td style="font-size:.82rem;font-weight:${r.completion_date?600:400};color:${completionColor}">${complete}</td>
+              <td>${statusBadge(r.status)}</td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">No data</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </div>`;
 
   } else if (tab === 'dc-recon') {
@@ -8085,6 +8122,82 @@ async function reloadOVD() {
   if (wrap) wrap.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
   const data = await api(`/reports/order-vs-delivery?from=${from}&to=${today}${client?'&client_id='+client:''}${dueOnly==='1'?'&due_only=1':''}`);
   if (data && wrap) wrap.innerHTML = renderOVDTable(data);
+}
+
+async function drillOrderDCs(orderId, label) {
+  openModal(`DC Breakdown — ${label}`, `<div style="text-align:center;padding:32px;color:var(--text-muted)">Loading delivery challans…</div>`, '');
+  const dcs = await api(`/reports/order-dcs?order_id=${encodeURIComponent(orderId)}`);
+  if (!dcs) return;
+
+  const statusColor = s => ({DELIVERED:'#059669',IN_TRANSIT:'#d97706',SCHEDULED:'#3b82f6',CANCELLED:'#ef4444'}[s]||'#6b7280');
+  const statusLabel = s => ({DELIVERED:'Delivered',IN_TRANSIT:'In Transit',SCHEDULED:'Scheduled',CANCELLED:'Cancelled'}[s]||s);
+
+  const totalLines = dcs.reduce((s,d)=>s+(d.line_count||0),0);
+  const totalOrdered = dcs.reduce((s,d)=>s+(d.total_qty_ordered||0),0);
+  const totalDelivered = dcs.reduce((s,d)=>s+(d.total_qty_delivered||0),0);
+
+  const body = `
+  <!-- Summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--primary)">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Challans</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${dcs.length}</div>
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid #8b5cf6">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Lines</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${totalLines}</div>
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--blue)">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Ordered Units</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${totalOrdered}</div>
+    </div>
+    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--success)">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Delivered Units</div>
+      <div style="font-size:1.6rem;font-weight:800;color:var(--success);margin-top:4px">${totalDelivered}</div>
+    </div>
+  </div>
+
+  <!-- DC detail table -->
+  <div style="overflow-x:auto">
+    <table class="table" style="font-size:.82rem">
+      <thead><tr>
+        <th>#</th>
+        <th>DC Number</th>
+        <th>Dispatch Date</th>
+        <th>Delivery Date</th>
+        <th>Status</th>
+        <th style="text-align:right">Lines</th>
+        <th style="text-align:right">Qty Dispatched</th>
+        <th style="text-align:right">Qty Delivered</th>
+        <th>Driver / Vehicle</th>
+      </tr></thead>
+      <tbody>
+        ${dcs.map((dc,i)=>{
+          const sc = statusColor(dc.status);
+          const pct = dc.total_qty_ordered>0 ? Math.round((dc.total_qty_delivered/dc.total_qty_ordered)*100) : 0;
+          return `<tr>
+            <td style="color:var(--text-muted)">${i+1}</td>
+            <td><b style="color:var(--navy)">${dc.dc_number}</b></td>
+            <td style="white-space:nowrap">${dc.dc_date ? fmtDate(dc.dc_date) : '—'}</td>
+            <td style="white-space:nowrap;color:${dc.delivered_at?'#059669':'var(--text-muted)'};font-weight:${dc.delivered_at?600:400}">${dc.delivered_at ? fmtDate(dc.delivered_at) : '—'}</td>
+            <td><span style="font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(dc.status)}</span></td>
+            <td style="text-align:right;font-weight:700">${dc.line_count||0}</td>
+            <td style="text-align:right;font-weight:600">${dc.total_qty_ordered||0}</td>
+            <td style="text-align:right">
+              <span style="font-weight:700;color:${pct===100?'#059669':pct>0?'#d97706':'var(--text-muted)'}">${dc.total_qty_delivered||0}</span>
+              ${dc.total_qty_ordered>0?`<span style="font-size:.7rem;color:var(--text-muted);margin-left:4px">${pct}%</span>`:''}
+            </td>
+            <td style="font-size:.78rem;color:var(--text-muted)">${[dc.driver_name,dc.vehicle_no].filter(Boolean).join(' · ')||'—'}</td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text-muted)">No delivery challans found</td></tr>'}
+      </tbody>
+    </table>
+  </div>`;
+
+  openModal(`DC Breakdown — ${label}`, body,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+     <button class="btn btn-primary" onclick="closeModal();viewOrderDrilldown('${orderId}')">Full Line-Item View</button>`
+  );
 }
 
 async function drillPendingClient(clientId, clientName) {
