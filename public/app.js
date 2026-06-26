@@ -2264,22 +2264,31 @@ async function renderOrderQueue(el) {
   }
 
   function filteredOrders() {
-    return APP._oqMonth
+    let res = APP._oqMonth
       ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth))
       : orders;
+    if (APP._oqTypeFilter) res = res.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter);
+    return res;
   }
 
   const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
   function oqKpiHtml(fOrders) {
+    const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
     const active = fOrders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status));
     const byS = s => fOrders.filter(o=>o.status===s);
     const needsAction  = byS('SUBMITTED').length + byS('PENDING_APPROVAL').length + byS('APPROVED').length;
     const inShipment   = byS('IN_SHIPMENT').length + byS('PARTIALLY_CLOSED').length;
     const toPick       = byS('ACKNOWLEDGED').length + byS('READY_TO_PICK').length;
     const totalValue   = active.reduce((s,o)=>s+(o.grand_total||0),0);
+    const byType = t => allForType.filter(o=>(o.order_type||'Regular')===t);
+    const typeCfg = [
+      {type:'Regular', color:'var(--blue)',   icon:'📋'},
+      {type:'Urgent',  color:'var(--danger)', icon:'🚨'},
+      {type:'Ad-Hoc',  color:'#d97706',       icon:'⚡'},
+    ];
     return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:12px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders')">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
@@ -2300,6 +2309,24 @@ async function renderOrderQueue(el) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${toPick}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in warehouse queue</div>
       </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      ${typeCfg.map(({type,color,icon})=>{
+        const cnt = byType(type).length;
+        const val = byType(type).reduce((s,o)=>s+(o.grand_total||0),0);
+        const active = APP._oqTypeFilter===type;
+        return `<div class="card" onclick="oqFilterByType('${type}')"
+          style="padding:12px 16px;border-top:3px solid ${color};margin-bottom:0;cursor:pointer;
+          ${active?`background:${color}10;box-shadow:0 0 0 2px ${color}40`:''}">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <span style="font-size:.9rem">${icon}</span>
+            <span style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${color}">${type}</span>
+            ${active?`<span style="margin-left:auto;font-size:.65rem;color:${color};font-weight:700">✕ clear</span>`:''}
+          </div>
+          <div style="font-size:1.6rem;font-weight:800;color:var(--navy);line-height:1">${cnt}</div>
+          <div style="font-size:.72rem;color:var(--text-muted);margin-top:3px">${fmt(val)}</div>
+        </div>`;
+      }).join('')}
     </div>`;
   }
 
@@ -2428,7 +2455,7 @@ function switchOQMainTab(tab) {
       </div>
       <div class="table-wrap">
         <table class="table" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
         </table>
       </div>
@@ -2445,6 +2472,21 @@ function switchOQTab(tab) {
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
   if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(tab);
+}
+
+function oqFilterByType(type) {
+  APP._oqTypeFilter = APP._oqTypeFilter === type ? null : type;
+  const kpiEl = document.getElementById('oq-kpi');
+  const allForType = APP._oqMonth
+    ? (APP._oqOrders||[]).filter(o=>(o.created_at||'').startsWith(APP._oqMonth))
+    : (APP._oqOrders||[]);
+  if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(
+    APP._oqTypeFilter ? allForType.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter) : allForType
+  );
+  const tabsEl = document.getElementById('oq-tabs');
+  if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab||'All');
 }
 
 async function oqLoadItems() {
