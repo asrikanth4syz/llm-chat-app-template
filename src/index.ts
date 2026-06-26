@@ -192,9 +192,11 @@ export default {
       if (path==="/api/auth/otp/send"   && method==="POST") return handleOTPSend(request,env);
       if (path==="/api/auth/otp/verify" && method==="POST") return handleOTPVerify(request,env);
 
-      // Orders
-      if (path==="/api/orders"          && method==="GET")  return handleListOrders(request,env);
-      if (path==="/api/orders"          && method==="POST") return handleCreateOrder(request,env);
+      // Orders — specific paths must come before the wildcard /:id routes
+      if (path==="/api/orders"                 && method==="GET")  return handleListOrders(request,env);
+      if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);
+      if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
+      if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
@@ -357,9 +359,7 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan$/) && method==="POST") return handleMarkScan(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/return$/) && method==="POST") return handleReturnDC(request,env,path);
 
-      // Picklist and stock transfers
-      if (path==="/api/orders/picklist"       && method==="GET") return handlePickList(request,env);
-      if (path==="/api/orders/items-summary"  && method==="GET") return handleOrderItemsSummary(request,env);
+      // Stock transfers
       if (path==="/api/stock-transfers"       && method==="POST") return handleStockTransfer(request,env);
 
       // Staff master
