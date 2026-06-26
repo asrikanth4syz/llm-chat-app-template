@@ -488,7 +488,9 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const clientId = url.searchParams.get("client_id");
   const q = url.searchParams.get("q");
 
-  let query = `SELECT o.*,c.name as client_name,u.name as creator_name
+  let query = `SELECT o.*,c.name as client_name,u.name as creator_name,
+    (SELECT COUNT(*) FROM order_items WHERE order_id=o.id) AS item_count,
+    (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE 1=1`;
   const params: string[] = [];
 

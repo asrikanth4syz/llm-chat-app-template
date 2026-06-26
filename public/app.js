@@ -2296,10 +2296,18 @@ async function renderOrderQueue(el) {
         <td>${o.client_name||'—'}</td>
         <td style="font-weight:700">${fmt(o.grand_total)}</td>
         <td>${statusBadge(o.status)}</td>
+        <td style="text-align:center">
+          <span style="font-weight:700;font-size:.88rem">${o.item_count||0}</span>
+          <span style="font-size:.72rem;color:var(--text-muted);display:block">items</span>
+        </td>
+        <td style="text-align:center">
+          <span style="font-weight:700;font-size:.88rem">${o.total_qty||0}</span>
+          <span style="font-size:.72rem;color:var(--text-muted);display:block">units</span>
+        </td>
         <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td>${orderQueueActions(o)}</td>
       </tr>`;
-    }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
+    }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
 
   APP._oqTabsHtml  = oqTabsHtml;
@@ -2332,7 +2340,7 @@ async function renderOrderQueue(el) {
       </div>
       <div class="table-wrap">
         <table class="table" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${oqTableHtml(APP._oqStatusTab)}
         </table>
       </div>
