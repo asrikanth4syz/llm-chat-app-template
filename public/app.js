@@ -6188,47 +6188,81 @@ async function renderDeliveryRoutes(el) {
   ]);
   if (!routes) return;
 
-  const undelivered = (dcs || []).filter(d => d.status !== 'DELIVERED');
+  const undelivered  = (dcs || []).filter(d => d.status !== 'DELIVERED');
+  const planned      = routes.filter(r => r.status === 'PLANNED');
+  const inProgress   = routes.filter(r => r.status === 'IN_PROGRESS');
+  const completed    = routes.filter(r => r.status === 'COMPLETED');
+
+  const kpis = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Total Routes',val:routes.length,sub:'all time',color:'var(--navy)'},
+      {label:'Planned',val:planned.length,sub:'ready to start',color:planned.length?'var(--blue)':'var(--success)'},
+      {label:'In Progress',val:inProgress.length,sub:'currently active',color:inProgress.length?'var(--warning)':'var(--success)'},
+      {label:'Unrouted DCs',val:undelivered.length,sub:'need assignment',color:undelivered.length?'var(--danger)':'var(--success)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>`;
+
+  const dcSelector = undelivered.length ? `
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span>Unrouted Delivery Challans (${undelivered.length})</span>
+      <button class="btn btn-gold btn-sm" onclick="createOptimizedRoute()">Create Route from Selected</button>
+    </div>
+    <div style="padding:12px 16px">
+      <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Select challans to bundle into a route:</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">
+        ${undelivered.map(dc=>`
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+            <input type="checkbox" class="dc-select" data-id="${dc.id}" value="${dc.id}" style="width:16px;height:16px;flex-shrink:0">
+            <div>
+              <div style="font-weight:600;font-size:.85rem">DC #${dc.id}</div>
+              <div style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id||'—'} · ${dc.client_name||'Unknown'} ${dc.dispatched_at?'· Dispatched '+fmtDate(dc.dispatched_at):''}</div>
+            </div>
+          </label>`).join('')}
+      </div>
+    </div>
+  </div>` : `
+  <div class="card" style="padding:16px 20px;margin-bottom:16px;border-left:3px solid var(--success);display:flex;align-items:center;gap:12px">
+    <span style="font-size:1.3rem">✓</span>
+    <div><div style="font-weight:600;color:var(--success)">All DCs routed</div><div style="font-size:.82rem;color:var(--text-muted)">No unassigned delivery challans</div></div>
+  </div>`;
+
+  function routeCard(r) {
+    const stops = typeof r.stops === 'string' ? JSON.parse(r.stops) : (r.stops||[]);
+    const statusColor = r.status==='COMPLETED'?'var(--success)':r.status==='IN_PROGRESS'?'var(--warning)':'var(--blue)';
+    return `
+    <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${statusColor}">
+      <div style="padding:14px 16px 10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-weight:700">${r.name}</span>
+          ${statusBadge(r.status)}
+        </div>
+        <div style="font-size:.8rem;color:var(--text-muted)">${fmtDate(r.route_date)} · ${stops.length} stop${stops.length!==1?'s':''}</div>
+      </div>
+      <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+        ${r.status==='PLANNED'?`<button class="btn btn-primary btn-sm" onclick="updateRouteStatus('${r.id}','IN_PROGRESS')">Start Route</button>`:''}
+        ${r.status==='IN_PROGRESS'?`<button class="btn btn-success btn-sm" onclick="updateRouteStatus('${r.id}','COMPLETED')">Complete</button>`:''}
+      </div>
+    </div>`;
+  }
 
   el.innerHTML = `
-  ${pageHeader('Route Optimization', `${routes.length} routes`,
-    `<button class="btn btn-gold" onclick="openNewRouteModal()" style="display:inline-flex;align-items:center;gap:6px">Optimize New Route</button>`)}
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header"><span>Undelivered DCs (${undelivered.length})</span></div>
-    <div class="card-body" style="padding:12px">
-      ${undelivered.length ? `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:8px">Select DCs to include in a route:</div>
-      ${undelivered.map(dc=>`
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
-          <input type="checkbox" class="dc-select" data-id="${dc.id}" value="${dc.id}">
-          <span><b>${dc.id}</b> — Order: ${dc.order_id||'—'} ${dc.dispatched_at ? '(Dispatched '+fmtDate(dc.dispatched_at)+')' : ''}</span>
-        </label>`).join('')}
-      <div style="margin-top:12px">
-        <button class="btn btn-primary" onclick="createOptimizedRoute()">Create Route from Selected</button>
-      </div>` : '<div style="padding:8px;color:var(--text-muted)">No undelivered DCs</div>'}
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-header"><span>Routes</span></div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>${routes.map(r=>{
-          const stops = typeof r.stops === 'string' ? JSON.parse(r.stops) : (r.stops||[]);
-          return `<tr>
-            <td><b>${r.name}</b></td>
-            <td>${fmtDate(r.route_date)}</td>
-            <td>${stops.length} stops</td>
-            <td>${statusBadge(r.status)}</td>
-            <td>
-              ${r.status==='PLANNED' ? `<button class="btn btn-primary btn-sm" onclick="updateRouteStatus('${r.id}','IN_PROGRESS')">Start</button>` : ''}
-              ${r.status==='IN_PROGRESS' ? `<button class="btn btn-success btn-sm" onclick="updateRouteStatus('${r.id}','COMPLETED')">Complete</button>` : ''}
-            </td>
-          </tr>`;
-        }).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No routes yet</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>`;
+  ${pageHeader('Route Optimization', 'Plan and track delivery routes',
+    `<button class="btn btn-gold" onclick="openNewRouteModal()">New Route</button>`)}
+  ${kpis}
+  ${dcSelector}
+  ${routes.length ? `
+  <div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:10px">All Routes (${routes.length})</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px">
+    ${routes.map(routeCard).join('')}
+  </div>` : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">🗺</div>No routes created yet</div>`}`;
 }
 
 async function createOptimizedRoute() {
@@ -7703,23 +7737,41 @@ async function confirmReturn(dcId) {
 async function renderConsolidatedOrders(el) {
   const data = await api('/reports/consolidated-orders');
   if (!data) return;
-  const totalDue = data.reduce((s,r)=>s+(r.total_due_qty||0),0);
+  const totalOrdered   = data.reduce((s,r)=>s+(r.total_ordered_qty||0),0);
+  const totalDelivered = data.reduce((s,r)=>s+(r.total_delivered_qty||0),0);
+  const totalDue       = data.reduce((s,r)=>s+(r.total_due_qty||0),0);
+  const critical       = data.filter(r => r.total_due_qty > 0 && r.client_count > 1).length;
+
   el.innerHTML = `
-  ${pageHeader('Procurement View', `${data.length} items needed · ${totalDue} total units due`,
+  ${pageHeader('Procurement View', 'Consolidated view of items needed across all orders',
     `<button class="btn btn-secondary" onclick="exportConsolidated()">Export CSV</button>`)}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Items with Due Qty',val:data.filter(r=>r.total_due_qty>0).length,sub:`of ${data.length} items`,color:'var(--danger)'},
+      {label:'Total Units Due',val:totalDue,sub:'pending delivery',color:totalDue?'var(--warning)':'var(--success)'},
+      {label:'Total Ordered',val:totalOrdered,sub:'units across orders',color:'var(--navy)'},
+      {label:'Total Delivered',val:totalDelivered,sub:`${totalOrdered?Math.round(totalDelivered/totalOrdered*100):100}% fulfillment`,color:'var(--success)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>
   <div class="card">
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Clients</th><th>Client Names</th></tr></thead>
-        <tbody>${data.length ? data.map(r=>`<tr>
-          <td>${r.sku}</td>
+        <tbody>${data.length ? data.sort((a,b)=>(b.total_due_qty||0)-(a.total_due_qty||0)).map(r=>`<tr style="${r.total_due_qty>0?'':'opacity:.65'}">
+          <td style="font-size:.8rem;color:var(--text-muted)">${r.sku}</td>
           <td><b>${r.item_name}</b></td>
           <td>${r.total_ordered_qty}</td>
           <td style="color:var(--success)">${r.total_delivered_qty}</td>
           <td style="color:${r.total_due_qty>0?'var(--danger)':'var(--success)'};font-weight:700">${r.total_due_qty}</td>
-          <td>${r.client_count}</td>
-          <td style="font-size:.8rem;color:var(--text-muted)">${r.clients||'—'}</td>
-        </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">All items delivered — nothing pending</td></tr>'}
+          <td style="text-align:center">${r.client_count}</td>
+          <td style="font-size:.78rem;color:var(--text-muted)">${r.clients||'—'}</td>
+        </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--success)">✓ All items delivered — nothing pending</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -7746,27 +7798,46 @@ function exportConsolidated() {
 async function renderConsolidatedDue(el) {
   const data = await api('/reports/consolidated-due');
   if (!data) return;
+  const totalDueQty  = data.reduce((s,r)=>s+(r.due_qty||0),0);
+  const critical7    = data.filter(r=>r.days_overdue>7).length;
+  const warn3        = data.filter(r=>r.days_overdue>3&&r.days_overdue<=7).length;
+  const maxDays      = data.length ? Math.max(...data.map(r=>r.days_overdue||0)) : 0;
+
   el.innerHTML = `
-  ${pageHeader('Due Items', `${data.length} pending line items`,
+  ${pageHeader('Due Items', 'Pending line items not yet delivered to clients',
     `<button class="btn btn-secondary" onclick="exportDue()">Export CSV</button>`)}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Pending Line Items',val:data.length,sub:'unfulfilled items',color:data.length?'var(--danger)':'var(--success)'},
+      {label:'Total Due Units',val:totalDueQty,sub:'units outstanding',color:totalDueQty?'var(--warning)':'var(--success)'},
+      {label:'Critical (>7d)',val:critical7,sub:'severely overdue',color:critical7?'var(--danger)':'var(--success)'},
+      {label:'Max Age',val:maxDays?maxDays+'d':'—',sub:'oldest pending item',color:maxDays>7?'var(--danger)':maxDays>3?'var(--warning)':'var(--success)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Client</th><th>Zone</th><th>Order</th><th>Order Date</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Days</th></tr></thead>
-        <tbody>${data.length ? data.map(r=>{
+        <thead><tr><th>Client</th><th>Zone</th><th>Order</th><th>Order Date</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Age</th></tr></thead>
+        <tbody>${data.length ? data.sort((a,b)=>(b.days_overdue||0)-(a.days_overdue||0)).map(r=>{
           const daysColor = r.days_overdue>7?'var(--danger)':r.days_overdue>3?'var(--warning)':'var(--text)';
           return `<tr style="${r.days_overdue>7?'background:#fff5f5':''}">
             <td><b>${r.client_name}</b></td>
-            <td><span class="badge badge-secondary">${r.zone}</span></td>
-            <td>${r.order_id}</td>
-            <td>${fmtDate(r.order_date)}</td>
+            <td><span class="badge badge-secondary">${r.zone||'—'}</span></td>
+            <td style="font-size:.82rem">${r.order_id}</td>
+            <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.order_date)}</td>
             <td>${r.item_name}</td>
-            <td>${r.ordered_qty}</td>
+            <td style="color:var(--text-muted)">${r.ordered_qty}</td>
             <td style="color:var(--success)">${r.delivered_qty}</td>
             <td style="color:var(--danger);font-weight:700">${r.due_qty}</td>
-            <td style="color:${daysColor};font-weight:600">${r.days_overdue}d</td>
+            <td><span style="display:inline-block;min-width:36px;text-align:center;padding:2px 8px;border-radius:10px;font-size:.78rem;font-weight:700;background:${r.days_overdue>7?'#fef2f2':r.days_overdue>3?'#fef3c7':'#f0fdf4'};color:${daysColor}">${r.days_overdue}d</span></td>
           </tr>`;
-        }).join('') : '<tr><td colspan="9" style="text-align:center;color:var(--success)">✓ No pending due items</td></tr>'}
+        }).join('') : '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--success)">✓ No pending due items</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -7796,17 +7867,36 @@ async function renderPorterExpenses(el) {
     api('/clients'),
     api('/staff')
   ]);
-  const total = (expenses||[]).reduce((s,e)=>s+(e.amount||0),0);
+  const exps = expenses || [];
+  const total   = exps.reduce((s,e)=>s+(e.amount||0),0);
+  const avg     = exps.length ? Math.round(total/exps.length) : 0;
+  const today   = new Date().toISOString().slice(0,10);
+  const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+  const thisWeek = exps.filter(e=>e.trip_date>=weekAgo).reduce((s,e)=>s+(e.amount||0),0);
   const clientOpts = (clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const staffOpts = (staff||[]).filter(s=>s.active).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 
   el.innerHTML = `
-  ${pageHeader('Porter Expenses', `${(expenses||[]).length} trips · Total: ${fmt(total)}`)}
+  ${pageHeader('Porter Expenses', 'Track delivery trip costs and driver expenses')}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:22px">
+    ${[
+      {label:'Total Trips',val:exps.length,sub:'logged',color:'var(--navy)'},
+      {label:'Total Spent',val:fmt(total),sub:'all time',color:'var(--primary)'},
+      {label:'Avg per Trip',val:fmt(avg),sub:'per delivery',color:'var(--blue)'},
+      {label:'This Week',val:fmt(thisWeek),sub:'last 7 days',color:'var(--warning)'},
+    ].map(k=>`
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
+        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+        <div style="font-size:1.6rem;font-weight:700;line-height:1">${k.val}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+      </div>
+    `).join('')}
+  </div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span>Log New Trip</span></div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
-        <div class="form-group"><label>Trip Date</label><input type="date" id="pe-date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="form-group"><label>Trip Date</label><input type="date" id="pe-date" value="${today}"></div>
         <div class="form-group"><label>Route</label><input type="text" id="pe-route" placeholder="e.g. BTP → EGL"></div>
         <div class="form-group"><label>Amount (₹)</label><input type="number" id="pe-amount" min="0" step="1"></div>
         <div class="form-group"><label>Client</label><select id="pe-client"><option value="">— All clients —</option>${clientOpts}</select></div>
@@ -7817,18 +7907,18 @@ async function renderPorterExpenses(el) {
     </div>
   </div>
   <div class="card">
-    <div class="card-header"><span>Trip Log</span></div>
+    <div class="card-header"><span>Trip Log (${exps.length})</span></div>
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>Date</th><th>Route</th><th>Amount</th><th>Client</th><th>Staff</th><th>Notes</th></tr></thead>
-        <tbody>${(expenses||[]).length ? (expenses||[]).map(e=>`<tr>
-          <td>${fmtDate(e.trip_date)}</td>
-          <td>${e.route||'—'}</td>
+        <tbody>${exps.length ? exps.map(e=>`<tr>
+          <td style="font-size:.82rem">${fmtDate(e.trip_date)}</td>
+          <td><b>${e.route||'—'}</b></td>
           <td style="font-weight:600">${fmt(e.amount)}</td>
           <td>${e.client_name||'—'}</td>
           <td>${e.staff_name||'—'}</td>
-          <td style="color:var(--text-muted)">${e.notes||'—'}</td>
-        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No trips logged</td></tr>'}
+          <td style="color:var(--text-muted);font-size:.82rem">${e.notes||'—'}</td>
+        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted)">No trips logged yet</td></tr>'}
         </tbody>
       </table>
     </div>
