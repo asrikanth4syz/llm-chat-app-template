@@ -545,8 +545,9 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
   const [order, {results: orderItems}, {results: dcs}] = await Promise.all([
     env.DB.prepare(`SELECT o.*,c.name as client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`).bind(id).first(),
     env.DB.prepare("SELECT * FROM order_items WHERE order_id=? ORDER BY name").bind(id).all(),
-    env.DB.prepare(`SELECT dc.id, dc.status, dc.dc_number, dc.dispatched_at, dc.delivered_at
-      FROM delivery_challans dc WHERE dc.order_id=? ORDER BY dc.created_at`).bind(id).all(),
+    env.DB.prepare(`SELECT dc.id, dc.status, dc.dc_number, dc.dispatched_at, dc.delivered_at,
+      dc.total_qty, dc.delivered_qty, dc.driver_name, dc.vehicle_no
+      FROM delivery_challans dc WHERE dc.order_id=? ORDER BY dc.dispatched_at`).bind(id).all(),
   ]);
   if (!order) return json({error:"Not found"}, 404);
 
