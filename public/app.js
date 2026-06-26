@@ -49,9 +49,10 @@ const iconRefresh  = s => svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 
 // ── Nav surfaces ───────────────────────────────────────────
 const NAV = {
   platform: [
-    { section:'Control Tower' },
+    { section:'Overview' },
     { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
     { id:'orders',      label:'Orders',        icon:iconOrders,    badge:'!' },
+    { section:'Catalogue' },
     { id:'inventory',   label:'Inventory',     icon:iconInventory, badge:null },
     { id:'vendors',     label:'Vendors',       icon:iconVendors,   badge:null },
     { section:'Operations' },
@@ -59,25 +60,27 @@ const NAV = {
     { id:'warehouse',   label:'Warehouse',     icon:iconWarehouse, badge:null },
     { id:'delivery',    label:'Deliveries',    icon:iconDelivery,  badge:null },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
-    { section:'Management' },
-    { id:'clients',         label:'Clients',            icon:iconClients,   badge:null },
-    { id:'service_desk',    label:'Service Desk',       icon:iconDesk,      badge:null },
-    { id:'reports',         label:'Reports & BI',       icon:iconReports,   badge:null },
-    { id:'fulfilment',      label:'Fulfilment',         icon:iconReports,   badge:'!' },
-    { id:'sla_dashboard',   label:'SLA Dashboard',      icon:iconReports,   badge:'!' },
-    { id:'approval_chains', label:'Approval Chains',    icon:iconApprove,   badge:null },
-    { id:'delivery_routes', label:'Route Optimization', icon:iconDelivery,  badge:null },
-    { id:'dunning',         label:'Dunning & Payments', icon:iconBilling,   badge:null },
-    { id:'import_data',     label:'CSV Import',         icon:iconInventory, badge:null },
-    { id:'templates',       label:'Templates',          icon:iconOrders,    badge:null },
+    { id:'fulfilment',  label:'Fulfilment',    icon:iconReports,   badge:'!' },
+    { section:'Client Services' },
+    { id:'clients',         label:'Clients',          icon:iconClients,   badge:null },
+    { id:'service_desk',    label:'Service Desk',     icon:iconDesk,      badge:null },
+    { id:'approval_chains', label:'Approval Chains',  icon:iconApprove,   badge:null },
+    { section:'Analytics' },
+    { id:'reports',         label:'Reports & BI',     icon:iconReports,   badge:null },
+    { id:'sla_dashboard',   label:'SLA Dashboard',    icon:iconDashboard, badge:'!' },
+    { section:'Tools' },
+    { id:'delivery_routes', label:'Route Planning',   icon:iconTruck,     badge:null },
+    { id:'dunning',         label:'Dunning',          icon:iconBilling,   badge:null },
+    { id:'import_data',     label:'CSV Import',       icon:iconUpload,    badge:null },
+    { id:'templates',       label:'Templates',        icon:iconOrders,    badge:null },
     { section:'Admin' },
-    { id:'todays_schedule',       label:"Today's Schedule",    icon:iconDelivery,   badge:'!' },
-    { id:'consolidated_orders',   label:'Procurement View',    icon:iconProcure,    badge:null },
-    { id:'consolidated_due',      label:'Due Items',           icon:iconReports,    badge:'!' },
-    { id:'staff',                 label:'Staff',               icon:iconUsers,      badge:null },
-    { id:'porter_expenses',       label:'Porter Expenses',     icon:iconBilling,    badge:null },
-    { id:'users',       label:'Users & Roles', icon:iconUsers,     badge:null },
-    { id:'settings',    label:'Settings',      icon:iconSettings,  badge:null },
+    { id:'todays_schedule',     label:"Today's Schedule", icon:iconDelivery, badge:'!' },
+    { id:'consolidated_orders', label:'Procurement View', icon:iconProcure,  badge:null },
+    { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,    badge:'!' },
+    { id:'staff',               label:'Staff',            icon:iconUsers,    badge:null },
+    { id:'porter_expenses',     label:'Porter Expenses',  icon:iconBilling,  badge:null },
+    { id:'users',               label:'Users & Roles',    icon:iconUsers,    badge:null },
+    { id:'settings',            label:'Settings',         icon:iconSettings, badge:null },
   ],
   ops: [
     { section:'Operations' },
@@ -403,11 +406,11 @@ function buildNav() {
   const nav = APP.user.nav;
   const items = NAV[nav] || NAV.platform;
   document.getElementById('sidebar-nav').innerHTML = items.map(item => {
-    if (item.section) return `<div class="nav-section">${item.section}</div>`;
-    return `<div class="nav-item" id="nav-${item.id}" onclick="navigate('${item.id}')">
-      <span class="nav-icon">${item.icon(16)}</span>
-      <span class="nav-label">${item.label}</span>
-      ${item.badge ? `<span class="nav-badge">${item.badge}</span>` : ''}
+    if (item.section) return `<div class="nav-section"><span class="nav-section-label">${item.section}</span></div>`;
+    return `<div class="nav-item" id="nav-${item.id}" onclick="navigate('${item.id}')" title="${item.label}">
+      <span class="nav-item-icon">${item.icon(18)}</span>
+      <span class="nav-item-label">${item.label}</span>
+      ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
     </div>`;
   }).join('');
 }
