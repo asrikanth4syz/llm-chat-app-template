@@ -2382,33 +2382,37 @@ async function renderDCBilling(el) {
   function financeTabContent(tab) {
     if (tab === 'dc_tracker') {
       const today = new Date().toISOString().slice(0,10);
+      const thisMonth = new Date().toISOString().slice(0,7);
       const billedToday = billed.filter(d=>d.billed_at?.startsWith(today));
+      const billedThisMonth = billed.filter(d=>(d.billed_at||'').startsWith(thisMonth));
       const critical = unbilled.filter(d => Math.floor((Date.now()-new Date(d.created_at).getTime())/86400000) > 15);
       const pendingValue = unbilled.reduce((s,d)=>s+(d.order_value||0),0);
-      const billedMonthValue = billed.filter(d=>(d.billed_at||'').startsWith(new Date().toISOString().slice(0,7))).reduce((s,d)=>s+(d.order_value||0),0);
+      const billedMonthValue = billedThisMonth.reduce((s,d)=>s+(d.order_value||0),0);
+      const criticalValue = critical.reduce((s,d)=>s+(d.order_value||0),0);
       return `
-      <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
-        <div class="kpi-card kpi-warning">
-          <div class="kpi-label">Pending Billing</div>
-          <div class="kpi-value">${unbilled.length}</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(pendingValue)} outstanding</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+        <div class="card" style="padding:16px 18px;border-top:3px solid ${unbilled.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending Billing</div>
+          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${unbilled.length}</div>
+          <div style="font-size:.75rem;color:${unbilled.length>0?'#d97706':'var(--text-muted)'};margin-top:6px">${fmt(pendingValue)} outstanding</div>
         </div>
-        <div class="kpi-card ${critical.length>0?'kpi-danger':''}">
-          <div class="kpi-label">Critical (16+ days)</div>
-          <div class="kpi-value">${critical.length}</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(critical.reduce((s,d)=>s+(d.order_value||0),0))} at risk</div>
+        <div class="card" style="padding:16px 18px;border-top:3px solid ${critical.length>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (16+ days)</div>
+          <div style="font-size:1.9rem;font-weight:700;color:${critical.length>0?'var(--danger)':'var(--navy)'};line-height:1">${critical.length}</div>
+          <div style="font-size:.75rem;color:${critical.length>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical.length>0?fmt(criticalValue)+' at risk':'All within 15 days'}</div>
         </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Billed Today</div>
-          <div class="kpi-value">${billedToday.length}</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
+        <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Billed Today</div>
+          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedToday.length}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
         </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Billed This Month</div>
-          <div class="kpi-value">${billed.filter(d=>(d.billed_at||'').startsWith(new Date().toISOString().slice(0,7))).length}</div>
-          <div style="font-size:.75rem;color:var(--success);margin-top:4px">${fmt(billedMonthValue)}</div>
+        <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Billed This Month</div>
+          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedThisMonth.length}</div>
+          <div style="font-size:.75rem;color:var(--success);margin-top:6px">${fmt(billedMonthValue)}</div>
         </div>
       </div>
+      ${critical.length>0?`<div style="background:#fef3cd;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:#92400e;display:flex;gap:10px;align-items:center"><span style="font-size:1.1rem">⚠️</span><span><strong>${critical.length}</strong> DC${critical.length>1?'s':''} unbilled for over 16 days — <strong>${fmt(criticalValue)}</strong> at risk of delayed payment.</span></div>`:''}
       <div class="card">
         <div class="card-header">
           <span>Delivered — Pending Billing (${unbilled.length})</span>
@@ -2475,14 +2479,17 @@ async function renderDCBilling(el) {
         clientMap[key].items.push(d);
       });
 
+      const BUCKET_BORDER = { success:'var(--success)', warning:'#d97706', danger:'var(--danger)', info:'#3b82f6' };
       return `
-      <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
         ${buckets.map(b=>{
           const items = billed.filter(d=>{ const age=ageDays(d); return age>=b.min && age<=b.max; });
-          return `<div class="kpi-card ${items.length?'kpi-'+b.cls:''}">
-            <div class="kpi-label">${b.label}</div>
-            <div class="kpi-value">${items.length}</div>
-            <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(items.reduce((s,d)=>s+(d.order_value||0),0))}</div>
+          const bColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--border)';
+          const valColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--text-muted)';
+          return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bColor};margin-bottom:0">
+            <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${b.label}</div>
+            <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
+            <div style="font-size:.75rem;color:${valColor};margin-top:6px">${fmt(items.reduce((s,d)=>s+(d.order_value||0),0))}</div>
           </div>`;
         }).join('')}
       </div>
@@ -5002,6 +5009,7 @@ async function renderServiceDesk(el) {
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           ${t.status!=='RESOLVED'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">▶ Start</button>`:''}
+          <button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>
         </div>
       </div>
     </div>`;
@@ -5018,28 +5026,33 @@ async function renderServiceDesk(el) {
     <button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>
   </div>
 
-  <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${openT.filter(t=>t.priority==='HIGH').length?'var(--danger)':'#f59e0b'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Open</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${openT.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${openT.filter(t=>t.priority==='HIGH').length} high priority</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Progress</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inProgT.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">being handled</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Resolved</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${resolvedT.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">all time</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--danger)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">High Priority</div>
-      <div style="font-size:2rem;font-weight:800;color:${tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length?'var(--danger)':'var(--navy)'};margin-top:6px">${tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">open high priority</div>
-    </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+    ${(()=>{
+      const openHigh = openT.filter(t=>t.priority==='HIGH').length;
+      const activeHigh = tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length;
+      const resolveRate = tickets.length ? Math.round(resolvedT.length/tickets.length*100) : 0;
+      return `
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${openT.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Open</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${openT.length}</div>
+        <div style="font-size:.75rem;color:${openHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${openHigh} high priority</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #3b82f6;margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Progress</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inProgT.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">being handled</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Resolved</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${resolvedT.length}</div>
+        <div style="font-size:.75rem;color:var(--success);margin-top:6px">${resolveRate}% resolution rate</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${activeHigh>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">High Priority</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${activeHigh>0?'var(--danger)':'var(--navy)'};line-height:1">${activeHigh}</div>
+        <div style="font-size:.75rem;color:${activeHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${activeHigh>0?'needs immediate attention':'all clear'}</div>
+      </div>`;
+    })()}
   </div>
 
   ${openT.length ? `
@@ -5087,6 +5100,43 @@ async function saveTicket() {
   const res = await api('/tickets', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast(`Ticket ${res.id} created`); navigate('service_desk'); }
+}
+
+function editTicketModal(id, subject, priority, status, description) {
+  openModal(`Edit Ticket ${id}`,
+    `<div class="form-group"><label>Subject</label><input type="text" id="etk-subject" value="${subject.replace(/"/g,'&quot;')}" placeholder="Brief summary"></div>
+     <div class="form-group"><label>Priority</label>
+       <select id="etk-priority">
+         <option value="LOW"${priority==='LOW'?' selected':''}>Low</option>
+         <option value="MEDIUM"${priority==='MEDIUM'?' selected':''}>Medium</option>
+         <option value="HIGH"${priority==='HIGH'?' selected':''}>High</option>
+       </select>
+     </div>
+     <div class="form-group"><label>Status</label>
+       <select id="etk-status">
+         <option value="OPEN"${status==='OPEN'?' selected':''}>Open</option>
+         <option value="IN_PROGRESS"${status==='IN_PROGRESS'?' selected':''}>In Progress</option>
+         <option value="RESOLVED"${status==='RESOLVED'?' selected':''}>Resolved</option>
+       </select>
+     </div>
+     <div class="form-group"><label>Description</label>
+       <textarea id="etk-desc" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${description}</textarea>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="updateTicket('${id}')">Save Changes</button>`);
+}
+
+async function updateTicket(id) {
+  const body = {
+    subject:     document.getElementById('etk-subject').value,
+    priority:    document.getElementById('etk-priority').value,
+    status:      document.getElementById('etk-status').value,
+    description: document.getElementById('etk-desc').value,
+  };
+  if (!body.subject) { showToast('Subject required','error'); return; }
+  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify(body) });
+  closeModal();
+  if (res) { showToast(`Ticket ${id} updated`); navigate('service_desk'); }
 }
 
 async function resolveTicket(id) {
