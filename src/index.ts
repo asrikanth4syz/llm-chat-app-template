@@ -622,6 +622,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     client_id: string;
     items: Array<{sku:string;name:string;qty:number;unit_price:number}>;
     notes?: string;
+    order_type?: string;
   };
   // Client roles must order for their own linked client only
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
@@ -645,8 +646,10 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   if (rule?.auto_approve) status = "APPROVED";
   else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
 
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes) VALUES (?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null).run();
+  const validTypes = ['Regular','Urgent','Ad-Hoc'];
+  const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)`)

@@ -532,6 +532,12 @@ function statusBadge(s) {
   return `<span class="badge badge-${cls}">${s.replace(/_/g,' ')}</span>`;
 }
 
+function orderTypeBadge(t) {
+  const cfg = { Regular:{cls:'info',label:'Regular'}, Urgent:{cls:'danger',label:'Urgent'}, 'Ad-Hoc':{cls:'gold',label:'Ad-Hoc'} };
+  const c = cfg[t] || cfg.Regular;
+  return `<span class="badge badge-${c.cls}" style="font-size:.68rem">${c.label}</span>`;
+}
+
 function showToast(msg, type = 'success') {
   const t = document.createElement('div');
   t.className = 'toast toast-' + type;
@@ -1138,6 +1144,7 @@ async function renderPlaceOrder(el) {
   APP._catFilter = 'All';
   APP._catalogSearch = '';
   if (!APP._catalogView) APP._catalogView = 'tile';
+  if (!APP._orderType) APP._orderType = 'Regular';
 
   const last3 = (recentOrders||[]).slice(0,3);
 
@@ -1225,8 +1232,23 @@ async function renderPlaceOrder(el) {
           </div>
           <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
         </div>
-        <!-- Delivery notes -->
+        <!-- Order Type -->
         <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+          <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:6px">Order Type</label>
+          <div style="display:flex;gap:6px">
+            ${['Regular','Urgent','Ad-Hoc'].map(t=>{
+              const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
+              return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
+                style="flex:1;padding:6px 0;border-radius:8px;border:1.5px solid ${colors[t]};
+                background:${(APP._orderType||'Regular')===t?colors[t]:'#fff'};
+                color:${(APP._orderType||'Regular')===t?'#fff':colors[t]};
+                font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- Delivery notes -->
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
           <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px">Delivery Notes (optional)</label>
           <textarea id="cart-notes" rows="2" placeholder="Special instructions, delivery address, contact…"
             style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.8rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
@@ -1555,6 +1577,18 @@ function refreshCartUI() {
   if (hint) hint.style.display = grand > 100000 ? '' : 'none';
 }
 
+function setOrderType(type, btn) {
+  APP._orderType = type;
+  const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
+  ['Regular','Urgent','Ad-Hoc'].forEach(t => {
+    const b = document.getElementById('ot-btn-' + t.replace('-',''));
+    if (!b) return;
+    const c = colors[t];
+    b.style.background = t === type ? c : '#fff';
+    b.style.color = t === type ? '#fff' : c;
+  });
+}
+
 async function submitOrder() {
   if (!APP.cart.length) { showToast('Cart is empty', 'error'); return; }
 
@@ -1606,9 +1640,10 @@ async function confirmOrder() {
   if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
 
   const notes = document.getElementById('cart-notes')?.value?.trim() || '';
+  const orderType = APP._orderType || 'Regular';
   const result = await api('/orders', {
     method: 'POST',
-    body: JSON.stringify({ client_id: clientId, items: APP.cart, ...(notes ? { notes } : {}) }),
+    body: JSON.stringify({ client_id: clientId, items: APP.cart, order_type: orderType, ...(notes ? { notes } : {}) }),
   });
 
   closeModal();
@@ -1707,7 +1742,7 @@ async function renderMyOrders(el) {
               </div>
               <div style="text-align:right;flex-shrink:0">
                 <div style="font-weight:800;font-size:1.1rem;color:var(--navy)">${fmt(o.grand_total)}</div>
-                <div style="margin-top:4px">${statusBadge(o.status)}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">${statusBadge(o.status)} ${o.order_type&&o.order_type!=='Regular'?orderTypeBadge(o.order_type):''}</div>
               </div>
             </div>
 
@@ -1805,18 +1840,19 @@ async function renderMyOrders(el) {
   <div class="card">
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th>Date</th><th>Actions</th></tr></thead>
         <tbody>${orders.length ? orders.map(o=>`<tr>
           <td><b>${o.id}</b></td>
           <td>${o.client_name||'—'}</td>
           <td>${fmt(o.grand_total)}</td>
           <td>${statusBadge(o.status)}</td>
+          <td>${orderTypeBadge(o.order_type||'Regular')}</td>
           <td>${fmtDate(o.created_at)}</td>
           <td>
             <button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>
             ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button>`:''}
           </td>
-        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders found</td></tr>'}
+        </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No orders found</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -1895,8 +1931,9 @@ async function viewOrder(id) {
 
   openModal(`Order ${id}`,
     `<div style="display:grid;gap:8px;margin-bottom:16px">
-      <div style="display:flex;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
+        <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
         <div><b>Date:</b> ${fmtDate(order.created_at)}</div>
       </div>
@@ -2293,11 +2330,12 @@ async function renderOrderQueue(el) {
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
-      return `<tr style="${isUrgent?'background:#fffbeb':''}">
+      return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:#fffbeb':''}">
         <td><b>${o.id}</b></td>
         <td>${o.client_name||'—'}</td>
         <td style="font-weight:700">${fmt(o.grand_total)}</td>
         <td>${statusBadge(o.status)}</td>
+        <td>${orderTypeBadge(o.order_type||'Regular')}</td>
         <td style="text-align:center">
           <span style="font-weight:700;font-size:.88rem">${o.item_count||0}</span>
           <span style="font-size:.72rem;color:var(--text-muted);display:block">items</span>
@@ -2309,7 +2347,7 @@ async function renderOrderQueue(el) {
         <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td>${orderQueueActions(o)}</td>
       </tr>`;
-    }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
+    }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
 
   APP._oqTabsHtml  = oqTabsHtml;
@@ -2342,7 +2380,7 @@ async function renderOrderQueue(el) {
       </div>
       <div class="table-wrap">
         <table class="table" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${oqTableHtml(APP._oqStatusTab)}
         </table>
       </div>
