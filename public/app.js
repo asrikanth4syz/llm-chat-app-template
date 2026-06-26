@@ -622,37 +622,36 @@ async function renderClientDashboard(el) {
     </div>
   </div>
 
-  <!-- KPI Tiles -->
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary);cursor:pointer" onclick="navigate('my_orders')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Active Orders</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${activeOrders}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${closedOrders} delivered</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="navigate('my_orders')">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${activeOrders}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${closedOrders} delivered</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'var(--warning)':'#d1d5db'};cursor:pointer" onclick="document.getElementById('track-delivery-section')?.scrollIntoView({behavior:'smooth'})">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">In Transit</div>
-      <div style="font-size:2rem;font-weight:800;color:${inTransitDCs.length?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${inTransitDCs.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${scheduledDCs.length} scheduled</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${inTransitDCs.length?'var(--warning)':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('track-delivery-section')?.scrollIntoView({behavior:'smooth'})">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Transit</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${inTransitDCs.length?'#d97706':'var(--navy)'};line-height:1">${inTransitDCs.length}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${scheduledDCs.length} scheduled</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'};cursor:pointer" onclick="navigate('approvals')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Approvals</div>
-      <div style="font-size:2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${pendingApproval}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">awaiting sign-off</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingApproval>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="navigate('approvals')">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Approvals</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
+      <div style="font-size:.75rem;color:${pendingApproval>0?'#d97706':'var(--text-muted)'};margin-top:6px">awaiting sign-off</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Budget Used</div>
-      <div style="font-size:2rem;font-weight:800;color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--navy)'};line-height:1.2;margin-top:6px">${pctSpent}%</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(remaining)} left</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--success)'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Budget Used</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--navy)'};line-height:1">${pctSpent}%</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(remaining)} remaining</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Delivered</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${deliveredThisMonth.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">this month</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delivered</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${deliveredThisMonth.length}</div>
+      <div style="font-size:.75rem;color:var(--success);margin-top:6px">this month</div>
     </div>
   </div>
 
   <!-- Budget progress bar -->
-  <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+  <div class="card" style="padding:16px 18px;margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <span style="font-weight:700;font-size:.88rem">Monthly Budget</span>
       <span style="font-size:.82rem;color:var(--text-muted)">${fmt(spent)} spent of ${fmt(budget)}</span>
@@ -668,7 +667,7 @@ async function renderClientDashboard(el) {
   </div>
 
   <!-- Track Delivery — full width -->
-  <div id="track-delivery-section" style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px;overflow:hidden">
+  <div id="track-delivery-section" class="card" style="padding:0;margin-bottom:16px;overflow:hidden">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <div>
         <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Track Delivery</div>
@@ -762,7 +761,7 @@ async function renderClientDashboard(el) {
   </div>
 
   <!-- Recent Orders -->
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Recent Orders</div>
       <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
@@ -952,38 +951,38 @@ async function renderOpsDashboard(el) {
   ${pageHeader('Control Tower', 'Platform-wide operations overview')}
 
   <!-- ROW 1: Primary KPIs -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div onclick="navigate('orders')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid var(--blue)">
-      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Total Orders</div>
-      <div style="font-size:2.2rem;font-weight:800;color:var(--navy);line-height:1">${totalOrders||0}</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+    <div class="card" onclick="navigate('orders')" style="cursor:pointer;padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Total Orders</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1">${totalOrders||0}</div>
       <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 8px;font-size:.75rem;font-weight:600">${pendingOrders||0} active</span>
+        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 8px;font-size:.74rem;font-weight:600">${pendingOrders||0} active</span>
       </div>
     </div>
-    <div onclick="navigate('orders')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'}">
-      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Approval</div>
-      <div style="font-size:2.2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
-      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">${pickedPending} orders picked · ${inShipment} in transit</div>
+    <div class="card" onclick="navigate('orders')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Approval</div>
+      <div style="font-size:2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
+      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">${pickedPending} picked · ${inShipment} in transit</div>
     </div>
-    <div onclick="navigate('fulfilment')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${dueCount>0?'#ef4444':'#d1d5db'}">
-      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Due Line Items</div>
-      <div style="font-size:2.2rem;font-weight:800;color:${dueCount>0?'#dc2626':'var(--navy)'};line-height:1">${dueCount}</div>
-      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)} value</div>
+    <div class="card" onclick="navigate('fulfilment')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${dueCount>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Due Line Items</div>
+      <div style="font-size:2rem;font-weight:800;color:${dueCount>0?'var(--danger)':'var(--navy)'};line-height:1">${dueCount}</div>
+      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)}</div>
     </div>
-    <div onclick="navigate('dc_billing')" style="cursor:pointer;background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid ${pendingDCBilling>0?'#f59e0b':'#d1d5db'}">
-      <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Billing</div>
-      <div style="font-size:2.2rem;font-weight:800;color:${pendingDCBilling>0?'#d97706':'var(--navy)'};line-height:1">${pendingDCBilling||0}</div>
-      <div style="margin-top:8px;font-size:.78rem;color:var(--text-muted)">DCs awaiting invoice</div>
+    <div class="card" onclick="navigate('dc_billing')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${pendingDCBilling>0?'#f59e0b':'#d1d5db'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Billing</div>
+      <div style="font-size:2rem;font-weight:800;color:${pendingDCBilling>0?'#d97706':'var(--navy)'};line-height:1">${pendingDCBilling||0}</div>
+      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">DCs awaiting invoice</div>
     </div>
   </div>
 
   <!-- ROW 2: Charts + Alerts -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 320px;gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+  <div style="display:grid;grid-template-columns:1fr 1fr 320px;gap:14px;margin-bottom:16px">
+    <div class="card" style="padding:18px 20px">
       <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Orders by Status</div>
       <canvas id="statusChart" height="180"></canvas>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <div class="card" style="padding:18px 20px">
       <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Top Clients by Spend</div>
       ${(topClients||[]).map((c,i)=>`
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
@@ -1000,7 +999,7 @@ async function renderOpsDashboard(el) {
           </div>
         </div>`).join('')||'<div style="color:var(--text-muted);font-size:.84rem">No data</div>'}
     </div>
-    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <div class="card" style="padding:18px 20px">
       <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Action Required</div>
       ${[
         { label:'Low Stock SKUs', val:lowStock||0, color:'#f59e0b', page:'inventory', icon:'📦', urgent: lowStock>0 },
@@ -1017,7 +1016,7 @@ async function renderOpsDashboard(el) {
   </div>
 
   <!-- ROW 3: Recent Orders -->
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div class="card" style="padding:0;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem">Recent Orders</div>
       <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All</button>
@@ -1751,28 +1750,28 @@ async function renderMyOrders(el) {
     </div>
 
     <!-- KPI tiles -->
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
-      <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid var(--primary);cursor:pointer" onclick="APP._moTab='All';moRender();document.querySelectorAll('.mo-pill').forEach(b=>b.classList.remove('active'));document.querySelector('.mo-pill[data-s=\\'All\\']')?.classList.add('active')">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="APP._moTab='All';moRender();document.querySelectorAll('.mo-pill').forEach(b=>b.classList.remove('active'));document.querySelector('.mo-pill[data-s=\\'All\\']')?.classList.add('active')">
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${active}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">in progress</div>
       </div>
-      <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid #06b6d4;cursor:pointer" onclick="APP._moTab='IN_SHIPMENT';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid #06b6d4;margin-bottom:0;cursor:pointer" onclick="APP._moTab='IN_SHIPMENT';moRender()">
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Transit</div>
         <div style="font-size:1.8rem;font-weight:800;color:${inShipment?'#0891b2':'var(--navy)'};line-height:1.2;margin-top:4px">${inShipment}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">on the way</div>
       </div>
-      <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid ${partial>0?'#f59e0b':'#d1d5db'};cursor:pointer" onclick="APP._moTab='PARTIALLY_CLOSED';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid ${partial>0?'#f59e0b':'#d1d5db'};margin-bottom:0;cursor:pointer" onclick="APP._moTab='PARTIALLY_CLOSED';moRender()">
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Partial</div>
         <div style="font-size:1.8rem;font-weight:800;color:${partial>0?'#d97706':'var(--navy)'};line-height:1.2;margin-top:4px">${partial}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">balance pending</div>
       </div>
-      <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid var(--success);cursor:pointer" onclick="APP._moTab='CLOSED';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" onclick="APP._moTab='CLOSED';moRender()">
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered</div>
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${closed}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">complete</div>
       </div>
-      <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);border-top:3px solid var(--blue)">
+      <div class="card" style="padding:14px 16px;border-top:3px solid var(--blue);margin-bottom:0">
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Spend</div>
         <div style="font-size:1.3rem;font-weight:800;color:var(--navy);line-height:1.3;margin-top:4px">${fmt(totalSpend)}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">on closed orders</div>
