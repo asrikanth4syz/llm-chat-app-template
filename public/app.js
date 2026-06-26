@@ -1935,9 +1935,16 @@ async function addOrderComment(orderId) {
   }
 }
 
-async function cancelOrder(id) {
-  if (!confirm(`Cancel order ${id}?`)) return;
+function cancelOrder(id) {
+  openModal(`Cancel Order ${id}`,
+    `<p style="margin:0;color:var(--text-muted)">Are you sure you want to cancel order <b>${id}</b>? This action cannot be undone.</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Keep Order</button>
+     <button class="btn btn-danger" onclick="confirmCancelOrder('${id}')">Cancel Order</button>`);
+}
+
+async function confirmCancelOrder(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note:'Cancelled by user' }) });
+  closeModal();
   if (res) { showToast(`Order ${id} cancelled`); navigate('my_orders'); }
 }
 
@@ -3963,12 +3970,19 @@ async function saveBinEdit(binId) {
   if (res) { showToast('Bin updated'); switchWHTab('bins', document.querySelectorAll('#wh-tabs .tab-btn')[2]); }
 }
 
-async function createDCFromPicklist(orderId) {
-  if (!confirm(`Dispatch order ${orderId}? This will deduct stock and create a Delivery Challan.`)) return;
+function createDCFromPicklist(orderId) {
+  openModal(`Dispatch Order ${orderId}`,
+    `<p style="margin:0;color:var(--text-muted)">This will deduct stock and create a Delivery Challan for order <b>${orderId}</b>. Confirm dispatch?</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-gold" onclick="confirmCreateDCFromPicklist('${orderId}')">Confirm Dispatch</button>`);
+}
+
+async function confirmCreateDCFromPicklist(orderId) {
   const res = await api(`/orders/${orderId}/transition`, {
     method: 'POST',
     body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
   });
+  closeModal();
   if (res) { showToast(`Order ${orderId} dispatched — DC created`); switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]); }
 }
 
@@ -6082,42 +6096,75 @@ async function renderDunning(el) {
   ]);
   if (!rules) return;
 
+  const recentEvents = (events||[]).slice(0,10);
+  const ACTION_COLOR = { EMAIL:'#2563eb', SMS:'#7c3aed', ESCALATE:'#d97706', SUSPEND:'var(--danger)' };
+
   el.innerHTML = `
-  ${pageHeader('Dunning & Payment Escalation', `${rules.length} rules`,
-    `<button class="btn btn-gold" onclick="runDunningCheck()">Run Dunning Check</button>`)}
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span>Dunning Rules</span>
-        <button class="btn btn-secondary btn-sm" onclick="addDunningRuleModal()">Add Rule</button>
-      </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Days Overdue</th><th>Action</th><th>Message</th></tr></thead>
-          <tbody>${rules.map(r=>`<tr>
-            <td><b>${r.days_overdue}d</b></td>
-            <td>${statusBadge(r.action)}</td>
-            <td style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.message_template||'—'}</td>
-          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No rules</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Dunning & Payment Escalation</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${rules.length} escalation rule${rules.length===1?'':'s'} · ${recentEvents.length} recent event${recentEvents.length===1?'':'s'}</div>
     </div>
-    <div class="card">
-      <div class="card-header"><span>Recent Events</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Client</th><th>Order</th><th>Action</th><th>Date</th></tr></thead>
-          <tbody>${(events||[]).slice(0,10).map(e=>`<tr>
-            <td>${e.client_name||e.client_id}</td>
-            <td>${e.order_id||'—'}</td>
-            <td>${statusBadge(e.action_taken)}</td>
-            <td>${fmtDate(e.created_at)}</td>
-          </tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No events yet</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="addDunningRuleModal()">${iconPlus(14)} Add Rule</button>
+      <button class="btn btn-gold" onclick="runDunningCheck()">▶ Run Check</button>
     </div>
-  </div>`;
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <!-- Rules -->
+    <div>
+      <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Escalation Rules</div>
+      ${rules.length===0 ? `
+      <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+        <div style="font-size:1.8rem;margin-bottom:10px">📋</div>
+        <div style="font-weight:600;color:var(--navy)">No rules configured</div>
+        <div style="font-size:.82rem;margin-top:6px">Add rules to automate payment escalation.</div>
+        <button class="btn btn-primary" style="margin-top:14px" onclick="addDunningRuleModal()">Add First Rule</button>
+      </div>` :
+      `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+        ${rules.sort((a,b)=>(a.days_overdue||0)-(b.days_overdue||0)).map((r,i)=>{
+          const ac = ACTION_COLOR[r.action] || '#6b7280';
+          return `<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
+            <div style="width:48px;height:48px;border-radius:10px;background:${ac}1a;color:${ac};display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:800;flex-shrink:0">${r.days_overdue}d</div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:.68rem;font-weight:700;background:${ac}1a;color:${ac};border-radius:4px;padding:2px 7px">${r.action}</span>
+              </div>
+              <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.message_template||'No message template'}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
+    </div>
+
+    <!-- Recent Events -->
+    <div>
+      <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recent Events</div>
+      ${recentEvents.length===0 ? `
+      <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+        <div style="font-size:1.8rem;margin-bottom:10px">📭</div>
+        <div style="font-weight:600;color:var(--navy)">No events yet</div>
+        <div style="font-size:.82rem;margin-top:6px">Run a dunning check to trigger escalations.</div>
+      </div>` :
+      `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+        ${recentEvents.map((e,i)=>{
+          const ac = ACTION_COLOR[e.action_taken] || '#6b7280';
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;gap:12px;${i<recentEvents.length-1?'border-bottom:1px solid var(--border)':''}">
+            <div>
+              <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${e.client_name||e.client_id}</div>
+              <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">Order: ${e.order_id||'—'}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:.68rem;font-weight:700;background:${ac}1a;color:${ac};border-radius:4px;padding:2px 7px;margin-bottom:3px">${e.action_taken}</div>
+              <div style="font-size:.68rem;color:var(--text-muted)">${fmtDate(e.created_at)}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
+    </div>
+  </div>
+  `;
 }
 
 async function runDunningCheck() {
@@ -6480,10 +6527,17 @@ function loadPOTemplate(id) {
   navigate('procurement');
 }
 
-async function deleteTemplate(type, id) {
-  if (!confirm('Delete this template?')) return;
+function deleteTemplate(type, id) {
+  openModal('Delete Template',
+    `<p style="margin:0;color:var(--text-muted)">Are you sure you want to delete this template? This cannot be undone.</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="confirmDeleteTemplate('${type}','${id}')">Delete</button>`);
+}
+
+async function confirmDeleteTemplate(type, id) {
   const endpoint = type === 'order' ? '/order-templates/' + id : '/po-templates/' + id;
   const res = await api(endpoint, { method: 'DELETE' });
+  closeModal();
   if (res) { showToast('Template deleted'); navigate('templates'); }
 }
 
@@ -6497,40 +6551,89 @@ async function renderSLADashboard(el) {
   ]);
   if (!rules) return;
 
+  const activeBreaches = breaches || [];
+  const criticalBreaches = activeBreaches.filter(b => {
+    const hoursAgo = (Date.now() - new Date(b.breached_at).getTime()) / 3600000;
+    return hoursAgo > 24;
+  });
+
   el.innerHTML = `
-  ${pageHeader('SLA Dashboard', `${(breaches||[]).length} active breach(es)`,
-    `<button class="btn btn-gold" onclick="runSLACheck()">Check SLA Now</button>`)}
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span>SLA Rules (${rules.length})</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Rule</th><th>Trigger Status</th><th>Max Hours</th><th>Action</th></tr></thead>
-          <tbody>${rules.map(r=>`<tr>
-            <td><b>${r.name}</b></td>
-            <td>${statusBadge(r.trigger_status)}</td>
-            <td>${r.max_hours}h</td>
-            <td>${statusBadge(r.action)}</td>
-          </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">SLA Dashboard</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${rules.length} rules configured · ${activeBreaches.length} active breach${activeBreaches.length===1?'':'es'}</div>
     </div>
-    <div class="card">
-      <div class="card-header"><span>Active Breaches (${(breaches||[]).length})</span></div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Rule</th><th>Entity</th><th>Breached At</th></tr></thead>
-          <tbody>${(breaches||[]).map(b=>`<tr>
-            <td>${b.rule_name||b.rule_id}</td>
-            <td>${b.entity_id}</td>
-            <td>${fmtDate(b.breached_at)}</td>
-          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--success)">No active breaches</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+    <button class="btn btn-gold" onclick="runSLACheck()">▶ Run SLA Check</button>
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">SLA Rules</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">active monitoring rules</div>
     </div>
-  </div>`;
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${activeBreaches.length?'var(--danger)':'var(--success)'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active Breaches</div>
+      <div style="font-size:2rem;font-weight:800;color:${activeBreaches.length?'var(--danger)':'var(--success)'};margin-top:6px">${activeBreaches.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${activeBreaches.length?'require action':'all clear'}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'#dc2626':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Critical (24h+)</div>
+      <div style="font-size:2rem;font-weight:800;color:${criticalBreaches.length?'var(--danger)':'var(--navy)'};margin-top:6px">${criticalBreaches.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">breached over 24h ago</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--navy)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Max SLA Hours</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length ? Math.max(...rules.map(r=>r.max_hours||0)) : '—'}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">longest configured rule</div>
+    </div>
+  </div>
+
+  <!-- Breaches alert -->
+  ${activeBreaches.length ? `
+  <div style="font-size:.82rem;font-weight:700;color:var(--danger);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚠ Active Breaches</div>
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:18px">
+    ${activeBreaches.map((b,i)=>{
+      const hoursAgo = Math.round((Date.now()-new Date(b.breached_at).getTime())/3600000);
+      const isCrit = hoursAgo > 24;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<activeBreaches.length-1?'border-bottom:1px solid var(--border)':''}${isCrit?';background:#fff5f5':''}">
+        <div>
+          <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${b.rule_name||b.rule_id}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Entity: <b>${b.entity_id}</b></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:.78rem;font-weight:600;color:${isCrit?'var(--danger)':'#d97706'}">${hoursAgo}h ago</div>
+          <div style="font-size:.68rem;color:var(--text-muted)">${fmtDate(b.breached_at)}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>` : `
+  <div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:12px;padding:16px 20px;margin-bottom:18px;display:flex;align-items:center;gap:12px">
+    <span style="font-size:1.5rem">✅</span>
+    <div>
+      <div style="font-weight:700;color:#065f46">All SLAs within bounds</div>
+      <div style="font-size:.78rem;color:#047857;margin-top:2px">No active breaches detected</div>
+    </div>
+  </div>`}
+
+  <!-- SLA Rules -->
+  <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Configured Rules</div>
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    ${rules.length===0 ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">No SLA rules configured</div>` :
+    rules.map((r,i)=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
+      <div>
+        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${r.name}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Trigger: ${r.trigger_status?.replace(/_/g,' ')||'—'} → Action: ${r.action||'—'}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:1.1rem;font-weight:800;color:${r.max_hours<=4?'var(--danger)':r.max_hours<=24?'#d97706':'var(--navy)'}">⏱ ${r.max_hours}h</div>
+        <div style="font-size:.68rem;color:var(--text-muted)">max hours</div>
+      </div>
+    </div>`).join('')}
+  </div>
+  `;
 }
 
 async function runSLACheck() {
@@ -6631,11 +6734,26 @@ async function saveApprovalChain() {
   if (res) { showToast('Approval chain created with ' + steps.length + ' step(s)'); navigate('approval_chains'); }
 }
 
-async function actOnChain(instanceId, action) {
-  const comments = action === 'REJECTED' ? prompt('Reason for rejection (optional):') : null;
+function actOnChain(instanceId, action) {
+  if (action === 'REJECTED') {
+    openModal('Reject Approval',
+      `<div class="form-group">
+        <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection (optional)</label>
+        <textarea id="chain-reject-reason" rows="3" placeholder="Explain why you are rejecting this step…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
+      </div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-danger" onclick="confirmActOnChain('${instanceId}','REJECTED')">Reject</button>`);
+  } else {
+    confirmActOnChain(instanceId, action);
+  }
+}
+
+async function confirmActOnChain(instanceId, action) {
+  const comments = action === 'REJECTED' ? (document.getElementById('chain-reject-reason')?.value || '') : '';
+  if (action === 'REJECTED') closeModal();
   const res = await api('/approval-chain-instances/' + instanceId + '/act', {
     method: 'POST',
-    body: JSON.stringify({ action, comments: comments || '' }),
+    body: JSON.stringify({ action, comments }),
   });
   if (res) {
     showToast(action === 'APPROVED' ? (res.all_steps_done ? 'Order fully approved!' : 'Step approved — next step notified') : 'Rejected — order cancelled');
