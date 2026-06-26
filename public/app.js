@@ -2199,8 +2199,14 @@ async function renderOrderQueue(el) {
 
   const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
+  const byStatus = s => orders.filter(o=>o.status===s);
+  const pendingApproval = byStatus('PENDING_APPROVAL').length;
+  const needsAction     = byStatus('SUBMITTED').length + pendingApproval + byStatus('APPROVED').length;
+  const inShipment      = byStatus('IN_SHIPMENT').length + byStatus('PARTIALLY_CLOSED').length;
+  const totalValue      = active.reduce((s,o)=>s+(o.grand_total||0),0);
+
   function oqTabsHtml() {
-    return `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
+    return `<div class="tabs" style="margin-bottom:0;flex-wrap:wrap">
       ${STATUS_TABS.map(s=>{
         const cnt = s==='All' ? orders.length : orders.filter(o=>o.status===s).length;
         return `<button class="tab-btn${APP._oqTab===s?' active':''}" onclick="switchOQTab('${s}')">
@@ -2212,25 +2218,62 @@ async function renderOrderQueue(el) {
 
   function oqTableHtml(tab) {
     const filtered = tab==='All' ? orders : orders.filter(o=>o.status===tab);
-    return `<tbody id="oq-tbody">${filtered.map(o=>`<tr>
-      <td><b>${o.id}</b></td>
-      <td>${o.client_name||'—'}</td>
-      <td>${fmt(o.grand_total)}</td>
-      <td>${statusBadge(o.status)}</td>
-      <td>${fmtDate(o.created_at)}</td>
-      <td>${orderQueueActions(o)}</td>
-    </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders</td></tr>'}</tbody>`;
+    const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+    return `<tbody id="oq-tbody">${sorted.map(o=>{
+      const isUrgent = o.status==='PENDING_APPROVAL';
+      return `<tr style="${isUrgent?'background:#fffbeb':''}">
+        <td><b>${o.id}</b></td>
+        <td>${o.client_name||'—'}</td>
+        <td style="font-weight:700">${fmt(o.grand_total)}</td>
+        <td>${statusBadge(o.status)}</td>
+        <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
+        <td>${orderQueueActions(o)}</td>
+      </tr>`;
+    }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No orders in this status</td></tr>'}</tbody>`;
   }
 
   APP._oqTabsHtml = oqTabsHtml;
   APP._oqTableHtml = oqTableHtml;
 
   el.innerHTML = `
-  ${pageHeader('Order Queue', `${active.length} active orders`)}
-  <div id="oq-tabs">${oqTabsHtml()}</div>
-  <div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Order Queue</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${active.length} active orders · ${fmt(totalValue)} value</div>
+    </div>
+  </div>
+
+  <!-- KPI tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue);cursor:pointer" onclick="switchOQTab('All')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Active</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${active.length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${needsAction?'#f59e0b':'#d1d5db'};cursor:pointer" onclick="switchOQTab('PENDING_APPROVAL')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Needs Attention</div>
+      <div style="font-size:2rem;font-weight:800;color:${needsAction?'#d97706':'var(--navy)'};margin-top:6px">${needsAction}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${pendingApproval} pending approval</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #8b5cf6;cursor:pointer" onclick="switchOQTab('IN_SHIPMENT')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Shipment</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inShipment}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">en route to client</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success);cursor:pointer" onclick="switchOQTab('ACKNOWLEDGED')">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">To Pick</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${byStatus('ACKNOWLEDGED').length + byStatus('READY_TO_PICK').length}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">in warehouse queue</div>
+    </div>
+  </div>
+
+  <!-- Tabs + table -->
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div id="oq-tabs">${oqTabsHtml()}</div>
+    </div>
     <div class="table-wrap">
-      <table class="table">
+      <table class="table" style="margin:0">
         <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
         ${oqTableHtml(APP._oqTab)}
       </table>
@@ -2242,32 +2285,10 @@ function switchOQTab(tab) {
   APP._oqTab = tab;
   const orders = APP._oqOrders || [];
   const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
-  // re-render tabs
   const tabsEl = document.getElementById('oq-tabs');
-  if (tabsEl) {
-    tabsEl.innerHTML = `<div class="tabs" style="margin-bottom:16px;flex-wrap:wrap">
-      ${STATUS_TABS.map(s=>{
-        const cnt = s==='All' ? orders.length : orders.filter(o=>o.status===s).length;
-        return `<button class="tab-btn${tab===s?' active':''}" onclick="switchOQTab('${s}')">
-          ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
-        </button>`;
-      }).join('')}
-    </div>`;
-  }
-  // re-render tbody
+  if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
-  if (tbody) {
-    const filtered = tab==='All' ? orders : orders.filter(o=>o.status===tab);
-    tbody.outerHTML = `<tbody id="oq-tbody">${filtered.map(o=>`<tr>
-      <td><b>${o.id}</b></td>
-      <td>${o.client_name||'—'}</td>
-      <td>${fmt(o.grand_total)}</td>
-      <td>${statusBadge(o.status)}</td>
-      <td>${fmtDate(o.created_at)}</td>
-      <td>${orderQueueActions(o)}</td>
-    </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No orders</td></tr>'}
-    </tbody>`;
-  }
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(tab);
 }
 
 function orderQueueActions(o) {
@@ -3214,36 +3235,124 @@ async function renderVendors(el) {
   const vendors = await api('/vendors');
   if (!vendors) return;
 
-  el.innerHTML = `
-  ${pageHeader('Vendor Directory', `${vendors.length} vendors`,
-    `<button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>`)}
-  <div class="card">
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Vendor</th><th>Category</th><th>On-time</th><th>Fill Rate</th><th>Lead Days</th><th>Rating</th><th>Actions</th></tr></thead>
-        <tbody>${vendors.map(v=>`<tr>
-          <td><b>${v.name}</b><div style="font-size:.78rem;color:var(--text-muted)">${v.contact_email||''}</div></td>
-          <td>${v.category}</td>
-          <td>
-            <div style="display:flex;align-items:center;gap:6px">
-              <div style="flex:1;background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-                <div style="height:100%;width:${v.on_time_rate}%;background:var(--success);border-radius:3px"></div>
-              </div>
-              <span style="font-size:.8rem">${pct(v.on_time_rate)}</span>
+  const avgOnTime  = vendors.length ? Math.round(vendors.reduce((s,v)=>s+(v.on_time_rate||0),0)/vendors.length) : 0;
+  const avgFill    = vendors.length ? Math.round(vendors.reduce((s,v)=>s+(v.fill_rate||0),0)/vendors.length) : 0;
+  const topRated   = [...vendors].sort((a,b)=>(b.rating||0)-(a.rating||0)).slice(0,1)[0];
+  const atRisk     = vendors.filter(v=>(v.on_time_rate||0)<75||(v.fill_rate||0)<85).length;
+
+  function scoreColor(val) {
+    return val >= 90 ? 'var(--success)' : val >= 75 ? '#d97706' : 'var(--danger)';
+  }
+
+  function starRating(rating) {
+    const r = Math.round(+rating * 2) / 2;
+    return Array.from({length:5}, (_,i) =>
+      `<span style="color:${i < r ? '#f59e0b' : '#d1d5db'};font-size:.8rem">★</span>`
+    ).join('');
+  }
+
+  function vendorCard(v) {
+    const onTimeColor = scoreColor(v.on_time_rate||0);
+    const fillColor   = scoreColor(v.fill_rate||0);
+    const isAtRisk    = (v.on_time_rate||0)<75 || (v.fill_rate||0)<85;
+    const initials    = v.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+    return `
+    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${isAtRisk?'var(--danger)':'var(--success)'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
+          <div>
+            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${v.name}</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap">
+              <span style="font-size:.68rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${v.category||'—'}</span>
+              ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
             </div>
-          </td>
-          <td>${pct(v.fill_rate)}</td>
-          <td>${v.avg_lead_days}d</td>
-          <td>⭐ ${(+v.rating).toFixed(1)}</td>
-          <td>
-            <button class="btn btn-secondary btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
-            <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
-          </td>
-        </tr>`).join('')}
-        </tbody>
-      </table>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:.76rem">${starRating(v.rating||0)}</div>
+          <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">${(+v.rating||0).toFixed(1)} / 5.0</div>
+        </div>
+      </div>
+
+      <!-- Performance metrics -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px">
+            <span>On-time Rate</span>
+            <span style="font-weight:700;color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>
+          </div>
+          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${v.on_time_rate||0}%;background:${onTimeColor};border-radius:3px"></div>
+          </div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px">
+            <span>Fill Rate</span>
+            <span style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</span>
+          </div>
+          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${v.fill_rate||0}%;background:${fillColor};border-radius:3px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Meta row -->
+      <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:14px;flex-wrap:wrap">
+        <span>⏱ ${v.avg_lead_days||'—'}d lead time</span>
+        ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a></span>`:''}
+        ${v.contact_phone?`<span>📞 ${v.contact_phone}</span>`:''}
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-gold btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
+        <button class="btn btn-secondary btn-sm" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
+      </div>
+    </div>`;
+  }
+
+  el.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Vendor Directory</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${vendors.length} vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
     </div>
-  </div>`;
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
+      <button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>
+    </div>
+  </div>
+
+  <!-- Summary tiles -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Vendors</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${vendors.length}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg On-time Rate</div>
+      <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgOnTime)};margin-top:6px">${avgOnTime}%</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgFill)}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg Fill Rate</div>
+      <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgFill)};margin-top:6px">${avgFill}%</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'#d1d5db'}">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
+      <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">below performance threshold</div>
+    </div>
+  </div>
+
+  <!-- Vendor cards -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+    ${vendors.sort((a,b)=>{
+      const aRisk = ((a.on_time_rate||0)<75||(a.fill_rate||0)<85)?1:0;
+      const bRisk = ((b.on_time_rate||0)<75||(b.fill_rate||0)<85)?1:0;
+      return bRisk - aRisk || (b.rating||0)-(a.rating||0);
+    }).map(v=>vendorCard(v)).join('')}
+  </div>
+  `;
 }
 
 function addVendorModal() {
