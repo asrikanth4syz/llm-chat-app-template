@@ -3610,87 +3610,110 @@ async function switchWHTab(tab, btn) {
 }
 
 function renderWHOverview(el, warehouses, bins, inv, grns) {
-  const totalUnits  = inv.reduce((s,i) => s+i.stock, 0);
-  const totalSKUs   = inv.length;
-  const lowStock    = inv.filter(i => i.stock <= (i.reorder_level||0)).length;
-  const thisMonth   = new Date().toISOString().slice(0,7);
-  const grnsMonth   = grns.filter(g => (g.received_at||'').startsWith(thisMonth));
-  const grnsThisMonth = grnsMonth.length;
-  const activeWH    = warehouses.filter(w=>w.active).length;
-  const totalBins   = bins.length;
-  const occupiedBins= bins.filter(b=>(b.occupied||0)>0).length;
-  const binFillPct  = totalBins ? Math.round(occupiedBins/totalBins*100) : 0;
-  const pendingGRNs = grns.filter(g => g.status && g.status !== 'RECEIVED').length;
+  const totalUnits   = inv.reduce((s,i) => s+i.stock, 0);
+  const totalSKUs    = inv.length;
+  const lowStock     = inv.filter(i => i.stock > 0 && i.stock <= (i.reorder_level||0)).length;
+  const outOfStock   = inv.filter(i => i.stock <= 0).length;
+  const thisMonth    = new Date().toISOString().slice(0,7);
+  const grnsThisMonth = grns.filter(g => (g.received_at||'').startsWith(thisMonth)).length;
+  const activeWH     = warehouses.filter(w=>w.active).length;
+  const totalBins    = bins.length;
+  const occupiedBins = bins.filter(b=>(b.occupied||0)>0).length;
+  const binFillPct   = totalBins ? Math.round(occupiedBins/totalBins*100) : 0;
+  const pendingGRNs  = grns.filter(g => g.status && g.status !== 'RECEIVED').length;
+
+  const binColor   = binFillPct>=85 ? 'var(--danger)' : binFillPct>=60 ? '#d97706' : 'var(--success)';
+  const skuColor   = outOfStock>0 ? 'var(--danger)' : lowStock>0 ? '#d97706' : 'var(--success)';
+  const grnColor   = pendingGRNs>0 ? '#d97706' : 'var(--success)';
+  const whColor    = activeWH === warehouses.length ? 'var(--navy)' : '#d97706';
+
+  const kpiTile = (label, value, sub, subColor, borderColor) => `
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${borderColor};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${label}</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${value}</div>
+      <div style="font-size:.75rem;color:${subColor};margin-top:6px">${sub}</div>
+    </div>`;
 
   el.innerHTML = `
-  <div class="kpi-row" style="grid-template-columns:repeat(5,1fr)">
-    <div class="kpi-card">
-      <div class="kpi-label">Active Warehouses</div>
-      <div class="kpi-value">${activeWH}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${warehouses.length} total</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Total SKUs</div>
-      <div class="kpi-value">${totalSKUs}</div>
-      <div style="font-size:.75rem;color:${lowStock>0?'var(--warning)':'var(--text-muted)'};margin-top:4px">${lowStock} low stock</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Units In Stock</div>
-      <div class="kpi-value">${totalUnits.toLocaleString('en-IN')}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all bins</div>
-    </div>
-    <div class="kpi-card ${binFillPct>85?'kpi-danger':binFillPct>60?'kpi-warning':''}">
-      <div class="kpi-label">Bin Utilisation</div>
-      <div class="kpi-value">${binFillPct}%</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${occupiedBins}/${totalBins} bins used</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">GRNs This Month</div>
-      <div class="kpi-value">${grnsThisMonth}</div>
-      <div style="font-size:.75rem;color:${pendingGRNs>0?'var(--warning)':'var(--text-muted)'};margin-top:4px">${pendingGRNs} pending</div>
-    </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+    ${kpiTile('Active Warehouses', activeWH, `${warehouses.length} total configured`, 'var(--text-muted)', whColor)}
+    ${kpiTile('Total SKUs', totalSKUs,
+      outOfStock>0 ? `${outOfStock} out of stock` : lowStock>0 ? `${lowStock} below reorder` : 'All levels healthy',
+      skuColor, skuColor)}
+    ${kpiTile('Units In Stock', totalUnits.toLocaleString('en-IN'), 'across all bins & warehouses', 'var(--text-muted)', 'var(--primary)')}
+    ${kpiTile('Bin Utilisation', binFillPct+'%', `${occupiedBins} of ${totalBins} bins used`, binColor, binColor)}
+    ${kpiTile('GRNs This Month', grnsThisMonth,
+      pendingGRNs>0 ? `${pendingGRNs} pending receipt` : 'All received',
+      grnColor, grnColor)}
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+  ${binFillPct>=85 || outOfStock>0 ? `
+  <div style="background:#fef3cd;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:#92400e;display:flex;gap:10px;align-items:center">
+    <span style="font-size:1.1rem">⚠️</span>
+    <span>
+      ${binFillPct>=85 ? `Bin capacity critical at <strong>${binFillPct}%</strong> utilisation. ` : ''}
+      ${outOfStock>0 ? `<strong>${outOfStock}</strong> SKU${outOfStock>1?'s':''} are out of stock. ` : ''}
+      Immediate action recommended.
+    </span>
+  </div>` : ''}
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     ${warehouses.map(w=>{
-      const wBins = bins.filter(b=>b.warehouse_id===w.id);
+      const wBins    = bins.filter(b=>b.warehouse_id===w.id);
+      const wInv     = inv.filter(i=>i.warehouse_id===w.id);
       const occupied = wBins.reduce((s,b)=>s+(b.occupied||0),0);
-      const cap = wBins.reduce((s,b)=>s+(b.capacity||1),1);
-      const utilPct = Math.min(100, Math.round(occupied/cap*100));
-      const color = utilPct>85?'var(--danger)':utilPct>60?'var(--warning)':'var(--success)';
+      const cap      = wBins.reduce((s,b)=>s+(b.capacity||1),1);
+      const utilPct  = Math.min(100, Math.round(occupied/cap*100));
+      const wUnits   = wInv.reduce((s,i)=>s+i.stock,0);
+      const wLow     = wInv.filter(i=>i.stock>0&&i.stock<=(i.reorder_level||0)).length;
+      const wOOS     = wInv.filter(i=>i.stock<=0).length;
+      const color    = utilPct>=85?'var(--danger)':utilPct>=60?'#d97706':'var(--success)';
+      const whActive = w.active;
       return `
-      <div class="card" style="margin-bottom:0">
-        <div class="card-header">
-          <span style="font-weight:600">${w.name}</span>
+      <div class="card" style="margin-bottom:0;border-top:3px solid ${whActive?color:'var(--border)'}">
+        <div class="card-header" style="padding:12px 16px">
+          <div>
+            <div style="font-weight:700;font-size:.95rem">${w.name}</div>
+            ${w.city ? `<div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${w.city}</div>` : ''}
+          </div>
           <div style="display:flex;gap:6px;align-items:center">
-            ${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}
+            ${whActive ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}
           </div>
         </div>
-        <div style="padding:16px">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
-            <div style="text-align:center">
-              <div style="font-size:.75rem;color:var(--text-muted)">City</div>
-              <div style="font-weight:600;font-size:.9rem">${w.city||'—'}</div>
+        <div style="padding:14px 16px">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+            <div style="text-align:center;background:var(--light);border-radius:6px;padding:8px 4px">
+              <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Capacity</div>
+              <div style="font-weight:700;font-size:.9rem;margin-top:2px">${(w.capacity||0).toLocaleString('en-IN')}</div>
             </div>
-            <div style="text-align:center">
-              <div style="font-size:.75rem;color:var(--text-muted)">Capacity</div>
-              <div style="font-weight:600;font-size:.9rem">${(w.capacity||0).toLocaleString('en-IN')}</div>
+            <div style="text-align:center;background:var(--light);border-radius:6px;padding:8px 4px">
+              <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Bins</div>
+              <div style="font-weight:700;font-size:.9rem;margin-top:2px">${wBins.length}</div>
             </div>
-            <div style="text-align:center">
-              <div style="font-size:.75rem;color:var(--text-muted)">Bins</div>
-              <div style="font-weight:600;font-size:.9rem">${wBins.length}</div>
+            <div style="text-align:center;background:var(--light);border-radius:6px;padding:8px 4px">
+              <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Units</div>
+              <div style="font-weight:700;font-size:.9rem;margin-top:2px">${wUnits.toLocaleString('en-IN')}</div>
+            </div>
+            <div style="text-align:center;background:${wOOS>0?'#fee2e2':wLow>0?'#fef3cd':'var(--light)'};border-radius:6px;padding:8px 4px">
+              <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Alerts</div>
+              <div style="font-weight:700;font-size:.9rem;margin-top:2px;color:${wOOS>0?'var(--danger)':wLow>0?'#d97706':'var(--success)'}">${wOOS+wLow||'—'}</div>
             </div>
           </div>
-          <div style="margin-bottom:8px">
+          <div style="margin-bottom:12px">
             <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px">
-              <span>Bin Utilisation</span>
-              <span style="font-weight:600;color:${color}">${utilPct}%</span>
+              <span style="color:var(--text-muted)">Bin Utilisation</span>
+              <span style="font-weight:700;color:${color}">${utilPct}%</span>
             </div>
-            <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
-              <div style="height:100%;width:${utilPct}%;background:${color};border-radius:4px;transition:width .3s"></div>
+            <div style="background:var(--border);height:7px;border-radius:4px;overflow:hidden">
+              <div style="height:100%;width:${utilPct}%;background:${color};border-radius:4px;transition:width .4s ease"></div>
             </div>
+            <div style="font-size:.7rem;color:var(--text-muted);margin-top:3px">${occupied} of ${cap} capacity used</div>
           </div>
-          <div style="display:flex;gap:6px;margin-top:12px">
+          ${wOOS>0||wLow>0 ? `
+          <div style="font-size:.75rem;color:${wOOS>0?'var(--danger)':'#d97706'};background:${wOOS>0?'#fee2e2':'#fef3cd'};padding:5px 8px;border-radius:4px;margin-bottom:10px">
+            ${wOOS>0?`${wOOS} SKU${wOOS>1?'s':''} out of stock`:''}${wOOS>0&&wLow>0?' · ':''}${wLow>0?`${wLow} below reorder level`:''}
+          </div>` : ''}
+          <div style="display:flex;gap:6px">
             <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
             <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
             <button class="btn btn-primary btn-sm" onclick="addBinModal('${w.id}')">${iconPlus(12)} Bin</button>
