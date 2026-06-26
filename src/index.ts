@@ -357,8 +357,9 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/return$/) && method==="POST") return handleReturnDC(request,env,path);
 
       // Picklist and stock transfers
-      if (path==="/api/orders/picklist" && method==="GET") return handlePickList(request,env);
-      if (path==="/api/stock-transfers" && method==="POST") return handleStockTransfer(request,env);
+      if (path==="/api/orders/picklist"       && method==="GET") return handlePickList(request,env);
+      if (path==="/api/orders/items-summary"  && method==="GET") return handleOrderItemsSummary(request,env);
+      if (path==="/api/stock-transfers"       && method==="POST") return handleStockTransfer(request,env);
 
       // Staff master
       if (path==="/api/staff"                              && method==="GET")   return handleListStaff(request,env);
@@ -1320,6 +1321,50 @@ async function handlePickList(request: Request, env: Env): Promise<Response> {
     WHERE o.status IN ('ACKNOWLEDGED','READY_TO_PICK','PICKED')
     ORDER BY o.created_at ASC
   `).all();
+  return json(results);
+}
+
+// GET /api/orders/items-summary — all active order line-items with stock & vendor context
+async function handleOrderItemsSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const url = new URL(request.url);
+  const month = url.searchParams.get("month"); // YYYY-MM
+
+  let where = `o.status NOT IN ('CLOSED','CANCELLED')`;
+  const params: string[] = [];
+  if (month) { where += ` AND strftime('%Y-%m', o.created_at) = ?`; params.push(month); }
+
+  // Scope to client if client role
+  if (["client_admin","client_approver","client_user"].includes(user!.role) && user!.client_id) {
+    where += ` AND o.client_id = ?`; params.push(user!.client_id);
+  }
+
+  const { results } = await env.DB.prepare(`
+    SELECT
+      o.id            AS order_id,
+      o.status        AS order_status,
+      strftime('%Y-%m', o.created_at) AS order_month,
+      o.created_at,
+      c.name          AS client_name,
+      oi.sku,
+      oi.name         AS item_name,
+      oi.qty          AS ordered_qty,
+      oi.unit_price,
+      COALESCE(oi.brand, i.brand, i.category, '') AS brand,
+      COALESCE(i.stock, 0)         AS stock,
+      COALESCE(i.reorder_level, 0) AS reorder_level,
+      COALESCE(i.vendor_id, '')    AS vendor_id,
+      COALESCE(v.name, 'Unknown Vendor') AS vendor_name
+    FROM orders o
+    JOIN clients c ON o.client_id = c.id
+    JOIN order_items oi ON oi.order_id = o.id
+    LEFT JOIN inventory i ON i.sku = oi.sku
+    LEFT JOIN vendors v ON v.id = i.vendor_id
+    WHERE ${where}
+    ORDER BY brand, oi.name
+  `).bind(...params).all();
   return json(results);
 }
 

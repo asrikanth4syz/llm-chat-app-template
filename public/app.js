@@ -2209,23 +2209,77 @@ async function renderTrackDelivery(el) {
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
-  const active = orders.filter(o => !['CLOSED','CANCELLED'].includes(o.status));
-  if (!APP._oqTab) APP._oqTab = 'All';
+  if (!APP._oqTab)   APP._oqTab   = 'orders';
+  if (!APP._oqMonth) APP._oqMonth = '';          // '' = all months
+  if (!APP._oqItemView) APP._oqItemView = 'brand';
   APP._oqOrders = orders;
+
+  // Build month options from orders
+  const monthsSet = new Set(orders.map(o=>(o.created_at||'').slice(0,7)).filter(Boolean));
+  const months = [...monthsSet].sort().reverse();
+  // Default to current month if present
+  if (!APP._oqMonthInit) {
+    const cur = new Date().toISOString().slice(0,7);
+    APP._oqMonth = months.includes(cur) ? cur : (months[0]||'');
+    APP._oqMonthInit = true;
+  }
+
+  function filteredOrders() {
+    return APP._oqMonth
+      ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth))
+      : orders;
+  }
 
   const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
-  const byStatus = s => orders.filter(o=>o.status===s);
-  const pendingApproval = byStatus('PENDING_APPROVAL').length;
-  const needsAction     = byStatus('SUBMITTED').length + pendingApproval + byStatus('APPROVED').length;
-  const inShipment      = byStatus('IN_SHIPMENT').length + byStatus('PARTIALLY_CLOSED').length;
-  const totalValue      = active.reduce((s,o)=>s+(o.grand_total||0),0);
+  function oqKpiHtml(fOrders) {
+    const active = fOrders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status));
+    const byS = s => fOrders.filter(o=>o.status===s);
+    const needsAction  = byS('SUBMITTED').length + byS('PENDING_APPROVAL').length + byS('APPROVED').length;
+    const inShipment   = byS('IN_SHIPMENT').length + byS('PARTIALLY_CLOSED').length;
+    const toPick       = byS('ACKNOWLEDGED').length + byS('READY_TO_PICK').length;
+    const totalValue   = active.reduce((s,o)=>s+(o.grand_total||0),0);
+    return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders')">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(totalValue)}</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('PENDING_APPROVAL')">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Needs Attention</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${needsAction?'#d97706':'var(--navy)'};line-height:1">${needsAction}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${byS('PENDING_APPROVAL').length} pending approval</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #8b5cf6;margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('IN_SHIPMENT')">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Shipment</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inShipment}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">en route to client</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('ACKNOWLEDGED')">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">To Pick</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${toPick}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in warehouse queue</div>
+      </div>
+    </div>`;
+  }
+
+  function monthPickerHtml() {
+    return `<div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:.8rem;color:var(--text-muted);font-weight:600">Month</label>
+      <select class="filter-select" style="font-size:.82rem" onchange="oqSetMonth(this.value)">
+        <option value="" ${!APP._oqMonth?'selected':''}>All time</option>
+        ${months.map(m=>`<option value="${m}" ${APP._oqMonth===m?'selected':''}>${m}</option>`).join('')}
+      </select>
+    </div>`;
+  }
 
   function oqTabsHtml() {
+    const fOrders = filteredOrders();
     return `<div class="tabs" style="margin-bottom:0;flex-wrap:wrap">
       ${STATUS_TABS.map(s=>{
-        const cnt = s==='All' ? orders.length : orders.filter(o=>o.status===s).length;
-        return `<button class="tab-btn${APP._oqTab===s?' active':''}" onclick="switchOQTab('${s}')">
+        const cnt = s==='All' ? fOrders.length : fOrders.filter(o=>o.status===s).length;
+        return `<button class="tab-btn${APP._oqStatusTab===s?' active':''}" onclick="switchOQTab('${s}')">
           ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
         </button>`;
       }).join('')}
@@ -2233,7 +2287,8 @@ async function renderOrderQueue(el) {
   }
 
   function oqTableHtml(tab) {
-    const filtered = tab==='All' ? orders : orders.filter(o=>o.status===tab);
+    const fOrders = filteredOrders();
+    const filtered = tab==='All' ? fOrders : fOrders.filter(o=>o.status===tab);
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
@@ -2245,66 +2300,313 @@ async function renderOrderQueue(el) {
         <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td>${orderQueueActions(o)}</td>
       </tr>`;
-    }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No orders in this status</td></tr>'}</tbody>`;
+    }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
 
-  APP._oqTabsHtml = oqTabsHtml;
+  APP._oqTabsHtml  = oqTabsHtml;
   APP._oqTableHtml = oqTableHtml;
+  APP._oqKpiHtml   = oqKpiHtml;
+  APP._oqMonthPickerHtml = monthPickerHtml;
+  if (!APP._oqStatusTab) APP._oqStatusTab = 'All';
 
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Order Queue</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${active.length} active orders · ${fmt(totalValue)} value</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="oq-subtitle">${filteredOrders().filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders</div>
     </div>
+    <div id="oq-month-picker">${monthPickerHtml()}</div>
   </div>
 
-  <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue);cursor:pointer" onclick="switchOQTab('All')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Active</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${active.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)}</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${needsAction?'#f59e0b':'#d1d5db'};cursor:pointer" onclick="switchOQTab('PENDING_APPROVAL')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Needs Attention</div>
-      <div style="font-size:2rem;font-weight:800;color:${needsAction?'#d97706':'var(--navy)'};margin-top:6px">${needsAction}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${pendingApproval} pending approval</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #8b5cf6;cursor:pointer" onclick="switchOQTab('IN_SHIPMENT')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Shipment</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inShipment}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">en route to client</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success);cursor:pointer" onclick="switchOQTab('ACKNOWLEDGED')">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">To Pick</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${byStatus('ACKNOWLEDGED').length + byStatus('READY_TO_PICK').length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">in warehouse queue</div>
-    </div>
+  <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
+
+  <div class="tabs" style="margin-bottom:16px">
+    <button class="tab-btn${APP._oqTab==='orders'?' active':''}" onclick="switchOQMainTab('orders')">Orders</button>
+    <button class="tab-btn${APP._oqTab==='items'?' active':''}" onclick="switchOQMainTab('items')">Line Items</button>
   </div>
 
-  <!-- Tabs + table -->
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
-    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-      <div id="oq-tabs">${oqTabsHtml()}</div>
-    </div>
-    <div class="table-wrap">
-      <table class="table" style="margin:0">
-        <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
-        ${oqTableHtml(APP._oqTab)}
-      </table>
-    </div>
+  <div id="oq-main-content">
+    ${APP._oqTab === 'orders' ? `
+    <div class="card" style="overflow:hidden">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+        <div id="oq-tabs">${oqTabsHtml()}</div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" style="margin:0">
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+          ${oqTableHtml(APP._oqStatusTab)}
+        </table>
+      </div>
+    </div>` : '<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>'}
   </div>`;
+
+  if (APP._oqTab === 'items') oqLoadItems();
+}
+
+function oqSetMonth(m) {
+  APP._oqMonth = m;
+  const el = document.getElementById('oq-month-picker');
+  if (el && APP._oqMonthPickerHtml) el.innerHTML = APP._oqMonthPickerHtml();
+  const kpiEl = document.getElementById('oq-kpi');
+  if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(APP._oqOrders ? (APP._oqMonth ? APP._oqOrders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : APP._oqOrders) : []);
+  const sub = document.getElementById('oq-subtitle');
+  if (sub) {
+    const f = APP._oqOrders ? (APP._oqMonth ? APP._oqOrders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : APP._oqOrders) : [];
+    sub.textContent = `${f.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders`;
+  }
+  if (APP._oqTab === 'orders') {
+    const tabsEl = document.getElementById('oq-tabs');
+    if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
+    const tbody = document.getElementById('oq-tbody');
+    if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab);
+  } else {
+    oqLoadItems();
+  }
+}
+
+function switchOQMainTab(tab) {
+  APP._oqTab = tab;
+  document.querySelectorAll('.tabs .tab-btn').forEach(b => {
+    if (b.textContent.trim()==='Orders'||b.textContent.trim()==='Line Items')
+      b.classList.toggle('active', (tab==='orders'&&b.textContent.trim()==='Orders')||(tab==='items'&&b.textContent.trim()==='Line Items'));
+  });
+  const contentEl = document.getElementById('oq-main-content');
+  if (!contentEl) return;
+  if (tab === 'orders') {
+    contentEl.innerHTML = `
+    <div class="card" style="overflow:hidden">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+        <div id="oq-tabs">${APP._oqTabsHtml?APP._oqTabsHtml():''}</div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" style="margin:0">
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+          ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
+        </table>
+      </div>
+    </div>`;
+  } else {
+    contentEl.innerHTML = `<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>`;
+    oqLoadItems();
+  }
 }
 
 function switchOQTab(tab) {
-  APP._oqTab = tab;
-  const orders = APP._oqOrders || [];
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
+  APP._oqStatusTab = tab;
   const tabsEl = document.getElementById('oq-tabs');
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
   if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(tab);
+}
+
+async function oqLoadItems() {
+  const qs = APP._oqMonth ? `?month=${APP._oqMonth}` : '';
+  const items = await api(`/orders/items-summary${qs}`);
+  const area = document.getElementById('oq-items-area');
+  if (!area || !items) return;
+
+  if (!APP._oqItemView) APP._oqItemView = 'brand';
+
+  function stockStatus(item) {
+    if (item.stock <= 0) return 'oos';
+    if (item.stock < item.ordered_qty) return 'short';
+    return 'ok';
+  }
+
+  const oosCount   = items.filter(i=>stockStatus(i)==='oos').length;
+  const shortCount = items.filter(i=>stockStatus(i)==='short').length;
+
+  function viewBtns() {
+    return `<div style="display:flex;gap:6px">
+      <button class="btn btn-sm ${APP._oqItemView==='brand'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('brand')">By Brand</button>
+      <button class="btn btn-sm ${APP._oqItemView==='vendor'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('vendor')">By Vendor</button>
+      <button class="btn btn-sm ${APP._oqItemView==='all'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('all')">All Items</button>
+    </div>`;
+  }
+
+  function renderByBrand() {
+    const brandMap = {};
+    items.forEach(i => {
+      const b = i.brand||'Unbranded';
+      if (!brandMap[b]) brandMap[b] = [];
+      brandMap[b].push(i);
+    });
+    return Object.entries(brandMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([brand,rows])=>{
+      const totalQty  = rows.reduce((s,r)=>s+r.ordered_qty,0);
+      const oos       = rows.filter(r=>stockStatus(r)==='oos').length;
+      const short     = rows.filter(r=>stockStatus(r)==='short').length;
+      const headerColor = oos>0?'var(--danger)':short>0?'#d97706':'var(--success)';
+      // Consolidate by SKU across orders
+      const skuMap = {};
+      rows.forEach(r=>{
+        if(!skuMap[r.sku]) skuMap[r.sku]={...r, ordered_qty:0, orders:new Set()};
+        skuMap[r.sku].ordered_qty += r.ordered_qty;
+        skuMap[r.sku].orders.add(r.order_id);
+      });
+      return `
+      <div class="card" style="margin-bottom:14px;border-top:3px solid ${headerColor}">
+        <div class="card-header" style="padding:10px 16px">
+          <div>
+            <span style="font-weight:700;font-size:.95rem">${brand}</span>
+            <span style="font-size:.75rem;color:var(--text-muted);margin-left:8px">${Object.keys(skuMap).length} SKUs · ${totalQty} units total</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            ${oos>0?`<span class="badge badge-danger">${oos} out of stock</span>`:''}
+            ${short>0?`<span class="badge badge-warning">${short} short</span>`:''}
+            ${oos===0&&short===0?`<span class="badge badge-success">All in stock</span>`:''}
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" style="margin:0">
+            <thead><tr><th>SKU</th><th>Item</th><th>Vendor</th><th>Orders</th><th>Total Qty Needed</th><th>Stock</th><th>Gap</th><th>Status</th></tr></thead>
+            <tbody>${Object.values(skuMap).sort((a,b)=>{
+              const sa=stockStatus(a),sb=stockStatus(b);
+              return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
+            }).map(r=>{
+              const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
+              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+              return `<tr style="${rowBg}">
+                <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
+                <td><b>${r.item_name}</b></td>
+                <td style="font-size:.82rem">${r.vendor_name}</td>
+                <td><span style="font-size:.78rem;background:var(--light);padding:2px 6px;border-radius:4px">${r.orders.size} order${r.orders.size!==1?'s':''}</span></td>
+                <td><b>${r.ordered_qty}</b></td>
+                <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
+                <td style="color:${gap>0?'var(--danger)':'var(--success)'};font-weight:${gap>0?700:400}">${gap>0?'+'+gap:'—'}</td>
+                <td>${ss==='oos'?'<span class="badge badge-danger">Out of Stock</span>':ss==='short'?'<span class="badge badge-warning">Short</span>':'<span class="badge badge-success">In Stock</span>'}</td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }).join('') || '<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">No line items</div>';
+  }
+
+  function renderByVendor() {
+    const vendorMap = {};
+    items.forEach(i => {
+      const v = i.vendor_name||'Unknown Vendor';
+      if (!vendorMap[v]) vendorMap[v] = { vendor_name:v, items:[] };
+      vendorMap[v].items.push(i);
+    });
+    return Object.values(vendorMap).sort((a,b)=>a.vendor_name.localeCompare(b.vendor_name)).map(({vendor_name,items:rows})=>{
+      const oos   = rows.filter(r=>stockStatus(r)==='oos').length;
+      const short = rows.filter(r=>stockStatus(r)==='short').length;
+      // Consolidate by SKU
+      const skuMap = {};
+      rows.forEach(r=>{
+        if(!skuMap[r.sku]) skuMap[r.sku]={...r,ordered_qty:0,orders:new Set()};
+        skuMap[r.sku].ordered_qty += r.ordered_qty;
+        skuMap[r.sku].orders.add(r.order_id);
+      });
+      const needPO = Object.values(skuMap).filter(r=>stockStatus(r)!=='ok');
+      const headerColor = oos>0?'var(--danger)':short>0?'#d97706':'var(--success)';
+      return `
+      <div class="card" style="margin-bottom:14px;border-top:3px solid ${headerColor}">
+        <div class="card-header" style="padding:10px 16px">
+          <div>
+            <span style="font-weight:700;font-size:.95rem">${vendor_name}</span>
+            <span style="font-size:.75rem;color:var(--text-muted);margin-left:8px">${Object.keys(skuMap).length} SKUs</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            ${needPO.length>0?`<span class="badge badge-danger">${needPO.length} need procurement</span>`:'<span class="badge badge-success">All stocked</span>'}
+          </div>
+        </div>
+        ${needPO.length>0?`
+        <div style="padding:10px 16px;background:#fef3cd;border-bottom:1px solid #f59e0b;font-size:.8rem;color:#92400e">
+          <b>Consolidated PO needed:</b> ${needPO.map(r=>`${r.item_name} × ${r.ordered_qty-r.stock}`).join(' · ')}
+        </div>`:''}
+        <div class="table-wrap">
+          <table class="table" style="margin:0">
+            <thead><tr><th>Brand</th><th>SKU</th><th>Item</th><th>Needed</th><th>Stock</th><th>Procure Qty</th><th>Status</th></tr></thead>
+            <tbody>${Object.values(skuMap).sort((a,b)=>{
+              const sa=stockStatus(a),sb=stockStatus(b);
+              return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
+            }).map(r=>{
+              const ss=stockStatus(r); const gap=Math.max(0,r.ordered_qty-r.stock);
+              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+              return `<tr style="${rowBg}">
+                <td style="font-size:.8rem">${r.brand||'—'}</td>
+                <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
+                <td><b>${r.item_name}</b></td>
+                <td><b>${r.ordered_qty}</b></td>
+                <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
+                <td>${gap>0?`<b style="color:var(--danger)">${gap}</b>`:'<span style="color:var(--success)">—</span>'}</td>
+                <td>${ss==='oos'?'<span class="badge badge-danger">Out of Stock</span>':ss==='short'?'<span class="badge badge-warning">Short</span>':'<span class="badge badge-success">In Stock</span>'}</td>
+              </tr>`;
+            }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }).join('') || '<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">No line items</div>';
+  }
+
+  function renderAllItems() {
+    const sorted = [...items].sort((a,b)=>{
+      const sa=stockStatus(a),sb=stockStatus(b);
+      const sc=(sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
+      return sc||a.brand.localeCompare(b.brand);
+    });
+    return `
+    <div class="card">
+      <div class="table-wrap">
+        <table class="table" style="margin:0">
+          <thead><tr><th>Brand</th><th>SKU</th><th>Item</th><th>Order</th><th>Client</th><th>Qty</th><th>Stock</th><th>Gap</th><th>Vendor</th><th>Status</th></tr></thead>
+          <tbody>${sorted.map(r=>{
+            const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
+            const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+            return `<tr style="${rowBg}">
+              <td style="font-size:.8rem">${r.brand||'—'}</td>
+              <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
+              <td><b>${r.item_name}</b></td>
+              <td style="font-size:.8rem"><b>${r.order_id}</b></td>
+              <td style="font-size:.8rem">${r.client_name}</td>
+              <td>${r.ordered_qty}</td>
+              <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
+              <td style="color:${gap>0?'var(--danger)':'var(--success)'}">${gap>0?'+'+gap:'—'}</td>
+              <td style="font-size:.8rem">${r.vendor_name}</td>
+              <td>${ss==='oos'?'<span class="badge badge-danger">OOS</span>':ss==='short'?'<span class="badge badge-warning">Short</span>':'<span class="badge badge-success">OK</span>'}</td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No line items</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  APP._oqRenderItems = () => {
+    const viewArea = document.getElementById('oq-items-area');
+    if (!viewArea) return;
+    const content = APP._oqItemView==='brand' ? renderByBrand() : APP._oqItemView==='vendor' ? renderByVendor() : renderAllItems();
+    viewArea.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;gap:14px">
+        <div class="card" style="padding:10px 16px;border-top:3px solid var(--danger);margin-bottom:0;min-width:100px">
+          <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Out of Stock</div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--danger)">${oosCount}</div>
+        </div>
+        <div class="card" style="padding:10px 16px;border-top:3px solid #d97706;margin-bottom:0;min-width:100px">
+          <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Short Stock</div>
+          <div style="font-size:1.5rem;font-weight:700;color:#d97706">${shortCount}</div>
+        </div>
+        <div class="card" style="padding:10px 16px;border-top:3px solid var(--success);margin-bottom:0;min-width:100px">
+          <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Total Lines</div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--navy)">${items.length}</div>
+        </div>
+      </div>
+      ${viewBtns()}
+    </div>
+    ${content}`;
+  };
+
+  APP._oqRenderItems();
+}
+
+function oqSetItemView(view) {
+  APP._oqItemView = view;
+  if (APP._oqRenderItems) APP._oqRenderItems();
 }
 
 function orderQueueActions(o) {
