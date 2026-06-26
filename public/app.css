@@ -438,8 +438,11 @@ tbody tr:hover { background: var(--blue-light) !important; }
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .modal {
-  background: var(--surface); border-radius: 12px; width: 100%; max-width: 580px;
+  background: var(--surface); border-radius: 12px; width: 75%; max-width: 75vw;
   max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-modal);
+}
+@media (max-width: 768px) {
+  .modal { width: 96%; max-width: 96vw; }
 }
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
