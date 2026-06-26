@@ -784,17 +784,16 @@ async function renderClientDashboard(el) {
     </div>
   </div>
 
-  <!-- Due Items KPI (loaded async) -->
-  <div id="due-kpi-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('fulfilment')">
-      <div class="kpi-label">Due Items</div>
-      <div class="kpi-value kpi-danger" id="due-items-count">—</div>
-      <div class="kpi-sub">items pending delivery</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0;cursor:pointer" onclick="navigate('fulfilment')">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Items</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1" id="due-items-count">—</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending delivery</div>
     </div>
-    <div class="kpi-card" style="cursor:pointer" onclick="navigate('fulfilment')">
-      <div class="kpi-label">Fulfilment Rate</div>
-      <div class="kpi-value" id="client-fulfilment-pct">—</div>
-      <div class="kpi-sub">this month</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="navigate('fulfilment')">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Fulfilment Rate</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1" id="client-fulfilment-pct">—</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">this month</div>
     </div>
   </div>`;
 
@@ -1059,27 +1058,37 @@ async function renderVendorDashboard(el) {
 
   el.innerHTML = `
   ${pageHeader('Vendor Dashboard', vendor?.name || 'Vendor Portal')}
-  <div class="kpi-row">
-    <div class="kpi-card">
-      <div class="kpi-label">On-time Rate</div>
-      <div class="kpi-value" style="color:var(--success)">${pct(vendor?.on_time_rate||0)}</div>
-      <div class="kpi-sub">Last 90 days</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Fill Rate</div>
-      <div class="kpi-value">${pct(vendor?.fill_rate||0)}</div>
-      <div class="kpi-sub">Order completeness</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Avg Lead Time</div>
-      <div class="kpi-value">${vendor?.avg_lead_days||0}d</div>
-      <div class="kpi-sub">Days to deliver</div>
-    </div>
-    <div class="kpi-card kpi-warning" style="cursor:pointer" onclick="navigate('vendor_pos')">
-      <div class="kpi-label">Pending POs</div>
-      <div class="kpi-value kpi-warning">${(pendingPOs||[]).length}</div>
-      <div class="kpi-sub">Awaiting action</div>
-    </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+    ${(()=>{
+      const onTime = vendor?.on_time_rate||0;
+      const fillRate = vendor?.fill_rate||0;
+      const leadDays = vendor?.avg_lead_days||0;
+      const pendingCount = (pendingPOs||[]).length;
+      const onTimeColor = onTime>=90?'var(--success)':onTime>=70?'#d97706':'var(--danger)';
+      const fillColor   = fillRate>=90?'var(--success)':fillRate>=70?'#d97706':'var(--danger)';
+      const leadColor   = leadDays<=3?'var(--success)':leadDays<=7?'#d97706':'var(--danger)';
+      return `
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${onTimeColor};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">On-time Rate</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${onTimeColor};line-height:1">${pct(onTime)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 90 days</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${fillColor};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Fill Rate</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${fillColor};line-height:1">${pct(fillRate)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">order completeness</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${leadColor};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Lead Time</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${leadDays}d</div>
+        <div style="font-size:.75rem;color:${leadColor};margin-top:6px">${leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement'}</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="navigate('vendor_pos')">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending POs</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'#d97706':'var(--navy)'};line-height:1">${pendingCount}</div>
+        <div style="font-size:.75rem;color:${pendingCount>0?'#d97706':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
+      </div>`;
+    })()}
   </div>
   <div class="card">
     <div class="card-header"><span>Pending Purchase Orders</span>
@@ -2612,15 +2621,16 @@ function renderAPAging(pos) {
   });
 
   return `
-  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
-    ${buckets.map(b => {
-      const items = open.filter(p=>{ const a=ageDays(p); return a>=b.min && a<=b.max; });
-      return `<div class="kpi-card ${items.length?'kpi-'+b.cls:''}">
-        <div class="kpi-label">${b.label}</div>
-        <div class="kpi-value">${items.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(items.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+    ${(()=>{ const BCLR={success:'var(--success)',warning:'#d97706',danger:'var(--danger)'}; return buckets.map(b=>{
+      const items=open.filter(p=>{const a=ageDays(p);return a>=b.min&&a<=b.max;});
+      const bc=items.length?BCLR[b.cls]:'var(--border)';
+      return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bc};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${b.label}</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
+        <div style="font-size:.75rem;color:${items.length?bc:'var(--text-muted)'};margin-top:6px">${fmt(items.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
       </div>`;
-    }).join('')}
+    }).join(''); })()}
   </div>
   ${overdue.length ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
     <b>⚠ ${overdue.length} POs outstanding 15+ days</b> — ${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))} payable
@@ -2699,11 +2709,27 @@ function renderMarginAnalysis(inv) {
   const bottomItems = [...priced].sort((a,b)=>marginOf(a)-marginOf(b)).slice(0,10);
 
   return `
-  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
-    <div class="kpi-card"><div class="kpi-label">Avg Margin</div><div class="kpi-value" style="color:${marginColor(overallMargin)}">${overallMargin}%</div></div>
-    <div class="kpi-card kpi-success"><div class="kpi-label">High Margin (≥30%)</div><div class="kpi-value">${highMargin}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
-    <div class="kpi-card kpi-warning"><div class="kpi-label">Low Margin (&lt;15%)</div><div class="kpi-value">${lowMargin}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
-    <div class="kpi-card ${negative?'kpi-danger':''}"><div class="kpi-label">Below Cost</div><div class="kpi-value">${negative}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">SKUs</div></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${marginColor(overallMargin)};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Margin</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${marginColor(overallMargin)};line-height:1">${overallMargin}%</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${priced.length} priced SKUs</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">High Margin (≥30%)</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${highMargin}</div>
+      <div style="font-size:.75rem;color:var(--success);margin-top:6px">SKUs</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowMargin>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Margin (&lt;15%)</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${lowMargin}</div>
+      <div style="font-size:.75rem;color:${lowMargin>0?'#d97706':'var(--text-muted)'};margin-top:6px">SKUs</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${negative>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Below Cost</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${negative>0?'var(--danger)':'var(--navy)'};line-height:1">${negative}</div>
+      <div style="font-size:.75rem;color:${negative>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${negative>0?'selling at a loss':'none'}</div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:14px">
@@ -7185,11 +7211,27 @@ async function switchFulfilTab(tab, btn) {
     if (!data) return;
     const critical = data.filter(r => r.due_ageing_days >= 15).length;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Critical Due (15+ days)</div><div class="kpi-value">${critical}</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Items</div><div class="kpi-value">${data.length}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${data.reduce((s,r)=>s+(r.due_qty||0),0)}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0))}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (15+ days)</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
+        <div style="font-size:.75rem;color:${critical>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical>0?'immediate action needed':'none critical'}</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Items</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.reduce((s,r)=>s+(r.due_qty||0),0)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Value</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0))}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">estimated at cost</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Due Items</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('due-items')">&#8595; CSV</button></div>
@@ -7217,12 +7259,32 @@ async function switchFulfilTab(tab, btn) {
     const data = await api('/reports/pending-supply');
     if (!data) return;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card"><div class="kpi-label">Open Orders</div><div class="kpi-value">${data.kpis.open_orders}</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Partial Orders</div><div class="kpi-value">${data.kpis.partial_orders}</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Quantity</div><div class="kpi-value">${data.kpis.due_qty}</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Due Value</div><div class="kpi-value">${fmt(data.kpis.due_value)}</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Delayed Deliveries</div><div class="kpi-value">${data.kpis.delayed_deliveries}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Open Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.open_orders}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in progress</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Partial Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:#d97706;line-height:1">${data.kpis.partial_orders}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">partly delivered</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Quantity</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${data.kpis.due_qty}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Value</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${fmt(data.kpis.due_value)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">at risk</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.delayed_deliveries>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delayed Deliveries</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.delayed_deliveries>0?'#d97706':'var(--navy)'};line-height:1">${data.kpis.delayed_deliveries}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">past expected date</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Client Drilldown</span></div>
@@ -7247,11 +7309,27 @@ async function switchFulfilTab(tab, btn) {
     const critical      = data.find(r=>r.age_bucket==='15+ Days');
     const totalOrders   = data.reduce((s,r)=>s+(r.order_count||0),0);
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card ${critical?.order_count?'kpi-danger':''}"><div class="kpi-label">Critical (15+ days)</div><div class="kpi-value">${critical?.order_count||0}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${fmt(critical?.due_value||0)} at risk</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total Due Orders</div><div class="kpi-value">${totalOrders}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all buckets</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${totalDueQty}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units outstanding</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total Due Value</div><div class="kpi-value">${fmt(totalDueValue)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">estimated at cost</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical?.order_count?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (15+ days)</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${critical?.order_count?'var(--danger)':'var(--navy)'};line-height:1">${critical?.order_count||0}</div>
+        <div style="font-size:.75rem;color:${critical?.order_count?'var(--danger)':'var(--text-muted)'};margin-top:6px">${fmt(critical?.due_value||0)} at risk</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalOrders}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all buckets</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDueQty}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Value</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueValue)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">estimated at cost</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ageing')">&#8595; CSV</button></div>
@@ -7276,11 +7354,27 @@ async function switchFulfilTab(tab, btn) {
     const totalDue = data.reduce((s,r)=>s+(r.due_qty||0),0);
     const avgFill  = data.length ? Math.round(data.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/data.length) : 100;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card ${critical?'kpi-danger':'kpi-success'}"><div class="kpi-label">Critical Brands (<70%)</div><div class="kpi-value">${critical}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">of ${data.length} brands</div></div>
-      <div class="kpi-card"><div class="kpi-label">Avg Fulfilment</div><div class="kpi-value">${avgFill}%</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all brands</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Total Due Units</div><div class="kpi-value">${totalDue}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">outstanding</div></div>
-      <div class="kpi-card"><div class="kpi-label">Brands Tracked</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">last 30 days</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical Brands (&lt;70%)</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill>=90?'var(--success)':avgFill>=70?'#d97706':'var(--danger)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${avgFill>=90?'var(--success)':avgFill>=70?'#d97706':'var(--danger)'};line-height:1">${avgFill}%</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all brands</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Units</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands Tracked</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-shortfall')">&#8595; CSV</button></div>
@@ -7307,11 +7401,27 @@ async function switchFulfilTab(tab, btn) {
     const totalSuggestedPO = data.reduce((s,r)=>s+(r.suggested_po_qty||0),0);
     const brandsWithShortfall = data.filter(r=>(r.shortfall_qty||0)>0).length;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card ${brandsWithShortfall?'kpi-warning':'kpi-success'}"><div class="kpi-label">Brands w/ Shortfall</div><div class="kpi-value">${brandsWithShortfall}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">of ${data.length} brands</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Total Shortfall Qty</div><div class="kpi-value">${totalShortfall}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units to procure</div></div>
-      <div class="kpi-card"><div class="kpi-label">Suggested PO Qty</div><div class="kpi-value">${totalSuggestedPO}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">total units to order</div></div>
-      <div class="kpi-card"><div class="kpi-label">Brands Tracked</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">last 30 days</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${brandsWithShortfall>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands w/ Shortfall</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${brandsWithShortfall>0?'#d97706':'var(--navy)'};line-height:1">${brandsWithShortfall}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalShortfall>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Shortfall Qty</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${totalShortfall>0?'var(--danger)':'var(--navy)'};line-height:1">${totalShortfall}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units to procure</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Suggested PO Qty</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">total units to order</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands Tracked</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-procurement')">&#8595; CSV</button></div>
@@ -7337,11 +7447,27 @@ async function switchFulfilTab(tab, btn) {
     const totalDueVal = data.reduce((s,r)=>s+(r.due_value||0),0);
     const avgDelivery = data.filter(r=>r.avg_delivery_days).length ? Math.round(data.filter(r=>r.avg_delivery_days).reduce((s,r)=>s+(r.avg_delivery_days||0),0)/data.filter(r=>r.avg_delivery_days).length*10)/10 : null;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card ${atRisk?'kpi-danger':'kpi-success'}"><div class="kpi-label">At-Risk Clients</div><div class="kpi-value">${atRisk}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">fulfilment &lt;70%</div></div>
-      <div class="kpi-card ${avgFill<70?'kpi-danger':avgFill<90?'kpi-warning':'kpi-success'}"><div class="kpi-label">Avg Fulfilment</div><div class="kpi-value">${avgFill}%</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">across all clients</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total Due Value</div><div class="kpi-value">${fmt(totalDueVal)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">outstanding</div></div>
-      <div class="kpi-card"><div class="kpi-label">Avg Delivery Time</div><div class="kpi-value">${avgDelivery!=null?avgDelivery+'d':'—'}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">days from order</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${atRisk>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">At-Risk Clients</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${atRisk>0?'var(--danger)':'var(--navy)'};line-height:1">${atRisk}</div>
+        <div style="font-size:.75rem;color:${atRisk>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">fulfilment &lt;70%</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill<70?'var(--danger)':avgFill<90?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${avgFill<70?'var(--danger)':avgFill<90?'#d97706':'var(--success)'};line-height:1">${avgFill}%</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all clients</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDueVal>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Value</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueVal)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Delivery Time</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${avgDelivery!=null?avgDelivery+'d':'—'}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">days from order</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('client-scorecard')">&#8595; CSV</button></div>
@@ -7370,11 +7496,27 @@ async function switchFulfilTab(tab, btn) {
     const data = await api(`/reports/dc-per-order?from=${from30}&to=${today}`);
     if (!data) return;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card"><div class="kpi-label">Total Orders</div><div class="kpi-value">${data.kpis.totalOrders}</div></div>
-      <div class="kpi-card kpi-success"><div class="kpi-label">Single DC Orders</div><div class="kpi-value">${data.kpis.singleDC}</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Multi-DC Orders</div><div class="kpi-value">${data.kpis.multiDC}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Avg DCs per Order</div><div class="kpi-value">${data.kpis.avgDCsPerOrder}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.totalOrders}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Single DC Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.singleDC}</div>
+        <div style="font-size:.75rem;color:var(--success);margin-top:6px">one-shot delivery</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.multiDC>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Multi-DC Orders</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.multiDC}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">split deliveries</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg DCs per Order</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.avgDCsPerOrder}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">delivery challans</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Multi-Delivery Completion Tracking</span></div>
@@ -7394,11 +7536,27 @@ async function switchFulfilTab(tab, btn) {
     const data = await api(`/reports/dc-reconciliation?from=${from30}&to=${today}`);
     if (!data) return;
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card"><div class="kpi-label">Total DCs</div><div class="kpi-value">${data.kpis.total_dcs}</div></div>
-      <div class="kpi-card kpi-success"><div class="kpi-label">POD Uploaded</div><div class="kpi-value">${data.kpis.pod_uploaded}</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Missing POD</div><div class="kpi-value">${data.kpis.missing_pod}</div></div>
-      <div class="kpi-card kpi-danger"><div class="kpi-label">Missing DC Scan</div><div class="kpi-value">${data.kpis.missing_dc_scan}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total DCs</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.total_dcs}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">POD Uploaded</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.pod_uploaded}</div>
+        <div style="font-size:.75rem;color:var(--success);margin-top:6px">proof of delivery</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_pod>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Missing POD</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_pod}</div>
+        <div style="font-size:.75rem;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_pod>0?'upload required':'all clear'}</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Missing DC Scan</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_dc_scan}</div>
+        <div style="font-size:.75rem;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_dc_scan>0?'scan required':'all clear'}</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header"><span>Delivery Challan Reconciliation</span></div>
@@ -7427,11 +7585,27 @@ async function switchFulfilTab(tab, btn) {
     const stockout         = data.filter(r=>r.current_stock<(r.due_qty||0)).length;
     const totalDue         = data.reduce((s,r)=>s+(r.due_qty||0),0);
     el.innerHTML = `
-    <div class="kpi-grid" style="margin-bottom:16px">
-      <div class="kpi-card ${stockout?'kpi-danger':'kpi-success'}"><div class="kpi-label">Stockout Risk Items</div><div class="kpi-value">${stockout}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">stock &lt; due qty</div></div>
-      <div class="kpi-card kpi-warning"><div class="kpi-label">Items Needing PO</div><div class="kpi-value">${data.length}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">to be procured</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total Due Qty</div><div class="kpi-value">${totalDue}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">units outstanding</div></div>
-      <div class="kpi-card"><div class="kpi-label">Total PO Qty Needed</div><div class="kpi-value">${totalSuggestedPO}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">suggested order</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${stockout>0?'var(--danger)':'var(--success)'};margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Stockout Risk</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${stockout>0?'var(--danger)':'var(--navy)'};line-height:1">${stockout}</div>
+        <div style="font-size:.75rem;color:${stockout>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">stock &lt; due qty</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Needing PO</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">to be procured</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+      </div>
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total PO Qty Needed</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">suggested order</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header">
@@ -7699,31 +7873,31 @@ async function renderTodaysSchedule(el) {
   ${pageHeader("Today's Delivery Schedule", today,
     `<button class="btn btn-secondary" onclick="navigate('todays_schedule')">&#8635; Refresh</button>`)}
 
-  <div class="kpi-row" style="grid-template-columns:repeat(5,1fr);margin-bottom:0">
-    <div class="kpi-card" style="position:relative;overflow:hidden">
-      <div class="kpi-label">Total DCs</div>
-      <div class="kpi-value">${totalDCs}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${staffCount} staff on route</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total DCs</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDCs}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${staffCount} staff on route</div>
     </div>
-    <div class="kpi-card" style="border-top:3px solid var(--success)">
-      <div class="kpi-label">Delivered</div>
-      <div class="kpi-value" style="color:var(--success)">${delivered}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${donePct}% complete</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delivered</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--success);line-height:1">${delivered}</div>
+      <div style="font-size:.75rem;color:var(--success);margin-top:6px">${donePct}% complete</div>
     </div>
-    <div class="kpi-card" style="border-top:3px solid var(--warning)">
-      <div class="kpi-label">In Transit</div>
-      <div class="kpi-value" style="color:var(--warning)">${inTransit}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">out for delivery</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Transit</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${inTransit}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">out for delivery</div>
     </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Scheduled</div>
-      <div class="kpi-value">${pending}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">not yet started</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Scheduled</div>
+      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${pending}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">not yet started</div>
     </div>
-    <div class="kpi-card ${unassigned.length>0?'kpi-warning':''}">
-      <div class="kpi-label">Unassigned</div>
-      <div class="kpi-value">${unassigned.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${unassigned.length?'needs staff':'all assigned'}</div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${unassigned.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Unassigned</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${unassigned.length>0?'#d97706':'var(--navy)'};line-height:1">${unassigned.length}</div>
+      <div style="font-size:.75rem;color:${unassigned.length>0?'#d97706':'var(--text-muted)'};margin-top:6px">${unassigned.length?'needs staff':'all assigned'}</div>
     </div>
   </div>
 
