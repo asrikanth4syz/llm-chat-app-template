@@ -2611,78 +2611,64 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
 
   let success = 0; const errors: string[] = [];
 
+  // Validate rows and split valid/invalid upfront
+  const validRows: { row: Record<string,unknown>; idx: number }[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name are required`); continue; }
-    try {
-      const existing = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(row.sku).first();
-      if (existing) {
-        await env.DB.prepare(
-          `UPDATE inventory SET name=?,stock=?,unit_price=?,category=?,brand=?,
-           gst_rate=?,reorder_level=?,max_stock=? WHERE sku=?`
+    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name are required`); }
+    else validRows.push({ row, idx: i });
+  }
+
+  if (validRows.length === 0) return json({success: 0, failed: errors.length, errors});
+
+  // One query to find which SKUs already exist — counts as 1 subrequest
+  const skus = validRows.map(v => String(v.row.sku));
+  const ph = skus.map(() => '?').join(',');
+  const existingSkus = new Set<string>();
+  try {
+    const res = await env.DB.prepare(`SELECT sku FROM inventory WHERE sku IN (${ph})`).bind(...skus).all();
+    for (const r of res.results) existingSkus.add(String((r as Record<string,unknown>).sku));
+  } catch { /* treat all as new if lookup fails */ }
+
+  // Build batch statements in chunks of 200 — each batch() call = 1 subrequest
+  const CHUNK = 200;
+  for (let c = 0; c < validRows.length; c += CHUNK) {
+    const chunk = validRows.slice(c, c + CHUNK);
+    const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+    const chunkIdxMap: number[] = []; // track original row index per stmt
+
+    for (const { row, idx } of chunk) {
+      const sku = String(row.sku);
+      if (existingSkus.has(sku)) {
+        stmts.push(env.DB.prepare(
+          `UPDATE inventory SET name=?,stock=?,unit_price=?,category=?,brand=?,gst_rate=?,reorder_level=?,max_stock=? WHERE sku=?`
         ).bind(
           row.name, Number(row.stock)||0, Number(row.unit_price)||0,
           row.category||"General", row.brand||"",
-          Number(row.gst_rate)||18,
-          Number(row.reorder_level)||10, Number(row.max_stock)||500,
-          row.sku
-        ).run();
-        // Optional extended fields — ignore if column missing
-        const ext: Record<string,unknown> = {};
-        if (row.mrp !== undefined) ext.mrp = Number(row.mrp)||0;
-        if (row.cost_excl_gst !== undefined) ext.cost_excl_gst = Number(row.cost_excl_gst)||0;
-        if (row.sub_category !== undefined) ext.sub_category = row.sub_category||"Normal";
-        if (row.uom !== undefined) ext.uom = row.uom||"unit";
-        if (row.pack_size !== undefined) ext.pack_size = Number(row.pack_size)||1;
-        if (row.units_per_case !== undefined) ext.units_per_case = Number(row.units_per_case)||1;
-        if (row.weight_grams !== undefined) ext.weight_grams = Number(row.weight_grams)||0;
-        if (row.barcode !== undefined) ext.barcode = row.barcode||"";
-        if (row.vendor_sku !== undefined) ext.vendor_sku = row.vendor_sku||"";
-        if (row.vendor_lead_days !== undefined) ext.vendor_lead_days = Number(row.vendor_lead_days)||3;
-        if (row.vendor_moq !== undefined) ext.vendor_moq = Number(row.vendor_moq)||1;
-        const extKeys = Object.keys(ext);
-        if (extKeys.length) {
-          try {
-            const setClause = extKeys.map(k => `${k}=?`).join(',');
-            await env.DB.prepare(`UPDATE inventory SET ${setClause} WHERE sku=?`)
-              .bind(...Object.values(ext), row.sku).run();
-          } catch { /* ignore — column may not exist in older DB */ }
-        }
+          Number(row.gst_rate)||18, Number(row.reorder_level)||10, Number(row.max_stock)||500,
+          sku
+        ));
       } else {
-        await env.DB.prepare(
-          `INSERT INTO inventory (sku,name,stock,unit_price,category,brand,gst_rate,reorder_level,max_stock)
-           VALUES (?,?,?,?,?,?,?,?,?)`
+        stmts.push(env.DB.prepare(
+          `INSERT OR IGNORE INTO inventory (sku,name,stock,unit_price,category,brand,gst_rate,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?,?,?)`
         ).bind(
-          row.sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0,
+          sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0,
           row.category||"General", row.brand||"",
-          Number(row.gst_rate)||18,
-          Number(row.reorder_level)||10, Number(row.max_stock)||500
-        ).run();
-        // Optional extended fields
-        const ext: Record<string,unknown> = {};
-        if (row.mrp !== undefined) ext.mrp = Number(row.mrp)||0;
-        if (row.cost_excl_gst !== undefined) ext.cost_excl_gst = Number(row.cost_excl_gst)||0;
-        if (row.sub_category !== undefined) ext.sub_category = row.sub_category||"Normal";
-        if (row.uom !== undefined) ext.uom = row.uom||"unit";
-        if (row.pack_size !== undefined) ext.pack_size = Number(row.pack_size)||1;
-        if (row.units_per_case !== undefined) ext.units_per_case = Number(row.units_per_case)||1;
-        if (row.weight_grams !== undefined) ext.weight_grams = Number(row.weight_grams)||0;
-        if (row.barcode !== undefined) ext.barcode = row.barcode||"";
-        if (row.vendor_sku !== undefined) ext.vendor_sku = row.vendor_sku||"";
-        if (row.vendor_lead_days !== undefined) ext.vendor_lead_days = Number(row.vendor_lead_days)||3;
-        if (row.vendor_moq !== undefined) ext.vendor_moq = Number(row.vendor_moq)||1;
-        const extKeys = Object.keys(ext);
-        if (extKeys.length) {
-          try {
-            const setClause = extKeys.map(k => `${k}=?`).join(',');
-            await env.DB.prepare(`UPDATE inventory SET ${setClause} WHERE sku=?`)
-              .bind(...Object.values(ext), row.sku).run();
-          } catch { /* ignore — column may not exist in older DB */ }
-        }
+          Number(row.gst_rate)||18, Number(row.reorder_level)||10, Number(row.max_stock)||500
+        ));
+        existingSkus.add(sku);
       }
-      success++;
+      chunkIdxMap.push(idx);
+    }
+
+    try {
+      await env.DB.batch(stmts);
+      success += stmts.length;
     } catch (e) {
-      errors.push(`Row ${i+1} (${row.sku}): ${String(e)}`);
+      // Batch failed — record error for each row in this chunk and fall back to individual inserts
+      for (let i = 0; i < stmts.length; i++) {
+        errors.push(`Row ${chunkIdxMap[i]+1} (${chunk[i].row.sku}): ${String(e)}`);
+      }
     }
   }
 
