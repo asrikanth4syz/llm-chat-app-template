@@ -903,8 +903,9 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
   for (const [col, key] of patchFields) {
     if (body[key] !== undefined) { fields.push(`${col}=?`); vals.push(body[key] === "" ? null : body[key]); }
   }
-  // vendor_id allows null
+  // vendor_id and secondary_vendor_id allow null
   if (body.vendor_id !== undefined) { fields.push("vendor_id=?"); vals.push(body.vendor_id || null); }
+  if (body.secondary_vendor_id !== undefined) { fields.push("secondary_vendor_id=?"); vals.push(body.secondary_vendor_id || null); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(sku);
   await env.DB.prepare(`UPDATE inventory SET ${fields.join(",")} WHERE sku=?`).bind(...vals).run();

@@ -3865,6 +3865,7 @@ async function editInventoryItem(sku) {
   if (!item) return;
   const vendors = await api('/vendors') || [];
   const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
+  const vendor2Opts = vendors.map(v => `<option value="${v.id}" ${v.id===item.secondary_vendor_id?'selected':''}>${v.name}</option>`).join('');
   const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','Other'];
   const catOpts = cats.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('');
   const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
@@ -3873,7 +3874,7 @@ async function editInventoryItem(sku) {
   openModal(`Edit Item — ${sku}`,
     `<!-- Section tabs -->
     <div style="display:flex;gap:6px;border-bottom:2px solid var(--border);margin-bottom:16px;padding-bottom:10px">
-      ${[['prod','Product ID','var(--primary)'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
+      ${[['prod','Product ID','#1F3864'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
         `<button class="ei-tab" data-tab="${id}" data-color="${color}" onclick="switchEITab('${id}')" style="padding:6px 14px;border:none;border-radius:20px;background:transparent;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .18s;white-space:nowrap">${label}</button>`
       ).join('')}
     </div>
@@ -3954,6 +3955,38 @@ async function editInventoryItem(sku) {
             </div>
           </div>
         </div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label style="display:flex;justify-content:space-between;align-items:center">
+            Secondary Vendor <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(fallback supplier)</span>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" onclick="toggleAddVendorInline('2')">+ Add New Vendor</button>
+          </label>
+          <select id="ei-vendor2"><option value="">— None —</option>${vendor2Opts}</select>
+          <!-- Inline new-vendor form for secondary -->
+          <div id="ei-new-vendor-form-2" style="display:none;margin-top:12px;background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:8px;padding:14px">
+            <div style="font-size:.76rem;font-weight:700;color:#7c3aed;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Secondary Vendor</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Vendor Name *</label><input type="text" id="nv2-name" placeholder="e.g. Backup Supplies Co"></div>
+              <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Category</label>
+                <select id="nv2-cat">
+                  <option value="Food & Beverage">Food & Beverage</option>
+                  <option value="FMCG">FMCG</option>
+                  <option value="Stationery">Stationery</option>
+                  <option value="Cleaning">Cleaning</option>
+                  <option value="Electronics">Electronics</option>
+                  <option value="Pharma">Pharma</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Phone</label><input type="tel" id="nv2-phone" placeholder="9876543210"></div>
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Email</label><input type="email" id="nv2-email" placeholder="vendor@example.com"></div>
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Location / City</label><input type="text" id="nv2-location" placeholder="e.g. Delhi"></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button type="button" class="btn btn-primary btn-sm" onclick="createVendorInline('2')">Create & Select</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAddVendorInline('2')">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div class="form-group"><label>Vendor SKU / Code</label><input type="text" id="ei-vendorsku" value="${item.vendor_sku||''}"></div>
         <div class="form-group"><label>Lead Time (days)</label><input type="number" id="ei-leaddays" value="${item.vendor_lead_days||3}" min="0"></div>
         <div class="form-group"><label>Min Order Qty (MOQ)</label><input type="number" id="ei-moq" value="${item.vendor_moq||1}" min="1"></div>
@@ -4014,8 +4047,9 @@ async function saveInventoryItem(sku) {
     amazon_url:     eiVal('ei-amazon'),
     flipkart_url:   eiVal('ei-flipkart'),
     // Vendor
-    vendor_id:      eiVal('ei-vendor') || null,
-    vendor_sku:     eiVal('ei-vendorsku'),
+    vendor_id:           eiVal('ei-vendor') || null,
+    secondary_vendor_id: eiVal('ei-vendor2') || null,
+    vendor_sku:          eiVal('ei-vendorsku'),
     vendor_lead_days: eiVal('ei-leaddays',true),
     vendor_moq:     eiVal('ei-moq',true),
     stock:          eiVal('ei-stock',true),
@@ -4028,39 +4062,45 @@ async function saveInventoryItem(sku) {
   if (res) { showToast('Item updated'); navigate('inventory'); }
 }
 
-function toggleAddVendorInline() {
-  const form = document.getElementById('ei-new-vendor-form');
+function toggleAddVendorInline(suffix = '') {
+  const formId = suffix ? `ei-new-vendor-form-${suffix}` : 'ei-new-vendor-form';
+  const form = document.getElementById(formId);
   if (!form) return;
   const showing = form.style.display !== 'none';
   form.style.display = showing ? 'none' : '';
-  if (!showing) document.getElementById('nv-name')?.focus();
+  if (!showing) document.getElementById(suffix ? `nv${suffix}-name` : 'nv-name')?.focus();
 }
 
-async function createVendorInline() {
-  const name = (document.getElementById('nv-name')?.value || '').trim();
+async function createVendorInline(suffix = '') {
+  const p = suffix ? `nv${suffix}-` : 'nv-';
+  const formId = suffix ? `ei-new-vendor-form-${suffix}` : 'ei-new-vendor-form';
+  const selId = suffix ? `ei-vendor${suffix}` : 'ei-vendor';
+  const name = (document.getElementById(p+'name')?.value || '').trim();
   if (!name) { showToast('Vendor name is required', 'error'); return; }
-  const btn = document.querySelector('#ei-new-vendor-form .btn-primary');
+  const btn = document.querySelector(`#${formId} .btn-primary`);
   if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
   const body = {
     name,
-    category: document.getElementById('nv-cat')?.value || 'Other',
-    contact_phone: document.getElementById('nv-phone')?.value || '',
-    contact_email: document.getElementById('nv-email')?.value || '',
-    location: document.getElementById('nv-location')?.value || '',
+    category: document.getElementById(p+'cat')?.value || 'Other',
+    contact_phone: document.getElementById(p+'phone')?.value || '',
+    contact_email: document.getElementById(p+'email')?.value || '',
+    location: document.getElementById(p+'location')?.value || '',
   };
   const res = await api('/vendors', { method: 'POST', body: JSON.stringify(body) });
   if (btn) { btn.disabled = false; btn.textContent = 'Create & Select'; }
   if (!res || !res.id) { showToast('Failed to create vendor', 'error'); return; }
-  // Add new option to the dropdown and select it
-  const sel = document.getElementById('ei-vendor');
-  if (sel) {
-    const opt = document.createElement('option');
-    opt.value = res.id;
-    opt.textContent = name;
-    opt.selected = true;
-    sel.appendChild(opt);
-  }
-  toggleAddVendorInline();
+  // Add new option to both dropdowns and select in the target one
+  ['ei-vendor','ei-vendor2'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel) {
+      const opt = document.createElement('option');
+      opt.value = res.id;
+      opt.textContent = name;
+      if (id === selId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  });
+  toggleAddVendorInline(suffix);
   showToast(`Vendor "${name}" created and selected`);
 }
 
