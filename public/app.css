@@ -367,6 +367,10 @@ button { font-family: var(--font); cursor: pointer; }
 .btn-secondary:hover { background: var(--bg); }
 .btn-success { background: var(--success); color: white; border-color: var(--success); }
 .btn-danger { background: var(--danger); color: white; border-color: var(--danger); }
+.btn-warning { background: #f59e0b; color: white; border-color: #f59e0b; }
+.btn-warning:hover { background: #d97706; border-color: #d97706; }
+.btn-info { background: #06b6d4; color: white; border-color: #06b6d4; }
+.btn-info:hover { background: #0891b2; border-color: #0891b2; }
 .btn-sm { padding: 4px 10px; font-size: .76rem; }
 .btn-icon { padding: 6px; border-radius: 6px; }
 

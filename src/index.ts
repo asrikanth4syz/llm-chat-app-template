@@ -160,16 +160,17 @@ async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<voi
 // ── ORDER FSM ─────────────────────────────────────────────────────────
 const ORDER_FSM: Record<string, string[]> = {
   DRAFT:            ["SUBMITTED","CANCELLED"],
-  SUBMITTED:        ["PENDING_APPROVAL","APPROVED","ACKNOWLEDGED","CANCELLED"],
-  PENDING_APPROVAL: ["APPROVED","ACKNOWLEDGED","CANCELLED"],
+  SUBMITTED:        ["PENDING_APPROVAL","APPROVED","CANCELLED"],
+  PENDING_APPROVAL: ["APPROVED","CANCELLED"],
   APPROVED:         ["ACKNOWLEDGED","CANCELLED"],
-  ACKNOWLEDGED:     ["PICKED","INVENTORY_CHECK","CANCELLED"],
-  INVENTORY_CHECK:  ["VENDOR_PO_RAISED","CANCELLED"],
+  ACKNOWLEDGED:     ["INVENTORY_CHECK","CANCELLED"],
+  INVENTORY_CHECK:  ["READY_TO_PICK","VENDOR_PO_RAISED","CANCELLED"],
   VENDOR_PO_RAISED: ["APPROVED","READY_TO_PICK","CANCELLED"],
-  READY_TO_PICK:    ["PICKED","IN_SHIPMENT"],
-  PICKED:           ["IN_SHIPMENT","CANCELLED"],
+  READY_TO_PICK:    ["PICKED","CANCELLED"],
+  PICKED:           ["QUALITY_CHECK","IN_SHIPMENT","CANCELLED"],
+  QUALITY_CHECK:    ["IN_SHIPMENT","READY_TO_PICK","CANCELLED"],
   IN_SHIPMENT:      ["PARTIALLY_CLOSED","CLOSED"],
-  PARTIALLY_CLOSED: ["CLOSED","CANCELLED"],
+  PARTIALLY_CLOSED: ["READY_TO_PICK","CLOSED","CANCELLED"],
   CLOSED: [], CANCELLED: [],
 };
 
@@ -630,6 +631,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     notes?: string;
     order_type?: string;
     need_by_date?: string;
+    save_as_draft?: boolean;
   };
   // Client roles must order for their own linked client only
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
@@ -643,6 +645,23 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price, 0);
   const gst = Math.round(subtotal*0.18);
   const grand_total = subtotal+gst;
+
+  // Save as draft — skip approval rules, return early status
+  if (body.save_as_draft) {
+    const validTypes = ['Regular','Urgent','Ad-Hoc'];
+    const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
+    const needByDate = body.need_by_date || null;
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
+    for (const item of body.items) {
+      await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)`)
+        .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price).run();
+    }
+    await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`)
+      .bind(uid(), id, "DRAFT", user!.sub, user!.name, "Saved as draft").run();
+    await audit(env, user, "CREATE", "order", id, undefined, `status:DRAFT,total:${grand_total}`);
+    return json({id, status:"DRAFT", grand_total}, 201);
+  }
 
   // Gap 6: check approval rules
   const rule = await env.DB.prepare(`SELECT * FROM approval_rules WHERE active=1 AND (client_id=? OR client_id IS NULL)
@@ -1367,7 +1386,7 @@ async function handlePickList(request: Request, env: Env): Promise<Response> {
     JOIN order_items oi ON oi.order_id=o.id
     LEFT JOIN inventory i ON i.sku=oi.sku
     LEFT JOIN order_allocations oa ON oa.order_id=o.id AND oa.sku=oi.sku
-    WHERE o.status IN ('ACKNOWLEDGED','READY_TO_PICK','PICKED')
+    WHERE o.status IN ('ACKNOWLEDGED','READY_TO_PICK','PICKED','QUALITY_CHECK')
     ORDER BY o.created_at ASC
   `).all();
   return json(results);

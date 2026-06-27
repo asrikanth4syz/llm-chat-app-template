@@ -615,7 +615,7 @@ function fmtDate(iso) {
 function statusBadge(s) {
   const map = {
     CLOSED:'success', DELIVERED:'success', RESOLVED:'success', INVOICED:'success', RECEIVED:'success',
-    IN_SHIPMENT:'info', IN_TRANSIT:'info', IN_PROGRESS:'info', DISPATCHED:'info', ACCEPTED:'info',
+    IN_SHIPMENT:'info', IN_TRANSIT:'info', IN_PROGRESS:'info', DISPATCHED:'info', ACCEPTED:'info', QUALITY_CHECK:'info',
     PENDING_APPROVAL:'warning', SENT:'warning', SCHEDULED:'warning', OPEN:'warning', READY_TO_PICK:'warning', PICKED:'warning',
     CANCELLED:'danger', REJECTED:'danger',
     SUBMITTED:'primary', APPROVED:'primary', ACKNOWLEDGED:'primary',
@@ -1362,6 +1362,9 @@ async function renderPlaceOrder(el) {
         <button class="btn btn-gold" style="width:100%;margin-top:10px" onclick="submitOrder()">
           ${iconCheck(14)} Place Order
         </button>
+        <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.83rem" onclick="saveDraft()">
+          Save as Draft
+        </button>
         <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.8rem" onclick="APP.cart=[];refreshCartUI();showToast('Cart cleared')">
           Clear Cart
         </button>
@@ -1738,14 +1741,13 @@ async function submitOrder() {
   }
 }
 
-async function confirmOrder() {
+async function confirmOrder(saveAsDraft) {
   const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
-  // For client roles, client_id comes from their JWT — backend enforces it
   const clientId = isClientRole ? (APP.user.client_id || '__self__') : document.getElementById('order-client')?.value;
   if (!isClientRole && !clientId) { showToast('Select a client', 'error'); return; }
 
   const btn = document.querySelector('#modal-footer .btn-gold');
-  if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+  if (btn) { btn.disabled = true; btn.textContent = saveAsDraft ? 'Saving…' : 'Submitting…'; }
 
   const notes = document.getElementById('cart-notes')?.value?.trim() || '';
   const orderType = APP._orderType || 'Regular';
@@ -1758,14 +1760,48 @@ async function confirmOrder() {
       order_type: orderType,
       ...(notes ? { notes } : {}),
       ...(needByDate ? { need_by_date: needByDate } : {}),
+      ...(saveAsDraft ? { save_as_draft: true } : {}),
     }),
   });
 
   closeModal();
   if (result) {
     APP.cart = [];
-    showToast(`Order ${result.id} placed — ${result.status==='PENDING_APPROVAL'?'sent for approval':'submitted to 4SYZ'}`);
+    if (saveAsDraft) {
+      showToast(`Draft ${result.id} saved — submit it from My Orders`);
+    } else {
+      showToast(`Order ${result.id} placed — ${result.status==='PENDING_APPROVAL'?'sent for approval':'submitted to 4SYZ'}`);
+    }
     navigate('my_orders');
+  }
+}
+
+async function saveDraft() {
+  if (!APP.cart.length) { showToast('Cart is empty', 'error'); return; }
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+  const grand = APP.cart.reduce((s,i)=>s+i.qty*i.unit_price,0)*1.18;
+  const summary = `
+    <div class="cart-row cart-total" style="margin-bottom:8px"><span>Grand Total</span><span>${fmt(grand)}</span></div>
+    <p style="font-size:.85rem;color:var(--text-muted)">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`;
+  if (isClientRole) {
+    openModal('Save as Draft',
+      `<p style="color:var(--text-muted);margin-bottom:12px">Draft will be saved to My Orders. You can submit it later.</p>${summary}`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-gold" onclick="confirmOrder(true)">Save Draft</button>`);
+  } else {
+    const clients = await api('/clients');
+    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    openModal('Save as Draft',
+      `<div style="margin-bottom:16px">
+        <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
+        <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
+          onchange="document.getElementById('save-draft-btn').disabled=!this.value">
+          <option value="">— Select a client —</option>
+          ${clientOpts}
+        </select>
+      </div>${summary}`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button id="save-draft-btn" class="btn btn-gold" onclick="confirmOrder(true)" disabled>Save Draft</button>`);
   }
 }
 
@@ -1782,9 +1818,9 @@ async function renderMyOrders(el) {
     if (!APP._moTab) APP._moTab = 'All';
     if (!APP._moSearch) APP._moSearch = '';
 
-    const STATUS_LABEL = { DRAFT:'Draft', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', ACKNOWLEDGED:'Acknowledged', PICKED:'Picked', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partial', CLOSED:'Delivered', CANCELLED:'Cancelled' };
-    const ORDER_STEPS = ['SUBMITTED','PENDING_APPROVAL','APPROVED','IN_SHIPMENT','CLOSED'];
-    const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', ACKNOWLEDGED:'#8b5cf6', PICKED:'#f97316', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
+    const STATUS_LABEL = { DRAFT:'Draft', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
+    const ORDER_STEPS = ['SUBMITTED','APPROVED','READY_TO_PICK','IN_SHIPMENT','CLOSED'];
+    const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#f97316', PICKED:'#f97316', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
       let list = APP._moTab === 'All' ? orders : orders.filter(o => o.status === APP._moTab);
@@ -1848,7 +1884,7 @@ async function renderMyOrders(el) {
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
               <div style="display:flex;align-items:center;gap:10px">
                 <div style="width:40px;height:40px;border-radius:10px;background:${sc}18;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
-                  ${isDone?'✅':isPartial?'🔶':isCancelled?'❌':o.status==='IN_SHIPMENT'?'🚚':o.status==='PENDING_APPROVAL'?'⏳':'📄'}
+                  ${isDone?'✅':isPartial?'🔶':isCancelled?'❌':o.status==='IN_SHIPMENT'?'🚚':o.status==='PENDING_APPROVAL'?'⏳':o.status==='DRAFT'?'✏️':'📄'}
                 </div>
                 <div>
                   <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${o.id}</div>
@@ -1877,6 +1913,7 @@ async function renderMyOrders(el) {
             <!-- Action buttons -->
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View Details</button>
+              ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" onclick="submitDraftOrder('${o.id}')">Submit Order</button>`:''}
               ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" onclick="viewOrderDrilldown('${o.id}')">📦 Delivery Breakdown</button>`:''}
               ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" onclick="reorderFromHistory('${o.id}')">🔄 Reorder</button>`:''}
               ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="event.stopPropagation();cancelOrder('${o.id}')">Cancel</button>`:''}
@@ -2108,22 +2145,33 @@ async function viewOrder(id) {
         if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
           footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','APPROVED','Approved via order detail')">✓ Approve</button>`);
         if (s==='APPROVED')
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','ACKNOWLEDGED','Processing started')">Process Order</button>`);
-        if (s==='ACKNOWLEDGED'||s==='READY_TO_PICK')
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();pickOrderModal('${id}')">Pick Items</button>`);
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','ACKNOWLEDGED','Order acknowledged — processing started')">Acknowledge</button>`);
         if (s==='ACKNOWLEDGED')
-          footer.push(`<button class="btn btn-gold" onclick="closeModal();advanceOrder('${id}','INVENTORY_CHECK','Sent to procurement')">Create PO</button>`);
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','INVENTORY_CHECK','Inventory check initiated')">Inventory Check</button>`);
+        if (s==='INVENTORY_CHECK') {
+          footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Stock available — ready for picking')">✓ Stock In</button>`);
+          footer.push(`<button class="btn btn-gold" onclick="closeModal();inventoryShortageModal('${id}')">⚠ Raise PO</button>`);
+        }
+        if (s==='READY_TO_PICK')
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();pickOrderModal('${id}')">Pick Items</button>`);
         if (s==='PICKED')
-          footer.push(`<button class="btn btn-success" onclick="closeModal();createDCFromPicklist('${id}')">Dispatch → DC</button>`);
+          footer.push(`<button class="btn btn-info" onclick="closeModal();advanceOrder('${id}','QUALITY_CHECK','Items picked — quality check & packing')">Quality Check</button>`);
+        if (s==='QUALITY_CHECK') {
+          footer.push(`<button class="btn btn-success" onclick="closeModal();createDCFromPicklist('${id}')">✓ Pass → Dispatch</button>`);
+          footer.push(`<button class="btn btn-warning" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`);
+        }
         if (s==='VENDOR_PO_RAISED')
           footer.push(`<button class="btn btn-warning" onclick="closeModal();advanceOrder('${id}','APPROVED','PO rejected — reopened')">↩ Reopen for Reprocessing</button>`);
         if (s==='PARTIALLY_CLOSED') {
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>`);
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Replenishment — next batch ready for picking')">Replenish</button>`);
+          footer.push(`<button class="btn btn-secondary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>`);
           footer.push(`<button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>`);
         }
         if (!['CLOSED','CANCELLED'].includes(s))
           footer.push(`<button class="btn btn-danger" onclick="closeModal();opsRejectOrder('${id}')">Cancel Order</button>`);
       } else {
+        if (s==='DRAFT')
+          footer.push(`<button class="btn btn-gold btn-sm" onclick="closeModal();submitDraftOrder('${id}')">Submit Order</button>`);
         if (s==='SUBMITTED'||s==='APPROVED')
           footer.push(`<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>`);
       }
@@ -2175,6 +2223,19 @@ async function confirmCancelOrder(id) {
   closeModal();
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
   if (res) { showToast(`Order ${id} cancelled`); navigate(isClient ? 'my_orders' : 'orders'); }
+}
+
+async function submitDraftOrder(id) {
+  openModal(`Submit Order ${id}`,
+    `<p style="color:var(--text-muted)">Submit draft order <b>${id}</b> to 4SYZ for processing?</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Not Yet</button>
+     <button class="btn btn-gold" onclick="confirmSubmitDraft('${id}')">Submit Order</button>`);
+}
+
+async function confirmSubmitDraft(id) {
+  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'SUBMITTED', note:'Draft submitted by client' }) });
+  closeModal();
+  if (res) { showToast(`Order ${id} submitted to 4SYZ`); navigate('my_orders'); }
 }
 
 /* ============================================================
@@ -2452,7 +2513,7 @@ async function renderOrderQueue(el) {
     return res;
   }
 
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','PICKED','INVENTORY_CHECK','READY_TO_PICK','IN_SHIPMENT','PARTIALLY_CLOSED'];
+  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
@@ -2893,32 +2954,38 @@ function orderQueueActions(o) {
       btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
       break;
     case 'PENDING_APPROVAL':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Ops override approval')">✓ Approve</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Client/ops approval')">✓ Approve</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
       break;
     case 'APPROVED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','ACKNOWLEDGED','Processing started')">Process</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','ACKNOWLEDGED','Order acknowledged — processing started')">Acknowledge</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Cancel</button>`);
       break;
     case 'ACKNOWLEDGED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
-      btns.push(`<button class="btn btn-gold btn-sm" onclick="advanceOrder('${o.id}','INVENTORY_CHECK','Sent to procurement')">Create PO</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','INVENTORY_CHECK','Inventory check initiated')">Inventory Check</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Cancel</button>`);
       break;
     case 'INVENTORY_CHECK':
-      btns.push(`<button class="btn btn-gold btn-sm" onclick="navigate('procurement')">→ Raise PO</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Stock available — ready for picking')">✓ Stock In</button>`);
+      btns.push(`<button class="btn btn-gold btn-sm" onclick="inventoryShortageModal('${o.id}')">⚠ Raise PO</button>`);
       break;
     case 'VENDOR_PO_RAISED':
       btns.push(`<button class="btn btn-secondary btn-sm" style="cursor:default;opacity:.65" disabled>Awaiting Vendor</button>`);
-      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','APPROVED','PO rejected — reopened for reprocessing')">↩ Reopen</button>`);
+      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','APPROVED','PO rejected — reverted for reprocessing')">↩ Reopen</button>`);
       break;
     case 'READY_TO_PICK':
       btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
       break;
     case 'PICKED':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">Dispatch &rarr; DC</button>`);
+      btns.push(`<button class="btn btn-info btn-sm" onclick="advanceOrder('${o.id}','QUALITY_CHECK','Items picked — quality check & packing')">Quality Check</button>`);
+      break;
+    case 'QUALITY_CHECK':
+      btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">✓ Pass &rarr; Dispatch</button>`);
+      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`);
       break;
     case 'PARTIALLY_CLOSED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Replenishment — next batch ready for picking')">Replenish</button>`);
+      btns.push(`<button class="btn btn-secondary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" onclick="preCloseOrder('${o.id}')">Pre-Close</button>`);
       break;
     case 'IN_SHIPMENT':
@@ -2926,6 +2993,18 @@ function orderQueueActions(o) {
       break;
   }
   return `<div style="display:flex;gap:4px;flex-wrap:wrap">${btns.join('')}</div>`;
+}
+
+function inventoryShortageModal(orderId) {
+  openModal('Stock Shortage — Raise Vendor PO',
+    `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.9rem">
+       Stock is insufficient for order <b>${orderId}</b>. This will mark the order as <b>Vendor PO Required</b> and redirect you to Procurement to raise a PO.
+     </p>
+     <p style="font-size:.85rem;color:var(--warning)">
+       ⚠ Once you raise a PO linked to this order, it will automatically move to <b>VENDOR PO RAISED</b> status.
+     </p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-gold" onclick="closeModal();navigate('procurement');showToast('Raise a PO and link it to order ${orderId}','info')">→ Go to Procurement</button>`);
 }
 
 async function dispatchRemainingModal(orderId) {
@@ -4623,13 +4702,16 @@ function renderWHPickList(el, picklist) {
               <b>${order.order_id}</b>
               <span style="margin-left:8px;color:var(--text-muted)">${order.client_name}</span>
               <span style="margin-left:8px;font-size:.8rem;color:var(--text-muted)">${fmtDate(order.created_at)}</span>
-              <span class="badge badge-${order.status==='PICKED'?'success':'warning'}" style="margin-left:8px">${order.status}</span>
-              ${order.status==='PICKED'&&order.picker_name?`<span style="margin-left:6px;font-size:.78rem;color:var(--text-muted)">Picked by ${order.picker_name}</span>`:''}
+              ${statusBadge(order.status)}
+              ${(order.status==='PICKED'||order.status==='QUALITY_CHECK')&&order.picker_name?`<span style="margin-left:6px;font-size:.78rem;color:var(--text-muted)">Picked by ${order.picker_name}</span>`:''}
             </div>
             <div>
-              ${order.status!=='PICKED'
-                ? `<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${order.order_id}')">Pick Items</button>`
-                : `<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${order.order_id}')">Dispatch &rarr; DC</button>`
+              ${order.status==='QUALITY_CHECK'
+                ? `<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${order.order_id}')">✓ Pass &rarr; Dispatch</button>
+                   <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="advanceOrder('${order.order_id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`
+                : order.status==='PICKED'
+                  ? `<button class="btn btn-info btn-sm" onclick="advanceOrder('${order.order_id}','QUALITY_CHECK','Items picked — quality check &amp; packing')">Quality Check</button>`
+                  : `<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${order.order_id}')">Pick Items</button>`
               }
             </div>
           </div>
