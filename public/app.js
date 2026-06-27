@@ -1783,7 +1783,7 @@ async function renderMyOrders(el) {
     if (!APP._moSearch) APP._moSearch = '';
 
     const STATUS_LABEL = { DRAFT:'Draft', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', ACKNOWLEDGED:'Acknowledged', PICKED:'Picked', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partial', CLOSED:'Delivered', CANCELLED:'Cancelled' };
-    const ORDER_STEPS = ['SUBMITTED','PENDING_APPROVAL','ACKNOWLEDGED','IN_SHIPMENT','CLOSED'];
+    const ORDER_STEPS = ['SUBMITTED','PENDING_APPROVAL','APPROVED','IN_SHIPMENT','CLOSED'];
     const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', ACKNOWLEDGED:'#8b5cf6', PICKED:'#f97316', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
@@ -2100,11 +2100,35 @@ async function viewOrder(id) {
     </div>` : ''}
     ${dcSection}
     ${commentsHtml}`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
-     ${order.status==='PARTIALLY_CLOSED' ? `
-       <button class="btn btn-primary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>
-       <button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>` : ''}
-     ${order.status==='SUBMITTED'||order.status==='APPROVED' ? `<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>` : ''}`
+    (() => {
+      const s = order.status;
+      const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+      const footer = [`<button class="btn btn-secondary" onclick="closeModal()">Close</button>`];
+      if (opsRole) {
+        if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
+          footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','APPROVED','Approved via order detail')">✓ Approve</button>`);
+        if (s==='APPROVED')
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','ACKNOWLEDGED','Processing started')">Process Order</button>`);
+        if (s==='ACKNOWLEDGED'||s==='READY_TO_PICK')
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();pickOrderModal('${id}')">Pick Items</button>`);
+        if (s==='ACKNOWLEDGED')
+          footer.push(`<button class="btn btn-gold" onclick="closeModal();advanceOrder('${id}','INVENTORY_CHECK','Sent to procurement')">Create PO</button>`);
+        if (s==='PICKED')
+          footer.push(`<button class="btn btn-success" onclick="closeModal();createDCFromPicklist('${id}')">Dispatch → DC</button>`);
+        if (s==='VENDOR_PO_RAISED')
+          footer.push(`<button class="btn btn-warning" onclick="closeModal();advanceOrder('${id}','APPROVED','PO rejected — reopened')">↩ Reopen for Reprocessing</button>`);
+        if (s==='PARTIALLY_CLOSED') {
+          footer.push(`<button class="btn btn-primary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>`);
+          footer.push(`<button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>`);
+        }
+        if (!['CLOSED','CANCELLED'].includes(s))
+          footer.push(`<button class="btn btn-danger" onclick="closeModal();opsRejectOrder('${id}')">Cancel Order</button>`);
+      } else {
+        if (s==='SUBMITTED'||s==='APPROVED')
+          footer.push(`<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>`);
+      }
+      return footer.join(' ');
+    })()
   );
 }
 
@@ -2147,9 +2171,10 @@ function cancelOrder(id) {
 }
 
 async function confirmCancelOrder(id) {
-  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note:'Cancelled by user' }) });
+  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note:'Cancelled by client' }) });
   closeModal();
-  if (res) { showToast(`Order ${id} cancelled`); navigate('my_orders'); }
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+  if (res) { showToast(`Order ${id} cancelled`); navigate(isClient ? 'my_orders' : 'orders'); }
 }
 
 /* ============================================================
@@ -2862,20 +2887,45 @@ function oqSetItemView(view) {
 
 function orderQueueActions(o) {
   const btns = [`<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>`];
-  const next = { SUBMITTED:'ACKNOWLEDGED', APPROVED:'ACKNOWLEDGED',
-    INVENTORY_CHECK:'VENDOR_PO_RAISED', VENDOR_PO_RAISED:'READY_TO_PICK',
-    IN_SHIPMENT:'CLOSED' };
-  if (o.status === 'ACKNOWLEDGED' || o.status === 'READY_TO_PICK') {
-    btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
-  } else if (o.status === 'PICKED') {
-    btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">Dispatch &rarr; DC</button>`);
-  } else if (o.status === 'PARTIALLY_CLOSED') {
-    btns.push(`<button class="btn btn-primary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
-    btns.push(`<button class="btn btn-danger btn-sm" onclick="preCloseOrder('${o.id}')">Pre-Close</button>`);
-  } else if (next[o.status]) {
-    btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','${next[o.status]}')">→ ${next[o.status].replace(/_/g,' ')}</button>`);
+  switch (o.status) {
+    case 'SUBMITTED':
+      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Approved by ops')">✓ Approve</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
+      break;
+    case 'PENDING_APPROVAL':
+      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Ops override approval')">✓ Approve</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
+      break;
+    case 'APPROVED':
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','ACKNOWLEDGED','Processing started')">Process</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Cancel</button>`);
+      break;
+    case 'ACKNOWLEDGED':
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
+      btns.push(`<button class="btn btn-gold btn-sm" onclick="advanceOrder('${o.id}','INVENTORY_CHECK','Sent to procurement')">Create PO</button>`);
+      break;
+    case 'INVENTORY_CHECK':
+      btns.push(`<button class="btn btn-gold btn-sm" onclick="navigate('procurement')">→ Raise PO</button>`);
+      break;
+    case 'VENDOR_PO_RAISED':
+      btns.push(`<button class="btn btn-secondary btn-sm" style="cursor:default;opacity:.65" disabled>Awaiting Vendor</button>`);
+      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','APPROVED','PO rejected — reopened for reprocessing')">↩ Reopen</button>`);
+      break;
+    case 'READY_TO_PICK':
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
+      break;
+    case 'PICKED':
+      btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">Dispatch &rarr; DC</button>`);
+      break;
+    case 'PARTIALLY_CLOSED':
+      btns.push(`<button class="btn btn-primary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" onclick="preCloseOrder('${o.id}')">Pre-Close</button>`);
+      break;
+    case 'IN_SHIPMENT':
+      btns.push(`<button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">→ Delivery</button>`);
+      break;
   }
-  return btns.join(' ');
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap">${btns.join('')}</div>`;
 }
 
 async function dispatchRemainingModal(orderId) {
@@ -2919,9 +2969,24 @@ async function confirmPreClose(orderId) {
   if (res) { showToast(`Order ${orderId} pre-closed`); navigate('orders'); }
 }
 
-async function advanceOrder(id, to) {
-  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to }) });
+async function advanceOrder(id, to, note) {
+  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to, note: note||undefined }) });
   if (res) { showToast(`Order ${id} → ${to.replace(/_/g,' ')}`); navigate('orders'); }
+}
+
+function opsRejectOrder(id) {
+  openModal(`Reject / Cancel Order ${id}`,
+    `<p style="color:var(--text-muted);margin:0">Reason for rejection (shown to client):</p>
+     <textarea id="reject-reason" rows="3" style="width:100%;margin-top:10px;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.85rem;resize:vertical" placeholder="e.g. Budget exceeded, items unavailable…"></textarea>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Keep Order</button>
+     <button class="btn btn-danger" onclick="confirmOpsReject('${id}')">Reject & Cancel</button>`);
+}
+
+async function confirmOpsReject(id) {
+  const reason = document.getElementById('reject-reason').value.trim() || 'Rejected by operations';
+  const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note: reason }) });
+  closeModal();
+  if (res) { showToast(`Order ${id} cancelled`); navigate('orders'); }
 }
 
 /* ============================================================

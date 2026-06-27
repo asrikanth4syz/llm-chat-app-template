@@ -165,7 +165,7 @@ const ORDER_FSM: Record<string, string[]> = {
   APPROVED:         ["ACKNOWLEDGED","CANCELLED"],
   ACKNOWLEDGED:     ["PICKED","INVENTORY_CHECK","CANCELLED"],
   INVENTORY_CHECK:  ["VENDOR_PO_RAISED","CANCELLED"],
-  VENDOR_PO_RAISED: ["READY_TO_PICK","CANCELLED"],
+  VENDOR_PO_RAISED: ["APPROVED","READY_TO_PICK","CANCELLED"],
   READY_TO_PICK:    ["PICKED","IN_SHIPMENT"],
   PICKED:           ["IN_SHIPMENT","CANCELLED"],
   IN_SHIPMENT:      ["PARTIALLY_CLOSED","CLOSED"],
@@ -1019,6 +1019,11 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
 
   if (body.status === "ACCEPTED" && po.order_id) {
     await env.DB.prepare("UPDATE orders SET status='READY_TO_PICK',updated_at=datetime('now') WHERE id=? AND status='VENDOR_PO_RAISED'").bind(po.order_id).run();
+    await pushNotification(env, "ops_admin", `PO ${id} accepted by vendor — order ${po.order_id} ready to pick`);
+  }
+  if ((body.status === "REJECTED" || body.status === "CANCELLED") && po.order_id) {
+    await env.DB.prepare("UPDATE orders SET status='APPROVED',updated_at=datetime('now') WHERE id=? AND status='VENDOR_PO_RAISED'").bind(po.order_id).run();
+    await pushNotification(env, "ops_admin", `PO ${id} ${body.status.toLowerCase()} — order ${po.order_id} reverted to APPROVED for reprocessing`);
   }
   if (body.status === "DISPATCHED" && po.order_id) {
     await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status IN ('READY_TO_PICK','VENDOR_PO_RAISED')").bind(po.order_id).run();
