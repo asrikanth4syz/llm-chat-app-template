@@ -303,6 +303,57 @@ function togglePw() {
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
+// ── Profile Modal ──────────────────────────────────────────
+async function openProfileModal() {
+  const profile = await api('/profile');
+  if (!profile) return;
+
+  const roleLabel = (ROLES[profile.role]?.label) || profile.role;
+
+  openModal('My Profile', `
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="width:64px;height:64px;border-radius:50%;background:var(--gold);color:#fff;font-size:1.4rem;font-weight:800;display:flex;align-items:center;justify-content:center;margin:0 auto 10px">${profile.initials}</div>
+      <div style="font-weight:800;font-size:1rem;color:var(--navy)">${profile.name}</div>
+      <div style="font-size:.8rem;color:var(--text-muted);margin-top:2px">${profile.email} · ${roleLabel}</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin-bottom:16px">
+    <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:10px">Edit Profile</div>
+    <div class="form-group"><label>Display Name</label><input type="text" id="prof-name" value="${profile.name}"></div>
+    <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:16px 0 10px">Change Password</div>
+    <div class="form-group"><label>Current Password</label><input type="password" id="prof-cur-pw" placeholder="Enter current password"></div>
+    <div class="form-group"><label>New Password</label><input type="password" id="prof-new-pw" placeholder="Enter new password (min 6 chars)"></div>
+    <div class="form-group"><label>Confirm New Password</label><input type="password" id="prof-conf-pw" placeholder="Confirm new password"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>`);
+}
+
+async function saveProfile() {
+  const name = document.getElementById('prof-name').value.trim();
+  const curPw = document.getElementById('prof-cur-pw').value;
+  const newPw = document.getElementById('prof-new-pw').value;
+  const confPw = document.getElementById('prof-conf-pw').value;
+
+  if (!name) { showToast('Name cannot be empty', 'error'); return; }
+  if (newPw && newPw.length < 6) { showToast('New password must be at least 6 characters', 'error'); return; }
+  if (newPw && newPw !== confPw) { showToast('Passwords do not match', 'error'); return; }
+
+  const body = { name };
+  if (newPw) { body.current_password = curPw; body.new_password = newPw; }
+
+  const res = await api('/profile', { method:'PATCH', body: JSON.stringify(body) });
+  if (!res) return;
+
+  // Update local state and UI
+  APP.user.name = res.name;
+  APP.user.initials = res.initials;
+  document.getElementById('user-name').textContent = res.name;
+  document.getElementById('user-avatar').textContent = res.initials;
+  document.getElementById('topbar-avatar').textContent = res.initials;
+
+  closeModal();
+  showToast('Profile updated');
+}
+
 // ── App init ───────────────────────────────────────────────
 function initApp() {
   const u = APP.user;

@@ -243,6 +243,10 @@ export default {
       if (path==="/api/users"                   && method==="POST")  return handleCreateUser(request,env);
       if (path.match(/^\/api\/users\/[^/]+$/)   && method==="PATCH") return handlePatchUser(request,env,path);
 
+      // Profile (self)
+      if (path==="/api/profile" && method==="GET")   return handleGetProfile(request,env);
+      if (path==="/api/profile" && method==="PATCH") return handlePatchProfile(request,env);
+
       // Notifications
       if (path==="/api/notifications"             && method==="GET")  return handleListNotifications(request,env);
       if (path==="/api/notifications/read-all"    && method==="POST") return handleReadAllNotifications(request,env);
@@ -1587,6 +1591,49 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
   await env.DB.prepare(`UPDATE users SET ${updates.join(",")} WHERE id=?`).bind(...vals).run();
   await audit(env, user, "UPDATE", "user", id, undefined, JSON.stringify({active:body.active,role:body.role}));
   return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PROFILE (self-service)
+// ════════════════════════════════════════════════════════════════════
+
+async function handleGetProfile(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const row = await env.DB.prepare("SELECT id,name,email,role,org,initials FROM users WHERE id=?")
+    .bind(user!.sub).first() as Record<string,string>|null;
+  if (!row) return json({error:"User not found"}, 404);
+  return json(row);
+}
+
+async function handlePatchProfile(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as {name?:string; current_password?:string; new_password?:string};
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+
+  if (body.name && body.name.trim()) {
+    const initials = body.name.trim().split(/\s+/).map((w:string)=>w[0]||'').join('').toUpperCase().slice(0,2);
+    fields.push("name=?"); vals.push(body.name.trim());
+    fields.push("initials=?"); vals.push(initials);
+  }
+
+  if (body.new_password) {
+    if (!body.current_password) return json({error:"Current password required"}, 400);
+    const row = await env.DB.prepare("SELECT password_hash FROM users WHERE id=?").bind(user!.sub).first() as {password_hash:string}|null;
+    if (!row) return json({error:"User not found"}, 404);
+    const hash = row.password_hash;
+    const valid = hash.startsWith("hash:") ? await verifyPassword(body.current_password, hash.slice(5)) : body.current_password === hash;
+    if (!valid) return json({error:"Current password is incorrect"}, 400);
+    fields.push("password_hash=?"); vals.push(`hash:${await hashPassword(body.new_password)}`);
+  }
+
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(user!.sub);
+  await env.DB.prepare(`UPDATE users SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  const updated = await env.DB.prepare("SELECT id,name,email,role,org,initials FROM users WHERE id=?").bind(user!.sub).first();
+  return json(updated);
 }
 
 // ════════════════════════════════════════════════════════════════════
