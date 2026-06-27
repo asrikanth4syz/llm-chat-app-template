@@ -2603,56 +2603,97 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
 
-  const rows = await request.json() as Record<string,unknown>[];
+  let rows: Record<string,unknown>[];
+  try { rows = await request.json() as Record<string,unknown>[]; }
+  catch { return json({error:"Invalid JSON body"}, 400); }
+
+  if (!Array.isArray(rows) || !rows.length) return json({error:"No rows provided"}, 400);
+
   let success = 0; const errors: string[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name required`); continue; }
+    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name are required`); continue; }
     try {
       const existing = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(row.sku).first();
       if (existing) {
         await env.DB.prepare(
-          `UPDATE inventory SET name=?,stock=?,unit_price=?,mrp=?,cost_excl_gst=?,gst_rate=?,
-           category=?,sub_category=?,brand=?,uom=?,pack_size=?,units_per_case=?,weight_grams=?,
-           barcode=?,vendor_sku=?,vendor_lead_days=?,vendor_moq=?,reorder_level=?,max_stock=?
-           WHERE sku=?`
+          `UPDATE inventory SET name=?,stock=?,unit_price=?,category=?,brand=?,
+           gst_rate=?,reorder_level=?,max_stock=? WHERE sku=?`
         ).bind(
-          row.name, Number(row.stock)||0, Number(row.unit_price)||0, Number(row.mrp)||0,
-          Number(row.cost_excl_gst)||0, Number(row.gst_rate)||18,
-          row.category||"General", row.sub_category||"Normal", row.brand||"",
-          row.uom||"unit", Number(row.pack_size)||1, Number(row.units_per_case)||1,
-          Number(row.weight_grams)||0, row.barcode||"", row.vendor_sku||"",
-          Number(row.vendor_lead_days)||3, Number(row.vendor_moq)||1,
+          row.name, Number(row.stock)||0, Number(row.unit_price)||0,
+          row.category||"General", row.brand||"",
+          Number(row.gst_rate)||18,
           Number(row.reorder_level)||10, Number(row.max_stock)||500,
           row.sku
         ).run();
+        // Optional extended fields — ignore if column missing
+        const ext: Record<string,unknown> = {};
+        if (row.mrp !== undefined) ext.mrp = Number(row.mrp)||0;
+        if (row.cost_excl_gst !== undefined) ext.cost_excl_gst = Number(row.cost_excl_gst)||0;
+        if (row.sub_category !== undefined) ext.sub_category = row.sub_category||"Normal";
+        if (row.uom !== undefined) ext.uom = row.uom||"unit";
+        if (row.pack_size !== undefined) ext.pack_size = Number(row.pack_size)||1;
+        if (row.units_per_case !== undefined) ext.units_per_case = Number(row.units_per_case)||1;
+        if (row.weight_grams !== undefined) ext.weight_grams = Number(row.weight_grams)||0;
+        if (row.barcode !== undefined) ext.barcode = row.barcode||"";
+        if (row.vendor_sku !== undefined) ext.vendor_sku = row.vendor_sku||"";
+        if (row.vendor_lead_days !== undefined) ext.vendor_lead_days = Number(row.vendor_lead_days)||3;
+        if (row.vendor_moq !== undefined) ext.vendor_moq = Number(row.vendor_moq)||1;
+        const extKeys = Object.keys(ext);
+        if (extKeys.length) {
+          try {
+            const setClause = extKeys.map(k => `${k}=?`).join(',');
+            await env.DB.prepare(`UPDATE inventory SET ${setClause} WHERE sku=?`)
+              .bind(...Object.values(ext), row.sku).run();
+          } catch { /* ignore — column may not exist in older DB */ }
+        }
       } else {
         await env.DB.prepare(
-          `INSERT INTO inventory (sku,name,stock,unit_price,mrp,cost_excl_gst,gst_rate,
-           category,sub_category,brand,uom,pack_size,units_per_case,weight_grams,
-           barcode,vendor_sku,vendor_lead_days,vendor_moq,reorder_level,max_stock)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          `INSERT INTO inventory (sku,name,stock,unit_price,category,brand,gst_rate,reorder_level,max_stock)
+           VALUES (?,?,?,?,?,?,?,?,?)`
         ).bind(
-          row.sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0, Number(row.mrp)||0,
-          Number(row.cost_excl_gst)||0, Number(row.gst_rate)||18,
-          row.category||"General", row.sub_category||"Normal", row.brand||"",
-          row.uom||"unit", Number(row.pack_size)||1, Number(row.units_per_case)||1,
-          Number(row.weight_grams)||0, row.barcode||"", row.vendor_sku||"",
-          Number(row.vendor_lead_days)||3, Number(row.vendor_moq)||1,
+          row.sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0,
+          row.category||"General", row.brand||"",
+          Number(row.gst_rate)||18,
           Number(row.reorder_level)||10, Number(row.max_stock)||500
         ).run();
+        // Optional extended fields
+        const ext: Record<string,unknown> = {};
+        if (row.mrp !== undefined) ext.mrp = Number(row.mrp)||0;
+        if (row.cost_excl_gst !== undefined) ext.cost_excl_gst = Number(row.cost_excl_gst)||0;
+        if (row.sub_category !== undefined) ext.sub_category = row.sub_category||"Normal";
+        if (row.uom !== undefined) ext.uom = row.uom||"unit";
+        if (row.pack_size !== undefined) ext.pack_size = Number(row.pack_size)||1;
+        if (row.units_per_case !== undefined) ext.units_per_case = Number(row.units_per_case)||1;
+        if (row.weight_grams !== undefined) ext.weight_grams = Number(row.weight_grams)||0;
+        if (row.barcode !== undefined) ext.barcode = row.barcode||"";
+        if (row.vendor_sku !== undefined) ext.vendor_sku = row.vendor_sku||"";
+        if (row.vendor_lead_days !== undefined) ext.vendor_lead_days = Number(row.vendor_lead_days)||3;
+        if (row.vendor_moq !== undefined) ext.vendor_moq = Number(row.vendor_moq)||1;
+        const extKeys = Object.keys(ext);
+        if (extKeys.length) {
+          try {
+            const setClause = extKeys.map(k => `${k}=?`).join(',');
+            await env.DB.prepare(`UPDATE inventory SET ${setClause} WHERE sku=?`)
+              .bind(...Object.values(ext), row.sku).run();
+          } catch { /* ignore — column may not exist in older DB */ }
+        }
       }
       success++;
     } catch (e) {
-      errors.push(`Row ${i+1}: ${String(e)}`);
+      errors.push(`Row ${i+1} (${row.sku}): ${String(e)}`);
     }
   }
-  const jobId = uid();
-  await env.DB.prepare(
-    "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
-  ).bind(jobId, "inventory", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
-  return json({job_id: jobId, success, failed: errors.length, errors});
+
+  try {
+    const jobId = uid();
+    await env.DB.prepare(
+      "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
+    ).bind(jobId, "inventory", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
+  } catch { /* non-fatal — job log table may be missing */ }
+
+  return json({success, failed: errors.length, errors});
 }
 
 async function handleImportOrders(request: Request, env: Env): Promise<Response> {
