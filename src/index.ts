@@ -214,6 +214,7 @@ export default {
       // Vendors
       if (path==="/api/vendors"  && method==="GET")  return handleListVendors(request,env);
       if (path==="/api/vendors"  && method==="POST") return handleAddVendor(request,env);
+      if (path.match(/^\/api\/vendors\/[^/]+$/) && method==="PATCH") return handlePatchVendor(request,env,path);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
@@ -897,7 +898,7 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
 async function handleListVendors(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT * FROM vendors WHERE active=1 ORDER BY name").all();
+  const {results} = await env.DB.prepare("SELECT * FROM vendors ORDER BY name").all();
   return json(results);
 }
 
@@ -906,12 +907,31 @@ async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const id = `v${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO vendors (id,name,category,contact_email,contact_phone) VALUES (?,?,?,?,?)")
-    .bind(id,body.name,body.category,body.contact_email||null,body.contact_phone||null).run();
+  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,contact_email,contact_phone) VALUES (?,?,?,?,?,?)")
+    .bind(id,body.name,body.category,body.location||'',body.contact_email||null,body.contact_phone||null).run();
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
     `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor ID: ${id}\n\nRegards,\n4SYZ Smart Pantry Team`);
   await audit(env, user, "CREATE", "vendor", id, undefined, body.name as string);
   return json({id}, 201);
+}
+
+async function handlePatchVendor(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as Record<string,unknown>;
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  if (body.name          !== undefined) { fields.push("name=?");          vals.push(body.name||''); }
+  if (body.category      !== undefined) { fields.push("category=?");      vals.push(body.category||''); }
+  if (body.contact_email !== undefined) { fields.push("contact_email=?"); vals.push(body.contact_email||null); }
+  if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(body.contact_phone||null); }
+  if (body.location      !== undefined) { fields.push("location=?");      vals.push(body.location||''); }
+  if (body.active        !== undefined) { fields.push("active=?");        vals.push(body.active); }
+  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE vendors SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  return json({id});
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1446,12 +1466,16 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   const body = await request.json() as Record<string,unknown>;
   const fields: string[] = [];
   const vals: unknown[] = [];
-  if (body.monthly_budget !== undefined)    { fields.push("monthly_budget=?");    vals.push(body.monthly_budget); }
-  if (body.approval_threshold !== undefined){ fields.push("approval_threshold=?"); vals.push(body.approval_threshold); }
-  if (body.health_score !== undefined)      { fields.push("health_score=?");       vals.push(body.health_score); }
-  if (body.zone          !== undefined) { fields.push("zone=?");          vals.push(body.zone||''); }
-  if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(body.contact_phone||''); }
-  if (body.map_pin       !== undefined) { fields.push("map_pin=?");       vals.push(body.map_pin||''); }
+  if (body.name               !== undefined) { fields.push("name=?");               vals.push(body.name||''); }
+  if (body.contact_name       !== undefined) { fields.push("contact_name=?");       vals.push(body.contact_name||''); }
+  if (body.contact_email      !== undefined) { fields.push("contact_email=?");      vals.push(body.contact_email||''); }
+  if (body.monthly_budget     !== undefined) { fields.push("monthly_budget=?");     vals.push(body.monthly_budget); }
+  if (body.approval_threshold !== undefined) { fields.push("approval_threshold=?"); vals.push(body.approval_threshold); }
+  if (body.health_score       !== undefined) { fields.push("health_score=?");       vals.push(body.health_score); }
+  if (body.zone               !== undefined) { fields.push("zone=?");               vals.push(body.zone||''); }
+  if (body.contact_phone      !== undefined) { fields.push("contact_phone=?");      vals.push(body.contact_phone||''); }
+  if (body.map_pin            !== undefined) { fields.push("map_pin=?");            vals.push(body.map_pin||''); }
+  if (body.active             !== undefined) { fields.push("active=?");             vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
   await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();

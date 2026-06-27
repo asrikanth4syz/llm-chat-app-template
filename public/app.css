@@ -728,7 +728,7 @@ tbody tr:hover { background: var(--blue-light) !important; }
 .text-danger { color: var(--danger) !important; }
 
 /* CART PANEL */
-.cart-panel { width: 280px; flex-shrink: 0; background: white; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; position: sticky; top: 16px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; }
+.cart-panel { width: 280px; flex-shrink: 0; background: white; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; position: sticky; top: 16px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; transform: none; }
 .cart-header { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .cart-title { font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .cart-count { font-size: .8rem; color: var(--text-muted); }
@@ -763,6 +763,14 @@ tbody tr:hover { background: var(--blue-light) !important; }
 
 /* NAV BADGE */
 .nav-badge { background: var(--danger); color: white; font-size: .65rem; padding: 1px 5px; border-radius: 10px; margin-left: auto; font-weight: 700; }
+
+/* COLLAPSIBLE NAV SECTIONS */
+.nav-section-toggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 4px; user-select: none; }
+.nav-section-toggle .nav-section-label { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); opacity: .7; }
+.nav-section-toggle .nav-toggle-arrow { font-size: .6rem; color: var(--text-muted); transition: transform .2s; opacity: .6; }
+.nav-section-toggle.collapsed .nav-toggle-arrow { transform: rotate(-90deg); }
+.nav-section-body { overflow: hidden; transition: max-height .25s ease; }
+.nav-section-body.collapsed { max-height: 0 !important; }
 
 /* MISC */
 .su-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--gold); color: white; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; flex-shrink: 0; }

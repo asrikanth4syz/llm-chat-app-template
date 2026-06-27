@@ -405,14 +405,58 @@ function getDefaultPage() {
 function buildNav() {
   const nav = APP.user.nav;
   const items = NAV[nav] || NAV.platform;
-  document.getElementById('sidebar-nav').innerHTML = items.map(item => {
-    if (item.section) return `<div class="nav-section"><span class="nav-section-label">${item.section}</span></div>`;
-    return `<div class="nav-item" id="nav-${item.id}" onclick="navigate('${item.id}')" title="${item.label}">
-      <span class="nav-item-icon">${item.icon(18)}</span>
-      <span class="nav-item-label">${item.label}</span>
-      ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
-    </div>`;
+  if (!APP._navCollapsed) APP._navCollapsed = {};
+
+  // Group items into sections
+  const sections = [];
+  let current = null;
+  items.forEach(item => {
+    if (item.section) {
+      current = { label: item.section, items: [] };
+      sections.push(current);
+    } else if (current) {
+      current.items.push(item);
+    }
+  });
+
+  const html = sections.map((sec, idx) => {
+    const isFirst = idx === 0;
+    const collapsed = !isFirst && APP._navCollapsed[sec.label];
+    const bodyMaxH = sec.items.length * 44 + 'px';
+
+    const headerHtml = isFirst
+      ? `<div class="nav-section"><span class="nav-section-label">${sec.label}</span></div>`
+      : `<div class="nav-section-toggle${collapsed ? ' collapsed' : ''}" onclick="toggleNavSection('${sec.label.replace(/'/g,"\\'")}')">
+           <span class="nav-section-label">${sec.label}</span>
+           <span class="nav-toggle-arrow">▶</span>
+         </div>`;
+
+    const itemsHtml = sec.items.map(item => `
+      <div class="nav-item" id="nav-${item.id}" onclick="navigate('${item.id}')" title="${item.label}">
+        <span class="nav-item-icon">${item.icon(18)}</span>
+        <span class="nav-item-label">${item.label}</span>
+        ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
+      </div>`).join('');
+
+    return headerHtml + (isFirst
+      ? itemsHtml
+      : `<div class="nav-section-body${collapsed ? ' collapsed' : ''}" id="nav-sec-${sec.label.replace(/\s+/g,'_')}" style="max-height:${collapsed ? '0' : bodyMaxH}">${itemsHtml}</div>`);
   }).join('');
+
+  document.getElementById('sidebar-nav').innerHTML = html;
+}
+
+function toggleNavSection(label) {
+  if (!APP._navCollapsed) APP._navCollapsed = {};
+  APP._navCollapsed[label] = !APP._navCollapsed[label];
+  const key = label.replace(/\s+/g,'_');
+  const body = document.getElementById('nav-sec-' + key);
+  const toggle = body?.previousElementSibling;
+  if (!body || !toggle) return;
+  const collapsed = APP._navCollapsed[label];
+  body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
+  body.classList.toggle('collapsed', collapsed);
+  toggle.classList.toggle('collapsed', collapsed);
 }
 
 function toggleSidebar() {
@@ -3730,13 +3774,34 @@ async function saveNewItem() {
    VENDORS
    ============================================================ */
 async function renderVendors(el) {
-  const vendors = await api('/vendors');
-  if (!vendors) return;
+  const allVendors = await api('/vendors');
+  if (!allVendors) return;
 
-  const avgOnTime  = vendors.length ? Math.round(vendors.reduce((s,v)=>s+(v.on_time_rate||0),0)/vendors.length) : 0;
-  const avgFill    = vendors.length ? Math.round(vendors.reduce((s,v)=>s+(v.fill_rate||0),0)/vendors.length) : 0;
-  const topRated   = [...vendors].sort((a,b)=>(b.rating||0)-(a.rating||0)).slice(0,1)[0];
-  const atRisk     = vendors.filter(v=>(v.on_time_rate||0)<75||(v.fill_rate||0)<85).length;
+  // State for filtering
+  if (!APP._vendorSearch) APP._vendorSearch = '';
+  if (!APP._vendorCat) APP._vendorCat = '';
+  if (!APP._vendorLoc) APP._vendorLoc = '';
+  if (!APP._vendorShowInactive) APP._vendorShowInactive = false;
+
+  function applyFilters(list) {
+    const q = (APP._vendorSearch||'').toLowerCase();
+    const cat = APP._vendorCat||'';
+    const loc = (APP._vendorLoc||'').toLowerCase();
+    return list.filter(v => {
+      if (!APP._vendorShowInactive && v.active===0) return false;
+      if (q && !v.name.toLowerCase().includes(q) && !(v.category||'').toLowerCase().includes(q)) return false;
+      if (cat && v.category !== cat) return false;
+      if (loc && !(v.location||'').toLowerCase().includes(loc)) return false;
+      return true;
+    });
+  }
+
+  const vendors = applyFilters(allVendors);
+  const activeVendors = allVendors.filter(v=>v.active!==0);
+  const avgOnTime  = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.on_time_rate||0),0)/activeVendors.length) : 0;
+  const avgFill    = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.fill_rate||0),0)/activeVendors.length) : 0;
+  const atRisk     = activeVendors.filter(v=>(v.on_time_rate||0)<75||(v.fill_rate||0)<85).length;
+  const allCategories = [...new Set(allVendors.map(v=>v.category).filter(Boolean))].sort();
 
   function scoreColor(val) {
     return val >= 90 ? 'var(--success)' : val >= 75 ? '#d97706' : 'var(--danger)';
@@ -3798,11 +3863,15 @@ async function renderVendors(el) {
       <!-- Meta row -->
       <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:14px;flex-wrap:wrap">
         <span>⏱ ${v.avg_lead_days||'—'}d lead time</span>
+        ${v.location?`<span>📍 ${v.location}</span>`:''}
         ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a></span>`:''}
         ${v.contact_phone?`<span>📞 ${v.contact_phone}</span>`:''}
       </div>
 
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="viewVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">View</button>
+        <button class="btn btn-gold btn-sm" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit</button>
+        <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'#fee2e2'};color:${v.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleVendorActive('${v.id}','${v.name.replace(/'/g,"\\'")}',${v.active===0?0:1})">${v.active===0?'Enable':'Disable'}</button>
         <button class="btn btn-gold btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
         <button class="btn btn-secondary btn-sm" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
       </div>
@@ -3813,7 +3882,7 @@ async function renderVendors(el) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Vendor Directory</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${vendors.length} vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${activeVendors.length} active vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
@@ -3821,11 +3890,30 @@ async function renderVendors(el) {
     </div>
   </div>
 
+  <!-- Search & Filter bar -->
+  <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <input type="text" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
+      style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
+      oninput="APP._vendorSearch=this.value;renderVendors(document.getElementById('main-content'))">
+    <select style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:#fff"
+      onchange="APP._vendorCat=this.value;renderVendors(document.getElementById('main-content'))">
+      <option value="">All Categories</option>
+      ${allCategories.map(c=>`<option value="${c}"${APP._vendorCat===c?' selected':''}>${c}</option>`).join('')}
+    </select>
+    <input type="text" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
+      style="width:160px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
+      oninput="APP._vendorLoc=this.value;renderVendors(document.getElementById('main-content'))">
+    <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
+      <input type="checkbox" ${APP._vendorShowInactive?'checked':''} onchange="APP._vendorShowInactive=this.checked;renderVendors(document.getElementById('main-content'))"> Show inactive
+    </label>
+    ${(APP._vendorSearch||APP._vendorCat||APP._vendorLoc)?`<button class="btn btn-secondary btn-sm" onclick="APP._vendorSearch='';APP._vendorCat='';APP._vendorLoc='';renderVendors(document.getElementById('main-content'))">Clear</button>`:''}
+  </div>
+
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Vendors</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${vendors.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeVendors.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg On-time Rate</div>
@@ -3843,6 +3931,7 @@ async function renderVendors(el) {
   </div>
 
   <!-- Vendor cards -->
+  ${vendors.length===0?`<div style="text-align:center;padding:40px;color:var(--text-muted)">No vendors match your search.</div>`:''}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
     ${vendors.sort((a,b)=>{
       const aRisk = ((a.on_time_rate||0)<75||(a.fill_rate||0)<85)?1:0;
@@ -3856,9 +3945,10 @@ async function renderVendors(el) {
 function addVendorModal() {
   openModal('Add Vendor',
     `<div class="form-group"><label>Company Name</label><input type="text" id="v-name"></div>
-     <div class="form-group"><label>Category</label>
+     <div class="form-group"><label>Category / Brand</label>
        <select id="v-cat"><option>Beverages & Snacks</option><option>Office Supplies</option><option>Hygiene & Cleaning</option><option>Office Furniture</option><option>Electronics</option></select>
      </div>
+     <div class="form-group"><label>Location (City/Area)</label><input type="text" id="v-loc" placeholder="e.g. Bengaluru, BTM Layout"></div>
      <div class="form-group"><label>Contact Email</label><input type="email" id="v-email"></div>
      <div class="form-group"><label>Contact Phone</label><input type="tel" id="v-phone"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -3869,6 +3959,7 @@ async function saveVendor() {
   const body = {
     name: document.getElementById('v-name').value,
     category: document.getElementById('v-cat').value,
+    location: document.getElementById('v-loc').value,
     contact_email: document.getElementById('v-email').value,
     contact_phone: document.getElementById('v-phone').value,
   };
@@ -3876,6 +3967,61 @@ async function saveVendor() {
   const res = await api('/vendors', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast(`Vendor added — welcome email sent`); navigate('vendors'); }
+}
+
+function viewVendorModal(v) {
+  const onTimeColor = v.on_time_rate>=90?'var(--success)':v.on_time_rate>=75?'#d97706':'var(--danger)';
+  const fillColor   = v.fill_rate>=90?'var(--success)':v.fill_rate>=75?'#d97706':'var(--danger)';
+  openModal(`Vendor: ${v.name}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${v.name}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Category / Brand</div><div style="font-weight:600">${v.category||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Location</div><div style="font-weight:600">${v.location||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a>`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${v.contact_phone||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Rating</div><div style="font-weight:600">${(+v.rating||0).toFixed(1)} / 5.0</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">On-time Rate</div><div style="font-weight:700;color:${onTimeColor}">${pct(v.on_time_rate||0)}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Fill Rate</div><div style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Avg Lead Days</div><div style="font-weight:600">${v.avg_lead_days||'—'} days</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
+    </div>`,
+    `<button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
+     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+function editVendorModal(v) {
+  const cats = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics'];
+  if (v.category && !cats.includes(v.category)) cats.push(v.category);
+  openModal(`Edit Vendor: ${v.name}`, `
+    <div class="form-group"><label>Company Name</label><input type="text" id="ev-name" value="${v.name||''}"></div>
+    <div class="form-group"><label>Category / Brand</label>
+      <select id="ev-cat">${cats.map(c=>`<option value="${c}"${v.category===c?' selected':''}>${c}</option>`).join('')}</select>
+    </div>
+    <div class="form-group"><label>Location (City/Area)</label><input type="text" id="ev-loc" value="${v.location||''}" placeholder="e.g. Bengaluru, BTM Layout"></div>
+    <div class="form-group"><label>Contact Email</label><input type="email" id="ev-email" value="${v.contact_email||''}"></div>
+    <div class="form-group"><label>Contact Phone</label><input type="tel" id="ev-phone" value="${v.contact_phone||''}"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveEditVendor('${v.id}')">Save Changes</button>`);
+}
+
+async function saveEditVendor(id) {
+  const body = {
+    name: document.getElementById('ev-name').value,
+    category: document.getElementById('ev-cat').value,
+    location: document.getElementById('ev-loc').value,
+    contact_email: document.getElementById('ev-email').value,
+    contact_phone: document.getElementById('ev-phone').value,
+  };
+  if (!body.name) { showToast('Vendor name required','error'); return; }
+  const res = await api('/vendors/' + id, { method:'PATCH', body: JSON.stringify(body) });
+  if (res) { closeModal(); showToast('Vendor updated'); APP._vendorSearch=''; APP._vendorCat=''; APP._vendorLoc=''; navigate('vendors'); }
+}
+
+async function toggleVendorActive(id, name, active) {
+  const newState = active ? 0 : 1;
+  if (!confirm(`${newState?'Enable':'Disable'} vendor "${name}"?`)) return;
+  const res = await api('/vendors/' + id, { method:'PATCH', body: JSON.stringify({ active: newState }) });
+  if (res) { showToast(`Vendor ${newState?'enabled':'disabled'}`); navigate('vendors'); }
 }
 
 async function newPOForVendor(vendorId, vendorName) {
@@ -5363,7 +5509,10 @@ async function renderClients(el) {
         👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${c.contact_phone}</a>`:''}
       </div>` : ''}
 
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="viewClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')})">View</button>
+        <button class="btn btn-gold btn-sm" onclick="editClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')})">Edit</button>
+        <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'#fee2e2'};color:${c.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleClientActive('${c.id}','${c.name.replace(/'/g,"\\'")}',${c.active===0?0:1})">${c.active===0?'Enable':'Disable'}</button>
         <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button>
       </div>
     </div>`;
@@ -5448,6 +5597,66 @@ async function saveClient() {
   if (res) { showToast('Client added'); navigate('clients'); }
 }
 
+
+function viewClientModal(c) {
+  const hColor = c.health_score>=85?'var(--success)':c.health_score>=70?'#d97706':'var(--danger)';
+  openModal(`Client: ${c.name}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${c.name}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Zone</div><div style="font-weight:600">${c.zone||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Name</div><div style="font-weight:600">${c.contact_name||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Health Score</div><div style="font-weight:700;color:${hColor}">★ ${c.health_score||0}/100</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div><div style="font-weight:600">${fmt(c.monthly_budget)}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Approval Threshold</div><div style="font-weight:600">${fmt(c.approval_threshold)}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Spent This Month</div><div style="font-weight:600">${fmt(c.spent_this_month)}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${c.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
+    </div>`,
+    `<button class="btn btn-primary" onclick="editClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')});closeModal()">Edit</button>
+     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+function editClientModal(c) {
+  openModal(`Edit Client: ${c.name}`, `
+    <div class="form-group"><label>Company Name</label><input type="text" id="ecl-name" value="${c.name||''}"></div>
+    <div class="form-group"><label>Contact Name</label><input type="text" id="ecl-cname" value="${c.contact_name||''}"></div>
+    <div class="form-group"><label>Contact Email</label><input type="email" id="ecl-email" value="${c.contact_email||''}"></div>
+    <div class="form-group"><label>Contact Phone</label><input type="tel" id="ecl-phone" value="${c.contact_phone||''}"></div>
+    <div class="form-group"><label>Location Zone</label>
+      <select id="ecl-zone">
+        <option value="">— Select Zone —</option>
+        ${['EGL','BTP','BTM','PV','FW','Other'].map(z=>`<option value="${z}"${c.zone===z?' selected':''}>${z}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="ecl-budget" value="${c.monthly_budget||0}"></div>
+    <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="ecl-threshold" value="${c.approval_threshold||0}"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveEditClient('${c.id}')">Save Changes</button>`);
+}
+
+async function saveEditClient(id) {
+  const body = {
+    name: document.getElementById('ecl-name').value,
+    contact_name: document.getElementById('ecl-cname').value,
+    contact_email: document.getElementById('ecl-email').value,
+    contact_phone: document.getElementById('ecl-phone').value,
+    zone: document.getElementById('ecl-zone').value,
+    monthly_budget: +document.getElementById('ecl-budget').value,
+    approval_threshold: +document.getElementById('ecl-threshold').value,
+  };
+  if (!body.name) { showToast('Name required','error'); return; }
+  const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify(body) });
+  if (res) { closeModal(); showToast('Client updated'); navigate('clients'); }
+}
+
+async function toggleClientActive(id, name, active) {
+  const newState = active ? 0 : 1;
+  const label = newState ? 'enable' : 'disable';
+  if (!confirm(`${newState?'Enable':'Disable'} client "${name}"?`)) return;
+  const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify({ active: newState }) });
+  if (res) { showToast(`Client ${label}d`); navigate('clients'); }
+}
 
 /* ============================================================
    SERVICE DESK
