@@ -3872,9 +3872,9 @@ async function editInventoryItem(sku) {
 
   openModal(`Edit Item — ${sku}`,
     `<!-- Section tabs -->
-    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
+    <div style="display:flex;gap:6px;border-bottom:2px solid var(--border);margin-bottom:16px;padding-bottom:10px">
       ${[['prod','Product ID','var(--primary)'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
-        `<button class="ei-tab" data-tab="${id}" onclick="switchEITab('${id}')" style="padding:8px 16px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .2s;margin-bottom:-2px">${label}</button>`
+        `<button class="ei-tab" data-tab="${id}" data-color="${color}" onclick="switchEITab('${id}')" style="padding:6px 14px;border:none;border-radius:20px;background:transparent;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .18s;white-space:nowrap">${label}</button>`
       ).join('')}
     </div>
 
@@ -3972,13 +3972,19 @@ async function editInventoryItem(sku) {
 function switchEITab(tab) {
   document.querySelectorAll('.ei-section').forEach(s => s.style.display='none');
   document.querySelectorAll('.ei-tab').forEach(b => {
-    b.style.borderBottomColor = 'transparent';
+    b.style.background = 'transparent';
     b.style.color = 'var(--text-muted)';
+    b.style.fontWeight = '600';
   });
   const sec = document.getElementById('ei-tab-'+tab);
   if (sec) sec.style.display='';
   const btn = document.querySelector(`.ei-tab[data-tab="${tab}"]`);
-  if (btn) { btn.style.borderBottomColor='var(--primary)'; btn.style.color='var(--navy)'; }
+  if (btn) {
+    const color = btn.dataset.color || 'var(--primary)';
+    btn.style.background = color;
+    btn.style.color = '#fff';
+    btn.style.fontWeight = '700';
+  }
 }
 
 function eiVal(id, num=false) { const el=document.getElementById(id); if(!el)return num?0:''; return num?+el.value:el.value; }
