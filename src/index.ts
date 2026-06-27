@@ -912,8 +912,8 @@ async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const id = `v${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,contact_email,contact_phone) VALUES (?,?,?,?,?,?)")
-    .bind(id,body.name,body.category,body.location||'',body.contact_email||null,body.contact_phone||null).run();
+  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(id,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null).run();
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
     `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor ID: ${id}\n\nRegards,\n4SYZ Smart Pantry Team`);
   await audit(env, user, "CREATE", "vendor", id, undefined, body.name as string);
@@ -932,6 +932,8 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
   if (body.contact_email !== undefined) { fields.push("contact_email=?"); vals.push(body.contact_email||null); }
   if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(body.contact_phone||null); }
   if (body.location      !== undefined) { fields.push("location=?");      vals.push(body.location||''); }
+  if (body.address       !== undefined) { fields.push("address=?");       vals.push(body.address||''); }
+  if (body.map_pin       !== undefined) { fields.push("map_pin=?");       vals.push(body.map_pin||''); }
   if (body.active        !== undefined) { fields.push("active=?");        vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
@@ -1458,8 +1460,8 @@ async function handleAddClient(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const id = `c${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin) VALUES (?,?,?,?,?,?,?,?,?)")
-    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'').run();
+  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin,address) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'',body.address||'').run();
   await audit(env, user, "CREATE", "client", id, undefined, body.name as string);
   return json({id}, 201);
 }
@@ -1491,6 +1493,7 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   if (body.zone               !== undefined) { fields.push("zone=?");               vals.push(body.zone||''); }
   if (body.contact_phone      !== undefined) { fields.push("contact_phone=?");      vals.push(body.contact_phone||''); }
   if (body.map_pin            !== undefined) { fields.push("map_pin=?");            vals.push(body.map_pin||''); }
+  if (body.address            !== undefined) { fields.push("address=?");            vals.push(body.address||''); }
   if (body.active             !== undefined) { fields.push("active=?");             vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);

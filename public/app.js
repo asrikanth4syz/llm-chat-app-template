@@ -3841,7 +3841,7 @@ async function renderVendors(el) {
     return list.filter(v => {
       if (!APP._vendorShowInactive && v.active===0) return false;
       if (q && !v.name.toLowerCase().includes(q) && !(v.category||'').toLowerCase().includes(q)) return false;
-      if (cat && v.category !== cat) return false;
+      if (cat && !(v.category||'').split(',').map(s=>s.trim()).includes(cat)) return false;
       if (loc && !(v.location||'').toLowerCase().includes(loc)) return false;
       return true;
     });
@@ -3852,7 +3852,7 @@ async function renderVendors(el) {
   const avgOnTime  = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.on_time_rate||0),0)/activeVendors.length) : 0;
   const avgFill    = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.fill_rate||0),0)/activeVendors.length) : 0;
   const atRisk     = activeVendors.filter(v=>(v.on_time_rate||0)<75||(v.fill_rate||0)<85).length;
-  const allCategories = [...new Set(allVendors.map(v=>v.category).filter(Boolean))].sort();
+  const allCategories = [...new Set([...VENDOR_CATS, ...allVendors.flatMap(v=>(v.category||'').split(',').map(s=>s.trim())).filter(Boolean)])].sort();
 
   function scoreColor(val) {
     return val >= 90 ? 'var(--success)' : val >= 75 ? '#d97706' : 'var(--danger)';
@@ -3877,8 +3877,8 @@ async function renderVendors(el) {
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
           <div>
             <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${v.name}</div>
-            <div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap">
-              <span style="font-size:.68rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${v.category||'—'}</span>
+            <div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
+              ${(v.category||'—').split(',').filter(Boolean).map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.trim()}</span>`).join('')}
               ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
             </div>
           </div>
@@ -3912,12 +3912,16 @@ async function renderVendors(el) {
       </div>
 
       <!-- Meta row -->
-      <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:14px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:${v.address?'6px':'14px'};flex-wrap:wrap">
         <span>⏱ ${v.avg_lead_days||'—'}d lead time</span>
-        ${v.location?`<span>📍 ${v.location}</span>`:''}
+        ${v.location?`<span>🏙 ${v.location}</span>`:''}
         ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a></span>`:''}
         ${v.contact_phone?`<span>📞 ${v.contact_phone}</span>`:''}
       </div>
+      ${v.address||v.map_pin?`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:14px;display:flex;align-items:flex-start;gap:6px">
+        <span style="flex-shrink:0">📍</span>
+        <span>${v.address||''}${(v.address&&v.map_pin)?' · ':''}${v.map_pin?`<a href="${mapsLink(v.map_pin,v.address)}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</span>
+      </div>`:''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" onclick="viewVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">View</button>
@@ -3993,24 +3997,58 @@ async function renderVendors(el) {
   `;
 }
 
+const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationery'];
+
+function vendorCatCheckboxes(prefix, selected) {
+  const sel = (selected||'').split(',').map(s=>s.trim()).filter(Boolean);
+  return `<div class="form-group">
+    <label>Category / Brand <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(select all that apply)</span></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:6px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;padding:12px">
+      ${VENDOR_CATS.map(c=>`
+        <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;cursor:pointer;padding:3px 0">
+          <input type="checkbox" name="${prefix}-cat" value="${c}" ${sel.includes(c)?'checked':''} style="accent-color:var(--navy);width:15px;height:15px"> ${c}
+        </label>`).join('')}
+    </div>
+  </div>`;
+}
+
+function getCheckedCats(prefix) {
+  return [...document.querySelectorAll(`input[name="${prefix}-cat"]:checked`)].map(i=>i.value).join(',');
+}
+
+function vendorFormFields(prefix, v={}) {
+  return `
+    <div class="grid-2">
+      <div class="form-group"><label>Company Name *</label><input type="text" id="${prefix}-name" value="${v.name||''}"></div>
+      <div class="form-group"><label>City / Area</label><input type="text" id="${prefix}-loc" value="${v.location||''}" placeholder="e.g. Bengaluru, BTM Layout"></div>
+    </div>
+    ${vendorCatCheckboxes(prefix, v.category||'')}
+    <div class="form-group"><label>Full Address</label>
+      <textarea id="${prefix}-address" rows="2" style="width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.84rem;resize:vertical">${v.address||''}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Map Location <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(paste Google Maps link, or lat,lng e.g. 12.9716,77.5946)</span></label>
+      <input type="text" id="${prefix}-mappin" value="${v.map_pin||''}" placeholder="https://maps.google.com/... or 12.9716,77.5946">
+    </div>
+    <div class="grid-2">
+      <div class="form-group"><label>Contact Email</label><input type="email" id="${prefix}-email" value="${v.contact_email||''}"></div>
+      <div class="form-group"><label>Contact Phone</label><input type="tel" id="${prefix}-phone" value="${v.contact_phone||''}"></div>
+    </div>`;
+}
+
 function addVendorModal() {
-  openModal('Add Vendor',
-    `<div class="form-group"><label>Company Name</label><input type="text" id="v-name"></div>
-     <div class="form-group"><label>Category / Brand</label>
-       <select id="v-cat"><option>Beverages & Snacks</option><option>Office Supplies</option><option>Hygiene & Cleaning</option><option>Office Furniture</option><option>Electronics</option></select>
-     </div>
-     <div class="form-group"><label>Location (City/Area)</label><input type="text" id="v-loc" placeholder="e.g. Bengaluru, BTM Layout"></div>
-     <div class="form-group"><label>Contact Email</label><input type="email" id="v-email"></div>
-     <div class="form-group"><label>Contact Phone</label><input type="tel" id="v-phone"></div>`,
+  openModal('Add Vendor', vendorFormFields('v'),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveVendor()">Add Vendor</button>`);
 }
 
 async function saveVendor() {
   const body = {
-    name: document.getElementById('v-name').value,
-    category: document.getElementById('v-cat').value,
+    name: document.getElementById('v-name').value.trim(),
+    category: getCheckedCats('v'),
     location: document.getElementById('v-loc').value,
+    address: document.getElementById('v-address').value,
+    map_pin: document.getElementById('v-mappin').value.trim(),
     contact_email: document.getElementById('v-email').value,
     contact_phone: document.getElementById('v-phone').value,
   };
@@ -4020,14 +4058,22 @@ async function saveVendor() {
   if (res) { showToast(`Vendor added — welcome email sent`); navigate('vendors'); }
 }
 
+function catChips(category) {
+  if (!category) return '—';
+  return category.split(',').map(c=>c.trim()).filter(Boolean)
+    .map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px;margin-right:3px">${c}</span>`)
+    .join('');
+}
+
 function viewVendorModal(v) {
   const onTimeColor = v.on_time_rate>=90?'var(--success)':v.on_time_rate>=75?'#d97706':'var(--danger)';
   const fillColor   = v.fill_rate>=90?'var(--success)':v.fill_rate>=75?'#d97706':'var(--danger)';
+  const mapUrl = mapsLink(v.map_pin, v.address);
   openModal(`Vendor: ${v.name}`, `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${v.name}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Category / Brand</div><div style="font-weight:600">${v.category||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Location</div><div style="font-weight:600">${v.location||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">City / Area</div><div style="font-weight:600">${v.location||'—'}</div></div>
+      <div style="grid-column:1/-1"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Category / Brand</div><div>${catChips(v.category)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a>`:'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${v.contact_phone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Rating</div><div style="font-weight:600">${(+v.rating||0).toFixed(1)} / 5.0</div></div>
@@ -4035,31 +4081,26 @@ function viewVendorModal(v) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Fill Rate</div><div style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Avg Lead Days</div><div style="font-weight:600">${v.avg_lead_days||'—'} days</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
-    </div>`,
+    </div>
+    ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
+    ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `<button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
 function editVendorModal(v) {
-  const cats = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics'];
-  if (v.category && !cats.includes(v.category)) cats.push(v.category);
-  openModal(`Edit Vendor: ${v.name}`, `
-    <div class="form-group"><label>Company Name</label><input type="text" id="ev-name" value="${v.name||''}"></div>
-    <div class="form-group"><label>Category / Brand</label>
-      <select id="ev-cat">${cats.map(c=>`<option value="${c}"${v.category===c?' selected':''}>${c}</option>`).join('')}</select>
-    </div>
-    <div class="form-group"><label>Location (City/Area)</label><input type="text" id="ev-loc" value="${v.location||''}" placeholder="e.g. Bengaluru, BTM Layout"></div>
-    <div class="form-group"><label>Contact Email</label><input type="email" id="ev-email" value="${v.contact_email||''}"></div>
-    <div class="form-group"><label>Contact Phone</label><input type="tel" id="ev-phone" value="${v.contact_phone||''}"></div>`,
+  openModal(`Edit Vendor: ${v.name}`, vendorFormFields('ev', v),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveEditVendor('${v.id}')">Save Changes</button>`);
 }
 
 async function saveEditVendor(id) {
   const body = {
-    name: document.getElementById('ev-name').value,
-    category: document.getElementById('ev-cat').value,
+    name: document.getElementById('ev-name').value.trim(),
+    category: getCheckedCats('ev'),
     location: document.getElementById('ev-loc').value,
+    address: document.getElementById('ev-address').value,
+    map_pin: document.getElementById('ev-mappin').value.trim(),
     contact_email: document.getElementById('ev-email').value,
     contact_phone: document.getElementById('ev-phone').value,
   };
@@ -5556,8 +5597,11 @@ async function renderClients(el) {
       </div>` : ''}
 
       <!-- Contact -->
-      ${c.contact_name ? `<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px">
+      ${c.contact_name ? `<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:8px">
         👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${c.contact_phone}</a>`:''}
+      </div>` : ''}
+      ${(c.address||c.map_pin) ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:flex-start;gap:5px">
+        <span>📍</span><span>${c.address||''}${(c.address&&c.map_pin)?' · ':''}${c.map_pin?`<a href="${mapsLink(c.map_pin,c.address)}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</span>
       </div>` : ''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -5608,49 +5652,72 @@ async function renderClients(el) {
   `;
 }
 
+function mapsLink(pin, address) {
+  if (!pin && !address) return null;
+  if (pin && (pin.startsWith('http://') || pin.startsWith('https://'))) return pin;
+  if (pin && /^-?\d+\.\d+,-?\d+\.\d+$/.test(pin.trim())) return `https://www.google.com/maps?q=${pin.trim()}`;
+  const q = address || pin;
+  return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : null;
+}
+
+const ZONE_OPTIONS = ['EGL','BTP','BTM','PV','FW','Other'];
+
+function clientFormFields(prefix, c={}) {
+  return `
+    <div class="grid-2">
+      <div class="form-group"><label>Company Name *</label><input type="text" id="${prefix}-name" value="${c.name||''}"></div>
+      <div class="form-group"><label>Location Zone</label>
+        <select id="${prefix}-zone">
+          <option value="">— Select Zone —</option>
+          ${ZONE_OPTIONS.map(z=>`<option value="${z}"${c.zone===z?' selected':''}>${z}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="form-group"><label>Contact Name</label><input type="text" id="${prefix}-cname" value="${c.contact_name||''}"></div>
+      <div class="form-group"><label>Contact Phone</label><input type="tel" id="${prefix}-phone" value="${c.contact_phone||''}" placeholder="+91 98765 43210"></div>
+    </div>
+    <div class="form-group"><label>Contact Email</label><input type="email" id="${prefix}-email" value="${c.contact_email||''}"></div>
+    <div class="form-group"><label>Full Address</label>
+      <textarea id="${prefix}-address" rows="2" style="width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.84rem;resize:vertical">${c.address||''}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Map Location <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(paste Google Maps link, or lat,lng e.g. 12.9716,77.5946)</span></label>
+      <input type="text" id="${prefix}-mappin" value="${c.map_pin||''}" placeholder="https://maps.google.com/... or 12.9716,77.5946">
+    </div>
+    <div class="grid-2">
+      <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="${prefix}-budget" value="${c.monthly_budget||500000}"></div>
+      <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="${prefix}-threshold" value="${c.approval_threshold||100000}"></div>
+    </div>`;
+}
+
 function addClientModal() {
-  openModal('Add Client',
-    `<div class="form-group"><label>Company Name</label><input type="text" id="cl-name"></div>
-     <div class="form-group"><label>Contact Name</label><input type="text" id="cl-cname"></div>
-     <div class="form-group"><label>Contact Email</label><input type="email" id="cl-email"></div>
-     <div class="form-group"><label>Contact Phone</label><input type="tel" id="cl-phone" placeholder="+91 98765 43210"></div>
-     <div class="form-group">
-       <label>Location Zone</label>
-       <select id="cl-zone">
-         <option value="">— Select Zone —</option>
-         <option value="EGL">EGL</option>
-         <option value="BTP">BTP</option>
-         <option value="BTM">BTM</option>
-         <option value="PV">PV</option>
-         <option value="FW">FW</option>
-         <option value="Other">Other</option>
-       </select>
-     </div>
-     <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="cl-budget" value="500000"></div>
-     <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="cl-threshold" value="100000"></div>`,
+  openModal('Add Client', clientFormFields('cl'),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveClient()">Add Client</button>`);
 }
 
 async function saveClient() {
   const body = {
-    name: document.getElementById('cl-name').value,
+    name: document.getElementById('cl-name').value.trim(),
     contact_name: document.getElementById('cl-cname').value,
     contact_email: document.getElementById('cl-email').value,
     contact_phone: document.getElementById('cl-phone').value,
     zone: document.getElementById('cl-zone').value,
+    address: document.getElementById('cl-address').value,
+    map_pin: document.getElementById('cl-mappin').value.trim(),
     monthly_budget: +document.getElementById('cl-budget').value,
     approval_threshold: +document.getElementById('cl-threshold').value,
   };
-  if (!body.name) { showToast('Name required','error'); return; }
+  if (!body.name) { showToast('Company name required','error'); return; }
   const res = await api('/clients', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast('Client added'); navigate('clients'); }
 }
 
-
 function viewClientModal(c) {
   const hColor = c.health_score>=85?'var(--success)':c.health_score>=70?'#d97706':'var(--danger)';
+  const mapUrl = mapsLink(c.map_pin, c.address);
   openModal(`Client: ${c.name}`, `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${c.name}</div></div>
@@ -5663,40 +5730,32 @@ function viewClientModal(c) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Approval Threshold</div><div style="font-weight:600">${fmt(c.approval_threshold)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Spent This Month</div><div style="font-weight:600">${fmt(c.spent_this_month)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${c.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
-    </div>`,
+    </div>
+    ${c.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${c.address}</div></div>`:''}
+    ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `<button class="btn btn-primary" onclick="editClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')});closeModal()">Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
 function editClientModal(c) {
-  openModal(`Edit Client: ${c.name}`, `
-    <div class="form-group"><label>Company Name</label><input type="text" id="ecl-name" value="${c.name||''}"></div>
-    <div class="form-group"><label>Contact Name</label><input type="text" id="ecl-cname" value="${c.contact_name||''}"></div>
-    <div class="form-group"><label>Contact Email</label><input type="email" id="ecl-email" value="${c.contact_email||''}"></div>
-    <div class="form-group"><label>Contact Phone</label><input type="tel" id="ecl-phone" value="${c.contact_phone||''}"></div>
-    <div class="form-group"><label>Location Zone</label>
-      <select id="ecl-zone">
-        <option value="">— Select Zone —</option>
-        ${['EGL','BTP','BTM','PV','FW','Other'].map(z=>`<option value="${z}"${c.zone===z?' selected':''}>${z}</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="ecl-budget" value="${c.monthly_budget||0}"></div>
-    <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="ecl-threshold" value="${c.approval_threshold||0}"></div>`,
+  openModal(`Edit Client: ${c.name}`, clientFormFields('ecl', c),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveEditClient('${c.id}')">Save Changes</button>`);
 }
 
 async function saveEditClient(id) {
   const body = {
-    name: document.getElementById('ecl-name').value,
+    name: document.getElementById('ecl-name').value.trim(),
     contact_name: document.getElementById('ecl-cname').value,
     contact_email: document.getElementById('ecl-email').value,
     contact_phone: document.getElementById('ecl-phone').value,
     zone: document.getElementById('ecl-zone').value,
+    address: document.getElementById('ecl-address').value,
+    map_pin: document.getElementById('ecl-mappin').value.trim(),
     monthly_budget: +document.getElementById('ecl-budget').value,
     approval_threshold: +document.getElementById('ecl-threshold').value,
   };
-  if (!body.name) { showToast('Name required','error'); return; }
+  if (!body.name) { showToast('Company name required','error'); return; }
   const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast('Client updated'); navigate('clients'); }
 }
