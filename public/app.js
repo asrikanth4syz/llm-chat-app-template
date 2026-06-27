@@ -1248,6 +1248,15 @@ async function renderPlaceOrder(el) {
           <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
         </div>
 
+        <!-- Need By Date (Urgent only) -->
+        <div id="need-by-wrap" style="display:${(APP._orderType||'Regular')==='Urgent'?'block':'none'};margin-top:10px;padding:10px 12px;background:#fff8f8;border-radius:8px;border:1px solid #fecaca">
+          <label style="font-size:.78rem;font-weight:700;color:var(--danger);display:block;margin-bottom:4px">🚨 Need By Date <span style="color:var(--text-muted);font-weight:400">(required for Urgent)</span></label>
+          <input type="date" id="cart-need-by"
+            style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
+            min="${new Date().toISOString().slice(0,10)}"
+            onfocus="this.style.borderColor='var(--danger)'" onblur="this.style.borderColor='#fca5a5'" />
+        </div>
+
         <!-- Delivery notes -->
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
           <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px">Delivery Notes (optional)</label>
@@ -1588,6 +1597,9 @@ function setOrderType(type, btn) {
     b.style.background = t === type ? c : '#fff';
     b.style.color = t === type ? '#fff' : c;
   });
+  const nbw = document.getElementById('need-by-wrap');
+  if (nbw) nbw.style.display = type === 'Urgent' ? 'block' : 'none';
+  if (type !== 'Urgent') { const nb = document.getElementById('cart-need-by'); if (nb) nb.value = ''; }
 }
 
 async function submitOrder() {
@@ -1642,9 +1654,16 @@ async function confirmOrder() {
 
   const notes = document.getElementById('cart-notes')?.value?.trim() || '';
   const orderType = APP._orderType || 'Regular';
+  const needByDate = document.getElementById('cart-need-by')?.value || '';
   const result = await api('/orders', {
     method: 'POST',
-    body: JSON.stringify({ client_id: clientId, items: APP.cart, order_type: orderType, ...(notes ? { notes } : {}) }),
+    body: JSON.stringify({
+      client_id: clientId,
+      items: APP.cart,
+      order_type: orderType,
+      ...(notes ? { notes } : {}),
+      ...(needByDate ? { need_by_date: needByDate } : {}),
+    }),
   });
 
   closeModal();
@@ -1756,6 +1775,8 @@ async function renderMyOrders(el) {
               ${(o.items||[]).length>4?`<span style="background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
             </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:8px">📝 ${o.notes}</div>` : ''}
 
+            ${o.need_by_date ? `<div style="padding:6px 12px;background:#fff8f8;border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid #fecaca">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
+            ${o.predicted_delivery_date && !['CLOSED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'#f0fdf4'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'#fecaca':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
             ${isPartial?`<div style="padding:8px 12px;background:#fef3c7;border-radius:8px;font-size:.78rem;color:#92400e;font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
 
             <!-- Action buttons -->
@@ -1930,14 +1951,43 @@ async function viewOrder(id) {
       <button class="btn btn-primary btn-sm" onclick="addOrderComment('${id}')">Post</button>
     </div>`;
 
+  const isOpsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+  const today = new Date().toISOString().slice(0,10);
+  const pdd = order.predicted_delivery_date;
+  const pddIsLate = pdd && pdd < today && !['CLOSED','CANCELLED'].includes(order.status);
+  const pddLabel = pdd
+    ? `<span style="font-weight:700;color:${pddIsLate?'var(--danger)':'var(--success)'}">${fmtDate(pdd)}${pddIsLate?' ⚠ Overdue':''}</span>`
+    : `<span style="color:var(--text-muted);font-style:italic">Not set</span>`;
+
   openModal(`Order ${id}`,
-    `<div style="display:grid;gap:8px;margin-bottom:16px">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+    `<div style="margin-bottom:16px">
+      <!-- Row 1: status / type / client / date -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
         <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
-        <div><b>Date:</b> ${fmtDate(order.created_at)}</div>
+        <div><b>Placed:</b> ${fmtDate(order.created_at)}</div>
       </div>
+      <!-- Row 2: dates -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
+        ${order.need_by_date ? `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;font-weight:600;color:var(--danger)">🚨 Need By:</span><span style="font-weight:700;color:var(--danger)">${fmtDate(order.need_by_date)}</span></div>` : ''}
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px">
+          <span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">📅 Est. Delivery:</span>
+          ${isOpsRole
+            ? `<span id="pdd-display">${pddLabel}</span>
+               <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:.72rem;margin-left:6px" onclick="document.getElementById('pdd-edit').style.display='flex';this.style.display='none'">
+                 ${pdd ? 'Edit' : 'Set date'}
+               </button>
+               <span id="pdd-edit" style="display:none;align-items:center;gap:4px">
+                 <input type="date" id="pdd-input" value="${pdd||''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
+                 <button class="btn btn-primary btn-sm" style="padding:3px 10px" onclick="savePredictedDelivery('${id}')">Save</button>
+                 <button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="document.getElementById('pdd-edit').style.display='none';document.querySelector('[onclick*=pdd-edit]').style.display=''">✕</button>
+               </span>`
+            : pddLabel
+          }
+        </div>
+      </div>
+      ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${order.notes}</span></div>` : ''}
     </div>
     <b>Items</b>${hasPartialPick?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
     <table class="table" style="margin-top:8px">
@@ -1961,6 +2011,17 @@ async function viewOrder(id) {
        <button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>` : ''}
      ${order.status==='SUBMITTED'||order.status==='APPROVED' ? `<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>` : ''}`
   );
+}
+
+async function savePredictedDelivery(orderId) {
+  const val = document.getElementById('pdd-input')?.value || '';
+  const res = await api('/orders/' + orderId, {
+    method: 'PATCH',
+    body: JSON.stringify({ predicted_delivery_date: val || null }),
+  });
+  if (!res) return;
+  showToast('Predicted delivery date saved');
+  viewOrder(orderId);
 }
 
 async function addOrderComment(orderId) {
@@ -2358,8 +2419,13 @@ async function renderOrderQueue(el) {
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
+      const todayStr = new Date().toISOString().slice(0,10);
       return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:#fffbeb':''}">
-        <td><b>${o.id}</b></td>
+        <td>
+          <b>${o.id}</b>
+          ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'#d97706'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
+          ${o.predicted_delivery_date && !['CLOSED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
+        </td>
         <td>${o.client_name||'—'}</td>
         <td style="font-weight:700">${fmt(o.grand_total)}</td>
         <td>${statusBadge(o.status)}</td>

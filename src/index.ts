@@ -623,6 +623,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     items: Array<{sku:string;name:string;qty:number;unit_price:number}>;
     notes?: string;
     order_type?: string;
+    need_by_date?: string;
   };
   // Client roles must order for their own linked client only
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
@@ -648,8 +649,9 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
 
   const validTypes = ['Regular','Urgent','Ad-Hoc'];
   const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type) VALUES (?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType).run();
+  const needByDate = body.need_by_date || null;
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)`)
@@ -776,8 +778,16 @@ async function handlePatchOrder(request: Request, env: Env, path: string): Promi
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").pop()!;
-  const body = await request.json() as {notes?:string};
-  await env.DB.prepare("UPDATE orders SET notes=?,updated_at=datetime('now') WHERE id=?").bind(body.notes||null, id).run();
+  const body = await request.json() as {notes?:string; predicted_delivery_date?:string; need_by_date?:string};
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  if ('notes' in body)                   { fields.push("notes=?");                   vals.push(body.notes||null); }
+  if ('predicted_delivery_date' in body) { fields.push("predicted_delivery_date=?"); vals.push(body.predicted_delivery_date||null); }
+  if ('need_by_date' in body)            { fields.push("need_by_date=?");            vals.push(body.need_by_date||null); }
+  if (!fields.length) return json({id});
+  fields.push("updated_at=datetime('now')");
+  vals.push(id);
+  await env.DB.prepare(`UPDATE orders SET ${fields.join(',')} WHERE id=?`).bind(...vals).run();
   return json({id});
 }
 
