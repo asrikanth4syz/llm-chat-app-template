@@ -3922,7 +3922,38 @@ async function editInventoryItem(sku) {
     <!-- Vendor Information -->
     <div id="ei-tab-vendor" class="ei-section" style="display:none">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div class="form-group" style="grid-column:1/-1"><label>Primary Vendor</label><select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select></div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label style="display:flex;justify-content:space-between;align-items:center">
+            Primary Vendor
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" onclick="toggleAddVendorInline()">+ Add New Vendor</button>
+          </label>
+          <select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select>
+          <!-- Inline new-vendor form -->
+          <div id="ei-new-vendor-form" style="display:none;margin-top:12px;background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:8px;padding:14px">
+            <div style="font-size:.76rem;font-weight:700;color:#d97706;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Vendor Details</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Vendor Name *</label><input type="text" id="nv-name" placeholder="e.g. Fresh Farms Pvt Ltd"></div>
+              <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Category</label>
+                <select id="nv-cat">
+                  <option value="Food & Beverage">Food & Beverage</option>
+                  <option value="FMCG">FMCG</option>
+                  <option value="Stationery">Stationery</option>
+                  <option value="Cleaning">Cleaning</option>
+                  <option value="Electronics">Electronics</option>
+                  <option value="Pharma">Pharma</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Phone</label><input type="tel" id="nv-phone" placeholder="9876543210"></div>
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Email</label><input type="email" id="nv-email" placeholder="vendor@example.com"></div>
+              <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Location / City</label><input type="text" id="nv-location" placeholder="e.g. Mumbai"></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button type="button" class="btn btn-primary btn-sm" onclick="createVendorInline()">Create & Select</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAddVendorInline()">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div class="form-group"><label>Vendor SKU / Code</label><input type="text" id="ei-vendorsku" value="${item.vendor_sku||''}"></div>
         <div class="form-group"><label>Lead Time (days)</label><input type="number" id="ei-leaddays" value="${item.vendor_lead_days||3}" min="0"></div>
         <div class="form-group"><label>Min Order Qty (MOQ)</label><input type="number" id="ei-moq" value="${item.vendor_moq||1}" min="1"></div>
@@ -3989,6 +4020,42 @@ async function saveInventoryItem(sku) {
   const res = await api(`/inventory/${sku}`, { method:'PATCH', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast('Item updated'); navigate('inventory'); }
+}
+
+function toggleAddVendorInline() {
+  const form = document.getElementById('ei-new-vendor-form');
+  if (!form) return;
+  const showing = form.style.display !== 'none';
+  form.style.display = showing ? 'none' : '';
+  if (!showing) document.getElementById('nv-name')?.focus();
+}
+
+async function createVendorInline() {
+  const name = (document.getElementById('nv-name')?.value || '').trim();
+  if (!name) { showToast('Vendor name is required', 'error'); return; }
+  const btn = document.querySelector('#ei-new-vendor-form .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  const body = {
+    name,
+    category: document.getElementById('nv-cat')?.value || 'Other',
+    contact_phone: document.getElementById('nv-phone')?.value || '',
+    contact_email: document.getElementById('nv-email')?.value || '',
+    location: document.getElementById('nv-location')?.value || '',
+  };
+  const res = await api('/vendors', { method: 'POST', body: JSON.stringify(body) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Create & Select'; }
+  if (!res || !res.id) { showToast('Failed to create vendor', 'error'); return; }
+  // Add new option to the dropdown and select it
+  const sel = document.getElementById('ei-vendor');
+  if (sel) {
+    const opt = document.createElement('option');
+    opt.value = res.id;
+    opt.textContent = name;
+    opt.selected = true;
+    sel.appendChild(opt);
+  }
+  toggleAddVendorInline();
+  showToast(`Vendor "${name}" created and selected`);
 }
 
 async function reorderItem(sku, name, price, vendorId) {
