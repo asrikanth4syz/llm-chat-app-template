@@ -1240,140 +1240,90 @@ async function renderPlaceOrder(el) {
   APP._catalogSearch = '';
   if (!APP._catalogView) APP._catalogView = 'tile';
   if (!APP._orderType) APP._orderType = 'Regular';
+  APP._orderStep = 'catalogue';
 
   const last3 = (recentOrders||[]).slice(0,3);
 
   el.innerHTML = `
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-    <div>
-      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Place Order</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse catalogue, search items, or reorder from history</div>
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">⬆ Import CSV</button>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">My Orders</button>
-    </div>
-  </div>
-
-  <!-- Quick Reorder strip -->
-  ${last3.length ? `
-  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <span style="font-size:.82rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">🔄 Quick Reorder</span>
-      <span style="font-size:.75rem;color:var(--text-muted)">from recent history</span>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      ${last3.map(o=>`
-      <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
-        <div style="min-width:0">
-          <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${o.id}</div>
-          <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
-          <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}</div>
-        </div>
-        <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder</button>
-      </div>`).join('')}
-    </div>
-  </div>` : ''}
-
-  <!-- Search + category pills -->
-  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
-    <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
-      style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
-      oninput="searchCatalog(this.value)" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
-    <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
-      ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
-    </div>
-  </div>
-
-  <!-- Catalogue + Cart -->
-  <div style="display:flex;gap:16px;align-items:flex-start">
-    <div style="flex:1;min-width:0">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted)">${inventory.length} items in catalogue</div>
-        <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
-          <button id="view-tile-btn" onclick="setCatalogView('tile')" title="Tile view"
-            style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='tile'?'var(--navy)':'#fff'};color:${APP._catalogView==='tile'?'#fff':'var(--text-muted)'}">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="6" height="6" rx="1"/><rect x="10" y="0" width="6" height="6" rx="1"/><rect x="0" y="10" width="6" height="6" rx="1"/><rect x="10" y="10" width="6" height="6" rx="1"/></svg>
-          </button>
-          <button id="view-list-btn" onclick="setCatalogView('list')" title="List view"
-            style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='list'?'var(--navy)':'#fff'};color:${APP._catalogView==='list'?'#fff':'var(--text-muted)'}">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="1" width="16" height="2" rx="1"/><rect x="0" y="7" width="16" height="2" rx="1"/><rect x="0" y="13" width="16" height="2" rx="1"/></svg>
-          </button>
-        </div>
+  <!-- STEP 1: BROWSE CATALOGUE -->
+  <div id="order-step-catalogue">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Place Order</div>
+        <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse the catalogue and add items to your cart</div>
       </div>
-      <div id="catalog-grid" class="${APP._catalogView==='list'?'catalog-list':'catalog-grid'}">${renderCatalogItems(inventory)}</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">⬆ Import CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">My Orders</button>
+      </div>
     </div>
 
-    <!-- Sticky cart panel -->
-    <div class="cart-panel" id="cart-panel" style="position:sticky;top:16px">
-      <div class="cart-header">
-        <div class="cart-title">${iconCart(16)} Cart</div>
-        <span class="cart-count" id="cart-count">0 items</span>
+    ${last3.length ? `
+    <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:.82rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">🔄 Quick Reorder</span>
+        <span style="font-size:.75rem;color:var(--text-muted)">from recent history</span>
       </div>
-      <div class="cart-items" id="cart-items">
-        <div class="empty-cart">Add items from the catalogue</div>
-      </div>
-      <!-- Order Type — always visible -->
-      <div style="padding:12px 16px;border-top:1px solid var(--border)">
-        <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:6px">Order Type</label>
-        <div style="display:flex;gap:6px">
-          ${['Regular','Urgent','Ad-Hoc'].map(t=>{
-            const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
-            return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
-              style="flex:1;padding:6px 0;border-radius:8px;border:1.5px solid ${colors[t]};
-              background:${(APP._orderType||'Regular')===t?colors[t]:'#fff'};
-              color:${(APP._orderType||'Regular')===t?'#fff':colors[t]};
-              font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
-          }).join('')}
-        </div>
-      </div>
-
-      <div class="cart-totals" id="cart-totals" style="display:none">
-        <div class="cart-row"><span>Subtotal</span><span id="cart-sub">₹0</span></div>
-        <div class="cart-row"><span>GST (18%)</span><span id="cart-gst">₹0</span></div>
-        <div class="cart-row cart-total"><span>Total</span><span id="cart-grand">₹0</span></div>
-        <div id="approval-hint" class="alert alert-warning" style="display:none;margin-top:8px;font-size:.8rem">
-          ⚠️ Amount exceeds ₹1L — approval required
-        </div>
-        <div id="budget-bar-wrap" style="margin-top:12px;display:none">
-          <div style="font-size:.8rem;font-weight:600;margin-bottom:4px;color:var(--text-muted)">Monthly Budget Used</div>
-          <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
-            <div id="budget-bar-fill" style="height:100%;border-radius:4px;transition:width .3s"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${last3.map(o=>`
+        <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div style="min-width:0">
+            <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${o.id}</div>
+            <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}</div>
           </div>
-          <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
-        </div>
+          <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder</button>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
 
-        <!-- Need By Date (Urgent only) -->
-        <div id="need-by-wrap" style="display:${(APP._orderType||'Regular')==='Urgent'?'block':'none'};margin-top:10px;padding:10px 12px;background:#fff8f8;border-radius:8px;border:1px solid #fecaca">
-          <label style="font-size:.78rem;font-weight:700;color:var(--danger);display:block;margin-bottom:4px">🚨 Need By Date <span style="color:var(--text-muted);font-weight:400">(required for Urgent)</span></label>
-          <input type="date" id="cart-need-by"
-            style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
-            min="${new Date().toISOString().slice(0,10)}"
-            onfocus="this.style.borderColor='var(--danger)'" onblur="this.style.borderColor='#fca5a5'" />
-        </div>
+    <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+      <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
+        style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
+        oninput="searchCatalog(this.value)" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+      <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
+        ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
+      </div>
+    </div>
 
-        <!-- Delivery notes -->
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-          <label style="font-size:.78rem;font-weight:700;color:var(--text-muted);display:block;margin-bottom:4px">Delivery Notes (optional)</label>
-          <textarea id="cart-notes" rows="2" placeholder="Special instructions, delivery address, contact…"
-            style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.8rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
-            onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
-        </div>
-        <button class="btn btn-gold" style="width:100%;margin-top:10px" onclick="submitOrder()">
-          ${iconCheck(14)} Place Order
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted)">${inventory.length} items in catalogue</div>
+      <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="view-tile-btn" onclick="setCatalogView('tile')" title="Tile view"
+          style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='tile'?'var(--navy)':'#fff'};color:${APP._catalogView==='tile'?'#fff':'var(--text-muted)'}">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="6" height="6" rx="1"/><rect x="10" y="0" width="6" height="6" rx="1"/><rect x="0" y="10" width="6" height="6" rx="1"/><rect x="10" y="10" width="6" height="6" rx="1"/></svg>
         </button>
-        <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.83rem" onclick="saveDraft()">
-          Save as Draft
-        </button>
-        <button class="btn btn-secondary" style="width:100%;margin-top:6px;font-size:.8rem" onclick="APP.cart=[];refreshCartUI();showToast('Cart cleared')">
-          Clear Cart
+        <button id="view-list-btn" onclick="setCatalogView('list')" title="List view"
+          style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='list'?'var(--navy)':'#fff'};color:${APP._catalogView==='list'?'#fff':'var(--text-muted)'}">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="1" width="16" height="2" rx="1"/><rect x="0" y="7" width="16" height="2" rx="1"/><rect x="0" y="13" width="16" height="2" rx="1"/></svg>
         </button>
       </div>
     </div>
+    <div id="catalog-grid" class="${APP._catalogView==='list'?'catalog-list':'catalog-grid'}">${renderCatalogItems(inventory)}</div>
+    <div style="height:72px"></div>
   </div>
 
-  <!-- CSV Upload Modal (hidden) -->
-  <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;align-items:center;justify-content:center">
+  <!-- STEP 2: REVIEW & PLACE -->
+  <div id="order-step-review" style="display:none"></div>
+
+  <!-- FLOATING CART BAR (bottom of viewport) -->
+  <div id="cart-bottom-bar" style="display:none;position:fixed;bottom:0;left:var(--sidebar-w);right:0;z-index:90;background:var(--navy);color:#fff;padding:12px 24px;align-items:center;justify-content:space-between;gap:16px;box-shadow:0 -2px 16px rgba(0,0,0,.18)">
+    <div style="display:flex;align-items:center;gap:14px">
+      <span style="font-size:1.4rem">🛒</span>
+      <div>
+        <span id="cbb-count" style="font-weight:700;font-size:.95rem">0 items</span>
+        <span style="margin:0 10px;opacity:.35">|</span>
+        <span id="cbb-total" style="font-weight:800;font-size:1.1rem">₹0</span>
+        <span style="font-size:.75rem;opacity:.65;margin-left:4px">incl. GST</span>
+      </div>
+    </div>
+    <button class="btn btn-gold" style="padding:9px 22px;font-size:.9rem;font-weight:700" onclick="switchOrderStep('review')">
+      Review Order →
+    </button>
+  </div>
+
+  <!-- CSV Upload Modal -->
+  <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:16px;padding:28px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18)">
       <div style="font-weight:800;font-size:1rem;color:var(--navy);margin-bottom:4px">Import Order via CSV</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px">Download the template, fill in SKU and quantity, then upload.</div>
@@ -1391,7 +1341,157 @@ async function renderPlaceOrder(el) {
   </div>`;
 
   refreshCartUI();
+}
+
+function switchOrderStep(step) {
+  if (step === 'review' && !APP.cart.length) { showToast('Add items to your cart first', 'error'); return; }
+  APP._orderStep = step;
+  const cat = document.getElementById('order-step-catalogue');
+  const rev = document.getElementById('order-step-review');
+  const bar = document.getElementById('cart-bottom-bar');
+  if (!cat || !rev) return;
+  if (step === 'review') {
+    cat.style.display = 'none';
+    if (bar) bar.style.display = 'none';
+    rev.style.display = '';
+    renderCartReview(rev);
+  } else {
+    rev.style.display = 'none';
+    cat.style.display = '';
+    refreshCartUI();
+  }
+}
+
+function renderCartReview(container) {
+  const isUrgent = (APP._orderType||'Regular') === 'Urgent';
+  const today = new Date().toISOString().slice(0,10);
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+      <div>
+        <button class="btn btn-secondary btn-sm" onclick="switchOrderStep('catalogue')">← Back to Catalogue</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:.84rem">
+        <span style="color:var(--text-muted)">① Browse</span>
+        <div style="width:48px;height:2px;background:var(--navy);border-radius:1px"></div>
+        <span style="font-weight:700;color:var(--navy)">② Review & Place</span>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:flex-start">
+
+      <!-- Left: items + options -->
+      <div>
+        <!-- Items card -->
+        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px">
+          <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+            <b style="font-size:.95rem;color:var(--navy)">Cart Items</b>
+            <button class="btn btn-secondary btn-sm" onclick="switchOrderStep('catalogue')">+ Add More Items</button>
+          </div>
+          <div id="review-cart-items"></div>
+        </div>
+
+        <!-- Order Type -->
+        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 18px;margin-bottom:16px">
+          <label style="font-weight:700;font-size:.88rem;display:block;margin-bottom:10px;color:var(--navy)">Order Type</label>
+          <div style="display:flex;gap:8px">
+            ${['Regular','Urgent','Ad-Hoc'].map(t=>{
+              const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
+              const active = (APP._orderType||'Regular')===t;
+              return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
+                style="flex:1;padding:10px 0;border-radius:8px;border:1.5px solid ${colors[t]};
+                background:${active?colors[t]:'#fff'};color:${active?'#fff':colors[t]};
+                font-size:.82rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
+            }).join('')}
+          </div>
+          <div id="need-by-wrap" style="display:${isUrgent?'block':'none'};margin-top:12px;padding:10px 12px;background:#fff8f8;border-radius:8px;border:1px solid #fecaca">
+            <label style="font-size:.78rem;font-weight:700;color:var(--danger);display:block;margin-bottom:4px">🚨 Need By Date <span style="color:var(--text-muted);font-weight:400">(required)</span></label>
+            <input type="date" id="cart-need-by" min="${today}"
+              style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
+              onfocus="this.style.borderColor='var(--danger)'" onblur="this.style.borderColor='#fca5a5'" />
+          </div>
+        </div>
+
+        <!-- Notes -->
+        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 18px">
+          <label style="font-weight:700;font-size:.88rem;display:block;margin-bottom:8px;color:var(--navy)">Delivery Notes <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+          <textarea id="cart-notes" rows="3" placeholder="Special instructions, delivery address, contact person…"
+            style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
+            onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+        </div>
+      </div>
+
+      <!-- Right: summary + actions -->
+      <div style="position:sticky;top:16px">
+        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
+          <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><b>Order Summary</b></div>
+          <div style="padding:16px 18px" id="review-summary"></div>
+          <div style="padding:0 18px 18px;display:flex;flex-direction:column;gap:8px">
+            <button class="btn btn-gold" style="width:100%;padding:11px;font-size:.95rem" onclick="submitOrder()">
+              ${iconCheck(14)} Place Order
+            </button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.83rem" onclick="saveDraft()">Save as Draft</button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" onclick="APP.cart=[];switchOrderStep('catalogue');showToast('Cart cleared')">Clear Cart</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  refreshCartReviewUI();
   loadBudgetBar();
+}
+
+function refreshCartReviewUI() {
+  const total = APP.cart.reduce((s,i) => s + i.qty * i.unit_price, 0);
+  const gst   = Math.round(total * 0.18);
+  const grand = total + gst;
+  const count = APP.cart.reduce((s,i) => s + i.qty, 0);
+
+  const itemsEl = document.getElementById('review-cart-items');
+  if (itemsEl) {
+    itemsEl.innerHTML = APP.cart.length === 0
+      ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">Cart is empty — <a href="#" onclick="switchOrderStep('catalogue');return false">browse catalogue</a></div>`
+      : APP.cart.map(item => `
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border)">
+          <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${item.name}</div>
+            <div style="font-size:.73rem;color:var(--text-muted);margin-top:1px">${item.sku} · ${fmt(item.unit_price)}/unit</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <div class="catalog-qty" style="margin:0">
+              <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
+              <span class="qty-val" data-name="${item.name.replace(/"/g,'&quot;')}">${item.qty}</span>
+              <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
+            </div>
+            <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
+            <button onclick="removeCartItem('${item.sku}')"
+              style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
+              onmouseover="this.style.background='#fef2f2';this.style.borderColor='#fca5a5';this.style.color='var(--danger)'"
+              onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">✕</button>
+          </div>
+        </div>`).join('');
+  }
+
+  const summaryEl = document.getElementById('review-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span style="color:var(--text-muted)">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span style="color:var(--text-muted)">GST (18%)</span><span>${fmt(gst)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding-top:12px;border-top:2px solid var(--border);font-weight:800;font-size:1.05rem"><span>Total</span><span style="color:var(--navy)">${fmt(grand)}</span></div>
+      ${grand > 100000 ? `<div class="alert alert-warning" style="margin-top:12px;font-size:.8rem">⚠️ Amount exceeds ₹1L — approval required</div>` : ''}
+      <div id="budget-bar-wrap" style="margin-top:12px;display:none">
+        <div style="font-size:.8rem;font-weight:600;margin-bottom:4px;color:var(--text-muted)">Monthly Budget Used</div>
+        <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden"><div id="budget-bar-fill" style="height:100%;border-radius:4px;transition:width .3s"></div></div>
+        <div id="budget-bar-label" style="font-size:.73rem;margin-top:3px;color:var(--text-muted)"></div>
+      </div>`;
+    loadBudgetBar();
+  }
+}
+
+function removeCartItem(sku) {
+  APP.cart = APP.cart.filter(i => i.sku !== sku);
+  if (!APP.cart.length) { switchOrderStep('catalogue'); showToast('Cart is empty', 'info'); return; }
+  refreshCartReviewUI();
 }
 
 function showCSVUploadModal() {
@@ -1527,11 +1627,10 @@ async function reorderFromHistory(orderId) {
     const price = item ? item.unit_price : (i.unit_price || 0);
     const existing = APP.cart.find(c => c.sku === (i.sku || i.name));
     if (existing) existing.qty += i.qty;
-    else APP.cart.push({ sku: i.sku || i.name, name: i.name, qty: i.qty, unit_price: price });
+    else APP.cart.push({ sku: i.sku || i.name, name: i.name, qty: i.qty, unit_price: price, emoji: item?.emoji || '📦' });
   });
   showToast('Items added to cart');
   refreshCartUI();
-  document.getElementById('catalog-grid')?.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 async function loadStandingOrders() {
@@ -1638,7 +1737,8 @@ function changeQty(sku, delta, price, btnOrName) {
     existing.qty = Math.max(0, existing.qty + delta);
     if (existing.qty === 0) APP.cart = APP.cart.filter(c => c.sku !== sku);
   } else if (delta > 0) {
-    APP.cart.push({ sku, name, qty: 1, unit_price: price });
+    const catalogItem = (APP._catalog||[]).find(c => c.sku === sku);
+    APP.cart.push({ sku, name, qty: 1, unit_price: price, emoji: catalogItem?.emoji || '📦' });
   }
   const qtyEl = document.getElementById('qty-' + sku);
   if (qtyEl) qtyEl.textContent = APP.cart.find(c => c.sku === sku)?.qty || 0;
@@ -1646,43 +1746,23 @@ function changeQty(sku, delta, price, btnOrName) {
 }
 
 function refreshCartUI() {
-  const countEl = document.getElementById('cart-count');
-  const itemsEl = document.getElementById('cart-items');
-  const totalsEl = document.getElementById('cart-totals');
-  if (!countEl) return;
-
   const total = APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0);
-  const gst = Math.round(total * 0.18);
+  const gst   = Math.round(total * 0.18);
   const grand = total + gst;
   const count = APP.cart.reduce((s, i) => s + i.qty, 0);
 
-  countEl.textContent = count + ' item' + (count !== 1 ? 's' : '');
-
-  if (!APP.cart.length) {
-    itemsEl.innerHTML = '<div class="empty-cart">Add items from the catalogue</div>';
-    totalsEl.style.display = 'none';
-    return;
+  // Update floating bottom bar (step 1 — browse)
+  const bar = document.getElementById('cart-bottom-bar');
+  if (bar) {
+    bar.style.display = APP.cart.length ? 'flex' : 'none';
+    const cbbCount = document.getElementById('cbb-count');
+    const cbbTotal = document.getElementById('cbb-total');
+    if (cbbCount) cbbCount.textContent = count + ' item' + (count !== 1 ? 's' : '');
+    if (cbbTotal) cbbTotal.textContent = fmt(grand);
   }
 
-  itemsEl.innerHTML = APP.cart.map(i => `
-    <div class="cart-item">
-      <div class="cart-item-name">${i.name}</div>
-      <div class="cart-item-row">
-        <div class="catalog-qty" style="margin:0">
-          <button class="qty-btn" onclick="changeQty('${i.sku}',-1,${i.unit_price},this)">−</button>
-          <span class="qty-val" data-name="${i.name.replace(/"/g,'&quot;')}">${i.qty}</span>
-          <button class="qty-btn" onclick="changeQty('${i.sku}',1,${i.unit_price},this)">+</button>
-        </div>
-        <span style="font-weight:600">${fmt(i.qty * i.unit_price)}</span>
-      </div>
-    </div>`).join('');
-
-  document.getElementById('cart-sub').textContent = fmt(total);
-  document.getElementById('cart-gst').textContent = fmt(gst);
-  document.getElementById('cart-grand').textContent = fmt(grand);
-  totalsEl.style.display = '';
-  const hint = document.getElementById('approval-hint');
-  if (hint) hint.style.display = grand > 100000 ? '' : 'none';
+  // If review step is open, refresh it too
+  if (APP._orderStep === 'review') refreshCartReviewUI();
 }
 
 function setOrderType(type, btn) {
