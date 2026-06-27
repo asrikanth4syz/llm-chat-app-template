@@ -4717,10 +4717,10 @@ function renderWHPickList(el, picklist) {
           </div>
           <div class="table-wrap">
             <table class="table" style="margin:0">
-              <thead><tr><th>SKU</th><th>Item</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
+              <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
               <tbody>${order.items.map(item=>`<tr>
-                <td>${item.sku}</td>
-                <td>${item.item_name}</td>
+                <td><b>${item.item_name}</b></td>
+                <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
                 <td>${item.qty}</td>
                 <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
                   <b>${item.stock_available}</b>
@@ -4897,11 +4897,11 @@ async function pickOrderModal(orderId) {
       Enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
+      <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
         ${(items||[]).map(item=>`<tr>
-          <td><b>${item.sku}</b></td>
-          <td>${item.name||item.item_name}</td>
+          <td><b>${item.name||item.item_name}</b></td>
+          <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
           <td style="color:var(--text-muted)">${item.qty}</td>
           <td>
             <input type="number" class="form-control form-control-sm pick-qty"
