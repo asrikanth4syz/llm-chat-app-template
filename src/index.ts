@@ -899,16 +899,25 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
     ["weight_grams","weight_grams"],["barcode","barcode"],["sub_category","sub_category"],
     ["vendor_sku","vendor_sku"],["vendor_lead_days","vendor_lead_days"],["vendor_moq","vendor_moq"],
     ["mrp","mrp"],["cost_excl_gst","cost_excl_gst"],["margin_pct","margin_pct"],["brand","brand"],
+    ["expiry_date","expiry_date"],["inv_location","inv_location"],["amazon_url","amazon_url"],["flipkart_url","flipkart_url"],
   ];
   for (const [col, key] of patchFields) {
     if (body[key] !== undefined) { fields.push(`${col}=?`); vals.push(body[key] === "" ? null : body[key]); }
   }
-  // vendor_id and secondary_vendor_id allow null
+  // vendor_id allows null
   if (body.vendor_id !== undefined) { fields.push("vendor_id=?"); vals.push(body.vendor_id || null); }
-  if (body.secondary_vendor_id !== undefined) { fields.push("secondary_vendor_id=?"); vals.push(body.secondary_vendor_id || null); }
-  if (!fields.length) return json({error:"Nothing to update"}, 400);
-  vals.push(sku);
-  await env.DB.prepare(`UPDATE inventory SET ${fields.join(",")} WHERE sku=?`).bind(...vals).run();
+  if (!fields.length && body.secondary_vendor_id === undefined) return json({error:"Nothing to update"}, 400);
+  if (fields.length) {
+    vals.push(sku);
+    await env.DB.prepare(`UPDATE inventory SET ${fields.join(",")} WHERE sku=?`).bind(...vals).run();
+  }
+  // secondary_vendor_id is in a newer migration — apply separately so older DBs don't 500
+  if (body.secondary_vendor_id !== undefined) {
+    try {
+      await env.DB.prepare("UPDATE inventory SET secondary_vendor_id=? WHERE sku=?")
+        .bind(body.secondary_vendor_id || null, sku).run();
+    } catch { /* column not yet migrated — ignore */ }
+  }
   await audit(env, user, "UPDATE", "inventory", sku, `stock:${before?.stock}`, `stock:${body.stock||before?.stock}`);
 
   // Gap 8: check auto-reorder after stock change
