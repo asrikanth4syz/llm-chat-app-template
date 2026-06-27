@@ -852,12 +852,24 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
   const q = url.searchParams.get("q");
   const cat = url.searchParams.get("category");
 
-  let query = "SELECT i.*,v.name as vendor_name FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id WHERE i.active=1";
   const params: string[] = [];
-  if (q)   { query += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
-  if (cat) { query += " AND i.category=?"; params.push(cat); }
-  query += " ORDER BY i.name";
-  const {results} = await env.DB.prepare(query).bind(...params).all();
+  let baseFilter = " WHERE i.active=1";
+  if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
+  if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
+
+  // Try with secondary vendor JOIN first; fall back to simpler query if column missing
+  let results: unknown[];
+  try {
+    const {results: r} = await env.DB.prepare(
+      `SELECT i.*,v.name as vendor_name,v2.name as secondary_vendor_name FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id LEFT JOIN vendors v2 ON i.secondary_vendor_id=v2.id${baseFilter} ORDER BY i.name`
+    ).bind(...params).all();
+    results = r;
+  } catch {
+    const {results: r} = await env.DB.prepare(
+      `SELECT i.*,v.name as vendor_name FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id${baseFilter} ORDER BY i.name`
+    ).bind(...params).all();
+    results = r;
+  }
   return json(results);
 }
 

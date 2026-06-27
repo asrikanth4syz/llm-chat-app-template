@@ -3689,7 +3689,8 @@ async function renderInventory(el) {
             <!-- 4. Vendor Information -->
             <div>
               <div style="font-size:.72rem;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
-              ${invDetailRow('Vendor', item.vendor_name||'—')}
+              ${invDetailRow('Primary Vendor', item.vendor_name||'—')}
+              ${invDetailRow('Secondary Vendor', item.secondary_vendor_name||'—')}
               ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
               ${invDetailRow('Lead Time (days)', item.vendor_lead_days||3)}
               ${invDetailRow('MOQ', item.vendor_moq||1)}
