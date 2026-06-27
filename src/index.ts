@@ -230,6 +230,7 @@ export default {
       // Clients
       if (path==="/api/clients"  && method==="GET")  return handleListClients(request,env);
       if (path==="/api/clients"  && method==="POST") return handleAddClient(request,env);
+      if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+$/) && method==="PATCH") return handlePatchClient(request,env,path);
 
       // Tickets
@@ -1457,6 +1458,17 @@ async function handleAddClient(request: Request, env: Env): Promise<Response> {
     .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'').run();
   await audit(env, user, "CREATE", "client", id, undefined, body.name as string);
   return json({id}, 201);
+}
+
+async function handleClientBudget(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const client = await env.DB.prepare(
+    "SELECT monthly_budget, spent_this_month, approval_threshold FROM clients WHERE id=?"
+  ).bind(id).first() as Record<string,number>|null;
+  if (!client) return json({error:"Client not found"}, 404);
+  return json({ monthly_budget: client.monthly_budget, used: client.spent_this_month, approval_threshold: client.approval_threshold });
 }
 
 async function handlePatchClient(request: Request, env: Env, path: string): Promise<Response> {
