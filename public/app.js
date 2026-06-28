@@ -6030,14 +6030,26 @@ async function manageClientCatalog(clientId, clientName) {
        </select>
      </div>
 
-     <!-- Import by category row -->
-     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:10px 12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe;flex-wrap:wrap">
-       <span style="font-size:.78rem;font-weight:700;color:#1e40af;white-space:nowrap">Import all by category:</span>
-       <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:120px;background:#fff">
-         <option value="">— Select category —</option>${catOpts}
-       </select>
-       <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 14px;font-size:.8rem;white-space:nowrap" onclick="importCCByCategory()">Import Category</button>
+     <!-- Import strip: category OR CSV -->
+     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+       <!-- By category -->
+       <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:220px;padding:10px 12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe;flex-wrap:wrap">
+         <span style="font-size:.76rem;font-weight:700;color:#1e40af;white-space:nowrap">By Category:</span>
+         <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:110px;background:#fff">
+           <option value="">— Select —</option>${catOpts}
+         </select>
+         <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" onclick="importCCByCategory()">Import</button>
+       </div>
+       <!-- By CSV -->
+       <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
+         <span style="font-size:.76rem;font-weight:700;color:#166534;white-space:nowrap">By CSV:</span>
+         <input type="file" id="cc-csv-input" accept=".csv,text/csv" style="display:none" onchange="handleCCCsvUpload(this)">
+         <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" onclick="document.getElementById('cc-csv-input').click()">Upload CSV</button>
+         <a id="cc-csv-template" href="#" style="font-size:.72rem;color:#16a34a;text-decoration:underline;white-space:nowrap" onclick="downloadCCTemplate(event)">Download template</a>
+       </div>
      </div>
+     <!-- CSV preview panel -->
+     <div id="cc-csv-preview" style="display:none;margin-bottom:14px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;padding:12px"></div>
 
      <!-- Search results (add) -->
      <div id="cc-search-results" style="display:none;max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:#fff"></div>
@@ -6184,6 +6196,99 @@ function updateCCCount(delta) {
   if (next === 0 && list && !list.querySelector('.cc-empty')) {
     list.innerHTML = `<div class="cc-empty" style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above or import a category.</div>`;
   }
+}
+
+function downloadCCTemplate(e) {
+  e.preventDefault();
+  const csv = 'sku\n' + _ccAllInventory.slice(0,3).map(i=>i.sku).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'client_catalog_template.csv';
+  a.click();
+}
+
+function handleCCCsvUpload(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    // Detect header row — skip if first cell is 'sku' (case-insensitive)
+    const startIdx = lines[0]?.toLowerCase().startsWith('sku') ? 1 : 0;
+    // Support CSV with multiple columns — take first column as SKU
+    const parsedSkus = lines.slice(startIdx).map(l => l.split(',')[0].trim().replace(/^"|"$/g,''));
+    const assignedSkus = ccGetAssignedSkus();
+    const skuMap = new Map(_ccAllInventory.map(i=>[i.sku, i]));
+    const matched = [], unmatched = [], alreadyIn = [];
+    for (const sku of parsedSkus) {
+      if (!sku) continue;
+      if (assignedSkus.has(sku)) alreadyIn.push(sku);
+      else if (skuMap.has(sku)) matched.push(skuMap.get(sku));
+      else unmatched.push(sku);
+    }
+    showCCCsvPreview(matched, unmatched, alreadyIn);
+  };
+  reader.readAsText(file);
+  input.value = ''; // allow re-upload of same file
+}
+
+function showCCCsvPreview(matched, unmatched, alreadyIn) {
+  const panel = document.getElementById('cc-csv-preview');
+  if (!panel) return;
+  panel.style.display = '';
+  panel.innerHTML = `
+    <div style="font-size:.78rem;font-weight:800;color:#166534;margin-bottom:10px">
+      CSV Preview — ${matched.length} to add · ${alreadyIn.length} already assigned · ${unmatched.length} not found
+    </div>
+    ${matched.length ? `
+      <div style="max-height:130px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:4px">
+        ${matched.map(i=>`
+          <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
+            <span>${i.emoji||'📦'}</span>
+            <span style="font-weight:600;flex:1">${i.name}</span>
+            <span style="color:var(--text-muted)">${i.sku}</span>
+            <span style="color:#16a34a;font-weight:700">✓</span>
+          </div>`).join('')}
+      </div>` : ''}
+    ${unmatched.length ? `
+      <div style="font-size:.74rem;color:var(--danger);margin-bottom:10px">
+        SKUs not found in inventory: <strong>${unmatched.join(', ')}</strong>
+      </div>` : ''}
+    ${alreadyIn.length ? `
+      <div style="font-size:.74rem;color:var(--text-muted);margin-bottom:10px">
+        Already assigned (skipped): ${alreadyIn.join(', ')}
+      </div>` : ''}
+    <div style="display:flex;gap:8px">
+      ${matched.length ? `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 14px;font-size:.8rem"
+        onclick="confirmCCCsvImport(${JSON.stringify(matched.map(i=>i.sku)).replace(/"/g,'&quot;')})">
+        Add ${matched.length} Item${matched.length!==1?'s':''}</button>` : ''}
+      <button class="btn btn-sm btn-secondary" style="font-size:.8rem" onclick="document.getElementById('cc-csv-preview').style.display='none'">Dismiss</button>
+    </div>`;
+}
+
+async function confirmCCCsvImport(skus) {
+  if (!skus.length || !_ccClientId) return;
+  const btn = document.querySelector('#cc-csv-preview .btn-sm');
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  const res = await api(`/clients/${_ccClientId}/catalog`, {
+    method:'POST', body: JSON.stringify({skus})
+  });
+  if (!res) { if (btn) { btn.disabled=false; btn.textContent=`Add ${skus.length} Items`; } return; }
+  const skuMap = new Map(_ccAllInventory.map(i=>[i.sku, i]));
+  const list = document.getElementById('cc-assigned-list');
+  if (list) {
+    list.querySelector('.cc-empty')?.remove();
+    skus.forEach(sku => {
+      const item = skuMap.get(sku);
+      if (item) list.insertAdjacentHTML('afterbegin', ccAssignedRow(item));
+    });
+  }
+  updateCCCount(skus.length);
+  document.getElementById('cc-csv-preview').style.display = 'none';
+  renderCCSearchResults();
+  showToast(`${skus.length} item${skus.length!==1?'s':''} imported from CSV`);
 }
 
 const ZONE_OPTIONS = ['EGL','BTP','BTM','PV','FW','Other'];
