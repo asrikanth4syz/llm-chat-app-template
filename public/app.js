@@ -6014,22 +6014,47 @@ async function manageClientCatalog(clientId, clientName) {
   _ccAllInventory = allInv || [];
   const assignedSkus = new Set((assigned||[]).map(i=>i.sku));
 
+  // Build category list from all inventory
+  const categories = [...new Set(_ccAllInventory.map(i=>i.category).filter(Boolean))].sort();
+  const catOpts = categories.map(c=>`<option value="${c}">${c}</option>`).join('');
+
   openModal(`📦 Product Catalog — ${clientName}`,
-    `<div style="display:flex;gap:10px;margin-bottom:14px">
-       <input id="cc-search" type="search" placeholder="Search to add items…" style="flex:1;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem" oninput="renderCCSearchResults()" onfocus="renderCCSearchResults()">
+    `<!-- Search + filter bar -->
+     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+       <input id="cc-search" type="search" placeholder="Search by name or SKU…"
+         style="flex:1;min-width:140px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem"
+         oninput="renderCCSearchResults()" onfocus="renderCCSearchResults()">
+       <select id="cc-cat-filter" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;color:var(--navy);background:#fff"
+         onchange="renderCCSearchResults()">
+         <option value="">All Categories</option>${catOpts}
+       </select>
      </div>
+
+     <!-- Import by category row -->
+     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:10px 12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe;flex-wrap:wrap">
+       <span style="font-size:.78rem;font-weight:700;color:#1e40af;white-space:nowrap">Import all by category:</span>
+       <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:120px;background:#fff">
+         <option value="">— Select category —</option>${catOpts}
+       </select>
+       <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 14px;font-size:.8rem;white-space:nowrap" onclick="importCCByCategory()">Import Category</button>
+     </div>
+
      <!-- Search results (add) -->
-     <div id="cc-search-results" style="display:none;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:#fff"></div>
+     <div id="cc-search-results" style="display:none;max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:#fff"></div>
+
      <!-- Assigned items -->
-     <div style="font-size:.72rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">
-       Assigned Products <span id="cc-count" style="font-weight:400;color:var(--text-muted)">(${assignedSkus.size})</span>
+     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+       <div style="font-size:.72rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">
+         Assigned Products <span id="cc-count" style="font-weight:400">(${assignedSkus.size})</span>
+       </div>
+       ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" onclick="removeAllCCItems()">Remove All</button>` : ''}
      </div>
-     <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto">
+     <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
        ${(assigned||[]).length === 0
-         ? `<div style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above to add items.</div>`
+         ? `<div class="cc-empty" style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above or import a category.</div>`
          : (assigned||[]).map(item => ccAssignedRow(item)).join('')}
      </div>`,
-    `<div style="font-size:.76rem;color:var(--text-muted);flex:1">Clients only see assigned products when placing orders.</div>
+    `<div style="font-size:.76rem;color:var(--text-muted);flex:1">Clients see only assigned products when placing orders.</div>
      <button class="btn btn-secondary" onclick="closeModal()">Done</button>`);
 }
 
@@ -6044,32 +6069,40 @@ function ccAssignedRow(item) {
   </div>`;
 }
 
-function renderCCSearchResults() {
-  const q = (document.getElementById('cc-search')?.value || '').toLowerCase().trim();
-  const container = document.getElementById('cc-search-results');
-  if (!container) return;
-  const assignedSkus = new Set(
+function ccGetAssignedSkus() {
+  return new Set(
     Array.from(document.querySelectorAll('[id^="cc-row-"]')).map(el => el.id.replace('cc-row-',''))
   );
+}
+
+function renderCCSearchResults() {
+  const q = (document.getElementById('cc-search')?.value || '').toLowerCase().trim();
+  const cat = document.getElementById('cc-cat-filter')?.value || '';
+  const container = document.getElementById('cc-search-results');
+  if (!container) return;
+  const assignedSkus = ccGetAssignedSkus();
   const matches = _ccAllInventory.filter(i =>
     !assignedSkus.has(i.sku) &&
-    (!q || i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.category||'').toLowerCase().includes(q))
-  ).slice(0, 20);
+    (!cat || i.category === cat) &&
+    (!q || i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q))
+  ).slice(0, 25);
 
-  if (!q && !matches.length) { container.style.display='none'; return; }
+  if (!q && !cat) { container.style.display='none'; return; }
   container.style.display = '';
   if (!matches.length) {
-    container.innerHTML = `<div style="padding:10px 14px;font-size:.82rem;color:var(--text-muted)">No unassigned items match "${q}"</div>`;
+    container.innerHTML = `<div style="padding:10px 14px;font-size:.82rem;color:var(--text-muted)">No unassigned items found${q?` for "${q}"`:''}${cat?` in ${cat}`:''}.</div>`;
     return;
   }
   container.innerHTML = matches.map(i => `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#edf0f4)" onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background=''" onclick="addCCItem('${i.sku}')">
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#edf0f4)"
+      onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background=''"
+      onclick="addCCItem('${i.sku}')">
       <span>${i.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:.84rem">${i.name}</div>
         <div style="font-size:.72rem;color:var(--text-muted)">${i.sku} · ${i.category||''} · ₹${i.unit_price}</div>
       </div>
-      <span style="font-size:.72rem;color:var(--blue);font-weight:700">+ Add</span>
+      <span style="font-size:.72rem;color:var(--blue);font-weight:700;flex-shrink:0">+ Add</span>
     </div>`).join('');
 }
 
@@ -6078,17 +6111,38 @@ async function addCCItem(sku) {
   if (!item || !_ccClientId) return;
   const res = await api(`/clients/${_ccClientId}/catalog`, { method:'POST', body: JSON.stringify({skus:[sku]}) });
   if (!res) return;
-  // Add row to assigned list
   const list = document.getElementById('cc-assigned-list');
   if (list) {
-    const empty = list.querySelector('[style*="No products"]');
-    if (empty) empty.remove();
+    list.querySelector('.cc-empty')?.remove();
     list.insertAdjacentHTML('afterbegin', ccAssignedRow(item));
   }
   updateCCCount(1);
-  // Refresh search results to hide added item
   renderCCSearchResults();
   showToast(`"${item.name}" added to catalog`);
+}
+
+async function importCCByCategory() {
+  const cat = document.getElementById('cc-import-cat')?.value;
+  if (!cat) { showToast('Please select a category to import', 'error'); return; }
+  const assignedSkus = ccGetAssignedSkus();
+  const toAdd = _ccAllInventory.filter(i => i.category === cat && !assignedSkus.has(i.sku));
+  if (!toAdd.length) { showToast(`All "${cat}" items are already assigned`); return; }
+  const btn = document.querySelector('#cc-import-cat + button') ||
+    document.querySelector('[onclick="importCCByCategory()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  const res = await api(`/clients/${_ccClientId}/catalog`, {
+    method:'POST', body: JSON.stringify({skus: toAdd.map(i=>i.sku)})
+  });
+  if (btn) { btn.disabled = false; btn.textContent = 'Import Category'; }
+  if (!res) return;
+  const list = document.getElementById('cc-assigned-list');
+  if (list) {
+    list.querySelector('.cc-empty')?.remove();
+    toAdd.forEach(item => list.insertAdjacentHTML('afterbegin', ccAssignedRow(item)));
+  }
+  updateCCCount(toAdd.length);
+  renderCCSearchResults();
+  showToast(`${toAdd.length} "${cat}" items added to catalog`);
 }
 
 async function removeCCItem(sku) {
@@ -6102,6 +6156,24 @@ async function removeCCItem(sku) {
   }
 }
 
+async function removeAllCCItems() {
+  const assignedSkus = [...ccGetAssignedSkus()];
+  if (!assignedSkus.length) return;
+  if (!confirm(`Remove all ${assignedSkus.length} assigned products from this client's catalog?`)) return;
+  // batch deletions one by one but fire in parallel
+  await Promise.all(assignedSkus.map(sku =>
+    api(`/clients/${_ccClientId}/catalog/${sku}`, { method:'DELETE' })
+  ));
+  const list = document.getElementById('cc-assigned-list');
+  if (list) {
+    list.innerHTML = `<div class="cc-empty" style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above or import a category.</div>`;
+  }
+  const countEl = document.getElementById('cc-count');
+  if (countEl) countEl.textContent = '(0)';
+  renderCCSearchResults();
+  showToast('All products removed from catalog');
+}
+
 function updateCCCount(delta) {
   const el = document.getElementById('cc-count');
   if (!el) return;
@@ -6109,8 +6181,8 @@ function updateCCCount(delta) {
   const next = Math.max(0, cur + delta);
   el.textContent = `(${next})`;
   const list = document.getElementById('cc-assigned-list');
-  if (next === 0 && list && !list.querySelector('[style*="No products"]')) {
-    list.innerHTML = `<div style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above to add items.</div>`;
+  if (next === 0 && list && !list.querySelector('.cc-empty')) {
+    list.innerHTML = `<div class="cc-empty" style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above or import a category.</div>`;
   }
 }
 
