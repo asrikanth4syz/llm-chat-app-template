@@ -232,6 +232,9 @@ export default {
       if (path==="/api/clients"  && method==="GET")  return handleListClients(request,env);
       if (path==="/api/clients"  && method==="POST") return handleAddClient(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="POST")   return handleAddClientCatalogItems(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="DELETE") return handleRemoveClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+$/) && method==="PATCH") return handlePatchClient(request,env,path);
 
       // Tickets
@@ -856,6 +859,22 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
   let baseFilter = " WHERE i.active=1";
   if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
   if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
+
+  // Client-role users see only their assigned catalog (if any assignments exist)
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  if (isClientRole && user!.client_id) {
+    try {
+      const {results: catalogRows} = await env.DB.prepare(
+        "SELECT sku FROM client_catalog WHERE client_id=?"
+      ).bind(user!.client_id).all();
+      if (catalogRows.length > 0) {
+        const catalogSkus = (catalogRows as Record<string,string>[]).map(r => r.sku);
+        const ph = catalogSkus.map(() => '?').join(',');
+        baseFilter += ` AND i.sku IN (${ph})`;
+        params.push(...catalogSkus);
+      }
+    } catch { /* client_catalog table not yet created — show all */ }
+  }
 
   // Try with secondary vendor JOIN first; fall back to simpler query if column missing
   let results: unknown[];
@@ -1545,6 +1564,53 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   vals.push(id);
   await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
   return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CLIENT CATALOG (per-client product assignments)
+// ════════════════════════════════════════════════════════════════════
+
+async function handleGetClientCatalog(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const clientId = path.split("/")[3];
+  const {results} = await env.DB.prepare(
+    `SELECT i.*,v.name as vendor_name,cc.added_at
+     FROM client_catalog cc
+     JOIN inventory i ON cc.sku=i.sku
+     LEFT JOIN vendors v ON i.vendor_id=v.id
+     WHERE cc.client_id=? AND i.active=1
+     ORDER BY i.name`
+  ).bind(clientId).all();
+  return json(results);
+}
+
+async function handleAddClientCatalogItems(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const clientId = path.split("/")[3];
+  const body = await request.json() as { skus: string[] };
+  if (!Array.isArray(body.skus) || !body.skus.length) return json({error:"skus array required"}, 400);
+  const stmts = body.skus.map(sku =>
+    env.DB.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)")
+      .bind(clientId, sku, user!.sub)
+  );
+  await env.DB.batch(stmts);
+  await audit(env, user, "UPDATE", "client_catalog", clientId, undefined, `added ${body.skus.length} items`);
+  return json({added: body.skus.length});
+}
+
+async function handleRemoveClientCatalogItem(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const parts = path.split("/");
+  const clientId = parts[3];
+  const sku = parts[5];
+  await env.DB.prepare("DELETE FROM client_catalog WHERE client_id=? AND sku=?").bind(clientId, sku).run();
+  await audit(env, user, "UPDATE", "client_catalog", clientId, sku, "removed");
+  return json({removed: sku});
 }
 
 // ════════════════════════════════════════════════════════════════════
