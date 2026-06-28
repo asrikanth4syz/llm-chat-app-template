@@ -6059,7 +6059,10 @@ async function manageClientCatalog(clientId, clientName) {
        <div style="font-size:.72rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">
          Assigned Products <span id="cc-count" style="font-weight:400">(${assignedSkus.size})</span>
        </div>
-       ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" onclick="removeAllCCItems()">Remove All</button>` : ''}
+       <div style="display:flex;gap:6px">
+         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#e0f2fe;color:#0369a1;border:none" onclick="downloadCCAssigned()">↓ Download CSV</button>` : ''}
+         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" onclick="removeAllCCItems()">Remove All</button>` : ''}
+       </div>
      </div>
      <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
        ${(assigned||[]).length === 0
@@ -6205,6 +6208,22 @@ function downloadCCTemplate(e) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'client_catalog_template.csv';
+  a.click();
+}
+
+function downloadCCAssigned() {
+  const assignedSkus = ccGetAssignedSkus();
+  const skuMap = new Map(_ccAllInventory.map(i=>[i.sku, i]));
+  const rows = [...assignedSkus].map(sku => {
+    const i = skuMap.get(sku) || {};
+    const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+    return [esc(sku), esc(i.name), esc(i.category), esc(i.brand), esc(i.unit_price), esc(i.mrp), esc(i.uom), esc(i.stock)].join(',');
+  });
+  const csv = ['sku,name,category,brand,unit_price,mrp,uom,stock', ...rows].join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `catalog_${_ccClientId}_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
 }
 
