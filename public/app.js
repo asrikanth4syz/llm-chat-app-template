@@ -3027,6 +3027,10 @@ function oqSetItemView(view) {
 }
 
 function orderQueueActions(o) {
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+  if (isClient) {
+    return `<div style="display:flex;gap:6px;align-items:center">${statusBadge(o.status)}<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button></div>`;
+  }
   const btns = [`<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>`];
   switch (o.status) {
     case 'SUBMITTED':
