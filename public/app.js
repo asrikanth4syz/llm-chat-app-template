@@ -1657,17 +1657,18 @@ async function loadStandingOrders() {
 function renderCatalogItems(items) {
   if (!items.length) return `<div style="padding:32px;text-align:center;color:var(--text-muted);grid-column:1/-1">No items match your search</div>`;
   const view = APP._catalogView || 'tile';
+  const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   if (view === 'list') {
     return `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
-      <div style="display:grid;grid-template-columns:2fr 1fr 80px 90px 110px;gap:0;padding:8px 16px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
-        <div>Item</div><div>Category</div><div>Stock</div><div>Price</div><div style="text-align:center">Quantity</div>
+      <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
+        <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div style="text-align:center">Quantity</div>
       </div>
       ${items.map(item => {
         const inCart = APP.cart.find(c => c.sku === item.sku);
         const qty = inCart ? inCart.qty : 0;
         const lowStock = item.stock <= item.reorder_level;
-        return `<div style="display:grid;grid-template-columns:2fr 1fr 80px 90px 110px;gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+        return `<div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <div style="font-size:1.4rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="min-width:0">
@@ -1676,9 +1677,9 @@ function renderCatalogItems(items) {
             </div>
           </div>
           <div style="font-size:.8rem;color:var(--text-muted)">${item.category}${item.sub_category&&item.sub_category!=='Normal'?'<br><span style="font-size:.7rem;color:#10b981;font-weight:600">'+item.sub_category+'</span>':''}</div>
-          <div style="font-size:.82rem;font-weight:600;color:${lowStock?'var(--danger)':'var(--text-muted)'}">
+          ${isClient?'':`<div style="font-size:.82rem;font-weight:600;color:${lowStock?'var(--danger)':'var(--text-muted)'}">
             ${item.stock}${item.uom?' '+item.uom:''}${lowStock?' ⚠️':''}
-          </div>
+          </div>`}
           <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
           <div style="display:flex;align-items:center;justify-content:center;gap:6px">
             <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)" style="width:26px;height:26px;border-radius:50%">−</button>
@@ -1707,9 +1708,9 @@ function renderCatalogItems(items) {
         ${item.uom?`<span style="font-size:.7rem;color:var(--text-muted)">/${item.uom}</span>`:''}
       </div>
       ${item.client_price!=null?`<div style="font-size:.67rem;background:#dbeafe;color:#1d4ed8;padding:1px 7px;border-radius:10px;display:inline-block;margin-bottom:6px">Your Price</div>`:'<div style="margin-bottom:6px"></div>'}
-      <div class="catalog-stock ${lowStock?'text-danger':''}" style="margin-bottom:10px">
+      ${isClient?'':`<div class="catalog-stock ${lowStock?'text-danger':''}" style="margin-bottom:10px">
         ${lowStock?'⚠️ ':''}Stock: ${item.stock}
-      </div>
+      </div>`}
       <div class="catalog-qty">
         <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
         <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}">${qty}</span>
