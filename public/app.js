@@ -5268,6 +5268,7 @@ async function renderDelivery(el) {
   }
 
   function dcCardScheduled(dc) {
+    const canDispatch = APP.user?.role !== 'delivery_exec';
     return `
     <div class="card" style="padding:0;overflow:hidden">
       <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
@@ -5283,7 +5284,7 @@ async function renderDelivery(el) {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
-          <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>
+          ${canDispatch ? `<button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>` : ''}
         </div>
       </div>
     </div>`;
@@ -5798,17 +5799,27 @@ async function renderDeliveryExecDashboard(el) {
   <div style="margin-bottom:8px;font-weight:700;font-size:.95rem;color:var(--navy)">Completed Today (${delivToday.length})</div>
   <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
     ${delivToday.map(dc => `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:32px;height:32px;border-radius:50%;background:#d1fae5;display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
-        <div>
-          <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
-          <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id}</div>
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:32px;height:32px;border-radius:50%;background:#d1fae5;display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
+          <div>
+            <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
+            <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id}</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.82rem;font-weight:700;color:var(--success)">Delivered</div>
+          <div style="font-size:.75rem;color:var(--text-muted)">${fmtDate(dc.delivered_at)}</div>
         </div>
       </div>
-      <div style="text-align:right">
-        <div style="font-size:.82rem;font-weight:700;color:var(--success)">Delivered</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${fmtDate(dc.delivered_at)}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm ${dc.pod_uploaded ? 'btn-secondary' : 'btn-primary'}" onclick="markPOD('${dc.id}')" ${dc.pod_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
+          ${dc.pod_uploaded ? '✓ POD Uploaded' : '📄 Upload POD'}
+        </button>
+        <button class="btn btn-sm ${dc.dc_scan_uploaded ? 'btn-secondary' : 'btn-primary'}" onclick="markScan('${dc.id}')" ${dc.dc_scan_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
+          ${dc.dc_scan_uploaded ? '✓ DC Scanned' : '🔍 Scan POD'}
+        </button>
       </div>
     </div>`).join('')}
   </div>` : ''}`;
