@@ -1597,16 +1597,30 @@ async function handleGetClientCatalog(request: Request, env: Env, path: string):
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const clientId = path.split("/")[3];
-  const {results} = await env.DB.prepare(
-    `SELECT i.*,v.name as vendor_name,cc.added_at,
-            cc.client_price,
-            COALESCE(cc.client_price, i.unit_price) AS effective_price
-     FROM client_catalog cc
-     JOIN inventory i ON cc.sku=i.sku
-     LEFT JOIN vendors v ON i.vendor_id=v.id
-     WHERE cc.client_id=? AND i.active=1
-     ORDER BY i.name`
-  ).bind(clientId).all();
+  let results: unknown[];
+  try {
+    ({results} = await env.DB.prepare(
+      `SELECT i.*,v.name as vendor_name,cc.added_at,
+              cc.client_price,
+              COALESCE(cc.client_price, i.unit_price) AS effective_price
+       FROM client_catalog cc
+       JOIN inventory i ON cc.sku=i.sku
+       LEFT JOIN vendors v ON i.vendor_id=v.id
+       WHERE cc.client_id=? AND i.active=1
+       ORDER BY i.name`
+    ).bind(clientId).all());
+  } catch {
+    // client_price column not yet migrated — fall back to query without it
+    ({results} = await env.DB.prepare(
+      `SELECT i.*,v.name as vendor_name,cc.added_at,
+              i.unit_price AS effective_price
+       FROM client_catalog cc
+       JOIN inventory i ON cc.sku=i.sku
+       LEFT JOIN vendors v ON i.vendor_id=v.id
+       WHERE cc.client_id=? AND i.active=1
+       ORDER BY i.name`
+    ).bind(clientId).all());
+  }
   return json(results);
 }
 

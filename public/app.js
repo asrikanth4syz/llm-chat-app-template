@@ -6082,24 +6082,30 @@ function ccAssignedRow(item) {
   const globalPrice = item.unit_price ?? 0;
   const clientPrice = item.client_price != null ? item.client_price : '';
   const hasCustom = item.client_price != null;
-  return `<div id="cc-row-${item.sku}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border);flex-wrap:wrap">
-    <span style="font-size:1.1rem">${item.emoji||'📦'}</span>
-    <div style="flex:1;min-width:120px">
-      <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
-      <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''} · Global ₹${globalPrice}</div>
+  return `<div id="cc-row-${item.sku}" style="background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border);padding:8px 10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="font-size:1.1rem;flex-shrink:0">${item.emoji||'📦'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
+        <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''}</div>
+      </div>
+      <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" onclick="removeCCItem('${item.sku}')">Remove</button>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-      <label style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Client Price ₹</label>
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
+      <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Global ₹${globalPrice}</span>
+      <span style="font-size:.72rem;color:var(--text-muted)">→</span>
+      <label style="font-size:.72rem;font-weight:600;color:var(--navy);white-space:nowrap">Client Price ₹</label>
       <input type="number" min="0" step="0.01" placeholder="${globalPrice}"
         value="${clientPrice}"
-        style="width:90px;padding:4px 7px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.82rem;background:#fff"
+        style="flex:1;min-width:70px;padding:4px 8px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.85rem;background:#fff"
         id="cc-price-${item.sku}"
         onblur="saveCCPrice('${item.sku}',this)"
         onkeydown="if(event.key==='Enter'){this.blur()}"
         title="Leave blank to use global price ₹${globalPrice}">
-      ${hasCustom?`<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:4px;white-space:nowrap">Custom</span>`:`<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;color:var(--text-muted);white-space:nowrap">Global</span>`}
+      ${hasCustom
+        ? `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:4px;white-space:nowrap;font-weight:600">Custom</span>`
+        : `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;color:var(--text-muted);white-space:nowrap">Global</span>`}
     </div>
-    <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" onclick="removeCCItem('${item.sku}')">Remove</button>
   </div>`;
 }
 
