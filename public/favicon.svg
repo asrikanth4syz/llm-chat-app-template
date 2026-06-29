@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 270">
+  <!-- Top band: wide parallelogram with chevron notch on right -->
+  <path d="M 0,0
+           L 220,0
+           L 220,90
+           L 140,155
+           L 0,155
+           Z" fill="#1F3864"/>
+  <!-- Bottom band: shorter horizontal bar -->
+  <path d="M 0,172
+           L 220,172
+           L 220,270
+           L 140,270
+           L 140,232
+           L 0,232
+           Z" fill="#1F3864"/>
+</svg>
