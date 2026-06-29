@@ -234,6 +234,7 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="POST")   return handleAddClientCatalogItems(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="PATCH")  return handlePatchClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="DELETE") return handleRemoveClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+$/) && method==="PATCH") return handlePatchClient(request,env,path);
 
@@ -860,23 +861,45 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
   if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
   if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
 
-  // Client-role users see only their assigned catalog (if any assignments exist)
+  // Client-role users see only their assigned catalog, with per-client prices applied
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
   if (isClientRole && user!.client_id) {
     try {
       const {results: catalogRows} = await env.DB.prepare(
-        "SELECT sku FROM client_catalog WHERE client_id=?"
-      ).bind(user!.client_id).all();
+        "SELECT sku, client_price FROM client_catalog WHERE client_id=?"
+      ).bind(user!.client_id).all() as {results: {sku:string; client_price:number|null}[]};
       if (catalogRows.length > 0) {
-        const catalogSkus = (catalogRows as Record<string,string>[]).map(r => r.sku);
+        const catalogSkus = catalogRows.map(r => r.sku);
         const ph = catalogSkus.map(() => '?').join(',');
         baseFilter += ` AND i.sku IN (${ph})`;
         params.push(...catalogSkus);
+
+        // After fetching, overlay per-client prices onto the results
+        const priceMap = Object.fromEntries(catalogRows.map(r => [r.sku, r.client_price]));
+
+        let results: unknown[];
+        try {
+          const {results: r} = await env.DB.prepare(
+            `SELECT i.*,v.name as vendor_name,v2.name as secondary_vendor_name FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id LEFT JOIN vendors v2 ON i.secondary_vendor_id=v2.id${baseFilter} ORDER BY i.name`
+          ).bind(...params).all();
+          results = r;
+        } catch {
+          const {results: r} = await env.DB.prepare(
+            `SELECT i.*,v.name as vendor_name FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id${baseFilter} ORDER BY i.name`
+          ).bind(...params).all();
+          results = r;
+        }
+        // Replace unit_price with client-specific price where set
+        results = (results as Record<string,unknown>[]).map(item => {
+          const cp = priceMap[item.sku as string];
+          return cp != null ? {...item, unit_price: cp, client_price: cp} : item;
+        });
+        return json(results);
       }
     } catch { /* client_catalog table not yet created — show all */ }
   }
 
-  // Try with secondary vendor JOIN first; fall back to simpler query if column missing
+  // Non-client roles or no catalog assignments — return full inventory
   let results: unknown[];
   try {
     const {results: r} = await env.DB.prepare(
@@ -1575,7 +1598,9 @@ async function handleGetClientCatalog(request: Request, env: Env, path: string):
   const denied = requireUser(user); if (denied) return denied;
   const clientId = path.split("/")[3];
   const {results} = await env.DB.prepare(
-    `SELECT i.*,v.name as vendor_name,cc.added_at
+    `SELECT i.*,v.name as vendor_name,cc.added_at,
+            cc.client_price,
+            COALESCE(cc.client_price, i.unit_price) AS effective_price
      FROM client_catalog cc
      JOIN inventory i ON cc.sku=i.sku
      LEFT JOIN vendors v ON i.vendor_id=v.id
@@ -1583,6 +1608,20 @@ async function handleGetClientCatalog(request: Request, env: Env, path: string):
      ORDER BY i.name`
   ).bind(clientId).all();
   return json(results);
+}
+
+async function handlePatchClientCatalogItem(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const parts = path.split("/");
+  const clientId = parts[3];
+  const sku = parts[5];
+  const body = await request.json() as { client_price?: number | null };
+  await env.DB.prepare("UPDATE client_catalog SET client_price=? WHERE client_id=? AND sku=?")
+    .bind(body.client_price ?? null, clientId, sku).run();
+  await audit(env, user, "UPDATE", "client_catalog", clientId, sku, `client_price:${body.client_price}`);
+  return json({ok: true, client_price: body.client_price ?? null});
 }
 
 async function handleAddClientCatalogItems(request: Request, env: Env, path: string): Promise<Response> {

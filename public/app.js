@@ -1679,7 +1679,7 @@ function renderCatalogItems(items) {
           <div style="font-size:.82rem;font-weight:600;color:${lowStock?'var(--danger)':'var(--text-muted)'}">
             ${item.stock}${item.uom?' '+item.uom:''}${lowStock?' ⚠️':''}
           </div>
-          <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}</div>
+          <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
           <div style="display:flex;align-items:center;justify-content:center;gap:6px">
             <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)" style="width:26px;height:26px;border-radius:50%">−</button>
             <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}" style="min-width:20px;text-align:center;font-weight:700;font-size:.9rem;color:${qty>0?'var(--navy)':'var(--text-muted)'}">${qty}</span>
@@ -1702,10 +1702,11 @@ function renderCatalogItems(items) {
       </div>
       <div class="catalog-name">${item.name}</div>
       <div class="catalog-cat">${item.category}${item.brand?' · '+item.brand:''}</div>
-      <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-bottom:4px">
         <div class="catalog-price">${fmt(item.unit_price)}</div>
         ${item.uom?`<span style="font-size:.7rem;color:var(--text-muted)">/${item.uom}</span>`:''}
       </div>
+      ${item.client_price!=null?`<div style="font-size:.67rem;background:#dbeafe;color:#1d4ed8;padding:1px 7px;border-radius:10px;display:inline-block;margin-bottom:6px">Your Price</div>`:'<div style="margin-bottom:6px"></div>'}
       <div class="catalog-stock ${lowStock?'text-danger':''}" style="margin-bottom:10px">
         ${lowStock?'⚠️ ':''}Stock: ${item.stock}
       </div>
@@ -6078,14 +6079,50 @@ async function manageClientCatalog(clientId, clientName) {
 }
 
 function ccAssignedRow(item) {
-  return `<div id="cc-row-${item.sku}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
+  const globalPrice = item.unit_price ?? 0;
+  const clientPrice = item.client_price != null ? item.client_price : '';
+  const hasCustom = item.client_price != null;
+  return `<div id="cc-row-${item.sku}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border);flex-wrap:wrap">
     <span style="font-size:1.1rem">${item.emoji||'📦'}</span>
-    <div style="flex:1;min-width:0">
+    <div style="flex:1;min-width:120px">
       <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
-      <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''} · ₹${item.unit_price}</div>
+      <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''} · Global ₹${globalPrice}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <label style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Client Price ₹</label>
+      <input type="number" min="0" step="0.01" placeholder="${globalPrice}"
+        value="${clientPrice}"
+        style="width:90px;padding:4px 7px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.82rem;background:#fff"
+        id="cc-price-${item.sku}"
+        onblur="saveCCPrice('${item.sku}',this)"
+        onkeydown="if(event.key==='Enter'){this.blur()}"
+        title="Leave blank to use global price ₹${globalPrice}">
+      ${hasCustom?`<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:4px;white-space:nowrap">Custom</span>`:`<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;color:var(--text-muted);white-space:nowrap">Global</span>`}
     </div>
     <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" onclick="removeCCItem('${item.sku}')">Remove</button>
   </div>`;
+}
+
+async function saveCCPrice(sku, input) {
+  if (!_ccClientId) return;
+  const raw = input.value.trim();
+  const price = raw === '' ? null : parseFloat(raw);
+  if (raw !== '' && (isNaN(price) || price < 0)) { showToast('Invalid price','error'); return; }
+  const res = await api(`/clients/${_ccClientId}/catalog/${sku}`, {
+    method:'PATCH', body: JSON.stringify({client_price: price})
+  });
+  if (!res) return;
+  const badge = document.getElementById(`cc-price-badge-${sku}`);
+  if (badge) {
+    if (price != null) {
+      badge.textContent = 'Custom'; badge.style.cssText = 'font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:4px;white-space:nowrap';
+      input.style.borderColor = 'var(--navy)';
+    } else {
+      badge.textContent = 'Global'; badge.style.cssText = 'font-size:.68rem;color:var(--text-muted);white-space:nowrap';
+      input.style.borderColor = 'var(--border)';
+    }
+  }
+  showToast(price != null ? `Client price set to ₹${price}` : 'Reverted to global price');
 }
 
 function ccGetAssignedSkus() {
@@ -6221,9 +6258,12 @@ function downloadCCAssigned() {
   const rows = [...assignedSkus].map(sku => {
     const i = skuMap.get(sku) || {};
     const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
-    return [esc(sku), esc(i.name), esc(i.category), esc(i.brand), esc(i.unit_price), esc(i.mrp), esc(i.uom), esc(i.stock)].join(',');
+    const priceInput = document.getElementById(`cc-price-${sku}`);
+    const clientPrice = priceInput?.value?.trim() || '';
+    const effectivePrice = clientPrice !== '' ? clientPrice : (i.unit_price ?? '');
+    return [esc(sku), esc(i.name), esc(i.category), esc(i.brand), esc(i.unit_price), esc(clientPrice||''), esc(effectivePrice), esc(i.mrp), esc(i.uom), esc(i.stock)].join(',');
   });
-  const csv = ['sku,name,category,brand,unit_price,mrp,uom,stock', ...rows].join('\n');
+  const csv = ['sku,name,category,brand,global_price,client_price,effective_price,mrp,uom,stock', ...rows].join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
