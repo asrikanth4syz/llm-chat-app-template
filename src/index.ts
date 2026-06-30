@@ -1418,8 +1418,11 @@ async function handleUploadDCDoc(request: Request, env: Env, path: string, docTy
     return json({ error: "Failed to store document: " + msg }, 500);
   }
 
-  const flagCol = docType === "pod" ? "pod_uploaded" : "dc_scan_uploaded";
-  await env.DB.prepare(`UPDATE delivery_challans SET ${flagCol}=1 WHERE id=?`).bind(id).run();
+  // scanning the POD document satisfies both flags — it's the same physical document
+  const updateSql = docType === "scan"
+    ? "UPDATE delivery_challans SET dc_scan_uploaded=1, pod_uploaded=1 WHERE id=?"
+    : "UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?";
+  await env.DB.prepare(updateSql).bind(id).run();
   await audit(env, user, docType === "pod" ? "POD_UPLOAD" : "DC_SCAN_UPLOAD", "delivery_challan", id, undefined, body.filename||"file");
   return json({ id, doc_type: docType, uploaded: true });
 }

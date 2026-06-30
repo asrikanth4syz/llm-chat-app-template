@@ -5850,35 +5850,40 @@ function uploadDCDocModal(dcId, docType) {
 }
 
 function scanDCDocModal(dcId) {
+  APP._scanPages = []; // [{dataUrl, name}]
   openModal(`Scan POD Document — DC #${dcId}`,
-    `<!-- hidden camera input -->
-     <input type="file" id="dc-scan-file" accept="image/*" capture="environment"
+    `<input type="file" id="dc-scan-file" accept="image/*" capture="environment"
        style="display:none" onchange="onScanCaptured(this,'${dcId}')">
 
-     <!-- initial state: tap to scan -->
-     <div id="scan-initial" style="text-align:center;padding:24px 0">
-       <div style="font-size:3.5rem;margin-bottom:12px">📷</div>
-       <div style="font-weight:700;font-size:1rem;color:var(--navy);margin-bottom:6px">Scan the POD document</div>
-       <div style="font-size:.83rem;color:var(--text-muted);margin-bottom:20px">Point your camera at the signed delivery challan</div>
-       <button class="btn btn-primary" style="font-size:1rem;padding:12px 32px" onclick="document.getElementById('dc-scan-file').click()">
-         📷 Open Camera
-       </button>
-       <div style="margin-top:12px;font-size:.78rem;color:var(--text-muted)">On desktop, this opens a file picker instead</div>
+     <!-- captured pages thumbnails (hidden until first page) -->
+     <div id="scan-pages-wrap" style="display:none;margin-bottom:14px">
+       <div style="font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">
+         Captured pages — <span id="scan-page-count">0</span>
+       </div>
+       <div id="scan-thumbs" style="display:flex;gap:8px;flex-wrap:wrap"></div>
      </div>
 
-     <!-- preview state (hidden until photo taken) -->
+     <!-- initial prompt -->
+     <div id="scan-initial" style="text-align:center;padding:20px 0">
+       <div style="font-size:3rem;margin-bottom:10px">📷</div>
+       <div style="font-weight:700;font-size:.95rem;color:var(--navy);margin-bottom:4px">Scan the POD document</div>
+       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:18px">Point your camera at the signed delivery challan.<br>You can scan multiple pages one at a time.</div>
+       <button class="btn btn-primary" style="padding:10px 28px" onclick="document.getElementById('dc-scan-file').click()">
+         📷 Open Camera
+       </button>
+       <div style="margin-top:10px;font-size:.75rem;color:var(--text-muted)">On desktop this opens a file picker</div>
+     </div>
+
+     <!-- preview of current capture -->
      <div id="scan-preview" style="display:none">
-       <div style="position:relative;text-align:center;margin-bottom:12px">
-         <img id="scan-preview-img" style="max-width:100%;max-height:340px;border-radius:8px;border:2px solid var(--border)">
-         <div id="scan-preview-name" style="font-size:.78rem;color:var(--text-muted);margin-top:6px"></div>
+       <div style="text-align:center;margin-bottom:10px">
+         <img id="scan-preview-img" style="max-width:100%;max-height:280px;border-radius:8px;border:2px solid var(--border)">
+         <div id="scan-preview-name" style="font-size:.75rem;color:var(--text-muted);margin-top:5px"></div>
        </div>
-       <div style="display:flex;gap:8px;justify-content:center">
-         <button class="btn btn-secondary" style="flex:1" onclick="rescanDCDoc('${dcId}')">
-           🔄 Retake Photo
-         </button>
-         <button class="btn btn-primary" style="flex:1" id="dc-scan-submit" onclick="confirmDCDocUpload('${dcId}','scan','dc-scan-file')">
-           ⬆ Upload Scan
-         </button>
+       <div style="display:flex;gap:8px">
+         <button class="btn btn-secondary" style="flex:1" onclick="retakeScanPage('${dcId}')">🔄 Retake</button>
+         <button class="btn btn-secondary" style="flex:1" onclick="addScanPage('${dcId}')">➕ Add Page</button>
+         <button class="btn btn-primary" style="flex:1" id="dc-scan-submit" onclick="uploadAllScanPages('${dcId}')">⬆ Upload</button>
        </div>
      </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`
@@ -5892,19 +5897,86 @@ function onScanCaptured(input, dcId) {
   const r = new FileReader();
   r.onload = e => {
     document.getElementById('scan-preview-img').src = e.target.result;
-    document.getElementById('scan-preview-name').textContent = file.name + ' · ' + fmt(file.size);
+    document.getElementById('scan-preview-name').textContent = 'Page preview · ' + fmt(file.size);
     document.getElementById('scan-initial').style.display = 'none';
     document.getElementById('scan-preview').style.display = '';
+    // store pending capture for add/upload
+    APP._scanPending = { dataUrl: e.target.result, name: file.name, type: file.type, file };
   };
   r.readAsDataURL(file);
 }
 
-function rescanDCDoc(dcId) {
+function retakeScanPage(dcId) {
+  APP._scanPending = null;
   document.getElementById('scan-preview').style.display = 'none';
-  document.getElementById('scan-initial').style.display = '';
+  document.getElementById('scan-initial').style.display = APP._scanPages.length ? 'none' : '';
   const inp = document.getElementById('dc-scan-file');
   inp.value = '';
   inp.click();
+}
+
+function addScanPage(dcId) {
+  if (!APP._scanPending) return;
+  const pages = APP._scanPages;
+  const idx = pages.length;
+  pages.push(APP._scanPending);
+  APP._scanPending = null;
+
+  // show thumb strip
+  const thumbs = document.getElementById('scan-thumbs');
+  const wrap   = document.getElementById('scan-pages-wrap');
+  const img = document.createElement('div');
+  img.style.cssText = 'position:relative;display:inline-block';
+  img.innerHTML = `<img src="${pages[idx].dataUrl}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:2px solid var(--border)">
+    <span style="position:absolute;top:-6px;left:-6px;background:var(--navy);color:#fff;font-size:.65rem;font-weight:700;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center">${idx+1}</span>`;
+  thumbs.appendChild(img);
+  wrap.style.display = '';
+  document.getElementById('scan-page-count').textContent = pages.length;
+  document.getElementById('scan-preview').style.display = 'none';
+
+  // reopen camera
+  const inp = document.getElementById('dc-scan-file');
+  inp.value = '';
+  inp.click();
+}
+
+async function uploadAllScanPages(dcId) {
+  // commit current preview as a page first
+  if (APP._scanPending) {
+    APP._scanPages.push(APP._scanPending);
+    APP._scanPending = null;
+  }
+  const pages = APP._scanPages;
+  if (!pages.length) { showToast('No pages captured', 'error'); return; }
+
+  const btn = document.getElementById('dc-scan-submit');
+  if (btn) { btn.disabled = true; btn.textContent = `Uploading ${pages.length} page(s)…`; }
+
+  let ok = 0;
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    const compressed = await compressImage(p.file, 1600, 0.75);
+    const file = compressed && compressed.size < p.file.size
+      ? new File([compressed], `scan_p${i+1}.jpg`, { type: 'image/jpeg' })
+      : p.file;
+    const b64 = await new Promise(res => {
+      const r = new FileReader();
+      r.onload = e => res(e.target.result.split(',')[1]);
+      r.readAsDataURL(file);
+    });
+    const result = await api(`/delivery-challans/${dcId}/scan/upload`, {
+      method: 'POST',
+      body: JSON.stringify({ filename: `DC${dcId}_scan_p${i+1}.jpg`, mime_type: file.type, content_b64: b64, file_size: file.size })
+    });
+    if (result) ok++;
+    if (btn) btn.textContent = `Uploading… ${i+1}/${pages.length}`;
+  }
+  closeModal();
+  if (ok) {
+    showToast(`${ok} page(s) uploaded for DC #${dcId}`);
+    if (APP.user?.role === 'delivery_exec') navigate('dashboard');
+    else switchDeliveryTab('pod', document.querySelector('#dc-tabs .tab-btn.active'));
+  }
 }
 
 function previewDCDoc(input) {
