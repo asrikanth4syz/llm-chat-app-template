@@ -5260,10 +5260,12 @@ async function renderDelivery(el) {
   APP._dcTab  = APP._dcTab || 'scheduled';
 
   function tabsHtml(active) {
-    return ['scheduled','transit','delivered','returns','all'].map((t,i)=>{
-      const labels = ['Scheduled','In Transit','Delivered','Returns','All'];
-      const counts = [scheduled.length, transit.length, delivered.length, returns.length, dcs.length];
-      return `<button class="tab-btn${active===t?' active':''}" onclick="switchDeliveryTab('${t}',this)">${labels[i]} <span style="font-size:.72rem;opacity:.7">(${counts[i]})</span></button>`;
+    const podPending = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
+    return ['scheduled','transit','delivered','returns','pod','all'].map((t,i)=>{
+      const labels = ['Scheduled','In Transit','Delivered','Returns','POD & Scans','All'];
+      const counts = [scheduled.length, transit.length, delivered.length, returns.length, delivered.length, dcs.length];
+      const badge  = t === 'pod' && podPending ? `<span style="background:var(--warning);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px">${podPending}</span>` : `<span style="font-size:.72rem;opacity:.7">(${counts[i]})</span>`;
+      return `<button class="tab-btn${active===t?' active':''}" onclick="switchDeliveryTab('${t}',this)">${labels[i]} ${badge}</button>`;
     }).join('');
   }
 
@@ -5366,6 +5368,75 @@ async function renderDelivery(el) {
       if (needsAction.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Needs Action (${needsAction.length})</div>${tbl(needsAction)}<div style="margin-bottom:16px"></div>`;
       if (complete.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Complete (${complete.length})</div>${tbl(complete)}`;
       return html;
+    }
+    if (tab === 'pod') {
+      if (!delivered.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📄</div>No delivered challans yet</div>`;
+      const podDone  = delivered.filter(d => d.pod_uploaded).length;
+      const scanDone = delivered.filter(d => d.dc_scan_uploaded).length;
+      return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+        <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary)">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Delivered</div>
+          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${delivered.length}</div>
+        </div>
+        <div class="card" style="padding:14px 16px;border-top:3px solid ${podDone===delivered.length?'var(--success)':'var(--warning)'}">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">POD Uploaded</div>
+          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
+        </div>
+        <div class="card" style="padding:14px 16px;border-top:3px solid ${scanDone===delivered.length?'var(--success)':'var(--warning)'}">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">DC Scanned</div>
+          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
+        </div>
+        <div class="card" style="padding:14px 16px;border-top:3px solid ${delivered.length-Math.max(podDone,scanDone)===0?'var(--success)':'var(--danger)'}">
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Pending Action</div>
+          <div style="font-size:1.8rem;font-weight:700;margin-top:4px;color:${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length?'var(--danger)':'var(--success)'}">
+            ${delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <div style="position:relative;flex:1;max-width:400px">
+          <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" oninput="filterPODTable(this.value)"
+            style="width:100%;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;outline:none">
+        </div>
+        <span id="pod-result-count" style="font-size:.82rem;color:var(--text-muted)"></span>
+      </div>
+      <div class="card"><div class="table-wrap">
+        <table class="table" id="pod-scan-table">
+          <thead><tr>
+            <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
+            <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th>
+          </tr></thead>
+          <tbody>
+            ${delivered.map(dc => {
+              const podOk  = !!dc.pod_uploaded;
+              const scanOk = !!dc.dc_scan_uploaded;
+              const allOk  = podOk && scanOk;
+              const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
+              return `<tr data-search="${search}">
+                <td><b>${dc.id}</b></td>
+                <td>${dc.order_id}</td>
+                <td>${dc.client_name||'—'}</td>
+                <td>${dc.driver_name||'—'}</td>
+                <td>${fmtDate(dc.delivered_at)}</td>
+                <td>${podOk
+                  ? '<span class="badge badge-success">✓ Uploaded</span>'
+                  : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}
+                </td>
+                <td>${scanOk
+                  ? '<span class="badge badge-success">✓ Scanned</span>'
+                  : `<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}
+                </td>
+                <td>${allOk
+                  ? '<span class="badge badge-success">Complete</span>'
+                  : `<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div></div>`;
     }
     if (tab === 'returns') {
       if (!returns.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
@@ -5516,6 +5587,67 @@ async function switchDeliveryTab(tab, btn) {
       }
       content.innerHTML = html;
 
+    } else if (tab === 'pod') {
+      const podDone  = delivered.filter(d => d.pod_uploaded).length;
+      const scanDone = delivered.filter(d => d.dc_scan_uploaded).length;
+      if (!delivered.length) {
+        content.innerHTML = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📄</div>No delivered challans yet</div>`;
+      } else {
+        content.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+          <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary)">
+            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Delivered</div>
+            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${delivered.length}</div>
+          </div>
+          <div class="card" style="padding:14px 16px;border-top:3px solid ${podDone===delivered.length?'var(--success)':'var(--warning)'}">
+            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">POD Uploaded</div>
+            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
+          </div>
+          <div class="card" style="padding:14px 16px;border-top:3px solid ${scanDone===delivered.length?'var(--success)':'var(--warning)'}">
+            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">DC Scanned</div>
+            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
+          </div>
+          <div class="card" style="padding:14px 16px;border-top:3px solid ${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length===0?'var(--success)':'var(--danger)'}">
+            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Pending Action</div>
+            <div style="font-size:1.8rem;font-weight:700;margin-top:4px;color:${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length?'var(--danger)':'var(--success)'}">${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="position:relative;flex:1;max-width:400px">
+            <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" oninput="filterPODTable(this.value)"
+              style="width:100%;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box">
+          </div>
+          <span id="pod-result-count" style="font-size:.82rem;color:var(--text-muted)"></span>
+        </div>
+        <div class="card"><div class="table-wrap">
+          <table class="table" id="pod-scan-table">
+            <thead><tr>
+              <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
+              <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th>
+            </tr></thead>
+            <tbody>
+              ${delivered.map(dc => {
+                const podOk  = !!dc.pod_uploaded;
+                const scanOk = !!dc.dc_scan_uploaded;
+                const allOk  = podOk && scanOk;
+                const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
+                return `<tr data-search="${search}">
+                  <td><b>${dc.id}</b></td>
+                  <td>${dc.order_id}</td>
+                  <td>${dc.client_name||'—'}</td>
+                  <td>${dc.driver_name||'—'}</td>
+                  <td>${fmtDate(dc.delivered_at)}</td>
+                  <td>${podOk?'<span class="badge badge-success">✓ Uploaded</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
+                  <td>${scanOk?'<span class="badge badge-success">✓ Scanned</span>':`<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
+                  <td>${allOk?'<span class="badge badge-success">Complete</span>':`<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div></div>`;
+      }
+
     } else if (tab === 'returns') {
       content.innerHTML = returns.length
         ? `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
@@ -5559,6 +5691,19 @@ function filterDCTable(status) {
   document.querySelectorAll('#dc-all-tbody tr[data-status]').forEach(row => {
     row.style.display = (!status || row.dataset.status === status) ? '' : 'none';
   });
+}
+
+function filterPODTable(q) {
+  const rows = document.querySelectorAll('#pod-scan-table tbody tr[data-search]');
+  const term = (q || '').toLowerCase().trim();
+  let visible = 0;
+  rows.forEach(r => {
+    const match = !term || (r.dataset.search || '').includes(term);
+    r.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  const counter = document.getElementById('pod-result-count');
+  if (counter) counter.textContent = term ? `${visible} result${visible !== 1 ? 's' : ''}` : '';
 }
 
 async function viewDCItems(dcId) {
