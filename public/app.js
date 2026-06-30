@@ -132,6 +132,8 @@ const NAV = {
     { id:'track_delivery', label:'Track Delivery', icon:iconDelivery,  badge:null },
     { id:'approvals',      label:'Approvals',      icon:iconApprove,   badge:null },
     { id:'client_budget',  label:'Budget & Spend', icon:iconReports,   badge:null },
+    { section:'Store' },
+    { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
@@ -147,6 +149,8 @@ const NAV = {
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
     { id:'track_delivery',label:'Track Delivery',icon:iconDelivery,badge:null },
+    { section:'Store' },
+    { id:'my_inventory', label:'My Inventory', icon:iconInventory, badge:null },
   ],
   vendor: [
     { section:'Vendor Portal' },
@@ -549,6 +553,7 @@ const PAGE_MAP = {
   consolidated_orders: renderConsolidatedOrders,
   consolidated_due: renderConsolidatedDue,
   client_budget: renderClientBudget,
+  my_inventory: renderMyInventory,
 };
 
 function navigate(page) {
@@ -1885,6 +1890,239 @@ async function saveDraft() {
       `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
        <button id="save-draft-btn" class="btn btn-gold" onclick="confirmOrder(true)" disabled>Save Draft</button>`);
   }
+}
+
+/* ============================================================
+   MY INVENTORY (CLIENT STORE TRACKING)
+   ============================================================ */
+async function renderMyInventory(el) {
+  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:40px"><span style="color:var(--text-muted)">Loading inventory…</span></div>`;
+  const [items, consumption] = await Promise.all([
+    api('/client-inventory'),
+    api('/client-inventory/consumption').catch(()=>[]),
+  ]);
+  if (!items) { el.innerHTML = `<div style="padding:32px;text-align:center;color:var(--text-muted)">Could not load inventory.</div>`; return; }
+
+  const totalItems   = items.length;
+  const lowStock     = items.filter(i => i.stock_status === 'low').length;
+  const outOfStock   = items.filter(i => i.stock_status === 'out').length;
+  const consumedWeek = (consumption||[]).filter(c => c.consumed_at >= new Date(Date.now()-7*86400000).toISOString().slice(0,10));
+  const totalUsedWeek= consumedWeek.reduce((s,c) => s + (c.qty||0), 0);
+
+  el.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Store Inventory</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track items received, log consumption, and reorder low-stock items</div>
+    </div>
+  </div>
+
+  <!-- KPI Cards -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:14px;margin-bottom:18px">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Tracked</div>
+      <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${totalItems}</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowStock?'#f59e0b':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='low';filterMyInventoryTable()">
+      <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Stock</div>
+      <div style="font-size:1.8rem;font-weight:700;color:${lowStock?'#d97706':'var(--navy)'};line-height:1">${lowStock}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">at or below reorder level</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${outOfStock?'var(--danger)':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='out';filterMyInventoryTable()">
+      <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Out of Stock</div>
+      <div style="font-size:1.8rem;font-weight:700;color:${outOfStock?'var(--danger)':'var(--navy)'};line-height:1">${outOfStock}</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
+      <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Used This Week</div>
+      <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${totalUsedWeek.toFixed(1)}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">units consumed</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
+    ${['stock','consumption'].map((t,i) => `<button id="inv-tab-${t}" onclick="switchMyInvTab('${t}')" style="padding:9px 20px;font-size:.85rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:${i===0?'2px solid var(--primary)':'2px solid transparent'};margin-bottom:-2px;color:${i===0?'var(--primary)':'var(--text-muted)'}">${['Current Stock','Consumption Log'][i]}</button>`).join('')}
+  </div>
+
+  <!-- Current Stock Tab -->
+  <div id="inv-panel-stock">
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <input id="inv-search" type="text" placeholder="Search items…" class="form-control" style="max-width:240px" oninput="filterMyInventoryTable()">
+      <select id="inv-filter-status" class="form-control" style="max-width:160px" onchange="filterMyInventoryTable()">
+        <option value="">All Status</option>
+        <option value="ok">In Stock</option>
+        <option value="low">Low Stock</option>
+        <option value="out">Out of Stock</option>
+      </select>
+      <select id="inv-filter-cat" class="form-control" style="max-width:180px" onchange="filterMyInventoryTable()">
+        <option value="">All Categories</option>
+        ${[...new Set(items.map(i=>i.category).filter(Boolean))].sort().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="table" style="margin:0">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Category</th>
+            <th>UOM</th>
+            <th style="text-align:right">In Store</th>
+            <th style="text-align:right">Reorder At</th>
+            <th>Status</th>
+            <th>Last Received</th>
+            <th>Last Used</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="my-inv-tbody">
+          ${items.length === 0 ? `<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted)">No inventory yet — items will appear here after deliveries are confirmed.</td></tr>` :
+            items.map(i => myInvRow(i)).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Consumption Log Tab -->
+  <div id="inv-panel-consumption" style="display:none">
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <input type="date" id="inv-cons-from" class="form-control" style="max-width:160px" value="${new Date(Date.now()-7*86400000).toISOString().slice(0,10)}" onchange="reloadConsumptionLog()">
+      <span style="color:var(--text-muted);font-size:.85rem">to</span>
+      <input type="date" id="inv-cons-to" class="form-control" style="max-width:160px" value="${new Date().toISOString().slice(0,10)}" onchange="reloadConsumptionLog()">
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="table" style="margin:0">
+        <thead>
+          <tr><th>Date & Time</th><th>Item</th><th style="text-align:right">Qty Used</th><th>Notes</th><th>Recorded By</th></tr>
+        </thead>
+        <tbody id="cons-log-tbody">
+          ${renderConsumptionRows(consumption||[])}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function myInvRow(i) {
+  const statusColor = i.stock_status==='out' ? 'var(--danger)' : i.stock_status==='low' ? '#d97706' : 'var(--success)';
+  const statusLabel = i.stock_status==='out' ? 'Out of Stock' : i.stock_status==='low' ? 'Low Stock' : 'In Stock';
+  const statusBg    = i.stock_status==='out' ? '#fee2e2' : i.stock_status==='low' ? '#fef3c7' : '#d1fae5';
+  const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
+  return `<tr data-sku="${esc(i.sku)}" data-cat="${esc(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
+    <td>
+      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${esc(i.item_name)}</div>
+      <div style="font-size:.72rem;color:var(--text-muted)">${esc(i.sku)}</div>
+    </td>
+    <td style="font-size:.82rem;color:var(--text-muted)">${esc(i.category||'—')}</td>
+    <td style="font-size:.82rem;color:var(--text-muted)">${esc(i.uom||'unit')}</td>
+    <td style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Number(i.qty_on_hand||0).toFixed(1)}</td>
+    <td style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Number(i.reorder_level).toFixed(1):'—'}</td>
+    <td><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
+    <td style="font-size:.78rem;color:var(--text-muted)">${i.last_received_at ? fmtDate(i.last_received_at) : '—'}</td>
+    <td style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
+    <td>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${esc(i.sku)}','${esc(i.item_name)}',${i.qty_on_hand||0},'${esc(i.uom||'unit')}')">Log Use</button>
+        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="navigate('place_order')">Order More</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="setReorderLevelModal('${esc(i.sku)}','${esc(i.item_name)}',${i.reorder_level||0})">⚙</button>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function renderConsumptionRows(rows) {
+  if (!rows.length) return `<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted)">No consumption recorded in this period.</td></tr>`;
+  return rows.map(r => `<tr>
+    <td style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">${fmtDate(r.consumed_at)}</td>
+    <td><div style="font-weight:600;font-size:.85rem">${esc(r.item_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${esc(r.sku)}</div></td>
+    <td style="text-align:right;font-weight:700">${Number(r.qty).toFixed(1)}</td>
+    <td style="font-size:.8rem;color:var(--text-muted)">${r.notes ? esc(r.notes) : '—'}</td>
+    <td style="font-size:.8rem;color:var(--text-muted)">${esc(r.recorded_by||'—')}</td>
+  </tr>`).join('');
+}
+
+function switchMyInvTab(tab) {
+  ['stock','consumption'].forEach(t => {
+    document.getElementById(`inv-panel-${t}`).style.display = t===tab ? '' : 'none';
+    const btn = document.getElementById(`inv-tab-${t}`);
+    btn.style.borderBottom = t===tab ? '2px solid var(--primary)' : '2px solid transparent';
+    btn.style.color = t===tab ? 'var(--primary)' : 'var(--text-muted)';
+  });
+}
+
+function filterMyInventoryTable() {
+  const q      = (document.getElementById('inv-search')?.value||'').toLowerCase();
+  const status = document.getElementById('inv-filter-status')?.value || '';
+  const cat    = document.getElementById('inv-filter-cat')?.value || '';
+  document.querySelectorAll('#my-inv-tbody tr[data-sku]').forEach(row => {
+    const text   = row.textContent.toLowerCase();
+    const rowCat = row.dataset.cat || '';
+    const rowSt  = row.dataset.status || '';
+    const show   = (!q || text.includes(q)) && (!status || rowSt===status) && (!cat || rowCat===cat);
+    row.style.display = show ? '' : 'none';
+  });
+}
+
+function logConsumptionModal(sku, name, qty, uom) {
+  openModal(`Log Consumption — ${name}`, `
+    <div style="margin-bottom:14px">
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${Number(qty).toFixed(1)} ${uom}</strong></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Quantity Used <span style="color:var(--danger)">*</span></label>
+      <input id="cons-qty" type="number" min="0.1" step="0.1" class="form-control" placeholder="e.g. 5" style="max-width:160px">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes (optional)</label>
+      <input id="cons-notes" type="text" class="form-control" placeholder="e.g. Used for lunch service">
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="submitConsumption('${esc(sku)}')">Save</button>`);
+}
+
+async function submitConsumption(sku) {
+  const qty   = parseFloat(document.getElementById('cons-qty')?.value);
+  const notes = document.getElementById('cons-notes')?.value?.trim();
+  if (!qty || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
+
+  const res = await api('/client-inventory/consume', {method:'POST', body:JSON.stringify({sku, qty, notes})});
+  if (res?.ok) {
+    showToast(`Consumption logged — ${qty} units`);
+    closeModal();
+    navigate('my_inventory');
+  } else {
+    showToast(res?.error || 'Error logging consumption', 'error');
+  }
+}
+
+function setReorderLevelModal(sku, name, currentLevel) {
+  openModal(`Reorder Level — ${name}`, `
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">
+      When stock drops to or below this level, the item is flagged as Low Stock and you can order more.
+    </div>
+    <div class="form-group">
+      <label class="form-label">Reorder Level</label>
+      <input id="reorder-level-val" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveReorderLevel('${esc(sku)}')">Save</button>`);
+}
+
+async function saveReorderLevel(sku) {
+  const val = parseFloat(document.getElementById('reorder-level-val')?.value);
+  if (isNaN(val) || val < 0) { showToast('Enter a valid level', 'error'); return; }
+  const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify({reorder_level: val})});
+  if (res?.ok) { showToast('Reorder level saved'); closeModal(); navigate('my_inventory'); }
+  else showToast(res?.error || 'Error saving', 'error');
+}
+
+async function reloadConsumptionLog() {
+  const from = document.getElementById('inv-cons-from')?.value;
+  const to   = document.getElementById('inv-cons-to')?.value;
+  const tbody = document.getElementById('cons-log-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">Loading…</td></tr>`;
+  const rows = await api(`/client-inventory/consumption?from=${from}&to=${to}`).catch(()=>[]);
+  tbody.innerHTML = renderConsumptionRows(rows||[]);
 }
 
 /* ============================================================

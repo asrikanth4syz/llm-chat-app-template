@@ -393,6 +393,11 @@ export default {
       if (path==="/api/delivery-returns"                   && method==="GET")   return handleListDeliveryReturns(request,env);
       if (path==="/api/delivery-returns"                   && method==="POST")  return handleAddDeliveryReturn(request,env);
 
+      // Feature 25: Client store inventory tracking
+      if (path==="/api/client-inventory"                   && method==="GET")   return handleListClientInventory(request,env);
+      if (path==="/api/client-inventory/consume"           && method==="POST")  return handleClientConsume(request,env);
+      if (path==="/api/client-inventory/consumption"       && method==="GET")   return handleListClientConsumption(request,env);
+      if (path.match(/^\/api\/client-inventory\/[^/]+$/)  && method==="PATCH") return handlePatchClientInventory(request,env,path);
 
       return json({error:"Not found"}, 404);
     } catch (err) {
@@ -1240,6 +1245,28 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
       orderFullyClosed = true;
     } else {
       await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    }
+  }
+
+  // Auto-populate client store inventory with delivered items
+  if (dc.order_id) {
+    const order = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(dc.order_id).first() as Record<string,string>|null;
+    if (order?.client_id) {
+      for (const item of deliveries) {
+        if (item.qty_delivered > 0) {
+          const inv = await env.DB.prepare("SELECT i.category, i.uom FROM inventory i WHERE i.sku=?").bind(item.sku).first() as Record<string,string>|null;
+          await env.DB.prepare(`
+            INSERT INTO client_inventory (client_id, sku, item_name, category, uom, qty_on_hand, last_received_qty, last_received_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))
+            ON CONFLICT(client_id, sku) DO UPDATE SET
+              qty_on_hand = qty_on_hand + excluded.qty_on_hand,
+              last_received_qty = excluded.last_received_qty,
+              last_received_at = excluded.last_received_at,
+              item_name = excluded.item_name,
+              updated_at = datetime('now')
+          `).bind(order.client_id, item.sku, item.name, inv?.category||'', inv?.uom||'unit', item.qty_delivered, item.qty_delivered).run().catch(()=>{});
+        }
+      }
     }
   }
 
@@ -3471,3 +3498,119 @@ async function handleRptClientSummary(request: Request, env: Env): Promise<Respo
   return json(results);
 }
 
+
+// ── Feature 25: Client Store Inventory Tracking ────────────────────────────
+
+async function handleListClientInventory(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const url = new URL(request.url);
+  const q = url.searchParams.get('q') || '';
+
+  // Resolve client_id: client roles use their own, admins can pass ?client_id=
+  let clientId: string | null = null;
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  if (isClientRole) {
+    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
+    clientId = link?.client_id || null;
+  } else {
+    clientId = url.searchParams.get('client_id');
+  }
+  if (!clientId) return json([]);
+
+  let sql = `SELECT ci.*, 
+    CASE WHEN ci.qty_on_hand = 0 THEN 'out' WHEN ci.reorder_level > 0 AND ci.qty_on_hand <= ci.reorder_level THEN 'low' ELSE 'ok' END AS stock_status
+    FROM client_inventory ci WHERE ci.client_id=?`;
+  const binds: unknown[] = [clientId];
+  if (q) { sql += ` AND (ci.item_name LIKE ? OR ci.sku LIKE ? OR ci.category LIKE ?)`; const like = `%${q}%`; binds.push(like,like,like); }
+  sql += ` ORDER BY ci.item_name ASC`;
+
+  try {
+    const {results} = await env.DB.prepare(sql).bind(...binds).all();
+    return json(results);
+  } catch { return json([]); }
+}
+
+async function handleClientConsume(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const body = await request.json() as {sku:string;qty:number;notes?:string};
+  if (!body.sku || !body.qty || body.qty <= 0) return json({error:"sku and qty > 0 required"}, 400);
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  let clientId: string | null = null;
+  if (isClientRole) {
+    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
+    clientId = link?.client_id || null;
+  } else {
+    return json({error:"Only client users can log consumption"}, 403);
+  }
+  if (!clientId) return json({error:"Client not linked"}, 400);
+
+  const row = await env.DB.prepare("SELECT item_name, qty_on_hand FROM client_inventory WHERE client_id=? AND sku=?").bind(clientId, body.sku).first() as Record<string,unknown>|null;
+  if (!row) return json({error:"Item not in your inventory"}, 404);
+
+  const newQty = Math.max(0, (row.qty_on_hand as number) - body.qty);
+  await env.DB.prepare("UPDATE client_inventory SET qty_on_hand=?, last_consumed_at=datetime('now'), updated_at=datetime('now') WHERE client_id=? AND sku=?")
+    .bind(newQty, clientId, body.sku).run();
+  await env.DB.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,notes,recorded_by) VALUES (?,?,?,?,?,?)")
+    .bind(clientId, body.sku, row.item_name, body.qty, body.notes||null, user!.name).run();
+
+  return json({ok:true, qty_on_hand: newQty});
+}
+
+async function handleListClientConsumption(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  let clientId: string | null = null;
+  if (isClientRole) {
+    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
+    clientId = link?.client_id || null;
+  } else {
+    clientId = url.searchParams.get('client_id');
+  }
+  if (!clientId) return json([]);
+
+  try {
+    const {results} = await env.DB.prepare(
+      `SELECT * FROM client_consumption WHERE client_id=? AND consumed_at >= ? AND consumed_at < date(?,'+1 day') ORDER BY consumed_at DESC LIMIT 500`
+    ).bind(clientId, from, to).all();
+    return json(results);
+  } catch { return json([]); }
+}
+
+async function handlePatchClientInventory(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const sku = decodeURIComponent(path.split('/').pop()!);
+  const body = await request.json() as {reorder_level?:number;qty_on_hand?:number};
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  let clientId: string | null = null;
+  if (isClientRole) {
+    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
+    clientId = link?.client_id || null;
+  } else {
+    return json({error:"Forbidden"}, 403);
+  }
+  if (!clientId) return json({error:"Client not linked"}, 400);
+
+  const sets: string[] = ['updated_at=datetime(\'now\')'];
+  const vals: unknown[] = [];
+  if (body.reorder_level !== undefined) { sets.push('reorder_level=?'); vals.push(body.reorder_level); }
+  if (body.qty_on_hand   !== undefined) { sets.push('qty_on_hand=?');   vals.push(Math.max(0, body.qty_on_hand)); }
+  if (sets.length === 1) return json({error:"Nothing to update"}, 400);
+
+  vals.push(clientId, sku);
+  await env.DB.prepare(`UPDATE client_inventory SET ${sets.join(',')} WHERE client_id=? AND sku=?`).bind(...vals).run();
+  return json({ok:true});
+}
