@@ -5830,7 +5830,7 @@ async function confirmDelivery(dcId) {
 }
 
 function markPOD(dcId)  { uploadDCDocModal(dcId, 'pod'); }
-function markScan(dcId) { uploadDCDocModal(dcId, 'scan'); }
+function markScan(dcId) { scanDCDocModal(dcId); }
 
 function uploadDCDocModal(dcId, docType) {
   const label = docType === 'pod' ? 'Proof of Delivery (POD)' : 'DC Scan';
@@ -5849,6 +5849,64 @@ function uploadDCDocModal(dcId, docType) {
   );
 }
 
+function scanDCDocModal(dcId) {
+  openModal(`Scan POD Document — DC #${dcId}`,
+    `<!-- hidden camera input -->
+     <input type="file" id="dc-scan-file" accept="image/*" capture="environment"
+       style="display:none" onchange="onScanCaptured(this,'${dcId}')">
+
+     <!-- initial state: tap to scan -->
+     <div id="scan-initial" style="text-align:center;padding:24px 0">
+       <div style="font-size:3.5rem;margin-bottom:12px">📷</div>
+       <div style="font-weight:700;font-size:1rem;color:var(--navy);margin-bottom:6px">Scan the POD document</div>
+       <div style="font-size:.83rem;color:var(--text-muted);margin-bottom:20px">Point your camera at the signed delivery challan</div>
+       <button class="btn btn-primary" style="font-size:1rem;padding:12px 32px" onclick="document.getElementById('dc-scan-file').click()">
+         📷 Open Camera
+       </button>
+       <div style="margin-top:12px;font-size:.78rem;color:var(--text-muted)">On desktop, this opens a file picker instead</div>
+     </div>
+
+     <!-- preview state (hidden until photo taken) -->
+     <div id="scan-preview" style="display:none">
+       <div style="position:relative;text-align:center;margin-bottom:12px">
+         <img id="scan-preview-img" style="max-width:100%;max-height:340px;border-radius:8px;border:2px solid var(--border)">
+         <div id="scan-preview-name" style="font-size:.78rem;color:var(--text-muted);margin-top:6px"></div>
+       </div>
+       <div style="display:flex;gap:8px;justify-content:center">
+         <button class="btn btn-secondary" style="flex:1" onclick="rescanDCDoc('${dcId}')">
+           🔄 Retake Photo
+         </button>
+         <button class="btn btn-primary" style="flex:1" id="dc-scan-submit" onclick="confirmDCDocUpload('${dcId}','scan','dc-scan-file')">
+           ⬆ Upload Scan
+         </button>
+       </div>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`
+  );
+}
+
+function onScanCaptured(input, dcId) {
+  const file = input.files[0];
+  if (!file) return;
+  const fmt = b => b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB';
+  const r = new FileReader();
+  r.onload = e => {
+    document.getElementById('scan-preview-img').src = e.target.result;
+    document.getElementById('scan-preview-name').textContent = file.name + ' · ' + fmt(file.size);
+    document.getElementById('scan-initial').style.display = 'none';
+    document.getElementById('scan-preview').style.display = '';
+  };
+  r.readAsDataURL(file);
+}
+
+function rescanDCDoc(dcId) {
+  document.getElementById('scan-preview').style.display = 'none';
+  document.getElementById('scan-initial').style.display = '';
+  const inp = document.getElementById('dc-scan-file');
+  inp.value = '';
+  inp.click();
+}
+
 function previewDCDoc(input) {
   const file = input.files[0];
   if (!file) return;
@@ -5865,12 +5923,12 @@ function previewDCDoc(input) {
   document.getElementById('dc-doc-preview').style.display = '';
 }
 
-async function confirmDCDocUpload(dcId, docType) {
-  const input = document.getElementById('dc-doc-file');
+async function confirmDCDocUpload(dcId, docType, inputId) {
+  const input = document.getElementById(inputId || 'dc-doc-file');
   const file = input?.files?.[0];
   if (!file) { showToast('Please select a file', 'error'); return; }
   if (file.size > 5 * 1024 * 1024) { showToast('File too large — max 5 MB', 'error'); return; }
-  const btn = document.getElementById('dc-doc-submit');
+  const btn = document.getElementById(docType === 'scan' ? 'dc-scan-submit' : 'dc-doc-submit');
   if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
   const reader = new FileReader();
   reader.onload = async e => {
