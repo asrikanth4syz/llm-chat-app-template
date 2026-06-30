@@ -5831,7 +5831,7 @@ async function renderDeliveryExecDashboard(el) {
   <div style="background:#f0fdf4;border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
     <span style="font-size:1.5rem">🎉</span>
     <div><div style="font-weight:700;color:var(--success)">All POD &amp; scans complete!</div><div style="font-size:.82rem;color:var(--text-muted)">${delivToday.length} delivery(ies) fully processed today.</div></div>
-  </div>` : ''}`}
+  </div>` : ''}`}`;
 }
 
 function execDCCard(dc, today) {
