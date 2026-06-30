@@ -5409,36 +5409,7 @@ async function renderDelivery(el) {
             <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
           </tr></thead>
           <tbody>
-            ${delivered.map(dc => {
-              const podOk  = !!dc.pod_uploaded;
-              const scanOk = !!dc.dc_scan_uploaded;
-              const allOk  = podOk && scanOk;
-              const hasDocs = podOk || scanOk;
-              const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
-              return `<tr data-search="${search}">
-                <td><b>${dc.id}</b></td>
-                <td>${dc.order_id}</td>
-                <td>${dc.client_name||'—'}</td>
-                <td>${dc.driver_name||'—'}</td>
-                <td>${fmtDate(dc.delivered_at)}</td>
-                <td>${podOk
-                  ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
-                  : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}
-                </td>
-                <td>${scanOk
-                  ? `<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`
-                  : `<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}
-                </td>
-                <td>${allOk
-                  ? '<span class="badge badge-success">Complete</span>'
-                  : `<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}
-                </td>
-                <td>${hasDocs
-                  ? `<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 View</button>`
-                  : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}
-                </td>
-              </tr>`;
-            }).join('')}
+            ${delivered.map(dc => podScanRow(dc)).join('')}
           </tbody>
         </table>
       </div></div>`;
@@ -5632,24 +5603,7 @@ async function switchDeliveryTab(tab, btn) {
               <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
             </tr></thead>
             <tbody>
-              ${delivered.map(dc => {
-                const podOk  = !!dc.pod_uploaded;
-                const scanOk = !!dc.dc_scan_uploaded;
-                const allOk  = podOk && scanOk;
-                const hasDocs = podOk || scanOk;
-                const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
-                return `<tr data-search="${search}">
-                  <td><b>${dc.id}</b></td>
-                  <td>${dc.order_id}</td>
-                  <td>${dc.client_name||'—'}</td>
-                  <td>${dc.driver_name||'—'}</td>
-                  <td>${fmtDate(dc.delivered_at)}</td>
-                  <td>${podOk?`<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`:`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
-                  <td>${scanOk?`<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`:`<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
-                  <td>${allOk?'<span class="badge badge-success">Complete</span>':`<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}</td>
-                  <td>${hasDocs?`<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 View</button>`:'<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
-                </tr>`;
-              }).join('')}
+              ${delivered.map(dc => podScanRow(dc)).join('')}
             </tbody>
           </table>
         </div></div>`;
@@ -5692,6 +5646,49 @@ async function switchDeliveryTab(tab, btn) {
       Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchDeliveryTab('${tab}',null)">Retry</button>
     </div>`;
   }
+}
+
+// Shared row renderer for POD & Scans table
+function podScanRow(dc) {
+  const podOk  = !!dc.pod_uploaded;
+  const scanOk = !!dc.dc_scan_uploaded;
+  // scanning the POD document satisfies both requirements
+  const podEff = podOk || scanOk;
+  const complete = podEff && scanOk;
+  const docCount = dc.doc_count || 0;
+  const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
+
+  const podCell = podOk
+    ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
+    : scanOk
+      ? `<span class="badge badge-success" style="background:#d1fae5;color:#065f46">✓ via Scan</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
+      : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`;
+
+  const scanCell = scanOk
+    ? `<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`
+    : `<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`;
+
+  const statusCell = complete
+    ? '<span class="badge badge-success">Complete</span>'
+    : !podOk && !scanOk
+      ? '<span class="badge" style="background:#fef9c3;color:#92400e">Both pending</span>'
+      : '<span class="badge" style="background:#fef9c3;color:#92400e">Scan missing</span>';
+
+  const docsCell = docCount > 0
+    ? `<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 ${docCount} page${docCount>1?'s':''}</button>`
+    : '<span style="color:var(--text-muted);font-size:.8rem">—</span>';
+
+  return `<tr data-search="${search}">
+    <td><b>${dc.id}</b></td>
+    <td>${dc.order_id}</td>
+    <td>${dc.client_name||'—'}</td>
+    <td>${dc.driver_name||'—'}</td>
+    <td>${fmtDate(dc.delivered_at)}</td>
+    <td>${podCell}</td>
+    <td>${scanCell}</td>
+    <td>${statusCell}</td>
+    <td>${docsCell}</td>
+  </tr>`;
 }
 
 function filterDCTable(status) {
@@ -6058,26 +6055,85 @@ async function viewDCDocuments(dcId) {
   const docs = await api(`/delivery-challans/${dcId}/documents`);
   if (!docs) return;
   if (!docs.length) { showToast('No documents uploaded for DC #' + dcId, 'error'); return; }
-  const body = docs.map(d => {
-    const isImg = (d.mime_type || '').startsWith('image/');
-    const fmt = b => b ? (b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB') : '';
+  const imgDocs = docs.filter(d => (d.mime_type||'').startsWith('image/'));
+  const fmt = b => b ? (b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB') : '';
+  const pagesHtml = docs.map((d, i) => {
+    const isImg = (d.mime_type||'').startsWith('image/');
     return `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
       <div style="padding:10px 14px;background:#f8fafc;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <span style="font-weight:700;font-size:.88rem">${d.doc_type === 'pod' ? '📄 POD' : '🔍 DC Scan'}</span>
-          <span style="font-size:.78rem;color:var(--text-muted);margin-left:8px">${d.filename||'document'} ${fmt(d.file_size) ? '· '+fmt(d.file_size) : ''}</span>
+          <span style="font-weight:700;font-size:.88rem">Page ${i+1} — ${d.doc_type==='pod'?'📄 POD':'🔍 DC Scan'}</span>
+          <span style="font-size:.78rem;color:var(--text-muted);margin-left:8px">${d.filename||'document'} ${fmt(d.file_size)?'· '+fmt(d.file_size):''}</span>
         </div>
         <div style="font-size:.75rem;color:var(--text-muted)">${d.uploaded_by||'—'} · ${fmtDate(d.uploaded_at)}</div>
       </div>
       <div style="padding:12px;text-align:center">
         ${isImg
           ? `<img src="data:${d.mime_type};base64,${d.content_b64}" style="max-width:100%;max-height:400px;border-radius:4px">`
-          : `<a href="data:${d.mime_type||'application/octet-stream'};base64,${d.content_b64}" download="${d.filename||'document'}"
-               class="btn btn-primary">⬇ Download ${d.filename||'document'}</a>`}
+          : `<a href="data:${d.mime_type||'application/octet-stream'};base64,${d.content_b64}" download="${d.filename||'document'}" class="btn btn-primary">⬇ Download ${d.filename||'document'}</a>`}
       </div>
     </div>`;
   }).join('');
-  openModal(`Documents — DC #${dcId}`, body);
+
+  const pdfBtn = imgDocs.length
+    ? `<button class="btn btn-primary" onclick="downloadDCDocsPDF('${dcId}', this)">⬇ Download PDF (${imgDocs.length} page${imgDocs.length>1?'s':''})</button>`
+    : '';
+
+  openModal(
+    `DC #${dcId} — ${docs.length} page${docs.length>1?'s':''} uploaded`,
+    pagesHtml,
+    `${pdfBtn}<button class="btn btn-secondary" onclick="closeModal()">Close</button>`
+  );
+}
+
+async function downloadDCDocsPDF(dcId, btn) {
+  const docs = await api(`/delivery-challans/${dcId}/documents`);
+  if (!docs || !docs.length) return;
+  const imgDocs = docs.filter(d => (d.mime_type||'').startsWith('image/'));
+  if (!imgDocs.length) { showToast('No image pages to convert', 'error'); return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating PDF…'; }
+
+  // Lazy-load jsPDF
+  if (!window.jspdf) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const W = 210, H = 297, margin = 10;
+
+    for (let i = 0; i < imgDocs.length; i++) {
+      if (i > 0) pdf.addPage();
+      const d = imgDocs[i];
+      const dataUrl = `data:${d.mime_type};base64,${d.content_b64}`;
+      // get natural image dimensions to preserve aspect ratio
+      await new Promise(res => {
+        const img = new Image();
+        img.onload = () => {
+          const ratio = img.naturalWidth / img.naturalHeight;
+          let iW = W - margin*2, iH = iW / ratio;
+          if (iH > H - margin*2) { iH = H - margin*2; iW = iH * ratio; }
+          const x = margin + (W - margin*2 - iW) / 2;
+          pdf.addImage(dataUrl, 'JPEG', x, margin, iW, iH);
+          res();
+        };
+        img.src = dataUrl;
+      });
+    }
+
+    pdf.save(`DC${dcId}_POD.pdf`);
+    if (btn) { btn.disabled = false; btn.textContent = `⬇ Download PDF (${imgDocs.length} page${imgDocs.length>1?'s':''})`; }
+  } catch(e) {
+    showToast('PDF generation failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Download PDF'; }
+  }
 }
 
 async function billDC(id) {
@@ -6133,7 +6189,8 @@ async function renderDeliveryExecDashboard(el) {
   const inTransit    = pool.filter(d => d.status === 'IN_TRANSIT');
   const scheduled    = pool.filter(d => d.status === 'SCHEDULED');
   const delivToday   = pool.filter(d => d.status === 'DELIVERED' && (d.delivered_at || '').startsWith(today));
-  const pendingPOD   = pool.filter(d => d.status === 'DELIVERED' && (!d.pod_uploaded || !d.dc_scan_uploaded));
+  // scan counts as POD — only show as pending if dc_scan_uploaded is also missing
+  const pendingPOD   = pool.filter(d => d.status === 'DELIVERED' && !d.dc_scan_uploaded);
   const totalItems  = inTransit.reduce((s, d) => s + (d.total_qty || 0), 0);
   const overdue     = inTransit.filter(d => d.expected_delivery_date && d.expected_delivery_date < today);
 

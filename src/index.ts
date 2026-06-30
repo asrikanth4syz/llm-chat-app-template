@@ -1134,7 +1134,8 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
 
   const isClient = ["client_admin","client_approver","client_user"].includes(user!.role);
-  let query = `SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value
+  let query = `SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value,
+    COALESCE((SELECT COUNT(*) FROM dc_documents d WHERE d.dc_id=dc.id),0) AS doc_count
     FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
     WHERE 1=1`;
   const params: string[] = [];
