@@ -5357,8 +5357,8 @@ async function renderDelivery(el) {
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td>
         <td>${fmtDate(dc.delivered_at)}</td>
-        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark POD</button>`}</td>
-        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark Scan</button>`}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
         <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
       </tr>`).join('');
       const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
@@ -5503,8 +5503,8 @@ async function switchDeliveryTab(tab, btn) {
         <td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.delivered_at)}</td>
-        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Mark POD</button>`}</td>
-        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Mark Scan</button>`}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
         <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
       </tr>`).join('');
       const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
@@ -5737,9 +5737,10 @@ async function renderDeliveryExecDashboard(el) {
   const useMine = assigned.length > 0;
   const pool = useMine ? assigned : dcs;
 
-  const inTransit   = pool.filter(d => d.status === 'IN_TRANSIT');
-  const scheduled   = pool.filter(d => d.status === 'SCHEDULED');
-  const delivToday  = pool.filter(d => d.status === 'DELIVERED' && (d.delivered_at || '').startsWith(today));
+  const inTransit    = pool.filter(d => d.status === 'IN_TRANSIT');
+  const scheduled    = pool.filter(d => d.status === 'SCHEDULED');
+  const delivToday   = pool.filter(d => d.status === 'DELIVERED' && (d.delivered_at || '').startsWith(today));
+  const pendingPOD   = pool.filter(d => d.status === 'DELIVERED' && (!d.pod_uploaded || !d.dc_scan_uploaded));
   const totalItems  = inTransit.reduce((s, d) => s + (d.total_qty || 0), 0);
   const overdue     = inTransit.filter(d => d.expected_delivery_date && d.expected_delivery_date < today);
 
@@ -5794,23 +5795,26 @@ async function renderDeliveryExecDashboard(el) {
     </div>
   `}
 
-  <!-- Today's completed deliveries -->
-  ${delivToday.length > 0 ? `
-  <div style="margin-bottom:8px;font-weight:700;font-size:.95rem;color:var(--navy)">Completed Today (${delivToday.length})</div>
+  <!-- Delivered DCs pending POD / scan -->
+  ${pendingPOD.length > 0 ? `
+  <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
+    <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Pending POD / Scan (${pendingPOD.length})</div>
+    <span style="background:#fef9c3;color:#92400e;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:10px">Action needed</span>
+  </div>
   <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
-    ${delivToday.map(dc => `
+    ${pendingPOD.map(dc => `
     <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:10px">
           <div style="width:32px;height:32px;border-radius:50%;background:#d1fae5;display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
           <div>
             <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
-            <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id}</div>
+            <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id} · ${fmtDate(dc.delivered_at)}</div>
           </div>
         </div>
-        <div style="text-align:right">
-          <div style="font-size:.82rem;font-weight:700;color:var(--success)">Delivered</div>
-          <div style="font-size:.75rem;color:var(--text-muted)">${fmtDate(dc.delivered_at)}</div>
+        <div style="text-align:right;font-size:.75rem;color:var(--text-muted)">
+          ${!dc.pod_uploaded ? '<span style="color:var(--warning);font-weight:600">POD pending</span>' : ''}
+          ${!dc.dc_scan_uploaded ? '<span style="color:var(--warning);font-weight:600;display:block">Scan pending</span>' : ''}
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -5822,7 +5826,12 @@ async function renderDeliveryExecDashboard(el) {
         </button>
       </div>
     </div>`).join('')}
-  </div>` : ''}`;
+  </div>` : `
+  ${delivToday.length > 0 ? `
+  <div style="background:#f0fdf4;border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+    <span style="font-size:1.5rem">🎉</span>
+    <div><div style="font-weight:700;color:var(--success)">All POD &amp; scans complete!</div><div style="font-size:.82rem;color:var(--text-muted)">${delivToday.length} delivery(ies) fully processed today.</div></div>
+  </div>` : ''}`}
 }
 
 function execDCCard(dc, today) {
