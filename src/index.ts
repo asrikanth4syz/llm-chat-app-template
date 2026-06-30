@@ -1400,16 +1400,23 @@ async function handleMarkScan(request: Request, env: Env, path: string): Promise
 async function handleUploadDCDoc(request: Request, env: Env, path: string, docType: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const parts = path.split("/");
-  const id = parts[3]; // /api/delivery-challans/:id/...
+  const id = path.split("/")[3];
   const body = await request.json() as { filename?: string; mime_type?: string; content_b64: string; file_size?: number };
   if (!body.content_b64) return json({ error: "content_b64 required" }, 400);
   if (body.file_size && body.file_size > 5 * 1024 * 1024) return json({ error: "File too large (max 5 MB)" }, 400);
 
-  await env.DB.prepare(
-    `INSERT INTO dc_documents (dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_by)
-     VALUES (?,?,?,?,?,?,?)`
-  ).bind(id, docType, body.filename||null, body.mime_type||null, body.content_b64, body.file_size||null, user?.name||null).run();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO dc_documents (dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_by)
+       VALUES (?,?,?,?,?,?,?)`
+    ).bind(id, docType, body.filename||null, body.mime_type||null, body.content_b64, body.file_size||null, user?.name||null).run();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("no such table")) {
+      return json({ error: "Database migration pending — run: wrangler d1 migrations apply smart-pantry-db --remote" }, 503);
+    }
+    return json({ error: "Failed to store document: " + msg }, 500);
+  }
 
   const flagCol = docType === "pod" ? "pod_uploaded" : "dc_scan_uploaded";
   await env.DB.prepare(`UPDATE delivery_challans SET ${flagCol}=1 WHERE id=?`).bind(id).run();
@@ -1421,11 +1428,15 @@ async function handleListDCDocs(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/")[3];
-  const { results } = await env.DB.prepare(
-    `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
-     FROM dc_documents WHERE dc_id=? ORDER BY uploaded_at DESC`
-  ).bind(id).all();
-  return json(results);
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
+       FROM dc_documents WHERE dc_id=? ORDER BY uploaded_at DESC`
+    ).bind(id).all();
+    return json(results);
+  } catch {
+    return json([]); // table not yet created — return empty list gracefully
+  }
 }
 
 async function handleReturnDC(request: Request, env: Env, path: string): Promise<Response> {

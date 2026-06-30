@@ -5923,13 +5923,46 @@ function previewDCDoc(input) {
   document.getElementById('dc-doc-preview').style.display = '';
 }
 
+function compressImage(file, maxPx, quality) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > maxPx || h > maxPx) {
+        if (w >= h) { h = Math.round(h * maxPx / w); w = maxPx; }
+        else         { w = Math.round(w * maxPx / h); h = maxPx; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve(blob), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
 async function confirmDCDocUpload(dcId, docType, inputId) {
   const input = document.getElementById(inputId || 'dc-doc-file');
-  const file = input?.files?.[0];
+  let file = input?.files?.[0];
   if (!file) { showToast('Please select a file', 'error'); return; }
-  if (file.size > 5 * 1024 * 1024) { showToast('File too large — max 5 MB', 'error'); return; }
   const btn = document.getElementById(docType === 'scan' ? 'dc-scan-submit' : 'dc-doc-submit');
-  if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Processing…'; }
+
+  // Compress images before upload — camera photos can be 5-10 MB;
+  // base64 of that would exceed D1's per-row limit (~700 KB safe target)
+  if (file.type.startsWith('image/')) {
+    const compressed = await compressImage(file, 1600, 0.75);
+    if (compressed && compressed.size < file.size) {
+      file = new File([compressed], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+    }
+  }
+
+  if (file.size > 5 * 1024 * 1024) { showToast('File too large — max 5 MB', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Upload'; } return; }
+  if (btn) btn.textContent = 'Uploading…';
+
   const reader = new FileReader();
   reader.onload = async e => {
     const b64 = e.target.result.split(',')[1];
