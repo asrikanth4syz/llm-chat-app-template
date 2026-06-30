@@ -368,6 +368,9 @@ export default {
       // New delivery-challan routes
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/pod$/) && method==="POST") return handleMarkPOD(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan$/) && method==="POST") return handleMarkScan(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/pod\/upload$/) && method==="POST") return handleUploadDCDoc(request,env,path,"pod");
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan\/upload$/) && method==="POST") return handleUploadDCDoc(request,env,path,"scan");
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/documents$/) && method==="GET") return handleListDCDocs(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/return$/) && method==="POST") return handleReturnDC(request,env,path);
 
       // Stock transfers
@@ -1392,6 +1395,37 @@ async function handleMarkScan(request: Request, env: Env, path: string): Promise
   await env.DB.prepare("UPDATE delivery_challans SET dc_scan_uploaded=1 WHERE id=?").bind(id).run();
   await audit(env, user, "DC_SCAN_UPLOAD", "delivery_challan", id);
   return json({id, dc_scan_uploaded:true});
+}
+
+async function handleUploadDCDoc(request: Request, env: Env, path: string, docType: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const parts = path.split("/");
+  const id = parts[3]; // /api/delivery-challans/:id/...
+  const body = await request.json() as { filename?: string; mime_type?: string; content_b64: string; file_size?: number };
+  if (!body.content_b64) return json({ error: "content_b64 required" }, 400);
+  if (body.file_size && body.file_size > 5 * 1024 * 1024) return json({ error: "File too large (max 5 MB)" }, 400);
+
+  await env.DB.prepare(
+    `INSERT INTO dc_documents (dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_by)
+     VALUES (?,?,?,?,?,?,?)`
+  ).bind(id, docType, body.filename||null, body.mime_type||null, body.content_b64, body.file_size||null, user?.name||null).run();
+
+  const flagCol = docType === "pod" ? "pod_uploaded" : "dc_scan_uploaded";
+  await env.DB.prepare(`UPDATE delivery_challans SET ${flagCol}=1 WHERE id=?`).bind(id).run();
+  await audit(env, user, docType === "pod" ? "POD_UPLOAD" : "DC_SCAN_UPLOAD", "delivery_challan", id, undefined, body.filename||"file");
+  return json({ id, doc_type: docType, uploaded: true });
+}
+
+async function handleListDCDocs(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/")[3];
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
+     FROM dc_documents WHERE dc_id=? ORDER BY uploaded_at DESC`
+  ).bind(id).all();
+  return json(results);
 }
 
 async function handleReturnDC(request: Request, env: Env, path: string): Promise<Response> {

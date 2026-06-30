@@ -5406,13 +5406,14 @@ async function renderDelivery(el) {
         <table class="table" id="pod-scan-table">
           <thead><tr>
             <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
-            <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th>
+            <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
           </tr></thead>
           <tbody>
             ${delivered.map(dc => {
               const podOk  = !!dc.pod_uploaded;
               const scanOk = !!dc.dc_scan_uploaded;
               const allOk  = podOk && scanOk;
+              const hasDocs = podOk || scanOk;
               const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
               return `<tr data-search="${search}">
                 <td><b>${dc.id}</b></td>
@@ -5421,16 +5422,20 @@ async function renderDelivery(el) {
                 <td>${dc.driver_name||'—'}</td>
                 <td>${fmtDate(dc.delivered_at)}</td>
                 <td>${podOk
-                  ? '<span class="badge badge-success">✓ Uploaded</span>'
+                  ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
                   : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}
                 </td>
                 <td>${scanOk
-                  ? '<span class="badge badge-success">✓ Scanned</span>'
+                  ? `<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`
                   : `<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}
                 </td>
                 <td>${allOk
                   ? '<span class="badge badge-success">Complete</span>'
                   : `<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}
+                </td>
+                <td>${hasDocs
+                  ? `<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 View</button>`
+                  : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}
                 </td>
               </tr>`;
             }).join('')}
@@ -5624,13 +5629,14 @@ async function switchDeliveryTab(tab, btn) {
           <table class="table" id="pod-scan-table">
             <thead><tr>
               <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
-              <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th>
+              <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
             </tr></thead>
             <tbody>
               ${delivered.map(dc => {
                 const podOk  = !!dc.pod_uploaded;
                 const scanOk = !!dc.dc_scan_uploaded;
                 const allOk  = podOk && scanOk;
+                const hasDocs = podOk || scanOk;
                 const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
                 return `<tr data-search="${search}">
                   <td><b>${dc.id}</b></td>
@@ -5638,9 +5644,10 @@ async function switchDeliveryTab(tab, btn) {
                   <td>${dc.client_name||'—'}</td>
                   <td>${dc.driver_name||'—'}</td>
                   <td>${fmtDate(dc.delivered_at)}</td>
-                  <td>${podOk?'<span class="badge badge-success">✓ Uploaded</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
-                  <td>${scanOk?'<span class="badge badge-success">✓ Scanned</span>':`<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
+                  <td>${podOk?`<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`:`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
+                  <td>${scanOk?`<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`:`<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
                   <td>${allOk?'<span class="badge badge-success">Complete</span>':`<span class="badge" style="background:#fef9c3;color:#92400e">${!podOk&&!scanOk?'Both pending':!podOk?'POD missing':'Scan missing'}</span>`}</td>
+                  <td>${hasDocs?`<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 View</button>`:'<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -5822,14 +5829,92 @@ async function confirmDelivery(dcId) {
   }
 }
 
-async function markPOD(dcId) {
-  const res = await api(`/delivery-challans/${dcId}/pod`, { method:'POST' });
-  if (res) { showToast('POD marked as uploaded'); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+function markPOD(dcId)  { uploadDCDocModal(dcId, 'pod'); }
+function markScan(dcId) { uploadDCDocModal(dcId, 'scan'); }
+
+function uploadDCDocModal(dcId, docType) {
+  const label = docType === 'pod' ? 'Proof of Delivery (POD)' : 'DC Scan';
+  openModal(`Upload ${label} — DC #${dcId}`,
+    `<div class="form-group">
+       <label>Select file (PDF or image, max 5 MB)</label>
+       <input type="file" id="dc-doc-file" accept="image/*,application/pdf" onchange="previewDCDoc(this)"
+         style="display:block;width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;margin-top:6px">
+     </div>
+     <div id="dc-doc-preview" style="display:none;margin-top:12px;text-align:center">
+       <img id="dc-doc-img" style="max-width:100%;max-height:260px;border-radius:6px;display:none">
+       <div id="dc-doc-name" style="font-size:.82rem;color:var(--text-muted);margin-top:6px"></div>
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" id="dc-doc-submit" onclick="confirmDCDocUpload('${dcId}','${docType}')">Upload ${label}</button>`
+  );
 }
 
-async function markScan(dcId) {
-  const res = await api(`/delivery-challans/${dcId}/scan`, { method:'POST' });
-  if (res) { showToast('DC scan marked as uploaded'); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+function previewDCDoc(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fmt = b => b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB';
+  document.getElementById('dc-doc-name').textContent = file.name + ' · ' + fmt(file.size);
+  const img = document.getElementById('dc-doc-img');
+  if (file.type.startsWith('image/')) {
+    const r = new FileReader();
+    r.onload = e => { img.src = e.target.result; img.style.display = ''; };
+    r.readAsDataURL(file);
+  } else {
+    img.style.display = 'none';
+  }
+  document.getElementById('dc-doc-preview').style.display = '';
+}
+
+async function confirmDCDocUpload(dcId, docType) {
+  const input = document.getElementById('dc-doc-file');
+  const file = input?.files?.[0];
+  if (!file) { showToast('Please select a file', 'error'); return; }
+  if (file.size > 5 * 1024 * 1024) { showToast('File too large — max 5 MB', 'error'); return; }
+  const btn = document.getElementById('dc-doc-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+  const reader = new FileReader();
+  reader.onload = async e => {
+    const b64 = e.target.result.split(',')[1];
+    const res = await api(`/delivery-challans/${dcId}/${docType}/upload`, {
+      method: 'POST',
+      body: JSON.stringify({ filename: file.name, mime_type: file.type, content_b64: b64, file_size: file.size })
+    });
+    closeModal();
+    if (res) {
+      const label = docType === 'pod' ? 'POD' : 'DC Scan';
+      showToast(`${label} document uploaded for DC #${dcId}`);
+      const role = APP.user?.role;
+      if (role === 'delivery_exec') { navigate('dashboard'); }
+      else { switchDeliveryTab('pod', document.querySelector('#dc-tabs .tab-btn.active')); }
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function viewDCDocuments(dcId) {
+  const docs = await api(`/delivery-challans/${dcId}/documents`);
+  if (!docs) return;
+  if (!docs.length) { showToast('No documents uploaded for DC #' + dcId, 'error'); return; }
+  const body = docs.map(d => {
+    const isImg = (d.mime_type || '').startsWith('image/');
+    const fmt = b => b ? (b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB') : '';
+    return `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="padding:10px 14px;background:#f8fafc;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <span style="font-weight:700;font-size:.88rem">${d.doc_type === 'pod' ? '📄 POD' : '🔍 DC Scan'}</span>
+          <span style="font-size:.78rem;color:var(--text-muted);margin-left:8px">${d.filename||'document'} ${fmt(d.file_size) ? '· '+fmt(d.file_size) : ''}</span>
+        </div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${d.uploaded_by||'—'} · ${fmtDate(d.uploaded_at)}</div>
+      </div>
+      <div style="padding:12px;text-align:center">
+        ${isImg
+          ? `<img src="data:${d.mime_type};base64,${d.content_b64}" style="max-width:100%;max-height:400px;border-radius:4px">`
+          : `<a href="data:${d.mime_type||'application/octet-stream'};base64,${d.content_b64}" download="${d.filename||'document'}"
+               class="btn btn-primary">⬇ Download ${d.filename||'document'}</a>`}
+      </div>
+    </div>`;
+  }).join('');
+  openModal(`Documents — DC #${dcId}`, body);
 }
 
 async function billDC(id) {
