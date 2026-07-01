@@ -901,10 +901,11 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
           ).bind(...params).all();
           results = r;
         }
-        // Replace unit_price with client-specific price where set
+        // Replace unit_price with client-specific price where set, overlay is_critical
+        const critSet2 = await getCriticalSet(env);
         results = (results as Record<string,unknown>[]).map(item => {
           const cp = priceMap[item.sku as string];
-          return cp != null ? {...item, unit_price: cp, client_price: cp} : item;
+          return { ...(cp != null ? {...item, unit_price: cp, client_price: cp} : item), is_critical: critSet2.has(item.sku as string) ? 1 : 0 };
         });
         return json(results);
       }
@@ -924,6 +925,12 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
     ).bind(...params).all();
     results = r;
   }
+  // Overlay is_critical from critical_skus table (no migration required)
+  const critSet = await getCriticalSet(env);
+  results = (results as Record<string,unknown>[]).map(item => ({
+    ...item,
+    is_critical: critSet.has(item.sku as string) ? 1 : 0
+  }));
   return json(results);
 }
 
@@ -947,19 +954,35 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   return json({sku}, 201);
 }
 
+async function ensureCriticalTable(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS critical_skus (sku TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')))`
+  ).run();
+}
+
+async function getCriticalSet(env: Env): Promise<Set<string>> {
+  try {
+    await ensureCriticalTable(env);
+    const {results} = await env.DB.prepare("SELECT sku FROM critical_skus").all();
+    return new Set((results as {sku:string}[]).map(r => r.sku));
+  } catch { return new Set(); }
+}
+
 async function handleToggleCritical(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
   const sku = decodeURIComponent(path.split("/")[3]);
-  try {
-    const item = await env.DB.prepare("SELECT is_critical FROM inventory WHERE sku=?").bind(sku).first() as Record<string,unknown>|null;
-    if (!item) return json({error:"Not found"}, 404);
-    const newVal = (item.is_critical as number) ? 0 : 1;
-    await env.DB.prepare("UPDATE inventory SET is_critical=? WHERE sku=?").bind(newVal, sku).run();
-    return json({ok:true, is_critical: newVal});
-  } catch(e) {
-    return json({error:"Migration 0021 not applied yet — run: npx wrangler d1 migrations apply smart-pantry-db --remote"}, 500);
+  const item = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
+  if (!item) return json({error:"Not found"}, 404);
+  await ensureCriticalTable(env);
+  const existing = await env.DB.prepare("SELECT sku FROM critical_skus WHERE sku=?").bind(sku).first();
+  if (existing) {
+    await env.DB.prepare("DELETE FROM critical_skus WHERE sku=?").bind(sku).run();
+    return json({ok:true, is_critical: 0});
+  } else {
+    await env.DB.prepare("INSERT OR IGNORE INTO critical_skus (sku) VALUES (?)").bind(sku).run();
+    return json({ok:true, is_critical: 1});
   }
 }
 
@@ -970,15 +993,18 @@ async function handleSendCriticalAlerts(request: Request, env: Env): Promise<Res
 
   let results: Record<string,unknown>[];
   try {
+    await ensureCriticalTable(env);
     const res = await env.DB.prepare(`
       SELECT i.sku, i.name, i.stock, i.reorder_level, v.name as vendor_name, v.contact_email as vendor_email
-      FROM inventory i LEFT JOIN vendors v ON i.vendor_id = v.id
-      WHERE i.is_critical = 1 AND i.stock <= i.reorder_level AND i.active = 1
+      FROM inventory i
+      JOIN critical_skus cs ON cs.sku = i.sku
+      LEFT JOIN vendors v ON i.vendor_id = v.id
+      WHERE i.stock <= i.reorder_level AND i.active = 1
       ORDER BY i.stock ASC
     `).all();
     results = res.results as Record<string,unknown>[];
   } catch {
-    return json({error:"Migration 0021 not applied yet — run: npx wrangler d1 migrations apply smart-pantry-db --remote"}, 500);
+    return json({error:"Error querying critical items"}, 500);
   }
 
   if (!results.length) return json({ok:true, count:0, message:"No critical items below reorder level"});
@@ -2313,25 +2339,28 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
       return json({type,from,to,data:results});
     }
     case "inventory": {
-      const {results} = await env.DB.prepare(`SELECT sku,name,category,stock,reorder_level,max_stock,is_critical,
-        ROUND(stock*100.0/max_stock,1) as utilisation_pct,
-        CASE WHEN stock<=reorder_level THEN 'LOW' WHEN stock<=reorder_level*1.5 THEN 'MEDIUM' ELSE 'OK' END as stock_health
-        FROM inventory WHERE active=1 ORDER BY is_critical DESC, utilisation_pct ASC`).all();
+      await ensureCriticalTable(env);
+      const {results} = await env.DB.prepare(`
+        SELECT i.sku, i.name, i.category, i.stock, i.reorder_level, i.max_stock,
+          CASE WHEN cs.sku IS NOT NULL THEN 1 ELSE 0 END as is_critical,
+          ROUND(i.stock*100.0/i.max_stock,1) as utilisation_pct,
+          CASE WHEN i.stock<=i.reorder_level THEN 'LOW' WHEN i.stock<=i.reorder_level*1.5 THEN 'MEDIUM' ELSE 'OK' END as stock_health
+        FROM inventory i LEFT JOIN critical_skus cs ON cs.sku=i.sku
+        WHERE i.active=1 ORDER BY is_critical DESC, utilisation_pct ASC`).all();
       return json({type,from,to,data:results});
     }
     case "critical-stock": {
-      try {
-        const {results} = await env.DB.prepare(`
-          SELECT i.sku, i.name, i.category, i.stock, i.reorder_level, i.max_stock,
-            CASE WHEN i.stock=0 THEN 'OUT' WHEN i.stock<=i.reorder_level THEN 'LOW' ELSE 'WATCH' END as status,
-            v.name as vendor_name, v.contact_email as vendor_email, v.avg_lead_days
-          FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id
-          WHERE i.is_critical=1 AND i.active=1
-          ORDER BY i.stock ASC, i.name ASC`).all();
-        return json({type,from,to,data:results});
-      } catch {
-        return json({type,from,to,data:[],note:"Apply migration 0021 to enable critical stock tracking"});
-      }
+      await ensureCriticalTable(env);
+      const {results} = await env.DB.prepare(`
+        SELECT i.sku, i.name, i.category, i.stock, i.reorder_level, i.max_stock,
+          CASE WHEN i.stock=0 THEN 'OUT' WHEN i.stock<=i.reorder_level THEN 'LOW' ELSE 'WATCH' END as status,
+          v.name as vendor_name, v.contact_email as vendor_email, v.avg_lead_days
+        FROM inventory i
+        JOIN critical_skus cs ON cs.sku = i.sku
+        LEFT JOIN vendors v ON i.vendor_id=v.id
+        WHERE i.active=1
+        ORDER BY i.stock ASC, i.name ASC`).all();
+      return json({type,from,to,data:results});
     }
     case "budget": {
       const {results} = await env.DB.prepare(`SELECT c.name,c.monthly_budget,c.spent_this_month,
