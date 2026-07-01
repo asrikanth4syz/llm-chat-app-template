@@ -210,6 +210,8 @@ export default {
       // Inventory
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
+      if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
+      if (path.match(/^\/api\/inventory\/[^/]+\/critical$/) && method==="PATCH") return handleToggleCritical(request,env,path);
       if (path.match(/^\/api\/inventory\/[^/]+$/) && method==="PATCH") return handlePatchInventory(request,env,path);
 
       // Vendors
@@ -943,6 +945,50 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
       body.mrp||0,body.cost_excl_gst||0,body.margin_pct||0,body.brand||"").run();
   await audit(env, user, "CREATE", "inventory", sku, undefined, JSON.stringify({name:body.name,stock:body.stock}));
   return json({sku}, 201);
+}
+
+async function handleToggleCritical(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const sku = decodeURIComponent(path.split("/")[3]);
+  const item = await env.DB.prepare("SELECT is_critical FROM inventory WHERE sku=?").bind(sku).first() as Record<string,unknown>|null;
+  if (!item) return json({error:"Not found"}, 404);
+  const newVal = item.is_critical ? 0 : 1;
+  await env.DB.prepare("UPDATE inventory SET is_critical=? WHERE sku=?").bind(newVal, sku).run();
+  return json({ok:true, is_critical: newVal});
+}
+
+async function handleSendCriticalAlerts(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const {results} = await env.DB.prepare(`
+    SELECT i.sku, i.name, i.stock, i.reorder_level, v.name as vendor_name, v.contact_email as vendor_email
+    FROM inventory i LEFT JOIN vendors v ON i.vendor_id = v.id
+    WHERE i.is_critical = 1 AND i.stock <= i.reorder_level AND i.active = 1
+    ORDER BY i.stock ASC
+  `).all();
+
+  if (!results.length) return json({ok:true, count:0, message:"No critical items below reorder level"});
+
+  const rows = results as Record<string,unknown>[];
+  const itemLines = rows.map(r =>
+    `  • ${r.sku} — ${r.name}: ${r.stock} units (reorder level: ${r.reorder_level})${r.vendor_name ? ` | Vendor: ${r.vendor_name}` : ''}`
+  ).join("\n");
+
+  const subject = `🔴 Critical Stock Alert — ${rows.length} item(s) need immediate reorder`;
+  const html = `<h2 style="color:#dc2626">Critical Stock Alert</h2>
+<p><strong>${rows.length} critical item(s)</strong> are at or below reorder level:</p>
+<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
+  <thead style="background:#fef2f2"><tr><th>SKU</th><th>Item</th><th>Stock</th><th>Reorder Level</th><th>Vendor</th></tr></thead>
+  <tbody>${rows.map(r=>`<tr><td>${r.sku}</td><td><strong>${r.name}</strong></td><td style="color:#dc2626;font-weight:bold">${r.stock}</td><td>${r.reorder_level}</td><td>${r.vendor_name||'—'}</td></tr>`).join('')}</tbody>
+</table>
+<p style="margin-top:16px">Please raise purchase orders immediately from the <a href="#">Smart Pantry Procurement</a> module.</p>`;
+
+  await sendEmail(env, user!.email, subject, `Critical Stock Alert\n\n${rows.length} item(s) need reorder:\n\n${itemLines}\n\nRaise POs immediately.`, html);
+  return json({ok:true, count:rows.length});
 }
 
 async function handlePatchInventory(request: Request, env: Env, path: string): Promise<Response> {
@@ -2258,10 +2304,20 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
       return json({type,from,to,data:results});
     }
     case "inventory": {
-      const {results} = await env.DB.prepare(`SELECT sku,name,category,stock,reorder_level,max_stock,
+      const {results} = await env.DB.prepare(`SELECT sku,name,category,stock,reorder_level,max_stock,is_critical,
         ROUND(stock*100.0/max_stock,1) as utilisation_pct,
         CASE WHEN stock<=reorder_level THEN 'LOW' WHEN stock<=reorder_level*1.5 THEN 'MEDIUM' ELSE 'OK' END as stock_health
-        FROM inventory WHERE active=1 ORDER BY utilisation_pct ASC`).all();
+        FROM inventory WHERE active=1 ORDER BY is_critical DESC, utilisation_pct ASC`).all();
+      return json({type,from,to,data:results});
+    }
+    case "critical-stock": {
+      const {results} = await env.DB.prepare(`
+        SELECT i.sku, i.name, i.category, i.stock, i.reorder_level, i.max_stock,
+          CASE WHEN i.stock=0 THEN 'OUT' WHEN i.stock<=i.reorder_level THEN 'LOW' ELSE 'WATCH' END as status,
+          v.name as vendor_name, v.contact_email as vendor_email, v.avg_lead_days
+        FROM inventory i LEFT JOIN vendors v ON i.vendor_id=v.id
+        WHERE i.is_critical=1 AND i.active=1
+        ORDER BY i.stock ASC, i.name ASC`).all();
       return json({type,from,to,data:results});
     }
     case "budget": {
@@ -3694,7 +3750,7 @@ async function handleSyncClientInventory(request: Request, env: Env): Promise<Re
       SELECT
         o.client_id, dci.sku,
         COALESCE(NULLIF(dci.name,''), NULLIF(i.name,''), MAX(NULLIF(oi.name,'')), dci.sku),
-        COALESCE(NULLIF(i.category,''), MAX(oi.category)), COALESCE(NULLIF(i.uom,''), MAX(oi.uom), 'unit'),
+        COALESCE(NULLIF(i.category,''), ''), COALESCE(NULLIF(i.uom,''), 'unit'),
         SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
         SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
         MAX(dc.delivered_at), datetime('now')

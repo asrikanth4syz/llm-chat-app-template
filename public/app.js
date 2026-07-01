@@ -3862,6 +3862,7 @@ async function renderInventory(el) {
   const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
   const lowStock = inv.filter(i => i.stock <= i.reorder_level);
   const outOfStock = inv.filter(i => i.stock === 0);
+  const criticalLow = inv.filter(i => i.is_critical && i.stock <= i.reorder_level);
 
   function getFiltered() {
     let items = inv;
@@ -3879,8 +3880,8 @@ async function renderInventory(el) {
       const color     = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
       const safeName  = item.name.replace(/'/g,"\\'");
       return `
-      <tr style="cursor:pointer" onclick="toggleInvDetail('${item.sku}',this)">
-        <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b></td>
+      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}" onclick="toggleInvDetail('${item.sku}',this)">
+        <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
         <td><b>${item.name}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${item.brand}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
@@ -3900,6 +3901,7 @@ async function renderInventory(el) {
           <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
           <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">History</button>
           <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
+          <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" onclick="toggleCritical('${item.sku}',this)">${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
       </tr>
       <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff">
@@ -3993,6 +3995,17 @@ async function renderInventory(el) {
     </div>
   </div>
 
+  ${criticalLow.length ? `
+  <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+    <div>
+      <div style="font-weight:800;color:#dc2626;font-size:.92rem;margin-bottom:4px">🔴 ${criticalLow.length} Critical Item${criticalLow.length>1?'s':''} Need Reorder</div>
+      <div style="font-size:.8rem;color:#991b1b">${criticalLow.slice(0,4).map(i=>`<b>${i.name}</b> (${i.stock} left)`).join(' · ')}${criticalLow.length>4?` +${criticalLow.length-4} more`:''}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn btn-secondary btn-sm" onclick="navigate('reports');setTimeout(()=>viewReport('critical-stock'),300)">View Report</button>
+      <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" onclick="sendCriticalAlerts(this)">📧 Send Alert Email</button>
+    </div>
+  </div>` : ''}
   ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${i.name}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
 
   <!-- Search + filter -->
@@ -4386,6 +4399,31 @@ async function confirmReorder(sku, name) {
   if (res) { showToast(`PO ${res.id} raised — vendor notified`); navigate('procurement'); }
 }
 
+async function toggleCritical(sku, btn) {
+  if (btn) { btn.disabled = true; }
+  const res = await api('/inventory/' + encodeURIComponent(sku) + '/critical', {method:'PATCH'});
+  if (btn) { btn.disabled = false; }
+  if (res?.ok) {
+    const isCrit = res.is_critical === 1;
+    showToast(isCrit ? 'Marked as CRITICAL' : 'Removed critical flag');
+    navigate('inventory');
+  } else {
+    showToast(res?.error || 'Error updating', 'error');
+  }
+}
+
+async function sendCriticalAlerts(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const res = await api('/inventory/critical-alerts', {method:'POST'});
+  if (btn) { btn.disabled = false; btn.textContent = '📧 Send Alert Email'; }
+  if (res?.ok) {
+    if (res.count === 0) showToast('No critical items below reorder level — nothing to alert', 'info');
+    else showToast(`Alert email sent for ${res.count} critical item(s)`);
+  } else {
+    showToast(res?.error || 'Error sending alert', 'error');
+  }
+}
+
 function renderAddItem() {
   openModal('Add New Item to Catalogue',
     `<div class="form-group"><label>Item Name</label><input type="text" id="item-name" placeholder="e.g. Organic Green Tea"></div>
@@ -4535,7 +4573,7 @@ async function renderVendors(el) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
-      ${APP.user?.role==='super_admin' ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
+      ${['platform','procurement'].includes(APP.user?.nav) ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
       <button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>
     </div>
   </div>
@@ -7543,6 +7581,9 @@ const REPORT_DEFS = [
   { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: items ordered, quantities, and delivery status per client.', icon:'📦',
     cols:['client_name','order_id','order_status','item_count','qty_ordered','delivery_status','grand_total'],
     labels:['Client','Order ID','Status','# Items','Total Qty Ordered','Delivery Status','Order Value'] },
+  { key:'critical-stock', title:'Critical Stock Report', desc:'All items flagged CRITICAL — shows stock level, reorder status, and vendor details.', icon:'🔴',
+    cols:['sku','name','category','stock','reorder_level','status','vendor_name','avg_lead_days'],
+    labels:['SKU','Item','Category','Stock','Reorder Level','Status','Vendor','Lead Days'] },
 ];
 
 const REPORT_CATEGORIES = [
@@ -7551,7 +7592,7 @@ const REPORT_CATEGORIES = [
   { label:'Finance', color:'#065f46', bg:'#ecfdf5', icon:'💰',
     keys:['spend','budget','budget-forecast','gst'] },
   { label:'Supply Chain', color:'#92400e', bg:'#fffbeb', icon:'🔗',
-    keys:['vendor','inventory'] },
+    keys:['vendor','inventory','critical-stock'] },
 ];
 
 function renderReports(el) {
@@ -8720,7 +8761,7 @@ async function saveDunningRule() {
 async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
-  const isSuper = APP.user && APP.user.role === 'super_admin';
+  const canImportVendors = ['platform','procurement'].includes(APP.user?.nav);
   const startTab = APP._importDefaultTab || 'inventory';
   APP._importDefaultTab = null;
 
@@ -8729,7 +8770,7 @@ async function renderImportData(el) {
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
     <button class="tab-pill${startTab==='inventory'?' active':''}" onclick="importTab('inventory',this)">Inventory</button>
     <button class="tab-pill${startTab==='orders'?' active':''}" onclick="importTab('orders',this)">Orders</button>
-    ${isSuper ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
+    ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
     <button class="tab-pill${startTab==='jobs'?' active':''}" onclick="importTab('jobs',this)">Import History</button>
   </div>
   <div id="import-content"></div>`;
