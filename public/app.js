@@ -2098,29 +2098,23 @@ async function submitConsumption(sku) {
 }
 
 function editInvItemModal(sku, currentName, currentLevel) {
-  openModal(`Edit Item — ${currentName||sku}`, `
-    <div class="form-group">
-      <label class="form-label">Item Name</label>
-      <input id="edit-inv-name" type="text" class="form-control" value="${h(currentName||'')}" placeholder="Enter item name">
+  openModal(`Reorder Level — ${currentName||sku}`, `
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">
+      Flag this item as <b>Low Stock</b> when quantity falls to or below this level.
     </div>
     <div class="form-group">
       <label class="form-label">Reorder Level</label>
       <input id="edit-inv-reorder" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
-      <div style="font-size:.76rem;color:var(--text-muted);margin-top:4px">Flag as Low Stock when qty falls to or below this number</div>
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveInvItemEdit('${h(sku)}')">Save</button>`);
 }
 
 async function saveInvItemEdit(sku) {
-  const name   = document.getElementById('edit-inv-name')?.value?.trim();
-  const level  = parseFloat(document.getElementById('edit-inv-reorder')?.value);
-  const patch  = {};
-  if (name)         patch.item_name     = name;
-  if (!isNaN(level) && level >= 0) patch.reorder_level = level;
-  if (!Object.keys(patch).length) { closeModal(); return; }
-  const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify(patch)});
-  if (res?.ok) { showToast('Item updated'); closeModal(); navigate('my_inventory'); }
+  const level = parseFloat(document.getElementById('edit-inv-reorder')?.value);
+  if (isNaN(level) || level < 0) { showToast('Enter a valid reorder level', 'error'); return; }
+  const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify({reorder_level: level})});
+  if (res?.ok) { showToast('Reorder level saved'); closeModal(); navigate('my_inventory'); }
   else showToast(res?.error || 'Error saving', 'error');
 }
 
@@ -4547,21 +4541,21 @@ async function renderVendors(el) {
 
   <!-- Search & Filter bar -->
   <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-    <input type="text" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
+    <input type="text" id="vendor-search-q" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      oninput="APP._vendorSearch=this.value;renderVendors(document.getElementById('main-content'))">
-    <select style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:#fff"
+      oninput="filterVendorCards()">
+    <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:#fff"
       onchange="APP._vendorCat=this.value;renderVendors(document.getElementById('main-content'))">
       <option value="">All Categories</option>
       ${allCategories.map(c=>`<option value="${c}"${APP._vendorCat===c?' selected':''}>${c}</option>`).join('')}
     </select>
-    <input type="text" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
+    <input type="text" id="vendor-search-loc" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
       style="width:160px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      oninput="APP._vendorLoc=this.value;renderVendors(document.getElementById('main-content'))">
+      oninput="filterVendorCards()">
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} onchange="APP._vendorShowInactive=this.checked;renderVendors(document.getElementById('main-content'))"> Show inactive
     </label>
-    ${(APP._vendorSearch||APP._vendorCat||APP._vendorLoc)?`<button class="btn btn-secondary btn-sm" onclick="APP._vendorSearch='';APP._vendorCat='';APP._vendorLoc='';renderVendors(document.getElementById('main-content'))">Clear</button>`:''}
+    <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" onclick="APP._vendorSearch='';APP._vendorCat='';APP._vendorLoc='';document.getElementById('vendor-search-q').value='';document.getElementById('vendor-search-loc').value='';document.getElementById('vendor-search-cat').value='';filterVendorCards()">Clear</button>
   </div>
 
   <!-- Summary tiles -->
@@ -4586,15 +4580,39 @@ async function renderVendors(el) {
   </div>
 
   <!-- Vendor cards -->
-  ${vendors.length===0?`<div style="text-align:center;padding:40px;color:var(--text-muted)">No vendors match your search.</div>`:''}
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
-    ${vendors.sort((a,b)=>{
+  <div id="vendor-no-match" style="text-align:center;padding:40px;color:var(--text-muted);display:${vendors.length===0?'block':'none'}">No vendors match your search.</div>
+  <div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+    ${allVendors.sort((a,b)=>{
       const aRisk = ((a.on_time_rate||0)<75||(a.fill_rate||0)<85)?1:0;
       const bRisk = ((b.on_time_rate||0)<75||(b.fill_rate||0)<85)?1:0;
       return bRisk - aRisk || (b.rating||0)-(a.rating||0);
-    }).map(v=>vendorCard(v)).join('')}
+    }).map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}">${vendorCard(v)}</div>`).join('')}
   </div>
   `;
+  APP._allVendors = allVendors;
+  filterVendorCards();
+}
+
+function filterVendorCards() {
+  const q   = (document.getElementById('vendor-search-q')?.value||'').toLowerCase().trim();
+  const loc = (document.getElementById('vendor-search-loc')?.value||'').toLowerCase().trim();
+  const cat = APP._vendorCat||'';
+  APP._vendorSearch = q;
+  APP._vendorLoc    = loc;
+  let visible = 0;
+  document.querySelectorAll('#vendor-cards-grid > [data-vname]').forEach(el => {
+    const nameMatch = !q || el.dataset.vname.includes(q) || el.dataset.vcat.includes(q);
+    const locMatch  = !loc || el.dataset.vloc.includes(loc);
+    const catMatch  = !cat || el.dataset.vcat.includes(cat.toLowerCase());
+    const activeOk  = APP._vendorShowInactive || el.dataset.vactive !== '0';
+    const show = nameMatch && locMatch && catMatch && activeOk;
+    el.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  const noMatch = document.getElementById('vendor-no-match');
+  if (noMatch) noMatch.style.display = visible === 0 ? 'block' : 'none';
+  const clearBtn = document.getElementById('vendor-clear-btn');
+  if (clearBtn) clearBtn.style.display = (q||loc||cat) ? '' : 'none';
 }
 
 const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationery'];
