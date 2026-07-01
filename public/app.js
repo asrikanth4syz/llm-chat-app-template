@@ -4533,8 +4533,9 @@ async function renderVendors(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Vendor Directory</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${activeVendors.length} active vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
     </div>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
+      ${APP.user?.role==='super_admin' ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
       <button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>
     </div>
   </div>
@@ -8720,18 +8721,20 @@ async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
   const isSuper = APP.user && APP.user.role === 'super_admin';
+  const startTab = APP._importDefaultTab || 'inventory';
+  APP._importDefaultTab = null;
 
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
-    <button class="tab-pill active" onclick="importTab('inventory',this)">Inventory</button>
-    <button class="tab-pill" onclick="importTab('orders',this)">Orders</button>
-    ${isSuper ? '<button class="tab-pill" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
-    <button class="tab-pill" onclick="importTab('jobs',this)">Import History</button>
+    <button class="tab-pill${startTab==='inventory'?' active':''}" onclick="importTab('inventory',this)">Inventory</button>
+    <button class="tab-pill${startTab==='orders'?' active':''}" onclick="importTab('orders',this)">Orders</button>
+    ${isSuper ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
+    <button class="tab-pill${startTab==='jobs'?' active':''}" onclick="importTab('jobs',this)">Import History</button>
   </div>
   <div id="import-content"></div>`;
 
-  showImportTab('inventory', jobs);
+  showImportTab(startTab, jobs);
 }
 
 function importTab(tab, btn) {
