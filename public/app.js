@@ -209,9 +209,10 @@ async function doLogin() {
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Signing in…';
 
+  const password = document.getElementById('login-password')?.value || 'password';
   const data = await api('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password: 'password' }),
+    body: JSON.stringify({ email, password }),
   }).catch(() => null);
 
   btn.disabled = false;
@@ -4573,7 +4574,7 @@ async function renderVendors(el) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
-      ${['platform','procurement'].includes(APP.user?.nav) ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
+      ${!['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user?.role) ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
       <button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>
     </div>
   </div>
@@ -8761,7 +8762,7 @@ async function saveDunningRule() {
 async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
-  const canImportVendors = ['platform','procurement'].includes(APP.user?.nav);
+  const canImportVendors = APP.user && !['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user.role);
   const startTab = APP._importDefaultTab || 'inventory';
   APP._importDefaultTab = null;
 
