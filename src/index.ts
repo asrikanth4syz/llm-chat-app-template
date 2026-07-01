@@ -3508,18 +3508,12 @@ async function handleListClientInventory(request: Request, env: Env): Promise<Re
   const url = new URL(request.url);
   const q = url.searchParams.get('q') || '';
 
-  // Resolve client_id: client roles use their own, admins can pass ?client_id=
-  let clientId: string | null = null;
+  // Resolve client_id: use JWT client_id for client roles, or ?client_id= for admins
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
-  if (isClientRole) {
-    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
-    clientId = link?.client_id || null;
-  } else {
-    clientId = url.searchParams.get('client_id');
-  }
+  const clientId: string | null = isClientRole ? (user!.client_id || null) : url.searchParams.get('client_id');
   if (!clientId) return json([]);
 
-  let sql = `SELECT ci.*, 
+  let sql = `SELECT ci.*,
     CASE WHEN ci.qty_on_hand = 0 THEN 'out' WHEN ci.reorder_level > 0 AND ci.qty_on_hand <= ci.reorder_level THEN 'low' ELSE 'ok' END AS stock_status
     FROM client_inventory ci WHERE ci.client_id=?`;
   const binds: unknown[] = [clientId];
@@ -3540,14 +3534,9 @@ async function handleClientConsume(request: Request, env: Env): Promise<Response
   if (!body.sku || !body.qty || body.qty <= 0) return json({error:"sku and qty > 0 required"}, 400);
 
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
-  let clientId: string | null = null;
-  if (isClientRole) {
-    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
-    clientId = link?.client_id || null;
-  } else {
-    return json({error:"Only client users can log consumption"}, 403);
-  }
-  if (!clientId) return json({error:"Client not linked"}, 400);
+  if (!isClientRole) return json({error:"Only client users can log consumption"}, 403);
+  const clientId = user!.client_id;
+  if (!clientId) return json({error:"Client not linked to your account"}, 400);
 
   const row = await env.DB.prepare("SELECT item_name, qty_on_hand FROM client_inventory WHERE client_id=? AND sku=?").bind(clientId, body.sku).first() as Record<string,unknown>|null;
   if (!row) return json({error:"Item not in your inventory"}, 404);
@@ -3570,13 +3559,7 @@ async function handleListClientConsumption(request: Request, env: Env): Promise<
   const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
 
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
-  let clientId: string | null = null;
-  if (isClientRole) {
-    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
-    clientId = link?.client_id || null;
-  } else {
-    clientId = url.searchParams.get('client_id');
-  }
+  const clientId: string | null = isClientRole ? (user!.client_id || null) : url.searchParams.get('client_id');
   if (!clientId) return json([]);
 
   try {
@@ -3595,14 +3578,9 @@ async function handlePatchClientInventory(request: Request, env: Env, path: stri
   const body = await request.json() as {reorder_level?:number;qty_on_hand?:number};
 
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
-  let clientId: string | null = null;
-  if (isClientRole) {
-    const link = await env.DB.prepare("SELECT client_id FROM user_client_links WHERE user_id=? LIMIT 1").bind(user!.sub).first() as Record<string,string>|null;
-    clientId = link?.client_id || null;
-  } else {
-    return json({error:"Forbidden"}, 403);
-  }
-  if (!clientId) return json({error:"Client not linked"}, 400);
+  if (!isClientRole) return json({error:"Forbidden"}, 403);
+  const clientId = user!.client_id;
+  if (!clientId) return json({error:"Client not linked to your account"}, 400);
 
   const sets: string[] = ['updated_at=datetime(\'now\')'];
   const vals: unknown[] = [];
