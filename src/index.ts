@@ -1255,7 +1255,8 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
     if (order?.client_id) {
       for (const item of deliveries) {
         if (item.qty_delivered > 0) {
-          const inv = await env.DB.prepare("SELECT i.category, i.uom FROM inventory i WHERE i.sku=?").bind(item.sku).first() as Record<string,string>|null;
+          const inv = await env.DB.prepare("SELECT i.name, i.category, i.uom FROM inventory i WHERE i.sku=?").bind(item.sku).first() as Record<string,string>|null;
+          const itemName = item.name || inv?.name || item.sku;
           await env.DB.prepare(`
             INSERT INTO client_inventory (client_id, sku, item_name, category, uom, qty_on_hand, last_received_qty, last_received_at, updated_at)
             VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))
@@ -1263,9 +1264,9 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
               qty_on_hand = qty_on_hand + excluded.qty_on_hand,
               last_received_qty = excluded.last_received_qty,
               last_received_at = excluded.last_received_at,
-              item_name = excluded.item_name,
+              item_name = COALESCE(NULLIF(excluded.item_name,''), client_inventory.item_name),
               updated_at = datetime('now')
-          `).bind(order.client_id, item.sku, item.name, inv?.category||'', inv?.uom||'unit', item.qty_delivered, item.qty_delivered).run().catch(()=>{});
+          `).bind(order.client_id, item.sku, itemName, inv?.category||'', inv?.uom||'unit', item.qty_delivered, item.qty_delivered).run().catch(()=>{});
         }
       }
     }
@@ -3607,7 +3608,7 @@ async function handleSyncClientInventory(request: Request, env: Env): Promise<Re
     await env.DB.prepare(`
       INSERT INTO client_inventory (client_id, sku, item_name, category, uom, qty_on_hand, last_received_qty, last_received_at, updated_at)
       SELECT
-        o.client_id, dci.sku, dci.name,
+        o.client_id, dci.sku, COALESCE(NULLIF(dci.name,''), i.name, dci.sku),
         COALESCE(i.category,''), COALESCE(i.uom,'unit'),
         SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
         SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
@@ -3622,7 +3623,7 @@ async function handleSyncClientInventory(request: Request, env: Env): Promise<Re
         qty_on_hand       = excluded.qty_on_hand,
         last_received_qty = excluded.last_received_qty,
         last_received_at  = excluded.last_received_at,
-        item_name         = excluded.item_name,
+        item_name         = COALESCE(NULLIF(excluded.item_name,''), client_inventory.item_name),
         updated_at        = datetime('now')
     `).bind(clientId).run();
     return json({ok:true});

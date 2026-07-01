@@ -2012,7 +2012,7 @@ function myInvRow(i) {
   const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
   return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
     <td>
-      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${h(i.item_name)}</div>
+      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${h(i.item_name||i.sku)}</div>
       <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
     </td>
     <td style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>

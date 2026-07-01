@@ -3,7 +3,7 @@ INSERT INTO client_inventory (client_id, sku, item_name, category, uom, qty_on_h
 SELECT
   o.client_id,
   dci.sku,
-  dci.name,
+  COALESCE(NULLIF(dci.name,''), i.name, dci.sku),
   COALESCE(i.category, ''),
   COALESCE(i.uom, 'unit'),
   SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
