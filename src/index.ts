@@ -324,6 +324,7 @@ export default {
       // Feature 18: CSV Import
       if (path==="/api/import/inventory"                        && method==="POST")  return handleImportInventory(request,env);
       if (path==="/api/import/orders"                           && method==="POST")  return handleImportOrders(request,env);
+      if (path==="/api/import/vendors"                          && method==="POST")  return handleImportVendors(request,env);
       if (path==="/api/import-jobs"                             && method==="GET")   return handleListImportJobs(request,env);
 
       // Feature 19: Templates
@@ -2927,6 +2928,88 @@ async function handleImportOrders(request: Request, env: Env): Promise<Response>
     "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
   ).bind(jobId, "orders", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
   return json({job_id: jobId, success, failed: errors.length, errors});
+}
+
+async function handleImportVendors(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({error:"Forbidden — super admin only"}, 403);
+
+  let body: {rows: Record<string,unknown>[]; overwrite?: boolean};
+  try { body = await request.json() as {rows: Record<string,unknown>[]; overwrite?: boolean}; }
+  catch { return json({error:"Invalid JSON body"}, 400); }
+
+  const { rows, overwrite = false } = body;
+  if (!Array.isArray(rows) || !rows.length) return json({error:"No rows provided"}, 400);
+
+  // Build name→id map of existing vendors
+  const existingRes = await env.DB.prepare("SELECT id, name FROM vendors").all();
+  const nameToId = new Map<string, string>();
+  for (const v of existingRes.results) {
+    nameToId.set(String((v as Record<string,unknown>).name).trim().toLowerCase(), String((v as Record<string,unknown>).id));
+  }
+
+  let success = 0, skipped = 0;
+  const errors: string[] = [];
+
+  const validRows: {row: Record<string,unknown>; idx: number; existingId: string|null}[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row.name || !String(row.name).trim()) { errors.push(`Row ${i+1}: name is required`); continue; }
+    const normName = String(row.name).trim().toLowerCase();
+    const existingId = nameToId.get(normName) || null;
+    if (existingId && !overwrite) { skipped++; continue; }
+    validRows.push({row, idx: i, existingId});
+  }
+
+  const CHUNK = 200;
+  for (let c = 0; c < validRows.length; c += CHUNK) {
+    const chunk = validRows.slice(c, c + CHUNK);
+    const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+    const chunkIdxMap: number[] = [];
+
+    for (const {row, idx, existingId} of chunk) {
+      const name     = String(row.name).trim();
+      const category = String(row.category || "General").trim();
+      const email    = String(row.contact_email || row.email || "").trim();
+      const phone    = String(row.contact_phone || row.phone || "").trim();
+      const location = String(row.location || "").trim();
+      const address  = String(row.address || "").trim();
+      const lead     = Number(row.avg_lead_days) || 3;
+      const rating   = Math.min(5, Math.max(0, Number(row.rating) || 4.0));
+
+      if (existingId) {
+        stmts.push(env.DB.prepare(
+          `UPDATE vendors SET name=?,category=?,contact_email=?,contact_phone=?,location=?,address=?,avg_lead_days=?,rating=? WHERE id=?`
+        ).bind(name, category, email, phone, location, address, lead, rating, existingId));
+      } else {
+        const newId = `V-${uid().slice(0,8).toUpperCase()}`;
+        stmts.push(env.DB.prepare(
+          `INSERT OR IGNORE INTO vendors (id,name,category,contact_email,contact_phone,location,address,avg_lead_days,rating) VALUES (?,?,?,?,?,?,?,?,?)`
+        ).bind(newId, name, category, email, phone, location, address, lead, rating));
+      }
+      chunkIdxMap.push(idx);
+    }
+
+    if (!stmts.length) continue;
+    try {
+      await env.DB.batch(stmts);
+      success += stmts.length;
+    } catch (e) {
+      for (let i = 0; i < stmts.length; i++) {
+        errors.push(`Row ${chunkIdxMap[i]+1}: ${String(e)}`);
+      }
+    }
+  }
+
+  try {
+    const jobId = uid();
+    await env.DB.prepare(
+      "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
+    ).bind(jobId, "vendors", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
+  } catch { /* non-fatal */ }
+
+  return json({success, skipped, failed: errors.length, errors});
 }
 
 async function handleListImportJobs(request: Request, env: Env): Promise<Response> {

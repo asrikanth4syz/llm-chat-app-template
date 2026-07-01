@@ -8719,12 +8719,14 @@ async function saveDunningRule() {
 async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
+  const isSuper = APP.user && APP.user.role === 'super_admin';
 
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
     <button class="tab-pill active" onclick="importTab('inventory',this)">Inventory</button>
     <button class="tab-pill" onclick="importTab('orders',this)">Orders</button>
+    ${isSuper ? '<button class="tab-pill" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
     <button class="tab-pill" onclick="importTab('jobs',this)">Import History</button>
   </div>
   <div id="import-content"></div>`;
@@ -8752,6 +8754,48 @@ function showImportTab(tab, jobs) {
         <td>${fmtDate(j.created_at)}</td>
       </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No imports yet</td></tr>'}
       </tbody></table></div></div>`;
+    return;
+  }
+  if (tab === 'vendors') {
+    el.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import Vendors</div>
+          <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers. Duplicates detected by vendor name (case-insensitive).</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="downloadSampleCSV('vendors')">⬇ Download Sample Template</button>
+      </div>
+      <div style="padding:16px 20px">
+        <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
+          <div style="font-weight:700;color:var(--navy);margin-bottom:4px">Columns <span style="font-weight:400;color:var(--text-muted)">(* required)</span></div>
+          <code style="color:var(--blue);word-break:break-all">name*, category*, contact_email, contact_phone, location, address, avg_lead_days, rating</code>
+        </div>
+        <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:#92400e">
+          <b>Duplicate handling:</b> If a vendor with the same name already exists, you can choose to skip it or overwrite it with the CSV data.
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label style="font-weight:600">Choose CSV file</label>
+          <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" onchange="previewVendorCSV(this)">
+        </div>
+        <div id="csv-preview" style="margin-top:12px"></div>
+        <div id="csv-actions" style="display:none;margin-top:12px">
+          <div style="margin-bottom:12px;padding:10px 14px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:.84rem">
+            <div style="font-weight:600;color:var(--navy);margin-bottom:8px">For duplicate vendors:</div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px">
+              <input type="radio" name="vendor-dup" value="skip" checked> Skip — keep existing vendor data unchanged
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="radio" name="vendor-dup" value="overwrite"> Overwrite — replace existing vendor with CSV data
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-primary" onclick="submitVendorImport()">Import Vendors</button>
+            <span id="csv-row-count" style="font-size:.84rem;color:var(--text-muted)"></span>
+          </div>
+        </div>
+      </div>
+    </div>`;
     return;
   }
   const isInventory = tab === 'inventory';
@@ -8879,10 +8923,120 @@ async function submitCSVImport(tab) {
   window._importJobs = null;
 }
 
+async function previewVendorCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    const parsed = parseCSVText(e.target.result);
+    if (parsed.length < 2) { showToast('CSV must have a header row + at least one data row', 'error'); return; }
+    const headers = parsed[0].map(function(hdr){ return hdr.trim().toLowerCase().replace(/^﻿/, ''); });
+    if (!headers.includes('name')) { showToast('CSV must have a "name" column', 'error'); return; }
+    const dataRows = parsed.slice(1).map(function(vals) {
+      const obj = {};
+      headers.forEach(function(hdr, i) { obj[hdr] = vals[i] !== undefined ? vals[i].trim() : ''; });
+      return obj;
+    });
+
+    // Fetch existing vendors to detect duplicates
+    const existingVendors = await api('/vendors') || [];
+    const existingNames = new Set(existingVendors.map(function(v){ return (v.name||'').trim().toLowerCase(); }));
+
+    let newCount = 0, dupCount = 0, invalidCount = 0;
+    const classified = dataRows.map(function(row) {
+      if (!row.name || !row.name.trim()) { invalidCount++; return {...row, _status:'invalid'}; }
+      const norm = row.name.trim().toLowerCase();
+      if (existingNames.has(norm)) { dupCount++; return {...row, _status:'duplicate'}; }
+      newCount++;
+      return {...row, _status:'new'};
+    });
+
+    window._vendorCsvRows = classified;
+
+    const preview = document.getElementById('csv-preview');
+    const actions = document.getElementById('csv-actions');
+    const rowCount = document.getElementById('csv-row-count');
+
+    const statusBadge = function(s) {
+      if (s === 'new') return '<span style="background:#d1fae5;color:#065f46;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">New</span>';
+      if (s === 'duplicate') return '<span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Duplicate</span>';
+      return '<span style="background:#fee2e2;color:#991b1b;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Invalid</span>';
+    };
+
+    const dispCols = ['name','category','contact_email','contact_phone','location','avg_lead_days','rating'];
+    if (preview) preview.innerHTML =
+      '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">' +
+        '<span style="background:#d1fae5;color:#065f46;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + newCount + ' New</span>' +
+        '<span style="background:#fef3c7;color:#92400e;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + dupCount + ' Duplicate</span>' +
+        (invalidCount ? '<span style="background:#fee2e2;color:#991b1b;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + invalidCount + ' Invalid</span>' : '') +
+      '</div>' +
+      '<div style="font-size:.8rem;font-weight:600;color:var(--navy);margin-bottom:6px">Preview (all ' + classified.length + ' rows)</div>' +
+      '<div class="table-wrap" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">' +
+      '<table class="table" style="margin:0"><thead><tr><th style="font-size:.73rem">Status</th>' +
+      dispCols.map(function(c){ return '<th style="font-size:.73rem">'+c+'</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      classified.map(function(row){
+        const bg = row._status === 'invalid' ? 'background:#fef2f2' : row._status === 'duplicate' ? 'background:#fefce8' : '';
+        return '<tr style="'+bg+'">' +
+          '<td>' + statusBadge(row._status) + '</td>' +
+          dispCols.map(function(c){ return '<td style="font-size:.76rem">'+(row[c]||'')+'</td>'; }).join('') +
+          '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    if (actions) actions.style.display = 'block';
+    if (rowCount) rowCount.textContent = newCount + ' new, ' + dupCount + ' duplicate' + (invalidCount ? ', ' + invalidCount + ' invalid' : '');
+  };
+  reader.readAsText(file);
+}
+
+async function submitVendorImport() {
+  const rows = window._vendorCsvRows;
+  if (!rows || !rows.length) { showToast('No data to import', 'error'); return; }
+  const overwrite = document.querySelector('input[name="vendor-dup"]:checked')?.value === 'overwrite';
+  const btn = document.querySelector('#csv-actions .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+
+  const sendRows = rows
+    .filter(function(r){ return r._status !== 'invalid'; })
+    .map(function(r){ const c = {...r}; delete c._status; return c; });
+
+  showToast('Importing ' + sendRows.length + ' vendors…');
+  const res = await api('/import/vendors', { method: 'POST', body: JSON.stringify({rows: sendRows, overwrite}) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Import Vendors'; }
+  if (!res) return;
+
+  const preview = document.getElementById('csv-preview');
+  const allFailed = res.success === 0 && res.failed > 0;
+  const partialFail = res.success > 0 && res.failed > 0;
+  const bg    = allFailed ? '#fef2f2' : partialFail ? '#fef3c7' : '#d1fae5';
+  const bdr   = allFailed ? '#fca5a5' : partialFail ? '#fcd34d' : '#6ee7b7';
+  const color = allFailed ? '#b91c1c' : partialFail ? '#92400e' : '#065f46';
+  const icon  = allFailed ? '✗' : '✓';
+  const skipMsg = res.skipped ? ', ' + res.skipped + ' duplicate(s) skipped' : '';
+  const summaryMsg = '<div style="background:'+bg+';border:1px solid '+bdr+';border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:'+color+'"><b>'+icon+(allFailed?' Import failed':' Import complete')+'</b> — ' + res.success + ' vendor(s) imported' + skipMsg + (res.failed ? ', <b>' + res.failed + ' failed</b>' : '') + '.</div>';
+  const errorsHtml = res.errors && res.errors.length
+    ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
+      res.errors.map(function(err){return '<li>'+err+'</li>';}).join('') + '</ul></div>'
+    : '';
+  if (preview) preview.innerHTML = summaryMsg + errorsHtml;
+  window._vendorCsvRows = null;
+  window._importJobs = null;
+}
+
 function downloadSampleCSV(tab) {
   const isInventory = tab === 'inventory';
   let csv, filename;
-  if (isInventory) {
+  if (tab === 'vendors') {
+    csv = [
+      'name,category,contact_email,contact_phone,location,address,avg_lead_days,rating',
+      'Fresh Farms Pvt Ltd,Produce,contact@freshfarms.in,9876543210,Mumbai,"123 Agri Park, Navi Mumbai",2,4.5',
+      'Dairy Direct Co,Dairy,info@dairydirect.in,9812345678,Pune,"45 Cold Chain Hub, Pune",1,4.8',
+      'Clean Supply Corp,Hygiene,sales@cleansupply.in,9900112233,Delhi,"Plot 7, Industrial Area, Delhi",3,4.2',
+      'Grain Masters Ltd,Grains & Staples,orders@grainmasters.in,9988776655,Ahmedabad,"Warehouse Block B, Ahmedabad",4,4.0',
+    ].join('\n');
+    filename = 'vendors_sample.csv';
+  } else if (isInventory) {
     csv = [
       'sku,name,category,sub_category,brand,stock,unit_price,mrp,cost_excl_gst,gst_rate,reorder_level,max_stock,uom,pack_size,units_per_case,weight_grams,barcode,vendor_sku,vendor_lead_days,vendor_moq',
       'SKU001,Organic Green Tea,Beverages,Healthy,Tata,50,180,220,140,18,10,200,box,12,24,250,,TV-GT-01,3,6',
