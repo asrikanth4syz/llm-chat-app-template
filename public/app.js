@@ -1895,6 +1895,8 @@ async function saveDraft() {
 /* ============================================================
    MY INVENTORY (CLIENT STORE TRACKING)
    ============================================================ */
+function h(v) { return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
 async function renderMyInventory(el) {
   el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:40px"><span style="color:var(--text-muted)">Loading inventory…</span></div>`;
   const [items, consumption] = await Promise.all([
@@ -1957,7 +1959,7 @@ async function renderMyInventory(el) {
       </select>
       <select id="inv-filter-cat" class="form-control" style="max-width:180px" onchange="filterMyInventoryTable()">
         <option value="">All Categories</option>
-        ${[...new Set(items.map(i=>i.category).filter(Boolean))].sort().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        ${[...new Set(items.map(i=>i.category).filter(Boolean))].sort().map(c=>`<option value="${h(c)}">${h(c)}</option>`).join('')}
       </select>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
@@ -2008,13 +2010,13 @@ function myInvRow(i) {
   const statusLabel = i.stock_status==='out' ? 'Out of Stock' : i.stock_status==='low' ? 'Low Stock' : 'In Stock';
   const statusBg    = i.stock_status==='out' ? '#fee2e2' : i.stock_status==='low' ? '#fef3c7' : '#d1fae5';
   const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
-  return `<tr data-sku="${esc(i.sku)}" data-cat="${esc(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
+  return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
     <td>
-      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${esc(i.item_name)}</div>
-      <div style="font-size:.72rem;color:var(--text-muted)">${esc(i.sku)}</div>
+      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${h(i.item_name)}</div>
+      <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
     </td>
-    <td style="font-size:.82rem;color:var(--text-muted)">${esc(i.category||'—')}</td>
-    <td style="font-size:.82rem;color:var(--text-muted)">${esc(i.uom||'unit')}</td>
+    <td style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
+    <td style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
     <td style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Number(i.qty_on_hand||0).toFixed(1)}</td>
     <td style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Number(i.reorder_level).toFixed(1):'—'}</td>
     <td><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
@@ -2022,9 +2024,9 @@ function myInvRow(i) {
     <td style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${esc(i.sku)}','${esc(i.item_name)}',${i.qty_on_hand||0},'${esc(i.uom||'unit')}')">Log Use</button>
+        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="navigate('place_order')">Order More</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="setReorderLevelModal('${esc(i.sku)}','${esc(i.item_name)}',${i.reorder_level||0})">⚙</button>
+        <button class="btn btn-secondary btn-sm" onclick="setReorderLevelModal('${h(i.sku)}','${h(i.item_name)}',${i.reorder_level||0})">⚙</button>
       </div>
     </td>
   </tr>`;
@@ -2034,10 +2036,10 @@ function renderConsumptionRows(rows) {
   if (!rows.length) return `<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted)">No consumption recorded in this period.</td></tr>`;
   return rows.map(r => `<tr>
     <td style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">${fmtDate(r.consumed_at)}</td>
-    <td><div style="font-weight:600;font-size:.85rem">${esc(r.item_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${esc(r.sku)}</div></td>
+    <td><div style="font-weight:600;font-size:.85rem">${h(r.item_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)}</div></td>
     <td style="text-align:right;font-weight:700">${Number(r.qty).toFixed(1)}</td>
-    <td style="font-size:.8rem;color:var(--text-muted)">${r.notes ? esc(r.notes) : '—'}</td>
-    <td style="font-size:.8rem;color:var(--text-muted)">${esc(r.recorded_by||'—')}</td>
+    <td style="font-size:.8rem;color:var(--text-muted)">${r.notes ? h(r.notes) : '—'}</td>
+    <td style="font-size:.8rem;color:var(--text-muted)">${h(r.recorded_by||'—')}</td>
   </tr>`).join('');
 }
 
@@ -2077,7 +2079,7 @@ function logConsumptionModal(sku, name, qty, uom) {
       <input id="cons-notes" type="text" class="form-control" placeholder="e.g. Used for lunch service">
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitConsumption('${esc(sku)}')">Save</button>`);
+     <button class="btn btn-primary" onclick="submitConsumption('${h(sku)}')">Save</button>`);
 }
 
 async function submitConsumption(sku) {
@@ -2105,7 +2107,7 @@ function setReorderLevelModal(sku, name, currentLevel) {
       <input id="reorder-level-val" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveReorderLevel('${esc(sku)}')">Save</button>`);
+     <button class="btn btn-primary" onclick="saveReorderLevel('${h(sku)}')">Save</button>`);
 }
 
 async function saveReorderLevel(sku) {
