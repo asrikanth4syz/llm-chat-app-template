@@ -3577,7 +3577,7 @@ async function handlePatchClientInventory(request: Request, env: Env, path: stri
   const denied = requireUser(user); if (denied) return denied;
 
   const sku = decodeURIComponent(path.split('/').pop()!);
-  const body = await request.json() as {reorder_level?:number;qty_on_hand?:number};
+  const body = await request.json() as {reorder_level?:number;qty_on_hand?:number;item_name?:string};
 
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
   if (!isClientRole) return json({error:"Forbidden"}, 403);
@@ -3586,6 +3586,7 @@ async function handlePatchClientInventory(request: Request, env: Env, path: stri
 
   const sets: string[] = ['updated_at=datetime(\'now\')'];
   const vals: unknown[] = [];
+  if (body.item_name     !== undefined) { sets.push('item_name=?');     vals.push(body.item_name.trim()); }
   if (body.reorder_level !== undefined) { sets.push('reorder_level=?'); vals.push(body.reorder_level); }
   if (body.qty_on_hand   !== undefined) { sets.push('qty_on_hand=?');   vals.push(Math.max(0, body.qty_on_hand)); }
   if (sets.length === 1) return json({error:"Nothing to update"}, 400);

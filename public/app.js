@@ -2024,9 +2024,9 @@ function myInvRow(i) {
     <td style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
+        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="navigate('place_order')">Order More</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="setReorderLevelModal('${h(i.sku)}','${h(i.item_name)}',${i.reorder_level||0})">⚙</button>
+        <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>
       </div>
     </td>
   </tr>`;
@@ -2097,24 +2097,30 @@ async function submitConsumption(sku) {
   }
 }
 
-function setReorderLevelModal(sku, name, currentLevel) {
-  openModal(`Reorder Level — ${name}`, `
-    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">
-      When stock drops to or below this level, the item is flagged as Low Stock and you can order more.
+function editInvItemModal(sku, currentName, currentLevel) {
+  openModal(`Edit Item — ${currentName||sku}`, `
+    <div class="form-group">
+      <label class="form-label">Item Name</label>
+      <input id="edit-inv-name" type="text" class="form-control" value="${h(currentName||'')}" placeholder="Enter item name">
     </div>
     <div class="form-group">
       <label class="form-label">Reorder Level</label>
-      <input id="reorder-level-val" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
+      <input id="edit-inv-reorder" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
+      <div style="font-size:.76rem;color:var(--text-muted);margin-top:4px">Flag as Low Stock when qty falls to or below this number</div>
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveReorderLevel('${h(sku)}')">Save</button>`);
+     <button class="btn btn-primary" onclick="saveInvItemEdit('${h(sku)}')">Save</button>`);
 }
 
-async function saveReorderLevel(sku) {
-  const val = parseFloat(document.getElementById('reorder-level-val')?.value);
-  if (isNaN(val) || val < 0) { showToast('Enter a valid level', 'error'); return; }
-  const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify({reorder_level: val})});
-  if (res?.ok) { showToast('Reorder level saved'); closeModal(); navigate('my_inventory'); }
+async function saveInvItemEdit(sku) {
+  const name   = document.getElementById('edit-inv-name')?.value?.trim();
+  const level  = parseFloat(document.getElementById('edit-inv-reorder')?.value);
+  const patch  = {};
+  if (name)         patch.item_name     = name;
+  if (!isNaN(level) && level >= 0) patch.reorder_level = level;
+  if (!Object.keys(patch).length) { closeModal(); return; }
+  const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify(patch)});
+  if (res?.ok) { showToast('Item updated'); closeModal(); navigate('my_inventory'); }
   else showToast(res?.error || 'Error saving', 'error');
 }
 
