@@ -1915,6 +1915,7 @@ async function renderMyInventory(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Store Inventory</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track items received, log consumption, and reorder low-stock items</div>
     </div>
+    <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
   </div>
 
   <!-- KPI Cards -->
@@ -2113,6 +2114,15 @@ async function saveReorderLevel(sku) {
   const res = await api(`/client-inventory/${encodeURIComponent(sku)}`, {method:'PATCH', body:JSON.stringify({reorder_level: val})});
   if (res?.ok) { showToast('Reorder level saved'); closeModal(); navigate('my_inventory'); }
   else showToast(res?.error || 'Error saving', 'error');
+}
+
+async function syncClientInventory(btn) {
+  const orig = btn.textContent;
+  btn.textContent = 'Syncing…'; btn.disabled = true;
+  const res = await api('/client-inventory/sync', {method:'POST'});
+  btn.textContent = orig; btn.disabled = false;
+  if (res?.ok) { showToast('Inventory synced from deliveries'); navigate('my_inventory'); }
+  else showToast(res?.error || 'Sync failed', 'error');
 }
 
 async function reloadConsumptionLog() {

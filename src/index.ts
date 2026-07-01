@@ -395,6 +395,7 @@ export default {
 
       // Feature 25: Client store inventory tracking
       if (path==="/api/client-inventory"                   && method==="GET")   return handleListClientInventory(request,env);
+      if (path==="/api/client-inventory/sync"              && method==="POST")  return handleSyncClientInventory(request,env);
       if (path==="/api/client-inventory/consume"           && method==="POST")  return handleClientConsume(request,env);
       if (path==="/api/client-inventory/consumption"       && method==="GET")   return handleListClientConsumption(request,env);
       if (path.match(/^\/api\/client-inventory\/[^/]+$/)  && method==="PATCH") return handlePatchClientInventory(request,env,path);
@@ -3591,4 +3592,41 @@ async function handlePatchClientInventory(request: Request, env: Env, path: stri
   vals.push(clientId, sku);
   await env.DB.prepare(`UPDATE client_inventory SET ${sets.join(',')} WHERE client_id=? AND sku=?`).bind(...vals).run();
   return json({ok:true});
+}
+
+async function handleSyncClientInventory(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  if (!isClientRole) return json({error:"Forbidden"}, 403);
+  const clientId = user!.client_id;
+  if (!clientId) return json({error:"Client not linked"}, 400);
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO client_inventory (client_id, sku, item_name, category, uom, qty_on_hand, last_received_qty, last_received_at, updated_at)
+      SELECT
+        o.client_id, dci.sku, dci.name,
+        COALESCE(i.category,''), COALESCE(i.uom,'unit'),
+        SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
+        SUM(CASE WHEN dci.qty_delivered > 0 THEN dci.qty_delivered ELSE dci.qty_ordered END),
+        MAX(dc.delivered_at), datetime('now')
+      FROM dc_items dci
+      JOIN delivery_challans dc ON dci.dc_id = dc.id
+      JOIN orders o ON dc.order_id = o.id
+      LEFT JOIN inventory i ON i.sku = dci.sku
+      WHERE dc.status = 'DELIVERED' AND o.client_id = ?
+      GROUP BY o.client_id, dci.sku
+      ON CONFLICT(client_id, sku) DO UPDATE SET
+        qty_on_hand       = excluded.qty_on_hand,
+        last_received_qty = excluded.last_received_qty,
+        last_received_at  = excluded.last_received_at,
+        item_name         = excluded.item_name,
+        updated_at        = datetime('now')
+    `).bind(clientId).run();
+    return json({ok:true});
+  } catch(e) {
+    return json({error: String(e)}, 500);
+  }
 }
