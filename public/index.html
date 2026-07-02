@@ -6,24 +6,574 @@
   <title>Smart Pantry – 4SYZ Corporate Procurement Platform</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="app.css" />
+
+  <style>
+    /* ── LOGIN SCREEN REDESIGN ──────────────────────────── */
+    .login-screen {
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+      position: relative;
+      overflow: hidden;
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+
+    /* Animated background */
+    .login-bg {
+      position: absolute; inset: 0; z-index: 0;
+      background: linear-gradient(135deg, #080f1e 0%, #0d1f3c 50%, #0b1828 100%);
+    }
+    .login-bg-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(249,115,22,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(249,115,22,.05) 1px, transparent 1px);
+      background-size: 52px 52px;
+    }
+    .login-blob {
+      position: absolute; border-radius: 50%; filter: blur(100px); pointer-events: none;
+    }
+    .blob1 { width: 650px; height: 650px; background: rgba(249,115,22,.18); top: -160px; left: -80px; animation: blobFloat1 14s ease-in-out infinite; }
+    .blob2 { width: 450px; height: 450px; background: rgba(99,102,241,.14); bottom: -100px; left: 300px; animation: blobFloat2 18s ease-in-out infinite; }
+    .blob3 { width: 300px; height: 300px; background: rgba(249,115,22,.08); top: 50%; left: 45%; animation: blobFloat3 20s ease-in-out infinite; }
+    @keyframes blobFloat1 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(40px,30px)} }
+    @keyframes blobFloat2 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-30px,-40px)} }
+    @keyframes blobFloat3 { 0%,100%{transform:translate(0,-50%)} 50%{transform:translate(20px,calc(-50% + 20px))} }
+
+    /* Noise texture overlay */
+    .login-bg::after {
+      content: '';
+      position: absolute; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      opacity: .4;
+    }
+
+    /* Container */
+    .login-container {
+      position: relative; z-index: 1; display: flex; width: 100%; min-height: 100vh;
+    }
+
+    /* ── LEFT HERO PANEL ──────────────────────────────── */
+    .login-left {
+      flex: 1;
+      padding: 48px 56px;
+      display: flex;
+      align-items: center;
+      color: white;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .login-brand { max-width: 560px; width: 100%; }
+
+    /* Brand row */
+    .brand-logo {
+      display: flex; align-items: center; gap: 14px; margin-bottom: 36px;
+    }
+    .brand-logo svg { filter: drop-shadow(0 0 20px rgba(249,115,22,.5)); }
+    .brand-name { font-size: 1.5rem; font-weight: 800; color: white; letter-spacing: -.03em; }
+    .brand-sub { font-size: .75rem; color: rgba(255,255,255,.4); margin-top: 2px; letter-spacing: .08em; text-transform: uppercase; }
+    .brand-sub strong { color: #fb923c; }
+
+    /* Live badge */
+    .live-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(249,115,22,.1);
+      border: 1px solid rgba(249,115,22,.25);
+      border-radius: 100px;
+      padding: 5px 14px 5px 10px;
+      font-size: .7rem; font-weight: 600;
+      color: #fb923c;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+    }
+    .live-dot {
+      width: 7px; height: 7px; background: #f97316; border-radius: 50%;
+      animation: livePulse 2s ease-in-out infinite;
+      box-shadow: 0 0 6px #f97316;
+    }
+    @keyframes livePulse { 0%,100%{opacity:1;box-shadow:0 0 6px #f97316} 50%{opacity:.4;box-shadow:0 0 2px #f97316} }
+
+    /* Headline */
+    .login-hero h2 {
+      font-size: 2.6rem; font-weight: 900;
+      line-height: 1.1; letter-spacing: -.04em;
+      margin-bottom: 16px; color: #fff;
+    }
+    .login-hero h2 .grad {
+      background: linear-gradient(135deg, #f97316 0%, #fb923c 40%, #fbbf24 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .login-hero p {
+      font-size: .9rem; color: rgba(255,255,255,.55);
+      line-height: 1.7; margin-bottom: 28px; max-width: 440px;
+    }
+
+    /* Feature list */
+    .login-features { display: flex; flex-direction: column; gap: 9px; margin-bottom: 32px; }
+    .lf-item { display: flex; align-items: center; gap: 10px; font-size: .83rem; color: rgba(255,255,255,.75); font-weight: 500; }
+    .lf-icon {
+      width: 20px; height: 20px;
+      background: rgba(249,115,22,.15);
+      border: 1px solid rgba(249,115,22,.3);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; font-size: .65rem; color: #f97316; font-weight: 800;
+    }
+
+    /* Demo CTA */
+    .hero-cta-row { display: flex; gap: 12px; align-items: center; margin-bottom: 36px; }
+    .btn-watch-demo {
+      display: flex; align-items: center; gap: 9px;
+      background: rgba(255,255,255,.07);
+      border: 1px solid rgba(255,255,255,.15);
+      color: rgba(255,255,255,.9);
+      padding: 11px 20px;
+      border-radius: 10px;
+      font-size: .85rem; font-weight: 600;
+      cursor: pointer;
+      transition: all .2s;
+      backdrop-filter: blur(10px);
+    }
+    .btn-watch-demo:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); }
+    .play-circle {
+      width: 30px; height: 30px;
+      background: #f97316;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 0 16px rgba(249,115,22,.5);
+    }
+
+    /* Stats */
+    .login-stats { display: flex; gap: 0; border-top: 1px solid rgba(255,255,255,.08); padding-top: 28px; }
+    .ls-stat { flex: 1; text-align: center; padding: 0 8px; border-right: 1px solid rgba(255,255,255,.07); }
+    .ls-stat:last-child { border-right: none; }
+    .ls-num { font-size: 1.7rem; font-weight: 900; color: #f97316; letter-spacing: -.03em; }
+    .ls-label { font-size: .66rem; color: rgba(255,255,255,.38); margin-top: 2px; text-transform: uppercase; letter-spacing: .08em; }
+
+    /* ── MOCK UI PREVIEW (inside left panel) ─────────── */
+    .hero-preview {
+      position: absolute;
+      right: -32px;
+      top: 50%;
+      transform: translateY(-50%) perspective(900px) rotateY(-6deg) rotateX(2deg);
+      width: 380px;
+      z-index: 5;
+      pointer-events: none;
+    }
+    .preview-frame {
+      background: #0d1f3c;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.1);
+      box-shadow:
+        0 0 0 1px rgba(249,115,22,.1),
+        0 30px 80px rgba(0,0,0,.6),
+        0 0 60px rgba(249,115,22,.1);
+      overflow: hidden;
+      font-size: .6rem;
+    }
+    .pf-titlebar {
+      background: #091525;
+      padding: 7px 12px;
+      display: flex; align-items: center; gap: 5px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .pf-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .pf-body { display: flex; height: 320px; }
+    .pf-sidebar {
+      width: 100px; background: #080f1e;
+      border-right: 1px solid rgba(255,255,255,.06);
+      padding: 10px 0;
+    }
+    .pf-sb-logo {
+      display: flex; align-items: center; gap: 5px;
+      padding: 0 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); margin-bottom: 6px;
+    }
+    .pf-sb-icon { width: 16px; height: 16px; background: #f97316; border-radius: 4px; flex-shrink: 0; }
+    .pf-sb-name { font-size: .55rem; font-weight: 800; color: #fff; }
+    .pf-nav { padding: 4px 8px; font-size: .55rem; color: rgba(255,255,255,.35); display: flex; align-items: center; gap: 4px; }
+    .pf-nav.active { color: #fb923c; background: rgba(249,115,22,.1); border-left: 2px solid #f97316; font-weight: 700; }
+    .pf-main { flex: 1; background: #eef2fa; overflow: hidden; }
+    .pf-topbar {
+      background: #fff; padding: 6px 8px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid #e5eaf3;
+    }
+    .pf-title { font-weight: 800; color: #0f2040; font-size: .6rem; }
+    .pf-tag {
+      padding: 2px 6px; border-radius: 10px;
+      font-size: .52rem; font-weight: 700;
+    }
+    .pf-tag-o { background: #fff7ed; color: #c2410c; }
+    .pf-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; padding: 6px; }
+    .pf-kpi { background: #fff; border-radius: 6px; padding: 5px 6px; border: 1px solid #e8edf7; }
+    .pf-kpi-v { font-size: .75rem; font-weight: 900; color: #0f2040; }
+    .pf-kpi-l { font-size: .48rem; color: #8896b0; text-transform: uppercase; letter-spacing: .05em; }
+    .pf-table { margin: 0 6px 6px; background: #fff; border-radius: 6px; border: 1px solid #e8edf7; overflow: hidden; }
+    .pf-th { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 4px; padding: 4px 6px; background: #f8faff; }
+    .pf-th span { font-size: .48rem; font-weight: 700; color: #8896b0; text-transform: uppercase; }
+    .pf-row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 4px; padding: 4px 6px; border-top: 1px solid #f0f4fa; }
+    .pf-row-name { font-size: .54rem; color: #0f2040; font-weight: 600; }
+    .pf-row-sub  { font-size: .48rem; color: #8896b0; }
+    .pf-row-val  { font-size: .55rem; font-weight: 700; }
+    .pf-pill { display: inline-block; padding: 1px 5px; border-radius: 10px; font-size: .46rem; font-weight: 700; }
+    .pill-ok  { background: #dcfce7; color: #15803d; }
+    .pill-low { background: #fef9c3; color: #a16207; }
+    .pill-out { background: #fee2e2; color: #b91c1c; }
+
+    /* Floating stat chips */
+    .preview-chip {
+      position: absolute;
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.25), 0 0 0 1px rgba(249,115,22,.1);
+      display: flex; align-items: center; gap: 8px;
+      z-index: 10;
+      animation: chipFloat 4s ease-in-out infinite;
+    }
+    .preview-chip-1 { top: 20px; right: -20px; animation-delay: 0s; }
+    .preview-chip-2 { bottom: 60px; right: -28px; animation-delay: -2s; }
+    @keyframes chipFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    .chip-icon { font-size: 1rem; }
+    .chip-num  { font-size: .95rem; font-weight: 900; color: #0f2040; }
+    .chip-lbl  { font-size: .56rem; color: #8896b0; margin-top: 1px; }
+    .chip-pill {
+      background: linear-gradient(135deg, #f97316, #fb923c);
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      box-shadow: 0 8px 24px rgba(249,115,22,.4);
+      animation-delay: -1s;
+    }
+    .chip-pill .chip-num { color: #fff; font-size: .8rem; }
+    .chip-pill .chip-lbl { color: rgba(255,255,255,.75); }
+
+    /* ── RIGHT LOGIN PANEL ───────────────────────────── */
+    .login-right {
+      width: 440px;
+      padding: 40px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255,255,255,.025);
+      backdrop-filter: blur(24px);
+      border-left: 1px solid rgba(255,255,255,.08);
+      position: relative;
+    }
+    .login-right::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(249,115,22,.04) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .login-card {
+      width: 100%; max-width: 360px;
+      background: rgba(255,255,255,.97);
+      border-radius: 18px;
+      padding: 32px 30px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.08);
+      position: relative;
+      z-index: 1;
+    }
+    .login-card::before {
+      content: '';
+      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 60px; height: 3px;
+      background: linear-gradient(90deg, #f97316, #fb923c);
+      border-radius: 0 0 4px 4px;
+    }
+    .login-card h3 { font-size: 1.35rem; font-weight: 800; color: #0f2040; margin-bottom: 3px; letter-spacing: -.02em; }
+    .login-subtitle { color: #8896b0; font-size: .83rem; margin-bottom: 20px; }
+
+    .demo-banner {
+      display: flex; align-items: center; gap: 8px;
+      background: #fff7ed; border: 1px solid #fed7aa;
+      border-radius: 8px; padding: 9px 12px; margin-bottom: 18px;
+      font-size: .78rem; color: #c2410c; font-weight: 500;
+    }
+    .form-group { margin-bottom: 13px; }
+    .form-group label { display: block; font-size: .78rem; font-weight: 600; color: #374151; margin-bottom: 5px; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 9px 13px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 9px;
+      font-family: 'Inter', system-ui, sans-serif; font-size: .86rem; color: #0f172a;
+      background: #fff; outline: none; transition: border-color .2s, box-shadow .2s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,.12);
+    }
+    .input-wrap { position: relative; }
+    .input-wrap input { padding-right: 40px; }
+    .toggle-pw {
+      position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; cursor: pointer; color: #94a3b8; padding: 4px;
+      display: flex; align-items: center;
+    }
+    .otp-inputs { display: flex; gap: 8px; }
+    .otp-input {
+      width: 42px; height: 42px; text-align: center;
+      font-size: 1.1rem; font-weight: 600;
+      border: 1.5px solid #e2e8f0; border-radius: 9px; outline: none;
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .otp-input:focus { border-color: #f97316; }
+    .otp-hint { font-size: .75rem; color: #94a3b8; margin-top: 6px; }
+    .btn-login {
+      width: 100%; padding: 12px;
+      background: linear-gradient(135deg, #f97316, #ea6d12);
+      color: white; border: none;
+      border-radius: 10px; font-size: .9rem; font-weight: 700;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: all .2s; margin-top: 8px;
+      box-shadow: 0 6px 20px rgba(249,115,22,.35);
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .btn-login:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(249,115,22,.45); }
+    .btn-login:active { transform: translateY(0); }
+    .login-footer-links {
+      display: flex; align-items: center; gap: 8px; justify-content: center;
+      margin-top: 16px; font-size: .76rem;
+    }
+    .login-footer-links a { color: #64748b; text-decoration: none; }
+    .login-footer-links a:hover { color: #f97316; }
+    .login-footer-links span { color: #cbd5e1; }
+    .login-clients { margin-top: 20px; padding-top: 18px; border-top: 1px solid #f1f5f9; }
+    .login-clients p { font-size: .72rem; color: #94a3b8; margin-bottom: 10px; text-align: center; font-weight: 500; }
+    .client-logos {
+      display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+    }
+    .client-logos span {
+      padding: 4px 10px; background: #f8faff; border: 1px solid #e2e8f0;
+      border-radius: 6px; font-size: .68rem; font-weight: 700; color: #64748b;
+    }
+
+    /* ── DEMO VIDEO MODAL ─────────────────────────────── */
+    .demo-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: rgba(5,10,20,.92);
+      backdrop-filter: blur(20px);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity .35s ease;
+    }
+    .demo-overlay.open { opacity: 1; pointer-events: all; }
+
+    .demo-modal {
+      width: min(900px, 92vw);
+      background: #0d1f3c;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,.1);
+      overflow: hidden;
+      box-shadow: 0 40px 120px rgba(0,0,0,.8), 0 0 0 1px rgba(249,115,22,.1);
+      transform: scale(.94) translateY(16px);
+      transition: transform .35s ease;
+      position: relative;
+    }
+    .demo-overlay.open .demo-modal { transform: scale(1) translateY(0); }
+
+    .demo-modal-header {
+      padding: 18px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.2);
+    }
+    .demo-modal-title {
+      display: flex; align-items: center; gap: 10px;
+      font-size: .95rem; font-weight: 800; color: #fff;
+    }
+    .demo-close {
+      width: 32px; height: 32px; background: rgba(255,255,255,.08);
+      border: none; border-radius: 50%; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: rgba(255,255,255,.6); transition: all .2s;
+    }
+    .demo-close:hover { background: rgba(255,255,255,.14); color: #fff; }
+
+    /* Progress tabs */
+    .demo-tabs {
+      display: flex; gap: 0;
+      padding: 0 24px;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      background: rgba(0,0,0,.1);
+      overflow-x: auto;
+    }
+    .demo-tab {
+      padding: 12px 18px;
+      font-size: .75rem; font-weight: 600;
+      color: rgba(255,255,255,.4);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: all .2s;
+    }
+    .demo-tab.active { color: #fb923c; border-bottom-color: #f97316; }
+
+    /* Progress bar */
+    .demo-progress { height: 2px; background: rgba(255,255,255,.06); position: relative; }
+    .demo-progress-fill {
+      height: 100%; background: linear-gradient(90deg, #f97316, #fbbf24);
+      border-radius: 2px; transition: width 6s linear;
+      width: 0%;
+    }
+
+    /* Slides */
+    .demo-slides { position: relative; height: 480px; overflow: hidden; }
+    .demo-slide {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      opacity: 0; transform: translateX(30px);
+      transition: all .5s ease;
+      padding: 24px;
+      pointer-events: none;
+    }
+    .demo-slide.active {
+      opacity: 1; transform: translateX(0);
+      pointer-events: all;
+    }
+    .slide-label {
+      font-size: .68rem; font-weight: 700;
+      color: #fb923c; text-transform: uppercase; letter-spacing: .1em;
+      margin-bottom: 8px;
+    }
+    .slide-title { font-size: 1.4rem; font-weight: 900; color: #fff; letter-spacing: -.02em; margin-bottom: 6px; }
+    .slide-desc  { font-size: .83rem; color: rgba(255,255,255,.5); margin-bottom: 20px; }
+
+    /* Slide screen mock */
+    .slide-screen {
+      flex: 1;
+      background: #f0f4fa;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 8px 32px rgba(0,0,0,.3);
+    }
+    .ss-topbar {
+      background: #fff; padding: 8px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid #e5eaf3;
+    }
+    .ss-title { font-size: .75rem; font-weight: 800; color: #0f2040; }
+    .ss-tags  { display: flex; gap: 5px; }
+    .ss-tag   { padding: 2px 8px; border-radius: 10px; font-size: .62rem; font-weight: 700; }
+    .ss-tag-o { background: #fff7ed; color: #c2410c; }
+    .ss-tag-g { background: #f0fdf4; color: #15803d; }
+    .ss-tag-b { background: #eff6ff; color: #2563eb; }
+    .ss-body  { padding: 12px; }
+
+    /* KPI mini tiles */
+    .ss-kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-bottom: 10px; }
+    .ss-kpi  {
+      background: #fff; border-radius: 8px; padding: 8px 10px;
+      border: 1px solid #e8edf7;
+    }
+    .ss-kpi-v { font-size: 1.1rem; font-weight: 900; color: #0f2040; }
+    .ss-kpi-l { font-size: .58rem; color: #8896b0; text-transform: uppercase; }
+    .ss-kpi-d { font-size: .6rem; margin-top: 2px; }
+    .up   { color: #16a34a; }
+    .warn { color: #d97706; }
+    .down { color: #dc2626; }
+
+    /* Mini table */
+    .ss-table  { background: #fff; border-radius: 8px; border: 1px solid #e8edf7; overflow: hidden; }
+    .ss-thead  { background: #f8faff; display: grid; padding: 6px 10px; }
+    .ss-thead span { font-size: .6rem; font-weight: 700; color: #8896b0; text-transform: uppercase; }
+    .ss-row    { display: grid; padding: 6px 10px; border-top: 1px solid #f0f4fa; align-items: center; }
+    .ss-name   { font-size: .7rem; font-weight: 600; color: #0f2040; }
+    .ss-sub    { font-size: .58rem; color: #8896b0; }
+    .ss-val    { font-size: .7rem; font-weight: 700; }
+    .ss-pill   { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: .6rem; font-weight: 700; }
+    .pl-g { background: #dcfce7; color: #15803d; }
+    .pl-a { background: #fef9c3; color: #a16207; }
+    .pl-r { background: #fee2e2; color: #b91c1c; }
+    .pl-b { background: #dbeafe; color: #1d4ed8; }
+
+    /* Bars */
+    .ss-bars { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+    .ss-bar-row { }
+    .ss-bar-meta { display: flex; justify-content: space-between; font-size: .65rem; color: #5a6e8a; margin-bottom: 3px; }
+    .ss-bar-meta b { color: #2d3e58; }
+    .ss-bar-track { height: 7px; background: #f0f4fa; border-radius: 4px; overflow: hidden; }
+    .ss-bar-fill  { height: 100%; border-radius: 4px; transition: width 1s ease; }
+
+    /* Map/Route slide */
+    .route-visual {
+      display: flex; gap: 12px; padding: 10px;
+    }
+    .route-list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .route-card {
+      background: #fff; border-radius: 8px; padding: 8px 10px;
+      border: 1px solid #e8edf7;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .route-num { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .65rem; font-weight: 800; flex-shrink: 0; }
+    .route-info .rn { font-size: .68rem; font-weight: 700; color: #0f2040; }
+    .route-info .rs { font-size: .58rem; color: #8896b0; }
+    .route-stat-col { width: 120px; display: flex; flex-direction: column; gap: 6px; }
+    .route-stat { background: #fff; border-radius: 8px; padding: 8px 10px; border: 1px solid #e8edf7; text-align: center; }
+    .route-stat .rv { font-size: .95rem; font-weight: 900; color: #0f2040; }
+    .route-stat .rl { font-size: .56rem; color: #8896b0; text-transform: uppercase; }
+
+    /* Demo nav */
+    .demo-nav {
+      padding: 14px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-top: 1px solid rgba(255,255,255,.07);
+      background: rgba(0,0,0,.1);
+    }
+    .demo-nav-btn {
+      padding: 9px 20px; border-radius: 9px;
+      font-size: .8rem; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; gap: 7px;
+      border: none; transition: all .2s;
+    }
+    .btn-prev {
+      background: rgba(255,255,255,.06);
+      color: rgba(255,255,255,.6);
+    }
+    .btn-next {
+      background: linear-gradient(135deg, #f97316, #ea6d12);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(249,115,22,.35);
+    }
+    .btn-next:hover { box-shadow: 0 6px 20px rgba(249,115,22,.5); transform: translateY(-1px); }
+    .demo-step-info { font-size: .72rem; color: rgba(255,255,255,.3); }
+
+    /* Animated typing cursor */
+    @keyframes typing { 0%,100%{opacity:1} 50%{opacity:0} }
+    .cursor { display: inline-block; width: 2px; height: 1em; background: #f97316; margin-left: 2px; animation: typing 1s infinite; vertical-align: text-bottom; }
+  </style>
 </head>
 <body>
 
-<!-- LOGIN SCREEN -->
+<!-- ══════════════════════════════════════════════════════
+     LOGIN SCREEN
+══════════════════════════════════════════════════════ -->
 <div id="login-screen" class="login-screen">
   <div class="login-bg">
     <div class="login-bg-grid"></div>
     <div class="login-blob blob1"></div>
     <div class="login-blob blob2"></div>
+    <div class="login-blob blob3"></div>
   </div>
+
   <div class="login-container">
+
+    <!-- ── LEFT HERO ── -->
     <div class="login-left">
       <div class="login-brand">
+
+        <!-- Brand -->
         <div class="brand-logo">
-          <svg width="52" height="52" viewBox="0 0 48 48" fill="none">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <rect width="48" height="48" rx="12" fill="#f97316"/>
             <path d="M12 28C12 22 17 16 24 14C31 16 36 22 36 28" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="24" cy="30" r="6" fill="white"/>
@@ -31,20 +581,44 @@
             <rect x="18" y="34" width="12" height="3" rx="1.5" fill="white" opacity="0.5"/>
           </svg>
           <div>
-            <h1 class="brand-name">Smart Pantry</h1>
-            <p class="brand-sub">by <strong>4SYZ</strong></p>
+            <div class="brand-name">Smart Pantry</div>
+            <div class="brand-sub">by <strong>4SYZ</strong></div>
           </div>
         </div>
+
+        <div class="live-badge">
+          <span class="live-dot"></span>
+          Enterprise Procurement Platform
+        </div>
+
+        <!-- Hero headline -->
         <div class="login-hero">
-          <h2>Unified Workplace Procurement &amp; Operations Platform</h2>
-          <p>Manage your complete enterprise procurement lifecycle — from client onboarding and catalogue management to vendor RFQ, warehouse operations, and AI-powered analytics.</p>
+          <h2>
+            One Platform.<br>
+            <span class="grad">Every Pantry.</span><br>
+            Zero Gaps.
+          </h2>
+          <p>End-to-end corporate procurement — from client onboarding, catalogue management and vendor RFQ to warehouse operations, delivery challans and AI-powered forecasting.</p>
+
           <div class="login-features">
-            <div class="lf-item"><span class="lf-icon">✓</span> Multi-tenant RBAC · 12 roles across 3 orgs</div>
-            <div class="lf-item"><span class="lf-icon">✓</span> Real-time inventory &amp; warehouse management</div>
-            <div class="lf-item"><span class="lf-icon">✓</span> AI-powered procurement forecasting</div>
-            <div class="lf-item"><span class="lf-icon">✓</span> End-to-end order lifecycle with FSM tracking</div>
-            <div class="lf-item"><span class="lf-icon">✓</span> Integrated vendor portal, RFQ &amp; Zoho Books</div>
+            <div class="lf-item"><span class="lf-icon">✓</span> Multi-tenant RBAC across 12 roles &amp; 3 organisations</div>
+            <div class="lf-item"><span class="lf-icon">✓</span> Real-time inventory · critical stock alerts · auto-PO</div>
+            <div class="lf-item"><span class="lf-icon">✓</span> End-to-end order FSM with dispatch &amp; delivery challans</div>
+            <div class="lf-item"><span class="lf-icon">✓</span> Vendor portal · RFQ · Zoho Books &amp; GST integration</div>
+            <div class="lf-item"><span class="lf-icon">✓</span> AI-powered procurement forecasting &amp; Reports &amp; BI</div>
           </div>
+
+          <!-- CTA -->
+          <div class="hero-cta-row">
+            <button class="btn-watch-demo" onclick="openDemo()">
+              <span class="play-circle">
+                <svg width="10" height="12" viewBox="0 0 10 12" fill="white"><path d="M1 1l8 5-8 5V1z"/></svg>
+              </span>
+              Watch Product Demo
+            </button>
+          </div>
+
+          <!-- Stats -->
           <div class="login-stats">
             <div class="ls-stat"><div class="ls-num">10</div><div class="ls-label">Domains</div></div>
             <div class="ls-stat"><div class="ls-num">50+</div><div class="ls-label">Features</div></div>
@@ -53,7 +627,81 @@
           </div>
         </div>
       </div>
+
+      <!-- Mini preview mock UI -->
+      <div class="hero-preview" id="hero-preview">
+        <!-- Floating chips -->
+        <div class="preview-chip preview-chip-1">
+          <div class="chip-icon">📦</div>
+          <div>
+            <div class="chip-num">₹2.4Cr</div>
+            <div class="chip-lbl">Orders this month</div>
+          </div>
+        </div>
+        <div class="preview-chip preview-chip-2 chip-pill">
+          <div class="chip-icon">✅</div>
+          <div>
+            <div class="chip-num">98.4% Fill Rate</div>
+            <div class="chip-lbl">Across all vendors</div>
+          </div>
+        </div>
+
+        <div class="preview-frame">
+          <div class="pf-titlebar">
+            <div class="pf-dot" style="background:#ef4444"></div>
+            <div class="pf-dot" style="background:#f59e0b"></div>
+            <div class="pf-dot" style="background:#22c55e"></div>
+          </div>
+          <div class="pf-body">
+            <div class="pf-sidebar">
+              <div class="pf-sb-logo">
+                <div class="pf-sb-icon"></div>
+                <div class="pf-sb-name">Smart Pantry</div>
+              </div>
+              <div class="pf-nav">🏠 Dashboard</div>
+              <div class="pf-nav active">📦 Inventory</div>
+              <div class="pf-nav">🛒 Orders</div>
+              <div class="pf-nav">🚚 Deliveries</div>
+              <div class="pf-nav">🏪 Vendors</div>
+              <div class="pf-nav">📈 Reports</div>
+            </div>
+            <div class="pf-main">
+              <div class="pf-topbar">
+                <span class="pf-title">Inventory</span>
+                <span class="pf-tag pf-tag-o">+ Add Item</span>
+              </div>
+              <div class="pf-kpis">
+                <div class="pf-kpi"><div class="pf-kpi-v">1,248</div><div class="pf-kpi-l">Total SKUs</div></div>
+                <div class="pf-kpi"><div class="pf-kpi-v" style="color:#d97706">34</div><div class="pf-kpi-l">Low Stock</div></div>
+                <div class="pf-kpi"><div class="pf-kpi-v" style="color:#dc2626">8</div><div class="pf-kpi-l">Critical</div></div>
+              </div>
+              <div class="pf-table">
+                <div class="pf-th" style="grid-template-columns:2fr 1fr 1fr">
+                  <span>Item</span><span>Stock</span><span>Status</span>
+                </div>
+                <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
+                  <div><div class="pf-row-name">Amul ButterMilk</div><div class="pf-row-sub">SKU-100045</div></div>
+                  <div class="pf-row-val" style="color:#16a34a">11,193</div>
+                  <div><span class="pf-pill pill-ok">OK</span></div>
+                </div>
+                <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
+                  <div><div class="pf-row-name">A4 Paper Ream</div><div class="pf-row-sub">SKU-007 🔴</div></div>
+                  <div class="pf-row-val" style="color:#d97706">156</div>
+                  <div><span class="pf-pill pill-low">LOW</span></div>
+                </div>
+                <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
+                  <div><div class="pf-row-name">Hand Sanitizer</div><div class="pf-row-sub">SKU-004</div></div>
+                  <div class="pf-row-val" style="color:#dc2626">0</div>
+                  <div><span class="pf-pill pill-out">OUT</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <!-- ── RIGHT LOGIN FORM ── -->
     <div class="login-right">
       <div class="login-card">
         <h3>Welcome back</h3>
@@ -134,10 +782,261 @@
   </div>
 </div>
 
-<!-- MAIN APPLICATION -->
-<div id="app" class="app hidden">
+<!-- ══════════════════════════════════════════════════════
+     DEMO VIDEO MODAL
+══════════════════════════════════════════════════════ -->
+<div class="demo-overlay" id="demo-overlay" onclick="handleDemoOverlayClick(event)">
+  <div class="demo-modal" onclick="event.stopPropagation()">
+    <div class="demo-modal-header">
+      <div class="demo-modal-title">
+        <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+          <rect width="48" height="48" rx="10" fill="#f97316"/>
+          <circle cx="24" cy="24" r="8" fill="white"/>
+          <path d="M21 20l7 4-7 4V20z" fill="#f97316"/>
+        </svg>
+        Smart Pantry — Product Demo
+        <span style="font-size:.65rem;font-weight:500;color:rgba(255,255,255,.4);margin-left:4px">5 feature highlights</span>
+      </div>
+      <button class="demo-close" onclick="closeDemo()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
 
-  <!-- SIDEBAR -->
+    <!-- Chapter tabs -->
+    <div class="demo-tabs" id="demo-tabs">
+      <div class="demo-tab active" onclick="gotoSlide(0)">📊 Inventory</div>
+      <div class="demo-tab" onclick="gotoSlide(1)">🛒 Orders</div>
+      <div class="demo-tab" onclick="gotoSlide(2)">📈 Reports &amp; BI</div>
+      <div class="demo-tab" onclick="gotoSlide(3)">🚚 Deliveries</div>
+      <div class="demo-tab" onclick="gotoSlide(4)">🏪 Vendors</div>
+    </div>
+
+    <div class="demo-progress"><div class="demo-progress-fill" id="demo-progress-fill"></div></div>
+
+    <!-- Slides -->
+    <div class="demo-slides">
+
+      <!-- Slide 0: Inventory -->
+      <div class="demo-slide active" id="slide-0">
+        <div class="slide-label">Feature 1 of 5 · Inventory Management</div>
+        <div class="slide-title">Real-time inventory with critical stock alerts</div>
+        <div class="slide-desc">Track 1,200+ SKUs across multiple warehouses. Mark items critical, get email alerts, and raise POs automatically when stock hits reorder level.</div>
+        <div class="slide-screen">
+          <div class="ss-topbar">
+            <span class="ss-title">📦 Inventory Overview</span>
+            <div class="ss-tags"><span class="ss-tag ss-tag-o">🔴 8 Critical</span><span class="ss-tag ss-tag-g">+ Add Item</span></div>
+          </div>
+          <div class="ss-body">
+            <div class="ss-kpis">
+              <div class="ss-kpi"><div class="ss-kpi-v">1,248</div><div class="ss-kpi-l">Total SKUs</div><div class="ss-kpi-d up">▲ 12 this week</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">34</div><div class="ss-kpi-l">Low Stock</div><div class="ss-kpi-d warn">⚠ needs action</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#dc2626">8</div><div class="ss-kpi-l">Critical</div><div class="ss-kpi-d down">▼ reorder now</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v">₹84L</div><div class="ss-kpi-l">Stock Value</div><div class="ss-kpi-d up">▲ 4.2% MoM</div></div>
+            </div>
+            <div class="ss-table">
+              <div class="ss-thead" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr"><span>Item</span><span>Stock</span><span>Reorder</span><span>Status</span></div>
+              <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
+                <div><div class="ss-name">Amul Masti ButterMilk 200ml</div><div class="ss-sub">SKU-100045 · Beverage</div></div>
+                <div class="ss-val" style="color:#16a34a">11,193</div><div class="ss-val">5,000</div><div><span class="ss-pill pl-g">OK</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
+                <div><div class="ss-name">A4 Paper Ream 500 sheets <span style="color:#dc2626;font-size:.6rem">🔴 CRITICAL</span></div><div class="ss-sub">SKU-007 · Stationery</div></div>
+                <div class="ss-val" style="color:#d97706">156</div><div class="ss-val">500</div><div><span class="ss-pill pl-a">LOW</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
+                <div><div class="ss-name">Hand Sanitizer 500ml</div><div class="ss-sub">SKU-004 · Hygiene</div></div>
+                <div class="ss-val" style="color:#dc2626">0</div><div class="ss-val">200</div><div><span class="ss-pill pl-r">OUT</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
+                <div><div class="ss-name">Premium Coffee Beans 1kg</div><div class="ss-sub">SKU-001 · Beverage</div></div>
+                <div class="ss-val" style="color:#16a34a">842</div><div class="ss-val">100</div><div><span class="ss-pill pl-g">OK</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 1: Orders -->
+      <div class="demo-slide" id="slide-1">
+        <div class="slide-label">Feature 2 of 5 · Order Management</div>
+        <div class="slide-title">Full order lifecycle with FSM tracking</div>
+        <div class="slide-desc">From cart to confirmed delivery — every order moves through a defined state machine with approvals, dispatch notes, and delivery challans.</div>
+        <div class="slide-screen">
+          <div class="ss-topbar">
+            <span class="ss-title">🛒 Order Queue</span>
+            <div class="ss-tags"><span class="ss-tag ss-tag-b">Filter</span><span class="ss-tag ss-tag-o">+ New Order</span></div>
+          </div>
+          <div class="ss-body">
+            <div class="ss-kpis">
+              <div class="ss-kpi"><div class="ss-kpi-v">142</div><div class="ss-kpi-l">Active Orders</div><div class="ss-kpi-d up">▲ 18 today</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:#2563eb">● Live tracking</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">12</div><div class="ss-kpi-l">Pending Approval</div><div class="ss-kpi-d warn">⚠ needs review</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v">₹2.4Cr</div><div class="ss-kpi-l">Month GMV</div><div class="ss-kpi-d up">▲ 22% MoM</div></div>
+            </div>
+            <div class="ss-table">
+              <div class="ss-thead" style="grid-template-columns:1fr 1.5fr 1fr 1fr 1fr"><span>Order ID</span><span>Client</span><span>Items</span><span>Value</span><span>Status</span></div>
+              <div class="ss-row" style="grid-template-columns:1fr 1.5fr 1fr 1fr 1fr">
+                <div class="ss-name">ORD-8840</div><div class="ss-name">Meta India</div><div class="ss-val">12 SKUs</div><div class="ss-val">₹84,200</div><div><span class="ss-pill pl-g">DELIVERED</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:1fr 1.5fr 1fr 1fr 1fr">
+                <div class="ss-name">ORD-8841</div><div class="ss-name">LinkedIn HQ</div><div class="ss-val">8 SKUs</div><div class="ss-val">₹62,450</div><div><span class="ss-pill pl-b">IN TRANSIT</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:1fr 1.5fr 1fr 1fr 1fr">
+                <div class="ss-name">ORD-8842</div><div class="ss-name">ServiceNow</div><div class="ss-val">5 SKUs</div><div class="ss-val">₹31,100</div><div><span class="ss-pill pl-a">PENDING</span></div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:1fr 1.5fr 1fr 1fr 1fr">
+                <div class="ss-name">ORD-8843</div><div class="ss-name">Sodexo Corp</div><div class="ss-val">20 SKUs</div><div class="ss-val">₹1,42,000</div><div><span class="ss-pill pl-g">PICKED</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 2: Reports & BI -->
+      <div class="demo-slide" id="slide-2">
+        <div class="slide-label">Feature 3 of 5 · Reports &amp; Business Intelligence</div>
+        <div class="slide-title">AI-powered analytics across every dimension</div>
+        <div class="slide-desc">20+ built-in reports — spend analytics, vendor performance, fulfilment rates, critical stock, budget forecasting, DC reconciliation and more.</div>
+        <div class="slide-screen">
+          <div class="ss-topbar">
+            <span class="ss-title">📈 Reports &amp; BI</span>
+            <div class="ss-tags"><span class="ss-tag ss-tag-b">Export CSV</span><span class="ss-tag ss-tag-g">Date Range</span></div>
+          </div>
+          <div class="ss-body">
+            <div class="ss-kpis">
+              <div class="ss-kpi"><div class="ss-kpi-v">₹12.8Cr</div><div class="ss-kpi-l">Total Spend</div><div class="ss-kpi-d up">▲ 18% YoY</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">96.2%</div><div class="ss-kpi-l">Fill Rate</div><div class="ss-kpi-d up">▲ vs 91% target</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ improved</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">₹2.1L</div><div class="ss-kpi-l">Budget Left</div><div class="ss-kpi-d warn">⚠ 8% remaining</div></div>
+            </div>
+            <div class="ss-bars" style="background:#fff;border-radius:8px;border:1px solid #e8edf7">
+              <div style="padding:8px 10px 0;font-size:.68rem;font-weight:800;color:#0f2040">Vendor Performance — Fill Rate</div>
+              <div class="ss-bar-row" style="padding:4px 10px">
+                <div class="ss-bar-meta"><span><b>Amul Beverages</b></span><span style="color:#16a34a">98.4%</span></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:98%;background:#22c55e"></div></div>
+              </div>
+              <div class="ss-bar-row" style="padding:4px 10px">
+                <div class="ss-bar-meta"><span><b>ITC Stationery</b></span><span style="color:#16a34a">94.1%</span></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:94%;background:#22c55e"></div></div>
+              </div>
+              <div class="ss-bar-row" style="padding:4px 10px">
+                <div class="ss-bar-meta"><span><b>Dettol Hygiene</b></span><span style="color:#d97706">72.3%</span></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:72%;background:#f97316"></div></div>
+              </div>
+              <div class="ss-bar-row" style="padding:4px 10px 8px">
+                <div class="ss-bar-meta"><span><b>Generic Office</b></span><span style="color:#dc2626">58.0%</span></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:58%;background:#ef4444"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 3: Deliveries -->
+      <div class="demo-slide" id="slide-3">
+        <div class="slide-label">Feature 4 of 5 · Delivery Management</div>
+        <div class="slide-title">Dispatch, track and confirm every delivery</div>
+        <div class="slide-desc">Delivery challans with POD scanning, route optimisation, live driver tracking, and automatic invoice generation on confirmed delivery.</div>
+        <div class="slide-screen">
+          <div class="ss-topbar">
+            <span class="ss-title">🚚 Delivery Challans</span>
+            <div class="ss-tags"><span class="ss-tag ss-tag-b">37 Active</span><span class="ss-tag ss-tag-g">Scan POD</span></div>
+          </div>
+          <div class="ss-body">
+            <div class="ss-kpis">
+              <div class="ss-kpi"><div class="ss-kpi-v">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:#2563eb">● Live</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">284</div><div class="ss-kpi-l">Delivered Today</div><div class="ss-kpi-d up">▲ vs 210 yesterday</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">8</div><div class="ss-kpi-l">POD Pending</div><div class="ss-kpi-d warn">⚠ awaiting scan</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v">99.1%</div><div class="ss-kpi-l">On-Time Rate</div><div class="ss-kpi-d up">▲ above SLA</div></div>
+            </div>
+            <div class="route-visual">
+              <div class="route-list">
+                <div class="route-card">
+                  <div class="route-num" style="background:#dbeafe;color:#1d4ed8">1</div>
+                  <div class="route-info"><div class="rn">DC-4421 · Meta India, BKC</div><div class="rs">12 items · ₹84,200 · Driver: Rajan K.</div></div>
+                  <span class="ss-pill pl-g" style="margin-left:auto;white-space:nowrap">DELIVERED</span>
+                </div>
+                <div class="route-card">
+                  <div class="route-num" style="background:#fef9c3;color:#a16207">2</div>
+                  <div class="route-info"><div class="rn">DC-4422 · LinkedIn, Andheri</div><div class="rs">8 items · ₹62,450 · Driver: Suresh M.</div></div>
+                  <span class="ss-pill pl-b" style="margin-left:auto;white-space:nowrap">IN TRANSIT</span>
+                </div>
+                <div class="route-card">
+                  <div class="route-num" style="background:#f0fdf4;color:#15803d">3</div>
+                  <div class="route-info"><div class="rn">DC-4423 · ServiceNow, Pune</div><div class="rs">5 items · ₹31,100 · Driver: Amit P.</div></div>
+                  <span class="ss-pill pl-a" style="margin-left:auto;white-space:nowrap">DISPATCHED</span>
+                </div>
+              </div>
+              <div class="route-stat-col">
+                <div class="route-stat"><div class="rv" style="color:#16a34a">2.1h</div><div class="rl">Avg Delivery</div></div>
+                <div class="route-stat"><div class="rv" style="color:#f97316">8</div><div class="rl">Routes Today</div></div>
+                <div class="route-stat"><div class="rv">₹5.8L</div><div class="rl">GMV Delivered</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slide 4: Vendors -->
+      <div class="demo-slide" id="slide-4">
+        <div class="slide-label">Feature 5 of 5 · Vendor Management</div>
+        <div class="slide-title">Vendor portal, RFQ, and performance tracking</div>
+        <div class="slide-desc">Manage your complete vendor ecosystem — onboard suppliers, send RFQs, track ratings, analyse fill rates, and integrate directly with Zoho Books for payments.</div>
+        <div class="slide-screen">
+          <div class="ss-topbar">
+            <span class="ss-title">🏪 Vendor Directory</span>
+            <div class="ss-tags"><span class="ss-tag ss-tag-b">⬆ Import CSV</span><span class="ss-tag ss-tag-o">+ Add Vendor</span></div>
+          </div>
+          <div class="ss-body">
+            <div class="ss-kpis">
+              <div class="ss-kpi"><div class="ss-kpi-v">48</div><div class="ss-kpi-l">Active Vendors</div><div class="ss-kpi-d up">▲ 3 this month</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">94.1%</div><div class="ss-kpi-l">Avg Fill Rate</div><div class="ss-kpi-d up">▲ industry avg 78%</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ target 3d</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">6</div><div class="ss-kpi-l">POs Overdue</div><div class="ss-kpi-d warn">⚠ follow up</div></div>
+            </div>
+            <div class="ss-table">
+              <div class="ss-thead" style="grid-template-columns:2fr 1fr 1fr 1fr"><span>Vendor</span><span>Fill Rate</span><span>Lead Days</span><span>Rating</span></div>
+              <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
+                <div><div class="ss-name">Amul Beverages Ltd</div><div class="ss-sub">Beverage · Mumbai</div></div>
+                <div class="ss-val" style="color:#16a34a">98.4%</div><div class="ss-val">1.5d</div><div class="ss-val" style="color:#f97316">★ 4.9</div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
+                <div><div class="ss-name">ITC Stationery</div><div class="ss-sub">Stationery · Delhi</div></div>
+                <div class="ss-val" style="color:#16a34a">94.1%</div><div class="ss-val">2.0d</div><div class="ss-val" style="color:#f97316">★ 4.6</div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
+                <div><div class="ss-name">Dettol Hygiene Products</div><div class="ss-sub">Hygiene · Pune</div></div>
+                <div class="ss-val" style="color:#d97706">72.3%</div><div class="ss-val">3.5d</div><div class="ss-val" style="color:#f97316">★ 3.8</div>
+              </div>
+              <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
+                <div><div class="ss-name">Generic Office Supplies</div><div class="ss-sub">Stationery · Chennai</div></div>
+                <div class="ss-val" style="color:#dc2626">58.0%</div><div class="ss-val">4.2d</div><div class="ss-val" style="color:#f97316">★ 3.2</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav -->
+    <div class="demo-nav">
+      <button class="demo-nav-btn btn-prev" onclick="prevSlide()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Previous
+      </button>
+      <span class="demo-step-info" id="demo-step-info">1 of 5</span>
+      <button class="demo-nav-btn btn-next" id="demo-next-btn" onclick="nextSlide()">
+        Next
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     MAIN APPLICATION (unchanged)
+══════════════════════════════════════════════════════ -->
+<div id="app" class="app hidden">
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-brand">
@@ -155,9 +1054,7 @@
         </div>
       </div>
     </div>
-
     <nav id="sidebar-nav" class="sidebar-nav"></nav>
-
     <div class="sidebar-footer">
       <div class="sidebar-user">
         <div class="su-avatar" id="user-avatar" onclick="openProfileModal()" title="View / Edit Profile" style="cursor:pointer">SA</div>
@@ -172,9 +1069,7 @@
     </div>
   </aside>
 
-  <!-- MAIN CONTENT AREA -->
   <div class="main-wrap">
-    <!-- TOP BAR -->
     <header class="topbar">
       <div class="topbar-left">
         <button class="menu-btn" onclick="toggleSidebar()">
@@ -199,7 +1094,6 @@
       </div>
     </header>
 
-    <!-- NOTIFICATION PANEL -->
     <div class="notif-panel hidden" id="notif-panel">
       <div class="notif-header">
         <h4>Notifications</h4>
@@ -208,7 +1102,6 @@
       <div class="notif-list" id="notif-list"></div>
     </div>
 
-    <!-- MAIN CONTENT -->
     <main class="content" id="main-content">
       <div class="loading-state">
         <div class="spinner"></div>
@@ -218,7 +1111,6 @@
   </div>
 </div>
 
-<!-- MODAL OVERLAY -->
 <div class="modal-overlay hidden" id="modal-overlay" onclick="closeModal()">
   <div class="modal" id="modal" onclick="event.stopPropagation()">
     <div class="modal-header">
@@ -233,5 +1125,88 @@
 </div>
 
 <script src="app.js"></script>
+
+<!-- Demo modal JS (self-contained, no conflicts with app.js) -->
+<script>
+(function() {
+  var currentSlide = 0;
+  var totalSlides = 5;
+  var autoTimer = null;
+  var progressTimer = null;
+  var SLIDE_DURATION = 7000;
+
+  window.openDemo = function() {
+    var o = document.getElementById('demo-overlay');
+    o.classList.add('open');
+    gotoSlide(0);
+    startAutoAdvance();
+  };
+  window.closeDemo = function() {
+    document.getElementById('demo-overlay').classList.remove('open');
+    stopAutoAdvance();
+  };
+  window.handleDemoOverlayClick = function(e) {
+    if (e.target === document.getElementById('demo-overlay')) closeDemo();
+  };
+
+  window.gotoSlide = function(n) {
+    stopAutoAdvance();
+    var slides = document.querySelectorAll('.demo-slide');
+    var tabs   = document.querySelectorAll('.demo-tab');
+    slides.forEach(function(s, i) { s.classList.toggle('active', i === n); });
+    tabs.forEach(function(t, i) { t.classList.toggle('active', i === n); });
+    currentSlide = n;
+
+    document.getElementById('demo-step-info').textContent = (n + 1) + ' of ' + totalSlides;
+    var nextBtn = document.getElementById('demo-next-btn');
+    if (n === totalSlides - 1) {
+      nextBtn.innerHTML = 'Sign In &nbsp;<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+      nextBtn.onclick = function() { closeDemo(); };
+    } else {
+      nextBtn.innerHTML = 'Next &nbsp;<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+      nextBtn.onclick = nextSlide;
+    }
+
+    // Animate progress bar
+    var fill = document.getElementById('demo-progress-fill');
+    fill.style.transition = 'none';
+    fill.style.width = '0%';
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        fill.style.transition = 'width ' + (SLIDE_DURATION / 1000) + 's linear';
+        fill.style.width = '100%';
+      });
+    });
+
+    startAutoAdvance();
+  };
+
+  window.nextSlide = function() {
+    if (currentSlide < totalSlides - 1) gotoSlide(currentSlide + 1);
+  };
+  window.prevSlide = function() {
+    if (currentSlide > 0) gotoSlide(currentSlide - 1);
+  };
+
+  function startAutoAdvance() {
+    stopAutoAdvance();
+    autoTimer = setTimeout(function() {
+      if (currentSlide < totalSlides - 1) gotoSlide(currentSlide + 1);
+    }, SLIDE_DURATION);
+  }
+  function stopAutoAdvance() {
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+  }
+
+  // Keyboard nav
+  document.addEventListener('keydown', function(e) {
+    var overlay = document.getElementById('demo-overlay');
+    if (!overlay.classList.contains('open')) return;
+    if (e.key === 'Escape') closeDemo();
+    if (e.key === 'ArrowRight') nextSlide();
+    if (e.key === 'ArrowLeft')  prevSlide();
+  });
+})();
+</script>
 </body>
 </html>
