@@ -1347,6 +1347,11 @@ async function renderPlaceOrder(el) {
   </div>`;
 
   refreshCartUI();
+  if (APP._postNavStep) {
+    const step = APP._postNavStep;
+    APP._postNavStep = null;
+    setTimeout(() => switchOrderStep(step), 0);
+  }
 }
 
 function switchOrderStep(step) {
@@ -1753,6 +1758,22 @@ function changeQty(sku, delta, price, btnOrName) {
   refreshCartUI();
 }
 
+async function orderMoreItem(sku, name) {
+  const items = await api('/inventory?q=' + encodeURIComponent(sku));
+  const item = Array.isArray(items) ? items.find(i => i.sku === sku) : null;
+  const price = item?.unit_price || item?.client_price || 0;
+  const emoji = item?.emoji || '📦';
+  const existing = APP.cart.find(c => c.sku === sku);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    APP.cart.push({ sku, name: item?.name || name, qty: 1, unit_price: price, emoji });
+  }
+  showToast(`${item?.name || name} added to cart`);
+  APP._postNavStep = 'review';
+  navigate('place_order');
+}
+
 function refreshCartUI() {
   const total = APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0);
   const gst   = Math.round(total * 0.18);
@@ -2026,7 +2047,7 @@ function myInvRow(i) {
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
-        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="navigate('place_order')">Order More</button>` : ''}
+        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="orderMoreItem('${h(i.sku)}','${h(i.item_name||i.sku)}')">Order More</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>
       </div>
     </td>
