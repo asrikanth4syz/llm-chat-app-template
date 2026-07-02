@@ -1050,111 +1050,253 @@ async function renderOpsDashboard(el) {
   const byStatus = {};
   (ordersByStatus||[]).forEach(r => { byStatus[r.status] = r.cnt; });
 
-  const dueCount = (dueItems||[]).length;
-  const dueValue = (dueItems||[]).reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0);
+  const dueCount        = (dueItems||[]).length;
   const pendingApproval = byStatus['PENDING_APPROVAL']||0;
-  const inShipment = (byStatus['IN_SHIPMENT']||0)+(byStatus['PARTIALLY_CLOSED']||0);
-  const pickedPending = byStatus['PICKED']||0;
+  const inShipment      = (byStatus['IN_SHIPMENT']||0)+(byStatus['PARTIALLY_CLOSED']||0);
+  const pickedPending   = byStatus['PICKED']||0;
+  const toPickCount     = byStatus['ACKNOWLEDGED']||0;
+  const delayedDel      = pendingSupply?.kpis?.delayed_deliveries||0;
+
+  const pipeline = [
+    { key:'SUBMITTED',        label:'Submitted',    color:'#3b82f6' },
+    { key:'ACKNOWLEDGED',     label:'To Pick',      color:'#8b5cf6' },
+    { key:'PICKED',           label:'Picked',       color:'#f97316' },
+    { key:'IN_SHIPMENT',      label:'In Transit',   color:'#06b6d4' },
+    { key:'PARTIALLY_CLOSED', label:'Partial',      color:'#f59e0b' },
+    { key:'CLOSED',           label:'Closed',       color:'#16a34a' },
+    { key:'CANCELLED',        label:'Cancelled',    color:'#ef4444' },
+  ];
+  const pipeTotal = pipeline.reduce((s,p)=>s+(byStatus[p.key]||0),0)||1;
+
+  const kpis = [
+    { label:'Total Orders',     val:totalOrders||0,    sub:`${pendingOrders||0} active`, color:'#2E75B6', bg:'#e6f1fb',  icon:'📦', page:'orders',       badge: pendingOrders>0 ? `${pendingOrders} active`:null, badgeBg:'#dbeafe', badgeCol:'#2563eb' },
+    { label:'Pending Approval', val:pendingApproval,   sub:`${pickedPending} picked · ${inShipment} in transit`, color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', badge: pendingApproval>0?'Action needed':null, badgeBg:'#fef3c7', badgeCol:'#d97706', alert:pendingApproval>0 },
+    { label:'Due Line Items',   val:dueCount,          sub:`${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)}`, color:'var(--danger)', bg:'#fef2f2', icon:'🚨', page:'fulfilment', badge:dueCount>0?'Overdue':null, badgeBg:'#fee2e2', badgeCol:'var(--danger)', alert:dueCount>0 },
+    { label:'Pending Billing',  val:pendingDCBilling||0, sub:'DCs awaiting invoice',    color:'#d97706', bg:'#fef3c7',  icon:'🧾', page:'dc_billing',  badge:null },
+    { label:'Low Stock SKUs',   val:lowStock||0,       sub:'Reorder required',           color:'#d97706', bg:'#fef3c7',  icon:'📊', page:'inventory',   badge:lowStock>0?'Restock':null, badgeBg:'#fef3c7', badgeCol:'#b45309', alert:lowStock>0 },
+    { label:'Open Tickets',     val:openTickets||0,    sub:'Support queue',              color:'#7c3aed', bg:'#f3e8ff',  icon:'🎫', page:'service_desk', badge:null },
+  ];
 
   el.innerHTML = `
-  ${pageHeader('Control Tower', 'Platform-wide operations overview')}
+  <style>
+    .ct-kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:14px;margin-bottom:20px}
+    .ct-kpi{background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 1px 6px rgba(0,0,0,.07);cursor:pointer;transition:box-shadow .2s,transform .15s;position:relative;overflow:hidden;border:1.5px solid transparent}
+    .ct-kpi:hover{box-shadow:0 6px 24px rgba(0,0,0,.11);transform:translateY(-2px)}
+    .ct-kpi.alert{border-color:rgba(163,45,45,.14)}
+    .ct-kpi-top{height:3px;position:absolute;top:0;left:0;right:0;border-radius:14px 14px 0 0}
+    .ct-kpi-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
+    .ct-kpi-val{font-size:2.1rem;font-weight:900;line-height:1;letter-spacing:-.04em;margin:10px 0 3px}
+    .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:6px}
+    .ct-kpi-sub{font-size:.74rem;color:var(--text-muted)}
+    .ct-badge{display:inline-block;border-radius:20px;padding:2px 8px;font-size:.65rem;font-weight:700}
+    .ct-card{background:#fff;border-radius:14px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden}
+    .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)}
+    .ct-card-title{font-weight:800;color:var(--navy);font-size:.92rem}
+    .ct-card-sub{font-size:.74rem;color:var(--text-muted);margin-top:2px}
+    .ct-mid{display:grid;grid-template-columns:1fr 340px;gap:14px;margin-bottom:20px}
+    .ct-mid-left{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .ct-action{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;cursor:pointer;transition:background .15s;margin-bottom:6px;border:1px solid transparent}
+    .ct-action:hover{background:#f8f9fa}
+    .ct-action.hot{background:#fff8f8;border-color:rgba(163,45,45,.12)}
+    .ct-action.hot:hover{background:#fff0f0}
+    .ct-action-ico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}
+    .ct-action-val{font-size:1.1rem;font-weight:800;min-width:28px;text-align:right}
+    .ct-pipe{display:flex;height:36px;border-radius:10px;overflow:hidden;margin-bottom:12px;gap:2px}
+    .ct-pipe-seg{display:flex;align-items:center;justify-content:center;transition:flex .6s ease;min-width:0;border-radius:4px}
+    .ct-pipe-seg:hover{filter:brightness(1.1)}
+    .ct-order-row{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
+    .ct-order-row:last-child{border-bottom:none}
+    .ct-order-row:hover{background:#f8f9fa}
+    .ct-client-bar{height:5px;background:#f0f2f7;border-radius:3px;margin-top:4px;overflow:hidden}
+    .ct-client-fill{height:100%;border-radius:3px;transition:width .8s ease}
+    @media(max-width:1100px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
+    @media(max-width:760px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
+    @media(max-width:480px){.ct-kpi-grid{grid-template-columns:1fr 1fr}}
+  </style>
 
-  <!-- ROW 1: Primary KPIs -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-    <div class="card" onclick="navigate('orders')" style="cursor:pointer;padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Total Orders</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1">${totalOrders||0}</div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 8px;font-size:.74rem;font-weight:600">${pendingOrders||0} active</span>
+  <!-- ── PAGE HEADER ── -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px">
+        <span style="font-size:1.45rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
+        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 10px;font-size:.66rem;font-weight:800;letter-spacing:.05em">LIVE</span>
+        ${[pendingApproval,dueCount,lowStock,delayedDel].some(v=>v>0)?`<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.5);display:inline-block" title="Attention required"></span>`:''}
+      </div>
+      <div style="font-size:.82rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="navigate('inventory')">Inventory</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('fulfilment')">Fulfilment</button>
+      <button class="btn btn-primary btn-sm" onclick="navigate('reports_bi')">Reports →</button>
+    </div>
+  </div>
+
+  <!-- ── KPI STRIP ── -->
+  <div class="ct-kpi-grid">
+    ${kpis.map(k=>`
+    <div class="ct-kpi${k.alert?' alert':''}" onclick="navigate('${k.page}')">
+      <div class="ct-kpi-top" style="background:linear-gradient(90deg,${k.color},${k.color}88)"></div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div class="ct-kpi-icon" style="background:${k.bg}">${k.icon}</div>
+        ${k.badge?`<span class="ct-badge" style="background:${k.badgeBg};color:${k.badgeCol}">${k.badge}</span>`:''}
+      </div>
+      <div class="ct-kpi-val" style="color:${k.alert?k.color:'var(--navy)'}">${k.val}</div>
+      <div class="ct-kpi-lbl">${k.label}</div>
+      <div class="ct-kpi-sub">${k.sub}</div>
+    </div>`).join('')}
+  </div>
+
+  <!-- ── ORDER PIPELINE STRIP ── -->
+  <div class="ct-card" style="margin-bottom:20px">
+    <div class="ct-card-hd">
+      <div>
+        <div class="ct-card-title">Order Pipeline</div>
+        <div class="ct-card-sub">${totalOrders||0} total orders across all stages</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All →</button>
+    </div>
+    <div style="padding:18px 20px">
+      <div class="ct-pipe">
+        ${pipeline.map(p=>{
+          const cnt = byStatus[p.key]||0;
+          const flex = Math.max(cnt>0?2:0.1, Math.round((cnt/pipeTotal)*100));
+          return `<div class="ct-pipe-seg" style="flex:${flex};background:${p.color}" title="${p.label}: ${cnt}"></div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px 20px">
+        ${pipeline.map(p=>`
+        <div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="navigate('orders')" title="${p.label}">
+          <div style="width:8px;height:8px;border-radius:2px;background:${p.color};flex-shrink:0"></div>
+          <span style="font-size:.72rem;color:var(--text-muted)">${p.label}</span>
+          <span style="font-size:.75rem;font-weight:800;color:var(--navy)">${byStatus[p.key]||0}</span>
+        </div>`).join('')}
       </div>
     </div>
-    <div class="card" onclick="navigate('orders')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${pendingApproval>0?'#f59e0b':'#d1d5db'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Approval</div>
-      <div style="font-size:2rem;font-weight:800;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
-      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">${pickedPending} picked · ${inShipment} in transit</div>
-    </div>
-    <div class="card" onclick="navigate('fulfilment')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${dueCount>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Due Line Items</div>
-      <div style="font-size:2rem;font-weight:800;color:${dueCount>0?'var(--danger)':'var(--navy)'};line-height:1">${dueCount}</div>
-      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)}</div>
-    </div>
-    <div class="card" onclick="navigate('dc_billing')" style="cursor:pointer;padding:16px 18px;border-top:3px solid ${pendingDCBilling>0?'#f59e0b':'#d1d5db'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Pending Billing</div>
-      <div style="font-size:2rem;font-weight:800;color:${pendingDCBilling>0?'#d97706':'var(--navy)'};line-height:1">${pendingDCBilling||0}</div>
-      <div style="margin-top:8px;font-size:.77rem;color:var(--text-muted)">DCs awaiting invoice</div>
-    </div>
   </div>
 
-  <!-- ROW 2: Charts + Alerts -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 320px;gap:14px;margin-bottom:16px">
-    <div class="card" style="padding:18px 20px">
-      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Orders by Status</div>
-      <canvas id="statusChart" height="180"></canvas>
+  <!-- ── MID GRID: Top Clients + Chart | Action Required ── -->
+  <div class="ct-mid" style="margin-bottom:20px">
+    <div class="ct-mid-left">
+
+      <!-- Top Clients -->
+      <div class="ct-card">
+        <div class="ct-card-hd">
+          <div class="ct-card-title">Top Clients</div>
+        </div>
+        <div style="padding:16px 20px">
+          ${(topClients||[]).slice(0,5).map((c,i)=>{
+            const cols = ['#2E75B6','#8b5cf6','#f97316','#06b6d4','#f59e0b'];
+            const col  = cols[i];
+            const pct  = Math.round((c.total/(topClients[0]?.total||1))*100);
+            return `
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px">
+              <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
+                  <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${c.name}</span>
+                  <span style="font-size:.82rem;font-weight:800;color:var(--navy);flex-shrink:0;margin-left:8px">${fmt(c.total)}</span>
+                </div>
+                <div class="ct-client-bar"><div class="ct-client-fill" style="width:${pct}%;background:${col}"></div></div>
+                <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${c.order_count} orders</div>
+              </div>
+            </div>`;
+          }).join('')||'<div style="color:var(--text-muted);font-size:.84rem;text-align:center;padding:24px 0">No data yet</div>'}
+        </div>
+      </div>
+
+      <!-- Orders by Status Chart -->
+      <div class="ct-card">
+        <div class="ct-card-hd">
+          <div class="ct-card-title">Orders by Status</div>
+        </div>
+        <div style="padding:16px 20px">
+          <canvas id="statusChart" height="200"></canvas>
+        </div>
+      </div>
     </div>
-    <div class="card" style="padding:18px 20px">
-      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Top Clients by Spend</div>
-      ${(topClients||[]).map((c,i)=>`
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-          <div style="width:24px;height:24px;border-radius:50%;background:var(--blue);color:#fff;font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}</div>
-            <div style="height:4px;background:#e6f1fb;border-radius:2px;margin-top:3px">
-              <div style="height:4px;background:var(--blue);border-radius:2px;width:${Math.min(100,Math.round((c.total/(topClients[0]?.total||1))*100))}%"></div>
+
+    <!-- Action Required -->
+    <div class="ct-card">
+      <div class="ct-card-hd">
+        <div>
+          <div class="ct-card-title">Action Required</div>
+          <div class="ct-card-sub">Items needing your attention</div>
+        </div>
+        ${[pendingApproval,dueCount,toPickCount,lowStock,delayedDel].some(v=>v>0)?`<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;box-shadow:0 0 0 3px rgba(239,68,68,.2)"></span>`:''}
+      </div>
+      <div style="padding:12px 14px">
+        ${[
+          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders'      },
+          { label:'Due Line Items',     val:dueCount,          color:'var(--danger)', bg:'#fee2e2', icon:'🚨', page:'fulfilment' },
+          { label:'Overdue Deliveries', val:delayedDel,        color:'var(--danger)', bg:'#fee2e2', icon:'🚚', page:'delivery'   },
+          { label:'Orders to Pick',     val:toPickCount,       color:'#8b5cf6', bg:'#f3e8ff', icon:'🏭', page:'warehouse'   },
+          { label:'Low Stock SKUs',     val:lowStock||0,       color:'#d97706', bg:'#fef3c7', icon:'📊', page:'inventory'   },
+          { label:'Pending Billing',    val:pendingDCBilling||0, color:'#2E75B6', bg:'#dbeafe', icon:'🧾', page:'dc_billing' },
+          { label:'Open Tickets',       val:openTickets||0,    color:'#7c3aed', bg:'#f3e8ff', icon:'🎫', page:'service_desk' },
+        ].map(a => {
+          const hot = a.val > 0;
+          return `<div class="ct-action${hot?' hot':''}" onclick="navigate('${a.page}')">
+            <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'}">${a.icon}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:.82rem;font-weight:${hot?'600':'500'};color:${hot?'var(--text)':'var(--text-muted)'}">${a.label}</div>
             </div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${fmt(c.total)}</div>
-            <div style="font-size:.7rem;color:var(--text-muted)">${c.order_count} orders</div>
-          </div>
-        </div>`).join('')||'<div style="color:var(--text-muted);font-size:.84rem">No data</div>'}
-    </div>
-    <div class="card" style="padding:18px 20px">
-      <div style="font-weight:700;color:var(--navy);margin-bottom:14px;font-size:.9rem">Action Required</div>
-      ${[
-        { label:'Low Stock SKUs', val:lowStock||0, color:'#f59e0b', page:'inventory', icon:'📦', urgent: lowStock>0 },
-        { label:'Pending Approval', val:pendingApproval, color:'#3b82f6', page:'orders', icon:'⏳', urgent: pendingApproval>0 },
-        { label:'Orders to Pick', val:byStatus['ACKNOWLEDGED']||0, color:'#8b5cf6', page:'warehouse', icon:'🏭', urgent: (byStatus['ACKNOWLEDGED']||0)>0 },
-        { label:'Open Tickets', val:openTickets||0, color:'#6b7280', page:'service_desk', icon:'🎫', urgent: openTickets>0 },
-        { label:'Overdue Deliveries', val:pendingSupply?.kpis?.delayed_deliveries||0, color:'#ef4444', page:'delivery', icon:'🚚', urgent: (pendingSupply?.kpis?.delayed_deliveries||0)>0 },
-      ].map(a=>`
-        <div onclick="navigate('${a.page}')" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;margin-bottom:6px;background:${a.urgent?'rgba(239,68,68,.05)':'#f8f9fa'};border:1px solid ${a.urgent?'rgba(239,68,68,.15)':'#e5e7eb'}">
-          <div style="font-size:.8rem;color:var(--text-muted)">${a.icon} ${a.label}</div>
-          <div style="font-weight:700;color:${a.urgent?a.color:'var(--text-muted)'};font-size:.9rem;min-width:24px;text-align:right">${a.val}</div>
-        </div>`).join('')}
+            <div class="ct-action-val" style="color:${hot?a.color:'#c4c9d4'}">${a.val}</div>
+            <div style="color:var(--text-muted);font-size:.8rem">›</div>
+          </div>`;
+        }).join('')}
+      </div>
     </div>
   </div>
 
-  <!-- ROW 3: Recent Orders -->
-  <div class="card" style="padding:0;overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
-      <div style="font-weight:700;color:var(--navy);font-size:.9rem">Recent Orders</div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All</button>
+  <!-- ── RECENT ORDERS ── -->
+  <div class="ct-card">
+    <div class="ct-card-hd">
+      <div>
+        <div class="ct-card-title">Recent Orders</div>
+        <div class="ct-card-sub">Latest activity across all clients</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All →</button>
     </div>
-    <div class="table-wrap">
-      <table class="table" style="margin:0">
-        <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Date</th><th></th></tr></thead>
-        <tbody>${(recentOrders||[]).map(o=>`<tr>
-          <td><b>${o.id}</b></td>
-          <td>${o.client_name||'—'}</td>
-          <td>${fmt(o.grand_total)}</td>
-          <td>${statusBadge(o.status)}</td>
-          <td>${fmtDate(o.created_at)}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button></td>
-        </tr>`).join('')}</tbody>
-      </table>
-    </div>
+    ${(recentOrders||[]).map(o=>`
+    <div class="ct-order-row" onclick="viewOrder('${o.id}')">
+      <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0">🧾</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:1px">${o.client_name||'—'}</div>
+      </div>
+      <div style="flex-shrink:0;text-align:right">
+        <div style="font-weight:800;font-size:.9rem;color:var(--navy)">${fmt(o.grand_total)}</div>
+        <div style="margin-top:3px">${statusBadge(o.status)}</div>
+      </div>
+      <div style="flex-shrink:0;text-align:right;margin-left:8px">
+        <div style="font-size:.73rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
+      </div>
+      <div style="color:var(--text-muted);font-size:.85rem;margin-left:4px">›</div>
+    </div>`).join('')||'<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders yet</div>'}
   </div>`;
 
-  // Chart
+  // Render chart after DOM is ready
   const labels = ['SUBMITTED','ACKNOWLEDGED','PICKED','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
-  const colors  = ['#3b82f6','#8b5cf6','#f97316','#06b6d4','#f59e0b','#1f8a5b','#ef4444'];
+  const colors  = ['#3b82f6','#8b5cf6','#f97316','#06b6d4','#f59e0b','#16a34a','#ef4444'];
   const counts  = labels.map(l => byStatus[l]||0);
   const ctx = document.getElementById('statusChart');
   if (ctx) {
+    if (APP.charts.status) { APP.charts.status.destroy(); delete APP.charts.status; }
     APP.charts.status = new Chart(ctx, {
       type: 'bar',
-      data: { labels: labels.map(l=>l.replace(/_/g,' ')), datasets: [{ data: counts, backgroundColor: colors, borderRadius: 6, borderSkipped: false }] },
-      options: { plugins:{ legend:{display:false} }, scales:{ x:{grid:{display:false},ticks:{font:{size:9}}}, y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#f0f0f0'}} } }
+      data: {
+        labels: labels.map(l=>l.replace(/_/g,' ')),
+        datasets: [{ data: counts, backgroundColor: colors, borderRadius: 8, borderSkipped: false }]
+      },
+      options: {
+        plugins: { legend:{ display:false }, tooltip:{ callbacks:{ title: t => t[0].label, label: t => ` ${t.raw} orders` } } },
+        scales: {
+          x: { grid:{ display:false }, ticks:{ font:{ size:9, weight:'600' }, color:'#8896b0' } },
+          y: { beginAtZero:true, ticks:{ precision:0, font:{ size:9 }, color:'#8896b0' }, grid:{ color:'#f0f2f7' }, border:{ display:false } }
+        },
+        animation: { duration: 600, easing: 'easeOutQuart' }
+      }
     });
   }
 }
