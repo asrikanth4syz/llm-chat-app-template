@@ -1068,61 +1068,50 @@ async function renderOpsDashboard(el) {
   ];
   const pipeTotal = pipeline.reduce((s,p)=>s+(byStatus[p.key]||0),0)||1;
 
-  const kpis = [
-    { label:'Total Orders',     val:totalOrders||0,    sub:`${pendingOrders||0} active`, color:'#2E75B6', bg:'#e6f1fb',  icon:'📦', page:'orders',       badge: pendingOrders>0 ? `${pendingOrders} active`:null, badgeBg:'#dbeafe', badgeCol:'#2563eb' },
-    { label:'Pending Approval', val:pendingApproval,   sub:`${pickedPending} picked · ${inShipment} in transit`, color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', badge: pendingApproval>0?'Action needed':null, badgeBg:'#fef3c7', badgeCol:'#d97706', alert:pendingApproval>0 },
-    { label:'Due Line Items',   val:dueCount,          sub:`${pendingSupply?.kpis?.due_qty||0} units · ${fmt(pendingSupply?.kpis?.due_value||0)}`, color:'var(--danger)', bg:'#fef2f2', icon:'🚨', page:'fulfilment', badge:dueCount>0?'Overdue':null, badgeBg:'#fee2e2', badgeCol:'var(--danger)', alert:dueCount>0 },
-    { label:'Pending Billing',  val:pendingDCBilling||0, sub:'DCs awaiting invoice',    color:'#d97706', bg:'#fef3c7',  icon:'🧾', page:'dc_billing',  badge:null },
-    { label:'Low Stock SKUs',   val:lowStock||0,       sub:'Reorder required',           color:'#d97706', bg:'#fef3c7',  icon:'📊', page:'inventory',   badge:lowStock>0?'Restock':null, badgeBg:'#fef3c7', badgeCol:'#b45309', alert:lowStock>0 },
-    { label:'Open Tickets',     val:openTickets||0,    sub:'Support queue',              color:'#7c3aed', bg:'#f3e8ff',  icon:'🎫', page:'service_desk', badge:null },
-  ];
-
   el.innerHTML = `
   <style>
-    .ct-kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:14px;margin-bottom:20px}
-    .ct-kpi{background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 1px 6px rgba(0,0,0,.07);cursor:pointer;transition:box-shadow .2s,transform .15s;position:relative;overflow:hidden;border:1.5px solid transparent}
-    .ct-kpi:hover{box-shadow:0 6px 24px rgba(0,0,0,.11);transform:translateY(-2px)}
-    .ct-kpi.alert{border-color:rgba(163,45,45,.14)}
-    .ct-kpi-top{height:3px;position:absolute;top:0;left:0;right:0;border-radius:14px 14px 0 0}
-    .ct-kpi-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
-    .ct-kpi-val{font-size:2.1rem;font-weight:900;line-height:1;letter-spacing:-.04em;margin:10px 0 3px}
-    .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:6px}
-    .ct-kpi-sub{font-size:.74rem;color:var(--text-muted)}
-    .ct-badge{display:inline-block;border-radius:20px;padding:2px 8px;font-size:.65rem;font-weight:700}
-    .ct-card{background:#fff;border-radius:14px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden}
-    .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)}
-    .ct-card-title{font-weight:800;color:var(--navy);font-size:.92rem}
-    .ct-card-sub{font-size:.74rem;color:var(--text-muted);margin-top:2px}
-    .ct-mid{display:grid;grid-template-columns:1fr 340px;gap:14px;margin-bottom:20px}
+    .ct-kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
+    .ct-kpi{background:#fff;border-radius:12px;padding:20px 18px;box-shadow:0 1px 4px rgba(0,0,0,.06);cursor:pointer;transition:box-shadow .18s,transform .15s;position:relative;border:1.5px solid var(--border)}
+    .ct-kpi:hover{box-shadow:0 4px 18px rgba(0,0,0,.1);transform:translateY(-1px);border-color:#c5cdd8}
+    .ct-kpi.ct-urgent{border-left:3px solid #dc2626;border-left-color:#dc2626}
+    .ct-kpi.ct-warn{border-left:3px solid #d97706}
+    .ct-kpi-dot{position:absolute;top:14px;right:14px;width:7px;height:7px;border-radius:50%}
+    .ct-kpi-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.9rem;margin-bottom:14px}
+    .ct-kpi-val{font-size:2rem;font-weight:900;line-height:1;letter-spacing:-.04em;margin-bottom:5px}
+    .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px}
+    .ct-kpi-sub{font-size:.74rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ct-card{background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;border:1px solid var(--border)}
+    .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+    .ct-card-title{font-weight:700;color:var(--navy);font-size:.88rem}
+    .ct-card-sub{font-size:.73rem;color:var(--text-muted);margin-top:1px}
+    .ct-mid{display:grid;grid-template-columns:1fr 320px;gap:14px;margin-bottom:16px}
     .ct-mid-left{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-    .ct-action{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;cursor:pointer;transition:background .15s;margin-bottom:6px;border:1px solid transparent}
-    .ct-action:hover{background:#f8f9fa}
-    .ct-action.hot{background:#fff8f8;border-color:rgba(163,45,45,.12)}
-    .ct-action.hot:hover{background:#fff0f0}
-    .ct-action-ico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}
-    .ct-action-val{font-size:1.1rem;font-weight:800;min-width:28px;text-align:right}
-    .ct-pipe{display:flex;height:36px;border-radius:10px;overflow:hidden;margin-bottom:12px;gap:2px}
-    .ct-pipe-seg{display:flex;align-items:center;justify-content:center;transition:flex .6s ease;min-width:0;border-radius:4px}
-    .ct-pipe-seg:hover{filter:brightness(1.1)}
-    .ct-order-row{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
+    .ct-action{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;transition:background .13s;margin-bottom:5px}
+    .ct-action:hover{background:#f4f6f9}
+    .ct-action.hot{background:#fff8f8}
+    .ct-action-ico{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
+    .ct-action-val{font-size:1rem;font-weight:800;min-width:26px;text-align:right;flex-shrink:0}
+    .ct-pipe-wrap{height:24px;border-radius:8px;overflow:hidden;display:flex;margin-bottom:10px}
+    .ct-pipe-seg{flex:var(--f,0);min-width:0;transition:flex .5s ease}
+    .ct-pipe-seg:hover{filter:brightness(1.08)}
+    .ct-order-row{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .13s}
     .ct-order-row:last-child{border-bottom:none}
     .ct-order-row:hover{background:#f8f9fa}
-    .ct-client-bar{height:5px;background:#f0f2f7;border-radius:3px;margin-top:4px;overflow:hidden}
-    .ct-client-fill{height:100%;border-radius:3px;transition:width .8s ease}
-    @media(max-width:1100px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
-    @media(max-width:760px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
-    @media(max-width:480px){.ct-kpi-grid{grid-template-columns:1fr 1fr}}
+    .ct-client-bar{height:4px;background:#edf0f5;border-radius:3px;margin-top:4px;overflow:hidden}
+    .ct-client-fill{height:100%;border-radius:3px}
+    @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:1050px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
+    @media(max-width:700px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
   </style>
 
   <!-- ── PAGE HEADER ── -->
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:3px">
-        <span style="font-size:1.45rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
-        <span style="background:#e6f1fb;color:var(--blue);border-radius:20px;padding:2px 10px;font-size:.66rem;font-weight:800;letter-spacing:.05em">LIVE</span>
-        ${[pendingApproval,dueCount,lowStock,delayedDel].some(v=>v>0)?`<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.5);display:inline-block" title="Attention required"></span>`:''}
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
+        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
+        <span style="background:#e8f0fb;color:#2563eb;border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
       </div>
-      <div style="font-size:.82rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+      <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" onclick="navigate('inventory')">Inventory</button>
@@ -1132,44 +1121,80 @@ async function renderOpsDashboard(el) {
     </div>
   </div>
 
-  <!-- ── KPI STRIP ── -->
+  <!-- ── KPI TILES ── -->
   <div class="ct-kpi-grid">
-    ${kpis.map(k=>`
-    <div class="ct-kpi${k.alert?' alert':''}" onclick="navigate('${k.page}')">
-      <div class="ct-kpi-top" style="background:linear-gradient(90deg,${k.color},${k.color}88)"></div>
-      <div style="display:flex;align-items:flex-start;justify-content:space-between">
-        <div class="ct-kpi-icon" style="background:${k.bg}">${k.icon}</div>
-        ${k.badge?`<span class="ct-badge" style="background:${k.badgeBg};color:${k.badgeCol}">${k.badge}</span>`:''}
-      </div>
-      <div class="ct-kpi-val" style="color:${k.alert?k.color:'var(--navy)'}">${k.val}</div>
-      <div class="ct-kpi-lbl">${k.label}</div>
-      <div class="ct-kpi-sub">${k.sub}</div>
-    </div>`).join('')}
+
+    <div class="ct-kpi" onclick="navigate('orders')">
+      <div class="ct-kpi-icon" style="background:#e8f0fb">📦</div>
+      <div class="ct-kpi-val" style="color:var(--navy)">${totalOrders||0}</div>
+      <div class="ct-kpi-lbl">Total Orders</div>
+      <div class="ct-kpi-sub">${pendingOrders||0} active</div>
+    </div>
+
+    <div class="ct-kpi${pendingApproval>0?' ct-warn':''}" onclick="navigate('orders')">
+      ${pendingApproval>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
+      <div class="ct-kpi-icon" style="background:${pendingApproval>0?'#fef3c7':'#f3f4f6'}">⏳</div>
+      <div class="ct-kpi-val" style="color:${pendingApproval>0?'#d97706':'var(--navy)'}">${pendingApproval}</div>
+      <div class="ct-kpi-lbl">Pending Approval</div>
+      <div class="ct-kpi-sub">${pickedPending} picked · ${inShipment} transit</div>
+    </div>
+
+    <div class="ct-kpi${dueCount>0?' ct-urgent':''}" onclick="navigate('fulfilment')">
+      ${dueCount>0?`<div class="ct-kpi-dot" style="background:#dc2626"></div>`:''}
+      <div class="ct-kpi-icon" style="background:${dueCount>0?'#fee2e2':'#f3f4f6'}">🚨</div>
+      <div class="ct-kpi-val" style="color:${dueCount>0?'#dc2626':'var(--navy)'}">${dueCount}</div>
+      <div class="ct-kpi-lbl">Due Line Items</div>
+      <div class="ct-kpi-sub">${pendingSupply?.kpis?.due_qty||0} units overdue</div>
+    </div>
+
+    <div class="ct-kpi${pendingDCBilling>0?' ct-warn':''}" onclick="navigate('dc_billing')">
+      ${pendingDCBilling>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
+      <div class="ct-kpi-icon" style="background:${pendingDCBilling>0?'#fef3c7':'#f3f4f6'}">🧾</div>
+      <div class="ct-kpi-val" style="color:${pendingDCBilling>0?'#d97706':'var(--navy)'}">${pendingDCBilling||0}</div>
+      <div class="ct-kpi-lbl">Pending Billing</div>
+      <div class="ct-kpi-sub">DCs awaiting invoice</div>
+    </div>
+
+    <div class="ct-kpi${lowStock>0?' ct-warn':''}" onclick="navigate('inventory')">
+      ${lowStock>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
+      <div class="ct-kpi-icon" style="background:${lowStock>0?'#fef3c7':'#f3f4f6'}">📊</div>
+      <div class="ct-kpi-val" style="color:${lowStock>0?'#d97706':'var(--navy)'}">${lowStock||0}</div>
+      <div class="ct-kpi-lbl">Low Stock SKUs</div>
+      <div class="ct-kpi-sub">Reorder required</div>
+    </div>
+
+    <div class="ct-kpi" onclick="navigate('service_desk')">
+      <div class="ct-kpi-icon" style="background:#f3f4f6">🎫</div>
+      <div class="ct-kpi-val" style="color:var(--navy)">${openTickets||0}</div>
+      <div class="ct-kpi-lbl">Open Tickets</div>
+      <div class="ct-kpi-sub">Support queue</div>
+    </div>
+
   </div>
 
-  <!-- ── ORDER PIPELINE STRIP ── -->
-  <div class="ct-card" style="margin-bottom:20px">
+  <!-- ── ORDER PIPELINE ── -->
+  <div class="ct-card" style="margin-bottom:16px">
     <div class="ct-card-hd">
       <div>
         <div class="ct-card-title">Order Pipeline</div>
-        <div class="ct-card-sub">${totalOrders||0} total orders across all stages</div>
+        <div class="ct-card-sub">${totalOrders||0} orders across all stages</div>
       </div>
       <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All →</button>
     </div>
-    <div style="padding:18px 20px">
-      <div class="ct-pipe">
+    <div style="padding:16px 18px">
+      <div class="ct-pipe-wrap">
         ${pipeline.map(p=>{
           const cnt = byStatus[p.key]||0;
-          const flex = Math.max(cnt>0?2:0.1, Math.round((cnt/pipeTotal)*100));
-          return `<div class="ct-pipe-seg" style="flex:${flex};background:${p.color}" title="${p.label}: ${cnt}"></div>`;
+          const f = Math.max(cnt>0?1.5:0, Math.round((cnt/pipeTotal)*100));
+          return `<div class="ct-pipe-seg" style="--f:${f};background:${p.color}" title="${p.label}: ${cnt}"></div>`;
         }).join('')}
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px 20px">
+      <div style="display:flex;flex-wrap:wrap;gap:6px 18px">
         ${pipeline.map(p=>`
-        <div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="navigate('orders')" title="${p.label}">
+        <div style="display:flex;align-items:center;gap:5px">
           <div style="width:8px;height:8px;border-radius:2px;background:${p.color};flex-shrink:0"></div>
           <span style="font-size:.72rem;color:var(--text-muted)">${p.label}</span>
-          <span style="font-size:.75rem;font-weight:800;color:var(--navy)">${byStatus[p.key]||0}</span>
+          <span style="font-size:.72rem;font-weight:800;color:var(--navy)">${byStatus[p.key]||0}</span>
         </div>`).join('')}
       </div>
     </div>
