@@ -370,10 +370,10 @@
       background: rgba(5,10,20,.92);
       backdrop-filter: blur(20px);
       display: flex; align-items: center; justify-content: center;
-      opacity: 0; pointer-events: none;
-      transition: opacity .35s ease;
+      opacity: 0; pointer-events: none; visibility: hidden;
+      transition: opacity .35s ease, visibility 0s .35s;
     }
-    .demo-overlay.open { opacity: 1; pointer-events: all; }
+    .demo-overlay.open { opacity: 1; pointer-events: all; visibility: visible; transition: opacity .35s ease, visibility 0s 0s; }
 
     .demo-modal {
       width: min(900px, 92vw);
