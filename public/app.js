@@ -8015,13 +8015,14 @@ function renderClientReports(el) {
 function clientRptPreset(preset) {
   const now = new Date();
   let from, to;
+  function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
   if (preset === 'thismonth') {
-    from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
-    to   = now.toISOString().slice(0,10);
+    from = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+    to   = ymd(now);
   } else if (preset === 'lastmonth') {
-    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    from = d.toISOString().slice(0,10);
-    to   = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0,10);
+    const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    from = `${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,'0')}-01`;
+    to   = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
   } else if (preset === 'thisyear') {
     from = `${now.getFullYear()}-01-01`;
     to   = now.toISOString().slice(0,10);
@@ -8029,7 +8030,8 @@ function clientRptPreset(preset) {
     from = `${now.getFullYear()-1}-01-01`;
     to   = `${now.getFullYear()-1}-12-31`;
   } else if (preset === 'last3m') {
-    from = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
+    const d3 = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+    from = `${d3.getFullYear()}-${String(d3.getMonth()+1).padStart(2,'0')}-01`;
     to   = now.toISOString().slice(0,10);
   }
   document.getElementById('rpt-from').value = from;
