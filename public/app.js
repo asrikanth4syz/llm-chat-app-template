@@ -134,6 +134,8 @@ const NAV = {
     { id:'client_budget',  label:'Budget & Spend', icon:iconReports,   badge:null },
     { section:'Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
+    { section:'Analytics' },
+    { id:'client_reports', label:'Reports',         icon:iconReports,   badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
@@ -547,6 +549,7 @@ const PAGE_MAP = {
   clients: renderClients,
   service_desk: renderServiceDesk,
   reports: renderReports,
+  client_reports: renderClientReports,
   approvals: renderApprovals,
   users: renderUsers,
   settings: renderSettings,
@@ -7938,6 +7941,300 @@ async function printReport(key) {
   w.document.write(html);
   w.document.close();
   w.print();
+}
+
+/* ============================================================
+   CLIENT REPORTS — Consumption & Spend
+   ============================================================ */
+let _clientRptData = { consumption: null, spend: null };
+let _clientRptSpendTab = 'monthly';
+
+function renderClientReports(el) {
+  const now = new Date();
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
+  const today = now.toISOString().slice(0,10);
+
+  el.innerHTML = `
+  ${pageHeader('Reports', 'Consumption & Spend analytics for your pantry')}
+
+  <!-- Date Filter Bar -->
+  <div class="card" style="padding:12px 16px;margin-bottom:16px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-weight:600;font-size:.83rem;color:var(--navy)">Period:</span>
+      <button class="btn btn-sm" id="rpt-pre-thismonth"  onclick="clientRptPreset('thismonth')"  style="font-size:.78rem">This Month</button>
+      <button class="btn btn-sm" id="rpt-pre-lastmonth"  onclick="clientRptPreset('lastmonth')"  style="font-size:.78rem">Last Month</button>
+      <button class="btn btn-sm" id="rpt-pre-thisyear"   onclick="clientRptPreset('thisyear')"   style="font-size:.78rem">This Year</button>
+      <button class="btn btn-sm" id="rpt-pre-lastyear"   onclick="clientRptPreset('lastyear')"   style="font-size:.78rem">Last Year</button>
+      <button class="btn btn-sm" id="rpt-pre-last3m"     onclick="clientRptPreset('last3m')"     style="font-size:.78rem">Last 3 Months</button>
+      <div style="display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap">
+        <input type="date" id="rpt-from" class="form-control" style="max-width:148px;font-size:.82rem" value="${firstOfMonth}">
+        <span style="color:var(--text-muted);font-size:.82rem">to</span>
+        <input type="date" id="rpt-to"   class="form-control" style="max-width:148px;font-size:.82rem" value="${today}">
+        <button class="btn btn-primary btn-sm" onclick="loadClientReports()" style="white-space:nowrap">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Consumption Section -->
+  <div style="margin-bottom:28px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <span style="font-size:1.1rem">🍽️</span>
+      <span style="font-weight:700;font-size:.97rem;color:#1e40af">Consumption Analytics</span>
+      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
+      <button class="btn btn-secondary btn-sm" onclick="downloadClientConsumptionCSV()" style="font-size:.78rem">⬇ CSV</button>
+    </div>
+    <div id="rpt-consumption-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px">
+      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Spend Section -->
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <span style="font-size:1.1rem">💰</span>
+      <span style="font-weight:700;font-size:.97rem;color:#065f46">Spend Reports</span>
+      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
+      <button class="btn btn-secondary btn-sm" onclick="downloadClientSpendCSV()" style="font-size:.78rem">⬇ CSV</button>
+    </div>
+    <!-- Spend sub-tabs -->
+    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
+      <button id="stab-monthly"  onclick="switchSpendTab('monthly')"  style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">Monthly Trend</button>
+      <button id="stab-yearly"   onclick="switchSpendTab('yearly')"   style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">Yearly Summary</button>
+      <button id="stab-po"       onclick="switchSpendTab('po')"       style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">PO-wise</button>
+    </div>
+    <div id="rpt-spend-content">
+      <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>
+    </div>
+  </div>`;
+
+  // highlight this month preset by default
+  document.getElementById('rpt-pre-thismonth')?.classList.add('btn-primary');
+  loadClientReports();
+}
+
+function clientRptPreset(preset) {
+  const now = new Date();
+  let from, to;
+  if (preset === 'thismonth') {
+    from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
+    to   = now.toISOString().slice(0,10);
+  } else if (preset === 'lastmonth') {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    from = d.toISOString().slice(0,10);
+    to   = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0,10);
+  } else if (preset === 'thisyear') {
+    from = `${now.getFullYear()}-01-01`;
+    to   = now.toISOString().slice(0,10);
+  } else if (preset === 'lastyear') {
+    from = `${now.getFullYear()-1}-01-01`;
+    to   = `${now.getFullYear()-1}-12-31`;
+  } else if (preset === 'last3m') {
+    from = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
+    to   = now.toISOString().slice(0,10);
+  }
+  document.getElementById('rpt-from').value = from;
+  document.getElementById('rpt-to').value   = to;
+  // reset button highlights
+  ['thismonth','lastmonth','thisyear','lastyear','last3m'].forEach(p => {
+    const btn = document.getElementById(`rpt-pre-${p}`);
+    if (btn) { btn.classList.remove('btn-primary'); btn.style.background=''; btn.style.color=''; }
+  });
+  const activeBtn = document.getElementById(`rpt-pre-${preset}`);
+  if (activeBtn) activeBtn.classList.add('btn-primary');
+  loadClientReports();
+}
+
+async function loadClientReports() {
+  const from = document.getElementById('rpt-from')?.value || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to   = document.getElementById('rpt-to')?.value   || new Date().toISOString().slice(0,10);
+
+  const grid = document.getElementById('rpt-consumption-grid');
+  const spend = document.getElementById('rpt-spend-content');
+  if (grid) grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
+  if (spend) spend.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
+
+  const [cData, sData] = await Promise.all([
+    api(`/reports/client-consumption?from=${from}&to=${to}`),
+    api(`/reports/client-spend?from=${from}&to=${to}`)
+  ]);
+
+  _clientRptData = { consumption: cData, spend: sData };
+
+  if (grid) grid.innerHTML = renderConsumptionGrid(cData?.rows || []);
+  renderSpendContent(_clientRptSpendTab, sData);
+}
+
+function renderConsumptionGrid(rows) {
+  if (!rows.length) return '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">No consumption recorded in this period.</div>';
+
+  const pantry    = rows.filter(r => /pantry/i.test(r.category||''));
+  const beverages = rows.filter(r => /beverag/i.test(r.category||''));
+
+  function card(title, icon, color, bg, items, mode) {
+    const sorted = mode === 'top' ? items.slice(0,5) : [...items].reverse().slice(0,5);
+    const label  = mode === 'top' ? 'Top 5 Most Consumed' : 'Bottom 5 Least Consumed';
+    const rows2  = sorted.length ? sorted.map((r,i) => {
+      const bar = Math.round((r.total_qty / (sorted[0].total_qty||1)) * 100);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid ${color}18">
+        <div style="width:20px;text-align:center;font-weight:700;font-size:.78rem;color:${color}">${i+1}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(r.item_name)}">${h(r.item_name)}</div>
+          <div style="background:${color}22;border-radius:3px;height:4px;margin-top:3px;width:${bar}%"></div>
+        </div>
+        <div style="text-align:right;font-size:.82rem;font-weight:700;color:${color};white-space:nowrap">${Math.round(r.total_qty)} used</div>
+      </div>`;
+    }).join('') : `<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:.82rem">No data for ${title}</div>`;
+    return `<div style="background:${bg};border:1px solid ${color}30;border-radius:10px;padding:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:1.3rem">${icon}</span>
+        <div>
+          <div style="font-weight:700;font-size:.88rem;color:${color}">${title}</div>
+          <div style="font-size:.72rem;color:var(--text-muted)">${label}</div>
+        </div>
+      </div>
+      ${rows2}
+    </div>`;
+  }
+
+  const allTop    = card('Overall', '📊', '#1e40af', '#eff6ff', rows, 'top');
+  const pantryTop = card('Pantry',  '🥫', '#065f46', '#ecfdf5', pantry, 'top');
+  const bevTop    = card('Beverages','🥤', '#7c3aed', '#f5f3ff', beverages, 'top');
+  const allBot    = card('Overall', '📉', '#92400e', '#fffbeb', rows, 'bottom');
+  const pantryBot = card('Pantry',  '🥫', '#b91c1c', '#fef2f2', pantry, 'bottom');
+  const bevBot    = card('Beverages','🥤', '#6b7280', '#f9fafb', beverages, 'bottom');
+
+  return `
+    <div style="grid-column:1/-1;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--primary);margin-bottom:2px">▲ Highest Consumed</div>
+    ${allTop}${pantryTop}${bevTop}
+    <div style="grid-column:1/-1;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-top:8px;margin-bottom:2px">▼ Lowest Consumed</div>
+    ${allBot}${pantryBot}${bevBot}
+  `;
+}
+
+function switchSpendTab(tab) {
+  _clientRptSpendTab = tab;
+  ['monthly','yearly','po'].forEach(t => {
+    const btn = document.getElementById(`stab-${t}`);
+    if (!btn) return;
+    btn.style.borderBottomColor = t === tab ? 'var(--primary)' : 'transparent';
+    btn.style.color = t === tab ? 'var(--primary)' : 'var(--text-muted)';
+  });
+  renderSpendContent(tab, _clientRptData.spend);
+}
+
+function renderSpendContent(tab, data) {
+  const el = document.getElementById('rpt-spend-content');
+  if (!el) return;
+
+  // activate the right tab button
+  ['monthly','yearly','po'].forEach(t => {
+    const btn = document.getElementById(`stab-${t}`);
+    if (!btn) return;
+    btn.style.borderBottomColor = t === tab ? 'var(--primary)' : 'transparent';
+    btn.style.color = t === tab ? 'var(--primary)' : 'var(--text-muted)';
+  });
+
+  if (!data) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No data</div>'; return; }
+
+  if (tab === 'monthly') {
+    const rows = data.monthly || [];
+    if (!rows.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
+    const maxSpend = Math.max(...rows.map(r => r.total_spend || 0), 1);
+    el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Month</th><th style="text-align:right">Orders</th><th style="text-align:right">Spend</th><th style="min-width:120px">Trend</th></tr></thead>
+      <tbody>${rows.map(r => {
+        const bar = Math.round(((r.total_spend||0)/maxSpend)*100);
+        return `<tr>
+          <td style="font-weight:600">${r.month}</td>
+          <td style="text-align:right">${r.order_count}</td>
+          <td style="text-align:right;font-weight:700;color:var(--navy)">${fmt(r.total_spend)}</td>
+          <td><div style="background:var(--primary);border-radius:3px;height:6px;width:${bar}%"></div></td>
+        </tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr style="background:var(--surface-alt)">
+        <td style="font-weight:700">Total</td>
+        <td style="text-align:right;font-weight:700">${rows.reduce((s,r)=>s+(r.order_count||0),0)}</td>
+        <td style="text-align:right;font-weight:700;color:var(--primary)">${fmt(rows.reduce((s,r)=>s+(r.total_spend||0),0))}</td>
+        <td></td>
+      </tr></tfoot>
+    </table></div></div>`;
+
+  } else if (tab === 'yearly') {
+    const monthly = data.monthly || [];
+    // group by year
+    const byYear = {};
+    monthly.forEach(r => {
+      const y = r.year || r.month?.slice(0,4) || '—';
+      if (!byYear[y]) byYear[y] = { year:y, order_count:0, total_spend:0, months:0 };
+      byYear[y].order_count += (r.order_count||0);
+      byYear[y].total_spend += (r.total_spend||0);
+      byYear[y].months++;
+    });
+    const years = Object.values(byYear).sort((a,b)=>a.year<b.year?-1:1);
+    if (!years.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
+    el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Year</th><th style="text-align:right">Months Active</th><th style="text-align:right">Orders</th><th style="text-align:right">Total Spend</th><th style="text-align:right">Avg / Month</th></tr></thead>
+      <tbody>${years.map(r => `<tr>
+        <td style="font-weight:700;font-size:.95rem">${r.year}</td>
+        <td style="text-align:right">${r.months}</td>
+        <td style="text-align:right">${r.order_count}</td>
+        <td style="text-align:right;font-weight:700;color:var(--navy)">${fmt(r.total_spend)}</td>
+        <td style="text-align:right;color:var(--text-muted)">${fmt(r.months ? r.total_spend/r.months : 0)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div></div>`;
+
+  } else if (tab === 'po') {
+    const rows = data.po_wise || [];
+    if (!rows.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
+    el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Order / PO</th><th>Date</th><th style="text-align:center">Items</th><th style="text-align:right">Amount</th><th>Status</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="font-weight:700;color:var(--primary)">#${r.order_id}</td>
+        <td style="font-size:.8rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
+        <td style="text-align:center">${r.item_count}</td>
+        <td style="text-align:right;font-weight:700">${fmt(r.grand_total)}</td>
+        <td>${statusBadge(r.status)}</td>
+      </tr>`).join('')}</tbody>
+      <tfoot><tr style="background:var(--surface-alt)">
+        <td colspan="3" style="font-weight:700">Total (${rows.length} orders)</td>
+        <td style="text-align:right;font-weight:700;color:var(--primary)">${fmt(rows.reduce((s,r)=>s+(r.grand_total||0),0))}</td>
+        <td></td>
+      </tr></tfoot>
+    </table></div></div>`;
+  }
+}
+
+function downloadClientConsumptionCSV() {
+  const rows = _clientRptData.consumption?.rows || [];
+  if (!rows.length) { showToast('No data to export', 'error'); return; }
+  const header = 'SKU,Item Name,Category,Total Qty Used,Log Count';
+  const body = rows.map(r => [r.sku, `"${r.item_name}"`, r.category||'', Math.round(r.total_qty), r.log_count].join(',')).join('\n');
+  _downloadCSV('consumption-report', header + '\n' + body);
+}
+
+function downloadClientSpendCSV() {
+  if (_clientRptSpendTab === 'po') {
+    const rows = _clientRptData.spend?.po_wise || [];
+    if (!rows.length) { showToast('No data to export', 'error'); return; }
+    const header = 'Order ID,Date,Items,Amount,Status';
+    const body = rows.map(r => [`#${r.order_id}`, fmtDate(r.created_at), r.item_count, r.grand_total, r.status].join(',')).join('\n');
+    _downloadCSV('spend-po-report', header + '\n' + body);
+  } else {
+    const rows = _clientRptData.spend?.monthly || [];
+    if (!rows.length) { showToast('No data to export', 'error'); return; }
+    const header = 'Month,Year,Orders,Total Spend';
+    const body = rows.map(r => [r.month, r.year, r.order_count, r.total_spend].join(',')).join('\n');
+    _downloadCSV('spend-monthly-report', header + '\n' + body);
+  }
+}
+
+function _downloadCSV(name, csv) {
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `${name}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('CSV downloaded');
 }
 
 /* ============================================================

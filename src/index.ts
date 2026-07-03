@@ -305,6 +305,8 @@ export default {
       if (path==="/api/reports/consolidated-orders"  && method==="GET") return handleRptConsolidatedOrders(request,env);
       if (path==="/api/reports/consolidated-due"     && method==="GET") return handleRptConsolidatedDue(request,env);
       if (path==="/api/reports/client-summary"       && method==="GET") return handleRptClientSummary(request,env);
+      if (path==="/api/reports/client-consumption"  && method==="GET") return handleRptClientConsumption(request,env);
+      if (path==="/api/reports/client-spend"        && method==="GET") return handleRptClientSpend(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -3814,4 +3816,86 @@ async function handleSyncClientInventory(request: Request, env: Env): Promise<Re
   } catch(e) {
     return json({error: String(e)}, 500);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLIENT REPORTS — Consumption & Spend
+// ═══════════════════════════════════════════════════════════════════
+
+async function handleRptClientConsumption(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+  const clientId = (user as any).client_id || null;
+  const isClientRole = ['client_admin','client_approver','client_user'].includes((user as any).role);
+
+  try {
+    let whereParts = [`cc.consumed_at >= ?`, `cc.consumed_at < date(?,'+1 day')`];
+    const binds: (string|number)[] = [from, to];
+    if (isClientRole && clientId) { whereParts.push(`cc.client_id = ?`); binds.push(clientId); }
+
+    const {results} = await env.DB.prepare(`
+      SELECT
+        cc.sku,
+        cc.item_name,
+        COALESCE(ci.category, '') AS category,
+        SUM(cc.qty) AS total_qty,
+        COUNT(cc.id) AS log_count
+      FROM client_consumption cc
+      LEFT JOIN client_inventory ci ON ci.sku = cc.sku AND ci.client_id = cc.client_id
+      WHERE ${whereParts.join(' AND ')}
+      GROUP BY cc.sku, cc.item_name
+      ORDER BY total_qty DESC
+    `).bind(...binds).all();
+    return json({ from, to, rows: results as Record<string,unknown>[] });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+async function handleRptClientSpend(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const from = url.searchParams.get('from') || new Date(Date.now()-365*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+  const clientId = (user as any).client_id || null;
+  const isClientRole = ['client_admin','client_approver','client_user'].includes((user as any).role);
+
+  try {
+    const clientWhere = isClientRole && clientId ? ' AND o.client_id = ?' : '';
+    const baseBinds: (string|number)[] = [from, to, ...(isClientRole && clientId ? [clientId] : [])];
+
+    const {results: monthly} = await env.DB.prepare(`
+      SELECT
+        strftime('%Y-%m', o.created_at) AS month,
+        strftime('%Y', o.created_at) AS year,
+        COUNT(DISTINCT o.id) AS order_count,
+        SUM(o.grand_total) AS total_spend
+      FROM orders o
+      WHERE o.created_at >= ? AND o.created_at <= ?
+        AND o.status NOT IN ('CANCELLED','DRAFT')
+        ${clientWhere}
+      GROUP BY month ORDER BY month ASC
+    `).bind(...baseBinds).all();
+
+    const {results: po_wise} = await env.DB.prepare(`
+      SELECT
+        o.id AS order_id,
+        o.created_at,
+        o.status,
+        o.grand_total,
+        c.name AS client_name,
+        COUNT(oi.id) AS item_count
+      FROM orders o
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN clients c ON c.id = o.client_id
+      WHERE o.created_at >= ? AND o.created_at <= ?
+        AND o.status NOT IN ('CANCELLED','DRAFT')
+        ${clientWhere}
+      GROUP BY o.id ORDER BY o.created_at DESC LIMIT 200
+    `).bind(...baseBinds).all();
+
+    return json({ from, to, monthly: monthly as Record<string,unknown>[], po_wise: po_wise as Record<string,unknown>[] });
+  } catch(e) { return json({error: String(e)}, 500); }
 }
