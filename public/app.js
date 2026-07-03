@@ -1450,7 +1450,7 @@ async function renderPlaceOrder(el) {
         <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse the catalogue and add items to your cart</div>
       </div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">⬆ Import CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">📋 Order via Spreadsheet</button>
         <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">My Orders</button>
       </div>
     </div>
@@ -1519,19 +1519,54 @@ async function renderPlaceOrder(el) {
     </button>
   </div>
 
-  <!-- CSV Upload Modal -->
-  <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;align-items:center;justify-content:center">
-    <div style="background:#fff;border-radius:16px;padding:28px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18)">
-      <div style="font-weight:800;font-size:1rem;color:var(--navy);margin-bottom:4px">Import Order via CSV</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px">Download the template, fill in SKU and quantity, then upload.</div>
-      <a href="#" onclick="downloadOrderTemplate();return false" class="btn btn-secondary btn-sm" style="margin-bottom:16px">⬇ Download CSV Template</a>
-      <div class="form-group" style="margin-bottom:12px">
-        <label style="font-weight:600;font-size:.86rem">Upload CSV File</label>
-        <input type="file" id="csv-upload-input" accept=".csv,.xlsx" style="display:block;margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;width:100%;box-sizing:border-box">
+  <!-- CSV Export / Import Modal -->
+  <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:16px;padding:28px;width:520px;max-width:95vw;box-shadow:0 8px 40px rgba(0,0,0,.22)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <div style="font-weight:800;font-size:1rem;color:var(--navy)">Order via Spreadsheet</div>
+          <div style="font-size:.8rem;color:var(--text-muted);margin-top:2px">Export your item list → fill quantities → upload</div>
+        </div>
+        <button onclick="document.getElementById('csv-upload-modal').style.display='none'" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--text-muted);line-height:1">×</button>
       </div>
-      <div id="csv-import-feedback" style="margin-bottom:12px"></div>
+
+      <!-- Steps -->
+      <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:20px">
+
+        <!-- Step 1 -->
+        <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:#eff6ff;border-radius:10px;border:1px solid #bfdbfe">
+          <div style="min-width:28px;height:28px;border-radius:50%;background:#1e40af;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">1</div>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:.88rem;color:#1e40af;margin-bottom:4px">Export your assigned item list</div>
+            <div style="font-size:.78rem;color:#1e3a8a;margin-bottom:10px">Downloads a CSV with all your items (SKU, name, category, price). The <b>Quantity</b> column is blank — fill it in.</div>
+            <button class="btn btn-primary btn-sm" onclick="downloadOrderTemplate()">⬇ Download Item List</button>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">
+          <div style="min-width:28px;height:28px;border-radius:50%;background:#15803d;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">2</div>
+          <div>
+            <div style="font-weight:700;font-size:.88rem;color:#15803d;margin-bottom:4px">Fill in quantities</div>
+            <div style="font-size:.78rem;color:#14532d">Open in Excel / Google Sheets. Enter the quantity you need in the <b>Quantity</b> column for each item. Leave blank or 0 to skip an item. Save as CSV.</div>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:#fefce8;border-radius:10px;border:1px solid #fde68a">
+          <div style="min-width:28px;height:28px;border-radius:50%;background:#d97706;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">3</div>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:.88rem;color:#92400e;margin-bottom:4px">Upload the filled CSV</div>
+            <div style="font-size:.78rem;color:#78350f;margin-bottom:10px">Items with a quantity will be added to your cart. Review and place the order.</div>
+            <input type="file" id="csv-upload-input" accept=".csv" style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:#fff">
+          </div>
+        </div>
+      </div>
+
+      <div id="csv-import-feedback" style="margin-bottom:14px"></div>
+
       <div style="display:flex;gap:8px">
-        <button class="btn btn-gold" onclick="processCSVUpload()">Import Order</button>
+        <button class="btn btn-primary" onclick="processCSVUpload()" style="flex:1">Import to Cart</button>
         <button class="btn btn-secondary" onclick="document.getElementById('csv-upload-modal').style.display='none'">Cancel</button>
       </div>
     </div>
@@ -1754,12 +1789,24 @@ async function loadBudgetBar() {
 }
 
 function downloadOrderTemplate() {
-  const csv = 'sku,quantity\nSKU-001,10\nSKU-002,5';
-  const blob = new Blob([csv], { type:'text/csv' });
+  const catalog = APP._catalog || [];
+  const date = new Date().toISOString().slice(0,10);
+  const header = 'SKU,Item Name,Category,UOM,Unit Price,Quantity';
+  const body = catalog.map(i => [
+    i.sku,
+    `"${(i.name||'').replace(/"/g,'""')}"`,
+    `"${(i.category||'').replace(/"/g,'""')}"`,
+    i.uom || 'unit',
+    (i.unit_price != null ? Number(i.unit_price).toFixed(2) : ''),
+    ''   // blank — client fills this in
+  ].join(',')).join('\n');
+  const csv = header + '\n' + body;
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'order_template.csv';
+  a.download = `order-list-${date}.csv`;
   a.click();
+  showToast(`Exported ${catalog.length} item${catalog.length!==1?'s':''}`, 'success');
 }
 
 async function processCSVUpload() {
@@ -1789,10 +1836,10 @@ async function processCSVUpload() {
     else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
-  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not in catalogue: ${notFound.join(', ')}</div>` : '';
+  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
   if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'#d1fae5':'#fef3c7'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'#92400e'}">
-    <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} skipped`:''}${notFoundNote}
-    ${imported?'<div style="margin-top:8px"><a href="#" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';refreshCartUI();return false" style="color:inherit;font-weight:700">✓ Done — view cart</a></div>':''}
+    <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
+    ${imported?'<div style="margin-top:10px"><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';switchOrderStep(\'review\')">Review &amp; Place Order →</button></div>':''}
   </div>`;
   if (imported) refreshCartUI();
 }
