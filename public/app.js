@@ -2218,8 +2218,8 @@ function myInvRow(i) {
     </td>
     <td style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
     <td style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
-    <td style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Number(i.qty_on_hand||0).toFixed(1)}</td>
-    <td style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Number(i.reorder_level).toFixed(1):'—'}</td>
+    <td style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Math.round(i.qty_on_hand||0)}</td>
+    <td style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Math.round(i.reorder_level):'—'}</td>
     <td><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
     <td style="font-size:.78rem;color:var(--text-muted)">${i.last_received_at ? fmtDate(i.last_received_at) : '—'}</td>
     <td style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
@@ -2238,7 +2238,7 @@ function renderConsumptionRows(rows) {
   return rows.map(r => `<tr>
     <td style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">${fmtDate(r.consumed_at)}</td>
     <td><div style="font-weight:600;font-size:.85rem">${h(r.item_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)}</div></td>
-    <td style="text-align:right;font-weight:700">${Number(r.qty).toFixed(1)}</td>
+    <td style="text-align:right;font-weight:700">${Math.round(r.qty)}</td>
     <td style="font-size:.8rem;color:var(--text-muted)">${r.notes ? h(r.notes) : '—'}</td>
     <td style="font-size:.8rem;color:var(--text-muted)">${h(r.recorded_by||'—')}</td>
   </tr>`).join('');
@@ -2269,11 +2269,11 @@ function filterMyInventoryTable() {
 function logConsumptionModal(sku, name, qty, uom) {
   openModal(`Log Consumption — ${name}`, `
     <div style="margin-bottom:14px">
-      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${Number(qty).toFixed(1)} ${uom}</strong></div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${Math.round(qty)} ${uom}</strong></div>
     </div>
     <div class="form-group">
       <label class="form-label">Quantity Used <span style="color:var(--danger)">*</span></label>
-      <input id="cons-qty" type="number" min="0.1" step="0.1" class="form-control" placeholder="e.g. 5" style="max-width:160px">
+      <input id="cons-qty" type="number" min="1" step="1" class="form-control" placeholder="e.g. 5" style="max-width:160px">
     </div>
     <div class="form-group">
       <label class="form-label">Notes (optional)</label>
@@ -2284,7 +2284,7 @@ function logConsumptionModal(sku, name, qty, uom) {
 }
 
 async function submitConsumption(sku) {
-  const qty   = parseFloat(document.getElementById('cons-qty')?.value);
+  const qty   = parseInt(document.getElementById('cons-qty')?.value, 10);
   const notes = document.getElementById('cons-notes')?.value?.trim();
   if (!qty || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
 
