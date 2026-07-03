@@ -656,7 +656,7 @@ function showToast(msg, type = 'success') {
   t.className = 'toast toast-' + type;
   t.textContent = msg;
   Object.assign(t.style, { position:'fixed', bottom:'24px', right:'24px', zIndex:9999,
-    background: type==='error' ? '#dc2626' : type==='info' ? '#3b82f6' : 'var(--navy)', color:'#fff',
+    background: type==='error' ? '#dc2626' : type==='info' ? '#3b82f6' : type==='warning' ? '#d97706' : 'var(--navy)', color:'#fff',
     padding:'12px 20px', borderRadius:'8px', fontSize:'.875rem', boxShadow:'0 4px 16px rgba(0,0,0,.2)',
     animation:'slideUp .2s ease' });
   document.body.appendChild(t);
@@ -8102,6 +8102,7 @@ const SETTINGS_NAV = [
   { id:'auth',          icon:'🔐', label:'Auth & OTP',       desc:'OTP, MFA, JWT session' },
   { id:'notifications', icon:'🔔', label:'Notifications',    desc:'Email & SMS config' },
   { id:'integrations',  icon:'🔗', label:'Integrations',     desc:'Zoho Books, webhooks' },
+  { id:'budgets',       icon:'💰', label:'Client Budgets',   desc:'Monthly budgets & approval thresholds' },
   { id:'approval',      icon:'✅', label:'Approval Rules',   desc:'Order approval thresholds' },
   { id:'warehouses',    icon:'🏭', label:'Warehouses',       desc:'Manage warehouse config' },
   { id:'audit',         icon:'📋', label:'Audit Log',        desc:'All system actions' },
@@ -8139,64 +8140,136 @@ async function settingsTab(tab, btn) {
   const el = document.getElementById('settings-content');
   el.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
 
+  const envNote = `<div class="alert alert-warning" style="font-size:.82rem;margin-bottom:0">
+    ⚙️ These settings are controlled by environment variables in <code>wrangler.jsonc</code>. The status shown is live from the server — to change values, update the env vars and redeploy.
+  </div>`;
+
+  const statusPill = (ok, trueLabel='Enabled', falseLabel='Disabled') =>
+    ok ? `<span class="badge badge-success">${trueLabel}</span>`
+       : `<span class="badge badge-warning">${falseLabel}</span>`;
+
   if (tab === 'auth') {
     const s = await api('/settings') || {};
     el.innerHTML = `
-    <div class="card"><div class="card-header"><span>Authentication & OTP</span></div>
-    <div class="card-body" style="display:grid;gap:16px;padding:20px">
-      <div class="form-group">
-        <label>OTP / MFA Enabled</label>
-        <select id="s-otp"><option value="true" ${s.OTP_ENABLED==='true'?'selected':''}>Enabled</option><option value="false" ${s.OTP_ENABLED!=='true'?'selected':''}>Disabled</option></select>
+    <div class="card">
+      <div class="card-header"><span>Authentication & OTP</span></div>
+      <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        ${envNote}
+        <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">OTP / MFA</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Two-factor authentication via email/SMS</div>
+            </div>
+            ${statusPill(s.otp_enabled)}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">MSG91 SMS</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">OTP delivery via SMS</div>
+            </div>
+            ${statusPill(s.msg91_configured, 'Configured', 'Not configured')}
+          </div>
+        </div>
+        <div style="font-size:.82rem;color:var(--text-muted)">To enable OTP: set <code>OTP_ENABLED=true</code> in wrangler.jsonc vars and redeploy.</div>
       </div>
-      <div class="form-group">
-        <label>OTP Expiry (minutes)</label>
-        <input type="number" id="s-otp-exp" value="${s.OTP_EXPIRY_MINUTES||5}" min="1" max="60">
-      </div>
-      <div class="form-group">
-        <label>JWT Session Expiry</label>
-        <select id="s-jwt"><option value="7d">7 days (default)</option><option value="1d">1 day</option><option value="30d">30 days</option></select>
-      </div>
-      <button class="btn btn-primary" style="width:fit-content" onclick="saveSettings('auth')">Save Auth Settings</button>
-    </div></div>`;
+    </div>`;
   }
 
   else if (tab === 'notifications') {
     const s = await api('/settings') || {};
     el.innerHTML = `
-    <div class="card"><div class="card-header"><span>Email & SMS Configuration</span></div>
-    <div class="card-body" style="display:grid;gap:16px;padding:20px">
-      <div class="form-group"><label>From Email</label><input type="email" id="s-email" value="${s.EMAIL_FROM||''}"></div>
-      <div class="form-group">
-        <label>MailChannels (Email) Enabled</label>
-        <select id="s-mailch"><option value="true" ${s.MAILCHANNELS_ENABLED==='true'?'selected':''}>Enabled</option><option value="false" ${s.MAILCHANNELS_ENABLED!=='true'?'selected':''}>Disabled</option></select>
+    <div class="card">
+      <div class="card-header"><span>Email & SMS Configuration</span></div>
+      <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        ${envNote}
+        <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">MailChannels Email</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Transactional email delivery</div>
+            </div>
+            ${statusPill(s.mailchannels_enabled)}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">MSG91 SMS</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">OTP and alert delivery via SMS</div>
+            </div>
+            ${statusPill(s.msg91_configured, 'Configured', 'Not configured')}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">Twilio Voice/SMS</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Alternate SMS/voice notifications</div>
+            </div>
+            ${statusPill(s.twilio_configured, 'Configured', 'Not configured')}
+          </div>
+        </div>
+        <button class="btn btn-secondary" style="width:fit-content" onclick="testEmail()">Send Test Email</button>
       </div>
-      <div class="form-group"><label>MSG91 Auth Key</label><input type="text" id="s-msg91" value="${s.MSG91_AUTH_KEY?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
-      <div class="form-group"><label>Twilio Account SID</label><input type="text" id="s-tw-sid" value="${s.TWILIO_ACCOUNT_SID?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
-      <div class="form-group"><label>Twilio From Number</label><input type="text" id="s-tw-num" value="${s.TWILIO_FROM_NUMBER||''}"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="saveSettings('notifications')">Save</button>
-        <button class="btn btn-secondary" onclick="testEmail()">Test Email</button>
-      </div>
-    </div></div>`;
+    </div>`;
   }
 
   else if (tab === 'integrations') {
     const s = await api('/settings') || {};
     const origin = window.location.origin;
     el.innerHTML = `
-    <div class="card"><div class="card-header"><span>Zoho Books Integration</span></div>
-    <div class="card-body" style="display:grid;gap:16px;padding:20px">
-      <div class="alert alert-warning" style="font-size:.84rem">
-        📌 Webhook URL (configure in Zoho Books): <code style="background:var(--bg);padding:2px 8px;border-radius:4px">${origin}/api/integrations/zoho/webhook</code>
+    <div class="card">
+      <div class="card-header"><span>Zoho Books Integration</span></div>
+      <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        ${envNote}
+        <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">Zoho Books API</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Org ID + Client ID configured</div>
+            </div>
+            ${statusPill(s.zoho_configured, 'Configured', 'Not configured')}
+          </div>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="font-size:.82rem;font-weight:600;margin-bottom:6px">Webhook URL</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <code style="font-size:.8rem;background:#f1f5f9;padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho/webhook</code>
+            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${origin}/api/integrations/zoho/webhook').then(()=>showToast('Copied'))">Copy</button>
+          </div>
+          <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Configure this URL in Zoho Books → Settings → Webhooks</div>
+        </div>
       </div>
-      <div class="form-group"><label>Zoho Books Org ID</label><input type="text" id="s-zoho-org" value="${s.ZOHO_BOOKS_ORG_ID||''}"></div>
-      <div class="form-group"><label>Zoho Client ID</label><input type="text" id="s-zoho-cid" value="${s.ZOHO_BOOKS_CLIENT_ID||''}"></div>
-      <div class="form-group"><label>Webhook Secret</label><input type="text" id="s-zoho-sec" value="${s.ZOHO_BOOKS_WEBHOOK_SECRET?'••••••••':''}" placeholder="Leave blank to keep unchanged"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="saveSettings('integrations')">Save</button>
-        <button class="btn btn-secondary" onclick="showToast('Zoho Books connection test not available in dev mode')">Test Connection</button>
+    </div>`;
+  }
+
+  else if (tab === 'budgets') {
+    const s = await api('/settings') || {};
+    const clients = s.clients || [];
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <span>Client Budgets & Approval Thresholds</span>
+        <button class="btn btn-primary btn-sm" onclick="saveClientBudgets()">Save Changes</button>
       </div>
-    </div></div>`;
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Client</th><th>Monthly Budget (₹)</th><th>Auto-Approve Below (₹)</th></tr></thead>
+          <tbody>
+            ${clients.length ? clients.map(c=>`<tr>
+              <td style="font-weight:600">${c.name}</td>
+              <td><input type="number" class="budget-input" data-id="${c.id}" data-field="monthly_budget"
+                value="${c.monthly_budget||''}" min="0" placeholder="No limit"
+                style="width:140px;padding:6px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:.86rem"></td>
+              <td><input type="number" class="threshold-input" data-id="${c.id}" data-field="approval_threshold"
+                value="${c.approval_threshold||''}" min="0" placeholder="No auto-approve"
+                style="width:160px;padding:6px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:.86rem"></td>
+            </tr>`).join('')
+            : '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No clients found</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:12px 16px;font-size:.8rem;color:var(--text-muted)">
+        Monthly Budget: maximum spend per calendar month. Auto-Approve Below: orders under this value skip manual approval.
+      </div>
+    </div>`;
   }
 
   else if (tab === 'approval') {
@@ -8290,7 +8363,26 @@ async function settingsTab(tab, btn) {
 }
 
 async function saveSettings(section) {
-  showToast('Settings saved (env vars require redeployment in production)');
+  showToast('These settings are controlled by environment variables — update wrangler.jsonc and redeploy to change them.', 'warning');
+}
+
+async function saveClientBudgets() {
+  const budgetInputs = document.querySelectorAll('.budget-input');
+  const threshInputs = document.querySelectorAll('.threshold-input');
+  const map = {};
+  budgetInputs.forEach(inp => {
+    const id = inp.dataset.id;
+    if (!map[id]) map[id] = { id };
+    map[id].monthly_budget = inp.value ? +inp.value : null;
+  });
+  threshInputs.forEach(inp => {
+    const id = inp.dataset.id;
+    if (!map[id]) map[id] = { id };
+    map[id].approval_threshold = inp.value ? +inp.value : null;
+  });
+  const client_budgets = Object.values(map);
+  const res = await api('/settings', { method:'POST', body: JSON.stringify({ client_budgets }) });
+  if (res) showToast('Client budgets saved successfully');
 }
 
 async function testEmail() {
