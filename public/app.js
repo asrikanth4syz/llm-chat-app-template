@@ -436,19 +436,28 @@ function hideSearchResults() {
 // ── Notification polling (Gap 2) ───────────────────────────
 function startNotificationPolling() {
   if (APP._notifInterval) clearInterval(APP._notifInterval);
+  let firstPoll = true;
   APP._notifInterval = setInterval(async () => {
     if (!APP.token) { clearInterval(APP._notifInterval); return; }
     const data = await api('/notifications').catch(() => null);
     if (!data) return;
-    const prevUnread = APP._prevUnread || 0;
-    const unread = data.filter(n => !n.read_flag).length;
-    APP._prevUnread = unread;
-    document.querySelector('.notif-badge').textContent = unread || '';
-    document.querySelector('.notif-badge').style.display = unread ? '' : 'none';
-    if (unread > prevUnread) {
-      const newest = data.find(n => !n.read_flag);
-      if (newest) showToast(newest.message, 'info');
+    const unread = data.filter(n => !n.read_flag);
+    const unreadCount = unread.length;
+    const newestId = unread[0]?.id ?? null;
+
+    document.querySelector('.notif-badge').textContent = unreadCount || '';
+    document.querySelector('.notif-badge').style.display = unreadCount ? '' : 'none';
+
+    // On the very first poll just baseline — never toast old notifications
+    if (!firstPoll && newestId && newestId !== APP._lastToastedNotifId) {
+      const prevCount = APP._prevUnread ?? 0;
+      if (unreadCount > prevCount) {
+        showToast(unread[0].message, 'info');
+        APP._lastToastedNotifId = newestId;
+      }
     }
+    if (firstPoll) { APP._lastToastedNotifId = newestId; firstPoll = false; }
+    APP._prevUnread = unreadCount;
   }, 30000);
 }
 
