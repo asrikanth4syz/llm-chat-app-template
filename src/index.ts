@@ -177,11 +177,31 @@ const ORDER_FSM: Record<string, string[]> = {
 // ════════════════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ════════════════════════════════════════════════════════════════════
+let _categoryFixApplied = false;
+async function fixCategoryNames(env: Env): Promise<void> {
+  if (_categoryFixApplied) return;
+  _categoryFixApplied = true;
+  try {
+    const renames: [string, string][] = [
+      ['Beverage',   'Beverages'],
+      ['Snack',      'Snacks'],
+      ['Stationary', 'Stationery'],
+      ['DryFruit',   'DryFruits'],
+    ];
+    for (const [from, to] of renames) {
+      await env.DB.prepare("UPDATE inventory        SET category=? WHERE category=?").bind(to, from).run();
+      await env.DB.prepare("UPDATE client_inventory SET category=? WHERE category=?").bind(to, from).run();
+      await env.DB.prepare("UPDATE order_items      SET category=? WHERE category=?").bind(to, from).run();
+    }
+  } catch { /* non-fatal — tables may not exist yet */ }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return cors();
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    fixCategoryNames(env); // fire-and-forget; idempotent after first run
 
     const path = url.pathname.replace(/\/$/,"");
     const method = request.method;
