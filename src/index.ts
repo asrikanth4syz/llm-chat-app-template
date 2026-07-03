@@ -197,11 +197,11 @@ async function fixCategoryNames(env: Env): Promise<void> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return cors();
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
-    fixCategoryNames(env); // fire-and-forget; idempotent after first run
+    ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
 
     const path = url.pathname.replace(/\/$/,"");
     const method = request.method;
