@@ -4396,7 +4396,7 @@ async function editInventoryItem(sku) {
   const vendors = await api('/vendors') || [];
   const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
   const vendor2Opts = vendors.map(v => `<option value="${v.id}" ${v.id===item.secondary_vendor_id?'selected':''}>${v.name}</option>`).join('');
-  const cats = ['Beverages','Snacks','Hygiene','Stationary','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','Other'];
+  const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','Other'];
   const catOpts = cats.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('');
   const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
   const uomOpts = uoms.map(u => `<option value="${u}" ${(item.uom||'unit')===u?'selected':''}>${u}</option>`).join('');
@@ -4468,7 +4468,7 @@ async function editInventoryItem(sku) {
                 <select id="nv-cat">
                   <option value="Food & Beverage">Food & Beverage</option>
                   <option value="FMCG">FMCG</option>
-                  <option value="Stationary">Stationary</option>
+                  <option value="Stationery">Stationery</option>
                   <option value="Cleaning">Cleaning</option>
                   <option value="Electronics">Electronics</option>
                   <option value="Pharma">Pharma</option>
@@ -4500,7 +4500,7 @@ async function editInventoryItem(sku) {
                 <select id="nv2-cat">
                   <option value="Food & Beverage">Food & Beverage</option>
                   <option value="FMCG">FMCG</option>
-                  <option value="Stationary">Stationary</option>
+                  <option value="Stationery">Stationery</option>
                   <option value="Cleaning">Cleaning</option>
                   <option value="Electronics">Electronics</option>
                   <option value="Pharma">Pharma</option>
@@ -4688,7 +4688,7 @@ function renderAddItem() {
   openModal('Add New Item to Catalogue',
     `<div class="form-group"><label>Item Name</label><input type="text" id="item-name" placeholder="e.g. Organic Green Tea"></div>
      <div class="form-group"><label>Category</label>
-       <select id="item-cat"><option>Beverages</option><option>Snacks</option><option>Hygiene</option><option>Stationary</option><option>Office</option></select>
+       <select id="item-cat"><option>Beverages</option><option>Snacks</option><option>Hygiene</option><option>Stationery</option><option>Office</option></select>
      </div>
      <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="item-price" min="0" step="0.01"></div>
      <div class="form-group"><label>Opening Stock</label><input type="number" id="item-stock" value="0" min="0"></div>
@@ -4914,7 +4914,7 @@ function filterVendorCards() {
   if (clearBtn) clearBtn.style.display = (q||loc||cat) ? '' : 'none';
 }
 
-const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationary'];
+const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationery'];
 
 function vendorCatCheckboxes(prefix, selected) {
   const sel = (selected||'').split(',').map(s=>s.trim()).filter(Boolean);
