@@ -5148,6 +5148,12 @@ async function confirmGRN(poId) {
    ============================================================ */
 async function renderWarehouse(el) {
   el.innerHTML = `
+  <div style="margin-bottom:12px">
+    <button class="btn btn-secondary btn-sm" onclick="navigate('settings')" style="display:inline-flex;align-items:center;gap:5px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back to Settings
+    </button>
+  </div>
   ${pageHeader('Warehouse', 'Warehouses, bins, GRN, picklist & stock transfers',
     `<button class="btn btn-primary" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
   <div class="tabs" id="wh-tabs" style="margin-bottom:16px">
@@ -8301,7 +8307,33 @@ async function settingsTab(tab, btn) {
   }
 
   else if (tab === 'warehouses') {
-    navigate('warehouse');
+    const warehouses = await api('/warehouses') || [];
+    el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div style="font-size:.82rem;color:var(--text-muted)">
+        Showing warehouse summary. For full GRN, bins and stock transfers →
+        <button class="btn btn-secondary btn-sm" style="margin-left:6px" onclick="navigate('warehouse')">Open Warehouse page</button>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="addWarehouseModal()">+ Add Warehouse</button>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>Warehouses (${warehouses.length})</span></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Name</th><th>Location</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${warehouses.length ? warehouses.map(w=>`<tr>
+              <td><b>${w.name}</b></td>
+              <td>${w.location||'—'}</td>
+              <td>${w.type||'—'}</td>
+              <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'}</td>
+              <td><button class="btn btn-secondary btn-sm" onclick="navigate('warehouse')">Manage</button></td>
+            </tr>`).join('')
+            : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No warehouses configured</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
   }
 
   else if (tab === 'audit') {
