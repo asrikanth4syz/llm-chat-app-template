@@ -735,6 +735,17 @@ function pageHeader(title, sub, actions = '') {
   </div>`;
 }
 
+/* Icon-chip stat card (Stitch reference style) */
+function statCard(icon, color, bg, value, label, onclick = '') {
+  return `<div class="card" style="padding:14px 16px;margin-bottom:0;display:flex;align-items:center;gap:12px${onclick?';cursor:pointer':''}" ${onclick?`onclick="${onclick}"`:''}>
+    <div style="width:42px;height:42px;border-radius:10px;background:${bg};color:${color};display:flex;align-items:center;justify-content:center;font-size:1.25rem;font-weight:800;flex-shrink:0">${icon}</div>
+    <div style="min-width:0">
+      <div style="font-size:1.35rem;font-weight:800;color:var(--navy);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${value}</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap">${label}</div>
+    </div>
+  </div>`;
+}
+
 function emptyState(icon, title, desc, action = '') {
   return `<div class="empty-state"><div class="empty-icon">${icon}</div>
     <div class="empty-title">${title}</div>
@@ -4197,6 +4208,8 @@ async function renderInventory(el) {
   APP._invFilter = APP._invFilter || 'All';
   APP._invSubFilter = APP._invSubFilter || 'All';
   APP._invSearch = '';
+  APP._invSort = APP._invSort || { col: null, dir: 1 };
+  APP._invSelected = new Set();
 
   const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
   const lowStock = inv.filter(i => i.stock <= i.reorder_level);
@@ -4208,6 +4221,14 @@ async function renderInventory(el) {
     if (APP._invFilter !== 'All') items = items.filter(i => i.category === APP._invFilter);
     if (APP._invSubFilter !== 'All') items = items.filter(i => (i.sub_category||'Normal') === APP._invSubFilter);
     if (APP._invSearch) { const q = APP._invSearch.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(q)||i.sku.toLowerCase().includes(q)||(i.brand||'').toLowerCase().includes(q)); }
+    const { col, dir } = APP._invSort;
+    if (col) {
+      items = [...items].sort((a,b) => {
+        let va = a[col], vb = b[col];
+        if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb||'').toLowerCase(); return va < vb ? -dir : va > vb ? dir : 0; }
+        return ((va||0) - (vb||0)) * dir;
+      });
+    }
     return items;
   }
 
@@ -4218,8 +4239,17 @@ async function renderInventory(el) {
       const pctStock  = Math.round((item.stock / (item.max_stock||1)) * 100);
       const color     = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
       const safeName  = item.name.replace(/'/g,"\\'");
+      const stPill    = item.stock === 0
+        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fee2e2;color:#dc2626">Critical</span>'
+        : item.stock <= item.reorder_level
+        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fef3c7;color:#d97706">Warning</span>'
+        : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:#059669">Active</span>';
+      const checked   = APP._invSelected.has(item.sku);
       return `
-      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}" onclick="toggleInvDetail('${item.sku}',this)">
+      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#fff7ed':''}" onclick="toggleInvDetail('${item.sku}',this)">
+        <td onclick="event.stopPropagation()" style="width:34px;text-align:center">
+          <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
+        </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
         <td><b>${item.name}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${item.brand}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
@@ -4235,6 +4265,7 @@ async function renderInventory(el) {
           </div>
           <div style="font-size:.68rem;color:${color}">${pctStock}%</div>
         </td>
+        <td>${stPill}</td>
         <td style="font-size:.8rem">${item.vendor_name||'—'}</td>
         <td onclick="event.stopPropagation()">
           <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
@@ -4244,7 +4275,7 @@ async function renderInventory(el) {
         </td>
       </tr>
       <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff">
-        <td colspan="12" style="padding:0">
+        <td colspan="14" style="padding:0">
           <div style="padding:16px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;border-top:2px solid var(--primary)">
 
             <!-- 1. Product Identification -->
@@ -4310,28 +4341,12 @@ async function renderInventory(el) {
   ${pageHeader('Inventory', `${inv.length} SKUs`,
     `<button class="btn btn-secondary" onclick="renderAddItem()">${iconPlus(14)} Add Item</button>`)}
 
-  <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total SKUs</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inv.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">active items</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${lowStock.length?'var(--warning)':'#d1d5db'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Low Stock</div>
-      <div style="font-size:2rem;font-weight:800;color:${lowStock.length?'#d97706':'var(--navy)'};margin-top:6px">${lowStock.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">below reorder level</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${outOfStock.length?'var(--danger)':'#d1d5db'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Out of Stock</div>
-      <div style="font-size:2rem;font-weight:800;color:${outOfStock.length?'var(--danger)':'var(--navy)'};margin-top:6px">${outOfStock.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">zero stock</div>
-    </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inventory Value</div>
-      <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(inv.reduce((s,i)=>s+i.stock*i.unit_price,0))}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">at selling price</div>
-    </div>
+  <!-- KPI tiles — icon-chip style, responsive -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-bottom:16px">
+    ${statCard('📦','#3b82f6','#eff6ff', inv.length, 'Active Items')}
+    ${statCard('↕️','#d97706','#fffbeb', lowStock.length, 'Below Reorder')}
+    ${statCard('⏱','#dc2626','#fef2f2', outOfStock.length, 'Zero Stock')}
+    ${statCard('₹','#059669','#ecfdf5', fmt(inv.reduce((s,i)=>s+i.stock*i.unit_price,0)), 'Stock Value')}
   </div>
 
   ${criticalLow.length ? `
@@ -4361,16 +4376,28 @@ async function renderInventory(el) {
     </div>
   </div>
 
+  <!-- Bulk action bar (appears when rows selected) -->
+  <div id="inv-bulk-bar" style="display:none;background:var(--primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(249,115,22,.3)">
+    <span id="inv-bulk-count" style="color:#fff;font-weight:800;font-size:.84rem"></span>
+    <div style="flex:1"></div>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('price')">✏️ Update Price</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('category')">📂 Change Category</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('stock')">📦 Adjust Stock</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('reorder')">🎯 Set Reorder Point</button>
+    <button class="btn btn-sm" style="background:#b91c1c;color:#fff;border:none;font-weight:700" onclick="invClearSelection()">✕ Cancel</button>
+  </div>
+
   <!-- Table — click row to expand 4-section detail -->
   <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
-    <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--text-muted)">Click any row to see Product Identification · Packing Details · Pricing · Vendor Information</div>
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--text-muted)">Click any row to see full details · Select rows with checkboxes for bulk actions · Click column headers to sort</div>
     <div class="table-wrap">
       <table class="table" id="inv-table" style="margin:0">
         <thead><tr>
-          <th>SKU</th><th>Item</th><th>Category</th><th>UOM</th>
-          <th>Price</th><th>MRP</th>
-          <th>Stock</th><th>Reserved</th><th>Available</th><th>Level</th>
-          <th>Vendor</th><th>Actions</th>
+          <th style="width:34px;text-align:center"><input type="checkbox" id="inv-select-all" onchange="invSelectAll(this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)"></th>
+          ${[['sku','SKU'],['name','Item'],['category','Category'],[null,'UOM'],['unit_price','Price'],['mrp','MRP'],['stock','Stock'],['reserved','Reserved'],[null,'Available'],[null,'Level'],[null,'Status'],[null,'Vendor'],[null,'Actions']]
+            .map(([col,label]) => col
+              ? `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="invSortBy('${col}')">${label} <span data-sort-arrow="${col}" style="font-size:.65rem;opacity:.5">⇅</span></th>`
+              : `<th>${label}</th>`).join('')}
         </tr></thead>
         <tbody id="inv-tbody">${invTableRows(getFiltered())}</tbody>
       </table>
@@ -4404,6 +4431,81 @@ async function renderInventory(el) {
 
   window.refreshInvTable = function() {
     document.getElementById('inv-tbody').innerHTML = invTableRows(getFiltered());
+    updateInvBulkBar();
+  };
+
+  function updateInvBulkBar() {
+    const bar = document.getElementById('inv-bulk-bar');
+    const n = APP._invSelected.size;
+    if (bar) {
+      bar.style.display = n ? 'flex' : 'none';
+      const cnt = document.getElementById('inv-bulk-count');
+      if (cnt) cnt.textContent = `${n} item${n>1?'s':''} selected`;
+    }
+  }
+
+  window.invToggleSelect = function(sku, cb) {
+    if (cb.checked) APP._invSelected.add(sku); else APP._invSelected.delete(sku);
+    const row = cb.closest('tr');
+    if (row) row.style.background = cb.checked ? '#fff7ed' : '';
+    updateInvBulkBar();
+  };
+
+  window.invSelectAll = function(cb) {
+    APP._invSelected = new Set(cb.checked ? getFiltered().map(i=>i.sku) : []);
+    window.refreshInvTable();
+  };
+
+  window.invClearSelection = function() {
+    APP._invSelected.clear();
+    const all = document.getElementById('inv-select-all'); if (all) all.checked = false;
+    window.refreshInvTable();
+  };
+
+  window.invSortBy = function(col) {
+    if (APP._invSort.col === col) APP._invSort.dir = -APP._invSort.dir;
+    else APP._invSort = { col, dir: 1 };
+    document.querySelectorAll('[data-sort-arrow]').forEach(s => { s.textContent = '⇅'; s.style.opacity = '.5'; });
+    const arrow = document.querySelector(`[data-sort-arrow="${col}"]`);
+    if (arrow) { arrow.textContent = APP._invSort.dir === 1 ? '↑' : '↓'; arrow.style.opacity = '1'; }
+    window.refreshInvTable();
+  };
+
+  window.invBulkModal = function(kind) {
+    const n = APP._invSelected.size;
+    if (!n) { showToast('Select items first', 'error'); return; }
+    const defs = {
+      price:    { title:'Update Price',      label:'New unit price (₹)',   field:'unit_price',    type:'number', min:0, step:'0.01' },
+      category: { title:'Change Category',   label:'New category',          field:'category',      type:'select' },
+      stock:    { title:'Adjust Stock',      label:'Set stock quantity',    field:'stock',          type:'number', min:0, step:'1' },
+      reorder:  { title:'Set Reorder Point', label:'New reorder level',     field:'reorder_level',  type:'number', min:0, step:'1' },
+    };
+    const d = defs[kind];
+    const inputHtml = d.type === 'select'
+      ? `<select id="bulk-value" class="form-control">${cats.filter(c=>c!=='All').map(c=>`<option>${c}</option>`).join('')}</select>`
+      : `<input id="bulk-value" type="number" min="${d.min}" step="${d.step}" class="form-control" style="max-width:180px">`;
+    openModal(`${d.title} — ${n} item${n>1?'s':''}`, `
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">This will apply to all ${n} selected item${n>1?'s':''}.</div>
+      <div class="form-group"><label class="form-label">${d.label}</label>${inputHtml}</div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" onclick="invBulkApply('${d.field}','${d.type}')">Apply to ${n} item${n>1?'s':''}</button>`);
+  };
+
+  window.invBulkApply = async function(field, type) {
+    const raw = document.getElementById('bulk-value')?.value;
+    const value = type === 'select' ? raw : parseFloat(raw);
+    if (type !== 'select' && (isNaN(value) || value < 0)) { showToast('Enter a valid value', 'error'); return; }
+    closeModal();
+    showToast(`Updating ${APP._invSelected.size} items…`);
+    let ok = 0, fail = 0;
+    for (const sku of APP._invSelected) {
+      const res = await api(`/inventory/${encodeURIComponent(sku)}`, { method:'PATCH', body: JSON.stringify({ [field]: value }) }).catch(()=>null);
+      if (res) { ok++; if (_invCache[sku]) _invCache[sku][field] = value; const it = inv.find(i=>i.sku===sku); if (it) it[field] = value; }
+      else fail++;
+    }
+    showToast(fail ? `${ok} updated, ${fail} failed` : `${ok} item${ok>1?'s':''} updated`, fail ? 'warning' : 'success');
+    APP._invSelected.clear();
+    window.refreshInvTable();
   };
 
   window.invFilterCat = function(cat) {
