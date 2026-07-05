@@ -1350,7 +1350,9 @@ async function renderOpsDashboard(el) {
           <div class="ct-card-title">Orders by Status</div>
         </div>
         <div style="padding:16px 20px">
-          <canvas id="statusChart" height="200"></canvas>
+          <div style="position:relative;height:220px;width:100%">
+            <canvas id="statusChart"></canvas>
+          </div>
         </div>
       </div>
     </div>
@@ -1429,6 +1431,8 @@ async function renderOpsDashboard(el) {
         datasets: [{ data: counts, backgroundColor: colors, borderRadius: 8, borderSkipped: false }]
       },
       options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: { legend:{ display:false }, tooltip:{ callbacks:{ title: t => t[0].label, label: t => ` ${t.raw} orders` } } },
         scales: {
           x: { grid:{ display:false }, ticks:{ font:{ size:9, weight:'600' }, color:'#8896b0' } },
@@ -5286,7 +5290,9 @@ async function renderProcurement(el) {
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
     <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem;margin-bottom:14px">Vendor Performance</div>
-      <canvas id="vendorChart" height="200"></canvas>
+      <div style="position:relative;height:220px;width:100%">
+        <canvas id="vendorChart"></canvas>
+      </div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -5349,7 +5355,7 @@ async function renderProcurement(el) {
             { label:'Fill Rate %', data: vendors.map(v=>v.fill_rate||0), backgroundColor:'#3b82f6', borderRadius:4 },
           ]
         },
-        options:{ plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true,max:100,grid:{color:'#f0f0f0'}},x:{grid:{display:false}}} }
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true,max:100,grid:{color:'#f0f0f0'}},x:{grid:{display:false}}} }
       });
     }
   }
