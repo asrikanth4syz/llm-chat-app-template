@@ -8049,6 +8049,38 @@ function renderReports(el) {
 
   el.innerHTML = `
   ${pageHeader('Reports & BI', 'Live data — view inline, export CSV, or print PDF')}
+
+  <!-- ═══ ANALYTICS OVERVIEW (Stitch reference) ═══ -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:24px">
+
+    <!-- SLA Performance Gauge -->
+    <div class="card" style="padding:18px 20px;margin-bottom:0">
+      <div style="font-weight:800;font-size:.92rem;color:var(--navy);margin-bottom:8px">SLA Performance</div>
+      <div id="sla-gauge-wrap" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:150px">
+        <div class="spinner" style="width:24px;height:24px"></div>
+      </div>
+    </div>
+
+    <!-- Fulfilment Efficiency -->
+    <div class="card" style="padding:18px 20px;margin-bottom:0">
+      <div style="font-weight:800;font-size:.92rem;color:var(--navy);margin-bottom:2px">Fulfilment Efficiency</div>
+      <div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px">Orders over the past week</div>
+      <div id="fulfilment-bars" style="min-height:120px;display:flex;align-items:center;justify-content:center">
+        <div class="spinner" style="width:24px;height:24px"></div>
+      </div>
+    </div>
+
+    <!-- Open Tickets -->
+    <div class="card" style="padding:18px 20px;margin-bottom:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:800;font-size:.92rem;color:var(--navy)">Open Tickets</div>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('service_desk')">View All →</button>
+      </div>
+      <div id="open-tickets-list" style="min-height:120px;display:flex;align-items:center;justify-content:center">
+        <div class="spinner" style="width:24px;height:24px"></div>
+      </div>
+    </div>
+  </div>
   ${REPORT_CATEGORIES.map(cat=>`
   <div style="margin-bottom:24px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
@@ -8099,6 +8131,83 @@ function renderReports(el) {
       </div>`).join('')}
     </div>
   </div>`:''}`;
+
+  loadReportsOverview();
+}
+
+/* ── Analytics overview widgets (SLA gauge, fulfilment bars, tickets) ── */
+async function loadReportsOverview() {
+  const [orders, tickets, fulfilment] = await Promise.all([
+    api('/orders').catch(()=>[]),
+    api('/tickets').catch(()=>[]),
+    api(`/reports/client-fulfilment?from=${new Date(Date.now()-30*86400000).toISOString().slice(0,10)}&to=${new Date().toISOString().slice(0,10)}`).catch(()=>[]),
+  ]);
+
+  // ── SLA gauge: average fulfilment % over 30 days ──
+  const gaugeWrap = document.getElementById('sla-gauge-wrap');
+  if (gaugeWrap) {
+    const pct = (fulfilment||[]).length
+      ? Math.round((fulfilment.reduce((s,r)=>s+(r.fulfilment_pct||0),0))/fulfilment.length)
+      : 100;
+    const angle = -180 + (pct/100)*180;
+    gaugeWrap.innerHTML = `
+      <svg viewBox="0 0 200 115" style="width:100%;max-width:220px">
+        <defs>
+          <linearGradient id="slaGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#dc2626"/><stop offset="50%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#16a34a"/>
+          </linearGradient>
+        </defs>
+        <path d="M 15 100 A 85 85 0 0 1 185 100" fill="none" stroke="url(#slaGrad)" stroke-width="16" stroke-linecap="round"/>
+        <line x1="100" y1="100" x2="${100+72*Math.cos(angle*Math.PI/180)}" y2="${100+72*Math.sin(angle*Math.PI/180)}" stroke="var(--navy)" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="100" cy="100" r="6" fill="var(--navy)"/>
+        <text x="100" y="82" text-anchor="middle" font-size="26" font-weight="800" fill="var(--navy)">${pct}%</text>
+      </svg>
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">On Target <span style="color:${pct>=80?'#16a34a':pct>=60?'#d97706':'#dc2626'};font-weight:700">· 30-day fulfilment</span></div>`;
+  }
+
+  // ── Fulfilment efficiency bars: past week ──
+  const barsWrap = document.getElementById('fulfilment-bars');
+  if (barsWrap) {
+    const weekAgo = Date.now() - 7*86400000;
+    const recent = (orders||[]).filter(o => new Date(o.created_at).getTime() >= weekAgo);
+    const received  = recent.length;
+    const processed = recent.filter(o => !['DRAFT','PENDING_APPROVAL','SUBMITTED'].includes(o.status)).length;
+    const delivered = recent.filter(o => ['CLOSED','PARTIALLY_CLOSED','IN_SHIPMENT','DELIVERED'].includes(o.status)).length;
+    const max = Math.max(received, processed, delivered, 1);
+    const row = (label, val, color) => `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="width:72px;font-size:.76rem;color:var(--text-muted);text-align:right;flex-shrink:0">${label}</div>
+        <div style="flex:1;background:var(--border);border-radius:4px;height:18px;overflow:hidden">
+          <div style="height:100%;width:${Math.round(val/max*100)}%;background:${color};border-radius:4px;transition:width .6s"></div>
+        </div>
+        <div style="width:26px;font-size:.8rem;font-weight:700;color:var(--navy)">${val}</div>
+      </div>`;
+    barsWrap.innerHTML = `<div style="width:100%">
+      ${row('Received', received, 'var(--primary)')}
+      ${row('Processed', processed, '#fb923c')}
+      ${row('Delivered', delivered, '#9ca3af')}
+    </div>`;
+  }
+
+  // ── Open tickets ──
+  const ticketsWrap = document.getElementById('open-tickets-list');
+  if (ticketsWrap) {
+    const open = (tickets||[]).filter(t => !['RESOLVED','CLOSED'].includes(t.status)).slice(0,4);
+    const pillColor = p => p==='HIGH'||p==='URGENT' ? ['#fee2e2','#dc2626'] : p==='MEDIUM' ? ['#fef3c7','#d97706'] : ['#e5e7eb','#6b7280'];
+    ticketsWrap.innerHTML = open.length ? `<div style="width:100%">
+      ${open.map(t => {
+        const [bg,fg] = pillColor(t.priority);
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('service_desk')">
+          <div style="width:8px;height:8px;border-radius:50%;background:${fg};flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.8rem;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${t.id}: ${h(t.subject||'')}</div>
+            <div style="font-size:.7rem;color:var(--text-muted)">${fmtDate(t.created_at)}</div>
+          </div>
+          <span style="font-size:.68rem;font-weight:700;padding:2px 9px;border-radius:20px;background:${bg};color:${fg};white-space:nowrap">${t.priority||'LOW'}</span>
+        </div>`;
+      }).join('')}
+    </div>` : `<div style="text-align:center;color:var(--text-muted);font-size:.82rem;padding:20px">🎉 No open tickets</div>`;
+  }
 }
 
 async function viewReport(key) {
