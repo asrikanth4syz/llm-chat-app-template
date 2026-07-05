@@ -8721,9 +8721,10 @@ async function renderUsers(el) {
 }
 
 const CLIENT_ROLES = ['client_admin','client_approver','client_user'];
+const VENDOR_ROLES = ['vendor_admin','vendor_user'];
 
-/* Org field: text input for platform/vendor roles, client dropdown for client roles */
-function userOrgFieldHtml(prefix, role, clients, currentClientId, currentOrg) {
+/* Org field by role: client dropdown / vendor dropdown / fixed 4SYZ Platform */
+function userOrgFieldHtml(prefix, role, clients, vendors, currentClientId, currentOrg) {
   if (CLIENT_ROLES.includes(role)) {
     if (!clients.length) {
       return `<div class="alert alert-warning" style="margin:0">No active clients onboarded yet. Onboard the client first (Clients page), then create its users.</div>`;
@@ -8734,21 +8735,39 @@ function userOrgFieldHtml(prefix, role, clients, currentClientId, currentOrg) {
     </select>
     <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Client users must belong to an onboarded client</div>`;
   }
-  return `<input type="text" id="${prefix}-org" value="${h(currentOrg||'')}" placeholder="4SYZ Platform">`;
+  if (VENDOR_ROLES.includes(role)) {
+    if (!vendors.length) {
+      return `<div class="alert alert-warning" style="margin:0">No vendors created yet. Add the vendor first (Vendors page), then create its users.</div>`;
+    }
+    return `<select id="${prefix}-vendor">
+      <option value="">— Select vendor —</option>
+      ${vendors.map(v=>`<option value="${v.id}" ${v.name===currentOrg?'selected':''}>${h(v.name)}</option>`).join('')}
+    </select>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Vendor users must belong to an existing vendor</div>`;
+  }
+  // Platform roles (Super Admin, Ops, Delivery, Finance…) — company is fixed
+  return `<input type="text" id="${prefix}-org" value="4SYZ Platform" readonly
+    style="background:var(--surface-alt,#f3f4f6);color:var(--text-muted);cursor:not-allowed">
+  <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Platform roles always belong to 4SYZ Platform</div>`;
 }
 
-function bindUserRoleToggle(prefix, clients, currentClientId, currentOrg) {
+function bindUserRoleToggle(prefix, clients, vendors, currentClientId, currentOrg) {
   const roleSel = document.getElementById(`${prefix}-role`);
   if (!roleSel) return;
   roleSel.onchange = () => {
     const wrap = document.getElementById(`${prefix}-org-wrap`);
-    if (wrap) wrap.innerHTML = userOrgFieldHtml(prefix, roleSel.value, clients, currentClientId, currentOrg);
+    if (wrap) wrap.innerHTML = userOrgFieldHtml(prefix, roleSel.value, clients, vendors, currentClientId, currentOrg);
   };
 }
 
 async function addUserModal() {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can add users','error'); return; }
-  const clients = (await api('/clients').catch(()=>[]) || []).filter(c=>c.active);
+  const [clientsRaw, vendorsRaw] = await Promise.all([
+    api('/clients').catch(()=>[]),
+    api('/vendors').catch(()=>[]),
+  ]);
+  const clients = (clientsRaw||[]).filter(c=>c.active);
+  const vendors = (vendorsRaw||[]);
   const firstRole = Object.keys(ROLES)[0];
   openModal('Add User',
     `<div class="form-group"><label>Full Name</label><input type="text" id="u-name"></div>
@@ -8758,13 +8777,13 @@ async function addUserModal() {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Organisation / Client</label>
-       <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, null, '')}</div>
+     <div class="form-group"><label>Company / Client / Vendor</label>
+       <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, vendors, null, '')}</div>
      </div>
      <div class="form-group"><label>Temporary Password</label><input type="password" id="u-pw" value="password"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveUser()">Create User</button>`);
-  bindUserRoleToggle('u', clients, null, '');
+  bindUserRoleToggle('u', clients, vendors, null, '');
 }
 
 async function saveUser() {
@@ -8780,9 +8799,12 @@ async function saveUser() {
     const clientId = document.getElementById('u-client')?.value;
     if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
     body.client_id = clientId;
-  } else {
-    body.org = document.getElementById('u-org')?.value || ROLES[role]?.org;
+  } else if (VENDOR_ROLES.includes(role)) {
+    const vendorId = document.getElementById('u-vendor')?.value;
+    if (!vendorId) { showToast('Select a vendor — vendor users must belong to an existing vendor','error'); return; }
+    body.vendor_id = vendorId;
   }
+  // Platform roles: org is fixed server-side to 4SYZ Platform
   const res = await api('/users', { method:'POST', body: JSON.stringify(body) });
   if (!res) return;
   closeModal();
@@ -8793,7 +8815,12 @@ async function editUserModal(id) {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can edit users','error'); return; }
   const u = APP._usersCache?.[id];
   if (!u) { showToast('User not found','error'); return; }
-  const clients = (await api('/clients').catch(()=>[]) || []).filter(c=>c.active);
+  const [clientsRaw, vendorsRaw] = await Promise.all([
+    api('/clients').catch(()=>[]),
+    api('/vendors').catch(()=>[]),
+  ]);
+  const clients = (clientsRaw||[]).filter(c=>c.active);
+  const vendors = (vendorsRaw||[]);
   openModal(`Edit User — ${u.name}`,
     `<div class="form-group"><label>Full Name</label><input type="text" id="eu-name" value="${h(u.name)}"></div>
      <div class="form-group"><label>Email</label><input type="email" id="eu-email" value="${h(u.email)}"></div>
@@ -8802,8 +8829,8 @@ async function editUserModal(id) {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${u.role===k?'selected':''}>${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Organisation / Client</label>
-       <div id="eu-org-wrap">${userOrgFieldHtml('eu', u.role, clients, u.client_id, u.org)}</div>
+     <div class="form-group"><label>Company / Client / Vendor</label>
+       <div id="eu-org-wrap">${userOrgFieldHtml('eu', u.role, clients, vendors, u.client_id, u.org)}</div>
      </div>
      <div class="form-group">
        <label>Reset Password <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(leave blank to keep current)</span></label>
@@ -8811,7 +8838,7 @@ async function editUserModal(id) {
      </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveUserEdit('${id}')">Save Changes</button>`);
-  bindUserRoleToggle('eu', clients, u.client_id, u.org);
+  bindUserRoleToggle('eu', clients, vendors, u.client_id, u.org);
 }
 
 async function saveUserEdit(id) {
@@ -8830,10 +8857,16 @@ async function saveUserEdit(id) {
     const clientId = document.getElementById('eu-client')?.value;
     if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
     if (clientId !== u.client_id) body.client_id = clientId;
+  } else if (VENDOR_ROLES.includes(role)) {
+    const vendorSel = document.getElementById('eu-vendor');
+    const vendorId = vendorSel?.value;
+    if (!vendorId) { showToast('Select a vendor — vendor users must belong to an existing vendor','error'); return; }
+    const vendorName = vendorSel.options[vendorSel.selectedIndex]?.text;
+    if (vendorName !== u.org) body.vendor_id = vendorId;
+    if (u.client_id) body.client_id = ''; // unlink client when moving to a vendor role
   } else {
-    const org = document.getElementById('eu-org')?.value?.trim();
-    if (org !== (u.org||'')) body.org = org;
-    if (u.client_id && role !== u.role) body.client_id = ''; // unlink when moving off a client role
+    // Platform role — org fixed server-side; just ensure client link is removed
+    if (u.client_id && role !== u.role) body.client_id = '';
   }
   if (pw) body.password = pw;
   if (!Object.keys(body).length) { closeModal(); showToast('No changes made','info'); return; }

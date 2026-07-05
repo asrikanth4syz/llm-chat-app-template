@@ -1918,16 +1918,22 @@ async function handleCreateUser(request: Request, env: Env): Promise<Response> {
   const ph = `hash:${await hashPassword(body.password||"password")}`;
   const initials = body.name.split(" ").map((w:string)=>w[0]).join("").slice(0,2).toUpperCase();
 
-  // Client-role users must be linked to an onboarded client
+  // Org rules: client roles → onboarded client; vendor roles → existing vendor; platform roles → fixed "4SYZ Platform"
   const isClientRole = ["client_admin","client_approver","client_user"].includes(body.role);
+  const isVendorRole = ["vendor_admin","vendor_user"].includes(body.role);
   let clientId: string | null = null;
-  let org = body.org || "4SYZ Platform";
+  let org = "4SYZ Platform";
   if (isClientRole) {
     if (!body.client_id) return json({error:"Select a client — client users must belong to an onboarded client"}, 400);
     const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
     if (!client) return json({error:"Client not found or inactive"}, 400);
     clientId = client.id;
     org = client.name;
+  } else if (isVendorRole) {
+    if (!body.vendor_id) return json({error:"Select a vendor — vendor users must belong to an existing vendor"}, 400);
+    const vendor = await env.DB.prepare("SELECT id,name FROM vendors WHERE id=?").bind(body.vendor_id).first() as {id:string;name:string}|null;
+    if (!vendor) return json({error:"Vendor not found"}, 400);
+    org = vendor.name;
   }
 
   await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials,client_id) VALUES (?,?,?,?,?,?,?,?)")
@@ -1943,7 +1949,7 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
   const id = path.split("/").pop()!;
-  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string;client_id?:string};
+  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string;client_id?:string;vendor_id?:string};
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.active !== undefined) { updates.push("active=?"); vals.push(body.active); }
@@ -1958,6 +1964,18 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
     } else {
       updates.push("client_id=?"); vals.push(null);
     }
+  }
+  if (body.vendor_id) {
+    const vendor = await env.DB.prepare("SELECT id,name FROM vendors WHERE id=?").bind(body.vendor_id).first() as {id:string;name:string}|null;
+    if (!vendor) return json({error:"Vendor not found"}, 400);
+    updates.push("org=?"); vals.push(vendor.name);
+    body.org = undefined;
+  }
+  // Platform (non-client, non-vendor) roles always belong to 4SYZ Platform
+  if (body.role && !["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(body.role)) {
+    updates.push("org=?"); vals.push("4SYZ Platform");
+    if (body.client_id === undefined) { updates.push("client_id=?"); vals.push(null); }
+    body.org = undefined;
   }
   if (body.name)     { updates.push("name=?");           vals.push(body.name);
                        updates.push("initials=?");       vals.push(body.name.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase()); }
