@@ -735,3 +735,46 @@ button { font-family: var(--font); cursor: pointer; }
   .content { padding: 0; }
   .card { box-shadow: none; border: 1px solid #ccc; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE CARD TABLES — dense tables become cards under 768px.
+   Add class .table-cards to a <table>; each <td> needs data-label.
+   ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .table-cards thead { display: none; }
+  .table-cards, .table-cards tbody { display: block; width: 100%; }
+  .table-cards tr {
+    display: block;
+    background: var(--surface, #fff);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin: 0 0 10px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .table-cards td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    border: none !important;
+    padding: 5px 0 !important;
+    text-align: left !important;
+    font-size: .84rem;
+  }
+  .table-cards td[data-label]::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .table-cards td:not([data-label]) { justify-content: flex-start; }
+  .table-cards td.card-title-cell { justify-content: flex-start; padding-bottom: 8px !important; border-bottom: 1px solid var(--border) !important; margin-bottom: 4px; }
+}
+
+/* details/summary used for progressive disclosure */
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary { user-select: none; }

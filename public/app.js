@@ -599,6 +599,40 @@ function navigate(page) {
   const fn = PAGE_MAP[page];
   if (fn) fn(main);
   else main.innerHTML = notImplemented(page);
+
+  ensureClientFAB();
+  closeMobileSidebar();
+}
+
+/* ── Persistent quick-action FAB (client roles) ───────────── */
+function ensureClientFAB() {
+  const isClient = ['client','client_user','approver'].includes(APP.user?.nav);
+  let fab = document.getElementById('client-fab');
+  if (!isClient) { if (fab) fab.remove(); return; }
+  if (fab) { fab.querySelector('#fab-menu').style.display='none'; fab.querySelector('#fab-main').textContent='+'; return; }
+
+  fab = document.createElement('div');
+  fab.id = 'client-fab';
+  fab.style.cssText = 'position:fixed;bottom:22px;right:22px;z-index:500;display:flex;flex-direction:column;align-items:flex-end;gap:10px';
+  fab.innerHTML = `
+    <div id="fab-menu" style="display:none;flex-direction:column;gap:8px;align-items:flex-end">
+      <button onclick="toggleFAB();navigate('place_order')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">🛒 New Order</button>
+      <button onclick="toggleFAB();navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📋 Upload Order Sheet</button>
+      <button onclick="toggleFAB();navigate('my_inventory')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📉 Log Use</button>
+    </div>
+    <button id="fab-main" onclick="toggleFAB()" title="Quick actions"
+      style="width:54px;height:54px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.7rem;font-weight:400;cursor:pointer;box-shadow:0 6px 18px rgba(249,115,22,.45);display:flex;align-items:center;justify-content:center;line-height:1;transition:transform .2s">+</button>`;
+  document.body.appendChild(fab);
+}
+
+function toggleFAB() {
+  const menu = document.getElementById('fab-menu');
+  const main = document.getElementById('fab-main');
+  if (!menu || !main) return;
+  const open = menu.style.display !== 'none';
+  menu.style.display = open ? 'none' : 'flex';
+  main.textContent = open ? '+' : '×';
+  main.style.transform = open ? '' : 'rotate(90deg)';
 }
 
 // ── Notifications ──────────────────────────────────────────
@@ -721,12 +755,15 @@ async function renderDashboard(el) {
 }
 
 async function renderClientDashboard(el) {
-  const [data, dcs] = await Promise.all([
+  const [data, dcs, myInv] = await Promise.all([
     api('/dashboard'),
     api('/delivery-challans').catch(()=>[]),
+    api('/client-inventory').catch(()=>[]),
   ]);
   if (!data) return;
   const { client, recentOrders, totalSpend, pendingApproval } = data;
+  const lowStock = (myInv||[]).filter(i => i.stock_status==='low' || i.stock_status==='out')
+    .sort((a,b) => (a.stock_status==='out'?0:1) - (b.stock_status==='out'?0:1));
   const budget    = client?.monthly_budget || 500000;
   const spent     = client?.spent_this_month || totalSpend || 0;
   const pctSpent  = Math.min(100, Math.round((spent / budget) * 100));
@@ -743,71 +780,113 @@ async function renderClientDashboard(el) {
   const activeOrders = (recentOrders||[]).filter(o => !['CLOSED','CANCELLED'].includes(o.status)).length;
   const closedOrders = (recentOrders||[]).filter(o => o.status === 'CLOSED').length;
 
+  const attentionCount = lowStock.length + (pendingApproval||0) + inTransitDCs.length;
+
   el.innerHTML = `
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Welcome back, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
       <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">${client?.name||'My Organization'} · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-secondary" onclick="navigate('my_orders')">My Orders</button>
-      <button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>
-    </div>
+    <button class="btn btn-primary" onclick="navigate('place_order')" style="padding:10px 22px;font-weight:700">${iconPlus(15)} Place Order</button>
   </div>
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="navigate('my_orders')">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${activeOrders}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${closedOrders} delivered</div>
+  <!-- ═══ WHAT NEEDS ATTENTION TODAY ═══ -->
+  <div style="margin-bottom:18px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:.85rem;font-weight:800;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">⚡ Needs attention today</span>
+      ${attentionCount ? `<span style="background:#fee2e2;color:#dc2626;border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${inTransitDCs.length?'var(--warning)':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('track-delivery-section')?.scrollIntoView({behavior:'smooth'})">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Transit</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${inTransitDCs.length?'#d97706':'var(--navy)'};line-height:1">${inTransitDCs.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${scheduledDCs.length} scheduled</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingApproval>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="navigate('approvals')">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Approvals</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${pendingApproval>0?'#d97706':'var(--navy)'};line-height:1">${pendingApproval}</div>
-      <div style="font-size:.75rem;color:${pendingApproval>0?'#d97706':'var(--text-muted)'};margin-top:6px">awaiting sign-off</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--success)'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Budget Used</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--navy)'};line-height:1">${pctSpent}%</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(remaining)} remaining</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delivered</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${deliveredThisMonth.length}</div>
-      <div style="font-size:.75rem;color:var(--success);margin-top:6px">this month</div>
-    </div>
-  </div>
-
-  <!-- Budget progress bar -->
-  <div class="card" style="padding:16px 18px;margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <span style="font-weight:700;font-size:.88rem">Monthly Budget</span>
-      <span style="font-size:.82rem;color:var(--text-muted)">${fmt(spent)} spent of ${fmt(budget)}</span>
-    </div>
-    <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
-      <div style="height:100%;width:${pctSpent}%;background:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'};border-radius:5px;transition:width .5s"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.76rem;color:var(--text-muted)">
-      <span style="color:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'}">▮ ${pctSpent}% used</span>
-      <span>Remaining: <b>${fmt(remaining)}</b></span>
-      <span>Health score: <b style="color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">${health}/100</b></span>
-    </div>
-  </div>
-
-  <!-- Track Delivery — full width -->
-  <div id="track-delivery-section" class="card" style="padding:0;margin-bottom:16px;overflow:hidden">
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    ${attentionCount === 0 ? `
+    <div class="card" style="padding:18px 20px;margin-bottom:0;display:flex;align-items:center;gap:12px;background:#f0fdf4;border:1px solid #bbf7d0">
+      <span style="font-size:1.5rem">✅</span>
       <div>
-        <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Track Delivery</div>
+        <div style="font-weight:700;font-size:.9rem;color:#15803d">All clear!</div>
+        <div style="font-size:.78rem;color:#166534">No low stock, pending approvals or deliveries needing action.</div>
+      </div>
+    </div>` : `
+    <div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch">
+      ${lowStock.slice(0,6).map(i => `
+      <div style="flex:0 0 240px;background:${i.stock_status==='out'?'#fef2f2':'#fffbeb'};border:1px solid ${i.stock_status==='out'?'#fecaca':'#fde68a'};border-radius:12px;padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:${i.stock_status==='out'?'#fee2e2':'#fef3c7'};color:${i.stock_status==='out'?'#dc2626':'#d97706'}">${i.stock_status==='out'?'OUT OF STOCK':'LOW STOCK'}</span>
+          <span style="font-size:.78rem;font-weight:700;color:${i.stock_status==='out'?'#dc2626':'#d97706'}">${Math.round(i.qty_on_hand||0)} left</span>
+        </div>
+        <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(i.item_name||i.sku)}">${h(i.item_name||i.sku)}</div>
+        <button class="btn btn-primary btn-sm" style="width:100%" onclick="orderMoreItem('${h(i.sku)}','${h(i.item_name||i.sku)}')">Order Now</button>
+      </div>`).join('')}
+      ${pendingApproval > 0 ? `
+      <div style="flex:0 0 240px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px">
+        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ffedd5;color:#c2410c;display:inline-block;margin-bottom:6px">APPROVAL</div>
+        <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px">${pendingApproval} order${pendingApproval>1?'s':''} awaiting sign-off</div>
+        <button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('approvals')">Review Now</button>
+      </div>` : ''}
+      ${inTransitDCs.slice(0,2).map(dc => `
+      <div style="flex:0 0 240px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 16px">
+        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#dbeafe;color:#1d4ed8;display:inline-block;margin-bottom:6px">ARRIVING</div>
+        <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:2px">${dc.dc_number||dc.id}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'🚚 En route'}${dc.scheduled_time?` · ETA ${dc.scheduled_time}`:''}</div>
+        ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('track_delivery')">Track</button>`}
+      </div>`).join('')}
+      ${lowStock.length > 6 ? `
+      <div style="flex:0 0 140px;display:flex;align-items:center;justify-content:center">
+        <button class="btn btn-secondary btn-sm" onclick="navigate('my_inventory')">+${lowStock.length-6} more →</button>
+      </div>` : ''}
+    </div>`}
+  </div>
+
+  <!-- ═══ QUICK ACTIONS ═══ -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px">
+    ${[
+      { icon:'🛒', label:'Place Order',   sub:'browse catalogue', action:"navigate('place_order')" },
+      { icon:'📋', label:'Order Sheet',   sub:'export & upload',  action:"navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" },
+      { icon:'📉', label:'Log Use',       sub:'record consumption', action:"navigate('my_inventory')" },
+      { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', action:"navigate('track_delivery')" },
+      { icon:'📊', label:'Reports',       sub:'spend & usage',    action:"navigate('client_reports')" },
+    ].map(a=>`
+    <button onclick="${a.action}" style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.08)';this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='';this.style.transform=''">
+      <div style="font-size:1.5rem;margin-bottom:5px">${a.icon}</div>
+      <div style="font-weight:700;font-size:.8rem;color:var(--navy)">${a.label}</div>
+      <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${a.sub}</div>
+    </button>`).join('')}
+  </div>
+
+  <!-- ═══ STATUS CHIPS ROW ═══ -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    <button onclick="navigate('my_orders')" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+      <b style="color:var(--navy)">${activeOrders}</b> active orders
+    </button>
+    <button onclick="navigate('track_delivery')" style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'#fef3c7':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+      <b style="color:${inTransitDCs.length?'#d97706':'var(--navy)'}">${inTransitDCs.length}</b> in transit
+    </button>
+    <span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:.78rem">
+      <b style="color:var(--success)">${deliveredThisMonth.length}</b> delivered this month
+    </span>
+    <span style="display:inline-flex;align-items:center;gap:6px;background:${pctSpent>90?'#fee2e2':'#fff'};border:1px solid ${pctSpent>90?'#fecaca':'var(--border)'};border-radius:20px;padding:6px 14px;font-size:.78rem">
+      budget <b style="color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--success)'}">${pctSpent}% used</b> · ${fmt(remaining)} left
+    </span>
+  </div>
+
+  <!-- Budget progress bar (compact) -->
+  <div class="card" style="padding:12px 18px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px">
+      <span style="font-weight:700;font-size:.84rem">Monthly Budget</span>
+      <span style="font-size:.78rem;color:var(--text-muted)">${fmt(spent)} of ${fmt(budget)}</span>
+    </div>
+    <div style="background:var(--border);height:8px;border-radius:4px;overflow:hidden">
+      <div style="height:100%;width:${pctSpent}%;background:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'};border-radius:4px;transition:width .5s"></div>
+    </div>
+  </div>
+
+  <!-- Track Delivery — collapsible (progressive disclosure) -->
+  <details id="track-delivery-section" class="card" style="padding:0;margin-bottom:16px;overflow:hidden" ${inTransitDCs.length||scheduledDCs.length?'open':''}>
+    <summary style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;cursor:pointer;list-style:none">
+      <div>
+        <div style="font-weight:800;font-size:.95rem;color:var(--navy)">🚚 Track Delivery <span style="font-weight:400;font-size:.76rem;color:var(--text-muted)">— tap to expand</span></div>
         <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">${inTransitDCs.length} in transit · ${scheduledDCs.length} scheduled · ${deliveredThisMonth.length} delivered this month</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All Orders</button>
-    </div>
+      <button class="btn btn-secondary btn-sm" onclick="event.preventDefault();navigate('my_orders')">View All Orders</button>
+    </summary>
 
     <!-- Pipeline header -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:#f8f9fa;border-bottom:1px solid var(--border)">
@@ -891,7 +970,7 @@ async function renderClientDashboard(el) {
         ${deliveredThisMonth.length > 4 ? `<div style="text-align:center;font-size:.76rem;color:var(--text-muted);padding-top:4px">+${deliveredThisMonth.length-4} more this month</div>` : ''}
       </div>
     </div>
-  </div>
+  </details>
 
   <!-- Recent Orders -->
   <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
@@ -2197,7 +2276,7 @@ async function renderMyInventory(el) {
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Used This Week</div>
-      <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${totalUsedWeek.toFixed(1)}</div>
+      <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${Math.round(totalUsedWeek)}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">units consumed</div>
     </div>
   </div>
@@ -2223,7 +2302,7 @@ async function renderMyInventory(el) {
       </select>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
-      <table class="table" style="margin:0">
+      <table class="table table-cards" style="margin:0">
         <thead>
           <tr>
             <th>Item</th>
@@ -2271,17 +2350,17 @@ function myInvRow(i) {
   const statusBg    = i.stock_status==='out' ? '#fee2e2' : i.stock_status==='low' ? '#fef3c7' : '#d1fae5';
   const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
   return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
-    <td>
+    <td class="card-title-cell">
       <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${h(i.item_name||i.sku)}</div>
       <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
     </td>
-    <td style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
-    <td style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
-    <td style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Math.round(i.qty_on_hand||0)}</td>
-    <td style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Math.round(i.reorder_level):'—'}</td>
-    <td><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
-    <td style="font-size:.78rem;color:var(--text-muted)">${i.last_received_at ? fmtDate(i.last_received_at) : '—'}</td>
-    <td style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
+    <td data-label="Category" style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
+    <td data-label="UOM" style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
+    <td data-label="Qty on Hand" style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Math.round(i.qty_on_hand||0)}</td>
+    <td data-label="Reorder Level" style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Math.round(i.reorder_level):'—'}</td>
+    <td data-label="Status"><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
+    <td data-label="Last Received" style="font-size:.78rem;color:var(--text-muted)">${i.last_received_at ? fmtDate(i.last_received_at) : '—'}</td>
+    <td data-label="Last Used" style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
