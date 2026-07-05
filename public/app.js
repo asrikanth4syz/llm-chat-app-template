@@ -8708,8 +8708,36 @@ async function renderUsers(el) {
   `;
 }
 
-function addUserModal() {
+const CLIENT_ROLES = ['client_admin','client_approver','client_user'];
+
+/* Org field: text input for platform/vendor roles, client dropdown for client roles */
+function userOrgFieldHtml(prefix, role, clients, currentClientId, currentOrg) {
+  if (CLIENT_ROLES.includes(role)) {
+    if (!clients.length) {
+      return `<div class="alert alert-warning" style="margin:0">No active clients onboarded yet. Onboard the client first (Clients page), then create its users.</div>`;
+    }
+    return `<select id="${prefix}-client">
+      <option value="">— Select client —</option>
+      ${clients.map(c=>`<option value="${c.id}" ${c.id===currentClientId?'selected':''}>${h(c.name)}</option>`).join('')}
+    </select>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Client users must belong to an onboarded client</div>`;
+  }
+  return `<input type="text" id="${prefix}-org" value="${h(currentOrg||'')}" placeholder="4SYZ Platform">`;
+}
+
+function bindUserRoleToggle(prefix, clients, currentClientId, currentOrg) {
+  const roleSel = document.getElementById(`${prefix}-role`);
+  if (!roleSel) return;
+  roleSel.onchange = () => {
+    const wrap = document.getElementById(`${prefix}-org-wrap`);
+    if (wrap) wrap.innerHTML = userOrgFieldHtml(prefix, roleSel.value, clients, currentClientId, currentOrg);
+  };
+}
+
+async function addUserModal() {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can add users','error'); return; }
+  const clients = (await api('/clients').catch(()=>[]) || []).filter(c=>c.active);
+  const firstRole = Object.keys(ROLES)[0];
   openModal('Add User',
     `<div class="form-group"><label>Full Name</label><input type="text" id="u-name"></div>
      <div class="form-group"><label>Email</label><input type="email" id="u-email"></div>
@@ -8718,30 +8746,42 @@ function addUserModal() {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Organisation</label><input type="text" id="u-org" placeholder="4SYZ Platform"></div>
+     <div class="form-group"><label>Organisation / Client</label>
+       <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, null, '')}</div>
+     </div>
      <div class="form-group"><label>Temporary Password</label><input type="password" id="u-pw" value="password"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveUser()">Create User</button>`);
+  bindUserRoleToggle('u', clients, null, '');
 }
 
 async function saveUser() {
+  const role = document.getElementById('u-role').value;
   const body = {
     name: document.getElementById('u-name').value,
     email: document.getElementById('u-email').value,
-    role: document.getElementById('u-role').value,
-    org: document.getElementById('u-org').value || ROLES[document.getElementById('u-role').value]?.org,
+    role,
     password: document.getElementById('u-pw').value || 'password',
   };
   if (!body.name||!body.email) { showToast('Name and email required','error'); return; }
+  if (CLIENT_ROLES.includes(role)) {
+    const clientId = document.getElementById('u-client')?.value;
+    if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
+    body.client_id = clientId;
+  } else {
+    body.org = document.getElementById('u-org')?.value || ROLES[role]?.org;
+  }
   const res = await api('/users', { method:'POST', body: JSON.stringify(body) });
+  if (!res) return;
   closeModal();
-  if (res) { showToast('User created — credentials sent via email'); navigate('users'); }
+  showToast('User created — credentials sent via email'); navigate('users');
 }
 
-function editUserModal(id) {
+async function editUserModal(id) {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can edit users','error'); return; }
   const u = APP._usersCache?.[id];
   if (!u) { showToast('User not found','error'); return; }
+  const clients = (await api('/clients').catch(()=>[]) || []).filter(c=>c.active);
   openModal(`Edit User — ${u.name}`,
     `<div class="form-group"><label>Full Name</label><input type="text" id="eu-name" value="${h(u.name)}"></div>
      <div class="form-group"><label>Email</label><input type="email" id="eu-email" value="${h(u.email)}"></div>
@@ -8750,13 +8790,16 @@ function editUserModal(id) {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${u.role===k?'selected':''}>${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Organisation</label><input type="text" id="eu-org" value="${h(u.org||'')}"></div>
+     <div class="form-group"><label>Organisation / Client</label>
+       <div id="eu-org-wrap">${userOrgFieldHtml('eu', u.role, clients, u.client_id, u.org)}</div>
+     </div>
      <div class="form-group">
        <label>Reset Password <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(leave blank to keep current)</span></label>
        <input type="password" id="eu-pw" placeholder="New password">
      </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveUserEdit('${id}')">Save Changes</button>`);
+  bindUserRoleToggle('eu', clients, u.client_id, u.org);
 }
 
 async function saveUserEdit(id) {
@@ -8764,7 +8807,6 @@ async function saveUserEdit(id) {
   const name  = document.getElementById('eu-name')?.value?.trim();
   const email = document.getElementById('eu-email')?.value?.trim();
   const role  = document.getElementById('eu-role')?.value;
-  const org   = document.getElementById('eu-org')?.value?.trim();
   const pw    = document.getElementById('eu-pw')?.value;
   if (!name || !email) { showToast('Name and email are required','error'); return; }
 
@@ -8772,14 +8814,22 @@ async function saveUserEdit(id) {
   if (name  !== u.name)  body.name  = name;
   if (email !== u.email) body.email = email;
   if (role  !== u.role)  body.role  = role;
-  if (org   !== (u.org||'')) body.org = org;
+  if (CLIENT_ROLES.includes(role)) {
+    const clientId = document.getElementById('eu-client')?.value;
+    if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
+    if (clientId !== u.client_id) body.client_id = clientId;
+  } else {
+    const org = document.getElementById('eu-org')?.value?.trim();
+    if (org !== (u.org||'')) body.org = org;
+    if (u.client_id && role !== u.role) body.client_id = ''; // unlink when moving off a client role
+  }
   if (pw) body.password = pw;
   if (!Object.keys(body).length) { closeModal(); showToast('No changes made','info'); return; }
 
   const res = await api(`/users/${id}`, { method:'PATCH', body: JSON.stringify(body) });
-  if (res?.error) { showToast(res.error,'error'); return; }
+  if (!res) return;
   closeModal();
-  if (res) { showToast(`${name} updated${body.role?' — role changed to '+(ROLES[role]?.label||role):''}`); navigate('users'); }
+  showToast(`${name} updated${body.role?' — role changed to '+(ROLES[role]?.label||role):''}`); navigate('users');
 }
 
 function deactivateUser(id, name) {

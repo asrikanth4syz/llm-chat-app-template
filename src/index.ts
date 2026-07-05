@@ -1905,7 +1905,7 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
 async function handleListUsers(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT id,email,role,name,org,initials,active,created_at FROM users ORDER BY name").all();
+  const {results} = await env.DB.prepare("SELECT id,email,role,name,org,initials,active,created_at,client_id FROM users ORDER BY name").all();
   return json(results);
 }
 
@@ -1917,8 +1917,21 @@ async function handleCreateUser(request: Request, env: Env): Promise<Response> {
   const id = `u${uid().slice(0,6)}`;
   const ph = `hash:${await hashPassword(body.password||"password")}`;
   const initials = body.name.split(" ").map((w:string)=>w[0]).join("").slice(0,2).toUpperCase();
-  await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials) VALUES (?,?,?,?,?,?,?)")
-    .bind(id,body.email,ph,body.role,body.name,body.org||"4SYZ Platform",initials).run();
+
+  // Client-role users must be linked to an onboarded client
+  const isClientRole = ["client_admin","client_approver","client_user"].includes(body.role);
+  let clientId: string | null = null;
+  let org = body.org || "4SYZ Platform";
+  if (isClientRole) {
+    if (!body.client_id) return json({error:"Select a client — client users must belong to an onboarded client"}, 400);
+    const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
+    if (!client) return json({error:"Client not found or inactive"}, 400);
+    clientId = client.id;
+    org = client.name;
+  }
+
+  await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials,client_id) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(id,body.email,ph,body.role,body.name,org,initials,clientId).run();
   await sendEmail(env, body.email, "Welcome to Smart Pantry",
     `Dear ${body.name},\n\nYour Smart Pantry account has been created.\n\nEmail: ${body.email}\nTemporary Password: ${body.password||"password"}\n\nPlease log in and change your password immediately.\n\nRegards,\n4SYZ Platform`);
   await audit(env, user, "CREATE", "user", id, undefined, `email:${body.email},role:${body.role}`);
@@ -1930,11 +1943,22 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
   const id = path.split("/").pop()!;
-  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string};
+  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string;client_id?:string};
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.active !== undefined) { updates.push("active=?"); vals.push(body.active); }
   if (body.role)     { updates.push("role=?");          vals.push(body.role); }
+  if (body.client_id !== undefined) {
+    if (body.client_id) {
+      const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
+      if (!client) return json({error:"Client not found or inactive"}, 400);
+      updates.push("client_id=?"); vals.push(client.id);
+      updates.push("org=?");        vals.push(client.name);
+      body.org = undefined; // org comes from the client record
+    } else {
+      updates.push("client_id=?"); vals.push(null);
+    }
+  }
   if (body.name)     { updates.push("name=?");           vals.push(body.name);
                        updates.push("initials=?");       vals.push(body.name.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase()); }
   if (body.email)    { updates.push("email=?");          vals.push(body.email.toLowerCase().trim()); }
