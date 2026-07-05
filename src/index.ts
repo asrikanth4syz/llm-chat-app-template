@@ -2077,7 +2077,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     env.DB.prepare("SELECT COUNT(*) as cnt FROM tickets WHERE status!='RESOLVED'").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT o.id,o.status,o.grand_total,o.created_at,c.name as client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id ORDER BY o.created_at DESC LIMIT 8").all(),
     env.DB.prepare("SELECT status,COUNT(*) as cnt FROM orders GROUP BY status").all(),
-    env.DB.prepare("SELECT c.name,SUM(o.grand_total) as total,COUNT(o.id) as order_count FROM orders o JOIN clients c ON o.client_id=c.id WHERE o.status NOT IN ('CANCELLED') GROUP BY c.id ORDER BY total DESC LIMIT 5").all(),
+    env.DB.prepare("SELECT c.id,c.name,SUM(o.grand_total) as total,COUNT(o.id) as order_count FROM orders o JOIN clients c ON o.client_id=c.id WHERE o.status NOT IN ('CANCELLED') GROUP BY c.id ORDER BY total DESC LIMIT 5").all(),
   ]);
 
   return json({

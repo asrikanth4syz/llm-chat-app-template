@@ -1322,6 +1322,7 @@ async function renderOpsDashboard(el) {
       <div class="ct-card">
         <div class="ct-card-hd">
           <div class="ct-card-title">Top Clients</div>
+          <button class="btn btn-secondary btn-sm" onclick="navigate('clients')">View All →</button>
         </div>
         <div style="padding:16px 20px">
           ${(topClients||[]).slice(0,5).map((c,i)=>{
@@ -1329,16 +1330,19 @@ async function renderOpsDashboard(el) {
             const col  = cols[i];
             const pct  = Math.round((c.total/(topClients[0]?.total||1))*100);
             return `
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px;cursor:pointer;border-radius:8px;padding:4px 6px;margin-left:-6px;margin-right:-6px;transition:background .15s"
+                 onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''"
+                 onclick="openClientDetail('${c.id}')" title="View ${h(c.name)} details">
               <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
               <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-                  <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${c.name}</span>
+                  <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;color:var(--blue)">${c.name}</span>
                   <span style="font-size:.82rem;font-weight:800;color:var(--navy);flex-shrink:0;margin-left:8px">${fmt(c.total)}</span>
                 </div>
                 <div class="ct-client-bar"><div class="ct-client-fill" style="width:${pct}%;background:${col}"></div></div>
                 <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${c.order_count} orders</div>
               </div>
+              <div style="color:var(--text-muted);font-size:.8rem;flex-shrink:0">›</div>
             </div>`;
           }).join('')||'<div style="color:var(--text-muted);font-size:.84rem;text-align:center;padding:24px 0">No data yet</div>'}
         </div>
@@ -7650,6 +7654,14 @@ async function saveClient() {
   const res = await api('/clients', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast('Client added'); navigate('clients'); }
+}
+
+/* Open client detail from anywhere (e.g. dashboard Top Clients) by id */
+async function openClientDetail(id) {
+  const clients = await api('/clients').catch(()=>null);
+  const c = (clients||[]).find(x => x.id === id);
+  if (!c) { showToast('Client not found', 'error'); return; }
+  viewClientModal(c);
 }
 
 function viewClientModal(c) {
