@@ -1930,16 +1930,25 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
   const id = path.split("/").pop()!;
-  const body = await request.json() as {active?:number;role?:string;password?:string};
+  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string};
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.active !== undefined) { updates.push("active=?"); vals.push(body.active); }
   if (body.role)     { updates.push("role=?");          vals.push(body.role); }
+  if (body.name)     { updates.push("name=?");           vals.push(body.name);
+                       updates.push("initials=?");       vals.push(body.name.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase()); }
+  if (body.email)    { updates.push("email=?");          vals.push(body.email.toLowerCase().trim()); }
+  if (body.org)      { updates.push("org=?");            vals.push(body.org); }
   if (body.password) { updates.push("password_hash=?"); vals.push(`hash:${await hashPassword(body.password)}`); }
   if (!updates.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
-  await env.DB.prepare(`UPDATE users SET ${updates.join(",")} WHERE id=?`).bind(...vals).run();
-  await audit(env, user, "UPDATE", "user", id, undefined, JSON.stringify({active:body.active,role:body.role}));
+  try {
+    await env.DB.prepare(`UPDATE users SET ${updates.join(",")} WHERE id=?`).bind(...vals).run();
+  } catch (e) {
+    if (String(e).includes("UNIQUE")) return json({error:"Email already in use by another user"}, 409);
+    throw e;
+  }
+  await audit(env, user, "UPDATE", "user", id, undefined, JSON.stringify({active:body.active,role:body.role,name:body.name,email:body.email,org:body.org,password_reset:!!body.password}));
   return json({id});
 }
 

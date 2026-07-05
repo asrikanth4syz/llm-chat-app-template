@@ -8591,6 +8591,7 @@ function _downloadCSV(name, csv) {
 async function renderUsers(el) {
   const users = await api('/users');
   if (!users) return;
+  APP._usersCache = Object.fromEntries(users.map(u=>[u.id,u]));
 
   const activeUsers   = users.filter(u=>u.active);
   const inactiveUsers = users.filter(u=>!u.active);
@@ -8631,9 +8632,12 @@ async function renderUsers(el) {
           <input type="checkbox" ${u.two_fa_enabled?'checked':''} onchange="toggle2FA('${u.id}',this.checked)">
           2FA
         </label>
-        ${u.active
-          ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}','${u.name.replace(/'/g,"\\'")}')" style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
-          : `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')" style="font-size:.7rem;padding:3px 8px">Activate</button>`}
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-secondary btn-sm" onclick="editUserModal('${u.id}')" style="font-size:.7rem;padding:3px 8px">✏️ Edit</button>
+          ${u.active
+            ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}','${u.name.replace(/'/g,"\\'")}')" style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
+            : `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')" style="font-size:.7rem;padding:3px 8px">Activate</button>`}
+        </div>
       </div>
     </div>`;
   }
@@ -8726,6 +8730,50 @@ async function saveUser() {
   const res = await api('/users', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast('User created — credentials sent via email'); navigate('users'); }
+}
+
+function editUserModal(id) {
+  if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can edit users','error'); return; }
+  const u = APP._usersCache?.[id];
+  if (!u) { showToast('User not found','error'); return; }
+  openModal(`Edit User — ${u.name}`,
+    `<div class="form-group"><label>Full Name</label><input type="text" id="eu-name" value="${h(u.name)}"></div>
+     <div class="form-group"><label>Email</label><input type="email" id="eu-email" value="${h(u.email)}"></div>
+     <div class="form-group"><label>Role</label>
+       <select id="eu-role">
+         ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${u.role===k?'selected':''}>${v.label}</option>`).join('')}
+       </select>
+     </div>
+     <div class="form-group"><label>Organisation</label><input type="text" id="eu-org" value="${h(u.org||'')}"></div>
+     <div class="form-group">
+       <label>Reset Password <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(leave blank to keep current)</span></label>
+       <input type="password" id="eu-pw" placeholder="New password">
+     </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveUserEdit('${id}')">Save Changes</button>`);
+}
+
+async function saveUserEdit(id) {
+  const u = APP._usersCache?.[id] || {};
+  const name  = document.getElementById('eu-name')?.value?.trim();
+  const email = document.getElementById('eu-email')?.value?.trim();
+  const role  = document.getElementById('eu-role')?.value;
+  const org   = document.getElementById('eu-org')?.value?.trim();
+  const pw    = document.getElementById('eu-pw')?.value;
+  if (!name || !email) { showToast('Name and email are required','error'); return; }
+
+  const body = {};
+  if (name  !== u.name)  body.name  = name;
+  if (email !== u.email) body.email = email;
+  if (role  !== u.role)  body.role  = role;
+  if (org   !== (u.org||'')) body.org = org;
+  if (pw) body.password = pw;
+  if (!Object.keys(body).length) { closeModal(); showToast('No changes made','info'); return; }
+
+  const res = await api(`/users/${id}`, { method:'PATCH', body: JSON.stringify(body) });
+  if (res?.error) { showToast(res.error,'error'); return; }
+  closeModal();
+  if (res) { showToast(`${name} updated${body.role?' — role changed to '+(ROLES[role]?.label||role):''}`); navigate('users'); }
 }
 
 function deactivateUser(id, name) {
