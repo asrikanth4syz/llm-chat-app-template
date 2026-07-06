@@ -2025,7 +2025,10 @@ async function handlePatchProfile(request: Request, env: Env): Promise<Response>
     const row = await env.DB.prepare("SELECT password_hash FROM users WHERE id=?").bind(user!.sub).first() as {password_hash:string}|null;
     if (!row) return json({error:"User not found"}, 404);
     const hash = row.password_hash;
-    const valid = hash.startsWith("hash:") ? await verifyPassword(body.current_password, hash.slice(5)) : body.current_password === hash;
+    let valid = false;
+    if (hash.startsWith("hash:"))      valid = await verifyPassword(body.current_password, hash.slice(5));
+    else if (hash.startsWith("SEED:")) valid = body.current_password === hash.slice(5);
+    else                                valid = body.current_password === hash;
     if (!valid) return json({error:"Current password is incorrect"}, 400);
     fields.push("password_hash=?"); vals.push(`hash:${await hashPassword(body.new_password)}`);
   }
