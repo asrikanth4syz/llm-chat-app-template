@@ -776,42 +776,19 @@
         <h3>Welcome back</h3>
         <p class="login-subtitle">Sign in to your account</p>
 
-        <div class="demo-banner">
-          <span>⚡</span>
-          <span>Demo Mode — select a role to explore all features</span>
-        </div>
-
         <div class="form-group">
           <label>Email Address</label>
-          <input type="email" id="login-email" placeholder="you@company.com" value="admin@4syz.com" />
+          <input type="email" id="login-email" placeholder="you@company.com" autocomplete="username" />
         </div>
 
         <div class="form-group">
           <label>Password</label>
           <div class="input-wrap">
-            <input type="password" id="login-password" placeholder="••••••••" value="password" />
+            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" />
             <button class="toggle-pw" type="button" onclick="togglePw()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-        </div>
-
-        <div class="form-group">
-          <label>Sign in as (Demo)</label>
-          <select id="demo-role">
-            <option value="super_admin">Super Admin — 4SYZ Platform</option>
-            <option value="ops_admin">Operations Admin — 4SYZ Platform</option>
-            <option value="procurement_manager">Procurement Manager — 4SYZ Platform</option>
-            <option value="warehouse_exec">Warehouse / Inventory Executive</option>
-            <option value="delivery_manager">Delivery Manager — 4SYZ Platform</option>
-            <option value="delivery_exec">Delivery Executive — 4SYZ Platform</option>
-            <option value="finance_admin">Finance Admin — 4SYZ Platform</option>
-            <option value="client_admin">Client Admin — Corporate</option>
-            <option value="client_approver">Client Approver — Corporate</option>
-            <option value="client_user">Client User — Corporate</option>
-            <option value="vendor_admin">Vendor Admin — Supplier</option>
-            <option value="vendor_user">Vendor User — Supplier</option>
-          </select>
         </div>
 
         <div class="form-group otp-group hidden" id="otp-group">
@@ -833,11 +810,9 @@
         </button>
 
         <div class="login-footer-links">
-          <a href="#">Forgot password?</a>
+          <a href="#" onclick="showToast('Contact your administrator to reset your password','info');return false">Forgot password?</a>
           <span>·</span>
-          <a href="#">Request SSO access</a>
-          <span>·</span>
-          <a href="#">Register as vendor</a>
+          <a href="#" onclick="showToast('Contact your administrator for account access','info');return false">Request access</a>
         </div>
 
         <div class="login-clients">

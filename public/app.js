@@ -168,22 +168,6 @@ const NAV = {
   ],
 };
 
-// ── Demo role → email map ──────────────────────────────────
-const ROLE_EMAILS = {
-  super_admin: 'admin@4syz.com',
-  ops_admin: 'ops@4syz.com',
-  procurement_manager: 'procurement@4syz.com',
-  warehouse_exec: 'warehouse@4syz.com',
-  delivery_manager: 'delivery.mgr@4syz.com',
-  delivery_exec: 'delivery@4syz.com',
-  finance_admin: 'finance@4syz.com',
-  client_admin: 'client.admin@meta.com',
-  client_approver: 'approver@meta.com',
-  client_user: 'user@meta.com',
-  vendor_admin: 'vendor.admin@freshfarms.com',
-  vendor_user: 'vendor@freshfarms.com',
-};
-
 // ── API wrapper ────────────────────────────────────────────
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -205,13 +189,14 @@ async function doLogin() {
 
   if (otpVisible) { doVerifyOTP(); return; }
 
-  const role = document.getElementById('demo-role').value;
-  const email = ROLE_EMAILS[role] || document.getElementById('login-email').value;
+  const email    = document.getElementById('login-email')?.value?.trim().toLowerCase();
+  const password = document.getElementById('login-password')?.value;
+  if (!email || !password) { showToast('Enter your email and password', 'error'); return; }
+
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Signing in…';
 
-  const password = document.getElementById('login-password')?.value || 'password';
   const data = await api('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
@@ -220,10 +205,7 @@ async function doLogin() {
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Sign In';
 
-  if (!data) {
-    showToast('Login failed — make sure the DB is seeded', 'error');
-    return;
-  }
+  if (!data) return; // api() already showed "Invalid credentials"
 
   if (data.otp_required) {
     APP._pendingEmail = email;
