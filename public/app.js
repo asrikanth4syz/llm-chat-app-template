@@ -7703,8 +7703,17 @@ async function toggleClientActive(id, name, active) {
    SERVICE DESK
    ============================================================ */
 async function renderServiceDesk(el) {
-  const tickets = await api('/tickets');
-  if (!tickets) return;
+  const allTickets = await api('/tickets');
+  if (!allTickets) return;
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+
+  // Client filter (platform/admin users only)
+  const clientOptions = isClientRole ? [] :
+    [...new Map(allTickets.filter(t=>t.client_id).map(t=>[t.client_id,{id:t.client_id,name:t.client_name||t.client_id}])).values()]
+      .sort((a,b)=>a.name.localeCompare(b.name));
+  const cf = APP._sdClientFilter || '';
+  const tickets = cf ? allTickets.filter(t=>t.client_id===cf) : allTickets;
 
   const openT     = tickets.filter(t=>t.status==='OPEN');
   const inProgT   = tickets.filter(t=>t.status==='IN_PROGRESS');
@@ -7755,9 +7764,21 @@ async function renderServiceDesk(el) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Service Desk</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${openT.length+inProgT.length} open · ${resolvedT.length} resolved</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${openT.length+inProgT.length} open · ${resolvedT.length} resolved${cf?` · filtered by client`:''}</div>
     </div>
-    <button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      ${!isClientRole && clientOptions.length ? `
+      <select id="sd-client-filter" class="form-control" style="max-width:220px;font-size:.84rem"
+        onchange="APP._sdClientFilter=this.value;navigate('service_desk')">
+        <option value="">All Clients (${allTickets.length})</option>
+        ${clientOptions.map(c=>{
+          const n = allTickets.filter(t=>t.client_id===c.id).length;
+          return `<option value="${c.id}" ${cf===c.id?'selected':''}>${h(c.name)} (${n})</option>`;
+        }).join('')}
+      </select>
+      ${cf?`<button class="btn btn-secondary btn-sm" onclick="APP._sdClientFilter='';navigate('service_desk')">✕ Clear</button>`:''}` : ''}
+      <button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>
+    </div>
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
