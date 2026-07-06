@@ -1855,9 +1855,26 @@ async function handleRemoveClientCatalogItem(request: Request, env: Env, path: s
 async function handleListTickets(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+
+  let where = "";
+  const binds: string[] = [];
+  if (["client_admin","client_approver","client_user"].includes(user!.role)) {
+    // Clients see only their own client's tickets
+    if (user!.client_id) { where = "WHERE t.client_id=?"; binds.push(user!.client_id); }
+    else {
+      const domain = user!.email.split("@")[1];
+      where = "WHERE t.client_id IN (SELECT id FROM clients WHERE contact_email LIKE ?)";
+      binds.push(`%${domain}%`);
+    }
+  } else if (["vendor_admin","vendor_user"].includes(user!.role)) {
+    // Vendors see only tickets they raised themselves
+    where = "WHERE t.raised_by=?"; binds.push(user!.sub);
+  }
+  // Platform roles (super_admin, ops, finance, delivery…) see all tickets
+
   const {results} = await env.DB.prepare(`SELECT t.*,c.name as client_name,u.name as raiser_name
     FROM tickets t LEFT JOIN clients c ON t.client_id=c.id LEFT JOIN users u ON t.raised_by=u.id
-    ORDER BY t.created_at DESC`).all();
+    ${where} ORDER BY t.created_at DESC`).bind(...binds).all();
   return json(results);
 }
 
@@ -1867,6 +1884,8 @@ async function handleCreateTicket(request: Request, env: Env): Promise<Response>
   const body = await request.json() as Record<string,string>;
   const id = `TKT-${String(Math.floor(Math.random()*900+100)).padStart(3,"0")}`;
   let clientId = body.client_id;
+  const isClientRole = ["client_admin","client_approver","client_user"].includes(user!.role);
+  if (isClientRole) clientId = user!.client_id || clientId; // clients always file under their own client
   if (!clientId) {
     const domain = user!.email.split("@")[1];
     const c = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
@@ -1883,6 +1902,16 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
+
+  // Clients/vendors may only update their own tickets
+  if (["client_admin","client_approver","client_user"].includes(user!.role)) {
+    const t = await env.DB.prepare("SELECT client_id FROM tickets WHERE id=?").bind(id).first() as {client_id:string}|null;
+    if (!t || (user!.client_id && t.client_id !== user!.client_id)) return json({error:"Forbidden"}, 403);
+  } else if (["vendor_admin","vendor_user"].includes(user!.role)) {
+    const t = await env.DB.prepare("SELECT raised_by FROM tickets WHERE id=?").bind(id).first() as {raised_by:string}|null;
+    if (!t || t.raised_by !== user!.sub) return json({error:"Forbidden"}, 403);
+  }
+
   const body = await request.json() as {status?:string;priority?:string};
   const updates: string[] = [];
   const vals: unknown[] = [];
