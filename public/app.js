@@ -8075,37 +8075,37 @@ async function confirmRejectOrder(id) {
    REPORTS (Gaps 1 & 12 — real data + CSV download)
    ============================================================ */
 const REPORT_DEFS = [
-  { key:'spend',       title:'Spend Analytics',    desc:'Monthly spend and order count per client.', icon:'📊',
+  { key:'spend',       title:'Spend Analytics',    desc:'Monthly spend and order count per client.', icon:'📊', datable:true,
     cols:['client','month','total_spend','order_count'],
     labels:['Client','Month','Total Spend','Orders'] },
-  { key:'fulfilment',  title:'Order Fulfilment',   desc:'Order-to-delivery cycle time and SLA adherence.', icon:'📦',
+  { key:'fulfilment',  title:'Order Fulfilment',   desc:'Order-to-delivery cycle time and SLA adherence.', icon:'📦', datable:true,
     cols:['id','client_name','status','grand_total','created_at'],
     labels:['Order','Client','Status','Amount','Created'] },
-  { key:'vendor',      title:'Vendor Scorecard',   desc:'On-time rate, fill rate, and lead time per vendor.', icon:'🏆',
+  { key:'vendor',      title:'Vendor Scorecard',   desc:'On-time rate, fill rate, and lead time per vendor.', icon:'🏆', datable:true,
     cols:['name','on_time_rate','fill_rate','avg_lead_days','rating'],
     labels:['Vendor','On-time %','Fill Rate %','Lead Days','Rating'] },
-  { key:'inventory',   title:'Inventory Turnover', desc:'Stock movement, dead stock, fast & slow SKUs.', icon:'🔄',
+  { key:'inventory',   title:'Inventory Turnover', desc:'Stock movement, dead stock, fast & slow SKUs.', icon:'🔄', period:'Live snapshot',
     cols:['sku','name','category','stock','reserved','reorder_level'],
     labels:['SKU','Item','Category','Stock','Reserved','Reorder Level'] },
-  { key:'budget',      title:'Budget Utilisation', desc:'Client-wise budget vs. actual spend.', icon:'💰',
+  { key:'budget',      title:'Budget Utilisation', desc:'Client-wise budget vs. actual spend.', icon:'💰', period:'Current calendar month',
     cols:['name','monthly_budget','spent_this_month','remaining'],
     labels:['Client','Budget','Spent','Remaining'] },
-  { key:'dc-billing',  title:'DC Billing Report',  desc:'Billing pipeline, unbilled DCs, and ageing.', icon:'🧾',
+  { key:'dc-billing',  title:'DC Billing Report',  desc:'Billing pipeline, unbilled DCs, and ageing.', icon:'🧾', period:'All time',
     cols:['id','order_id','client_name','status','billed'],
     labels:['DC #','Order','Client','Status','Billed'] },
-  { key:'service-desk',title:'Service Desk SLA',   desc:'Ticket resolution time and open ticket ageing.', icon:'🎫',
+  { key:'service-desk',title:'Service Desk SLA',   desc:'Ticket resolution time and open ticket ageing.', icon:'🎫', period:'All time',
     cols:['id','subject','priority','status','client_name','created_at'],
     labels:['Ticket','Subject','Priority','Status','Client','Created'] },
-  { key:'gst',         title:'GST & Tax Report',   desc:'HSN-wise GST breakup and summary for filing.', icon:'📋',
+  { key:'gst',         title:'GST & Tax Report',   desc:'HSN-wise GST breakup and summary for filing.', icon:'📋', datable:true,
     cols:['sku','name','hsn_code','gst_rate','stock','unit_price'],
     labels:['SKU','Item','HSN','GST %','Stock','Unit Price'] },
-  { key:'budget-forecast', title:'Budget Forecasting', desc:'3-month rolling average forecast per client for next month.', icon:'🔮',
+  { key:'budget-forecast', title:'Budget Forecasting', desc:'3-month rolling average forecast per client for next month.', icon:'🔮', period:'Next month (3-month rolling average)',
     cols:['client','forecast_month','predicted'],
     labels:['Client','Forecast Month','Predicted Spend'] },
-  { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: items ordered, quantities, and delivery status per client.', icon:'📦',
+  { key:'order-items', title:'Order Items vs Delivered', desc:'Per-order item breakdown: items ordered, quantities, and delivery status per client.', icon:'📦', period:'All time',
     cols:['client_name','order_id','order_status','item_count','qty_ordered','delivery_status','grand_total'],
     labels:['Client','Order ID','Status','# Items','Total Qty Ordered','Delivery Status','Order Value'] },
-  { key:'critical-stock', title:'Critical Stock Report', desc:'All items flagged CRITICAL — shows stock level, reorder status, and vendor details.', icon:'🔴',
+  { key:'critical-stock', title:'Critical Stock Report', desc:'All items flagged CRITICAL — shows stock level, reorder status, and vendor details.', icon:'🔴', period:'Live snapshot',
     cols:['sku','name','category','stock','reorder_level','status','vendor_name','avg_lead_days'],
     labels:['SKU','Item','Category','Stock','Reorder Level','Status','Vendor','Lead Days'] },
 ];
@@ -8287,11 +8287,27 @@ async function loadReportsOverview() {
   }
 }
 
-async function viewReport(key) {
+function rptPresetDates(preset) {
+  const now = new Date();
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if (preset==='thismonth') return [`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`, ymd(now)];
+  if (preset==='lastmonth') { const lm=new Date(now.getFullYear(),now.getMonth()-1,1); return [`${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,'0')}-01`, ymd(new Date(now.getFullYear(),now.getMonth(),0))]; }
+  if (preset==='thisyear')  return [`${now.getFullYear()}-01-01`, ymd(now)];
+  return [ymd(new Date(Date.now()-30*86400000)), ymd(now)]; // last 30 days
+}
+
+async function viewReport(key, from, to) {
   const def = REPORT_DEFS.find(r=>r.key===key);
   if (!def) return;
+  if (def.datable) {
+    if (!from || !to) [from, to] = rptPresetDates('last30');
+    APP._rptRange = { key, from, to };
+  } else {
+    APP._rptRange = null;
+  }
   showToast('Loading report…');
-  const data = await api('/reports/' + key);
+  const qs = def.datable ? `?from=${from}&to=${to}` : '';
+  const data = await api('/reports/' + key + qs);
   if (!data) return;
   let rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : []);
   if (key === 'budget-forecast') {
@@ -8313,8 +8329,24 @@ async function viewReport(key) {
     return '<tr>' + cells + '</tr>';
   }).join('') : '<tr><td colspan="' + def.cols.length + '" style="text-align:center;color:var(--text-muted)">No data</td></tr>';
 
+  const fmtD = s => { const d = new Date(s+'T00:00:00'); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}); };
+  const periodBar = def.datable ? `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--surface-alt,#f8f9fb);border-radius:8px">
+      <span style="font-size:.76rem;font-weight:700;color:var(--navy)">📅 Period: ${fmtD(from)} → ${fmtD(to)}</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('last30'))" style="font-size:.72rem">Last 30 Days</button>
+      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('thismonth'))" style="font-size:.72rem">This Month</button>
+      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('lastmonth'))" style="font-size:.72rem">Last Month</button>
+      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('thisyear'))" style="font-size:.72rem">This Year</button>
+      <input type="date" id="rpt-modal-from" class="form-control" style="max-width:135px;font-size:.76rem" value="${from}">
+      <input type="date" id="rpt-modal-to" class="form-control" style="max-width:135px;font-size:.76rem" value="${to}">
+      <button class="btn btn-primary btn-sm" onclick="viewReport('${key}',document.getElementById('rpt-modal-from').value,document.getElementById('rpt-modal-to').value)" style="font-size:.72rem">Apply</button>
+    </div>`
+  : `<div style="margin-bottom:12px;padding:8px 12px;background:var(--surface-alt,#f8f9fb);border-radius:8px;font-size:.76rem;font-weight:700;color:var(--navy)">📅 Period: ${def.period||'All time'}</div>`;
+
   openModal(def.title,
-    `<div class="table-wrap" style="max-height:60vh;overflow-y:auto">
+    `${periodBar}
+    <div class="table-wrap" style="max-height:55vh;overflow-y:auto">
       <table class="table">
         <thead><tr>${def.labels.map(l=>`<th>${l}</th>`).join('')}</tr></thead>
         <tbody>${tbody}</tbody>
@@ -8328,7 +8360,9 @@ async function downloadReportCSV(key) {
   const def = REPORT_DEFS.find(r=>r.key===key);
   if (!def) return;
   showToast('Preparing CSV…');
-  const data = await api('/reports/' + key);
+  const r = APP._rptRange;
+  const qs = def.datable && r?.key === key ? `?from=${r.from}&to=${r.to}` : '';
+  const data = await api('/reports/' + key + qs);
   const rows = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.rows) ? data.rows : (Array.isArray(data) ? data : []));
   if (!Array.isArray(rows) || !rows.length) { showToast('No data to export','error'); return; }
   const header = def.labels.join(',');
