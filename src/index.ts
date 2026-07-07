@@ -1721,7 +1721,13 @@ async function handleStockTransfer(request: Request, env: Env): Promise<Response
 async function handleListClients(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT * FROM clients WHERE active=1 ORDER BY name").all();
+  // spent_this_month computed live from orders — the stored column is stale seed data
+  const {results} = await env.DB.prepare(`
+    SELECT c.*,
+      COALESCE((SELECT SUM(o.grand_total) FROM orders o
+        WHERE o.client_id=c.id AND o.status NOT IN ('CANCELLED','DRAFT')
+        AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0) AS spent_this_month
+    FROM clients c WHERE c.active=1 ORDER BY c.name`).all();
   return json(results);
 }
 
@@ -1740,9 +1746,12 @@ async function handleClientBudget(request: Request, env: Env, path: string): Pro
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const client = await env.DB.prepare(
-    "SELECT monthly_budget, spent_this_month, approval_threshold FROM clients WHERE id=?"
-  ).bind(id).first() as Record<string,number>|null;
+  const client = await env.DB.prepare(`
+    SELECT monthly_budget, approval_threshold,
+      COALESCE((SELECT SUM(o.grand_total) FROM orders o
+        WHERE o.client_id=clients.id AND o.status NOT IN ('CANCELLED','DRAFT')
+        AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0) AS spent_this_month
+    FROM clients WHERE id=?`).bind(id).first() as Record<string,number>|null;
   if (!client) return json({error:"Client not found"}, 404);
   return json({ monthly_budget: client.monthly_budget, used: client.spent_this_month, approval_threshold: client.approval_threshold });
 }
@@ -2098,14 +2107,25 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const role = user!.role;
 
   if (["client_admin","client_approver","client_user"].includes(role)) {
-    const domain = user!.email.split("@")[1];
-    const client = await env.DB.prepare("SELECT * FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,unknown>|null;
-    const cid = client?.id || "c1";
-    const [{results:recentOrders}, spend, pendingApproval] = await Promise.all([
+    // Resolve the user's client: explicit link first, email-domain fallback — never another client's record
+    let client: Record<string,unknown>|null = null;
+    if (user!.client_id) {
+      client = await env.DB.prepare("SELECT * FROM clients WHERE id=?").bind(user!.client_id).first() as Record<string,unknown>|null;
+    }
+    if (!client) {
+      const domain = user!.email.split("@")[1];
+      client = await env.DB.prepare("SELECT * FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,unknown>|null;
+    }
+    if (!client) return json({client:null, recentOrders:[], totalSpend:0, pendingApproval:0});
+    const cid = client.id as string;
+    const [{results:recentOrders}, spend, monthSpend, pendingApproval] = await Promise.all([
       env.DB.prepare("SELECT id,status,grand_total,created_at FROM orders WHERE client_id=? ORDER BY created_at DESC LIMIT 5").bind(cid).all(),
       env.DB.prepare("SELECT SUM(grand_total) as total FROM orders WHERE client_id=? AND status NOT IN ('CANCELLED','DRAFT')").bind(cid).first() as Promise<Record<string,number>|null>,
+      env.DB.prepare("SELECT SUM(grand_total) as total FROM orders WHERE client_id=? AND status NOT IN ('CANCELLED','DRAFT') AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now')").bind(cid).first() as Promise<Record<string,number>|null>,
       env.DB.prepare("SELECT COUNT(*) as cnt FROM orders WHERE client_id=? AND status='PENDING_APPROVAL'").bind(cid).first() as Promise<Record<string,number>|null>,
     ]);
+    // Always report actual current-month spend, never the stale seeded column
+    client.spent_this_month = (monthSpend as Record<string,number>|null)?.total || 0;
     return json({client, recentOrders, totalSpend:(spend as Record<string,number>|null)?.total||0, pendingApproval:(pendingApproval as Record<string,number>|null)?.cnt||0});
   }
 
@@ -2468,9 +2488,18 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
       return json({type,from,to,data:results});
     }
     case "budget": {
-      const {results} = await env.DB.prepare(`SELECT c.name,c.monthly_budget,c.spent_this_month,
-        ROUND(c.spent_this_month*100.0/c.monthly_budget,1) as utilisation_pct,
-        c.approval_threshold FROM clients WHERE c.active=1 ORDER BY utilisation_pct DESC`).all();
+      const {results} = await env.DB.prepare(`SELECT c.name,c.monthly_budget,
+        COALESCE((SELECT SUM(o.grand_total) FROM orders o
+          WHERE o.client_id=c.id AND o.status NOT IN ('CANCELLED','DRAFT')
+          AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0) AS spent_this_month,
+        ROUND(COALESCE((SELECT SUM(o.grand_total) FROM orders o
+          WHERE o.client_id=c.id AND o.status NOT IN ('CANCELLED','DRAFT')
+          AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0)*100.0/c.monthly_budget,1) as utilisation_pct,
+        c.approval_threshold,
+        c.monthly_budget - COALESCE((SELECT SUM(o.grand_total) FROM orders o
+          WHERE o.client_id=c.id AND o.status NOT IN ('CANCELLED','DRAFT')
+          AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0) AS remaining
+        FROM clients c WHERE c.active=1 ORDER BY utilisation_pct DESC`).all();
       return json({type,from,to,data:results});
     }
     case "dc-billing": {
