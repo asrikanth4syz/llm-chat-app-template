@@ -1768,24 +1768,30 @@ function refreshCartReviewUI() {
     itemsEl.innerHTML = APP.cart.length === 0
       ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">Cart is empty — <a href="#" onclick="switchOrderStep('catalogue');return false">browse catalogue</a></div>`
       : APP.cart.map(item => `
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border)">
-          <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${item.name}</div>
-            <div style="font-size:.73rem;color:var(--text-muted);margin-top:1px">${item.sku} · ${fmt(item.unit_price)}/unit</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-            <div class="catalog-qty" style="margin:0">
-              <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
-              <span class="qty-val" data-name="${item.name.replace(/"/g,'&quot;')}">${item.qty}</span>
-              <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${item.name}</div>
+              <div style="font-size:.73rem;color:var(--text-muted);margin-top:1px">${item.sku} · ${fmt(item.unit_price)}/unit</div>
             </div>
-            <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
-            <button onclick="removeCartItem('${item.sku}')"
-              style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
-              onmouseover="this.style.background='#fef2f2';this.style.borderColor='#fca5a5';this.style.color='var(--danger)'"
-              onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">✕</button>
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+              <div class="catalog-qty" style="margin:0">
+                <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
+                <span class="qty-val" data-name="${item.name.replace(/"/g,'&quot;')}">${item.qty}</span>
+                <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
+              </div>
+              <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
+              <button onclick="removeCartItem('${item.sku}')"
+                style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
+                onmouseover="this.style.background='#fef2f2';this.style.borderColor='#fca5a5';this.style.color='var(--danger)'"
+                onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">✕</button>
+            </div>
           </div>
+          <input type="text" maxlength="200" value="${h(item.note||'')}" placeholder="💬 Remark for this item — brand preference, size, urgency… (optional)"
+            oninput="setCartItemNote('${item.sku}', this.value)"
+            style="width:100%;margin-top:8px;padding:6px 10px;border:1px dashed var(--border);border-radius:7px;font-size:.76rem;box-sizing:border-box;outline:none;background:#fafbfc;transition:border .15s"
+            onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid'" onblur="this.style.borderColor='var(--border)';this.style.borderStyle='dashed'">
         </div>`).join('');
   }
 
@@ -1809,6 +1815,11 @@ function removeCartItem(sku) {
   APP.cart = APP.cart.filter(i => i.sku !== sku);
   if (!APP.cart.length) { switchOrderStep('catalogue'); showToast('Cart is empty', 'info'); return; }
   refreshCartReviewUI();
+}
+
+function setCartItemNote(sku, note) {
+  const item = APP.cart.find(i => i.sku === sku);
+  if (item) item.note = note.trim() || undefined;
 }
 
 function showCSVUploadModal() {
@@ -2726,16 +2737,17 @@ async function viewOrder(id) {
   const itemsTableRows = (order.items||[]).map(i => {
     const picked = allocMap[i.sku];
     const isShort = hasPartialPick && picked !== undefined && picked < i.qty;
+    const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
     if (hasPartialPick) {
       return `<tr>
-        <td>${i.name}</td>
+        <td>${i.name}${noteHtml}</td>
         <td style="color:var(--text-muted)">${i.qty}</td>
         <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
     }
-    return `<tr><td>${i.name}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
+    return `<tr><td>${i.name}${noteHtml}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
   }).join('');
 
   const commentsHtml = `

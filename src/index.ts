@@ -194,6 +194,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
       await env.DB.prepare("UPDATE order_items      SET category=? WHERE category=?").bind(to, from).run();
     }
   } catch { /* non-fatal — tables may not exist yet */ }
+  try {
+    await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
+  } catch { /* column already exists */ }
 }
 
 export default {
@@ -665,7 +668,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
 
   const body = await request.json() as {
     client_id: string;
-    items: Array<{sku:string;name:string;qty:number;unit_price:number}>;
+    items: Array<{sku:string;name:string;qty:number;unit_price:number;note?:string}>;
     notes?: string;
     order_type?: string;
     need_by_date?: string;
@@ -692,8 +695,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date) VALUES (?,?,?,?,?,?,?,?,?,?)`)
       .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
     for (const item of body.items) {
-      await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)`)
-        .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price).run();
+      await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
+        .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
     }
     await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`)
       .bind(uid(), id, "DRAFT", user!.sub, user!.name, "Saved as draft").run();
@@ -717,8 +720,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
 
   for (const item of body.items) {
-    await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)`)
-      .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price).run();
+    await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
+      .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
     // Gap 9: reserve stock
     await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(item.qty, item.sku).run();
   }
