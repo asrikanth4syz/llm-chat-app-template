@@ -7705,6 +7705,7 @@ async function toggleClientActive(id, name, active) {
 async function renderServiceDesk(el) {
   const allTickets = await api('/tickets');
   if (!allTickets) return;
+  APP._sdTicketsById = Object.fromEntries(allTickets.map(t=>[t.id,t]));
 
   const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
@@ -7739,9 +7740,9 @@ async function renderServiceDesk(el) {
     return `
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-        <div style="min-width:0">
+        <div style="min-width:0;cursor:pointer" onclick="viewTicketModal('${t.id}')" title="View ticket details">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span style="font-weight:700;font-size:.88rem;color:var(--navy)">${t.id}</span>
+            <span style="font-weight:700;font-size:.88rem;color:var(--blue)">${t.id}</span>
             <span style="font-size:.68rem;font-weight:700;background:${pm.bg};color:${pm.color};border-radius:4px;padding:1px 7px">${pm.label}</span>
             <span style="font-size:.68rem;font-weight:700;background:${sm.bg};color:${sm.color};border-radius:4px;padding:1px 7px">${sm.dot} ${t.status.replace('_',' ')}</span>
           </div>
@@ -7914,6 +7915,32 @@ async function startTicket(id) {
   if (res) { showToast(`Ticket ${id} in progress`); navigate('service_desk'); }
 }
 
+/* Full ticket detail — available to all roles including clients/vendors */
+function viewTicketModal(id) {
+  const t = APP._sdTicketsById?.[id];
+  if (!t) { showToast('Ticket not found', 'error'); return; }
+  const isRaiserRole = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'].includes(APP.user?.role);
+  const pmColor = t.priority==='HIGH' ? '#dc2626' : t.priority==='MEDIUM' ? '#d97706' : '#2563eb';
+  const smColor = t.status==='RESOLVED' ? '#059669' : t.status==='CLOSED' ? '#6b7280' : t.status==='IN_PROGRESS' ? '#2563eb' : '#d97706';
+  openModal(`Ticket ${t.id}`, `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <span style="font-size:.72rem;font-weight:700;background:${pmColor}1a;color:${pmColor};border-radius:20px;padding:3px 10px">${t.priority||'MEDIUM'} PRIORITY</span>
+      <span style="font-size:.72rem;font-weight:700;background:${smColor}1a;color:${smColor};border-radius:20px;padding:3px 10px">${(t.status||'OPEN').replace('_',' ')}</span>
+    </div>
+    <div style="font-weight:700;font-size:1rem;color:var(--navy);margin-bottom:10px">${h(t.subject||'')}</div>
+    ${t.description?`<div style="font-size:.84rem;color:var(--text);background:#f8f9fa;padding:12px 14px;border-radius:8px;line-height:1.6;margin-bottom:16px;white-space:pre-wrap">${h(t.description)}</div>`:'<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:16px">No description provided.</div>'}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><div style="font-size:.7rem;color:var(--text-muted)">Raised By</div><div style="font-weight:600;font-size:.84rem">${h(t.raiser_name||'—')}</div></div>
+      ${!isRaiserRole?`<div><div style="font-size:.7rem;color:var(--text-muted)">Client</div><div style="font-weight:600;font-size:.84rem">${h(t.client_name||'—')}</div></div>`:''}
+      <div><div style="font-size:.7rem;color:var(--text-muted)">Created</div><div style="font-weight:600;font-size:.84rem">${fmtDate(t.created_at)}</div></div>
+      <div><div style="font-size:.7rem;color:var(--text-muted)">${t.status==='RESOLVED'||t.status==='CLOSED'?'Resolved':'Resolution'}</div><div style="font-weight:600;font-size:.84rem">${t.resolved_at?fmtDate(t.resolved_at):'Pending'}</div></div>
+    </div>`,
+    `${isRaiserRole && t.status==='RESOLVED' ? `
+      <button class="btn btn-primary" onclick="closeModal();confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
+      <button class="btn btn-secondary" onclick="closeModal();reopenTicket('${t.id}')">↩ Reopen</button>` : ''}
+     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
 /* Raiser-only actions on a RESOLVED ticket */
 async function confirmCloseTicket(id) {
   const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ status:'CLOSED' }) });
@@ -8048,9 +8075,9 @@ async function confirmRejectOrder(id) {
    REPORTS (Gaps 1 & 12 — real data + CSV download)
    ============================================================ */
 const REPORT_DEFS = [
-  { key:'spend',       title:'Spend Analytics',    desc:'Monthly spend by client, category, and vendor.', icon:'📊',
-    cols:['client','category','total_spend','order_count'],
-    labels:['Client','Category','Total Spend','Orders'] },
+  { key:'spend',       title:'Spend Analytics',    desc:'Monthly spend and order count per client.', icon:'📊',
+    cols:['client','month','total_spend','order_count'],
+    labels:['Client','Month','Total Spend','Orders'] },
   { key:'fulfilment',  title:'Order Fulfilment',   desc:'Order-to-delivery cycle time and SLA adherence.', icon:'📦',
     cols:['id','client_name','status','grand_total','created_at'],
     labels:['Order','Client','Status','Amount','Created'] },

@@ -2457,9 +2457,10 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
   switch (type) {
     case "spend": {
       const {results} = await env.DB.prepare(`SELECT c.name as client, strftime('%Y-%m',o.created_at) as month,
-        SUM(o.grand_total) as total FROM orders o JOIN clients c ON o.client_id=c.id
-        WHERE o.created_at>=? AND o.created_at<=? AND o.status NOT IN ('CANCELLED')
-        GROUP BY c.id,month ORDER BY month DESC`).bind(from,to).all();
+        SUM(o.grand_total) as total_spend, COUNT(o.id) as order_count
+        FROM orders o JOIN clients c ON o.client_id=c.id
+        WHERE o.created_at>=? AND o.created_at<=? AND o.status NOT IN ('CANCELLED','DRAFT')
+        GROUP BY c.id,month ORDER BY month DESC, total_spend DESC`).bind(from,to).all();
       return json({type,from,to,data:results});
     }
     case "fulfilment": {
@@ -2538,7 +2539,7 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
         ROUND(SUM(oi.total)*i.gst_rate/100,2) as gst_amount
         FROM order_items oi JOIN inventory i ON oi.sku=i.sku
         JOIN orders o ON oi.order_id=o.id
-        WHERE o.created_at>=? AND o.status NOT IN ('CANCELLED')
+        WHERE o.created_at>=? AND o.status NOT IN ('CANCELLED','DRAFT')
         GROUP BY i.hsn_code,i.name ORDER BY gst_amount DESC`).bind(from).all();
       return json({type,from,to,data:results});
     }
@@ -2548,7 +2549,7 @@ async function handleReportData(request: Request, env: Env, path: string): Promi
       for (const cl of clients2 as Record<string,unknown>[]) {
         const {results: history} = await env.DB.prepare(`
           SELECT strftime('%Y-%m',created_at) as month, SUM(grand_total) as actual
-          FROM orders WHERE client_id=? AND status NOT IN ('CANCELLED')
+          FROM orders WHERE client_id=? AND status NOT IN ('CANCELLED','DRAFT')
           AND created_at >= datetime('now','-6 months')
           GROUP BY month ORDER BY month ASC`).bind(cl.id).all();
         const actuals = (history as Record<string,unknown>[]).map(r => ({ month: r.month as string, actual: r.actual as number }));
