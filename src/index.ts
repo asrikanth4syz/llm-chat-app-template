@@ -1912,13 +1912,10 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
 
-  // Clients/vendors may only update their own tickets
-  if (["client_admin","client_approver","client_user"].includes(user!.role)) {
-    const t = await env.DB.prepare("SELECT client_id FROM tickets WHERE id=?").bind(id).first() as {client_id:string}|null;
-    if (!t || (user!.client_id && t.client_id !== user!.client_id)) return json({error:"Forbidden"}, 403);
-  } else if (["vendor_admin","vendor_user"].includes(user!.role)) {
-    const t = await env.DB.prepare("SELECT raised_by FROM tickets WHERE id=?").bind(id).first() as {raised_by:string}|null;
-    if (!t || t.raised_by !== user!.sub) return json({error:"Forbidden"}, 403);
+  // Ticket workflow belongs to the ops team: only platform roles may change
+  // status/priority. Raisers (clients/vendors) view their tickets read-only.
+  if (["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role)) {
+    return json({error:"Only the operations team can update ticket status"}, 403);
   }
 
   const body = await request.json() as {status?:string;priority?:string};

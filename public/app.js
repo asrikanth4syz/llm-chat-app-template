@@ -7734,6 +7734,7 @@ async function renderServiceDesk(el) {
     const pm = PRIORITY_META[t.priority] || PRIORITY_META.MEDIUM;
     const sm = STATUS_META[t.status] || STATUS_META.OPEN;
     const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+    const isRaiserRole = isClient || ['vendor_admin','vendor_user'].includes(APP.user?.role);
     return `
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
@@ -7749,11 +7750,15 @@ async function renderServiceDesk(el) {
           </div>
           ${t.description?`<div style="font-size:.76rem;color:var(--text-muted);margin-top:6px;background:#f8f9fa;padding:8px 10px;border-radius:6px;line-height:1.5">${t.description.length>120?t.description.slice(0,120)+'…':t.description}</div>`:''}
         </div>
+        ${!isRaiserRole ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           ${t.status!=='RESOLVED'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">▶ Start</button>`:''}
           <button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>
-        </div>
+        </div>` : `
+        <div style="flex-shrink:0;font-size:.72rem;color:var(--text-muted);text-align:right;max-width:120px">
+          ${t.status==='RESOLVED'?'Resolved by support team':'Being handled by support team'}
+        </div>`}
       </div>
     </div>`;
   }
