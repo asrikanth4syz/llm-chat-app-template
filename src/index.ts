@@ -203,6 +203,17 @@ async function fixCategoryNames(env: Env): Promise<void> {
       author_name TEXT NOT NULL, author_role TEXT NOT NULL, message TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS returns (
+      id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, order_id TEXT, client_id TEXT,
+      reason TEXT, items TEXT NOT NULL, prev_dc_status TEXT,
+      status TEXT DEFAULT 'PENDING', created_by TEXT, created_by_name TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      reviewed_by TEXT, reviewed_at TEXT, review_note TEXT)`).run();
+  } catch { /* ignore */ }
+  try {
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_image TEXT").run();
+  } catch { /* column already exists */ }
 }
 
 export default {
@@ -406,6 +417,10 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan$/) && method==="POST") return handleMarkScan(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/pod\/upload$/) && method==="POST") return handleUploadDCDoc(request,env,path,"pod");
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/scan\/upload$/) && method==="POST") return handleUploadDCDoc(request,env,path,"scan");
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/voice\/upload$/) && method==="POST") return handleUploadDCDoc(request,env,path,"voice");
+      if (path==="/api/returns"                                  && method==="GET")  return handleListReturns(request,env);
+      if (path.match(/^\/api\/returns\/[^/]+\/approve$/)        && method==="POST") return handleReviewReturn(request,env,path,"APPROVED");
+      if (path.match(/^\/api\/returns\/[^/]+\/reject$/)         && method==="POST") return handleReviewReturn(request,env,path,"REJECTED");
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/documents$/) && method==="GET") return handleListDCDocs(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/return$/) && method==="POST") return handleReturnDC(request,env,path);
 
@@ -681,7 +696,9 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     order_type?: string;
     need_by_date?: string;
     save_as_draft?: boolean;
+    image?: string;
   };
+  const orderImage = body.image && body.image.startsWith("data:image/") && body.image.length <= 1_500_000 ? body.image : null;
   // Client roles must order for their own linked client only
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
   if (isClientRole) {
@@ -700,8 +717,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const validTypes = ['Regular','Urgent','Ad-Hoc'];
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
-    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -724,8 +741,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   const validTypes = ['Regular','Urgent','Ad-Hoc'];
   const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
   const needByDate = body.need_by_date || null;
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate).run();
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -1269,6 +1286,10 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
       const cl = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
       if (cl) { query += " AND o.client_id=?"; params.push(cl.id); }
     }
+  } else if (user!.role === "delivery_exec") {
+    // Delivery executives see only deliveries assigned to them
+    query += " AND (LOWER(dc.driver_name)=LOWER(?) OR dc.staff_id IN (SELECT id FROM staff WHERE LOWER(name)=LOWER(?)))";
+    params.push(user!.name, user!.name);
   }
 
   query += " ORDER BY dc.dispatched_at DESC";
@@ -1591,39 +1612,89 @@ async function handleReturnDC(request: Request, env: Env, path: string): Promise
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {reason?:string};
+  const body = await request.json() as {reason?:string; items?:{sku:string;name?:string;qty:number}[]};
 
-  // Get DC and items before cancelling
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
   if (!dc) return json({error:"DC not found"}, 404);
 
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
 
-  // Mark DC as cancelled
-  await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=?").bind(id).run();
+  // Per-item return quantities: use provided items, clamp to dispatched qty; default full qty
+  const returnItems = (body.items?.length
+    ? body.items
+    : dcItems.map(di => ({ sku: di.sku as string, name: di.name as string, qty: (di.qty_delivered as number) || (di.qty_ordered as number) }))
+  ).map(ri => {
+    const di = dcItems.find(d => d.sku === ri.sku);
+    const maxQty = di ? ((di.qty_delivered as number) || (di.qty_ordered as number)) : 0;
+    return { sku: ri.sku, name: ri.name || (di?.name as string) || ri.sku, qty: Math.max(0, Math.min(ri.qty, maxQty)) };
+  }).filter(ri => ri.qty > 0);
 
-  // Restore inventory stock for returned items
-  for (const item of dcItems) {
-    if ((item.qty_delivered as number) > 0) {
+  if (!returnItems.length) return json({error:"No return quantities specified"}, 400);
+
+  // Create a PENDING return — stock is restored only after warehouse approval
+  const retId = `RET-${uid().slice(0,6).toUpperCase()}`;
+  const ord = dc.order_id ? await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(dc.order_id as string).first() as {client_id:string}|null : null;
+  await env.DB.prepare(`INSERT INTO returns (id,dc_id,order_id,client_id,reason,items,prev_dc_status,status,created_by,created_by_name)
+    VALUES (?,?,?,?,?,?,?,'PENDING',?,?)`)
+    .bind(retId, id, dc.order_id||null, ord?.client_id||null, body.reason||null,
+      JSON.stringify(returnItems), dc.status as string, user!.sub, user!.name).run();
+
+  await env.DB.prepare("UPDATE delivery_challans SET status='RETURN_PENDING' WHERE id=?").bind(id).run();
+
+  await pushNotification(env, "warehouse_exec", `Return ${retId} for DC ${id} awaiting warehouse check — ${returnItems.length} item(s)`);
+  await pushNotification(env, "ops_admin", `Return ${retId} logged for DC ${id} by ${user!.name}`);
+  await audit(env, user, "RETURN_REQUEST", "delivery_challan", id, dc.status as string, "RETURN_PENDING");
+  return json({id: retId, dc_id: id, status:'PENDING'}, 201);
+}
+
+async function handleListReturns(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  try {
+    const {results} = await env.DB.prepare(`SELECT r.*, c.name as client_name
+      FROM returns r LEFT JOIN clients c ON r.client_id=c.id
+      ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END, r.created_at DESC LIMIT 100`).all();
+    return json((results as Record<string,unknown>[]).map(r => ({...r, items: JSON.parse((r.items as string)||'[]')})));
+  } catch { return json([]); }
+}
+
+async function handleReviewReturn(request: Request, env: Env, path: string, verdict: "APPROVED"|"REJECTED"): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","warehouse_exec"].includes(user!.role)) return json({error:"Only warehouse/ops can review returns"}, 403);
+  const retId = path.split("/")[3];
+  const body = await request.json().catch(()=>({})) as {note?:string};
+
+  const ret = await env.DB.prepare("SELECT * FROM returns WHERE id=?").bind(retId).first() as Record<string,unknown>|null;
+  if (!ret) return json({error:"Return not found"}, 404);
+  if (ret.status !== "PENDING") return json({error:"Return already reviewed"}, 400);
+
+  const items = JSON.parse((ret.items as string)||'[]') as {sku:string;name:string;qty:number}[];
+
+  if (verdict === "APPROVED") {
+    // Restock checked quantities and record movements
+    for (const item of items) {
       await env.DB.prepare("UPDATE inventory SET stock=stock+?,reserved=MAX(0,reserved-?) WHERE sku=?")
-        .bind(item.qty_delivered, item.qty_delivered, item.sku).run();
+        .bind(item.qty, item.qty, item.sku).run();
       await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), item.sku as string, 'RETURN', item.qty_delivered as number, id, 'delivery_challan',
-          `Returned DC ${id}${body.reason ? ': ' + body.reason : ''}`, user!.name).run();
+        .bind(uid(), item.sku, 'RETURN', item.qty, ret.dc_id as string, 'return',
+          `Return ${retId} approved${ret.reason ? ': ' + ret.reason : ''}`, user!.name).run();
     }
+    await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=?").bind(ret.dc_id as string).run();
+    if (ret.order_id) {
+      await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'RETURN_APPROVED',?,?,?)`)
+        .bind(uid(), ret.order_id as string, user!.sub, user!.name, `Return ${retId} approved — ${items.length} item(s) restocked`).run();
+    }
+  } else {
+    // Rejected — DC goes back to its previous status, no restock
+    await env.DB.prepare("UPDATE delivery_challans SET status=? WHERE id=?").bind((ret.prev_dc_status as string)||'DELIVERED', ret.dc_id as string).run();
   }
 
-  // Revert order status
-  if (dc.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='APPROVED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')")
-      .bind(dc.order_id).run();
-    await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,'IN_SHIPMENT','APPROVED',?,?,?)`)
-      .bind(uid(), dc.order_id, user!.sub, user!.name, `DC ${id} returned: ${body.reason||'No reason given'}`).run();
-  }
-
-  await pushNotification(env, "ops_admin", `DC ${id} returned/rejected — stock restored`);
-  await audit(env, user, "RETURN", "delivery_challan", id, "IN_TRANSIT", "CANCELLED");
-  return json({id, status:'CANCELLED'});
+  await env.DB.prepare("UPDATE returns SET status=?, reviewed_by=?, reviewed_at=datetime('now'), review_note=? WHERE id=?")
+    .bind(verdict, user!.name, body.note||null, retId).run();
+  await pushNotification(env, "ops_admin", `Return ${retId} ${verdict.toLowerCase()} by ${user!.name}${verdict==='APPROVED'?' — stock restored':''}`);
+  await audit(env, user, `RETURN_${verdict}`, "return", retId, "PENDING", verdict);
+  return json({id: retId, status: verdict});
 }
 
 // ════════════════════════════════════════════════════════════════════

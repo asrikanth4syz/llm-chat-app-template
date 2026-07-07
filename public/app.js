@@ -1734,6 +1734,14 @@ function renderCartReview(container) {
           <textarea id="cart-notes" rows="3" placeholder="Special instructions, delivery address, contact person…"
             style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
             onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+
+          <label style="font-weight:700;font-size:.88rem;display:block;margin:14px 0 6px;color:var(--navy)">📷 Attach Photo <span style="font-weight:400;color:var(--text-muted)">(optional — reference image, handwritten list, product photo)</span></label>
+          <input type="file" id="cart-image" accept="image/*" onchange="attachOrderImage(this)"
+            style="display:block;width:100%;padding:8px;border:1.5px dashed var(--border);border-radius:8px;font-size:.8rem;box-sizing:border-box;background:#fafbfc">
+          <div id="cart-image-preview" style="margin-top:8px;display:none;align-items:center;gap:10px">
+            <img id="cart-image-thumb" style="max-height:70px;border-radius:8px;border:1px solid var(--border)">
+            <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="removeOrderImage()">✕ Remove</button>
+          </div>
         </div>
       </div>
 
@@ -1820,6 +1828,39 @@ function removeCartItem(sku) {
 function setCartItemNote(sku, note) {
   const item = APP.cart.find(i => i.sku === sku);
   if (item) item.note = note.trim() || undefined;
+}
+
+/* ── Order photo attachment: downscale to ≤900px JPEG, keep under ~1MB ── */
+function attachOrderImage(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { showToast('Please select an image file', 'error'); input.value=''; return; }
+  const img = new Image();
+  img.onload = () => {
+    const maxDim = 900;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width  = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    let dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+    if (dataUrl.length > 1_400_000) dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+    if (dataUrl.length > 1_400_000) { showToast('Image too large even after compression — try a smaller photo', 'error'); input.value=''; return; }
+    APP._orderImage = dataUrl;
+    const prev = document.getElementById('cart-image-preview');
+    const thumb = document.getElementById('cart-image-thumb');
+    if (thumb) thumb.src = dataUrl;
+    if (prev) prev.style.display = 'flex';
+    URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => { showToast('Could not read image', 'error'); input.value=''; };
+  img.src = URL.createObjectURL(file);
+}
+
+function removeOrderImage() {
+  APP._orderImage = null;
+  const inp = document.getElementById('cart-image'); if (inp) inp.value = '';
+  const prev = document.getElementById('cart-image-preview'); if (prev) prev.style.display = 'none';
 }
 
 function showCSVUploadModal() {
@@ -2197,6 +2238,7 @@ async function confirmOrder(saveAsDraft) {
       items: APP.cart,
       order_type: orderType,
       ...(notes ? { notes } : {}),
+      ...(APP._orderImage ? { image: APP._orderImage } : {}),
       ...(needByDate ? { need_by_date: needByDate } : {}),
       ...(saveAsDraft ? { save_as_draft: true } : {}),
     }),
@@ -2205,6 +2247,7 @@ async function confirmOrder(saveAsDraft) {
   closeModal();
   if (result) {
     APP.cart = [];
+    APP._orderImage = null;
     if (saveAsDraft) {
       showToast(`Draft ${result.id} saved — submit it from My Orders`);
     } else {
@@ -2804,6 +2847,7 @@ async function viewOrder(id) {
         </div>
       </div>
       ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${order.notes}</span></div>` : ''}
+      ${order.order_image ? `<div style="margin-top:10px"><div style="font-weight:700;font-size:.8rem;color:var(--navy);margin-bottom:6px">📷 Attached Photo</div><a href="${order.order_image}" target="_blank"><img src="${order.order_image}" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" title="Click to open full size"></a></div>` : ''}
     </div>
     <b>Items</b>${hasPartialPick?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
     <table class="table" style="margin-top:8px">
@@ -5400,6 +5444,7 @@ async function renderWarehouse(el) {
   </div>
   ${pageHeader('Warehouse', 'Warehouses, bins, GRN, picklist & stock transfers',
     `<button class="btn btn-primary" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
+  <div id="wh-returns-queue"></div>
   <div class="tabs" id="wh-tabs" style="margin-bottom:16px">
     <button class="tab-btn active" onclick="switchWHTab('overview',this)">Overview</button>
     <button class="tab-btn" onclick="switchWHTab('grn',this)">GRN Records</button>
@@ -5410,6 +5455,61 @@ async function renderWarehouse(el) {
   <div id="wh-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
 
   switchWHTab('overview', document.querySelector('#wh-tabs .tab-btn'));
+  loadWarehouseReturnsQueue();
+}
+
+/* ── Returns awaiting warehouse check & approval ── */
+async function loadWarehouseReturnsQueue() {
+  const wrap = document.getElementById('wh-returns-queue');
+  if (!wrap) return;
+  const returns = await api('/returns').catch(()=>[]) || [];
+  const pending = returns.filter(r => r.status === 'PENDING');
+  if (!pending.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `
+  <div class="card" style="border:1.5px solid #fcd34d;margin-bottom:16px;overflow:hidden;padding:0">
+    <div style="padding:12px 18px;background:#fffbeb;border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:8px">
+      <span style="font-size:1.1rem">↩</span>
+      <b style="font-size:.9rem;color:#92400e">Returns Awaiting Check & Approval (${pending.length})</b>
+      <span style="font-size:.74rem;color:#b45309">— verify returned goods, then approve to restock</span>
+    </div>
+    ${pending.map(r => `
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${r.id} · DC ${r.dc_id}${r.client_name?` · ${h(r.client_name)}`:''}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">By ${h(r.created_by_name||'—')} · ${fmtDate(r.created_at)}${r.reason?` · Reason: <i>${h(r.reason)}</i>`:''}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+            ${(r.items||[]).map(i=>`<span style="font-size:.72rem;font-weight:600;background:#fef3c7;color:#92400e;border-radius:6px;padding:3px 9px">${h(i.name||i.sku)} × ${i.qty}</span>`).join('')}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="btn btn-primary btn-sm" onclick="reviewReturn('${r.id}','approve')">✓ Checked & Approve</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="reviewReturn('${r.id}','reject')">✕ Reject</button>
+        </div>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+async function reviewReturn(retId, action) {
+  const label = action==='approve' ? 'approve and restock' : 'reject';
+  openModal(`${action==='approve'?'Approve':'Reject'} Return ${retId}`,
+    `<p style="margin:0 0 12px;color:var(--text-muted);font-size:.86rem">${action==='approve'
+      ? 'Confirm the returned goods have been physically checked at the warehouse. Approving will <b>restock the returned quantities</b>.'
+      : 'Rejecting will send the DC back to its previous status. No stock changes.'}</p>
+     <div class="form-group"><label>Note (optional)</label><input type="text" id="ret-review-note" placeholder="e.g. All items verified in good condition"></div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn ${action==='approve'?'btn-primary':'btn-danger'}" onclick="confirmReviewReturn('${retId}','${action}')">${action==='approve'?'✓ Approve & Restock':'✕ Reject Return'}</button>`);
+}
+
+async function confirmReviewReturn(retId, action) {
+  const note = document.getElementById('ret-review-note')?.value?.trim();
+  const res = await api(`/returns/${retId}/${action}`, { method:'POST', body: JSON.stringify({ note }) });
+  closeModal();
+  if (res) {
+    showToast(action==='approve' ? `Return ${retId} approved — stock restored` : `Return ${retId} rejected`);
+    loadWarehouseReturnsQueue();
+  }
 }
 
 async function switchWHTab(tab, btn) {
@@ -6823,10 +6923,12 @@ async function viewDCDocuments(dcId) {
   const fmt = b => b ? (b < 1024*1024 ? (b/1024).toFixed(1)+' KB' : (b/1024/1024).toFixed(1)+' MB') : '';
   const pagesHtml = docs.map((d, i) => {
     const isImg = (d.mime_type||'').startsWith('image/');
+    const isAudio = d.doc_type==='voice' || (d.mime_type||'').startsWith('audio/');
+    const typeLabel = d.doc_type==='pod'?'📄 POD':d.doc_type==='voice'?'🎙 Voice Note':'🔍 DC Scan';
     return `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
       <div style="padding:10px 14px;background:#f8fafc;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <span style="font-weight:700;font-size:.88rem">Page ${i+1} — ${d.doc_type==='pod'?'📄 POD':'🔍 DC Scan'}</span>
+          <span style="font-weight:700;font-size:.88rem">${isAudio?'':'Page '+(i+1)+' — '}${typeLabel}</span>
           <span style="font-size:.78rem;color:var(--text-muted);margin-left:8px">${d.filename||'document'} ${fmt(d.file_size)?'· '+fmt(d.file_size):''}</span>
         </div>
         <div style="font-size:.75rem;color:var(--text-muted)">${d.uploaded_by||'—'} · ${fmtDate(d.uploaded_at)}</div>
@@ -6834,6 +6936,8 @@ async function viewDCDocuments(dcId) {
       <div style="padding:12px;text-align:center">
         ${isImg
           ? `<img src="data:${d.mime_type};base64,${d.content_b64}" style="max-width:100%;max-height:400px;border-radius:4px">`
+          : isAudio
+          ? `<audio controls src="data:${d.mime_type||'audio/webm'};base64,${d.content_b64}" style="width:100%;max-width:380px"></audio>`
           : `<a href="data:${d.mime_type||'application/octet-stream'};base64,${d.content_b64}" download="${d.filename||'document'}" class="btn btn-primary">⬇ Download ${d.filename||'document'}</a>`}
       </div>
     </div>`;
@@ -6905,29 +7009,50 @@ async function billDC(id) {
   if (res) { showToast(`DC ${id} billed`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
 }
 
-function returnDCModal(dcId) {
-  openModal(`Return / Reject DC — ${dcId}`,
-    `<p style="margin-bottom:12px;color:var(--text-muted)">Marking DC <b>${dcId}</b> as returned will restore inventory and revert the order status.</p>
-     <div class="form-group"><label>Reason for Return</label>
-       <textarea id="return-reason" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. Goods damaged in transit, wrong items delivered..."></textarea>
+async function returnDCModal(dcId) {
+  const items = await api(`/delivery-challans/${dcId}/items`).catch(()=>[]) || [];
+  openModal(`Return Items — DC ${dcId}`,
+    `<p style="margin-bottom:12px;color:var(--text-muted);font-size:.84rem">Enter the quantity being returned for <b>each item</b>. The return goes to the <b>warehouse for checking and approval</b> — stock is restored only after approval.</p>
+     ${items.length ? `
+     <div class="table-wrap" style="margin-bottom:14px">
+       <table class="table" style="margin:0">
+         <thead><tr><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Return Qty</th></tr></thead>
+         <tbody>${items.map(it => {
+           const maxQ = it.qty_delivered || it.qty_ordered;
+           return `<tr>
+             <td><b style="font-size:.84rem">${h(it.item_name||it.name||it.sku)}</b><div style="font-size:.7rem;color:var(--text-muted)">${h(it.sku)}</div></td>
+             <td style="text-align:center;color:var(--text-muted)">${maxQ}</td>
+             <td style="text-align:center"><input type="number" data-ret-sku="${h(it.sku)}" data-ret-name="${h(it.item_name||it.name||it.sku)}" value="0" min="0" max="${maxQ}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+           </tr>`;}).join('')}
+         </tbody>
+       </table>
+     </div>` : '<div class="alert alert-warning" style="margin-bottom:12px">No item breakdown found for this DC — the full DC will be returned.</div>'}
+     <div class="form-group"><label>Reason for Return <span style="color:var(--danger)">*</span></label>
+       <textarea id="return-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" placeholder="e.g. Goods damaged in transit, wrong items, quality issue…"></textarea>
      </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" style="background:var(--danger)" onclick="confirmReturnDC('${dcId}')">Confirm Return</button>`);
+     <button class="btn btn-primary" style="background:var(--danger)" onclick="confirmReturnDC('${dcId}')">Submit Return for Approval</button>`);
 }
 
 async function confirmReturnDC(dcId) {
   const reason = document.getElementById('return-reason').value;
   if (!reason.trim()) { showToast('Please provide a reason for the return','error'); return; }
+  const inputs = document.querySelectorAll('#modal-body input[data-ret-sku]');
+  let items;
+  if (inputs.length) {
+    items = Array.from(inputs)
+      .map(inp => ({ sku: inp.dataset.retSku, name: inp.dataset.retName, qty: parseInt(inp.value)||0 }))
+      .filter(i => i.qty > 0);
+    if (!items.length) { showToast('Enter a return quantity for at least one item','error'); return; }
+  }
   const res = await api(`/delivery-challans/${dcId}/return`, {
     method: 'POST',
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ reason, ...(items ? { items } : {}) })
   });
   closeModal();
   if (res) {
-    showToast(`DC ${dcId} marked as returned — stock restored`);
-    const tabs = document.querySelectorAll('#dc-tabs .tab-btn');
-    if (tabs.length) switchDeliveryTab('returns', tabs[3]);
-    else navigate('dashboard');
+    showToast(`Return ${res.id||''} submitted — awaiting warehouse approval`);
+    navigate(APP.page || 'dashboard');
   }
 }
 
@@ -6943,12 +7068,8 @@ async function renderDeliveryExecDashboard(el) {
   if (!dcs) { el.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--danger)">Failed to load.</div>'; return; }
 
   const today = new Date().toISOString().slice(0, 10);
-  const myName = (APP.user?.name || '').toLowerCase();
-
-  // Filter: assigned to me (driver_name matches) OR all in-transit if no assignments yet (demo)
-  const assigned = dcs.filter(d => d.driver_name && d.driver_name.toLowerCase().includes(myName.split(' ')[0]));
-  const useMine = assigned.length > 0;
-  const pool = useMine ? assigned : dcs;
+  // Backend already scopes delivery_exec to only their assigned DCs
+  const pool = dcs;
 
   const inTransit    = pool.filter(d => d.status === 'IN_TRANSIT');
   const scheduled    = pool.filter(d => d.status === 'SCHEDULED');
@@ -7090,6 +7211,7 @@ async function execMarkDelivered(dcId) {
     if (res) { showToast('DC ' + dcId + ' marked as delivered'); navigate('dashboard'); }
     return;
   }
+  APP._voiceNote = null;
   openModal('Confirm Delivery — ' + dcId, `
     <p style="color:var(--text-muted);margin-bottom:12px">Enter actual qty delivered. If less than dispatched, a follow-up DC will be created.</p>
     <table class="table" style="margin-bottom:16px">
@@ -7100,17 +7222,79 @@ async function execMarkDelivered(dcId) {
         <td><input type="number" data-sku="${it.sku}" value="${it.qty_ordered}" min="0" max="${it.qty_ordered}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       </tr>`).join('')}
       </tbody>
-    </table>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    </table>
+    <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+      <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" id="voice-rec-btn" class="btn btn-secondary btn-sm" onclick="toggleVoiceRecording()">● Record</button>
+        <span id="voice-rec-status" style="font-size:.76rem;color:var(--text-muted)">Not recorded</span>
+        <audio id="voice-preview" controls style="display:none;height:32px;max-width:220px"></audio>
+        <button type="button" id="voice-del-btn" class="btn btn-secondary btn-sm" style="display:none;color:var(--danger)" onclick="discardVoiceNote()">✕</button>
+      </div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="stopVoiceIfRecording();closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="confirmExecDelivery('${dcId}')">Confirm Delivery</button>`
   );
 }
 
+/* ── Voice note recording (MediaRecorder) ── */
+async function toggleVoiceRecording() {
+  const btn = document.getElementById('voice-rec-btn');
+  const status = document.getElementById('voice-rec-status');
+  if (APP._voiceRecorder && APP._voiceRecorder.state === 'recording') { APP._voiceRecorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(stream);
+    const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+      if (blob.size > 2 * 1024 * 1024) { showToast('Voice note too long — keep it under ~60 seconds', 'error'); discardVoiceNote(); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        APP._voiceNote = { content_b64: String(reader.result).split(',')[1], mime_type: blob.type, file_size: blob.size };
+        const audio = document.getElementById('voice-preview');
+        if (audio) { audio.src = URL.createObjectURL(blob); audio.style.display = ''; }
+        const del = document.getElementById('voice-del-btn'); if (del) del.style.display = '';
+        if (status) status.textContent = `Recorded (${Math.round(blob.size/1024)} KB)`;
+        if (btn) { btn.textContent = '● Re-record'; btn.style.color = ''; }
+      };
+      reader.readAsDataURL(blob);
+    };
+    rec.start();
+    APP._voiceRecorder = rec;
+    if (btn) { btn.textContent = '⏹ Stop'; btn.style.color = 'var(--danger)'; }
+    if (status) status.textContent = 'Recording… tap Stop when done';
+  } catch (e) {
+    showToast('Microphone access denied or unavailable', 'error');
+  }
+}
+
+function stopVoiceIfRecording() {
+  if (APP._voiceRecorder && APP._voiceRecorder.state === 'recording') { try { APP._voiceRecorder.stop(); } catch(_){} }
+}
+
+function discardVoiceNote() {
+  APP._voiceNote = null;
+  const audio = document.getElementById('voice-preview'); if (audio) { audio.src=''; audio.style.display='none'; }
+  const del = document.getElementById('voice-del-btn'); if (del) del.style.display='none';
+  const status = document.getElementById('voice-rec-status'); if (status) status.textContent = 'Not recorded';
+  const btn = document.getElementById('voice-rec-btn'); if (btn) btn.textContent = '● Record';
+}
+
 async function confirmExecDelivery(dcId) {
+  stopVoiceIfRecording();
   const inputs = document.querySelectorAll('#modal-body input[data-sku]');
   const items = Array.from(inputs).map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
   const res = await api('/delivery-challans/' + dcId + '/deliver', { method:'POST', body: JSON.stringify({ items }) });
   if (res) {
+    if (APP._voiceNote) {
+      await api(`/delivery-challans/${dcId}/voice/upload`, { method:'POST', body: JSON.stringify({
+        filename: `voice-note-${dcId}.webm`, ...APP._voiceNote,
+      })}).catch(()=>null);
+      APP._voiceNote = null;
+    }
     closeModal();
     const msg = res.partial ? 'Partial delivery recorded — follow-up DC created' : 'DC ' + dcId + ' fully delivered' + (res.order_closed ? ' — order closed' : '');
     showToast(msg);
@@ -11928,30 +12112,8 @@ async function saveAssignDC(dcId) {
   if (res) { showToast('DC updated'); navigate('todays_schedule'); }
 }
 
-function logReturnModal(dcId) {
-  openModal(`Log Return — DC ${dcId}`,
-    `<p style="color:var(--text-muted);margin-bottom:12px">Record items rejected or not accepted by the client.</p>
-     <div class="form-group"><label>SKU</label><input type="text" id="ret-sku" placeholder="e.g. SKU001"></div>
-     <div class="form-group"><label>Item Name</label><input type="text" id="ret-name"></div>
-     <div class="form-group"><label>Qty Returned</label><input type="number" id="ret-qty" value="1" min="1"></div>
-     <div class="form-group"><label>Reason</label><input type="text" id="ret-reason" placeholder="e.g. Expired, Quality issue, Not ordered"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmReturn('${dcId}')">Log Return</button>`);
-}
-
-async function confirmReturn(dcId) {
-  const body = {
-    dc_id: dcId,
-    sku: document.getElementById('ret-sku').value,
-    item_name: document.getElementById('ret-name').value,
-    qty_returned: +document.getElementById('ret-qty').value,
-    reason: document.getElementById('ret-reason').value,
-  };
-  if (!body.sku || !body.qty_returned) { showToast('SKU and qty required','error'); return; }
-  const res = await api('/delivery-returns', { method:'POST', body: JSON.stringify(body) });
-  closeModal();
-  if (res) { showToast('Return logged — stock restored'); navigate('todays_schedule'); }
-}
+// Unified return flow: per-item quantities + warehouse approval (see returnDCModal)
+function logReturnModal(dcId) { returnDCModal(dcId); }
 
 /* ============================================================
    CONSOLIDATED ORDERS (PROCUREMENT VIEW)
