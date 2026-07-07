@@ -7717,7 +7717,7 @@ async function renderServiceDesk(el) {
 
   const openT     = tickets.filter(t=>t.status==='OPEN');
   const inProgT   = tickets.filter(t=>t.status==='IN_PROGRESS');
-  const resolvedT = tickets.filter(t=>t.status==='RESOLVED');
+  const resolvedT = tickets.filter(t=>t.status==='RESOLVED'||t.status==='CLOSED');
 
   const PRIORITY_META = {
     HIGH:   { color:'var(--danger)',  bg:'#fef2f2', label:'High' },
@@ -7728,6 +7728,7 @@ async function renderServiceDesk(el) {
     OPEN:        { color:'#d97706', bg:'#fef3c7', dot:'🟡' },
     IN_PROGRESS: { color:'#2563eb', bg:'#dbeafe', dot:'🔵' },
     RESOLVED:    { color:'#059669', bg:'#d1fae5', dot:'🟢' },
+    CLOSED:      { color:'#6b7280', bg:'#e5e7eb', dot:'⚫' },
   };
 
   function ticketCard(t) {
@@ -7752,12 +7753,16 @@ async function renderServiceDesk(el) {
         </div>
         ${!isRaiserRole ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-          ${t.status!=='RESOLVED'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
+          ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">▶ Start</button>`:''}
-          <button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>
+          ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>`:''}
+        </div>` : t.status==='RESOLVED' ? `
+        <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+          <button class="btn btn-primary btn-sm" onclick="confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
+          <button class="btn btn-secondary btn-sm" onclick="reopenTicket('${t.id}')">↩ Reopen</button>
         </div>` : `
         <div style="flex-shrink:0;font-size:.72rem;color:var(--text-muted);text-align:right;max-width:120px">
-          ${t.status==='RESOLVED'?'Resolved by support team':'Being handled by support team'}
+          ${t.status==='CLOSED'?'Closed':'Being handled by support team'}
         </div>`}
       </div>
     </div>`;
@@ -7907,6 +7912,25 @@ async function resolveTicket(id) {
 async function startTicket(id) {
   const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ status:'IN_PROGRESS' }) });
   if (res) { showToast(`Ticket ${id} in progress`); navigate('service_desk'); }
+}
+
+/* Raiser-only actions on a RESOLVED ticket */
+async function confirmCloseTicket(id) {
+  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ status:'CLOSED' }) });
+  if (res) { showToast(`Ticket ${id} closed — thank you for confirming`); navigate('service_desk'); }
+}
+
+async function reopenTicket(id) {
+  openModal(`Reopen Ticket ${id}`,
+    `<p style="margin:0;color:var(--text-muted)">The support team will be notified that the issue is not fully resolved. Reopen this ticket?</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="confirmReopenTicket('${id}')">↩ Reopen Ticket</button>`);
+}
+
+async function confirmReopenTicket(id) {
+  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ status:'OPEN' }) });
+  closeModal();
+  if (res) { showToast(`Ticket ${id} reopened — support team notified`); navigate('service_desk'); }
 }
 
 /* ============================================================

@@ -1912,13 +1912,31 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
 
-  // Ticket workflow belongs to the ops team: only platform roles may change
-  // status/priority. Raisers (clients/vendors) view their tickets read-only.
-  if (["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role)) {
-    return json({error:"Only the operations team can update ticket status"}, 403);
-  }
-
   const body = await request.json() as {status?:string;priority?:string};
+
+  // Ticket workflow belongs to the ops team. Controlled exception for raisers
+  // (clients/vendors): on their OWN ticket in RESOLVED state they may either
+  // confirm resolution (→ CLOSED) or reopen it (→ OPEN). Nothing else.
+  const isRaiserRole = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role);
+  if (isRaiserRole) {
+    const t = await env.DB.prepare("SELECT client_id,raised_by,status FROM tickets WHERE id=?").bind(id).first() as {client_id:string;raised_by:string;status:string}|null;
+    if (!t) return json({error:"Ticket not found"}, 404);
+    const ownsTicket = ["vendor_admin","vendor_user"].includes(user!.role)
+      ? t.raised_by === user!.sub
+      : (user!.client_id ? t.client_id === user!.client_id : t.raised_by === user!.sub);
+    if (!ownsTicket) return json({error:"Forbidden"}, 403);
+    if (t.status !== "RESOLVED" || body.priority || !["CLOSED","OPEN"].includes(body.status||"")) {
+      return json({error:"You can only confirm or reopen a resolved ticket"}, 403);
+    }
+    if (body.status === "OPEN") {
+      await env.DB.prepare("UPDATE tickets SET status='OPEN', resolved_at=NULL WHERE id=?").bind(id).run();
+      await pushNotification(env, "ops_admin", `Ticket ${id} was REOPENED by ${user!.name} — resolution disputed`);
+    } else {
+      await env.DB.prepare("UPDATE tickets SET status='CLOSED' WHERE id=?").bind(id).run();
+    }
+    await audit(env, user, "UPDATE", "ticket", id, undefined, `raiser:${body.status}`);
+    return json({id, status: body.status});
+  }
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.status) {
