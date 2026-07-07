@@ -7927,8 +7927,8 @@ async function startTicket(id) {
   if (res) { showToast(`Ticket ${id} in progress`); navigate('service_desk'); }
 }
 
-/* Full ticket detail — available to all roles including clients/vendors */
-function viewTicketModal(id) {
+/* Full ticket detail with chat-style comment thread — all roles */
+async function viewTicketModal(id) {
   const t = APP._sdTicketsById?.[id];
   if (!t) { showToast('Ticket not found', 'error'); return; }
   const isRaiserRole = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'].includes(APP.user?.role);
@@ -7940,17 +7940,70 @@ function viewTicketModal(id) {
       <span style="font-size:.72rem;font-weight:700;background:${smColor}1a;color:${smColor};border-radius:20px;padding:3px 10px">${(t.status||'OPEN').replace('_',' ')}</span>
     </div>
     <div style="font-weight:700;font-size:1rem;color:var(--navy);margin-bottom:10px">${h(t.subject||'')}</div>
-    ${t.description?`<div style="font-size:.84rem;color:var(--text);background:#f8f9fa;padding:12px 14px;border-radius:8px;line-height:1.6;margin-bottom:16px;white-space:pre-wrap">${h(t.description)}</div>`:'<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:16px">No description provided.</div>'}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    ${t.description?`<div style="font-size:.84rem;color:var(--text);background:#f8f9fa;padding:12px 14px;border-radius:8px;line-height:1.6;margin-bottom:14px;white-space:pre-wrap">${h(t.description)}</div>`:'<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:14px">No description provided.</div>'}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
       <div><div style="font-size:.7rem;color:var(--text-muted)">Raised By</div><div style="font-weight:600;font-size:.84rem">${h(t.raiser_name||'—')}</div></div>
       ${!isRaiserRole?`<div><div style="font-size:.7rem;color:var(--text-muted)">Client</div><div style="font-weight:600;font-size:.84rem">${h(t.client_name||'—')}</div></div>`:''}
       <div><div style="font-size:.7rem;color:var(--text-muted)">Created</div><div style="font-weight:600;font-size:.84rem">${fmtDate(t.created_at)}</div></div>
       <div><div style="font-size:.7rem;color:var(--text-muted)">${t.status==='RESOLVED'||t.status==='CLOSED'?'Resolved':'Resolution'}</div><div style="font-weight:600;font-size:.84rem">${t.resolved_at?fmtDate(t.resolved_at):'Pending'}</div></div>
-    </div>`,
+    </div>
+
+    <div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-bottom:8px;border-top:1px solid var(--border);padding-top:14px">💬 Conversation</div>
+    <div id="ticket-chat" style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px 2px;margin-bottom:10px">
+      <div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:12px">Loading…</div>
+    </div>
+    ${t.status!=='CLOSED'?`
+    <div style="display:flex;gap:8px">
+      <input type="text" id="ticket-chat-input" maxlength="2000" placeholder="Write a message…"
+        style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
+        onkeydown="if(event.key==='Enter')postTicketComment('${t.id}')">
+      <button class="btn btn-primary" onclick="postTicketComment('${t.id}')">Send</button>
+    </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">Ticket closed — conversation is read-only</div>`}`,
     `${isRaiserRole && t.status==='RESOLVED' ? `
       <button class="btn btn-primary" onclick="closeModal();confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
       <button class="btn btn-secondary" onclick="closeModal();reopenTicket('${t.id}')">↩ Reopen</button>` : ''}
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+
+  loadTicketChat(id);
+}
+
+const RAISER_ROLES_SET = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'];
+
+async function loadTicketChat(ticketId) {
+  const wrap = document.getElementById('ticket-chat');
+  if (!wrap) return;
+  const comments = await api(`/tickets/${ticketId}/comments`).catch(()=>[]) || [];
+  const fmtDT = s => { const d = new Date((s||'').replace(' ','T')+'Z'); return isNaN(d) ? (s||'') : d.toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); };
+  if (!comments.length) {
+    wrap.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:12px">No messages yet — start the conversation below.</div>';
+    return;
+  }
+  wrap.innerHTML = comments.map(c => {
+    const mine = c.author_id === APP.user?.sub;
+    const isSupportAuthor = !RAISER_ROLES_SET.includes(c.author_role);
+    const tag = isSupportAuthor ? '🛠 Support' : '🙋 Requester';
+    const bubbleBg = mine ? 'var(--primary)' : (isSupportAuthor ? '#eef2ff' : '#f3f4f6');
+    const textCol  = mine ? '#fff' : 'var(--text)';
+    return `
+    <div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'}">
+      <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:2px;padding:0 4px">
+        <b style="color:${isSupportAuthor?'#4f46e5':'#b45309'}">${h(c.author_name)}</b> · ${tag} · ${fmtDT(c.created_at)}
+      </div>
+      <div style="max-width:82%;background:${bubbleBg};color:${textCol};border-radius:${mine?'12px 12px 3px 12px':'12px 12px 12px 3px'};padding:8px 12px;font-size:.83rem;line-height:1.5;white-space:pre-wrap;word-break:break-word">${h(c.message)}</div>
+    </div>`;
+  }).join('');
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+async function postTicketComment(ticketId) {
+  const input = document.getElementById('ticket-chat-input');
+  const message = input?.value?.trim();
+  if (!message) return;
+  input.disabled = true;
+  const res = await api(`/tickets/${ticketId}/comments`, { method:'POST', body: JSON.stringify({ message }) });
+  input.disabled = false;
+  if (res) { input.value = ''; loadTicketChat(ticketId); }
+  input.focus();
 }
 
 /* Raiser-only actions on a RESOLVED ticket */

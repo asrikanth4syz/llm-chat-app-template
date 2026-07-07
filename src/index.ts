@@ -197,6 +197,12 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
   } catch { /* column already exists */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ticket_comments (
+      id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, author_id TEXT NOT NULL,
+      author_name TEXT NOT NULL, author_role TEXT NOT NULL, message TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* ignore */ }
 }
 
 export default {
@@ -267,6 +273,8 @@ export default {
       if (path==="/api/tickets"                     && method==="GET")   return handleListTickets(request,env);
       if (path==="/api/tickets"                     && method==="POST")  return handleCreateTicket(request,env);
       if (path.match(/^\/api\/tickets\/[^/]+$/)     && method==="PATCH") return handlePatchTicket(request,env,path);
+      if (path.match(/^\/api\/tickets\/[^/]+\/comments$/) && method==="GET")  return handleListTicketComments(request,env,path);
+      if (path.match(/^\/api\/tickets\/[^/]+\/comments$/) && method==="POST") return handleAddTicketComment(request,env,path);
 
       // Users
       if (path==="/api/users"                   && method==="GET")   return handleListUsers(request,env);
@@ -1908,6 +1916,53 @@ async function handleCreateTicket(request: Request, env: Env): Promise<Response>
   await pushNotification(env, "ops_admin", `New support ticket ${id}: ${body.subject}`);
   await audit(env, user, "CREATE", "ticket", id, undefined, body.subject);
   return json({id}, 201);
+}
+
+// Shared ownership check: may this user access this ticket?
+async function canAccessTicket(env: Env, user: JWTPayload, ticketId: string): Promise<boolean> {
+  if (["client_admin","client_approver","client_user"].includes(user.role)) {
+    const t = await env.DB.prepare("SELECT client_id,raised_by FROM tickets WHERE id=?").bind(ticketId).first() as {client_id:string;raised_by:string}|null;
+    if (!t) return false;
+    return user.client_id ? t.client_id === user.client_id : t.raised_by === user.sub;
+  }
+  if (["vendor_admin","vendor_user"].includes(user.role)) {
+    const t = await env.DB.prepare("SELECT raised_by FROM tickets WHERE id=?").bind(ticketId).first() as {raised_by:string}|null;
+    return !!t && t.raised_by === user.sub;
+  }
+  return true; // platform roles
+}
+
+async function handleListTicketComments(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const ticketId = path.split("/")[3];
+  if (!await canAccessTicket(env, user!, ticketId)) return json({error:"Forbidden"}, 403);
+  try {
+    const {results} = await env.DB.prepare("SELECT * FROM ticket_comments WHERE ticket_id=? ORDER BY created_at ASC").bind(ticketId).all();
+    return json(results);
+  } catch { return json([]); }
+}
+
+async function handleAddTicketComment(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const ticketId = path.split("/")[3];
+  if (!await canAccessTicket(env, user!, ticketId)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as {message?:string};
+  const message = (body.message||"").trim();
+  if (!message) return json({error:"Message required"}, 400);
+  if (message.length > 2000) return json({error:"Message too long"}, 400);
+
+  const cid = uid();
+  await env.DB.prepare("INSERT INTO ticket_comments (id,ticket_id,author_id,author_name,author_role,message) VALUES (?,?,?,?,?,?)")
+    .bind(cid, ticketId, user!.sub, user!.name, user!.role, message).run();
+
+  // Notify the other party
+  const isRaiserSide = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role);
+  if (isRaiserSide) await pushNotification(env, "ops_admin", `New comment on ticket ${ticketId} from ${user!.name}`);
+
+  const row = await env.DB.prepare("SELECT * FROM ticket_comments WHERE id=?").bind(cid).first();
+  return json(row, 201);
 }
 
 async function handlePatchTicket(request: Request, env: Env, path: string): Promise<Response> {
