@@ -758,7 +758,7 @@ async function renderClientDashboard(el) {
   const lowStock = (myInv||[]).filter(i => i.stock_status==='low' || i.stock_status==='out')
     .sort((a,b) => (a.stock_status==='out'?0:1) - (b.stock_status==='out'?0:1));
   const budget    = client?.monthly_budget || 500000;
-  const spent     = client?.spent_this_month || totalSpend || 0;
+  const spent     = client?.spent_this_month ?? 0; // actual current-month spend from backend
   const pctSpent  = Math.min(100, Math.round((spent / budget) * 100));
   const health    = client?.health_score || 85;
   const remaining = Math.max(0, budget - spent);
@@ -1027,7 +1027,7 @@ async function renderClientBudget(el) {
   ]);
   const client = data?.client || {};
   const budget   = client.monthly_budget || 500000;
-  const spent    = client.spent_this_month || data?.totalSpend || 0;
+  const spent    = client.spent_this_month ?? 0; // actual current-month spend from backend
   const pct      = Math.min(100, Math.round((spent / budget) * 100));
   const remain   = Math.max(0, budget - spent);
   const health   = client.health_score || 85;
