@@ -1766,6 +1766,14 @@ function renderCartReview(container) {
 }
 
 function refreshCartReviewUI() {
+  // Safety net: repair any cart item whose name is missing or equal to its SKU
+  APP.cart.forEach(ci => {
+    if (!ci.name || ci.name === ci.sku) {
+      const ct = (APP._catalog||[]).find(c => c.sku === ci.sku);
+      if (ct?.name) ci.name = ct.name;
+    }
+  });
+
   const total = APP.cart.reduce((s,i) => s + i.qty * i.unit_price, 0);
   const gst   = Math.round(total * 0.18);
   const grand = total + gst;
@@ -2113,14 +2121,17 @@ function filterCatalog(cat, btn) {
 }
 
 function changeQty(sku, delta, price, btnOrName) {
-  const name = typeof btnOrName === 'string' ? btnOrName :
-    (btnOrName.closest('.catalog-qty')?.querySelector('.qty-val')?.dataset.name || sku);
+  const catalogItem = (APP._catalog||[]).find(c => c.sku === sku);
+  // Prefer the catalog's real item name; fall back to the qty-val label, never the SKU
+  const name = catalogItem?.name
+    || (typeof btnOrName === 'string' ? btnOrName : null)
+    || (typeof btnOrName === 'object' ? document.getElementById('qty-' + sku)?.dataset.name : null)
+    || sku;
   const existing = APP.cart.find(c => c.sku === sku);
   if (existing) {
     existing.qty = Math.max(0, existing.qty + delta);
     if (existing.qty === 0) APP.cart = APP.cart.filter(c => c.sku !== sku);
   } else if (delta > 0) {
-    const catalogItem = (APP._catalog||[]).find(c => c.sku === sku);
     APP.cart.push({ sku, name, qty: 1, unit_price: price, emoji: catalogItem?.emoji || '📦' });
   }
   const qtyEl = document.getElementById('qty-' + sku);
