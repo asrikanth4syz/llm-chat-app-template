@@ -6749,24 +6749,27 @@ async function markDelivered(dcId) {
     if (res) { showToast(`DC ${dcId} marked as delivered`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
     return;
   }
+  const capped = items.some(i => i.order_remaining != null && i.order_remaining < i.qty_ordered);
   openModal(`Confirm Delivery — ${dcId}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
-      Enter actual qty delivered for each item. If less than dispatched, a follow-up DC will be created automatically.
+      Enter actual qty delivered for each item. You cannot deliver more than the order's outstanding balance — if less, a follow-up DC is created for the remainder.
     </p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th>Dispatched</th><th>Delivered</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Outstanding</th><th style="text-align:center">Delivered</th></tr></thead>
       <tbody>
-        ${items.map(i=>`<tr>
+        ${items.map(i=>{ const maxDeliver = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
           <td><b>${i.sku}</b></td>
           <td>${i.name}</td>
-          <td style="color:var(--text-muted)">${i.qty_ordered}</td>
-          <td><input type="number" class="form-control form-control-sm deliver-qty"
-            data-sku="${i.sku}" value="${i.qty_ordered}" min="0" max="${i.qty_ordered}"
+          <td style="text-align:center;color:var(--text-muted)">${i.qty_ordered}</td>
+          <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
+          <td style="text-align:center"><input type="number" class="form-control form-control-sm deliver-qty"
+            data-sku="${i.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}"
             style="width:80px;text-align:center"
-            oninput="this.style.color=+this.value<+this.max?'var(--warning)':'inherit'"></td>
-        </tr>`).join('')}
+            oninput="if(+this.value>${maxDeliver})this.value=${maxDeliver};this.style.color=+this.value<${maxDeliver}?'var(--warning)':'inherit'"></td>
+        </tr>`;}).join('')}
       </tbody>
     </table>
+    ${capped?'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Deliverable qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-success" onclick="confirmDelivery('${dcId}')">Confirm Delivery</button>
@@ -7308,17 +7311,22 @@ async function execMarkDelivered(dcId) {
     return;
   }
   APP._voiceNote = null;
+  const capped = items.some(it => it.order_remaining != null && it.order_remaining < it.qty_ordered);
   openModal('Confirm Delivery — ' + dcId, `
-    <p style="color:var(--text-muted);margin-bottom:12px">Enter actual qty delivered. If less than dispatched, a follow-up DC will be created.</p>
+    <p style="color:var(--text-muted);margin-bottom:12px">Enter actual qty delivered. You cannot deliver more than what is still outstanding on the order — if less, a follow-up DC is created for the balance.</p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>Item</th><th>Dispatched</th><th>Delivered</th></tr></thead>
-      <tbody>${items.map(it => `<tr>
+      <thead><tr><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Outstanding</th><th style="text-align:center">Delivered</th></tr></thead>
+      <tbody>${items.map(it => {
+        const maxDeliver = it.order_remaining != null ? it.order_remaining : it.qty_ordered;
+        return `<tr>
         <td>${it.item_name||it.sku}</td>
-        <td>${it.qty_ordered}</td>
-        <td><input type="number" data-sku="${it.sku}" value="${it.qty_ordered}" min="0" max="${it.qty_ordered}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
-      </tr>`).join('')}
+        <td style="text-align:center;color:var(--text-muted)">${it.qty_ordered}</td>
+        <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
+        <td style="text-align:center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" oninput="if(+this.value>${maxDeliver})this.value=${maxDeliver}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      </tr>`;}).join('')}
       </tbody>
     </table>
+    ${capped?'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Some items already had quantity delivered on earlier DCs — the deliverable amount is capped to the order balance.</div>':''}
     <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
       <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">

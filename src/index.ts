@@ -1344,11 +1344,33 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
   if (!dc) return json({error:"Not found"}, 404);
 
-  // Merge per-item delivered qtys (body.items if provided, else full dispatched qty)
+  // Order-wide caps: total ordered per sku and what's already delivered on OTHER DCs.
+  // Cumulative delivered across all DCs must never exceed the ordered qty.
+  const orderCap: Record<string, number> = {};
+  const deliveredElsewhere: Record<string, number> = {};
+  if (dc.order_id) {
+    const {results: oItems} = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
+    for (const oi of oItems) orderCap[oi.sku as string] = oi.qty as number;
+    const {results: delRows} = await env.DB.prepare(
+      "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) as del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.dc_id!=? GROUP BY di.sku"
+    ).bind(dc.order_id, id).all() as {results: Record<string,unknown>[]};
+    for (const r of delRows) deliveredElsewhere[r.sku as string] = r.del as number;
+  }
+
+  // Merge per-item delivered qtys, clamped to min(dispatched, order remaining)
   const deliveries = dcItems.map(di => {
     const override = body.items?.find(i => i.sku === di.sku);
-    const qty_delivered = override !== undefined ? Math.max(0, Math.min(override.qty_delivered, di.qty_ordered as number)) : (di.qty_ordered as number);
-    return { sku: di.sku as string, name: di.name as string, qty_delivered, qty_dispatched: di.qty_ordered as number };
+    const dispatched = di.qty_ordered as number;
+    const cap = orderCap[di.sku as string] != null
+      ? Math.max(0, orderCap[di.sku as string] - (deliveredElsewhere[di.sku as string] || 0))
+      : dispatched;
+    const requested = override !== undefined ? override.qty_delivered : dispatched;
+    const qty_delivered = Math.max(0, Math.min(requested, dispatched, cap));
+    // Outstanding for the whole order after this delivery (never negative)
+    const order_remaining = orderCap[di.sku as string] != null
+      ? Math.max(0, orderCap[di.sku as string] - (deliveredElsewhere[di.sku as string] || 0) - qty_delivered)
+      : Math.max(0, dispatched - qty_delivered);
+    return { sku: di.sku as string, name: di.name as string, qty_delivered, qty_dispatched: dispatched, order_remaining };
   });
 
   const totalDelivered = deliveries.reduce((s, i) => s + i.qty_delivered, 0);
@@ -1369,16 +1391,17 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,delivered_at=datetime('now') WHERE id=?")
     .bind(totalDelivered, id).run();
 
-  // Create follow-up DC for any items not fully delivered from this DC
-  const shortItems = deliveries.filter(i => i.qty_delivered < i.qty_dispatched);
+  // Create follow-up DC only for items still OUTSTANDING against the order
+  // (based on order remaining, so we never schedule more than was ordered).
+  const shortItems = deliveries.filter(i => i.order_remaining > 0);
   if (shortItems.length > 0 && dc.order_id) {
     const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
-    const remainingTotal = shortItems.reduce((s, i) => s + (i.qty_dispatched - i.qty_delivered), 0);
+    const remainingTotal = shortItems.reduce((s, i) => s + i.order_remaining, 0);
     await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
       .bind(newDCId, dc.order_id, remainingTotal).run();
     for (const r of shortItems) {
       await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
-        .bind(uid(), newDCId, r.sku, r.name, r.qty_dispatched - r.qty_delivered).run();
+        .bind(uid(), newDCId, r.sku, r.name, r.order_remaining).run();
     }
     await pushNotification(env, "ops_admin", `DC ${id} partial delivery — follow-up DC ${newDCId} created for ${remainingTotal} units`);
   }
@@ -1507,7 +1530,25 @@ async function handleListDCItems(request: Request, env: Env, path: string): Prom
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const {results} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=? ORDER BY name").bind(id).all();
+  const {results} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=? ORDER BY name").bind(id).all() as {results: Record<string,unknown>[]};
+
+  // Enrich each item with the order-wide remaining balance so the UI can cap
+  // deliverable qty to what's still outstanding across ALL DCs, never > ordered.
+  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string}|null;
+  if (dc?.order_id) {
+    for (const it of results) {
+      const oi = await env.DB.prepare("SELECT qty FROM order_items WHERE order_id=? AND sku=?").bind(dc.order_id, it.sku).first() as {qty:number}|null;
+      const del = await env.DB.prepare(
+        "SELECT COALESCE(SUM(di.qty_delivered),0) as del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.sku=? AND di.dc_id!=?"
+      ).bind(dc.order_id, it.sku, id).first() as {del:number}|null;
+      const ordered = oi?.qty ?? (it.qty_ordered as number);
+      const deliveredElsewhere = del?.del || 0;
+      it.order_ordered_qty = ordered;
+      it.delivered_elsewhere = deliveredElsewhere;
+      // Max that may be delivered on THIS dc = min(dispatched, order remaining)
+      it.order_remaining = Math.max(0, Math.min(it.qty_ordered as number, ordered - deliveredElsewhere));
+    }
+  }
   return json(results);
 }
 
