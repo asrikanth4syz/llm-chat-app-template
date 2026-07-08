@@ -359,6 +359,7 @@ export default {
       if (path==="/api/reports/client-consumption"  && method==="GET") return handleRptClientConsumption(request,env);
       if (path==="/api/reports/client-spend"        && method==="GET") return handleRptClientSpend(request,env);
       if (path==="/api/reports/order-fulfilment-monthly" && method==="GET") return handleRptOrderFulfilmentMonthly(request,env);
+      if (path==="/api/reports/category-breakdown"  && method==="GET") return handleRptCategoryBreakdown(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -4275,5 +4276,62 @@ async function handleRptOrderFulfilmentMonthly(request: Request, env: Env): Prom
     `).bind(...binds).all();
 
     return json({ rows: results as Record<string,unknown>[], client_id: clientId, scope: clientId ? 'client' : 'all' });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// Ordered-vs-delivered split by category, or by sub-category when ?category= is given.
+// Scope: client role → own client; admin may pass ?client_id=. Filter by exact
+// ?period=YYYY-MM (order period) or a ?from=&to= date range for custom windows.
+async function handleRptCategoryBreakdown(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  const clientId = isClientRole ? (user!.client_id || null) : (url.searchParams.get('client_id') || null);
+  const period = url.searchParams.get('period');           // exact YYYY-MM
+  const category = url.searchParams.get('category');        // when set → sub-category level
+  const from = url.searchParams.get('from') || new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+
+  try {
+    const where: string[] = ["o.status NOT IN ('CANCELLED','DRAFT')"];
+    const binds: string[] = [];
+    if (clientId) { where.push("o.client_id = ?"); binds.push(clientId); }
+    if (period && /^\d{4}-\d{2}$/.test(period)) {
+      where.push("COALESCE(o.order_period, strftime('%Y-%m', o.created_at)) = ?"); binds.push(period);
+    } else {
+      where.push("o.created_at >= ? AND o.created_at < date(?, '+1 day')"); binds.push(from, to);
+    }
+
+    const groupExpr = category != null
+      ? "COALESCE(NULLIF(i.sub_category,''),'Normal')"
+      : "COALESCE(NULLIF(i.category,''),'Uncategorised')";
+    if (category != null) { where.push("COALESCE(NULLIF(i.category,''),'Uncategorised') = ?"); binds.push(category); }
+
+    const deliveredExpr = `COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END)
+        FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+        WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)`;
+
+    const {results} = await env.DB.prepare(`
+      SELECT
+        ${groupExpr} AS name,
+        COUNT(DISTINCT o.id) AS order_count,
+        SUM(oi.qty) AS ordered_qty,
+        SUM(oi.qty * oi.unit_price) AS ordered_value,
+        SUM(${deliveredExpr}) AS delivered_qty,
+        SUM(${deliveredExpr} * oi.unit_price) AS delivered_value
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN inventory i ON i.sku = oi.sku
+      WHERE ${where.join(' AND ')}
+      GROUP BY name
+      ORDER BY ordered_value DESC
+    `).bind(...binds).all();
+
+    return json({
+      level: category != null ? 'subcategory' : 'category',
+      category: category || null, period: period || null, from, to,
+      rows: results as Record<string,unknown>[],
+    });
   } catch(e) { return json({error: String(e)}, 500); }
 }

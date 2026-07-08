@@ -8964,21 +8964,26 @@ function renderFulfilContent() {
     <div><div style="font-size:.72rem;color:var(--text-muted)">Ordered</div><div style="font-weight:700">${Math.round(totOrd)} units</div></div>
     <div><div style="font-size:.72rem;color:var(--text-muted)">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
     <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'#dc2626':'#16a34a'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
+    <div style="flex:1"></div>
+    <button class="btn btn-secondary btn-sm" onclick="openCategoryDrill('','All periods in range')">🔍 Category Split (all)</button>
   </div>`;
 
   if (_fulfilMode === 'table') {
     el.innerHTML = header + `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th></tr></thead>
+      <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
       <tbody>${data.map(d=>{ const due=Math.max(0,d.ordered_qty-d.delivered_qty); const c=d.fill_pct>=90?'#16a34a':d.fill_pct>=70?'#d97706':'#dc2626';
-        return `<tr>
-          <td style="font-weight:600">${d.label}</td>
+        const periodParam = _fulfilGranularity==='month' ? d.key : '';
+        return `<tr style="cursor:pointer" onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" onclick="openCategoryDrill('${periodParam}','${d.label.replace(/'/g,"")}')">
+          <td style="font-weight:600;color:var(--blue)">${d.label}</td>
           <td style="text-align:right">${d.order_count}</td>
           <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
           <td style="text-align:right">${Math.round(d.delivered_qty)}</td>
           <td style="text-align:right;color:${due>0?'#dc2626':'inherit'}">${Math.round(due)}</td>
           <td style="text-align:right;font-weight:700;color:${c}">${d.fill_pct}%</td>
+          <td style="text-align:right;color:var(--text-muted)">Categories ›</td>
         </tr>`;}).join('')}</tbody>
-    </table></div></div>`;
+    </table></div></div>
+    <div style="font-size:.74rem;color:var(--text-muted);margin-top:6px">💡 ${_fulfilGranularity==='month'?'Click a month':'Switch to Monthly to drill by month, or use "Category Split (all)"'} to see the category → sub-category breakdown.</div>`;
     return;
   }
 
@@ -9000,7 +9005,13 @@ function renderFulfilContent() {
       },
       options: {
         responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12 } } },
+        onClick: (evt, els) => {
+          if (!els.length) return;
+          const d = data[els[0].index]; if (!d) return;
+          openCategoryDrill(_fulfilGranularity==='month' ? d.key : '', d.label);
+        },
+        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12 } },
+          tooltip:{ callbacks:{ afterBody: ()=> _fulfilGranularity==='month' ? 'Click to drill into categories' : '' } } },
         scales:{
           x:{ grid:{display:false}, ticks:{font:{size:10}} },
           y1:{ position:'left', beginAtZero:true, title:{display:true,text:'Units',font:{size:10}}, grid:{color:'#f0f2f7'} },
@@ -9008,6 +9019,115 @@ function renderFulfilContent() {
         }
       }
     });
+  }
+}
+
+/* ══ Category / sub-category drill-down (client → period → category → subcat) ══ */
+let _drillState = { period:'', periodLabel:'', category:null };
+
+function drillDateParams() {
+  const from = document.getElementById('rpt-from')?.value || '';
+  const to   = document.getElementById('rpt-to')?.value   || '';
+  return { from, to };
+}
+
+async function openCategoryDrill(period, periodLabel) {
+  _drillState = { period: period||'', periodLabel: periodLabel||'All periods', category:null };
+  openModal('Category Breakdown', '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div>',
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+  loadDrill();
+}
+
+function drillToSubcategory(category) {
+  _drillState.category = category;
+  loadDrill();
+}
+
+function drillBackToCategory() {
+  _drillState.category = null;
+  loadDrill();
+}
+
+async function loadDrill() {
+  const { period, periodLabel, category } = _drillState;
+  const { from, to } = drillDateParams();
+  const params = new URLSearchParams();
+  if (period) params.set('period', period); else { if(from)params.set('from',from); if(to)params.set('to',to); }
+  if (category != null) params.set('category', category);
+
+  const titleEl = document.getElementById('modal-title');
+  if (titleEl) titleEl.textContent = category != null ? `Sub-category · ${category}` : 'Category Breakdown';
+
+  const body = document.getElementById('modal-body');
+  if (body) body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div>';
+
+  const data = await api('/reports/category-breakdown?' + params.toString());
+  if (!body) return;
+  const rows = (data?.rows || []).filter(r => (r.ordered_qty||0) > 0);
+
+  // Breadcrumb
+  const crumb = `<div style="display:flex;align-items:center;gap:6px;font-size:.8rem;margin-bottom:12px;flex-wrap:wrap">
+    <span style="color:var(--text-muted)">📅 ${h(periodLabel)}</span>
+    <span style="color:var(--border)">›</span>
+    <button onclick="drillBackToCategory()" style="background:none;border:none;cursor:pointer;padding:0;font-size:.8rem;font-weight:${category==null?'700':'400'};color:${category==null?'var(--navy)':'var(--blue)'}">Categories</button>
+    ${category!=null?`<span style="color:var(--border)">›</span><span style="font-weight:700;color:var(--navy)">${h(category)}</span>`:''}
+  </div>`;
+
+  if (!rows.length) { body.innerHTML = crumb + '<div style="text-align:center;padding:30px;color:var(--text-muted)">No data for this selection.</div>'; return; }
+
+  const totOrdVal = rows.reduce((s,r)=>s+(r.ordered_value||0),0) || 1;
+  const totOrdQty = rows.reduce((s,r)=>s+(r.ordered_qty||0),0);
+  const totDelQty = rows.reduce((s,r)=>s+(r.delivered_qty||0),0);
+  const palette = ['#6366f1','#0891b2','#16a34a','#d97706','#dc2626','#7c3aed','#0ea5e9','#65a30d','#db2777','#64748b','#ea580c','#0d9488'];
+
+  const enriched = rows.map((r,i)=>({
+    ...r,
+    share: Math.round((r.ordered_value||0)/totOrdVal*100),
+    fill: r.ordered_qty ? Math.round((r.delivered_qty||0)/r.ordered_qty*100) : 0,
+    color: palette[i%palette.length],
+  }));
+
+  const isCat = category == null;
+  const donut = window.Chart ? `<div style="flex:0 0 210px;position:relative;height:210px"><canvas id="drill-donut"></canvas></div>` : '';
+  const listRows = enriched.map(r=>{
+    const fc = r.fill>=90?'#16a34a':r.fill>=70?'#d97706':'#dc2626';
+    const clickable = isCat;
+    return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" onclick="drillToSubcategory('${String(r.name).replace(/'/g,"")}')"`:''}>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.color};margin-right:7px"></span><b style="${clickable?'color:var(--blue)':''}">${h(r.name)}</b></td>
+      <td style="text-align:right;font-weight:700">${r.share}%</td>
+      <td style="text-align:right">${Math.round(r.ordered_qty)}</td>
+      <td style="text-align:right">${Math.round(r.delivered_qty)}</td>
+      <td style="text-align:right;font-weight:700;color:${fc}">${r.fill}%</td>
+      ${clickable?'<td style="text-align:right;color:var(--text-muted);font-size:.8rem">›</td>':'<td></td>'}
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = crumb + `
+    <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+      ${donut}
+      <div style="flex:1;min-width:280px">
+        <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px">Overall fill: <b style="color:${totOrdQty&&Math.round(totDelQty/totOrdQty*100)>=90?'#16a34a':'#d97706'}">${totOrdQty?Math.round(totDelQty/totOrdQty*100):0}%</b> · ${Math.round(totOrdQty)} ordered · ${Math.round(totDelQty)} delivered</div>
+        <div class="table-wrap"><table class="table" style="margin:0">
+          <thead><tr><th>${isCat?'Category':'Sub-category'}</th><th style="text-align:right">% Split</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
+          <tbody>${listRows}</tbody>
+        </table></div>
+        ${isCat?'<div style="font-size:.73rem;color:var(--text-muted);margin-top:6px">💡 Click a category to see its sub-category split.</div>':''}
+      </div>
+    </div>`;
+
+  if (window.Chart) {
+    const cv = document.getElementById('drill-donut');
+    if (cv) {
+      if (APP.charts.drill) { try{APP.charts.drill.destroy();}catch(_){} }
+      APP.charts.drill = new Chart(cv, {
+        type:'doughnut',
+        data:{ labels:enriched.map(r=>r.name), datasets:[{ data:enriched.map(r=>Math.round(r.ordered_value)), backgroundColor:enriched.map(r=>r.color), borderWidth:1, borderColor:'#fff' }] },
+        options:{ responsive:true, maintainAspectRatio:false, cutout:'58%',
+          plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(c)=>`${c.label}: ${fmt(c.raw)} (${enriched[c.dataIndex].share}%)` } } },
+          onClick:(e,els)=>{ if(isCat&&els.length){ drillToSubcategory(String(enriched[els[0].index].name)); } }
+        }
+      });
+    }
   }
 }
 
