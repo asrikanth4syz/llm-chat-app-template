@@ -5211,7 +5211,54 @@ function vendorFormFields(prefix, v={}) {
     <div class="grid-2">
       <div class="form-group"><label>Contact Email</label><input type="email" id="${prefix}-email" value="${v.contact_email||''}"></div>
       <div class="form-group"><label>Contact Phone</label><input type="tel" id="${prefix}-phone" value="${v.contact_phone||''}"></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);margin:6px 0 12px;padding-top:12px;font-size:.78rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Delivery & Visit Schedule</div>
+    <div class="grid-2">
+      <div class="form-group">
+        <label>Lead Time for Delivery <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(days)</span></label>
+        <input type="number" id="${prefix}-lead" min="0" step="1" value="${v.avg_lead_days!=null?v.avg_lead_days:''}" placeholder="e.g. 3">
+      </div>
+      <div class="form-group">
+        <label>Visit Frequency</label>
+        <select id="${prefix}-visitfreq" onchange="onVendorVisitFreqChange('${prefix}')">
+          ${['','Weekly','Fortnightly','Monthly','On-Demand'].map(f=>`<option value="${f}" ${(v.visit_frequency||'')===f?'selected':''}>${f||'— Not scheduled —'}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group" id="${prefix}-visitday-wrap" style="display:${(v.visit_frequency==='Weekly'||v.visit_frequency==='Fortnightly'||v.visit_frequency==='Monthly')?'block':'none'}">
+      <label id="${prefix}-visitday-label">Visit Day</label>
+      <div id="${prefix}-visitday-field">${vendorVisitDayField(prefix, v.visit_frequency||'', v.visit_day||'')}</div>
+    </div>
+
+    <div class="form-group">
+      <label>Comments / Notes <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(product list, packaging, MOQ, payment terms, anything relevant)</span></label>
+      <textarea id="${prefix}-notes" rows="3" style="width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.84rem;resize:vertical" placeholder="e.g. Supplies: Bru Coffee 200g, Tata Tea 1kg… · MOQ 24 units · Delivers Tue & Fri · Payment: 15-day credit">${v.notes||''}</textarea>
     </div>`;
+}
+
+const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+function vendorVisitDayField(prefix, freq, current) {
+  if (freq === 'Monthly') {
+    return `<input type="number" id="${prefix}-visitday" min="1" max="31" value="${current||''}" placeholder="Day of month (1–31)" style="max-width:200px">`;
+  }
+  // Weekly / Fortnightly → weekday picker
+  return `<select id="${prefix}-visitday" style="max-width:220px">
+    <option value="">— Select day —</option>
+    ${WEEKDAYS.map(d=>`<option value="${d}" ${current===d?'selected':''}>${d}</option>`).join('')}
+  </select>`;
+}
+
+function onVendorVisitFreqChange(prefix) {
+  const freq = document.getElementById(`${prefix}-visitfreq`)?.value || '';
+  const wrap = document.getElementById(`${prefix}-visitday-wrap`);
+  const label = document.getElementById(`${prefix}-visitday-label`);
+  const field = document.getElementById(`${prefix}-visitday-field`);
+  const showDay = ['Weekly','Fortnightly','Monthly'].includes(freq);
+  if (wrap) wrap.style.display = showDay ? 'block' : 'none';
+  if (label) label.textContent = freq === 'Monthly' ? 'Visit Day of Month' : 'Visit Weekday';
+  if (field) field.innerHTML = vendorVisitDayField(prefix, freq, '');
 }
 
 function addVendorModal() {
@@ -5220,16 +5267,26 @@ function addVendorModal() {
      <button class="btn btn-primary" onclick="saveVendor()">Add Vendor</button>`);
 }
 
-async function saveVendor() {
-  const body = {
-    name: document.getElementById('v-name').value.trim(),
-    category: getCheckedCats('v'),
-    location: document.getElementById('v-loc').value,
-    address: document.getElementById('v-address').value,
-    map_pin: document.getElementById('v-mappin').value.trim(),
-    contact_email: document.getElementById('v-email').value,
-    contact_phone: document.getElementById('v-phone').value,
+function collectVendorForm(prefix) {
+  const freq = document.getElementById(`${prefix}-visitfreq`)?.value || '';
+  const leadVal = document.getElementById(`${prefix}-lead`)?.value;
+  return {
+    name: document.getElementById(`${prefix}-name`).value.trim(),
+    category: getCheckedCats(prefix),
+    location: document.getElementById(`${prefix}-loc`).value,
+    address: document.getElementById(`${prefix}-address`).value,
+    map_pin: document.getElementById(`${prefix}-mappin`).value.trim(),
+    contact_email: document.getElementById(`${prefix}-email`).value,
+    contact_phone: document.getElementById(`${prefix}-phone`).value,
+    avg_lead_days: leadVal === '' ? undefined : Number(leadVal),
+    visit_frequency: freq || null,
+    visit_day: ['Weekly','Fortnightly','Monthly'].includes(freq) ? (document.getElementById(`${prefix}-visitday`)?.value || null) : null,
+    notes: document.getElementById(`${prefix}-notes`)?.value?.trim() || null,
   };
+}
+
+async function saveVendor() {
+  const body = collectVendorForm('v');
   if (!body.name) { showToast('Vendor name required','error'); return; }
   const res = await api('/vendors', { method:'POST', body: JSON.stringify(body) });
   closeModal();
@@ -5257,9 +5314,11 @@ function viewVendorModal(v) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Rating</div><div style="font-weight:600">${(+v.rating||0).toFixed(1)} / 5.0</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">On-time Rate</div><div style="font-weight:700;color:${onTimeColor}">${pct(v.on_time_rate||0)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Fill Rate</div><div style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Avg Lead Days</div><div style="font-weight:600">${v.avg_lead_days||'—'} days</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Lead Time</div><div style="font-weight:600">${v.avg_lead_days!=null?v.avg_lead_days+' days':'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Visit Schedule</div><div style="font-weight:600">${v.visit_frequency?`${v.visit_frequency}${v.visit_day?' · '+(v.visit_frequency==='Monthly'?'day '+v.visit_day:v.visit_day):''}`:'—'}</div></div>
     </div>
+    ${v.notes?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Comments / Notes</div><div style="font-size:.84rem;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;line-height:1.5">${h(v.notes)}</div></div>`:''}
     ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `<button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
@@ -5273,15 +5332,7 @@ function editVendorModal(v) {
 }
 
 async function saveEditVendor(id) {
-  const body = {
-    name: document.getElementById('ev-name').value.trim(),
-    category: getCheckedCats('ev'),
-    location: document.getElementById('ev-loc').value,
-    address: document.getElementById('ev-address').value,
-    map_pin: document.getElementById('ev-mappin').value.trim(),
-    contact_email: document.getElementById('ev-email').value,
-    contact_phone: document.getElementById('ev-phone').value,
-  };
+  const body = collectVendorForm('ev');
   if (!body.name) { showToast('Vendor name required','error'); return; }
   const res = await api('/vendors/' + id, { method:'PATCH', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast('Vendor updated'); APP._vendorSearch=''; APP._vendorCat=''; APP._vendorLoc=''; navigate('vendors'); }
