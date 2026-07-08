@@ -2471,26 +2471,48 @@ function filterMyInventoryTable() {
 }
 
 function logConsumptionModal(sku, name, qty, uom) {
+  const onHand = Math.round(qty) || 0;
   openModal(`Log Consumption — ${name}`, `
     <div style="margin-bottom:14px">
-      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${Math.round(qty)} ${uom}</strong></div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${onHand} ${uom}</strong></div>
     </div>
     <div class="form-group">
       <label class="form-label">Quantity Used <span style="color:var(--danger)">*</span></label>
-      <input id="cons-qty" type="number" min="1" step="1" class="form-control" placeholder="e.g. 5" style="max-width:160px">
+      <input id="cons-qty" type="number" min="1" step="1" max="${onHand}" class="form-control" placeholder="e.g. 5" style="max-width:160px"
+        oninput="validateConsQty(${onHand})">
+      <div id="cons-qty-warn" style="display:none;font-size:.76rem;color:var(--danger);margin-top:5px"></div>
     </div>
     <div class="form-group">
       <label class="form-label">Notes (optional)</label>
       <input id="cons-notes" type="text" class="form-control" placeholder="e.g. Used for lunch service">
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitConsumption('${h(sku)}')">Save</button>`);
+     <button id="cons-save-btn" class="btn btn-primary" onclick="submitConsumption('${h(sku)}',${onHand})">Save</button>`);
 }
 
-async function submitConsumption(sku) {
+function validateConsQty(onHand) {
+  const input = document.getElementById('cons-qty');
+  const warn  = document.getElementById('cons-qty-warn');
+  const btn   = document.getElementById('cons-save-btn');
+  const val   = parseInt(input?.value, 10);
+  let msg = '';
+  if (input?.value && (isNaN(val) || val <= 0)) msg = 'Enter a quantity of at least 1.';
+  else if (val > onHand) msg = `Only ${onHand} in store — you cannot use more than that.`;
+  if (warn) { warn.textContent = msg; warn.style.display = msg ? 'block' : 'none'; }
+  if (input) input.style.borderColor = msg ? 'var(--danger)' : '';
+  if (btn) btn.disabled = !!msg;
+  return !msg;
+}
+
+async function submitConsumption(sku, onHand) {
   const qty   = parseInt(document.getElementById('cons-qty')?.value, 10);
   const notes = document.getElementById('cons-notes')?.value?.trim();
   if (!qty || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
+  if (typeof onHand === 'number' && qty > onHand) {
+    showToast(`Only ${onHand} in store — cannot log ${qty}`, 'error');
+    validateConsQty(onHand);
+    return;
+  }
 
   const res = await api('/client-inventory/consume', {method:'POST', body:JSON.stringify({sku, qty, notes})});
   if (res?.ok) {

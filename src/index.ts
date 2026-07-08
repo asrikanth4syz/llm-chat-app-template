@@ -4006,7 +4006,12 @@ async function handleClientConsume(request: Request, env: Env): Promise<Response
   const row = await env.DB.prepare("SELECT item_name, qty_on_hand FROM client_inventory WHERE client_id=? AND sku=?").bind(clientId, body.sku).first() as Record<string,unknown>|null;
   if (!row) return json({error:"Item not in your inventory"}, 404);
 
-  const newQty = Math.max(0, (row.qty_on_hand as number) - body.qty);
+  const onHand = (row.qty_on_hand as number) || 0;
+  if (body.qty > onHand) {
+    return json({error:`Cannot log ${body.qty} — only ${Math.round(onHand)} in store`}, 400);
+  }
+
+  const newQty = onHand - body.qty;
   await env.DB.prepare("UPDATE client_inventory SET qty_on_hand=?, last_consumed_at=datetime('now'), updated_at=datetime('now') WHERE client_id=? AND sku=?")
     .bind(newQty, clientId, body.sku).run();
   await env.DB.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,notes,recorded_by) VALUES (?,?,?,?,?,?)")
