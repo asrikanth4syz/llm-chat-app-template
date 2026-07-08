@@ -214,6 +214,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_image TEXT").run();
   } catch { /* column already exists */ }
+  try {
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN closed_at TEXT").run();
+  } catch { /* column already exists */ }
 }
 
 export default {
@@ -1304,7 +1307,7 @@ async function handleBillDC(request: Request, env: Env, path: string): Promise<R
   await env.DB.prepare("UPDATE delivery_challans SET billed=1,billed_at=datetime('now') WHERE id=?").bind(id).run();
   const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (dc?.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
     // Gap 9: release any remaining reservations
     const {results:items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(dc.order_id).all();
     for (const item of items as Record<string,unknown>[]) {
@@ -1376,7 +1379,7 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
       if ((row?.total as number || 0) < (oi.qty as number)) { allDelivered = false; break; }
     }
     if (allDelivered) {
-      await env.DB.prepare("UPDATE orders SET status='CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+      await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
       await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
         .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Fully delivered — DC ${id}`).run();
       orderFullyClosed = true;

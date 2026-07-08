@@ -2630,6 +2630,7 @@ async function renderMyOrders(el) {
               </div>
               <div style="text-align:right;flex-shrink:0">
                 <div style="font-weight:800;font-size:1.1rem;color:var(--navy)">${fmt(o.grand_total)}</div>
+                ${o.status==='CLOSED'&&(o.closed_at||o.updated_at)?`<div style="font-size:.7rem;color:var(--success);font-weight:600;margin-top:4px">✓ Closed ${fmtDate(o.closed_at||o.updated_at)}</div>`:''}
                 <div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">${statusBadge(o.status)} ${o.order_type&&o.order_type!=='Regular'?orderTypeBadge(o.order_type):''}</div>
               </div>
             </div>
@@ -2736,7 +2737,7 @@ async function renderMyOrders(el) {
           <td><b>${o.id}</b></td>
           <td>${o.client_name||'—'}</td>
           <td>${fmt(o.grand_total)}</td>
-          <td>${statusBadge(o.status)}</td>
+          <td>${o.status==='CLOSED'&&(o.closed_at||o.updated_at)?`<div style="font-size:.68rem;color:var(--success);font-weight:600;margin-bottom:2px">✓ ${fmtDate(o.closed_at||o.updated_at)}</div>`:''}${statusBadge(o.status)}</td>
           <td>${orderTypeBadge(o.order_type||'Regular')}</td>
           <td>${fmtDate(o.created_at)}</td>
           <td>
