@@ -8987,37 +8987,61 @@ function renderFulfilContent() {
     return;
   }
 
-  // Chart mode — fill % bar per period (fall back to table if Chart.js unavailable)
+  // Chart mode — Fill % is the hero (color-coded bars); Ordered/Delivered as context lines
   if (!window.Chart) { _fulfilMode = 'table'; renderFulfilContent(); return; }
-  el.innerHTML = header + `<div class="card" style="padding:16px 18px"><div style="position:relative;height:300px"><canvas id="fulfil-chart"></canvas></div></div>`;
+  const fillColor = p => p>=90 ? '#16a34a' : p>=70 ? '#d97706' : '#dc2626';
+  el.innerHTML = header + `<div class="card" style="padding:16px 18px">
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:.72rem;color:var(--text-muted)">
+      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#16a34a;display:inline-block"></span>≥90%</span>
+      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#d97706;display:inline-block"></span>70–89%</span>
+      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#dc2626;display:inline-block"></span>&lt;70%</span>
+      <span style="margin-left:auto">Bars = Fill % · Lines = units</span>
+    </div>
+    <div style="position:relative;height:320px"><canvas id="fulfil-chart"></canvas></div>
+  </div>`;
   const ctx = document.getElementById('fulfil-chart');
   if (ctx && window.Chart) {
     if (APP.charts.fulfil) { try{APP.charts.fulfil.destroy();}catch(_){} }
+    // Data-label plugin drawn inline: show the % on top of each bar
+    const pctLabels = {
+      id:'pctLabels',
+      afterDatasetsDraw(chart){
+        const {ctx} = chart; const meta = chart.getDatasetMeta(0);
+        if (!meta || meta.hidden) return;
+        ctx.save(); ctx.font='700 12px sans-serif'; ctx.textAlign='center';
+        meta.data.forEach((bar,i)=>{ const v=data[i].fill_pct; ctx.fillStyle=fillColor(v); ctx.fillText(v+'%', bar.x, bar.y-6); });
+        ctx.restore();
+      }
+    };
     APP.charts.fulfil = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: data.map(d=>d.label),
         datasets: [
-          { label:'Ordered', data:data.map(d=>Math.round(d.ordered_qty)), backgroundColor:'#c7d2fe', borderRadius:4, yAxisID:'y1', order:2 },
-          { label:'Delivered', data:data.map(d=>Math.round(d.delivered_qty)), backgroundColor:'#6366f1', borderRadius:4, yAxisID:'y1', order:2 },
-          { label:'Fill %', data:data.map(d=>d.fill_pct), type:'line', borderColor:'#16a34a', backgroundColor:'#16a34a', tension:.3, yAxisID:'y2', order:1, pointRadius:4, pointHoverRadius:6 },
+          { label:'Fill %', data:data.map(d=>d.fill_pct), backgroundColor:data.map(d=>fillColor(d.fill_pct)), borderRadius:6, yAxisID:'y2', order:3, barPercentage:.6, categoryPercentage:.7 },
+          { label:'Ordered', data:data.map(d=>Math.round(d.ordered_qty)), type:'line', borderColor:'#94a3b8', backgroundColor:'#94a3b8', borderDash:[5,4], tension:.3, yAxisID:'y1', order:1, pointRadius:3, borderWidth:2 },
+          { label:'Delivered', data:data.map(d=>Math.round(d.delivered_qty)), type:'line', borderColor:'#4f46e5', backgroundColor:'#4f46e5', tension:.3, yAxisID:'y1', order:2, pointRadius:3, borderWidth:2.5 },
         ]
       },
       options: {
         responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ top:18 } },
         onClick: (evt, els) => {
           if (!els.length) return;
           const d = data[els[0].index]; if (!d) return;
           openCategoryDrill(_fulfilGranularity==='month' ? d.key : '', d.label);
         },
-        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12 } },
-          tooltip:{ callbacks:{ afterBody: ()=> _fulfilGranularity==='month' ? 'Click to drill into categories' : '' } } },
+        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12, usePointStyle:true } },
+          tooltip:{ callbacks:{
+            label:(c)=> c.dataset.label==='Fill %' ? `Fill %: ${c.raw}%` : `${c.dataset.label}: ${c.raw} units`,
+            afterBody: ()=> _fulfilGranularity==='month' ? 'Click to drill into categories' : '' } } },
         scales:{
           x:{ grid:{display:false}, ticks:{font:{size:10}} },
-          y1:{ position:'left', beginAtZero:true, title:{display:true,text:'Units',font:{size:10}}, grid:{color:'#f0f2f7'} },
-          y2:{ position:'right', beginAtZero:true, max:100, title:{display:true,text:'Fill %',font:{size:10}}, grid:{display:false}, ticks:{callback:v=>v+'%'} }
+          y2:{ position:'left', beginAtZero:true, max:100, title:{display:true,text:'Fill %',font:{size:11,weight:'700'}}, grid:{color:'#f0f2f7'}, ticks:{callback:v=>v+'%',font:{size:10}} },
+          y1:{ position:'right', beginAtZero:true, title:{display:true,text:'Units',font:{size:10}}, grid:{display:false}, ticks:{font:{size:10}} }
         }
-      }
+      },
+      plugins:[pctLabels]
     });
   }
 }

@@ -4314,7 +4314,7 @@ async function handleRptCategoryBreakdown(request: Request, env: Env): Promise<R
 
     const {results} = await env.DB.prepare(`
       SELECT
-        ${groupExpr} AS name,
+        ${groupExpr} AS grp_name,
         COUNT(DISTINCT o.id) AS order_count,
         SUM(oi.qty) AS ordered_qty,
         SUM(oi.qty * oi.unit_price) AS ordered_value,
@@ -4324,14 +4324,14 @@ async function handleRptCategoryBreakdown(request: Request, env: Env): Promise<R
       JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN inventory i ON i.sku = oi.sku
       WHERE ${where.join(' AND ')}
-      GROUP BY name
+      GROUP BY grp_name
       ORDER BY ordered_value DESC
     `).bind(...binds).all();
 
     return json({
       level: category != null ? 'subcategory' : 'category',
       category: category || null, period: period || null, from, to,
-      rows: results as Record<string,unknown>[],
+      rows: (results as Record<string,unknown>[]).map(r => ({ ...r, name: r.grp_name })),
     });
   } catch(e) { return json({error: String(e)}, 500); }
 }
