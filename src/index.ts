@@ -220,6 +220,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
   for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE vendors ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
+  try {
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
+  } catch { /* column already exists */ }
 }
 
 export default {
@@ -355,6 +358,7 @@ export default {
       if (path==="/api/reports/client-summary"       && method==="GET") return handleRptClientSummary(request,env);
       if (path==="/api/reports/client-consumption"  && method==="GET") return handleRptClientConsumption(request,env);
       if (path==="/api/reports/client-spend"        && method==="GET") return handleRptClientSpend(request,env);
+      if (path==="/api/reports/order-fulfilment-monthly" && method==="GET") return handleRptOrderFulfilmentMonthly(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -703,8 +707,11 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     need_by_date?: string;
     save_as_draft?: boolean;
     image?: string;
+    order_period?: string;
   };
   const orderImage = body.image && body.image.startsWith("data:image/") && body.image.length <= 1_500_000 ? body.image : null;
+  // Order period (YYYY-MM) — the business month this order is FOR; default to current month
+  const orderPeriod = /^\d{4}-\d{2}$/.test(body.order_period||"") ? body.order_period! : new Date().toISOString().slice(0,7);
   // Client roles must order for their own linked client only
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
   if (isClientRole) {
@@ -723,8 +730,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const validTypes = ['Regular','Urgent','Ad-Hoc'];
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
-    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage).run();
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -747,8 +754,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   const validTypes = ['Regular','Urgent','Ad-Hoc'];
   const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
   const needByDate = body.need_by_date || null;
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage).run();
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -4191,5 +4198,41 @@ async function handleRptClientSpend(request: Request, env: Env): Promise<Respons
     `).bind(...baseBinds).all();
 
     return json({ from, to, monthly: monthly as Record<string,unknown>[], po_wise: po_wise as Record<string,unknown>[] });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// Order-vs-delivery fulfilment, bucketed by the order's business period
+// (order_period, falling back to created_at month). Returns per-month rows;
+// the frontend rolls these up into month / quarter / fiscal-year views.
+async function handleRptOrderFulfilmentMonthly(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  // client role → own client; admin can pass ?client_id= to scope, else all clients
+  const clientId = isClientRole ? (user!.client_id || null) : (url.searchParams.get('client_id') || null);
+
+  try {
+    const clientWhere = clientId ? ' AND o.client_id = ?' : '';
+    const binds: string[] = clientId ? [clientId] : [];
+    const deliveredExpr = `COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END)
+        FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+        WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)`;
+
+    const {results} = await env.DB.prepare(`
+      SELECT
+        COALESCE(o.order_period, strftime('%Y-%m', o.created_at)) AS period,
+        COUNT(DISTINCT o.id) AS order_count,
+        SUM(oi.qty) AS ordered_qty,
+        SUM(oi.qty * oi.unit_price) AS ordered_value,
+        SUM(${deliveredExpr}) AS delivered_qty,
+        SUM(${deliveredExpr} * oi.unit_price) AS delivered_value
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.status NOT IN ('CANCELLED','DRAFT') ${clientWhere}
+      GROUP BY period ORDER BY period ASC
+    `).bind(...binds).all();
+
+    return json({ rows: results as Record<string,unknown>[], client_id: clientId, scope: clientId ? 'client' : 'all' });
   } catch(e) { return json({error: String(e)}, 500); }
 }

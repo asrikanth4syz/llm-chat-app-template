@@ -1726,6 +1726,14 @@ function renderCartReview(container) {
               style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
               onfocus="this.style.borderColor='var(--danger)'" onblur="this.style.borderColor='#fca5a5'" />
           </div>
+
+          <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label style="font-size:.82rem;font-weight:700;color:var(--navy)">📅 Order for month</label>
+            <input type="month" id="cart-order-period" value="${today.slice(0,7)}"
+              style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
+              onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'" />
+            <span style="font-size:.72rem;color:var(--text-muted)">Defaults to this month — change only if ordering ahead</span>
+          </div>
         </div>
 
         <!-- Notes -->
@@ -2242,6 +2250,7 @@ async function confirmOrder(saveAsDraft) {
   const notes = document.getElementById('cart-notes')?.value?.trim() || '';
   const orderType = APP._orderType || 'Regular';
   const needByDate = document.getElementById('cart-need-by')?.value || '';
+  const orderPeriod = document.getElementById('cart-order-period')?.value || '';
   const result = await api('/orders', {
     method: 'POST',
     body: JSON.stringify({
@@ -2251,6 +2260,7 @@ async function confirmOrder(saveAsDraft) {
       ...(notes ? { notes } : {}),
       ...(APP._orderImage ? { image: APP._orderImage } : {}),
       ...(needByDate ? { need_by_date: needByDate } : {}),
+      ...(orderPeriod ? { order_period: orderPeriod } : {}),
       ...(saveAsDraft ? { save_as_draft: true } : {}),
     }),
   });
@@ -2860,6 +2870,7 @@ async function viewOrder(id) {
         <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
         <div><b>Placed:</b> ${fmtDate(order.created_at)}</div>
+        ${order.order_period ? `<div><b>For:</b> ${new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'})}</div>` : ''}
       </div>
       <!-- Row 2: dates -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
@@ -8796,10 +8807,29 @@ function renderClientReports(el) {
     <div id="rpt-spend-content">
       <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>
     </div>
+  </div>
+
+  <!-- Order Fulfilment Section -->
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:1.1rem">📦</span>
+      <span style="font-weight:700;font-size:.97rem;color:#1e40af">Order vs Delivery — Fulfilment</span>
+      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
+      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        ${['month','quarter','year'].map(g=>`<button id="ftab-${g}" onclick="switchFulfilGranularity('${g}')" style="padding:6px 14px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
+      </div>
+      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="fmode-chart" onclick="switchFulfilMode('chart')" title="Chart" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
+        <button id="fmode-table" onclick="switchFulfilMode('table')" title="Table" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
+      </div>
+    </div>
+    <div id="rpt-fulfil-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
   </div>`;
 
   // highlight this month preset by default
   document.getElementById('rpt-pre-thismonth')?.classList.add('btn-primary');
+  _fulfilGranularity = 'month';
+  _fulfilMode = 'chart';
   loadClientReports();
 }
 
@@ -8846,16 +8876,133 @@ async function loadClientReports() {
   if (grid) grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
   if (spend) spend.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
 
-  const [cData, sData] = await Promise.all([
+  const [cData, sData, fData] = await Promise.all([
     api(`/reports/client-consumption?from=${from}&to=${to}`),
-    api(`/reports/client-spend?from=${from}&to=${to}`)
+    api(`/reports/client-spend?from=${from}&to=${to}`),
+    api(`/reports/order-fulfilment-monthly`)
   ]);
 
-  _clientRptData = { consumption: cData, spend: sData };
+  _clientRptData = { consumption: cData, spend: sData, fulfil: fData?.rows || [] };
 
   if (grid) grid.innerHTML = renderConsumptionGrid(cData?.rows || []);
   renderSpendContent(_clientRptSpendTab, sData);
+  renderFulfilContent();
 }
+
+/* ── Order-vs-delivery fulfilment: month / quarter / fiscal-year, % + chart ── */
+let _fulfilGranularity = 'month';
+let _fulfilMode = 'chart';
+
+function fiscalBucket(period, gran) {
+  // period = 'YYYY-MM'; Indian FY = Apr–Mar
+  const [y, m] = period.split('-').map(Number);
+  if (gran === 'month') {
+    const d = new Date(y, m-1, 1);
+    return { key: period, label: d.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}) };
+  }
+  const fyStart = m >= 4 ? y : y - 1;
+  const fyLabel = `FY${String(fyStart).slice(2)}-${String(fyStart+1).slice(2)}`;
+  if (gran === 'year') return { key: `${fyStart}`, label: fyLabel };
+  // fiscal quarter
+  const q = m >= 4 && m <= 6 ? 1 : m >= 7 && m <= 9 ? 2 : m >= 10 && m <= 12 ? 3 : 4;
+  return { key: `${fyStart}-Q${q}`, label: `Q${q} ${fyLabel}` };
+}
+
+function bucketFulfil(rows, gran) {
+  const map = new Map();
+  (rows||[]).forEach(r => {
+    const b = fiscalBucket(r.period, gran);
+    if (!map.has(b.key)) map.set(b.key, { key:b.key, label:b.label, ordered_qty:0, delivered_qty:0, ordered_value:0, delivered_value:0, order_count:0 });
+    const o = map.get(b.key);
+    o.ordered_qty    += r.ordered_qty||0;
+    o.delivered_qty  += r.delivered_qty||0;
+    o.ordered_value  += r.ordered_value||0;
+    o.delivered_value+= r.delivered_value||0;
+    o.order_count    += r.order_count||0;
+  });
+  return [...map.values()].sort((a,b)=>a.key<b.key?-1:1).map(o => ({
+    ...o, fill_pct: o.ordered_qty ? Math.round(o.delivered_qty/o.ordered_qty*100) : 0
+  }));
+}
+
+function switchFulfilGranularity(g) { _fulfilGranularity = g; renderFulfilContent(); }
+function switchFulfilMode(m) { _fulfilMode = m; renderFulfilContent(); }
+
+function renderFulfilContent() {
+  const el = document.getElementById('rpt-fulfil-content');
+  if (!el) return;
+  ['month','quarter','year'].forEach(g => {
+    const b = document.getElementById(`ftab-${g}`);
+    if (b) { b.style.background = g===_fulfilGranularity?'var(--primary)':'#fff'; b.style.color = g===_fulfilGranularity?'#fff':'var(--text-muted)'; }
+  });
+  ['chart','table'].forEach(m => {
+    const b = document.getElementById(`fmode-${m}`);
+    if (b) b.style.background = m===_fulfilMode ? 'var(--primary)' : '#fff';
+  });
+
+  const data = bucketFulfil(_clientRptData.fulfil, _fulfilGranularity);
+  if (!data.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders yet.</div>'; return; }
+
+  // Overall fill across all buckets
+  const totOrd = data.reduce((s,d)=>s+d.ordered_qty,0);
+  const totDel = data.reduce((s,d)=>s+d.delivered_qty,0);
+  const overall = totOrd ? Math.round(totDel/totOrd*100) : 0;
+  const ovColor = overall>=90?'#16a34a':overall>=70?'#d97706':'#dc2626';
+
+  const header = `<div class="card" style="padding:14px 18px;margin-bottom:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div><div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Overall Fill Rate</div>
+      <div style="font-size:1.8rem;font-weight:800;color:${ovColor};line-height:1.1">${overall}%</div></div>
+    <div style="height:34px;width:1px;background:var(--border)"></div>
+    <div><div style="font-size:.72rem;color:var(--text-muted)">Ordered</div><div style="font-weight:700">${Math.round(totOrd)} units</div></div>
+    <div><div style="font-size:.72rem;color:var(--text-muted)">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
+    <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'#dc2626':'#16a34a'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
+  </div>`;
+
+  if (_fulfilMode === 'table') {
+    el.innerHTML = header + `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th></tr></thead>
+      <tbody>${data.map(d=>{ const due=Math.max(0,d.ordered_qty-d.delivered_qty); const c=d.fill_pct>=90?'#16a34a':d.fill_pct>=70?'#d97706':'#dc2626';
+        return `<tr>
+          <td style="font-weight:600">${d.label}</td>
+          <td style="text-align:right">${d.order_count}</td>
+          <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
+          <td style="text-align:right">${Math.round(d.delivered_qty)}</td>
+          <td style="text-align:right;color:${due>0?'#dc2626':'inherit'}">${Math.round(due)}</td>
+          <td style="text-align:right;font-weight:700;color:${c}">${d.fill_pct}%</td>
+        </tr>`;}).join('')}</tbody>
+    </table></div></div>`;
+    return;
+  }
+
+  // Chart mode — fill % bar per period (fall back to table if Chart.js unavailable)
+  if (!window.Chart) { _fulfilMode = 'table'; renderFulfilContent(); return; }
+  el.innerHTML = header + `<div class="card" style="padding:16px 18px"><div style="position:relative;height:300px"><canvas id="fulfil-chart"></canvas></div></div>`;
+  const ctx = document.getElementById('fulfil-chart');
+  if (ctx && window.Chart) {
+    if (APP.charts.fulfil) { try{APP.charts.fulfil.destroy();}catch(_){} }
+    APP.charts.fulfil = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: data.map(d=>d.label),
+        datasets: [
+          { label:'Ordered', data:data.map(d=>Math.round(d.ordered_qty)), backgroundColor:'#c7d2fe', borderRadius:4, yAxisID:'y1', order:2 },
+          { label:'Delivered', data:data.map(d=>Math.round(d.delivered_qty)), backgroundColor:'#6366f1', borderRadius:4, yAxisID:'y1', order:2 },
+          { label:'Fill %', data:data.map(d=>d.fill_pct), type:'line', borderColor:'#16a34a', backgroundColor:'#16a34a', tension:.3, yAxisID:'y2', order:1, pointRadius:4, pointHoverRadius:6 },
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12 } } },
+        scales:{
+          x:{ grid:{display:false}, ticks:{font:{size:10}} },
+          y1:{ position:'left', beginAtZero:true, title:{display:true,text:'Units',font:{size:10}}, grid:{color:'#f0f2f7'} },
+          y2:{ position:'right', beginAtZero:true, max:100, title:{display:true,text:'Fill %',font:{size:10}}, grid:{display:false}, ticks:{callback:v=>v+'%'} }
+        }
+      }
+    });
+  }
+}
+
 
 function renderConsumptionGrid(rows) {
   if (!rows.length) return '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">No consumption recorded in this period.</div>';
