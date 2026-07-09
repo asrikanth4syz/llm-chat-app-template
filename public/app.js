@@ -8524,10 +8524,44 @@ async function renderExecBI(el) {
       <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#c2410c)">${_xbi.timeLabel}</b></span>
     </div>
   </div>
-  <div id="xbi-crumbs" style="margin-bottom:12px"></div>
-  <div id="xbi-body"><div style="text-align:center;padding:50px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div></div>`;
+  <style>
+    #xbi-layout{display:grid;grid-template-columns:210px 1fr;gap:16px;align-items:start}
+    @media(max-width:820px){#xbi-layout{grid-template-columns:1fr}#xbi-rail{display:none}}
+    #xbi-rail{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 12px;position:sticky;top:16px}
+    .xbi-rail-title{font-size:.62rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--text-muted);padding:0 8px 10px}
+    .xbi-step{display:flex;align-items:center;gap:11px;padding:7px 8px;border-radius:9px;font-size:.79rem;color:var(--text-muted);position:relative;transition:background .12s}
+    .xbi-step[onclick]:hover{background:var(--surface-2)}
+    .xbi-step .xbi-idx{width:20px;height:20px;border-radius:50%;background:var(--border-light);color:var(--text-muted);font-size:.64rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;z-index:1;transition:.18s}
+    .xbi-step.done{color:var(--navy)} .xbi-step.done .xbi-idx{background:var(--primary-border);color:var(--primary-hover)}
+    .xbi-step.active{color:var(--navy);font-weight:700} .xbi-step.active .xbi-idx{background:var(--primary);color:#fff;box-shadow:0 0 0 4px var(--primary-light)}
+    .xbi-step::before{content:"";position:absolute;left:17.5px;top:-7px;height:7px;width:2px;background:var(--border)}
+    .xbi-step:first-of-type::before{display:none}
+    .xbi-step.done::before,.xbi-step.active::before{background:var(--primary-border)}
+    .xbi-kpi.clk{cursor:pointer;transition:border-color .12s,transform .12s}
+    .xbi-kpi.clk:hover{border-color:var(--primary);transform:translateY(-2px);box-shadow:0 4px 14px -6px rgba(0,0,0,.15)}
+    .xbi-row:hover .xbi-chev{transform:translateX(2px);color:var(--primary)}
+  </style>
+  <div id="xbi-layout">
+    <aside id="xbi-rail"></aside>
+    <div style="min-width:0">
+      <div id="xbi-crumbs" style="margin-bottom:10px"></div>
+      <div id="xbi-levelbar" style="margin-bottom:12px"></div>
+      <div id="xbi-body"><div style="text-align:center;padding:50px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div></div>
+    </div>
+  </div>`;
   xbiHighlightPreset();
   xbiRender();
+}
+
+function xbiRail() {
+  const rail = document.getElementById('xbi-rail');
+  if (!rail) return;
+  const depth = _xbi.path.length - 1;
+  rail.innerHTML = '<div class="xbi-rail-title">Drill path</div>' + EXEC_LEVELS.map((lv,i)=>{
+    const cls = i<depth ? 'done' : i===depth ? 'active' : '';
+    const visited = i <= depth;
+    return `<div class="xbi-step ${cls}" ${visited?`onclick="xbiGoTo(${i})"`:''}><span class="xbi-idx">${i+1}</span><span>${EXEC_LEVEL_NAME[lv]}</span></div>`;
+  }).join('');
 }
 
 function xbiHighlightPreset() {
@@ -8569,7 +8603,15 @@ function xbiScopeParams(ctx) {
 
 async function xbiRender() {
   xbiCrumbs();
+  xbiRail();
   const node = _xbi.path[_xbi.path.length-1];
+  const lvlIdx = EXEC_LEVELS.indexOf(node.level);
+  const lb = document.getElementById('xbi-levelbar');
+  if (lb) lb.innerHTML = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:.66rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--primary-hover)">◉ Level ${lvlIdx+1} · ${EXEC_LEVEL_NAME[node.level]}</span>
+      <span style="font-size:1.15rem;font-weight:800;color:var(--navy)">${h(node.label)}</span>
+      <span style="margin-left:auto;font-size:.74rem;color:var(--text-muted)">${_xbi.timeLabel}</span>
+    </div>`;
   const body = document.getElementById('xbi-body');
   if (!body) return;
   body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:22px;height:22px;margin:0 auto"></div></div>';
@@ -8578,10 +8620,11 @@ async function xbiRender() {
 }
 
 function xbiKpi(lab,val,sub,cls,onclick){
-  return `<div class="card" style="padding:11px 13px;margin-bottom:0;${onclick?'cursor:pointer':''}" ${onclick?`onclick="${onclick}"`:''}>
+  return `<div class="card xbi-kpi ${onclick?'clk':''}" style="padding:11px 13px;margin-bottom:0;position:relative" ${onclick?`onclick="${onclick}"`:''}>
     <div style="font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)">${lab}</div>
     <div style="font-size:1.28rem;font-weight:800;line-height:1.15;margin-top:3px;color:${cls==='g'?'var(--success)':cls==='w'?'#d97706':cls==='b'?'var(--danger)':'var(--navy)'}">${val}</div>
     ${sub?`<div style="font-size:.68rem;color:var(--text-muted);margin-top:1px">${sub}</div>`:''}
+    ${onclick?'<span style="position:absolute;top:9px;right:11px;color:var(--text-muted);font-size:.72rem;font-weight:700">↘</span>':''}
   </div>`;
 }
 function xbiGrp(title, cards){
@@ -8596,7 +8639,7 @@ function xbiRow(name, meta, val, opts={}){
     <div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:.87rem">${h(name)}</div><div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${meta}</div></div>
     ${share}
     <div style="text-align:right;flex-shrink:0"><div style="font-weight:800;font-size:.9rem">${val}</div>${pill}</div>
-    <span style="color:var(--text-muted)">›</span>
+    <span class="xbi-chev" style="color:var(--text-muted);transition:transform .12s,color .12s">›</span>
   </button>`;
 }
 
