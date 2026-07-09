@@ -2876,7 +2876,12 @@ async function viewOrder(id) {
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
         ${order.need_by_date ? `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;font-weight:600;color:var(--danger)">🚨 Need By:</span><span style="font-weight:700;color:var(--danger)">${fmtDate(order.need_by_date)}</span></div>` : ''}
         <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px">
-          <span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">📅 Est. Delivery:</span>
+          ${['CLOSED','CANCELLED'].includes(order.status)
+            ? (order.status==='CLOSED'
+                ? `<span style="font-size:.8rem;font-weight:600;color:var(--success)">✅ Delivered:</span>
+                   <span style="font-weight:700;color:var(--success)">${order.closed_at||order.updated_at ? fmtDate(order.closed_at||order.updated_at) : 'Completed'}</span>`
+                : `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">Order cancelled</span>`)
+            : `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">📅 Est. Delivery:</span>
           ${isOpsRole
             ? `<span id="pdd-display">${pddLabel}</span>
                <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:.72rem;margin-left:6px" onclick="document.getElementById('pdd-edit').style.display='flex';this.style.display='none'">
@@ -2888,6 +2893,7 @@ async function viewOrder(id) {
                  <button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="document.getElementById('pdd-edit').style.display='none';document.querySelector('[onclick*=pdd-edit]').style.display=''">✕</button>
                </span>`
             : pddLabel
+          }`
           }
         </div>
       </div>
