@@ -136,7 +136,7 @@ const NAV = {
     { section:'Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
     { section:'Analytics' },
-    { id:'client_reports', label:'Reports',         icon:iconReports,   badge:null },
+    { id:'client_reports', label:'Executive',       icon:iconReports,   badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
@@ -9187,120 +9187,180 @@ async function printReport(key) {
 let _clientRptData = { consumption: null, spend: null };
 let _clientRptSpendTab = 'monthly';
 
+/* ── Client Executive Dashboard — Time is the primary controller ── */
+let _cdashCompare = false, _cdashTab = 'overview', _cdashExec = null, _cdashPrev = null;
+
 function renderClientReports(el) {
   const now = new Date();
   const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
   const today = now.toISOString().slice(0,10);
 
+  const presets = [['today','Today'],['thisweek','This Week'],['thismonth','This Month'],['quarter','Quarter'],['fy','Financial Year']];
+  const tabs = [['overview','Overview'],['orders','Orders'],['spend','Spend'],['consumption','Consumption'],['inventory','Inventory'],['downloads','Downloads']];
+  const spendSubtab = (id,label)=>`<button id="stab-${id}" onclick="switchSpendTab('${id}')" style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">${label}</button>`;
+
   el.innerHTML = `
-  ${pageHeader('Reports', 'Consumption & Spend analytics for your pantry')}
+  ${pageHeader('Executive Dashboard', 'Your pantry — budget, orders & consumption, driven by the period you pick')}
+  <style id="cdash-style">
+    #cdash-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+    @media(max-width:900px){#cdash-kpis{grid-template-columns:repeat(2,1fr)}}
+    .cdash-kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 14px;cursor:pointer;transition:.15s;position:relative}
+    .cdash-kpi:hover{border-color:var(--primary);transform:translateY(-2px);box-shadow:0 6px 16px -8px rgba(30,58,95,.25)}
+    .cdash-kpi::after{content:"↘";position:absolute;top:10px;right:12px;color:var(--border);font-weight:700;font-size:.8rem}
+    .cdash-kpi:hover::after{color:var(--primary)}
+    .cdash-kpi .kl{font-size:.63rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)}
+    .cdash-kpi .kv{font-size:1.4rem;font-weight:800;color:var(--navy);line-height:1.1;margin-top:5px}
+    .cdash-kpi .kv.g{color:var(--success)}.cdash-kpi .kv.w{color:#d97706}.cdash-kpi .kv.b{color:var(--danger)}
+    .cdash-kpi .ks{font-size:.67rem;color:var(--text-muted);margin-top:3px}
+    .cdash-delta{display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:.67rem;font-weight:700}
+    .cdash-delta.up{color:var(--success)}.cdash-delta.down{color:var(--danger)}.cdash-delta.neu{color:var(--text-muted)}
+    .cdash-delta .cap{color:var(--text-muted);font-weight:500}
+    .cdash-tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:2px solid var(--border);margin-bottom:16px}
+    .cdash-tab{padding:9px 14px;font-size:.84rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;color:var(--text-muted)}
+    .cdash-tab:hover{color:var(--navy)}
+    .cdash-tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+    .cdash-chip{padding:6px 13px;font-size:.77rem;font-weight:600;border:1px solid var(--border);background:var(--surface);border-radius:100px;cursor:pointer;color:var(--text-muted)}
+    .cdash-chip:hover{border-color:var(--primary);color:var(--navy)}
+    .cdash-chip.on{background:var(--primary);border-color:var(--primary);color:#fff}
+    .cdash-qgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    @media(max-width:680px){.cdash-qgrid{grid-template-columns:1fr}}
+    .cdash-q{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--navy);border-radius:10px;padding:14px 15px}
+    .cdash-q.ok{border-left-color:var(--success)}.cdash-q.warn{border-left-color:#d97706}.cdash-q.bad{border-left-color:var(--danger)}
+    .cdash-q .qq{font-size:.77rem;color:var(--text-muted);font-weight:600}
+    .cdash-q .qa{font-size:1rem;color:var(--navy);font-weight:700;margin-top:6px;line-height:1.35}
+    .cdash-q .qa b{color:var(--primary)}
+  </style>
 
-  <!-- Date Filter Bar -->
-  <div class="card" style="padding:12px 16px;margin-bottom:16px">
+  <!-- GLOBAL TIME BAR — the controller -->
+  <div class="card" style="padding:11px 15px;margin-bottom:14px">
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="font-weight:600;font-size:.83rem;color:var(--navy)">Period:</span>
-      <button class="btn btn-sm" id="rpt-pre-thismonth"  onclick="clientRptPreset('thismonth')"  style="font-size:.78rem">This Month</button>
-      <button class="btn btn-sm" id="rpt-pre-lastmonth"  onclick="clientRptPreset('lastmonth')"  style="font-size:.78rem">Last Month</button>
-      <button class="btn btn-sm" id="rpt-pre-thisyear"   onclick="clientRptPreset('thisyear')"   style="font-size:.78rem">This Year</button>
-      <button class="btn btn-sm" id="rpt-pre-lastyear"   onclick="clientRptPreset('lastyear')"   style="font-size:.78rem">Last Year</button>
-      <button class="btn btn-sm" id="rpt-pre-last3m"     onclick="clientRptPreset('last3m')"     style="font-size:.78rem">Last 3 Months</button>
-      <div style="display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap">
-        <input type="date" id="rpt-from" class="form-control" style="max-width:148px;font-size:.82rem" value="${firstOfMonth}">
-        <span style="color:var(--text-muted);font-size:.82rem">to</span>
-        <input type="date" id="rpt-to"   class="form-control" style="max-width:148px;font-size:.82rem" value="${today}">
-        <button class="btn btn-primary btn-sm" onclick="loadClientReports()" style="white-space:nowrap">Apply</button>
+      <span style="font-weight:700;font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;color:var(--primary);display:inline-flex;align-items:center;gap:5px">🕐 Period</span>
+      ${presets.map(p=>`<button class="cdash-chip" id="cdash-pre-${p[0]}" onclick="clientRptPreset('${p[0]}')">${p[1]}</button>`).join('')}
+      <span style="width:1px;height:20px;background:var(--border)"></span>
+      <input type="date" id="rpt-from" class="form-control" style="max-width:140px;font-size:.8rem" value="${firstOfMonth}" onchange="cdashClearPreset()">
+      <span style="color:var(--text-muted);font-size:.8rem">to</span>
+      <input type="date" id="rpt-to" class="form-control" style="max-width:140px;font-size:.8rem" value="${today}" onchange="cdashClearPreset()">
+      <button class="btn btn-primary btn-sm" onclick="loadClientReports()">Apply</button>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="cdash-chip" id="cdash-cmp" onclick="cdashToggleCompare()">⇄ Compare</button>
+        <button class="btn btn-secondary btn-sm" id="cdash-refresh" onclick="cdashRefresh()">↻ Refresh</button>
+        <span id="cdash-period-badge" style="font-size:.74rem;font-weight:700;color:var(--primary);background:var(--primary-light);border:1px solid var(--primary-border);padding:4px 10px;border-radius:100px">This Month</span>
       </div>
     </div>
   </div>
 
-  <!-- Consumption Section -->
-  <div style="margin-bottom:28px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-      <span style="font-size:1.1rem">🍽️</span>
-      <span style="font-weight:700;font-size:.97rem;color:#1e40af">Consumption Analytics</span>
-      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
-      <button class="btn btn-secondary btn-sm" onclick="downloadClientConsumptionCSV()" style="font-size:.78rem">⬇ CSV</button>
-    </div>
-    <div id="rpt-consumption-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px">
-      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>
-    </div>
-  </div>
+  <!-- KPI WALL -->
+  <div id="cdash-kpis"><div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted)">Loading…</div></div>
 
-  <!-- Spend Section -->
-  <div style="margin-bottom:24px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-      <span style="font-size:1.1rem">💰</span>
-      <span style="font-weight:700;font-size:.97rem;color:#065f46">Spend Reports</span>
-      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
-      <button class="btn btn-secondary btn-sm" onclick="downloadClientSpendCSV()" style="font-size:.78rem">⬇ CSV</button>
-    </div>
-    <!-- Spend sub-tabs -->
-    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
-      <button id="stab-monthly"  onclick="switchSpendTab('monthly')"  style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">Monthly Trend</button>
-      <button id="stab-yearly"   onclick="switchSpendTab('yearly')"   style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">Yearly Summary</button>
-      <button id="stab-po"       onclick="switchSpendTab('po')"       style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">PO-wise</button>
-    </div>
-    <div id="rpt-spend-content">
-      <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>
-    </div>
-  </div>
+  <!-- SMART INSIGHTS -->
+  <div id="cdash-insights" class="card" style="display:none;padding:13px 16px;margin-bottom:16px;border-left:3px solid var(--primary);background:var(--primary-light)"></div>
 
-  <!-- Order Fulfilment Section -->
-  <div style="margin-bottom:24px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-      <span style="font-size:1.1rem">📦</span>
-      <span style="font-weight:700;font-size:.97rem;color:#1e40af">Order vs Delivery — Fulfilment</span>
-      <div style="flex:1;height:1px;background:var(--border);margin-left:8px"></div>
-      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        ${['month','quarter','year'].map(g=>`<button id="ftab-${g}" onclick="switchFulfilGranularity('${g}')" style="padding:6px 14px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
+  <!-- TABS -->
+  <div class="cdash-tabs">
+    ${tabs.map((t,i)=>`<button class="cdash-tab ${i===0?'on':''}" id="cdash-tab-${t[0]}" onclick="cdashSwitchTab('${t[0]}')">${t[1]}</button>`).join('')}
+  </div>
+  <div id="cdash-tabpane">
+    <div class="cdash-pane" data-pane="overview"><div id="cdash-overview"></div></div>
+
+    <div class="cdash-pane" data-pane="orders" style="display:none">
+      <div id="cdash-orders-status"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Order vs Delivery</span>
+        <div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">${['month','quarter','year'].map(g=>`<button id="ftab-${g}" onclick="switchFulfilGranularity('${g}')" style="padding:6px 13px;font-size:.75rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}</div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden"><button id="fmode-chart" onclick="switchFulfilMode('chart')" title="Chart" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📊</button><button id="fmode-table" onclick="switchFulfilMode('table')" title="Table" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📋</button></div>
       </div>
-      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <button id="fmode-chart" onclick="switchFulfilMode('chart')" title="Chart" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
-        <button id="fmode-table" onclick="switchFulfilMode('table')" title="Table" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
-      </div>
+      <div id="rpt-fulfil-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
     </div>
-    <div id="rpt-fulfil-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
+
+    <div class="cdash-pane" data-pane="spend" style="display:none">
+      <div id="cdash-spend-gauge"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Spend detail</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" onclick="downloadClientSpendCSV()">⬇ CSV</button></div>
+      <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">${spendSubtab('monthly','Monthly Trend')}${spendSubtab('yearly','Yearly Summary')}${spendSubtab('po','PO-wise')}</div>
+      <div id="rpt-spend-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
+    </div>
+
+    <div class="cdash-pane" data-pane="consumption" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Consumption analytics</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" onclick="downloadClientConsumptionCSV()">⬇ CSV</button></div>
+      <div id="rpt-consumption-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px"><div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
+    </div>
+
+    <div class="cdash-pane" data-pane="inventory" style="display:none"><div id="cdash-inventory"></div></div>
+
+    <div class="cdash-pane" data-pane="downloads" style="display:none">
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">Export the current period (<b id="cdash-dl-period" style="color:var(--navy)">this month</b>) and scope.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="downloadClientSpendCSV()"><div style="font-size:1.3rem">💰</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Spend CSV</div><div style="font-size:.7rem;color:var(--text-muted)">monthly / PO-wise</div></button>
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="downloadClientConsumptionCSV()"><div style="font-size:1.3rem">🍽️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Consumption CSV</div><div style="font-size:.7rem;color:var(--text-muted)">items used</div></button>
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="window.print()"><div style="font-size:1.3rem">🖨️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Print / PDF</div><div style="font-size:.7rem;color:var(--text-muted)">current view</div></button>
+      </div>
+      <div class="card" style="padding:12px 15px;margin-top:14px;font-size:.78rem;color:var(--text-muted);background:var(--surface-2)">Scheduled email delivery (monthly executive summary) is planned — exports today are on-demand.</div>
+    </div>
   </div>`;
 
-  // highlight this month preset by default
-  document.getElementById('rpt-pre-thismonth')?.classList.add('btn-primary');
+  document.getElementById('cdash-pre-thismonth')?.classList.add('on');
   _fulfilGranularity = 'month';
   _fulfilMode = 'chart';
+  _cdashTab = 'overview';
   loadClientReports();
 }
 
 function clientRptPreset(preset) {
   const now = new Date();
-  let from, to;
-  function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
-  if (preset === 'thismonth') {
-    from = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-    to   = ymd(now);
-  } else if (preset === 'lastmonth') {
-    const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    from = `${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,'0')}-01`;
-    to   = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
-  } else if (preset === 'thisyear') {
-    from = `${now.getFullYear()}-01-01`;
-    to   = now.toISOString().slice(0,10);
-  } else if (preset === 'lastyear') {
-    from = `${now.getFullYear()-1}-01-01`;
-    to   = `${now.getFullYear()-1}-12-31`;
-  } else if (preset === 'last3m') {
-    const d3 = new Date(now.getFullYear(), now.getMonth() - 3, 1);
-    from = `${d3.getFullYear()}-${String(d3.getMonth()+1).padStart(2,'0')}-01`;
-    to   = now.toISOString().slice(0,10);
-  }
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  let from, to = ymd(now);
+  if (preset === 'today') { from = ymd(now); }
+  else if (preset === 'thisweek') { const dow = (now.getDay()+6)%7; const mon = new Date(now); mon.setDate(now.getDate()-dow); from = ymd(mon); }
+  else if (preset === 'thismonth') { from = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`; }
+  else if (preset === 'quarter') { const m = now.getMonth(); const qs = (m>=3&&m<=5)?3:(m>=6&&m<=8)?6:(m>=9)?9:0; from = `${now.getFullYear()}-${String(qs+1).padStart(2,'0')}-01`; }
+  else if (preset === 'fy') { const y = now.getMonth()>=3 ? now.getFullYear() : now.getFullYear()-1; from = `${y}-04-01`; }
+  else return;
   document.getElementById('rpt-from').value = from;
   document.getElementById('rpt-to').value   = to;
-  // reset button highlights
-  ['thismonth','lastmonth','thisyear','lastyear','last3m'].forEach(p => {
-    const btn = document.getElementById(`rpt-pre-${p}`);
-    if (btn) { btn.classList.remove('btn-primary'); btn.style.background=''; btn.style.color=''; }
+  ['today','thisweek','thismonth','quarter','fy'].forEach(p => {
+    const b = document.getElementById('cdash-pre-'+p);
+    if (b) b.classList.toggle('on', p === preset);
   });
-  const activeBtn = document.getElementById(`rpt-pre-${preset}`);
-  if (activeBtn) activeBtn.classList.add('btn-primary');
   loadClientReports();
+}
+
+function cdashClearPreset() {
+  ['today','thisweek','thismonth','quarter','fy'].forEach(p => document.getElementById('cdash-pre-'+p)?.classList.remove('on'));
+}
+
+function cdashToggleCompare() {
+  _cdashCompare = !_cdashCompare;
+  document.getElementById('cdash-cmp')?.classList.toggle('on', _cdashCompare);
+  loadClientReports();
+}
+
+function cdashRefresh() {
+  const b = document.getElementById('cdash-refresh');
+  if (b) { b.disabled = true; b.textContent = '↻ …'; }
+  loadClientReports().finally(() => { if (b) { b.disabled = false; b.textContent = '↻ Refresh'; } });
+}
+
+function cdashSwitchTab(tab) {
+  _cdashTab = tab;
+  document.querySelectorAll('#cdash-tabpane .cdash-pane').forEach(p => { p.style.display = p.dataset.pane === tab ? '' : 'none'; });
+  ['overview','orders','spend','consumption','inventory','downloads'].forEach(t => document.getElementById('cdash-tab-'+t)?.classList.toggle('on', t === tab));
+}
+
+function cdashINR(n) {
+  n = Number(n||0);
+  if (n >= 1e7) return '₹' + (n/1e7).toFixed(2).replace(/\.?0+$/,'') + 'Cr';
+  if (n >= 1e5) return '₹' + (n/1e5).toFixed(2).replace(/\.?0+$/,'') + 'L';
+  if (n >= 1e3) return '₹' + (n/1e3).toFixed(1).replace(/\.?0+$/,'') + 'k';
+  return '₹' + Math.round(n);
+}
+
+function cdashPrevRange(from, to) {
+  const f = new Date(from+'T00:00:00'), t = new Date(to+'T00:00:00');
+  const days = Math.max(0, Math.round((t-f)/86400000));
+  const pt = new Date(f); pt.setDate(pt.getDate()-1);
+  const pf = new Date(pt); pf.setDate(pf.getDate()-days);
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return { from: ymd(pf), to: ymd(pt) };
 }
 
 async function loadClientReports() {
@@ -9308,22 +9368,163 @@ async function loadClientReports() {
   const from = document.getElementById('rpt-from')?.value || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const to   = document.getElementById('rpt-to')?.value   || new Date().toISOString().slice(0,10);
 
+  const kpiEl = document.getElementById('cdash-kpis');
+  if (kpiEl) kpiEl.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted)">Loading…</div>';
   const grid = document.getElementById('rpt-consumption-grid');
-  const spend = document.getElementById('rpt-spend-content');
   if (grid) grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
-  if (spend) spend.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
 
-  const [cData, sData, fData] = await Promise.all([
+  // period badge
+  const activeChip = ['today','thisweek','thismonth','quarter','fy'].map(p => document.getElementById('cdash-pre-'+p)).find(b => b && b.classList.contains('on'));
+  const badgeTxt = activeChip ? activeChip.textContent : 'Custom range';
+  const pb = document.getElementById('cdash-period-badge'); if (pb) pb.textContent = badgeTxt;
+  const dlp = document.getElementById('cdash-dl-period'); if (dlp) dlp.textContent = badgeTxt.toLowerCase();
+
+  let prevProm = Promise.resolve(null);
+  if (_cdashCompare) { const pr = cdashPrevRange(from, to); prevProm = api(`/reports/exec-summary?from=${pr.from}&to=${pr.to}`); }
+
+  const [cData, sData, fData, exec, prev] = await Promise.all([
     api(`/reports/client-consumption?from=${from}&to=${to}`),
     api(`/reports/client-spend?from=${from}&to=${to}`),
-    api(`/reports/order-fulfilment-monthly`)
+    api(`/reports/order-fulfilment-monthly`),
+    api(`/reports/exec-summary?from=${from}&to=${to}`),
+    prevProm
   ]);
 
   _clientRptData = { consumption: cData, spend: sData, fulfil: fData?.rows || [] };
+  _cdashExec = exec; _cdashPrev = prev;
+
+  renderCdashKpis();
+  renderCdashInsights();
+  renderCdashOverview();
+  renderCdashOrdersStatus();
+  renderCdashSpendGauge();
+  renderCdashInventory();
 
   if (grid) grid.innerHTML = renderConsumptionGrid(cData?.rows || []);
   renderSpendContent(_clientRptSpendTab, sData);
   renderFulfilContent();
+}
+
+function renderCdashKpis() {
+  const el = document.getElementById('cdash-kpis'); if (!el) return;
+  const ex = _cdashExec;
+  if (!ex || ex.error) { el.innerHTML = '<div style="grid-column:1/-1;padding:24px;text-align:center;color:var(--danger)">Couldn’t load KPIs.</div>'; return; }
+  const f = ex.finance, o = ex.orders, d = ex.delivery;
+  const dueOrders = (o.partial||0) + (o.pending||0);
+  const pv = (_cdashCompare && _cdashPrev && !_cdashPrev.error) ? _cdashPrev : null;
+
+  function chip(cur, prev, mode, goodDir) {
+    if (!pv || prev == null) return '';
+    let diff, txt;
+    if (mode === 'pt') { diff = Math.round((cur-prev)*10)/10; txt = (diff>0?'+':'') + diff + 'pt'; }
+    else { if (prev === 0) return ''; diff = Math.round((cur-prev)/Math.abs(prev)*1000)/10; txt = (diff>0?'+':'') + diff + '%'; }
+    let tone = 'neu';
+    if (diff !== 0) { if (goodDir==='up') tone = diff>0?'up':'down'; else if (goodDir==='down') tone = diff>0?'down':'up'; }
+    const arrow = diff>0?'▲':diff<0?'▼':'▬';
+    return `<div class="cdash-delta ${tone}"><span>${arrow} ${txt}</span><span class="cap">vs prev</span></div>`;
+  }
+
+  const utilTone = f.budget_util>100?'b':f.budget_util>90?'w':'g';
+  const fillTone = d.fill_pct>=97?'g':d.fill_pct>=90?'w':'b';
+  const dueOTone = dueOrders===0?'g':dueOrders>12?'b':'w';
+  const dueVTone = d.due_value===0?'g':d.due_value>500000?'b':'w';
+
+  const cards = [
+    { tab:'spend',  l:'Budget',             v:cdashINR(f.budget), s:'allocated',                       c:'',        d:'' },
+    { tab:'spend',  l:'Actual Spend',       v:cdashINR(f.spend),  s:(f.budget_util||0)+'% of budget',  c:'',        d:chip(f.spend, pv && pv.finance.spend, 'pct','down') },
+    { tab:'spend',  l:'Budget Utilization', v:(f.budget_util||0)+'%', s:cdashINR(Math.max(0,(f.budget||0)-(f.spend||0)))+' left', c:utilTone, d:chip(f.budget_util, pv && pv.finance.budget_util, 'pt','down') },
+    { tab:'orders', l:'Orders',             v:String(o.total||0), s:(o.completed||0)+' completed',      c:'',        d:chip(o.total, pv && pv.orders.total, 'pct','up') },
+    { tab:'orders', l:'Fulfilment',         v:(d.fill_pct||0)+'%', s:(o.partial||0)+' partial · '+(o.pending||0)+' pending', c:fillTone, d:chip(d.fill_pct, pv && pv.delivery.fill_pct, 'pt','up') },
+    { tab:'orders', l:'Due Orders',         v:String(dueOrders),  s:'awaiting delivery',               c:dueOTone,  d:chip(dueOrders, pv && ((pv.orders.partial||0)+(pv.orders.pending||0)), 'pct','down') },
+    { tab:'orders', l:'Due Value',          v:cdashINR(d.due_value), s:'not yet received',             c:dueVTone,  d:chip(d.due_value, pv && pv.delivery.due_value, 'pct','down') },
+    { tab:'spend',  l:'Avg Order',          v:cdashINR(o.avg),    s:'per order',                        c:'',        d:chip(o.avg, pv && pv.orders.avg, 'pct','neu') },
+  ];
+  el.innerHTML = cards.map(k => `<div class="cdash-kpi" onclick="cdashSwitchTab('${k.tab}')"><div class="kl">${k.l}</div><div class="kv ${k.c}">${k.v}</div><div class="ks">${k.s}</div>${k.d}</div>`).join('');
+}
+
+function renderCdashInsights() {
+  const el = document.getElementById('cdash-insights'); const ex = _cdashExec;
+  if (!el || !ex || ex.error) { if (el) el.style.display = 'none'; return; }
+  const f = ex.finance, o = ex.orders, d = ex.delivery;
+  const ins = [];
+  if (f.budget) {
+    if (f.budget_util>100) ins.push(['b', `Over budget — ${f.budget_util}% used (${cdashINR(f.spend)} of ${cdashINR(f.budget)}).`]);
+    else if (f.budget_util>90) ins.push(['w', `Nearing budget — ${f.budget_util}% used, ${cdashINR(Math.max(0,f.budget-f.spend))} left.`]);
+    else ins.push(['g', `On budget — ${f.budget_util||0}% used, ${cdashINR(Math.max(0,f.budget-f.spend))} still available.`]);
+  }
+  if (o.total) {
+    if (d.fill_pct<90) ins.push(['w', `Fulfilment at ${d.fill_pct}% — ${d.due_qty} units still due (${cdashINR(d.due_value)}).`]);
+    else ins.push(['g', `Strong fulfilment at ${d.fill_pct}% across ${o.total} orders.`]);
+  }
+  if (d.due_value>0) { const dueOrders=(o.partial||0)+(o.pending||0); ins.push(['i', `${cdashINR(d.due_value)} awaiting delivery across ${dueOrders} open order${dueOrders===1?'':'s'}.`]); }
+  if (_cdashCompare && _cdashPrev && !_cdashPrev.error) {
+    const p = _cdashPrev;
+    if (p.finance.spend) { const dp = Math.round((f.spend-p.finance.spend)/Math.abs(p.finance.spend)*1000)/10; if (dp) ins.push([dp>0?'w':'g', `Spend ${dp>0?'up':'down'} ${Math.abs(dp)}% vs previous period.`]); }
+    const fd = Math.round((d.fill_pct-p.delivery.fill_pct)*10)/10; if (fd) ins.push([fd>0?'g':'w', `Fulfilment ${fd>0?'up':'down'} ${Math.abs(fd)}pt vs previous period.`]);
+  }
+  const crows = _clientRptData?.consumption?.rows || [];
+  if (crows.length) ins.push(['i', `Most consumed: ${h(crows[0].item_name)} (${Math.round(crows[0].total_qty)} used).`]);
+
+  if (!ins.length) { el.style.display = 'none'; return; }
+  const dot = t => t==='g'?'var(--success)':t==='w'?'#d97706':t==='b'?'var(--danger)':'var(--navy)';
+  el.style.display = '';
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="font-size:.9rem">✦</span><span style="font-weight:700;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--primary)">Smart Insights</span></div>`
+    + `<div style="display:flex;flex-direction:column;gap:7px">`
+    + ins.slice(0,4).map(x => `<div style="display:flex;gap:9px;align-items:flex-start;font-size:.85rem;color:var(--navy)"><span style="width:7px;height:7px;border-radius:50%;background:${dot(x[0])};margin-top:6px;flex-shrink:0"></span><span>${x[1]}</span></div>`).join('')
+    + `</div>`;
+}
+
+function renderCdashOverview() {
+  const el = document.getElementById('cdash-overview'); const ex = _cdashExec;
+  if (!el) return;
+  if (!ex || ex.error) { el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted)">No data for this period.</div>'; return; }
+  const f = ex.finance, o = ex.orders, d = ex.delivery;
+  const dueOrders = (o.partial||0) + (o.pending||0);
+  const q1 = f.budget_util>100?'bad':f.budget_util>90?'warn':'ok';
+  const q2 = d.fill_pct>=97?'ok':d.fill_pct>=90?'warn':'bad';
+  const top = (_clientRptData?.consumption?.rows || [])[0];
+  const cards = [
+    ['1', q1, 'Are we within budget?', f.budget ? `<b>${f.budget_util}%</b> used — ${cdashINR(f.spend)} of ${cdashINR(f.budget)}. ${cdashINR(Math.max(0,f.budget-f.spend))} left.` : 'No budget set for this period.'],
+    ['2', q2, 'Did we receive what we ordered?', o.total ? `<b>${d.fill_pct}%</b> fulfilled across ${o.total} orders. ${d.due_qty>0 ? `${d.due_qty} units (${cdashINR(d.due_value)}) still due.` : 'Nothing outstanding.'}` : 'No orders in this period.'],
+    ['3', '', 'What are people consuming?', top ? `Top item <b>${h(top.item_name)}</b> — ${Math.round(top.total_qty)} used. See the Consumption tab.` : 'No consumption logged yet.'],
+    ['4', dueOrders>5?'warn':'ok', 'What needs attention?', dueOrders>5 ? `<b>${dueOrders}</b> open orders to chase — see the Orders tab.` : 'Nothing urgent — deliveries are on track.'],
+  ];
+  el.innerHTML = `<div class="cdash-qgrid">` + cards.map(c => `<div class="cdash-q ${c[1]}"><div class="qq">${c[0]}. ${c[2]}</div><div class="qa">${c[3]}</div></div>`).join('') + `</div>`;
+}
+
+function renderCdashOrdersStatus() {
+  const el = document.getElementById('cdash-orders-status'); const ex = _cdashExec;
+  if (!el || !ex || ex.error) { if (el) el.innerHTML = ''; return; }
+  const o = ex.orders, d = ex.delivery; const tot = o.total || 0;
+  const barrow = (l,v,c) => { const p = tot ? Math.round(v/tot*100) : 0; return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><span style="width:96px;font-size:.82rem;color:var(--text-muted)">${l}</span><div style="flex:1;height:16px;border-radius:6px;background:var(--surface-2);overflow:hidden"><div style="height:100%;width:${p}%;background:${c};border-radius:6px"></div></div><span style="width:34px;text-align:right;font-weight:700">${v}</span></div>`; };
+  el.innerHTML = `<div class="card" style="padding:15px 17px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px"><span style="font-weight:700;font-size:.88rem;color:var(--navy)">Order status</span><span style="font-size:.76rem;color:var(--text-muted)">${tot} orders · ${d.fill_pct}% fulfilled</span></div>`
+    + barrow('Completed', o.completed||0, 'var(--success)')
+    + barrow('Partial', o.partial||0, '#d97706')
+    + barrow('Pending', o.pending||0, 'var(--danger)')
+    + `</div>`;
+}
+
+function renderCdashSpendGauge() {
+  const el = document.getElementById('cdash-spend-gauge'); const ex = _cdashExec;
+  if (!el || !ex || ex.error) { if (el) el.innerHTML = ''; return; }
+  const f = ex.finance; const u = Math.min(f.budget_util||0, 100);
+  const c = f.budget_util>100?'var(--danger)':f.budget_util>90?'#d97706':'var(--primary)';
+  el.innerHTML = `<div class="card" style="padding:15px 17px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:8px"><span style="font-weight:700;color:var(--navy)">Budget utilization</span><span style="color:var(--text-muted)">${f.budget_util||0}% of ${cdashINR(f.budget)}</span></div><div style="height:20px;border-radius:7px;background:var(--surface-2);overflow:hidden"><div style="height:100%;width:${u}%;background:${c};border-radius:7px"></div></div><div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--text-muted);margin-top:7px"><span><b style="color:var(--navy)">${cdashINR(f.spend)}</b> spent</span><span><b style="color:var(--navy)">${cdashINR(Math.max(0,(f.budget||0)-(f.spend||0)))}</b> headroom</span></div></div>`;
+}
+
+function renderCdashInventory() {
+  const el = document.getElementById('cdash-inventory'); const ex = _cdashExec;
+  if (!el || !ex || ex.error) { if (el) el.innerHTML = ''; return; }
+  const inv = ex.inventory;
+  const stat = (l,v,c,s) => `<div class="card" style="padding:14px 15px"><div style="font-size:.63rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">${l}</div><div style="font-size:1.3rem;font-weight:800;color:${c||'var(--navy)'};margin-top:4px">${v}</div><div style="font-size:.69rem;color:var(--text-muted);margin-top:2px">${s}</div></div>`;
+  el.innerHTML = `<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:10px">Warehouse stock levels (shared catalogue).</div>`
+    + `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">`
+    + stat('Stock availability', (inv.availability||0)+'%', inv.availability>=90?'var(--success)':'#d97706', 'on-hand vs catalogue')
+    + stat('Must-have items', (inv.must_have||0)+'%', inv.must_have>=95?'var(--success)':'#d97706', 'critical SKUs in stock')
+    + stat('Low stock', inv.low_stock||0, inv.low_stock>0?'#d97706':'var(--navy)', 'below reorder level')
+    + stat('Stock-out', inv.stock_out||0, inv.stock_out>0?'var(--danger)':'var(--success)', 'need action')
+    + stat('Inventory value', cdashINR(inv.value||0), 'var(--navy)', 'at unit price')
+    + `</div>`;
 }
 
 /* ── Order-vs-delivery fulfilment: month / quarter / fiscal-year, % + chart ── */
