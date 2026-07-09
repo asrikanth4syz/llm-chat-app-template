@@ -363,6 +363,7 @@ export default {
       if (path==="/api/reports/category-breakdown"  && method==="GET") return handleRptCategoryBreakdown(request,env);
       if (path==="/api/reports/exec-summary"        && method==="GET") return handleRptExecSummary(request,env);
       if (path==="/api/reports/drill"               && method==="GET") return handleRptDrill(request,env);
+      if (path==="/api/reports/sku-challans"        && method==="GET") return handleRptSkuChallans(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -4530,5 +4531,45 @@ async function handleRptDrill(request: Request, env: Env): Promise<Response> {
       ORDER BY ordered_value DESC`).bind(...binds).all();
 
     return json({ level, rows: (results as Record<string,unknown>[]).map(r => ({ ...r, name: level==='sku' ? (r.item_name||r.sku) : r.grp_name })) });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// ── Delivery challans that carried a given SKU (drill: SKU → DC → Invoice) ──
+async function handleRptSkuChallans(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  const clientId = isClientRole ? (user!.client_id || null) : (url.searchParams.get('client_id') || null);
+  const orderId = url.searchParams.get('order_id');
+  const sku = url.searchParams.get('sku');
+  const from = url.searchParams.get('from') || new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+  if (!sku) return json({error:"sku required"}, 400);
+
+  try {
+    const where: string[] = ["di.sku=?"];
+    const binds: string[] = [sku];
+    if (orderId) { where.push("dc.order_id=?"); binds.push(orderId); }
+    else {
+      if (clientId) { where.push("o.client_id=?"); binds.push(clientId); }
+      where.push("o.created_at >= ? AND o.created_at < date(?, '+1 day')"); binds.push(from, to);
+    }
+    const {results} = await env.DB.prepare(`
+      SELECT dc.id, dc.dc_number, dc.order_id, dc.status, dc.dispatched_at, dc.delivered_at,
+        dc.billed, dc.billed_at, dc.vehicle_no, dc.driver_name,
+        c.name AS client_name,
+        di.qty_ordered AS dispatched_qty, di.qty_delivered,
+        COALESCE(i.unit_price,0) AS unit_price,
+        di.qty_delivered * COALESCE(i.unit_price,0) AS line_value,
+        (SELECT COUNT(*) FROM dc_documents d WHERE d.dc_id=dc.id AND d.doc_type='pod') AS pod_count
+      FROM dc_items di
+      JOIN delivery_challans dc ON di.dc_id=dc.id
+      JOIN orders o ON dc.order_id=o.id
+      LEFT JOIN clients c ON o.client_id=c.id
+      LEFT JOIN inventory i ON i.sku=di.sku
+      WHERE ${where.join(' AND ')}
+      ORDER BY dc.dispatched_at DESC`).bind(...binds).all();
+    return json({ sku, rows: results as Record<string,unknown>[] });
   } catch(e) { return json({error: String(e)}, 500); }
 }

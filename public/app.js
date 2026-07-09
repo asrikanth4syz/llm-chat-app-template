@@ -1215,7 +1215,7 @@ async function renderOpsDashboard(el) {
       <button class="btn btn-secondary btn-sm" onclick="navigate('inventory')">Inventory</button>
       <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button>
       <button class="btn btn-secondary btn-sm" onclick="navigate('fulfilment')">Fulfilment</button>
-      <button class="btn btn-primary btn-sm" onclick="navigate('reports_bi')">Reports →</button>
+      <button class="btn btn-primary btn-sm" onclick="navigate('reports')">Reports →</button>
     </div>
   </div>
 
@@ -8484,8 +8484,8 @@ const REPORT_CATEGORIES = [
    EXECUTIVE BI — filter bar + drill: Exec → Client → Order →
    Category → Sub-category → Brand → SKU  (Phase 1)
    ============================================================ */
-const EXEC_LEVELS = ['exec','client','order','category','subcat','brand','sku'];
-const EXEC_LEVEL_NAME = { exec:'Executive', client:'Client', order:'Order', category:'Category', subcat:'Sub Category', brand:'Brand', sku:'SKU / Item' };
+const EXEC_LEVELS = ['exec','client','order','category','subcat','brand','sku','dc','invoice'];
+const EXEC_LEVEL_NAME = { exec:'Executive', client:'Client', order:'Order', category:'Category', subcat:'Sub Category', brand:'Brand', sku:'SKU / Item', dc:'Delivery Challan', invoice:'Invoice' };
 let _xbi = null; // { from,to,timeLabel, path:[{level,label,ctx}] }
 
 function xbiPreset(preset) {
@@ -8567,7 +8567,7 @@ async function xbiRender() {
   const body = document.getElementById('xbi-body');
   if (!body) return;
   body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:22px;height:22px;margin:0 auto"></div></div>';
-  const fn = { exec:xbiExec, client:xbiClient, order:xbiOrder, category:xbiGroup, subcat:xbiGroup, brand:xbiGroup, sku:xbiSku }[node.level];
+  const fn = { exec:xbiExec, client:xbiClient, order:xbiOrder, category:xbiGroup, subcat:xbiGroup, brand:xbiGroup, sku:xbiSku, dc:xbiDc, invoice:xbiInvoice }[node.level];
   try { await fn(node, body); } catch(e) { body.innerHTML = `<div class="alert alert-danger">Failed to load: ${h(String(e))}</div>`; }
 }
 
@@ -8708,15 +8708,18 @@ async function xbiGroup(node, body) {
 }
 
 async function xbiSku(node, body) {
-  // node.ctx has category/subcategory/brand + sku; pull sku totals + inventory snapshot
+  // node.ctx has category/subcategory/brand + sku; pull sku totals + inventory + challans
   const p = xbiScopeParams(node.ctx); p.set('level','sku');
-  const [d, inv] = await Promise.all([
+  const cp = xbiScopeParams(node.ctx); cp.set('sku', node.ctx.sku||node.label);
+  const [d, inv, ch] = await Promise.all([
     api('/reports/drill?'+p.toString()),
     api('/inventory?q='+encodeURIComponent(node.ctx.sku||node.label)).catch(()=>[]),
+    api('/reports/sku-challans?'+cp.toString()).catch(()=>({rows:[]})),
   ]);
   const row = (d?.rows||[]).find(r=>String(r.sku)===String(node.ctx.sku)) || (d?.rows||[])[0] || {};
   const item = Array.isArray(inv) ? inv.find(i=>i.sku===node.ctx.sku) : null;
   const ordQ=Math.round(row.ordered_qty||0), delQ=Math.round(row.delivered_qty||0);
+  const challans = ch?.rows||[];
   body.innerHTML = `
     ${xbiGrp('Item — '+h(node.label),[
       xbiKpi('Ordered', ordQ, 'units'), xbiKpi('Delivered', delQ, ordQ?Math.round(delQ/ordQ*100)+'%':'', ordQ&&delQ/ordQ>=0.9?'g':'w'),
@@ -8728,8 +8731,67 @@ async function xbiSku(node, body) {
       xbiKpi('SKU', node.ctx.sku||'—', ''),
       xbiKpi('Vendor', item?.vendor_name||'—', ''),
       xbiKpi('Unit Price', item?fmt(item.unit_price):'—', '')])}
-    <div style="margin-top:18px;background:var(--primary-wash,#fff2e6);border:1px dashed #f9a86b;border-radius:10px;padding:12px 14px;font-size:.8rem;color:#c2410c">
-      🏁 <b>End of Phase 1.</b> Delivery-challan &amp; invoice drill-down for this item comes in Phase 2 — the data's already there (DCs, DC billing).
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Delivery challans <span style="font-weight:400;color:var(--faint)">— click to drill</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${challans.length ? challans.map(dc=>{
+        const st=(dc.status||'').replace(/_/g,' ');
+        const stCls = dc.status==='DELIVERED'?'g':dc.status==='CANCELLED'?'b':'w';
+        return xbiRow(dc.dc_number||dc.id, `Order ${dc.order_id} · ${dc.delivered_at?fmtDate(dc.delivered_at):st} · ${dc.billed?'billed':'unbilled'}`, `${Math.round(dc.qty_delivered||0)} units`, {fill:null, key:dc.id, share:null});
+      }).join('') : '<div style="text-align:center;color:var(--text-muted);padding:20px">No challans carried this item in the period.</div>'}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>{
+    b.onclick=()=>{ const dc=challans.find(x=>String(x.id)===b.dataset.k); if(!dc)return; xbiPush('dc', dc.dc_number||dc.id, { dc_id: dc.id, dc }); };
+  });
+}
+
+async function xbiDc(node, body) {
+  const dc = node.ctx.dc || {};
+  const items = await api('/delivery-challans/'+encodeURIComponent(node.ctx.dc_id)+'/items').catch(()=>[]) || [];
+  const st=(dc.status||'').replace(/_/g,' ');
+  body.innerHTML = `
+    ${xbiGrp('Challan '+h(dc.dc_number||node.ctx.dc_id),[
+      xbiKpi('DC Number', dc.dc_number||node.ctx.dc_id, ''),
+      xbiKpi('Linked Order', dc.order_id||'—', ''),
+      xbiKpi('Client', dc.client_name||'—', ''),
+      xbiKpi('Status', st||'—', '', dc.status==='DELIVERED'?'g':'w'),
+      xbiKpi('Delivered', dc.delivered_at?fmtDate(dc.delivered_at):'—', ''),
+      xbiKpi('POD', dc.pod_count>0?'Uploaded':'Pending', '', dc.pod_count>0?'g':'w')])}
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Items in this challan</div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px"><div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th>SKU</th><th style="text-align:right">Dispatched</th><th style="text-align:right">Delivered</th></tr></thead>
+      <tbody>${items.length ? items.map(i=>`<tr><td>${h(i.name||i.item_name||i.sku)}</td><td style="color:var(--text-muted)">${h(i.sku)}</td><td style="text-align:right">${i.qty_ordered}</td><td style="text-align:right;font-weight:700">${i.qty_delivered}</td></tr>`).join('')
+        : '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No item detail</td></tr>'}</tbody>
+    </table></div></div>
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:6px 0 8px">Billing <span style="font-weight:400;color:var(--faint)">— view the invoice</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${xbiRow('Invoice for '+(dc.dc_number||node.ctx.dc_id), dc.billed?('Billed '+(dc.billed_at?fmtDate(dc.billed_at):'')):'Not yet billed', fmt(dc.line_value||0), {key:'inv'})}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>b.onclick=()=>xbiPush('invoice', 'Invoice · '+(dc.dc_number||node.ctx.dc_id), { dc }));
+}
+
+async function xbiInvoice(node, body) {
+  const dc = node.ctx.dc || {};
+  const val = dc.line_value || 0;
+  const gst = Math.round(val*0.18);
+  body.innerHTML = `
+    ${xbiGrp('Invoice',[
+      xbiKpi('Invoice #', 'INV-'+(dc.dc_number||dc.id||'—'), ''),
+      xbiKpi('Linked Order', dc.order_id||'—', ''),
+      xbiKpi('Linked DC', dc.dc_number||dc.id||'—', ''),
+      xbiKpi('Invoice Value', fmt(val+gst), 'incl GST'),
+      xbiKpi('Payment', dc.billed?'Billed':'Unbilled', '', dc.billed?'g':'w'),
+      xbiKpi('Outstanding', dc.billed?fmt(0):fmt(val+gst), '', dc.billed?'g':'b')])}
+    <div class="card" style="padding:0;overflow:hidden;margin-top:14px">
+      <div style="background:var(--navy);color:#fff;padding:13px 16px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <span style="font-weight:700">INV-${dc.dc_number||dc.id||'—'}</span><span>${h(dc.client_name||'—')}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:9px 16px;font-size:.84rem;border-bottom:1px solid var(--border)"><span>${h(node.ctx.sku||'Delivered items')}</span><span class="tnum">${Math.round(dc.qty_delivered||0)} × ${fmt(dc.unit_price||0)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:9px 16px;font-size:.84rem;border-bottom:1px solid var(--border)"><span>Subtotal</span><span class="tnum">${fmt(val)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:9px 16px;font-size:.84rem;border-bottom:1px solid var(--border)"><span>GST @ 18%</span><span class="tnum">${fmt(gst)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:12px 16px;font-weight:800;color:var(--navy);background:var(--panel,#faf8f4)"><span>Total</span><span class="tnum">${fmt(val+gst)}</span></div>
+    </div>
+    <div style="margin-top:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;font-size:.8rem;color:#166534">
+      🏁 <b>Bottom of the drill.</b> From a portfolio KPI to a single billed line — every hop auditable. This invoice is derived from the DC's billing record; a full invoice ledger (multi-DC invoices, payment dates) can follow once client invoicing is modelled.
     </div>`;
 }
 
