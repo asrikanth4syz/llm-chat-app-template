@@ -2679,7 +2679,7 @@ async function renderMyOrders(el) {
             </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:8px">📝 ${o.notes}</div>` : ''}
 
             ${o.need_by_date ? `<div style="padding:6px 12px;background:#fff8f8;border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid #fecaca">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
-            ${o.predicted_delivery_date && !['CLOSED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'#f0fdf4'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'#fecaca':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
+            ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'#f0fdf4'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'#fecaca':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
             ${isPartial?`<div style="padding:8px 12px;background:#fef3c7;border-radius:8px;font-size:.78rem;color:#92400e;font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
 
             <!-- Action buttons -->
@@ -2878,11 +2878,11 @@ async function viewOrder(id) {
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
         ${order.need_by_date ? `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;font-weight:600;color:var(--danger)">🚨 Need By:</span><span style="font-weight:700;color:var(--danger)">${fmtDate(order.need_by_date)}</span></div>` : ''}
         <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px">
-          ${['CLOSED','CANCELLED'].includes(order.status)
-            ? (order.status==='CLOSED'
-                ? `<span style="font-size:.8rem;font-weight:600;color:var(--success)">✅ Delivered:</span>
-                   <span style="font-weight:700;color:var(--success)">${order.closed_at||order.updated_at ? fmtDate(order.closed_at||order.updated_at) : 'Completed'}</span>`
-                : `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">Order cancelled</span>`)
+          ${['CLOSED','DELIVERED','CANCELLED'].includes(order.status)
+            ? (order.status==='CANCELLED'
+                ? `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">Order cancelled</span>`
+                : `<span style="font-size:.8rem;font-weight:600;color:var(--success)">✅ Delivered:</span>
+                   <span style="font-weight:700;color:var(--success)">${order.closed_at||order.updated_at ? fmtDate(order.closed_at||order.updated_at) : 'Completed'}</span>`)
             : `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">📅 Est. Delivery:</span>
           ${isOpsRole
             ? `<span id="pdd-display">${pddLabel}</span>
@@ -3386,7 +3386,7 @@ async function renderOrderQueue(el) {
         <td>
           <b>${o.id}</b>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'#d97706'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
-          ${o.predicted_delivery_date && !['CLOSED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
+          ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
         <td>${o.client_name||'—'}</td>
         <td style="font-weight:700">${fmt(o.grand_total)}</td>
@@ -4481,6 +4481,7 @@ async function renderInventory(el) {
     <div style="flex:1"></div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('price')">✏️ Update Price</button>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('category')">📂 Change Category</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('subcategory')">🏷️ Sub-Category</button>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('stock')">📦 Adjust Stock</button>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('reorder')">🎯 Set Reorder Point</button>
     <button class="btn btn-sm" style="background:#b91c1c;color:#fff;border:none;font-weight:700" onclick="invClearSelection()">✕ Cancel</button>
@@ -4573,15 +4574,18 @@ async function renderInventory(el) {
   window.invBulkModal = function(kind) {
     const n = APP._invSelected.size;
     if (!n) { showToast('Select items first', 'error'); return; }
+    const subcats = [...new Set(['Healthy','Normal', ...inv.map(i=>i.sub_category).filter(Boolean)])];
     const defs = {
       price:    { title:'Update Price',      label:'New unit price (₹)',   field:'unit_price',    type:'number', min:0, step:'0.01' },
-      category: { title:'Change Category',   label:'New category',          field:'category',      type:'select' },
+      category: { title:'Change Category',   label:'New category',          field:'category',      type:'select', options: cats.filter(c=>c!=='All') },
+      subcategory:{ title:'Change Sub-Category', label:'New sub-category', field:'sub_category', type:'select', options: subcats, allowCustom:true },
       stock:    { title:'Adjust Stock',      label:'Set stock quantity',    field:'stock',          type:'number', min:0, step:'1' },
       reorder:  { title:'Set Reorder Point', label:'New reorder level',     field:'reorder_level',  type:'number', min:0, step:'1' },
     };
     const d = defs[kind];
     const inputHtml = d.type === 'select'
-      ? `<select id="bulk-value" class="form-control">${cats.filter(c=>c!=='All').map(c=>`<option>${c}</option>`).join('')}</select>`
+      ? `<select id="bulk-value" class="form-control">${(d.options||[]).map(c=>`<option>${c}</option>`).join('')}</select>
+         ${d.allowCustom?`<div style="margin-top:8px"><label style="font-size:.78rem;color:var(--text-muted)">…or type a new one</label><input id="bulk-value-custom" type="text" class="form-control" placeholder="Optional — overrides the dropdown"></div>`:''}`
       : `<input id="bulk-value" type="number" min="${d.min}" step="${d.step}" class="form-control" style="max-width:180px">`;
     openModal(`${d.title} — ${n} item${n>1?'s':''}`, `
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">This will apply to all ${n} selected item${n>1?'s':''}.</div>
@@ -4591,9 +4595,11 @@ async function renderInventory(el) {
   };
 
   window.invBulkApply = async function(field, type) {
-    const raw = document.getElementById('bulk-value')?.value;
+    const custom = document.getElementById('bulk-value-custom')?.value?.trim();
+    const raw = custom || document.getElementById('bulk-value')?.value;
     const value = type === 'select' ? raw : parseFloat(raw);
     if (type !== 'select' && (isNaN(value) || value < 0)) { showToast('Enter a valid value', 'error'); return; }
+    if (type === 'select' && !value) { showToast('Choose or enter a value', 'error'); return; }
     closeModal();
     showToast(`Updating ${APP._invSelected.size} items…`);
     let ok = 0, fail = 0;
