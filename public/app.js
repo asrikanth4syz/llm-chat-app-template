@@ -8477,8 +8477,38 @@ function renderReports(el) {
   const usedKeys = new Set(REPORT_CATEGORIES.flatMap(c=>c.keys));
   const otherDefs = REPORT_DEFS.filter(r=>!usedKeys.has(r.key));
 
+  const nowM = new Date();
+  const admFrom = new Date(nowM.getFullYear(), nowM.getMonth()-5, 1).toISOString().slice(0,10);
+  const admTo = nowM.toISOString().slice(0,10);
+
   el.innerHTML = `
   ${pageHeader('Reports & BI', 'Live data — view inline, export CSV, or print PDF')}
+
+  <!-- ═══ CLIENT FULFILMENT DRILL-DOWN ═══ -->
+  <div class="card" style="padding:16px 20px;margin-bottom:20px;border:1px solid var(--primary)">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <span style="font-size:1.1rem">🔎</span>
+      <span style="font-weight:800;font-size:.95rem;color:var(--navy)">Client Fulfilment Drill-down</span>
+      <span style="font-size:.76rem;color:var(--text-muted)">— orders vs delivery by month/quarter/year, then drill into category → sub-category</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <select id="adm-fulfil-client" class="form-control" style="max-width:240px" onchange="loadAdminFulfil()">
+        <option value="">Loading clients…</option>
+      </select>
+      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        ${['month','quarter','year'].map(g=>`<button id="aftab-${g}" onclick="setAdminFulfilGran('${g}')" style="padding:6px 12px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
+      </div>
+      <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="afmode-chart" onclick="setAdminFulfilMode('chart')" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
+        <button id="afmode-table" onclick="setAdminFulfilMode('table')" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
+      </div>
+      <input type="date" id="adm-rpt-from" class="form-control" style="max-width:150px;font-size:.8rem" value="${admFrom}">
+      <span style="font-size:.8rem;color:var(--text-muted)">to</span>
+      <input type="date" id="adm-rpt-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${admTo}">
+      <button class="btn btn-primary btn-sm" onclick="loadAdminFulfil()">Apply</button>
+    </div>
+    <div id="rpt-fulfil-content"><div style="text-align:center;padding:30px;color:var(--text-muted)">Select a client to view fulfilment.</div></div>
+  </div>
 
   <!-- ═══ ANALYTICS OVERVIEW (Stitch reference) ═══ -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:24px">
@@ -8563,6 +8593,32 @@ function renderReports(el) {
   </div>`:''}`;
 
   loadReportsOverview();
+  populateAdminFulfilClients();
+}
+
+/* ── Admin: client fulfilment drill-down (reuses the fulfilment renderer) ── */
+async function populateAdminFulfilClients() {
+  const sel = document.getElementById('adm-fulfil-client');
+  if (!sel) return;
+  const clients = (await api('/clients').catch(()=>[]) || []).filter(c=>c.active);
+  sel.innerHTML = '<option value="">— Select a client —</option>' +
+    clients.map(c=>`<option value="${c.id}">${h(c.name)}</option>`).join('');
+}
+
+function setAdminFulfilGran(g) { _fulfilGranularity = g; renderFulfilContent(); }
+function setAdminFulfilMode(m) { _fulfilMode = m; renderFulfilContent(); }
+
+async function loadAdminFulfil() {
+  const clientId = document.getElementById('adm-fulfil-client')?.value || '';
+  const wrap = document.getElementById('rpt-fulfil-content');
+  if (!clientId) { if(wrap) wrap.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted)">Select a client to view fulfilment.</div>'; _drillClientId=null; return; }
+  if (wrap) wrap.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted)"><div class="spinner" style="width:22px;height:22px;margin:0 auto"></div></div>';
+  _drillClientId = clientId;                       // makes the drill scope to this client
+  if (!_fulfilGranularity) _fulfilGranularity = 'month';
+  if (!_fulfilMode) _fulfilMode = 'chart';
+  const data = await api(`/reports/order-fulfilment-monthly?client_id=${clientId}`);
+  _clientRptData = { ..._clientRptData, fulfil: data?.rows || [] };
+  renderFulfilContent();
 }
 
 /* ── Analytics overview widgets (SLA gauge, fulfilment bars, tickets) ── */
@@ -8876,6 +8932,7 @@ function clientRptPreset(preset) {
 }
 
 async function loadClientReports() {
+  _drillClientId = null; // client sees their own data; endpoint auto-scopes
   const from = document.getElementById('rpt-from')?.value || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const to   = document.getElementById('rpt-to')?.value   || new Date().toISOString().slice(0,10);
 
@@ -8940,12 +8997,11 @@ function renderFulfilContent() {
   const el = document.getElementById('rpt-fulfil-content');
   if (!el) return;
   ['month','quarter','year'].forEach(g => {
-    const b = document.getElementById(`ftab-${g}`);
-    if (b) { b.style.background = g===_fulfilGranularity?'var(--primary)':'#fff'; b.style.color = g===_fulfilGranularity?'#fff':'var(--text-muted)'; }
+    [`ftab-${g}`,`aftab-${g}`].forEach(id=>{ const b=document.getElementById(id);
+      if (b) { b.style.background = g===_fulfilGranularity?'var(--primary)':'#fff'; b.style.color = g===_fulfilGranularity?'#fff':'var(--text-muted)'; } });
   });
   ['chart','table'].forEach(m => {
-    const b = document.getElementById(`fmode-${m}`);
-    if (b) b.style.background = m===_fulfilMode ? 'var(--primary)' : '#fff';
+    [`fmode-${m}`,`afmode-${m}`].forEach(id=>{ const b=document.getElementById(id); if (b) b.style.background = m===_fulfilMode ? 'var(--primary)' : '#fff'; });
   });
 
   const data = bucketFulfil(_clientRptData.fulfil, _fulfilGranularity);
@@ -8987,29 +9043,33 @@ function renderFulfilContent() {
     return;
   }
 
-  // Chart mode — Fill % is the hero (color-coded bars); Ordered/Delivered as context lines
+  // Chart mode — clean, single Fill % bar chart (color-coded, big % labels).
+  // Ordered/Delivered units live in the tooltip and the table, keeping this uncluttered.
   if (!window.Chart) { _fulfilMode = 'table'; renderFulfilContent(); return; }
   const fillColor = p => p>=90 ? '#16a34a' : p>=70 ? '#d97706' : '#dc2626';
-  el.innerHTML = header + `<div class="card" style="padding:16px 18px">
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:.72rem;color:var(--text-muted)">
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#16a34a;display:inline-block"></span>≥90%</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#d97706;display:inline-block"></span>70–89%</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#dc2626;display:inline-block"></span>&lt;70%</span>
-      <span style="margin-left:auto">Bars = Fill % · Lines = units</span>
+  el.innerHTML = header + `<div class="card" style="padding:18px 20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div style="font-weight:700;font-size:.9rem;color:var(--navy)">Fill Rate by ${_fulfilGranularity==='month'?'Month':_fulfilGranularity==='quarter'?'Quarter':'Fiscal Year'}</div>
+      <div style="display:flex;gap:14px;font-size:.72rem;color:var(--text-muted)">
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#16a34a"></span>≥90%</span>
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#d97706"></span>70–89%</span>
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#dc2626"></span>&lt;70%</span>
+      </div>
     </div>
-    <div style="position:relative;height:320px"><canvas id="fulfil-chart"></canvas></div>
+    <div style="position:relative;height:${Math.max(280, Math.min(420, data.length*46+120))}px"><canvas id="fulfil-chart"></canvas></div>
+    <div style="font-size:.73rem;color:var(--text-muted);margin-top:8px">Hover a bar for ordered/delivered units${_fulfilGranularity==='month'?' · click to drill into categories':''}.</div>
   </div>`;
   const ctx = document.getElementById('fulfil-chart');
   if (ctx && window.Chart) {
     if (APP.charts.fulfil) { try{APP.charts.fulfil.destroy();}catch(_){} }
-    // Data-label plugin drawn inline: show the % on top of each bar
+    // Inline plugin: print the % value at the end of each bar, big and bold
     const pctLabels = {
       id:'pctLabels',
       afterDatasetsDraw(chart){
         const {ctx} = chart; const meta = chart.getDatasetMeta(0);
-        if (!meta || meta.hidden) return;
-        ctx.save(); ctx.font='700 12px sans-serif'; ctx.textAlign='center';
-        meta.data.forEach((bar,i)=>{ const v=data[i].fill_pct; ctx.fillStyle=fillColor(v); ctx.fillText(v+'%', bar.x, bar.y-6); });
+        if (!meta) return;
+        ctx.save(); ctx.font='800 14px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+        meta.data.forEach((bar,i)=>{ const v=data[i].fill_pct; ctx.fillStyle=fillColor(v); ctx.fillText(' '+v+'%', bar.x+4, bar.y); });
         ctx.restore();
       }
     };
@@ -9018,27 +9078,28 @@ function renderFulfilContent() {
       data: {
         labels: data.map(d=>d.label),
         datasets: [
-          { label:'Fill %', data:data.map(d=>d.fill_pct), backgroundColor:data.map(d=>fillColor(d.fill_pct)), borderRadius:6, yAxisID:'y2', order:3, barPercentage:.6, categoryPercentage:.7 },
-          { label:'Ordered', data:data.map(d=>Math.round(d.ordered_qty)), type:'line', borderColor:'#94a3b8', backgroundColor:'#94a3b8', borderDash:[5,4], tension:.3, yAxisID:'y1', order:1, pointRadius:3, borderWidth:2 },
-          { label:'Delivered', data:data.map(d=>Math.round(d.delivered_qty)), type:'line', borderColor:'#4f46e5', backgroundColor:'#4f46e5', tension:.3, yAxisID:'y1', order:2, pointRadius:3, borderWidth:2.5 },
+          { label:'Fill %', data:data.map(d=>d.fill_pct), backgroundColor:data.map(d=>fillColor(d.fill_pct)),
+            borderRadius:6, barThickness:'flex', maxBarThickness:34,
+            _ordered:data.map(d=>Math.round(d.ordered_qty)), _delivered:data.map(d=>Math.round(d.delivered_qty)) },
         ]
       },
       options: {
+        indexAxis:'y',                 // horizontal bars — labels always readable
         responsive:true, maintainAspectRatio:false,
-        layout:{ padding:{ top:18 } },
+        layout:{ padding:{ right:52 } },
         onClick: (evt, els) => {
           if (!els.length) return;
           const d = data[els[0].index]; if (!d) return;
           openCategoryDrill(_fulfilGranularity==='month' ? d.key : '', d.label);
         },
-        plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}, boxWidth:12, usePointStyle:true } },
+        plugins:{ legend:{ display:false },
           tooltip:{ callbacks:{
-            label:(c)=> c.dataset.label==='Fill %' ? `Fill %: ${c.raw}%` : `${c.dataset.label}: ${c.raw} units`,
-            afterBody: ()=> _fulfilGranularity==='month' ? 'Click to drill into categories' : '' } } },
+            label:(c)=>`Fill: ${c.raw}%`,
+            afterLabel:(c)=>{ const d=data[c.dataIndex]; return `Ordered: ${Math.round(d.ordered_qty)}  ·  Delivered: ${Math.round(d.delivered_qty)}  ·  Due: ${Math.round(Math.max(0,d.ordered_qty-d.delivered_qty))}`; },
+            afterBody: ()=> _fulfilGranularity==='month' ? '\nClick to drill into categories' : '' } } },
         scales:{
-          x:{ grid:{display:false}, ticks:{font:{size:10}} },
-          y2:{ position:'left', beginAtZero:true, max:100, title:{display:true,text:'Fill %',font:{size:11,weight:'700'}}, grid:{color:'#f0f2f7'}, ticks:{callback:v=>v+'%',font:{size:10}} },
-          y1:{ position:'right', beginAtZero:true, title:{display:true,text:'Units',font:{size:10}}, grid:{display:false}, ticks:{font:{size:10}} }
+          x:{ beginAtZero:true, max:100, grid:{color:'#f0f2f7'}, ticks:{callback:v=>v+'%',font:{size:10}}, title:{display:true,text:'Fill %',font:{size:11,weight:'700'}} },
+          y:{ grid:{display:false}, ticks:{font:{size:11,weight:'600'}} }
         }
       },
       plugins:[pctLabels]
@@ -9047,37 +9108,60 @@ function renderFulfilContent() {
 }
 
 /* ══ Category / sub-category drill-down (client → period → category → subcat) ══ */
-let _drillState = { period:'', periodLabel:'', category:null };
+let _drillState = { periodKey:'', baseLabel:'', gran:'custom', category:null };
+let _drillClientId = null; // set when an admin drills a specific client
 
-function drillDateParams() {
-  const from = document.getElementById('rpt-from')?.value || '';
-  const to   = document.getElementById('rpt-to')?.value   || '';
-  return { from, to };
+function fyQuarterRange(y, m) {
+  let sm, em, sy=y, ey=y;
+  if (m>=4&&m<=6){sm=4;em=6;} else if (m>=7&&m<=9){sm=7;em=9;} else if (m>=10&&m<=12){sm=10;em=12;} else {sm=1;em=3;}
+  const from = `${sy}-${String(sm).padStart(2,'0')}-01`;
+  const to = new Date(ey, em, 0).toISOString().slice(0,10); // last day of end month
+  const fyStart = (sm>=4)?sy:sy-1;
+  const q = sm>=4&&sm<=6?1:sm>=7&&sm<=9?2:sm>=10&&sm<=12?3:4;
+  return { from, to, label:`Q${q} FY${String(fyStart).slice(2)}-${String(fyStart+1).slice(2)}` };
+}
+function fyYearRange(y, m) {
+  const fyStart = m>=4?y:y-1;
+  return { from:`${fyStart}-04-01`, to:`${fyStart+1}-03-31`, label:`FY${String(fyStart).slice(2)}-${String(fyStart+1).slice(2)}` };
 }
 
-async function openCategoryDrill(period, periodLabel) {
-  _drillState = { period: period||'', periodLabel: periodLabel||'All periods', category:null };
+// Resolve the current drill window (period exact, or from/to range) + label
+function drillWindow() {
+  const { periodKey, gran, baseLabel } = _drillState;
+  if (gran === 'month' && /^\d{4}-\d{2}$/.test(periodKey)) {
+    const d = new Date(periodKey+'-01');
+    return { period: periodKey, label: d.toLocaleDateString('en-IN',{month:'short',year:'numeric'}) };
+  }
+  if ((gran === 'quarter' || gran === 'year') && /^\d{4}-\d{2}$/.test(periodKey)) {
+    const [y,m] = periodKey.split('-').map(Number);
+    const r = gran==='quarter' ? fyQuarterRange(y,m) : fyYearRange(y,m);
+    return { from:r.from, to:r.to, label:r.label };
+  }
+  // custom → page date filter
+  const from = document.getElementById('rpt-from')?.value || document.getElementById('adm-rpt-from')?.value || '';
+  const to   = document.getElementById('rpt-to')?.value   || document.getElementById('adm-rpt-to')?.value   || '';
+  return { from, to, label: baseLabel || 'Custom range' };
+}
+
+async function openCategoryDrill(periodKey, baseLabel) {
+  _drillState = { periodKey: periodKey||'', baseLabel: baseLabel||'All periods', gran: periodKey ? 'month' : 'custom', category:null };
   openModal('Category Breakdown', '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div>',
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
   loadDrill();
 }
 
-function drillToSubcategory(category) {
-  _drillState.category = category;
-  loadDrill();
-}
-
-function drillBackToCategory() {
-  _drillState.category = null;
-  loadDrill();
-}
+function setDrillGran(g) { _drillState.gran = g; loadDrill(); }
+function drillToSubcategory(category) { _drillState.category = category; loadDrill(); }
+function drillBackToCategory() { _drillState.category = null; loadDrill(); }
 
 async function loadDrill() {
-  const { period, periodLabel, category } = _drillState;
-  const { from, to } = drillDateParams();
+  const { category, periodKey } = _drillState;
+  const win = drillWindow();
   const params = new URLSearchParams();
-  if (period) params.set('period', period); else { if(from)params.set('from',from); if(to)params.set('to',to); }
+  if (win.period) params.set('period', win.period);
+  else { if(win.from)params.set('from',win.from); if(win.to)params.set('to',win.to); }
   if (category != null) params.set('category', category);
+  if (_drillClientId) params.set('client_id', _drillClientId);
 
   const titleEl = document.getElementById('modal-title');
   if (titleEl) titleEl.textContent = category != null ? `Sub-category · ${category}` : 'Category Breakdown';
@@ -9089,13 +9173,19 @@ async function loadDrill() {
   if (!body) return;
   const rows = (data?.rows || []).filter(r => (r.ordered_qty||0) > 0);
 
+  // Granularity selector (only meaningful when drilled from a specific month)
+  const granBar = periodKey ? `<div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px">
+    ${[['month','Month'],['quarter','Quarter'],['year','Fiscal Year'],['custom','Custom']].map(([g,lbl])=>
+      `<button onclick="setDrillGran('${g}')" style="padding:5px 12px;font-size:.74rem;font-weight:600;border:none;cursor:pointer;background:${_drillState.gran===g?'var(--primary)':'#fff'};color:${_drillState.gran===g?'#fff':'var(--text-muted)'}">${lbl}</button>`).join('')}
+  </div>` : '';
+
   // Breadcrumb
-  const crumb = `<div style="display:flex;align-items:center;gap:6px;font-size:.8rem;margin-bottom:12px;flex-wrap:wrap">
-    <span style="color:var(--text-muted)">📅 ${h(periodLabel)}</span>
+  const crumb = `<div style="display:flex;align-items:center;gap:6px;font-size:.8rem;margin-bottom:10px;flex-wrap:wrap">
+    <span style="color:var(--text-muted)">📅 ${h(win.label)}</span>
     <span style="color:var(--border)">›</span>
     <button onclick="drillBackToCategory()" style="background:none;border:none;cursor:pointer;padding:0;font-size:.8rem;font-weight:${category==null?'700':'400'};color:${category==null?'var(--navy)':'var(--blue)'}">Categories</button>
     ${category!=null?`<span style="color:var(--border)">›</span><span style="font-weight:700;color:var(--navy)">${h(category)}</span>`:''}
-  </div>`;
+  </div>` + granBar;
 
   if (!rows.length) { body.innerHTML = crumb + '<div style="text-align:center;padding:30px;color:var(--text-muted)">No data for this selection.</div>'; return; }
 
@@ -11698,15 +11788,16 @@ async function switchFulfilTab(tab, btn) {
     <div class="card">
       <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-procurement')">&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th></tr></thead>
+        <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
           <td><b>${r.brand_name}</b></td><td>${r.category}</td>
           <td title="${r.clients}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
-          <td><b style="color:var(--danger)">${r.shortfall_qty}</b></td>
+          <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
           <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
           <td>${r.primary_vendor||'—'}</td>
-        </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+          <td>${r.suggested_po_qty>0?`<button class="btn btn-primary btn-sm" onclick="initiateBrandPO('${String(r.brand_name).replace(/'/g,"")}','${r.vendor_id||''}','${from30}','${today}')">🛒 Initiate PO</button>`:'<span style="color:var(--success);font-size:.8rem">✓ Fulfilled</span>'}</td>
+        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -12190,6 +12281,85 @@ async function generateRFQFromForecast() {
 
 function exportFulfilCSV(tab) {
   showToast('CSV export initiated — data will download shortly', 'info');
+}
+
+/* ── Initiate PO from Brand Procurement shortfall ── */
+let _brandPOItems = [];
+async function initiateBrandPO(brand, vendorId, from, to) {
+  const [items, vendors] = await Promise.all([
+    api(`/reports/brand-procurement-items?brand=${encodeURIComponent(brand)}&from=${from}&to=${to}`),
+    api('/vendors').catch(()=>[]),
+  ]);
+  if (!items || !items.length) { showToast('No shortfall items for this brand', 'error'); return; }
+  _brandPOItems = items;
+  const activeVendors = (vendors||[]).filter(v=>v.active!==0);
+  const vendorOpts = activeVendors.map(v=>`<option value="${v.id}" ${v.id===vendorId?'selected':''}>${h(v.name)}</option>`).join('');
+
+  openModal(`Initiate PO — ${brand}`, `
+    <div class="form-group">
+      <label>Vendor <span style="color:var(--danger)">*</span></label>
+      <select id="bpo-vendor">${vendorOpts||'<option value="">No vendors — add one first</option>'}</select>
+    </div>
+    <div class="form-group">
+      <label>Items & Quantities <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(pre-filled with shortfall; edit as needed)</span></label>
+      <div class="table-wrap"><table class="table" style="margin:0">
+        <thead><tr><th>Item</th><th>SKU</th><th style="text-align:right">Unit ₹</th><th style="text-align:center">Qty</th></tr></thead>
+        <tbody>${items.map((it,i)=>`<tr>
+          <td style="font-size:.84rem"><b>${h(it.name||it.sku)}</b></td>
+          <td style="font-size:.76rem;color:var(--text-muted)">${h(it.sku)}</td>
+          <td style="text-align:right">${fmt(it.unit_price||0)}</td>
+          <td style="text-align:center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" oninput="updateBrandPOTotal()"></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div id="bpo-total" style="text-align:right;font-weight:700;margin-top:8px;color:var(--navy)"></div>
+    </div>
+    <div class="form-group">
+      <label>Notes (optional)</label>
+      <input type="text" id="bpo-notes" placeholder="e.g. Consolidated procurement for shortfall">
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-secondary" onclick="submitBrandPO('whatsapp')">📱 WhatsApp</button>
+     <button class="btn btn-primary" onclick="submitBrandPO('email')">📧 Create &amp; Email PO</button>`);
+  updateBrandPOTotal();
+}
+
+function collectBrandPO() {
+  const items = _brandPOItems.map((it,i)=>{
+    const qty = parseInt(document.querySelector(`input[data-bpo-i="${i}"]`)?.value,10)||0;
+    return { sku: it.sku, name: it.name||it.sku, qty, unit_price: it.unit_price||0 };
+  }).filter(x=>x.qty>0);
+  return items;
+}
+
+function updateBrandPOTotal() {
+  const items = collectBrandPO();
+  const sub = items.reduce((s,i)=>s+i.qty*i.unit_price,0);
+  const el = document.getElementById('bpo-total');
+  if (el) el.textContent = `Subtotal: ${fmt(sub)} · +18% GST = ${fmt(Math.round(sub*1.18))}`;
+}
+
+async function submitBrandPO(mode) {
+  const vendorId = document.getElementById('bpo-vendor')?.value;
+  if (!vendorId) { showToast('Select a vendor', 'error'); return; }
+  const items = collectBrandPO();
+  if (!items.length) { showToast('Enter at least one quantity', 'error'); return; }
+  const notes = document.getElementById('bpo-notes')?.value?.trim() || '';
+
+  const res = await api('/purchase-orders', { method:'POST', body: JSON.stringify({ vendor_id: vendorId, items, notes }) });
+  if (!res) return;
+
+  if (mode === 'whatsapp') {
+    const vSel = document.getElementById('bpo-vendor');
+    const vendorName = vSel?.options[vSel.selectedIndex]?.text || 'Vendor';
+    const lines = items.map(i=>`• ${i.name} × ${i.qty}`).join('\n');
+    const msg = `Hello ${vendorName},\n\nNew Purchase Order ${res.id} from 4SYZ Smart Pantry:\n\n${lines}\n\nTotal (incl. GST): ₹${(res.grand_total||0).toLocaleString('en-IN')}\n\nPlease confirm. Thank you.`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+    showToast(`PO ${res.id} created — WhatsApp opened`);
+  } else {
+    showToast(`PO ${res.id} created & emailed to vendor`);
+  }
+  closeModal();
+  navigate('fulfilment');
 }
 
 /* ============================================================

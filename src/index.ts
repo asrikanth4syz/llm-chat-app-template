@@ -344,6 +344,7 @@ export default {
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
       if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
       if (path==="/api/reports/brand-procurement"    && method==="GET") return handleRptBrandProcurement(request,env);
+      if (path==="/api/reports/brand-procurement-items" && method==="GET") return handleRptBrandProcurementItems(request,env);
       if (path==="/api/reports/due-items"            && method==="GET") return handleRptDueItems(request,env);
       if (path==="/api/reports/dc-per-order"         && method==="GET") return handleRptDCPerOrder(request,env);
       if (path==="/api/reports/order-dcs"             && method==="GET") return handleRptOrderDCs(request,env);
@@ -2837,10 +2838,11 @@ async function handleRptBrandProcurement(request: Request, env: Env): Promise<Re
       i.category,
       SUM(oi.qty) AS total_ordered_qty,
       COALESCE(SUM(dci_sum.qty_delivered),0) AS total_delivered_qty,
-      SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0) AS shortfall_qty,
-      SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0) AS suggested_po_qty,
+      MAX(0, SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0)) AS shortfall_qty,
+      MAX(0, SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0)) AS suggested_po_qty,
       GROUP_CONCAT(DISTINCT c.name) AS clients,
       COALESCE(v.name,'') AS primary_vendor,
+      MAX(i.vendor_id) AS vendor_id,
       COUNT(DISTINCT o.client_id) AS client_count,
       COUNT(DISTINCT o.id) AS order_count
     FROM orders o
@@ -2857,6 +2859,40 @@ async function handleRptBrandProcurement(request: Request, env: Env): Promise<Re
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?
     GROUP BY COALESCE(i.brand,i.category)
     ORDER BY total_ordered_qty DESC`).bind(from, to).all();
+  return json(results);
+}
+
+// SKU-level shortfall for one brand — used to pre-fill the "Initiate PO" modal
+async function handleRptBrandProcurementItems(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const brand = url.searchParams.get('brand') || '';
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  if (!brand) return json({error:"brand required"}, 400);
+
+  const {results} = await env.DB.prepare(`
+    SELECT
+      oi.sku,
+      MAX(i.name) AS name,
+      MAX(i.vendor_id) AS vendor_id,
+      MAX(i.unit_price) AS unit_price,
+      MAX(0, SUM(oi.qty) - COALESCE(SUM(dci_sum.qty_delivered),0)) AS shortfall_qty
+    FROM orders o
+    JOIN order_items oi ON oi.order_id=o.id
+    LEFT JOIN inventory i ON i.sku=oi.sku
+    LEFT JOIN (
+      SELECT dci.sku, dc.order_id, SUM(dci.qty_delivered) AS qty_delivered
+      FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+      GROUP BY dci.sku, dc.order_id
+    ) dci_sum ON dci_sum.sku=oi.sku AND dci_sum.order_id=o.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT')
+      AND COALESCE(i.brand,i.category)=?
+      AND date(o.created_at) >= ? AND date(o.created_at) <= ?
+    GROUP BY oi.sku
+    HAVING shortfall_qty > 0
+    ORDER BY shortfall_qty DESC`).bind(brand, from, to).all();
   return json(results);
 }
 
