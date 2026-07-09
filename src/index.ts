@@ -361,6 +361,8 @@ export default {
       if (path==="/api/reports/client-spend"        && method==="GET") return handleRptClientSpend(request,env);
       if (path==="/api/reports/order-fulfilment-monthly" && method==="GET") return handleRptOrderFulfilmentMonthly(request,env);
       if (path==="/api/reports/category-breakdown"  && method==="GET") return handleRptCategoryBreakdown(request,env);
+      if (path==="/api/reports/exec-summary"        && method==="GET") return handleRptExecSummary(request,env);
+      if (path==="/api/reports/drill"               && method==="GET") return handleRptDrill(request,env);
 
       // Gap 12: Reports data
       if (path.match(/^\/api\/reports\/[^/]+$/) && method==="GET") return handleReportData(request,env,path);
@@ -4369,5 +4371,164 @@ async function handleRptCategoryBreakdown(request: Request, env: Env): Promise<R
       category: category || null, period: period || null, from, to,
       rows: (results as Record<string,unknown>[]).map(r => ({ ...r, name: r.grp_name })),
     });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// Shared: SQL fragment for delivered qty of an order line across all its DCs
+const DELIVERED_EXPR = `COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END)
+  FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+  WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)`;
+
+// ── Executive KPI wall: Orders / Delivery / Finance / Inventory + client roll-up ──
+async function handleRptExecSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  const clientId = isClientRole ? (user!.client_id || null) : (url.searchParams.get('client_id') || null);
+  const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+
+  try {
+    const cWhere = clientId ? ' AND o.client_id=?' : '';
+    const dWhere = `o.created_at >= ? AND o.created_at < date(?, '+1 day')`;
+    const b = (extra: (string|number)[] = []) => [from, to, ...(clientId?[clientId]:[]), ...extra];
+
+    // Orders KPIs
+    const orderAgg = await env.DB.prepare(`
+      SELECT COUNT(*) AS total, COALESCE(SUM(grand_total),0) AS value,
+        SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS completed,
+        SUM(CASE WHEN status='PARTIALLY_CLOSED' THEN 1 ELSE 0 END) AS partial,
+        SUM(CASE WHEN status NOT IN ('CLOSED','PARTIALLY_CLOSED','CANCELLED') THEN 1 ELSE 0 END) AS pending
+      FROM orders o WHERE ${dWhere} AND o.status NOT IN ('CANCELLED','DRAFT') ${cWhere}`).bind(...b()).first() as Record<string,number>;
+
+    // Delivery + margin (ordered vs delivered qty/value, cost)
+    const line = await env.DB.prepare(`
+      SELECT COALESCE(SUM(oi.qty),0) AS ord_qty,
+        COALESCE(SUM(${DELIVERED_EXPR}),0) AS del_qty,
+        COALESCE(SUM(oi.qty*oi.unit_price),0) AS ord_val,
+        COALESCE(SUM((oi.qty - ${DELIVERED_EXPR})*oi.unit_price),0) AS due_val,
+        COALESCE(SUM(oi.qty * COALESCE(i.cost_excl_gst,0)),0) AS cost_val,
+        COALESCE(SUM(CASE WHEN i.cost_excl_gst IS NOT NULL AND i.cost_excl_gst>0 THEN oi.qty*oi.unit_price ELSE 0 END),0) AS costed_val
+      FROM orders o JOIN order_items oi ON oi.order_id=o.id LEFT JOIN inventory i ON i.sku=oi.sku
+      WHERE ${dWhere} AND o.status NOT IN ('CANCELLED','DRAFT') ${cWhere}`).bind(...b()).first() as Record<string,number>;
+
+    const awaitingDispatch = await env.DB.prepare(`SELECT COUNT(*) AS c FROM delivery_challans WHERE status='SCHEDULED'`).first() as Record<string,number>;
+    const awaitingProc = await env.DB.prepare(`SELECT COUNT(*) AS c FROM orders o WHERE o.status IN ('APPROVED','ACKNOWLEDGED') AND ${dWhere} ${cWhere}`).bind(...b()).first() as Record<string,number>;
+
+    // Finance — budget from clients (all or one)
+    const budRow = await env.DB.prepare(clientId
+      ? `SELECT COALESCE(SUM(monthly_budget),0) AS budget FROM clients WHERE id=?`
+      : `SELECT COALESCE(SUM(monthly_budget),0) AS budget FROM clients WHERE active=1`)
+      .bind(...(clientId?[clientId]:[])).first() as Record<string,number>;
+
+    // Inventory snapshot (global — inventory is not client-scoped)
+    let inv: Record<string,number> = { val:0, total:0, instock:0, low:0, out:0 };
+    try {
+      inv = await env.DB.prepare(`SELECT COALESCE(SUM(stock*unit_price),0) AS val, COUNT(*) AS total,
+        SUM(CASE WHEN stock>0 THEN 1 ELSE 0 END) AS instock,
+        SUM(CASE WHEN stock<=reorder_level AND stock>0 THEN 1 ELSE 0 END) AS low,
+        SUM(CASE WHEN stock=0 THEN 1 ELSE 0 END) AS out
+        FROM inventory WHERE active=1`).first() as Record<string,number>;
+    } catch { /* ignore */ }
+    let mustHave = { total:0, avail:0 };
+    try {
+      await ensureCriticalTable(env);
+      const mh = await env.DB.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN i.stock>0 THEN 1 ELSE 0 END) AS avail
+        FROM critical_skus cs JOIN inventory i ON i.sku=cs.sku WHERE i.active=1`).first() as Record<string,number>;
+      mustHave = { total: mh?.total||0, avail: mh?.avail||0 };
+    } catch { /* ignore */ }
+
+    // Clients roll-up
+    const clientRows = await env.DB.prepare(`
+      SELECT c.id, c.name, c.monthly_budget,
+        COUNT(DISTINCT o.id) AS order_count,
+        COALESCE(SUM(o.grand_total),0) AS spend,
+        COALESCE((SELECT SUM(oi.qty) FROM order_items oi WHERE oi.order_id IN (SELECT id FROM orders o2 WHERE o2.client_id=c.id AND o2.created_at>=? AND o2.created_at<date(?, '+1 day') AND o2.status NOT IN ('CANCELLED','DRAFT'))),0) AS ord_qty,
+        COALESCE((SELECT SUM(CASE WHEN dc.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END)
+          FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id
+          WHERE dc.order_id IN (SELECT id FROM orders o3 WHERE o3.client_id=c.id AND o3.created_at>=? AND o3.created_at<date(?, '+1 day') AND o3.status NOT IN ('CANCELLED','DRAFT'))),0) AS del_qty
+      FROM clients c
+      LEFT JOIN orders o ON o.client_id=c.id AND o.created_at>=? AND o.created_at<date(?, '+1 day') AND o.status NOT IN ('CANCELLED','DRAFT')
+      WHERE c.active=1 ${clientId?'AND c.id=?':''}
+      GROUP BY c.id ORDER BY spend DESC`).bind(from,to,from,to,from,to,...(clientId?[clientId]:[])).all();
+
+    const clients = (clientRows.results as Record<string,number>[]).map(c => ({
+      ...c, fill_pct: c.ord_qty ? Math.round((c.del_qty as number)/(c.ord_qty as number)*100) : 0,
+      budget_util: c.monthly_budget ? Math.round((c.spend as number)/(c.monthly_budget as number)*100) : 0,
+    }));
+
+    const ordVal = line?.ord_val||0, delQty = line?.del_qty||0, ordQty = line?.ord_qty||0;
+    const margin = line?.costed_val ? Math.round(((line.costed_val - line.cost_val)/line.costed_val)*1000)/10 : null;
+
+    return json({
+      from, to, scope: clientId ? 'client':'all',
+      orders: { total: orderAgg?.total||0, value: orderAgg?.value||0,
+        avg: orderAgg?.total ? Math.round((orderAgg.value)/(orderAgg.total)) : 0,
+        completed: orderAgg?.completed||0, partial: orderAgg?.partial||0, pending: orderAgg?.pending||0 },
+      delivery: { fill_pct: ordQty?Math.round(delQty/ordQty*100):100,
+        due_qty: Math.max(0, ordQty-delQty), due_value: Math.max(0, Math.round(line?.due_val||0)),
+        awaiting_dispatch: awaitingDispatch?.c||0, awaiting_procurement: awaitingProc?.c||0 },
+      finance: { budget: budRow?.budget||0, spend: Math.round(ordVal),
+        budget_util: budRow?.budget ? Math.round(ordVal/budRow.budget*100) : 0,
+        revenue: Math.round(ordVal), gross_margin: margin },
+      inventory: { value: Math.round(inv?.val||0),
+        availability: inv?.total ? Math.round((inv.instock)/(inv.total)*100) : 0,
+        must_have: mustHave.total ? Math.round(mustHave.avail/mustHave.total*100) : 100,
+        low_stock: inv?.low||0, stock_out: inv?.out||0 },
+      clients,
+    });
+  } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// ── Generalized drill: group ordered vs delivered by category / subcategory / brand / sku ──
+async function handleRptDrill(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  const clientId = isClientRole ? (user!.client_id || null) : (url.searchParams.get('client_id') || null);
+  const orderId = url.searchParams.get('order_id');
+  const level = url.searchParams.get('level') || 'category';
+  const category = url.searchParams.get('category');
+  const subcategory = url.searchParams.get('subcategory');
+  const brand = url.searchParams.get('brand');
+  const from = url.searchParams.get('from') || new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
+
+  const groupExprs: Record<string,string> = {
+    category:    "COALESCE(NULLIF(i.category,''),'Uncategorised')",
+    subcategory: "COALESCE(NULLIF(i.sub_category,''),'Normal')",
+    brand:       "COALESCE(NULLIF(i.brand,''),NULLIF(i.category,''),'—')",
+    sku:         "oi.sku",
+  };
+  const groupExpr = groupExprs[level] || groupExprs.category;
+
+  try {
+    const where: string[] = ["o.status NOT IN ('CANCELLED','DRAFT')"];
+    const binds: string[] = [];
+    if (orderId) { where.push("o.id=?"); binds.push(orderId); }
+    else {
+      if (clientId) { where.push("o.client_id=?"); binds.push(clientId); }
+      where.push("o.created_at >= ? AND o.created_at < date(?, '+1 day')"); binds.push(from, to);
+    }
+    if (category != null)    { where.push("COALESCE(NULLIF(i.category,''),'Uncategorised')=?"); binds.push(category); }
+    if (subcategory != null) { where.push("COALESCE(NULLIF(i.sub_category,''),'Normal')=?"); binds.push(subcategory); }
+    if (brand != null)       { where.push("COALESCE(NULLIF(i.brand,''),NULLIF(i.category,''),'—')=?"); binds.push(brand); }
+
+    const nameSel = level === 'sku' ? "MAX(i.name) AS item_name, oi.sku AS sku," : "";
+    const {results} = await env.DB.prepare(`
+      SELECT ${groupExpr} AS grp_name, ${nameSel}
+        COUNT(DISTINCT o.id) AS order_count,
+        COALESCE(SUM(oi.qty),0) AS ordered_qty,
+        COALESCE(SUM(oi.qty*oi.unit_price),0) AS ordered_value,
+        COALESCE(SUM(${DELIVERED_EXPR}),0) AS delivered_qty,
+        COALESCE(SUM(${DELIVERED_EXPR}*oi.unit_price),0) AS delivered_value
+      FROM orders o JOIN order_items oi ON oi.order_id=o.id LEFT JOIN inventory i ON i.sku=oi.sku
+      WHERE ${where.join(' AND ')}
+      GROUP BY grp_name ${level==='sku'?', oi.sku':''}
+      ORDER BY ordered_value DESC`).bind(...binds).all();
+
+    return json({ level, rows: (results as Record<string,unknown>[]).map(r => ({ ...r, name: level==='sku' ? (r.item_name||r.sku) : r.grp_name })) });
   } catch(e) { return json({error: String(e)}, 500); }
 }

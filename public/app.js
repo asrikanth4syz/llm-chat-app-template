@@ -66,6 +66,7 @@ const NAV = {
     { id:'service_desk',    label:'Service Desk',     icon:iconDesk,      badge:null },
     { id:'approval_chains', label:'Approval Chains',  icon:iconApprove,   badge:null },
     { section:'Analytics' },
+    { id:'exec_bi',         label:'Executive BI',     icon:iconDashboard, badge:null },
     { id:'reports',         label:'Reports & BI',     icon:iconReports,   badge:null },
     { id:'sla_dashboard',   label:'SLA Dashboard',    icon:iconDashboard, badge:'!' },
     { section:'Tools' },
@@ -540,6 +541,7 @@ const PAGE_MAP = {
   clients: renderClients,
   service_desk: renderServiceDesk,
   reports: renderReports,
+  exec_bi: renderExecBI,
   client_reports: renderClientReports,
   approvals: renderApprovals,
   users: renderUsers,
@@ -8477,6 +8479,259 @@ const REPORT_CATEGORIES = [
   { label:'Supply Chain', color:'#92400e', bg:'#fffbeb', icon:'🔗',
     keys:['vendor','inventory','critical-stock'] },
 ];
+
+/* ============================================================
+   EXECUTIVE BI — filter bar + drill: Exec → Client → Order →
+   Category → Sub-category → Brand → SKU  (Phase 1)
+   ============================================================ */
+const EXEC_LEVELS = ['exec','client','order','category','subcat','brand','sku'];
+const EXEC_LEVEL_NAME = { exec:'Executive', client:'Client', order:'Order', category:'Category', subcat:'Sub Category', brand:'Brand', sku:'SKU / Item' };
+let _xbi = null; // { from,to,timeLabel, path:[{level,label,ctx}] }
+
+function xbiPreset(preset) {
+  const now = new Date();
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const map = {
+    today:      [ymd(now), ymd(now), 'Today'],
+    week:       [ymd(new Date(Date.now()-6*86400000)), ymd(now), 'This Week'],
+    month:      [`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`, ymd(now), 'This Month'],
+    quarter:    (()=>{ const m=now.getMonth(); const qs=m>=3&&m<=5?3:m>=6&&m<=8?6:m>=9?9:0; const y=(m<3)?now.getFullYear():now.getFullYear(); return [ymd(new Date(now.getFullYear(),qs,1)), ymd(now), 'Quarter']; })(),
+    fy:         (()=>{ const y=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1; return [`${y}-04-01`, ymd(now), 'Financial Year']; })(),
+    cy:         [`${now.getFullYear()}-01-01`, ymd(now), 'Calendar Year'],
+  };
+  return map[preset] || map.month;
+}
+
+async function renderExecBI(el) {
+  if (!_xbi) { const [f,t,l] = xbiPreset('month'); _xbi = { from:f, to:t, timeLabel:l, preset:'month', path:[{level:'exec',label:'Executive',ctx:{}}] }; }
+  el.innerHTML = `
+  ${pageHeader('Executive BI', 'Company-wide KPIs — click any client, order, category or item to drill deeper')}
+  <div class="card" style="padding:12px 16px;margin-bottom:16px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      ${[['today','Today'],['week','This Week'],['month','This Month'],['quarter','Quarter'],['fy','Financial Year'],['cy','Calendar Year']]
+        .map(([k,l])=>`<button class="btn btn-sm" id="xbi-t-${k}" onclick="xbiSetPreset('${k}')" style="font-size:.76rem;${_xbi.preset===k?'':''}">${l}</button>`).join('')}
+      <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
+      <input type="date" id="xbi-from" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.from}">
+      <span style="font-size:.8rem;color:var(--text-muted)">to</span>
+      <input type="date" id="xbi-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.to}">
+      <button class="btn btn-primary btn-sm" onclick="xbiApplyCustom()">Apply</button>
+      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#c2410c)">${_xbi.timeLabel}</b></span>
+    </div>
+  </div>
+  <div id="xbi-crumbs" style="margin-bottom:12px"></div>
+  <div id="xbi-body"><div style="text-align:center;padding:50px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div></div>`;
+  xbiHighlightPreset();
+  xbiRender();
+}
+
+function xbiHighlightPreset() {
+  ['today','week','month','quarter','fy','cy'].forEach(k=>{
+    const b=document.getElementById('xbi-t-'+k);
+    if (b) b.classList.toggle('btn-primary', _xbi.preset===k);
+  });
+}
+function xbiSyncLabel(){ const lab=document.getElementById('xbi-period-lbl'); if(lab)lab.textContent=_xbi.timeLabel; }
+function xbiSetPreset(k){ const [f,t,l]=xbiPreset(k); _xbi.from=f; _xbi.to=t; _xbi.timeLabel=l; _xbi.preset=k;
+  const fe=document.getElementById('xbi-from'), te=document.getElementById('xbi-to'); if(fe)fe.value=f; if(te)te.value=t;
+  xbiHighlightPreset(); xbiSyncLabel(); xbiRender(); }
+function xbiApplyCustom(){ _xbi.from=document.getElementById('xbi-from').value; _xbi.to=document.getElementById('xbi-to').value; _xbi.timeLabel='Custom'; _xbi.preset=''; xbiHighlightPreset(); xbiSyncLabel(); xbiRender(); }
+
+function xbiCrumbs() {
+  const c = document.getElementById('xbi-crumbs');
+  if (!c) return;
+  c.innerHTML = '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.85rem">' +
+    _xbi.path.map((p,i)=>{
+      const last = i===_xbi.path.length-1;
+      return (i?'<span style="color:var(--text-muted)">›</span>':'')+
+        `<button onclick="xbiGoTo(${i})" ${last?'disabled':''} style="background:${last?'none':'none'};border:none;cursor:${last?'default':'pointer'};font-size:.85rem;font-weight:${last?'700':'600'};color:${last?'var(--navy)':'var(--blue)'};padding:3px 6px;border-radius:6px">${h(p.label)}</button>`;
+    }).join('') + '</div>';
+}
+function xbiGoTo(i){ _xbi.path = _xbi.path.slice(0,i+1); xbiRender(); }
+function xbiPush(level, label, ctx){ _xbi.path.push({level,label,ctx:{..._xbi.path[_xbi.path.length-1].ctx, ...ctx}}); xbiRender(); }
+
+// Build query string for the current context (order_id scopes; else client_id + dates)
+function xbiScopeParams(ctx) {
+  const p = new URLSearchParams();
+  if (ctx.order_id) p.set('order_id', ctx.order_id);
+  else {
+    if (ctx.client_id) p.set('client_id', ctx.client_id);
+    p.set('from', _xbi.from); p.set('to', _xbi.to);
+  }
+  ['category','subcategory','brand'].forEach(k=>{ if (ctx[k]!=null) p.set(k, ctx[k]); });
+  return p;
+}
+
+async function xbiRender() {
+  xbiCrumbs();
+  const node = _xbi.path[_xbi.path.length-1];
+  const body = document.getElementById('xbi-body');
+  if (!body) return;
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:22px;height:22px;margin:0 auto"></div></div>';
+  const fn = { exec:xbiExec, client:xbiClient, order:xbiOrder, category:xbiGroup, subcat:xbiGroup, brand:xbiGroup, sku:xbiSku }[node.level];
+  try { await fn(node, body); } catch(e) { body.innerHTML = `<div class="alert alert-danger">Failed to load: ${h(String(e))}</div>`; }
+}
+
+function xbiKpi(lab,val,sub,cls,onclick){
+  return `<div class="card" style="padding:11px 13px;margin-bottom:0;${onclick?'cursor:pointer':''}" ${onclick?`onclick="${onclick}"`:''}>
+    <div style="font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)">${lab}</div>
+    <div style="font-size:1.28rem;font-weight:800;line-height:1.15;margin-top:3px;color:${cls==='g'?'var(--success)':cls==='w'?'#d97706':cls==='b'?'var(--danger)':'var(--navy)'}">${val}</div>
+    ${sub?`<div style="font-size:.68rem;color:var(--text-muted);margin-top:1px">${sub}</div>`:''}
+  </div>`;
+}
+function xbiGrp(title, cards){
+  return `<div style="font-size:.64rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin:14px 0 8px">${title}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:9px">${cards.join('')}</div>`;
+}
+function xbiFillPill(p){ const c=p>=90?['#e7f6ec','var(--success)']:p>=70?['#fdf0dc','#d97706']:['#fdeaea','var(--danger)']; return `<span style="font-size:.66rem;font-weight:800;padding:2px 8px;border-radius:20px;background:${c[0]};color:${c[1]}">${p}% fill</span>`; }
+function xbiRow(name, meta, val, opts={}){
+  const share = opts.share!=null?`<div style="display:flex;align-items:center;gap:8px;min-width:130px"><div style="flex:1;height:8px;border-radius:5px;background:var(--border);overflow:hidden"><i style="display:block;height:100%;width:${opts.share}%;background:var(--primary)"></i></div><span style="font-size:.74rem;font-weight:700;color:var(--text-muted);width:34px;text-align:right">${opts.share}%</span></div>`:'';
+  const pill = opts.fill!=null?`<div style="margin-top:4px">${xbiFillPill(opts.fill)}</div>`:'';
+  return `<button class="xbi-row" data-k="${h(opts.key||name)}" style="display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface,#fff);cursor:pointer;text-align:left;font-family:inherit;width:100%;transition:border-color .12s,transform .12s" onmouseover="this.style.borderColor='var(--primary)';this.style.transform='translateX(2px)'" onmouseout="this.style.borderColor='var(--border)';this.style.transform=''">
+    <div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:.87rem">${h(name)}</div><div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${meta}</div></div>
+    ${share}
+    <div style="text-align:right;flex-shrink:0"><div style="font-weight:800;font-size:.9rem">${val}</div>${pill}</div>
+    <span style="color:var(--text-muted)">›</span>
+  </button>`;
+}
+
+async function xbiExec(node, body) {
+  const p = new URLSearchParams({ from:_xbi.from, to:_xbi.to });
+  const d = await api('/reports/exec-summary?'+p.toString());
+  if (!d) { body.innerHTML='<div class="alert alert-danger">No data</div>'; return; }
+  const o=d.orders, dl=d.delivery, f=d.finance, iv=d.inventory;
+  const clients = (d.clients||[]).filter(c=>c.spend>0 || c.order_count>0);
+  const maxSpend = Math.max(...clients.map(c=>c.spend), 1);
+  body.innerHTML = `
+    ${xbiGrp('Orders',[
+      xbiKpi('Total Orders', o.total, '', null), xbiKpi('Order Value', fmt(o.value), 'gross'),
+      xbiKpi('Avg Order', fmt(o.avg), ''), xbiKpi('Completed', o.completed, '', 'g'),
+      xbiKpi('Partial', o.partial, '', o.partial?'w':null), xbiKpi('Pending', o.pending, 'in progress', o.pending?'w':null)])}
+    ${xbiGrp('Delivery',[
+      xbiKpi('Fulfilment %', dl.fill_pct+'%', '', dl.fill_pct>=90?'g':dl.fill_pct>=70?'w':'b'),
+      xbiKpi('Due Qty', Math.round(dl.due_qty), 'units', dl.due_qty?'b':null),
+      xbiKpi('Due Value', fmt(dl.due_value), '', dl.due_value?'b':null),
+      xbiKpi('Awaiting Dispatch', dl.awaiting_dispatch, ''), xbiKpi('Awaiting Procurement', dl.awaiting_procurement, '')])}
+    ${xbiGrp('Finance',[
+      xbiKpi('Budget', fmt(f.budget), ''), xbiKpi('Spend', fmt(f.spend), f.budget_util+'% used'),
+      xbiKpi('Budget Util %', f.budget_util+'%', '', f.budget_util>90?'b':f.budget_util>70?'w':null),
+      xbiKpi('Revenue', fmt(f.revenue), ''), xbiKpi('Gross Margin', f.gross_margin!=null?f.gross_margin+'%':'—', f.gross_margin!=null?'':'no cost data', f.gross_margin!=null?'g':null)])}
+    ${xbiGrp('Inventory',[
+      xbiKpi('Inventory Value', fmt(iv.value), ''), xbiKpi('Stock Availability', iv.availability+'%', '', iv.availability>=90?'g':'w'),
+      xbiKpi('Must-Have %', iv.must_have+'%', '', iv.must_have>=95?'g':'w'),
+      xbiKpi('Low Stock', iv.low_stock, 'items', iv.low_stock?'w':null), xbiKpi('Stock-Out', iv.stock_out, 'alerts', iv.stock_out?'b':null)])}
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Clients by spend <span style="font-weight:400;color:var(--faint)">— click to drill</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px" id="xbi-rows">
+      ${clients.length ? clients.map(c=>xbiRow(c.name, `${c.order_count} orders · ${c.budget_util}% budget`, fmt(c.spend), {share:Math.round(c.spend/maxSpend*100), fill:c.fill_pct, key:c.id})).join('')
+        : '<div style="text-align:center;color:var(--text-muted);padding:24px">No orders in this period.</div>'}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>b.onclick=()=>{
+    const c = clients.find(x=>String(x.id)===b.dataset.k); if(!c)return;
+    xbiPush('client', c.name, { client_id: c.id });
+  });
+}
+
+async function xbiClient(node, body) {
+  const cid = node.ctx.client_id;
+  const [d, orders] = await Promise.all([
+    api(`/reports/exec-summary?from=${_xbi.from}&to=${_xbi.to}&client_id=${cid}`),
+    api(`/orders?client_id=${cid}`).catch(()=>[]),
+  ]);
+  const o=d?.orders||{}, dl=d?.delivery||{}, f=d?.finance||{};
+  const scoped = (orders||[]).filter(x=>x.created_at>=_xbi.from && x.created_at<=_xbi.to+'T23:59:59' && !['CANCELLED','DRAFT'].includes(x.status));
+  body.innerHTML = `
+    ${xbiGrp('Client — '+h(node.label),[
+      xbiKpi('Orders', o.total||0, ''), xbiKpi('Order Value', fmt(o.value||0), ''),
+      xbiKpi('Fulfilment', (dl.fill_pct||0)+'%', '', (dl.fill_pct||0)>=90?'g':'w'),
+      xbiKpi('Budget Util', (f.budget_util||0)+'%', '', (f.budget_util||0)>90?'b':(f.budget_util||0)>70?'w':null),
+      xbiKpi('Due Value', fmt(dl.due_value||0), '', dl.due_value?'b':null),
+      xbiKpi('Pending', o.pending||0, '')])}
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Orders <span style="font-weight:400;color:var(--faint)">— click to drill</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${scoped.length ? scoped.map(ord=>xbiRow(ord.id, `${fmtDate(ord.created_at)} · ${(ord.status||'').replace(/_/g,' ')}`, fmt(ord.grand_total), {key:ord.id})).join('')
+        : '<div style="text-align:center;color:var(--text-muted);padding:24px">No orders for this client in the period.</div>'}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>b.onclick=()=>xbiPush('order', b.dataset.k, { order_id: b.dataset.k, client_id: cid }));
+}
+
+async function xbiOrder(node, body) {
+  const oid = node.ctx.order_id;
+  const [order, cats] = await Promise.all([
+    api('/orders/'+oid).catch(()=>null),
+    api('/reports/drill?level=category&order_id='+encodeURIComponent(oid)),
+  ]);
+  const rows = (cats?.rows||[]).filter(r=>r.ordered_qty>0);
+  const totOrd = rows.reduce((s,r)=>s+r.ordered_value,0)||1;
+  const fill = order ? null : null;
+  body.innerHTML = `
+    ${xbiGrp('Order '+h(oid),[
+      xbiKpi('Order Value', fmt(order?.grand_total||0), 'incl GST'),
+      xbiKpi('Status', (order?.status||'—').replace(/_/g,' '), '', order?.status==='CLOSED'?'g':'w'),
+      xbiKpi('Lines', (order?.items||[]).length, ''),
+      xbiKpi('Client', order?.client_name||'—', ''),
+      xbiKpi('Placed', order?.created_at?fmtDate(order.created_at):'—', ''),
+      xbiKpi('For', order?.order_period?new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'}):'—', '')])}
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Category breakdown <span style="font-weight:400;color:var(--faint)">— click a category to drill</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${rows.length ? rows.map(r=>{ const fillp=r.ordered_qty?Math.round(r.delivered_qty/r.ordered_qty*100):0;
+        return xbiRow(r.name, `${Math.round(r.ordered_qty)} ordered`, fmt(r.ordered_value), {share:Math.round(r.ordered_value/totOrd*100), fill:fillp, key:r.name}); }).join('')
+        : '<div style="text-align:center;color:var(--text-muted);padding:24px">No line items.</div>'}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>b.onclick=()=>xbiPush('category', b.dataset.k, { category: b.dataset.k }));
+}
+
+// Generic group level: category→subcat→brand→sku
+async function xbiGroup(node, body) {
+  const levelMap = { category:'subcategory', subcat:'brand', brand:'sku' };
+  const nextApiLevel = levelMap[node.level];
+  const p = xbiScopeParams(node.ctx); p.set('level', nextApiLevel);
+  const d = await api('/reports/drill?'+p.toString());
+  const rows = (d?.rows||[]).filter(r=>r.ordered_qty>0);
+  const totOrd = rows.reduce((s,r)=>s+r.ordered_value,0)||1;
+  const totQ = rows.reduce((s,r)=>s+r.ordered_qty,0), totD = rows.reduce((s,r)=>s+r.delivered_qty,0);
+  const label = { category:'Sub-categories', subcat:'Brands', brand:'SKUs / items' }[node.level];
+  body.innerHTML = `
+    ${xbiGrp(EXEC_LEVEL_NAME[node.level]+' — '+h(node.label),[
+      xbiKpi('Qty Ordered', Math.round(totQ), ''), xbiKpi('Delivered', Math.round(totD), totQ?Math.round(totD/totQ*100)+'%':'', totQ&&totD/totQ>=0.9?'g':'w'),
+      xbiKpi('Value', fmt(totOrd), ''), xbiKpi('Due', Math.round(Math.max(0,totQ-totD)), 'units', totQ-totD>0?'b':null)])}
+    <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">${label} <span style="font-weight:400;color:var(--faint)">— click to drill</span></div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${rows.length ? rows.map(r=>{ const fillp=r.ordered_qty?Math.round(r.delivered_qty/r.ordered_qty*100):0;
+        return xbiRow(r.name, `${Math.round(r.ordered_qty)} ordered${r.sku?' · '+r.sku:''}`, fmt(r.ordered_value), {share:Math.round(r.ordered_value/totOrd*100), fill:fillp, key:(nextApiLevel==='sku'?r.sku:r.name)}); }).join('')
+        : '<div style="text-align:center;color:var(--text-muted);padding:24px">No data at this level.</div>'}
+    </div>`;
+  body.querySelectorAll('.xbi-row').forEach(b=>b.onclick=()=>{
+    const key = b.dataset.k;
+    if (nextApiLevel==='subcategory') xbiPush('subcat', key, { subcategory:key });
+    else if (nextApiLevel==='brand')  xbiPush('brand', key, { brand:key });
+    else xbiPush('sku', key, { sku:key });
+  });
+}
+
+async function xbiSku(node, body) {
+  // node.ctx has category/subcategory/brand + sku; pull sku totals + inventory snapshot
+  const p = xbiScopeParams(node.ctx); p.set('level','sku');
+  const [d, inv] = await Promise.all([
+    api('/reports/drill?'+p.toString()),
+    api('/inventory?q='+encodeURIComponent(node.ctx.sku||node.label)).catch(()=>[]),
+  ]);
+  const row = (d?.rows||[]).find(r=>String(r.sku)===String(node.ctx.sku)) || (d?.rows||[])[0] || {};
+  const item = Array.isArray(inv) ? inv.find(i=>i.sku===node.ctx.sku) : null;
+  const ordQ=Math.round(row.ordered_qty||0), delQ=Math.round(row.delivered_qty||0);
+  body.innerHTML = `
+    ${xbiGrp('Item — '+h(node.label),[
+      xbiKpi('Ordered', ordQ, 'units'), xbiKpi('Delivered', delQ, ordQ?Math.round(delQ/ordQ*100)+'%':'', ordQ&&delQ/ordQ>=0.9?'g':'w'),
+      xbiKpi('Due', Math.max(0,ordQ-delQ), 'units', ordQ-delQ>0?'b':null), xbiKpi('Order Value', fmt(row.ordered_value||0), '')])}
+    ${xbiGrp('Stock & item',[
+      xbiKpi('Current Stock', item?Math.round(item.stock):'—', item?(item.uom||'units'):''),
+      xbiKpi('Reserved', item?Math.round(item.reserved||0):'—', ''),
+      xbiKpi('Reorder Level', item?Math.round(item.reorder_level||0):'—', ''),
+      xbiKpi('SKU', node.ctx.sku||'—', ''),
+      xbiKpi('Vendor', item?.vendor_name||'—', ''),
+      xbiKpi('Unit Price', item?fmt(item.unit_price):'—', '')])}
+    <div style="margin-top:18px;background:var(--primary-wash,#fff2e6);border:1px dashed #f9a86b;border-radius:10px;padding:12px 14px;font-size:.8rem;color:#c2410c">
+      🏁 <b>End of Phase 1.</b> Delivery-challan &amp; invoice drill-down for this item comes in Phase 2 — the data's already there (DCs, DC billing).
+    </div>`;
+}
 
 function renderReports(el) {
   const byKey = Object.fromEntries(REPORT_DEFS.map(r=>[r.key,r]));
