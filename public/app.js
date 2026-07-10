@@ -9822,8 +9822,8 @@ async function loadDrill() {
 function renderConsumptionGrid(rows) {
   if (!rows.length) return '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">No consumption recorded in this period.</div>';
 
-  const pantry    = rows.filter(r => /pantry/i.test(r.category||''));
   const beverages = rows.filter(r => /beverag/i.test(r.category||''));
+  const pantry    = rows.filter(r => !/beverag/i.test(r.category||'')); // everything that isn't a beverage (snacks, dry fruits, pantry…)
 
   function card(title, icon, color, bg, items, mode) {
     const sorted = mode === 'top' ? items.slice(0,5) : [...items].reverse().slice(0,5);
@@ -9852,10 +9852,10 @@ function renderConsumptionGrid(rows) {
   }
 
   const allTop    = card('Overall', '📊', '#1e40af', '#eff6ff', rows, 'top');
-  const pantryTop = card('Pantry',  '🥫', '#065f46', '#ecfdf5', pantry, 'top');
+  const pantryTop = card('Pantry & Snacks',  '🥫', '#065f46', '#ecfdf5', pantry, 'top');
   const bevTop    = card('Beverages','🥤', '#7c3aed', '#f5f3ff', beverages, 'top');
   const allBot    = card('Overall', '📉', '#92400e', '#fffbeb', rows, 'bottom');
-  const pantryBot = card('Pantry',  '🥫', '#b91c1c', '#fef2f2', pantry, 'bottom');
+  const pantryBot = card('Pantry & Snacks',  '🥫', '#b91c1c', '#fef2f2', pantry, 'bottom');
   const bevBot    = card('Beverages','🥤', '#6b7280', '#f9fafb', beverages, 'bottom');
 
   return `

@@ -193,6 +193,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
       await env.DB.prepare("UPDATE client_inventory SET category=? WHERE category=?").bind(to, from).run();
       await env.DB.prepare("UPDATE order_items      SET category=? WHERE category=?").bind(to, from).run();
     }
+    // Self-heal: sync each client's stored category from the master catalogue so
+    // per-product category edits (not just the blanket renames above) propagate.
+    await env.DB.prepare(`UPDATE client_inventory
+      SET category = (SELECT inv.category FROM inventory inv WHERE inv.sku = client_inventory.sku)
+      WHERE EXISTS (SELECT 1 FROM inventory inv WHERE inv.sku = client_inventory.sku
+        AND COALESCE(inv.category,'') <> ''
+        AND COALESCE(inv.category,'') <> COALESCE(client_inventory.category,''))`).run();
   } catch { /* non-fatal — tables may not exist yet */ }
   try {
     await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
@@ -4075,11 +4082,17 @@ async function handleListClientInventory(request: Request, env: Env): Promise<Re
   const clientId: string | null = isClientRole ? (user!.client_id || null) : url.searchParams.get('client_id');
   if (!clientId) return json([]);
 
+  // category is sourced live from the master catalogue (inventory) so per-product
+  // category edits show immediately; ci.category is only a fallback. The aliased
+  // `category` is selected after ci.* so it wins in the returned row.
   let sql = `SELECT ci.*,
+    COALESCE(NULLIF(inv.category,''), ci.category) AS category,
     CASE WHEN ci.qty_on_hand = 0 THEN 'out' WHEN ci.reorder_level > 0 AND ci.qty_on_hand <= ci.reorder_level THEN 'low' ELSE 'ok' END AS stock_status
-    FROM client_inventory ci WHERE ci.client_id=?`;
+    FROM client_inventory ci
+    LEFT JOIN inventory inv ON inv.sku = ci.sku
+    WHERE ci.client_id=?`;
   const binds: unknown[] = [clientId];
-  if (q) { sql += ` AND (ci.item_name LIKE ? OR ci.sku LIKE ? OR ci.category LIKE ?)`; const like = `%${q}%`; binds.push(like,like,like); }
+  if (q) { sql += ` AND (ci.item_name LIKE ? OR ci.sku LIKE ? OR COALESCE(inv.category, ci.category) LIKE ?)`; const like = `%${q}%`; binds.push(like,like,like); }
   sql += ` ORDER BY ci.item_name ASC`;
 
   try {
@@ -4222,11 +4235,12 @@ async function handleRptClientConsumption(request: Request, env: Env): Promise<R
       SELECT
         cc.sku,
         cc.item_name,
-        COALESCE(ci.category, '') AS category,
+        COALESCE(NULLIF(inv.category,''), NULLIF(ci.category,''), '') AS category,
         SUM(cc.qty) AS total_qty,
         COUNT(cc.id) AS log_count
       FROM client_consumption cc
       LEFT JOIN client_inventory ci ON ci.sku = cc.sku AND ci.client_id = cc.client_id
+      LEFT JOIN inventory inv ON inv.sku = cc.sku
       WHERE ${whereParts.join(' AND ')}
       GROUP BY cc.sku, cc.item_name
       ORDER BY total_qty DESC
