@@ -592,7 +592,9 @@ function navigate(page) {
 function ensureClientFAB() {
   const isClient = ['client','client_user','approver'].includes(APP.user?.nav);
   let fab = document.getElementById('client-fab');
-  if (!isClient) { if (fab) fab.remove(); return; }
+  // The order page has its own cart bar + action buttons; the floating FAB would
+  // overlap them, so hide it there.
+  if (!isClient || APP.page === 'place_order') { if (fab) fab.remove(); return; }
   if (fab) { fab.querySelector('#fab-menu').style.display='none'; fab.querySelector('#fab-main').textContent='+'; return; }
 
   fab = document.createElement('div');
@@ -759,6 +761,8 @@ async function renderClientDashboard(el) {
   const { client, recentOrders, totalSpend, pendingApproval } = data;
   const lowStock = (myInv||[]).filter(i => i.stock_status==='low' || i.stock_status==='out')
     .sort((a,b) => (a.stock_status==='out'?0:1) - (b.stock_status==='out'?0:1));
+  APP._attentionItems = lowStock;
+  const cartCount = (APP.cart||[]).reduce((s,i) => s + (i.qty||0), 0);
   const budget    = client?.monthly_budget || 500000;
   const spent     = client?.spent_this_month ?? 0; // actual current-month spend from backend
   const pctSpent  = Math.min(100, Math.round((spent / budget) * 100));
@@ -788,9 +792,13 @@ async function renderClientDashboard(el) {
 
   <!-- ═══ WHAT NEEDS ATTENTION TODAY ═══ -->
   <div style="margin-bottom:18px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-size:.85rem;font-weight:800;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">⚡ Needs attention today</span>
       ${attentionCount ? `<span style="background:#fee2e2;color:#dc2626;border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
+      ${lowStock.length ? `<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-gold btn-sm" onclick="orderAllAttention()" title="Add every low & out-of-stock item to your order">🛒 Order all (${lowStock.length})</button>
+        <button id="attn-review-btn" class="btn btn-primary btn-sm" style="display:${cartCount>0?'inline-flex':'none'}" onclick="APP._postNavStep='review';navigate('place_order')">Review order (<span id="attn-review-count">${cartCount}</span>) →</button>
+      </div>` : ''}
     </div>
     ${attentionCount === 0 ? `
     <div class="card" style="padding:18px 20px;margin-bottom:0;display:flex;align-items:center;gap:12px;background:#f0fdf4;border:1px solid #bbf7d0">
@@ -808,7 +816,9 @@ async function renderClientDashboard(el) {
           <span style="font-size:.78rem;font-weight:700;color:${i.stock_status==='out'?'#dc2626':'#d97706'}">${Math.round(i.qty_on_hand||0)} left</span>
         </div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(i.item_name||i.sku)}">${h(i.item_name||i.sku)}</div>
-        <button class="btn btn-primary btn-sm" style="width:100%" onclick="orderMoreItem('${h(i.sku)}','${h(i.item_name||i.sku)}')">Order Now</button>
+        ${(APP.cart||[]).some(c => c.sku === i.sku)
+          ? `<button class="btn btn-secondary btn-sm" style="width:100%;background:#dcfce7;color:#15803d;border-color:#86efac" onclick="APP._postNavStep='review';navigate('place_order')">✓ Added — Review</button>`
+          : `<button class="btn btn-primary btn-sm" style="width:100%" onclick="addAttentionItem('${h(i.sku)}','${h(i.item_name||i.sku)}',this)">Order Now</button>`}
       </div>`).join('')}
       ${pendingApproval > 0 ? `
       <div style="flex:0 0 240px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px">
@@ -2534,26 +2544,68 @@ function updateCriticalKpi() {
   if (s) { s.textContent = need ? `${need} need restock` : 'tracked for availability'; s.style.color = need ? 'var(--danger)' : 'var(--text-muted)'; }
 }
 
-// Add every low & out-of-stock item to the cart in one tap, then jump to review
-async function orderAllLowStock() {
-  const items = (APP._clientInvItems || []).filter(i => i.stock_status === 'low' || i.stock_status === 'out');
-  if (!items.length) { showToast('Nothing is low or out of stock', 'info'); return; }
+// Shared: add a list of inventory items to the cart, each with a suggested qty
+// that clears its reorder gap (min 1). Resolves prices from the catalogue once.
+async function bulkAddToCart(items) {
+  if (!items || !items.length) return 0;
   const cat = await api('/inventory');
   const bySku = {}; (Array.isArray(cat) ? cat : []).forEach(c => { bySku[c.sku] = c; });
-  let added = 0;
   items.forEach(i => {
     const c = bySku[i.sku];
     const price = c?.unit_price || c?.client_price || i.unit_price || 0;
-    // suggest enough to clear the reorder gap (min 1)
     const qty = i.reorder_level > 0 ? Math.max(Math.round(i.reorder_level - (i.qty_on_hand||0)), 1) : 1;
     const existing = APP.cart.find(x => x.sku === i.sku);
     if (existing) existing.qty += qty;
     else APP.cart.push({ sku: i.sku, name: i.item_name || c?.name || i.sku, qty, unit_price: price, emoji: c?.emoji || '📦' });
-    added++;
   });
-  showToast(`${added} item${added!==1?'s':''} added to your order`);
+  return items.length;
+}
+
+// My Inventory: add every low & out-of-stock item to the cart, then jump to review
+async function orderAllLowStock() {
+  const items = (APP._clientInvItems || []).filter(i => i.stock_status === 'low' || i.stock_status === 'out');
+  if (!items.length) { showToast('Nothing is low or out of stock', 'info'); return; }
+  const n = await bulkAddToCart(items);
+  showToast(`${n} item${n!==1?'s':''} added to your order`);
   APP._postNavStep = 'review';
   navigate('place_order');
+}
+
+// Dashboard "Needs attention": add all flagged items at once, then review
+async function orderAllAttention() {
+  const items = APP._attentionItems || [];
+  if (!items.length) { showToast('Nothing needs attention', 'info'); return; }
+  const n = await bulkAddToCart(items);
+  showToast(`${n} item${n!==1?'s':''} added to your order`);
+  APP._postNavStep = 'review';
+  navigate('place_order');
+}
+
+// Dashboard "Needs attention": add a single item but STAY on the page so the
+// user can add several before reviewing.
+async function addAttentionItem(sku, name, btn) {
+  const items = await api('/inventory?q=' + encodeURIComponent(sku));
+  const item = Array.isArray(items) ? items.find(i => i.sku === sku) : null;
+  const price = item?.unit_price || item?.client_price || 0;
+  const existing = APP.cart.find(c => c.sku === sku);
+  if (existing) existing.qty += 1;
+  else APP.cart.push({ sku, name: item?.name || name, qty: 1, unit_price: price, emoji: item?.emoji || '📦' });
+  if (btn) {
+    btn.textContent = '✓ Added — Review';
+    btn.className = 'btn btn-secondary btn-sm';
+    btn.style.cssText = 'width:100%;background:#dcfce7;color:#15803d;border-color:#86efac';
+    btn.onclick = () => { APP._postNavStep = 'review'; navigate('place_order'); };
+  }
+  const total = APP.cart.reduce((s, i) => s + i.qty, 0);
+  showToast(`${item?.name || name} added — ${total} in cart`);
+  updateAttnReviewBtn();
+}
+
+function updateAttnReviewBtn() {
+  const btn = document.getElementById('attn-review-btn'); if (!btn) return;
+  const count = (APP.cart || []).reduce((s, i) => s + (i.qty||0), 0);
+  btn.style.display = count > 0 ? 'inline-flex' : 'none';
+  const c = document.getElementById('attn-review-count'); if (c) c.textContent = count;
 }
 
 function logConsumptionModal(sku, name, qty, uom) {
