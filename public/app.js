@@ -2325,16 +2325,23 @@ async function renderMyInventory(el) {
   const totalItems   = items.length;
   const lowStock     = items.filter(i => i.stock_status === 'low').length;
   const outOfStock   = items.filter(i => i.stock_status === 'out').length;
+  const reorderItems = items.filter(i => i.stock_status === 'low' || i.stock_status === 'out');
+  const criticalItems= items.filter(i => i.is_critical);
+  const criticalNeed = criticalItems.filter(i => i.stock_status === 'low' || i.stock_status === 'out').length;
   const consumedWeek = (consumption||[]).filter(c => c.consumed_at >= new Date(Date.now()-7*86400000).toISOString().slice(0,10));
   const totalUsedWeek= consumedWeek.reduce((s,c) => s + (c.qty||0), 0);
+  APP._clientInvItems = items;
 
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Store Inventory</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track items received, log consumption, and reorder low-stock items</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track items received, mark what's critical, log consumption, and reorder in one tap</div>
     </div>
-    <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${reorderItems.length ? `<button class="btn btn-gold btn-sm" onclick="orderAllLowStock()" title="Add every low & out-of-stock item to your order">🛒 Reorder all low/out (${reorderItems.length})</button>` : ''}
+      <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
+    </div>
   </div>
 
   <!-- KPI Cards -->
@@ -2351,6 +2358,11 @@ async function renderMyInventory(el) {
     <div class="card" style="padding:16px 18px;border-top:3px solid ${outOfStock?'var(--danger)':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='out';filterMyInventoryTable()">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Out of Stock</div>
       <div style="font-size:1.8rem;font-weight:700;color:${outOfStock?'var(--danger)':'var(--navy)'};line-height:1">${outOfStock}</div>
+    </div>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'#7c3aed'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='critical';filterMyInventoryTable();switchMyInvTab('stock')" title="Items you've marked critical">
+      <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">★ Critical Items</div>
+      <div id="inv-kpi-critical" style="font-size:1.8rem;font-weight:700;color:#7c3aed;line-height:1">${criticalItems.length}</div>
+      <div id="inv-kpi-critical-sub" style="font-size:.72rem;color:${criticalNeed?'var(--danger)':'var(--text-muted)'};margin-top:4px">${criticalNeed?`${criticalNeed} need restock`:'tracked for availability'}</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Used This Week</div>
@@ -2370,6 +2382,7 @@ async function renderMyInventory(el) {
       <input id="inv-search" type="text" placeholder="Search items…" class="form-control" style="max-width:240px" oninput="filterMyInventoryTable()">
       <select id="inv-filter-status" class="form-control" style="max-width:160px" onchange="filterMyInventoryTable()">
         <option value="">All Status</option>
+        <option value="critical">★ Critical</option>
         <option value="ok">In Stock</option>
         <option value="low">Low Stock</option>
         <option value="out">Out of Stock</option>
@@ -2427,9 +2440,9 @@ function myInvRow(i) {
   const statusLabel = i.stock_status==='out' ? 'Out of Stock' : i.stock_status==='low' ? 'Low Stock' : 'In Stock';
   const statusBg    = i.stock_status==='out' ? '#fee2e2' : i.stock_status==='low' ? '#fef3c7' : '#d1fae5';
   const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
-  return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" style="${rowBg}">
+  return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" data-critical="${i.is_critical?1:0}" style="${rowBg}">
     <td class="card-title-cell">
-      <div style="font-weight:600;font-size:.87rem;color:var(--navy)">${h(i.item_name||i.sku)}</div>
+      <div class="inv-name" style="font-weight:600;font-size:.87rem;color:var(--navy)">${i.is_critical?'<span class="inv-star" title="Critical for you" style="color:#f59e0b">★</span> ':''}${h(i.item_name||i.sku)}</div>
       <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
     </td>
     <td data-label="Category" style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
@@ -2441,6 +2454,7 @@ function myInvRow(i) {
     <td data-label="Last Used" style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm inv-crit-btn" onclick="toggleClientCritical('${h(i.sku)}',this)" title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
         <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="orderMoreItem('${h(i.sku)}','${h(i.item_name||i.sku)}')">Order More</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>
@@ -2477,9 +2491,69 @@ function filterMyInventoryTable() {
     const text   = row.textContent.toLowerCase();
     const rowCat = row.dataset.cat || '';
     const rowSt  = row.dataset.status || '';
-    const show   = (!q || text.includes(q)) && (!status || rowSt===status) && (!cat || rowCat===cat);
+    const rowCrit= row.dataset.critical === '1';
+    const statusMatch = !status ? true : status === 'critical' ? rowCrit : rowSt === status;
+    const show   = (!q || text.includes(q)) && statusMatch && (!cat || rowCat===cat);
     row.style.display = show ? '' : 'none';
   });
+}
+
+// Mark / unmark an item as critical for this client (tracked for availability)
+async function toggleClientCritical(sku, btn) {
+  const row = btn.closest('tr');
+  const next = !(row?.dataset.critical === '1');
+  btn.disabled = true;
+  const res = await api('/client-inventory/' + encodeURIComponent(sku), { method:'PATCH', body: JSON.stringify({ is_critical: next ? 1 : 0 }) });
+  btn.disabled = false;
+  if (!res) return; // api() already surfaced the error
+  if (row) {
+    row.dataset.critical = next ? '1' : '0';
+    btn.textContent = next ? '★' : '☆';
+    btn.title = next ? 'Unmark critical' : 'Mark as critical';
+    btn.style.cssText = next ? 'color:#b45309;border-color:#fcd34d;background:#fffbeb' : '';
+    const nameEl = row.querySelector('.inv-name');
+    if (nameEl) {
+      const nm = nameEl.textContent.replace(/^★\s*/, '');
+      nameEl.innerHTML = (next ? '<span class="inv-star" title="Critical for you" style="color:#f59e0b">★</span> ' : '') + h(nm);
+    }
+  }
+  const it = (APP._clientInvItems||[]).find(x => x.sku === sku);
+  if (it) it.is_critical = next ? 1 : 0;
+  updateCriticalKpi();
+  // if currently filtering by critical, hide de-selected rows
+  if (document.getElementById('inv-filter-status')?.value) filterMyInventoryTable();
+  showToast(next ? 'Marked as critical' : 'Removed from critical');
+}
+
+function updateCriticalKpi() {
+  const items = APP._clientInvItems || [];
+  const crit  = items.filter(i => i.is_critical);
+  const need  = crit.filter(i => i.stock_status === 'low' || i.stock_status === 'out').length;
+  const v = document.getElementById('inv-kpi-critical'); if (v) v.textContent = crit.length;
+  const s = document.getElementById('inv-kpi-critical-sub');
+  if (s) { s.textContent = need ? `${need} need restock` : 'tracked for availability'; s.style.color = need ? 'var(--danger)' : 'var(--text-muted)'; }
+}
+
+// Add every low & out-of-stock item to the cart in one tap, then jump to review
+async function orderAllLowStock() {
+  const items = (APP._clientInvItems || []).filter(i => i.stock_status === 'low' || i.stock_status === 'out');
+  if (!items.length) { showToast('Nothing is low or out of stock', 'info'); return; }
+  const cat = await api('/inventory');
+  const bySku = {}; (Array.isArray(cat) ? cat : []).forEach(c => { bySku[c.sku] = c; });
+  let added = 0;
+  items.forEach(i => {
+    const c = bySku[i.sku];
+    const price = c?.unit_price || c?.client_price || i.unit_price || 0;
+    // suggest enough to clear the reorder gap (min 1)
+    const qty = i.reorder_level > 0 ? Math.max(Math.round(i.reorder_level - (i.qty_on_hand||0)), 1) : 1;
+    const existing = APP.cart.find(x => x.sku === i.sku);
+    if (existing) existing.qty += qty;
+    else APP.cart.push({ sku: i.sku, name: i.item_name || c?.name || i.sku, qty, unit_price: price, emoji: c?.emoji || '📦' });
+    added++;
+  });
+  showToast(`${added} item${added!==1?'s':''} added to your order`);
+  APP._postNavStep = 'review';
+  navigate('place_order');
 }
 
 function logConsumptionModal(sku, name, qty, uom) {
