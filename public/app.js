@@ -10148,16 +10148,19 @@ function dcalCls(dc, k) {
 
 async function renderDeliveryCalendar(el) {
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading deliveries…</p></div>`;
-  const dcs = await api('/delivery-challans');
+  const [dcs, sos] = await Promise.all([
+    api('/delivery-challans'),
+    api('/standing-orders').catch(() => null),
+  ]);
   if (!dcs) { el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted)">Could not load deliveries.</div>'; return; }
   const now = new Date();
-  _dcal = { y: now.getFullYear(), m: now.getMonth(), sel: dcalKey(now), view: 'month', client: '', status: '', dcs };
+  _dcal = { y: now.getFullYear(), m: now.getMonth(), sel: dcalKey(now), view: 'month', client: '', status: '', dcs, sos: sos || [] };
   const clients = [...new Set(dcs.map(d => d.client_name).filter(Boolean))].sort();
 
   el.innerHTML = `
   ${pageHeader('Delivery Calendar', 'Pre-planned deliveries — booked, in transit, delivered & at risk on one calendar')}
   <style id="dcal-style">
-    #dcal-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+    #dcal-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
     @media(max-width:860px){#dcal-kpis{grid-template-columns:repeat(2,1fr)}}
     .dcal-kp{background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--navy);border-radius:11px;padding:10px 13px;text-align:left;font-family:inherit}
     .dcal-kp .l{font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
@@ -10167,6 +10170,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-kp.upc{border-top-color:#2f6bd6}
     .dcal-kp.ris{border-top-color:var(--danger);cursor:pointer;transition:.13s} .dcal-kp.ris .v{color:var(--danger)}
     .dcal-kp.ris:hover{border-color:var(--danger)}
+    .dcal-kp.rec{border-top-color:var(--primary)} .dcal-kp.rec .v{color:var(--primary-hover)}
     #dcal-body{display:grid;grid-template-columns:1fr 290px;gap:14px;align-items:start}
     @media(max-width:1000px){#dcal-body{grid-template-columns:1fr}}
     .dcal-grid{display:grid;grid-template-columns:repeat(7,1fr);min-width:680px}
@@ -10185,6 +10189,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-chip.tra{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
     .dcal-chip.del{background:#d1fae5;color:#047857;border:1px solid #a7f3d0}
     .dcal-chip.ris{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
+    .dcal-chip.gho{background:var(--primary-light);color:#c2410c;border:1.5px dashed var(--primary-border)}
     .dcal-more{margin-top:3px;font-size:.6rem;color:var(--text-muted);font-weight:700}
     .dcal-rail-card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 13px;margin-bottom:12px}
     .dcal-rc-h{font-size:.63rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;gap:8px}
@@ -10196,7 +10201,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-rl .t{font-size:.76rem;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
     .dcal-rl .s{font-size:.65rem;color:var(--text-muted);display:block}
     .dcal-pill{font-size:.58rem;font-weight:800;padding:2px 7px;border-radius:20px;white-space:nowrap}
-    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}
+    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}.dcal-pill.org{background:#ffedd5;color:#c2410c}
     .dcal-vbtn{padding:6px 13px;font-size:.76rem;font-weight:700;border:1px solid var(--border);background:var(--surface);border-radius:20px;cursor:pointer;color:var(--text-muted)}
     .dcal-vbtn.on{background:var(--primary);border-color:var(--primary);color:#fff}
   </style>
@@ -10219,9 +10224,10 @@ async function renderDeliveryCalendar(el) {
       <option value="tra">In transit</option>
       <option value="del">Delivered</option>
       <option value="ris">At risk</option>
+      <option value="gho">Recurring (projected)</option>
     </select>
     <div style="margin-left:auto;display:flex;gap:12px;font-size:.72rem;color:var(--text-muted);flex-wrap:wrap">
-      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span>
+      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span><span style="color:#c2410c">◌ Projected</span>
     </div>
   </div>
   <div id="dcal-body">
@@ -10258,18 +10264,60 @@ function dcalByDate() {
   return map;
 }
 
-function dcalRefresh() {
-  if (!_dcal || !document.getElementById('dcal-kpis')) return;
-  const by = dcalByDate();
-  dcalKpis(by);
-  const ml = document.getElementById('dcal-month-label');
-  if (ml) ml.textContent = new Date(_dcal.y, _dcal.m, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
-  if (_dcal.view === 'month') dcalGrid(by); else dcalAgendaView(by);
-  dcalAgendaDay(by);
-  dcalRail(by);
+// Recurring-order projection: step a cycle date forward by its frequency.
+function dcalAdvance(dateStr, freq) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const f = String(freq || 'MONTHLY').toUpperCase();
+  if (f.startsWith('DAI')) d.setDate(d.getDate() + 1);
+  else if (f.startsWith('WEEK')) d.setDate(d.getDate() + 7);
+  else if (f.startsWith('FORT') || f === 'BIWEEKLY') d.setDate(d.getDate() + 14);
+  else if (f.startsWith('QUART')) d.setMonth(d.getMonth() + 3);
+  else d.setMonth(d.getMonth() + 1);
+  return dcalKey(d);
 }
 
-function dcalKpis(by) {
+// Ghosts: future occurrences of active standing orders (next 60 days) that are
+// not yet resolved (created/skipped) and not already covered by a DC for the
+// same client on that date.
+function dcalGhosts() {
+  const out = {};
+  if (_dcal.status && _dcal.status !== 'gho') return out; // status filter hides ghosts
+  const today = dcalKey(new Date());
+  const horizon = dcalKey(new Date(Date.now() + 60 * 86400000));
+  const dcDates = {};
+  (_dcal.dcs || []).forEach(dc => {
+    if (dc.status === 'CANCELLED' || !dc.client_id) return;
+    (dcDates[dc.client_id] = dcDates[dc.client_id] || new Set()).add(dcalDcDate(dc));
+  });
+  (_dcal.sos || []).forEach(so => {
+    if (!so.active) return;
+    if (_dcal.client && so.client_name !== _dcal.client) return;
+    const done = new Set((so.events || []).map(e => e.cycle_date));
+    let k = String(so.next_run_date || today).slice(0, 10) || today;
+    let guard = 0;
+    while (k < today && guard++ < 400) k = dcalAdvance(k, so.frequency);
+    guard = 0;
+    while (k <= horizon && guard++ < 90) {
+      if (!done.has(k) && !(dcDates[so.client_id] && dcDates[so.client_id].has(k))) (out[k] = out[k] || []).push(so);
+      k = dcalAdvance(k, so.frequency);
+    }
+  });
+  return out;
+}
+
+function dcalRefresh() {
+  if (!_dcal || !document.getElementById('dcal-kpis')) return;
+  const by = _dcal.status === 'gho' ? {} : dcalByDate();
+  const gh = dcalGhosts();
+  dcalKpis(by, gh);
+  const ml = document.getElementById('dcal-month-label');
+  if (ml) ml.textContent = new Date(_dcal.y, _dcal.m, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
+  if (_dcal.view === 'month') dcalGrid(by, gh); else dcalAgendaView(by, gh);
+  dcalAgendaDay(by, gh);
+  dcalRail(by, gh);
+}
+
+function dcalKpis(by, gh) {
   const pfx = `${_dcal.y}-${String(_dcal.m+1).padStart(2,'0')}`;
   let tot = 0, com = 0, upc = 0, ris = 0;
   Object.keys(by).forEach(k => by[k].forEach(dc => {
@@ -10280,12 +10328,16 @@ function dcalKpis(by) {
     if (dc.status === 'DELIVERED') com++;
     else if (!risk) upc++;
   }));
+  const in30 = dcalKey(new Date(Date.now() + 30 * 86400000));
+  let rec = 0;
+  Object.keys(gh || {}).forEach(k => { if (k <= in30) rec += gh[k].length; });
   const kp = (cls, l, v, s) => `<div class="dcal-kp ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   document.getElementById('dcal-kpis').innerHTML =
     kp('', 'This month', tot, 'delivery challans')
     + kp('com', 'Completed', com, tot ? Math.round(com/tot*100) + '% of month' : '—')
     + kp('upc', 'Upcoming', upc, 'scheduled & in transit')
-    + `<button class="dcal-kp ris" onclick="dcalJumpRisk()"><div class="l">⚠ At risk</div><div class="v">${ris}</div><div class="s">past date, undelivered — click to view</div></button>`;
+    + `<button class="dcal-kp ris" onclick="dcalJumpRisk()"><div class="l">⚠ At risk</div><div class="v">${ris}</div><div class="s">past date, undelivered — click to view</div></button>`
+    + kp('rec', 'Recurring due', rec, 'next 30 days — unconfirmed');
 }
 
 function dcalJumpRisk() {
@@ -10296,7 +10348,7 @@ function dcalJumpRisk() {
   dcalSelect(k);
 }
 
-function dcalGrid(by) {
+function dcalGrid(by, gh) {
   const { y, m } = _dcal, today = dcalKey(new Date());
   const lead = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-start
   const start = new Date(y, m, 1 - lead);
@@ -10305,12 +10357,16 @@ function dcalGrid(by) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const k = dcalKey(d), inM = d.getMonth() === m;
     const list = by[k] || [];
+    const ghosts = (gh && gh[k]) || [];
+    const total = list.length + ghosts.length;
     const risk = list.some(dc => dcalIsRisk(dc, k));
-    const chips = list.slice(0,3).map(dc =>
-      `<span class="dcal-chip ${dcalCls(dc,k)}" title="${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'')}">${dc.scheduled_time ? dc.scheduled_time+' ' : ''}${h(dc.client_name||dc.dc_number||dc.id)}</span>`).join('');
+    const chipArr = list.map(dc =>
+      `<span class="dcal-chip ${dcalCls(dc,k)}" title="${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'')}">${dc.scheduled_time ? dc.scheduled_time+' ' : ''}${h(dc.client_name||dc.dc_number||dc.id)}</span>`)
+      .concat(ghosts.map(so =>
+      `<span class="dcal-chip gho" title="Projected from standing order ${h(so.id)}">◌ ${h(so.client_name||so.name)}</span>`));
     html += `<button class="dcal-day${inM?'':' out'}${k===today?' today':''}${k===_dcal.sel?' sel':''}" onclick="dcalSelect('${k}')">
-      <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${list.length?`<span class="n">${list.length}</span>`:''}</span>
-      ${chips}${list.length>3?`<div class="dcal-more">+${list.length-3} more</div>`:''}</button>`;
+      <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${total?`<span class="n">${total}</span>`:''}</span>
+      ${chipArr.slice(0,3).join('')}${total>3?`<div class="dcal-more">+${total-3} more</div>`:''}</button>`;
   }
   document.getElementById('dcal-grid').innerHTML = html;
 }
@@ -10348,36 +10404,54 @@ function dcalAgItem(dc, k) {
     <button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">Open in Deliveries</button></div>`;
 }
 
-function dcalAgendaDay(by) {
+// Ghost row: a projected recurring occurrence — not an order yet.
+function dcalGhostItem(so, k) {
+  let n = 0;
+  try { n = JSON.parse(so.items || '[]').length; } catch { /* ignore */ }
+  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1.5px dashed var(--primary-border);background:var(--primary-light);border-radius:10px;padding:10px 13px">
+    <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">—</span>
+    <div style="flex:1;min-width:170px">
+      <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(so.name||so.id)} · ${h(so.client_name||'—')} <span class="dcal-pill org">Projected</span></div>
+      <div style="font-size:.72rem;color:var(--text-muted)">Standing order ${h(so.id)} · ${h(so.frequency||'MONTHLY')}${n?` · ${n} item${n===1?'':'s'}`:''} · no order created yet</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="dcalGhostCreate('${h(so.id)}','${k}',this)">Create order</button>
+    <button class="btn btn-secondary btn-sm" onclick="dcalGhostSkip('${h(so.id)}','${k}',this)">Skip this cycle</button></div>`;
+}
+
+function dcalAgendaDay(by, gh) {
   const el = document.getElementById('dcal-agenda'); if (!el) return;
-  const k = _dcal.sel, list = by[k] || [];
+  const k = _dcal.sel, list = by[k] || [], ghosts = (gh && gh[k]) || [];
+  const total = list.length + ghosts.length;
   const d = new Date(k + 'T00:00:00');
   el.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-weight:800;color:var(--navy);font-size:1rem">${d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</span>
-      <span style="font-size:.74rem;color:var(--text-muted)">${list.length||'no'} deliver${list.length===1?'y':'ies'}</span></div>`
-    + (list.length
-      ? `<div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}</div>`
+      <span style="font-size:.74rem;color:var(--text-muted)">${total||'no'} entr${total===1?'y':'ies'}</span></div>`
+    + (total
+      ? `<div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}${ghosts.map(so => dcalGhostItem(so, k)).join('')}</div>`
       : `<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.83rem">Nothing scheduled this day.</div>`);
 }
 
-function dcalAgendaView(by) {
+function dcalAgendaView(by, gh) {
   const el = document.getElementById('dcal-view-agenda'); if (!el) return;
   const now = new Date();
   let out = '';
   for (let i = 0; i < 14; i++) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
-    const k = dcalKey(d), list = by[k] || [];
-    if (!list.length) continue;
+    const k = dcalKey(d), list = by[k] || [], ghosts = (gh && gh[k]) || [];
+    if (!list.length && !ghosts.length) continue;
     out += `<div style="margin-bottom:14px"><div style="font-weight:800;color:var(--navy);font-size:.9rem;margin-bottom:7px">${d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'})}${i===0?' <span style="font-size:.7rem;color:var(--text-muted)">· today</span>':''}</div>
-      <div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}</div></div>`;
+      <div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}${ghosts.map(so => dcalGhostItem(so, k)).join('')}</div></div>`;
   }
   el.innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--text-muted)">Nothing in the next 14 days.</div>';
 }
 
-function dcalRail(by) {
+function dcalRail(by, gh) {
   const el = document.getElementById('dcal-rail'); if (!el) return;
   const today = dcalKey(new Date()), now = new Date();
   const dotColor = { sch:'#33475f', tra:'#d97706', del:'#16a34a', ris:'#dc2626' };
+  const ghostRow = (k, so) => `<button class="dcal-rl" onclick="dcalSelect('${k}')"><span class="dcal-dot" style="background:transparent;border:2px dashed var(--primary)"></span>
+    <span class="m"><span class="t">${h(so.client_name||so.name)}</span>
+    <span class="s">${fmtDate(k)} · ${h(so.frequency||'MONTHLY')}</span></span><span class="dcal-pill org">Projected</span></button>`;
   const row = (k, dc) => {
     const c = dcalCls(dc, k);
     const days = Math.max(0, Math.round((new Date(today) - new Date(k)) / 86400000));
@@ -10393,6 +10467,7 @@ function dcalRail(by) {
   for (let i = 0; i < 7; i++) {
     const k = dcalKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i));
     (by[k] || []).forEach(dc => { if (dc.status !== 'DELIVERED') next += row(k, dc); });
+    ((gh && gh[k]) || []).forEach(so => { next += ghostRow(k, so); });
   }
   let risk = '';
   Object.keys(by).sort().forEach(k => {
@@ -10433,6 +10508,33 @@ async function dcalSaveDate(id) {
   if (dc) dc.scheduled_date = val;
   showToast('Delivery scheduled for ' + fmtDate(val));
   dcalSelect(val);
+}
+
+// Ghost → real order: runs the standing order through the normal order
+// pipeline (approvals, reservations, notifications) for this cycle date.
+async function dcalGhostCreate(soId, date, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  const res = await api(`/standing-orders/${encodeURIComponent(soId)}/materialize`, { method:'POST', body: JSON.stringify({ date }) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Create order'; }
+  if (!res) return;
+  const so = (_dcal.sos || []).find(s => s.id === soId);
+  if (so) {
+    (so.events = so.events || []).push({ cycle_date: date, action:'CREATED', order_id: res.order_id });
+    if (res.next_run_date) so.next_run_date = res.next_run_date;
+  }
+  showToast(`Order ${res.order_id} created (${res.order_status}) — dispatch it from Orders`);
+  dcalRefresh();
+}
+
+async function dcalGhostSkip(soId, date, btn) {
+  if (btn) btn.disabled = true;
+  const res = await api(`/standing-orders/${encodeURIComponent(soId)}/skip`, { method:'POST', body: JSON.stringify({ date }) });
+  if (btn) btn.disabled = false;
+  if (!res) return;
+  const so = (_dcal.sos || []).find(s => s.id === soId);
+  if (so) (so.events = so.events || []).push({ cycle_date: date, action:'SKIPPED' });
+  showToast('Cycle skipped — the next occurrence stays on the calendar');
+  dcalRefresh();
 }
 
 /* ============================================================

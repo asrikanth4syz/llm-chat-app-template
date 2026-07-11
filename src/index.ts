@@ -208,6 +208,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare("ALTER TABLE client_inventory ADD COLUMN is_critical INTEGER DEFAULT 0").run();
   } catch { /* column already exists */ }
   try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS standing_order_events (
+      id TEXT PRIMARY KEY, so_id TEXT NOT NULL, cycle_date TEXT NOT NULL,
+      action TEXT NOT NULL, order_id TEXT, actor_name TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(so_id, cycle_date))`).run();
+  } catch { /* ignore */ }
+  try {
     await env.DB.prepare("ALTER TABLE delivery_challans ADD COLUMN scheduled_date TEXT").run();
   } catch { /* column already exists */ }
   try {
@@ -287,6 +294,9 @@ export default {
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
 
       // Delivery Challans
+      if (path==="/api/standing-orders"                              && method==="GET")  return handleListStandingOrders(request,env);
+      if (path.match(/^\/api\/standing-orders\/[^/]+\/skip$/)        && method==="POST") return handleSkipStandingOrder(request,env,path);
+      if (path.match(/^\/api\/standing-orders\/[^/]+\/materialize$/) && method==="POST") return handleMaterializeStandingOrder(request,env,path);
       if (path==="/api/delivery-challans"                            && method==="GET")  return handleListDCs(request,env);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
@@ -3920,6 +3930,122 @@ async function handlePatchDC(request: Request, env: Env, path: string): Promise<
   vals.push(id);
   await env.DB.prepare(`UPDATE delivery_challans SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
   return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// STANDING ORDERS — list, skip a cycle, materialize a cycle into a real
+// order (Delivery Calendar Phase 2: recurring "ghost" projections)
+// ════════════════════════════════════════════════════════════════════
+
+async function handleListStandingOrders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user!.role);
+  try {
+    // Aliases keep the older client-portal standing-orders card working too.
+    let sql = `SELECT so.*, so.name AS description, so.next_run_date AS next_run,
+      CASE WHEN so.active=1 THEN 'Active' ELSE 'Paused' END AS status,
+      c.name AS client_name
+      FROM standing_orders so LEFT JOIN clients c ON c.id=so.client_id WHERE so.active=1`;
+    const binds: string[] = [];
+    if (isClientRole) {
+      if (!user!.client_id) return json([]);
+      sql += " AND so.client_id=?"; binds.push(user!.client_id);
+    }
+    const {results} = await env.DB.prepare(sql).bind(...binds).all();
+    const sos = results as Record<string,unknown>[];
+    for (const so of sos) {
+      try {
+        const ev = await env.DB.prepare(
+          `SELECT cycle_date, action, order_id FROM standing_order_events WHERE so_id=? AND cycle_date >= date('now','-90 days')`
+        ).bind(so.id).all();
+        so.events = ev.results;
+      } catch { so.events = []; }
+    }
+    return json(sos);
+  } catch { return json([]); }
+}
+
+function soCycleGuard(user: NonNullable<Awaited<ReturnType<typeof getUser>>>, so: Record<string,unknown>): Response | null {
+  const isClientRole = ['client_admin','client_approver','client_user'].includes(user.role);
+  if (isClientRole && user.client_id !== so.client_id) return json({error:"Forbidden"}, 403);
+  return null;
+}
+
+async function handleSkipStandingOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const soId = path.split("/").slice(-2)[0];
+  const body = await request.json() as {date?:string};
+  const date = String(body.date||'').slice(0,10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({error:"date (YYYY-MM-DD) required"}, 400);
+  const so = await env.DB.prepare("SELECT * FROM standing_orders WHERE id=?").bind(soId).first() as Record<string,unknown>|null;
+  if (!so) return json({error:"Standing order not found"}, 404);
+  const forbidden = soCycleGuard(user!, so); if (forbidden) return forbidden;
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO standing_order_events (id,so_id,cycle_date,action,actor_name) VALUES (?,?,?,?,?)")
+      .bind(uid(), soId, date, "SKIPPED", user!.name).run();
+  } catch(e) { return json({error:String(e)}, 500); }
+  await audit(env, user, "UPDATE", "standing_order", soId, undefined, `skip:${date}`);
+  return json({ok:true});
+}
+
+async function handleMaterializeStandingOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const soId = path.split("/").slice(-2)[0];
+  const body = await request.json() as {date?:string};
+  const date = String(body.date||'').slice(0,10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({error:"date (YYYY-MM-DD) required"}, 400);
+  const so = await env.DB.prepare("SELECT * FROM standing_orders WHERE id=?").bind(soId).first() as Record<string,unknown>|null;
+  if (!so) return json({error:"Standing order not found"}, 404);
+  const forbidden = soCycleGuard(user!, so); if (forbidden) return forbidden;
+
+  const existing = await env.DB.prepare("SELECT order_id FROM standing_order_events WHERE so_id=? AND cycle_date=?")
+    .bind(soId, date).first() as Record<string,string>|null;
+  if (existing) return json({error:`This cycle is already resolved${existing.order_id?` (order ${existing.order_id})`:''}`}, 409);
+
+  // Build order items from the standing order, pricing from the live catalogue.
+  let items: Array<{sku:string;name?:string;qty:number}> = [];
+  try { items = JSON.parse(String(so.items||'[]')); } catch { /* fall through */ }
+  if (!items.length) return json({error:"Standing order has no items"}, 400);
+  const priced: Array<{sku:string;name:string;qty:number;unit_price:number}> = [];
+  for (const it of items) {
+    const inv = await env.DB.prepare("SELECT name, unit_price, client_price FROM inventory WHERE sku=?")
+      .bind(it.sku).first() as Record<string,unknown>|null;
+    priced.push({ sku: it.sku, name: String(inv?.name || it.name || it.sku), qty: Number(it.qty)||1,
+      unit_price: Number((inv?.client_price ?? inv?.unit_price) || 0) });
+  }
+
+  // Reuse the full order pipeline — approval rules, stock reservation,
+  // history and notifications all apply exactly as for a manual order.
+  const synth = new Request("http://internal/api/orders", { method:"POST",
+    headers: { "Content-Type":"application/json", "Authorization": request.headers.get("Authorization") || "" },
+    body: JSON.stringify({ client_id: so.client_id, items: priced, need_by_date: date, order_period: date.slice(0,7),
+      notes: `Recurring — created from standing order ${soId} (${so.name}) for ${date}` }) });
+  const res = await handleCreateOrder(synth, env);
+  if (res.status >= 400) return res;
+  const created = await res.json() as {id:string; status:string; grand_total:number};
+
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO standing_order_events (id,so_id,cycle_date,action,order_id,actor_name) VALUES (?,?,?,?,?,?)")
+      .bind(uid(), soId, date, "CREATED", created.id, user!.name).run();
+  } catch { /* ignore */ }
+  const next = nextCycleDate(date, String(so.frequency||'MONTHLY'));
+  await env.DB.prepare("UPDATE standing_orders SET last_run_date=?, next_run_date=? WHERE id=?").bind(date, next, soId).run();
+  await audit(env, user, "CREATE", "standing_order_run", soId, undefined, `order:${created.id},cycle:${date}`);
+  return json({ ok:true, order_id: created.id, order_status: created.status, grand_total: created.grand_total, next_run_date: next }, 201);
+}
+
+function nextCycleDate(dateStr: string, freq: string): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const f = freq.toUpperCase();
+  if (f.startsWith("DAI")) d.setUTCDate(d.getUTCDate()+1);
+  else if (f.startsWith("WEEK")) d.setUTCDate(d.getUTCDate()+7);
+  else if (f.startsWith("FORT") || f === "BIWEEKLY") d.setUTCDate(d.getUTCDate()+14);
+  else if (f.startsWith("QUART")) d.setUTCMonth(d.getUTCMonth()+3);
+  else d.setUTCMonth(d.getUTCMonth()+1);
+  return d.toISOString().slice(0,10);
 }
 
 // ════════════════════════════════════════════════════════════════════
