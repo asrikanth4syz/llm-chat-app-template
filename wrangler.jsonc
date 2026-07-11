@@ -15,6 +15,10 @@
 	"observability": {
 		"enabled": true
 	},
+	"triggers": {
+		// Daily delivery reminders: 03:30 UTC = 09:00 IST
+		"crons": ["30 3 * * *"]
+	},
 	"upload_source_maps": true,
 	"d1_databases": [
 		{

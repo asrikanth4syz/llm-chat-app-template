@@ -215,6 +215,12 @@ async function fixCategoryNames(env: Env): Promise<void> {
       UNIQUE(so_id, cycle_date))`).run();
   } catch { /* ignore */ }
   try {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)").run();
+  } catch { /* ignore */ }
+  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT"]) {
+    try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
+  try {
     await env.DB.prepare("ALTER TABLE delivery_challans ADD COLUMN scheduled_date TEXT").run();
   } catch { /* column already exists */ }
   try {
@@ -246,6 +252,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
 }
 
 export default {
+  // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      await fixCategoryNames(env); // make sure columns/tables exist first
+      await runDeliveryReminders(env);
+    })());
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return cors();
@@ -294,6 +307,9 @@ export default {
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
 
       // Delivery Challans
+      if (path==="/api/delivery-calendar/settings"                   && method==="GET")  return handleGetDcalSettings(request,env);
+      if (path==="/api/delivery-calendar/settings"                   && method==="POST") return handleSaveDcalSettings(request,env);
+      if (path==="/api/delivery-calendar/run-reminders"              && method==="POST") return handleRunDcalReminders(request,env);
       if (path==="/api/standing-orders"                              && method==="GET")  return handleListStandingOrders(request,env);
       if (path.match(/^\/api\/standing-orders\/[^/]+\/skip$/)        && method==="POST") return handleSkipStandingOrder(request,env,path);
       if (path.match(/^\/api\/standing-orders\/[^/]+\/materialize$/) && method==="POST") return handleMaterializeStandingOrder(request,env,path);
@@ -3924,6 +3940,7 @@ async function handlePatchDC(request: Request, env: Env, path: string): Promise<
   if (body.staff_id        !== undefined) { fields.push("staff_id=?");        vals.push(body.staff_id||null); }
   if (body.scheduled_time  !== undefined) { fields.push("scheduled_time=?");  vals.push(body.scheduled_time||null); }
   if (body.scheduled_date  !== undefined) { fields.push("scheduled_date=?");  vals.push(body.scheduled_date||null); }
+  if (body.reminder_armed  !== undefined) { fields.push("reminder_armed=?");  vals.push(body.reminder_armed===null ? null : (body.reminder_armed ? 1 : 0)); }
   if (body.driver_name     !== undefined) { fields.push("driver_name=?");     vals.push(body.driver_name||null); }
   if (body.vehicle_no      !== undefined) { fields.push("vehicle_no=?");      vals.push(body.vehicle_no||null); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
@@ -4046,6 +4063,129 @@ function nextCycleDate(dateStr: string, freq: string): string {
   else if (f.startsWith("QUART")) d.setUTCMonth(d.getUTCMonth()+3);
   else d.setUTCMonth(d.getUTCMonth()+1);
   return d.toISOString().slice(0,10);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// DELIVERY REMINDERS — global policy, per-DC overrides, daily cron
+// (Delivery Calendar Phase 3)
+// ════════════════════════════════════════════════════════════════════
+
+interface DcalPolicy { email_t1: boolean; dayof: boolean; ghost_nudge: boolean; capacity: number }
+const DCAL_POLICY_DEFAULT: DcalPolicy = { email_t1: true, dayof: true, ghost_nudge: true, capacity: 6 };
+
+async function getDcalPolicy(env: Env): Promise<DcalPolicy> {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM app_settings WHERE key='dcal_policy'").first() as Record<string,string>|null;
+    if (row?.value) return { ...DCAL_POLICY_DEFAULT, ...JSON.parse(row.value) };
+  } catch { /* fall through */ }
+  return { ...DCAL_POLICY_DEFAULT };
+}
+
+async function handleGetDcalSettings(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  return json(await getDcalPolicy(env));
+}
+
+async function handleSaveDcalSettings(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!['super_admin','ops_admin'].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Partial<DcalPolicy>;
+  const cur = await getDcalPolicy(env);
+  const merged: DcalPolicy = {
+    email_t1:    body.email_t1    !== undefined ? !!body.email_t1    : cur.email_t1,
+    dayof:       body.dayof       !== undefined ? !!body.dayof       : cur.dayof,
+    ghost_nudge: body.ghost_nudge !== undefined ? !!body.ghost_nudge : cur.ghost_nudge,
+    capacity:    body.capacity    !== undefined ? Math.max(1, Math.min(99, Number(body.capacity)||6)) : cur.capacity,
+  };
+  await env.DB.prepare("INSERT INTO app_settings (key,value) VALUES ('dcal_policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .bind(JSON.stringify(merged)).run();
+  await audit(env, user, "UPDATE", "settings", "dcal_policy", undefined, JSON.stringify(merged));
+  return json({ ok: true, ...merged });
+}
+
+async function handleRunDcalReminders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (['client_admin','client_approver','client_user','vendor','vendor_user'].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const summary = await runDeliveryReminders(env);
+  return json({ ok: true, ...summary });
+}
+
+// The daily sweep. Also invoked manually via "Send reminders now".
+async function runDeliveryReminders(env: Env): Promise<{t1:number; dayof:number; overdue:number; ghosts:number}> {
+  const pol = await getDcalPolicy(env);
+  const summary = { t1: 0, dayof: 0, overdue: 0, ghosts: 0 };
+  const effDate = "COALESCE(dc.scheduled_date, date(dc.dispatched_at), date(dc.created_at))";
+  const live = "dc.status NOT IN ('DELIVERED','CANCELLED','RETURNED')";
+
+  // Recipients for email (best-effort; in-app notifications always fire)
+  let emails: string[] = [];
+  try {
+    const { results } = await env.DB.prepare("SELECT email FROM users WHERE role IN ('super_admin','ops_admin') AND active=1").all();
+    emails = (results as Record<string,string>[]).map(r => r.email).filter(Boolean);
+  } catch { /* ignore */ }
+
+  // T-1: due tomorrow, policy on (or forced per-DC), not already reminded today
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT dc.id, dc.dc_number, dc.scheduled_time, c.name AS client_name
+      FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
+      WHERE ${live} AND ${effDate} = date('now','+1 day')
+        AND (dc.reminder_sent_at IS NULL OR date(dc.reminder_sent_at) < date('now'))
+        AND (dc.reminder_armed = 1 OR (dc.reminder_armed IS NULL AND ?=1))`).bind(pol.email_t1 ? 1 : 0).all();
+    const rows = results as Record<string,unknown>[];
+    for (const r of rows) {
+      await pushNotification(env, "ops_admin", `⏰ Delivery tomorrow: ${r.dc_number||r.id} — ${r.client_name||'client'}${r.scheduled_time?` at ${r.scheduled_time}`:''}`);
+      await env.DB.prepare("UPDATE delivery_challans SET reminder_sent_at=datetime('now') WHERE id=?").bind(r.id).run();
+      summary.t1++;
+    }
+    if (rows.length && emails.length) {
+      const lines = rows.map(r => `• ${r.dc_number||r.id} — ${r.client_name||'client'}${r.scheduled_time?` at ${r.scheduled_time}`:''}`).join('\n');
+      for (const to of emails) {
+        await sendEmail(env, to, `Smart Pantry — ${rows.length} deliver${rows.length===1?'y':'ies'} due tomorrow`,
+          `Deliveries scheduled for tomorrow:\n\n${lines}\n\nOpen the Delivery Calendar to review or reschedule.`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Day-of digest
+  if (pol.dayof) {
+    try {
+      const row = await env.DB.prepare(`SELECT COUNT(*) AS c FROM delivery_challans dc
+        WHERE ${live} AND ${effDate} = date('now') AND COALESCE(dc.reminder_armed,1) != 0`).first() as Record<string,number>|null;
+      if (row?.c) { await pushNotification(env, "ops_admin", `🚚 ${row.c} deliver${row.c===1?'y':'ies'} due today — see the Delivery Calendar`); summary.dayof = row.c; }
+    } catch { /* ignore */ }
+  }
+
+  // Overdue (at-risk) digest
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS c FROM delivery_challans dc
+      WHERE ${live} AND ${effDate} < date('now')`).first() as Record<string,number>|null;
+    if (row?.c) { await pushNotification(env, "ops_admin", `⚠️ ${row.c} deliver${row.c===1?'y is':'ies are'} past date and undelivered — at risk`); summary.overdue = row.c; }
+  } catch { /* ignore */ }
+
+  // Unconfirmed recurring cycles due within 2 days
+  if (pol.ghost_nudge) {
+    try {
+      const { results } = await env.DB.prepare("SELECT * FROM standing_orders WHERE active=1").all();
+      const today = new Date().toISOString().slice(0,10);
+      const limit = new Date(Date.now() + 2*86400000).toISOString().slice(0,10);
+      for (const so of results as Record<string,unknown>[]) {
+        let k = String(so.next_run_date||'').slice(0,10);
+        if (!k) continue;
+        let guard = 0;
+        while (k < today && guard++ < 400) k = nextCycleDate(k, String(so.frequency||'MONTHLY'));
+        if (k > limit) continue;
+        const ev = await env.DB.prepare("SELECT 1 FROM standing_order_events WHERE so_id=? AND cycle_date=?").bind(so.id, k).first();
+        if (ev) continue;
+        await pushNotification(env, "ops_admin", `◌ Recurring order "${so.name}" is due ${k} — create the order or skip the cycle`);
+        summary.ghosts++;
+      }
+    } catch { /* ignore */ }
+  }
+  return summary;
 }
 
 // ════════════════════════════════════════════════════════════════════

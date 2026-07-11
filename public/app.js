@@ -10148,13 +10148,15 @@ function dcalCls(dc, k) {
 
 async function renderDeliveryCalendar(el) {
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading deliveries…</p></div>`;
-  const [dcs, sos] = await Promise.all([
+  const [dcs, sos, pol] = await Promise.all([
     api('/delivery-challans'),
     api('/standing-orders').catch(() => null),
+    api('/delivery-calendar/settings').catch(() => null),
   ]);
   if (!dcs) { el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted)">Could not load deliveries.</div>'; return; }
   const now = new Date();
-  _dcal = { y: now.getFullYear(), m: now.getMonth(), sel: dcalKey(now), view: 'month', client: '', status: '', dcs, sos: sos || [] };
+  _dcal = { y: now.getFullYear(), m: now.getMonth(), sel: dcalKey(now), view: 'month', client: '', status: '', dcs, sos: sos || [],
+    pol: pol || { email_t1: true, dayof: true, ghost_nudge: true, capacity: 6 } };
   const clients = [...new Set(dcs.map(d => d.client_name).filter(Boolean))].sort();
 
   el.innerHTML = `
@@ -10183,6 +10185,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-day .dn{font-size:.74rem;font-weight:700;color:var(--text-muted);display:flex;align-items:center;gap:5px}
     .dcal-day.today .dn i{font-style:normal;background:var(--primary);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem}
     .dcal-day .dn .n{margin-left:auto;font-size:.6rem;color:var(--text-muted);font-weight:700}
+    .dcal-day .dn .n.full{color:var(--danger)}
     .dcal-riskbadge{font-size:.52rem;font-weight:800;background:var(--danger);color:#fff;border-radius:20px;padding:1px 6px}
     .dcal-chip{display:block;width:100%;margin-top:4px;font-size:.63rem;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
     .dcal-chip.sch{background:#e9eef4;color:#25384d;border:1px solid #c6d2e0}
@@ -10361,11 +10364,13 @@ function dcalGrid(by, gh) {
     const total = list.length + ghosts.length;
     const risk = list.some(dc => dcalIsRisk(dc, k));
     const chipArr = list.map(dc =>
-      `<span class="dcal-chip ${dcalCls(dc,k)}" title="${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'')}">${dc.scheduled_time ? dc.scheduled_time+' ' : ''}${h(dc.client_name||dc.dc_number||dc.id)}</span>`)
+      `<span class="dcal-chip ${dcalCls(dc,k)}" title="${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'')}">${dc.scheduled_time ? dc.scheduled_time+' ' : ''}${h(dc.client_name||dc.dc_number||dc.id)}${dc.reminder_armed===1?' 🔔':''}</span>`)
       .concat(ghosts.map(so =>
       `<span class="dcal-chip gho" title="Projected from standing order ${h(so.id)}">◌ ${h(so.client_name||so.name)}</span>`));
+    const cap = (_dcal.pol && _dcal.pol.capacity) || 6;
+    const atCap = list.length >= cap;
     html += `<button class="dcal-day${inM?'':' out'}${k===today?' today':''}${k===_dcal.sel?' sel':''}" onclick="dcalSelect('${k}')">
-      <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${total?`<span class="n">${total}</span>`:''}</span>
+      <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${total?`<span class="n${atCap?' full':''}" title="${list.length}/${cap} fleet slots used">${list.length ? list.length+'/'+cap : total}</span>`:''}</span>
       ${chipArr.slice(0,3).join('')}${total>3?`<div class="dcal-more">+${total-3} more</div>`:''}</button>`;
   }
   document.getElementById('dcal-grid').innerHTML = html;
@@ -10394,13 +10399,17 @@ function dcalAgItem(dc, k) {
         <input type="date" id="dcal-date-${h(String(dc.id))}" class="form-control" style="max-width:150px;font-size:.78rem" value="${dcalDcDate(dc)}">
         <button class="btn btn-primary btn-sm" onclick="dcalSaveDate('${h(String(dc.id))}')">${risk ? 'Reschedule' : 'Set date'}</button></span>`
     : '';
+  const bellState = dc.reminder_armed === 1 ? '🔔 On' : dc.reminder_armed === 0 ? '🔕 Muted' : '🔔 Auto';
+  const bell = dc.status !== 'DELIVERED'
+    ? `<button class="btn btn-secondary btn-sm" title="Reminder for this delivery — Auto follows the global policy, then On, then Muted" onclick="dcalCycleBell('${h(String(dc.id))}',this)">${bellState}</button>`
+    : '';
   return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid ${risk?'#fecaca':'var(--border)'};background:${risk?'#fff5f5':'var(--surface)'};border-radius:10px;padding:10px 13px">
     <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">${dc.scheduled_time||'—'}</span>
     <div style="flex:1;min-width:170px">
       <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'—')} ${pill}</div>
       <div style="font-size:.72rem;color:var(--text-muted)">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'driver unassigned'}${dc.vehicle_no?` · ${h(dc.vehicle_no)}`:''}${dc.order_id?` · order ${h(dc.order_id)}`:''}</div>
     </div>
-    ${dateEdit}
+    ${dateEdit}${bell}
     <button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">Open in Deliveries</button></div>`;
 }
 
@@ -10477,9 +10486,23 @@ function dcalRail(by, gh) {
       else if (k === today && dc.status !== 'DELIVERED') risk += row(k, dc);
     });
   });
+  const pol = _dcal.pol || {};
+  const polRow = (field, label, sub) => `<label style="display:flex;align-items:flex-start;gap:8px;font-size:.78rem;padding:4px 0;cursor:pointer;color:var(--navy)">
+    <input type="checkbox" ${pol[field]?'checked':''} onchange="dcalPolSave('${field}',this)" style="margin-top:2px">
+    <span><b>${label}</b><span style="display:block;font-size:.66rem;color:var(--text-muted)">${sub}</span></span></label>`;
+  const policyCard = `<div class="dcal-rail-card"><div class="dcal-rc-h">Reminders &amp; capacity <span style="text-transform:none;font-weight:600">global policy</span></div>
+    ${polRow('email_t1','1 day before','email + alert to ops')}
+    ${polRow('dayof','Day-of digest','morning summary of today’s runs')}
+    ${polRow('ghost_nudge','Recurring nudges','unconfirmed cycles, 2 days out')}
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 0 2px;font-size:.78rem;color:var(--navy)"><b>Fleet capacity / day</b>
+      <input type="number" min="1" max="99" value="${pol.capacity||6}" class="form-control" style="width:64px;font-size:.8rem;padding:4px 8px" onchange="dcalPolSave('capacity',this)"></div>
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:9px" onclick="dcalSendReminders(this)">📨 Send reminders now</button>
+    <div style="font-size:.63rem;color:var(--text-muted);margin-top:7px;line-height:1.5">Runs automatically every morning (9:00 IST). Bells on individual deliveries override this policy.</div>
+  </div>`;
   el.innerHTML =
     `<div class="dcal-rail-card"><div class="dcal-rc-h">Next 7 days <span style="text-transform:none;font-weight:600">from today</span></div>${next||'<div style="font-size:.75rem;color:var(--text-muted);padding:4px 0">Nothing upcoming.</div>'}</div>
-     <div class="dcal-rail-card"><div class="dcal-rc-h" style="color:var(--danger)">⚠ At risk <span style="text-transform:none;font-weight:600">needs action</span></div>${risk||'<div style="font-size:.75rem;color:var(--text-muted);padding:4px 0">Nothing at risk 🎉</div>'}</div>`;
+     <div class="dcal-rail-card"><div class="dcal-rc-h" style="color:var(--danger)">⚠ At risk <span style="text-transform:none;font-weight:600">needs action</span></div>${risk||'<div style="font-size:.75rem;color:var(--text-muted);padding:4px 0">Nothing at risk 🎉</div>'}</div>`
+    + policyCard;
 }
 
 function dcalNav(d) { _dcal.m += d; if (_dcal.m < 0) { _dcal.m = 11; _dcal.y--; } if (_dcal.m > 11) { _dcal.m = 0; _dcal.y++; } dcalRefresh(); }
@@ -10502,6 +10525,10 @@ function dcalApplyFilters() {
 async function dcalSaveDate(id) {
   const val = document.getElementById('dcal-date-' + id)?.value;
   if (!val) { showToast('Pick a date first', 'error'); return; }
+  // capacity heads-up (warn, don't block)
+  const cap = (_dcal.pol && _dcal.pol.capacity) || 6;
+  const cnt = (dcalByDate()[val] || []).filter(d => String(d.id) !== String(id)).length;
+  if (cnt >= cap) showToast(`Heads up: ${fmtDate(val)} already has ${cnt} deliveries (capacity ${cap})`, 'error');
   const res = await api('/delivery-challans/' + encodeURIComponent(id), { method:'PATCH', body: JSON.stringify({ scheduled_date: val }) });
   if (!res) return;
   const dc = (_dcal.dcs || []).find(d => String(d.id) === String(id));
@@ -10535,6 +10562,42 @@ async function dcalGhostSkip(soId, date, btn) {
   if (so) (so.events = so.events || []).push({ cycle_date: date, action:'SKIPPED' });
   showToast('Cycle skipped — the next occurrence stays on the calendar');
   dcalRefresh();
+}
+
+// Per-delivery reminder override: Auto (follow policy) → On → Muted → Auto
+async function dcalCycleBell(id, btn) {
+  const dc = (_dcal.dcs || []).find(d => String(d.id) === String(id));
+  if (!dc) return;
+  const cur = dc.reminder_armed;
+  const next = cur === 1 ? 0 : cur === 0 ? null : 1;
+  if (btn) btn.disabled = true;
+  const res = await api('/delivery-challans/' + encodeURIComponent(id), { method:'PATCH', body: JSON.stringify({ reminder_armed: next }) });
+  if (btn) btn.disabled = false;
+  if (!res) return;
+  dc.reminder_armed = next;
+  showToast(next === 1 ? 'Reminder ON for this delivery — pinged the day before'
+    : next === 0 ? 'Reminders muted for this delivery'
+    : 'Following the global reminder policy');
+  dcalRefresh();
+}
+
+// Save one field of the global reminder/capacity policy
+async function dcalPolSave(field, el) {
+  const val = field === 'capacity' ? Math.max(1, Math.min(99, parseInt(el.value) || 6)) : !!el.checked;
+  const res = await api('/delivery-calendar/settings', { method:'POST', body: JSON.stringify({ [field]: val }) });
+  if (!res) { dcalRefresh(); return; } // revert UI to server state
+  _dcal.pol = { ..._dcal.pol, [field]: val };
+  showToast('Reminder settings saved');
+  if (field === 'capacity') dcalRefresh();
+}
+
+// Manual trigger of the daily sweep
+async function dcalSendReminders(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '📨 Sending…'; }
+  const res = await api('/delivery-calendar/run-reminders', { method:'POST', body: JSON.stringify({}) });
+  if (btn) { btn.disabled = false; btn.textContent = '📨 Send reminders now'; }
+  if (!res) return;
+  showToast(`Reminders sent — ${res.t1||0} for tomorrow, ${res.dayof||0} today, ${res.overdue||0} at risk, ${res.ghosts||0} recurring nudge${(res.ghosts||0)===1?'':'s'}`);
 }
 
 /* ============================================================
