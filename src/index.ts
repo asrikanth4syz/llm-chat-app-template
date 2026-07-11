@@ -208,6 +208,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare("ALTER TABLE client_inventory ADD COLUMN is_critical INTEGER DEFAULT 0").run();
   } catch { /* column already exists */ }
   try {
+    await env.DB.prepare("ALTER TABLE delivery_challans ADD COLUMN scheduled_date TEXT").run();
+  } catch { /* column already exists */ }
+  try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ticket_comments (
       id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, author_id TEXT NOT NULL,
       author_name TEXT NOT NULL, author_role TEXT NOT NULL, message TEXT NOT NULL,
@@ -3910,6 +3913,7 @@ async function handlePatchDC(request: Request, env: Env, path: string): Promise<
   if (body.dc_number       !== undefined) { fields.push("dc_number=?");       vals.push(body.dc_number||null); }
   if (body.staff_id        !== undefined) { fields.push("staff_id=?");        vals.push(body.staff_id||null); }
   if (body.scheduled_time  !== undefined) { fields.push("scheduled_time=?");  vals.push(body.scheduled_time||null); }
+  if (body.scheduled_date  !== undefined) { fields.push("scheduled_date=?");  vals.push(body.scheduled_date||null); }
   if (body.driver_name     !== undefined) { fields.push("driver_name=?");     vals.push(body.driver_name||null); }
   if (body.vehicle_no      !== undefined) { fields.push("vehicle_no=?");      vals.push(body.vehicle_no||null); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);

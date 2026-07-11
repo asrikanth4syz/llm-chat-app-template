@@ -59,6 +59,7 @@ const NAV = {
     { id:'procurement', label:'Procurement',   icon:iconProcure,   badge:null },
     { id:'warehouse',   label:'Warehouse',     icon:iconWarehouse, badge:null },
     { id:'delivery',    label:'Deliveries',    icon:iconDelivery,  badge:null },
+    { id:'delivery_calendar', label:'Delivery Calendar', icon:iconDelivery, badge:null },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
     { id:'fulfilment',  label:'Fulfilment',    icon:iconReports,   badge:'!' },
     { section:'Client Services' },
@@ -90,6 +91,7 @@ const NAV = {
     { id:'todays_schedule',     label:"Today's Schedule", icon:iconDelivery,  badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReports,   badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
+    { id:'delivery_calendar',   label:'Delivery Calendar',icon:iconDelivery,  badge:null },
     { id:'dc_billing',          label:'DC Billing',       icon:iconBilling,   badge:'!' },
     { id:'fulfilment',          label:'Fulfilment',       icon:iconReports,   badge:'!' },
     { id:'service_desk',        label:'Service Desk',     icon:iconDesk,      badge:null },
@@ -112,6 +114,7 @@ const NAV = {
     { id:'dashboard',       label:'Dashboard',          icon:iconDashboard, badge:null },
     { id:'todays_schedule', label:"Today's Schedule",   icon:iconDelivery,  badge:'!' },
     { id:'delivery',        label:'Deliveries',         icon:iconDelivery,  badge:null },
+    { id:'delivery_calendar', label:'Delivery Calendar', icon:iconDelivery, badge:null },
     { id:'dc_billing',      label:'DC Billing',         icon:iconBilling,   badge:'!' },
   ],
   delivery_exec: [
@@ -559,6 +562,7 @@ const PAGE_MAP = {
   staff: renderStaff,
   porter_expenses: renderPorterExpenses,
   todays_schedule: renderTodaysSchedule,
+  delivery_calendar: renderDeliveryCalendar,
   consolidated_orders: renderConsolidatedOrders,
   consolidated_due: renderConsolidatedDue,
   client_budget: renderClientBudget,
@@ -10116,6 +10120,319 @@ function _downloadCSV(name, csv) {
   a.href = url; a.download = `${name}-${new Date().toISOString().slice(0,10)}.csv`;
   a.click(); URL.revokeObjectURL(url);
   showToast('CSV downloaded');
+}
+
+/* ============================================================
+   DELIVERY CALENDAR — Phase 1
+   Month planner + right rail over existing delivery challans:
+   at-risk flags, next-7-days, 14-day agenda, reschedule in place.
+   ============================================================ */
+let _dcal = null;
+
+function dcalKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+// Which date a DC sits on: delivered → delivery date; else planned date; else dispatch; else creation.
+function dcalDcDate(dc) {
+  if (dc.status === 'DELIVERED' && dc.delivered_at) return String(dc.delivered_at).slice(0,10);
+  if (dc.scheduled_date) return String(dc.scheduled_date).slice(0,10);
+  if (dc.dispatched_at)  return String(dc.dispatched_at).slice(0,10);
+  if (dc.delivered_at)   return String(dc.delivered_at).slice(0,10);
+  return String(dc.created_at||'').slice(0,10);
+}
+function dcalIsRisk(dc, k) { return !['DELIVERED','CANCELLED','RETURNED'].includes(dc.status) && k && k < dcalKey(new Date()); }
+function dcalCls(dc, k) {
+  if (dc.status === 'DELIVERED') return 'del';
+  if (dcalIsRisk(dc, k)) return 'ris';
+  if (['IN_TRANSIT','DISPATCHED'].includes(dc.status)) return 'tra';
+  return 'sch';
+}
+
+async function renderDeliveryCalendar(el) {
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading deliveries…</p></div>`;
+  const dcs = await api('/delivery-challans');
+  if (!dcs) { el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted)">Could not load deliveries.</div>'; return; }
+  const now = new Date();
+  _dcal = { y: now.getFullYear(), m: now.getMonth(), sel: dcalKey(now), view: 'month', client: '', status: '', dcs };
+  const clients = [...new Set(dcs.map(d => d.client_name).filter(Boolean))].sort();
+
+  el.innerHTML = `
+  ${pageHeader('Delivery Calendar', 'Pre-planned deliveries — booked, in transit, delivered & at risk on one calendar')}
+  <style id="dcal-style">
+    #dcal-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+    @media(max-width:860px){#dcal-kpis{grid-template-columns:repeat(2,1fr)}}
+    .dcal-kp{background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--navy);border-radius:11px;padding:10px 13px;text-align:left;font-family:inherit}
+    .dcal-kp .l{font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+    .dcal-kp .v{font-size:1.35rem;font-weight:800;color:var(--navy);line-height:1.15;margin-top:2px}
+    .dcal-kp .s{font-size:.66rem;color:var(--text-muted)}
+    .dcal-kp.com{border-top-color:var(--success)} .dcal-kp.com .v{color:var(--success)}
+    .dcal-kp.upc{border-top-color:#2f6bd6}
+    .dcal-kp.ris{border-top-color:var(--danger);cursor:pointer;transition:.13s} .dcal-kp.ris .v{color:var(--danger)}
+    .dcal-kp.ris:hover{border-color:var(--danger)}
+    #dcal-body{display:grid;grid-template-columns:1fr 290px;gap:14px;align-items:start}
+    @media(max-width:1000px){#dcal-body{grid-template-columns:1fr}}
+    .dcal-grid{display:grid;grid-template-columns:repeat(7,1fr);min-width:680px}
+    .dcal-dow{padding:7px 9px;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);border-bottom:1px solid var(--border)}
+    .dcal-day{min-height:92px;border:none;border-bottom:1px solid var(--border-light);border-right:1px solid var(--border-light);padding:6px 7px;cursor:pointer;background:var(--surface);text-align:left;font-family:inherit;transition:.12s}
+    .dcal-day:nth-child(7n){border-right:none}
+    .dcal-day:hover{background:var(--surface-2)}
+    .dcal-day.out{background:var(--surface-2);opacity:.55}
+    .dcal-day.sel{box-shadow:inset 0 0 0 2px var(--primary)}
+    .dcal-day .dn{font-size:.74rem;font-weight:700;color:var(--text-muted);display:flex;align-items:center;gap:5px}
+    .dcal-day.today .dn i{font-style:normal;background:var(--primary);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem}
+    .dcal-day .dn .n{margin-left:auto;font-size:.6rem;color:var(--text-muted);font-weight:700}
+    .dcal-riskbadge{font-size:.52rem;font-weight:800;background:var(--danger);color:#fff;border-radius:20px;padding:1px 6px}
+    .dcal-chip{display:block;width:100%;margin-top:4px;font-size:.63rem;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+    .dcal-chip.sch{background:#e9eef4;color:#25384d;border:1px solid #c6d2e0}
+    .dcal-chip.tra{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
+    .dcal-chip.del{background:#d1fae5;color:#047857;border:1px solid #a7f3d0}
+    .dcal-chip.ris{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
+    .dcal-more{margin-top:3px;font-size:.6rem;color:var(--text-muted);font-weight:700}
+    .dcal-rail-card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 13px;margin-bottom:12px}
+    .dcal-rc-h{font-size:.63rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;gap:8px}
+    .dcal-rl{display:flex;align-items:center;gap:8px;width:100%;background:none;border:none;border-bottom:1px solid var(--border-light);padding:7px 2px;cursor:pointer;text-align:left;font-family:inherit}
+    .dcal-rl:last-child{border-bottom:none}
+    .dcal-rl:hover .t{color:var(--primary)}
+    .dcal-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .dcal-rl .m{flex:1;min-width:0}
+    .dcal-rl .t{font-size:.76rem;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+    .dcal-rl .s{font-size:.65rem;color:var(--text-muted);display:block}
+    .dcal-pill{font-size:.58rem;font-weight:800;padding:2px 7px;border-radius:20px;white-space:nowrap}
+    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}
+    .dcal-vbtn{padding:6px 13px;font-size:.76rem;font-weight:700;border:1px solid var(--border);background:var(--surface);border-radius:20px;cursor:pointer;color:var(--text-muted)}
+    .dcal-vbtn.on{background:var(--primary);border-color:var(--primary);color:#fff}
+  </style>
+  <div id="dcal-kpis"></div>
+  <div class="card" style="padding:10px 14px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <div style="display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden">
+      <button onclick="dcalNav(-1)" aria-label="Previous month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">‹</button>
+      <span id="dcal-month-label" style="padding:6px 12px;font-weight:700;color:var(--navy);min-width:130px;text-align:center"></span>
+      <button onclick="dcalNav(1)" aria-label="Next month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">›</button>
+    </div>
+    <button class="btn btn-secondary btn-sm" onclick="dcalToday()">Today</button>
+    <button class="dcal-vbtn on" id="dcal-v-month" onclick="dcalSetView('month')">Month</button>
+    <button class="dcal-vbtn" id="dcal-v-agenda" onclick="dcalSetView('agenda')">Next 14 days</button>
+    <select id="dcal-f-client" class="form-control" style="max-width:180px;font-size:.8rem" onchange="dcalApplyFilters()">
+      <option value="">Client: All</option>${clients.map(c=>`<option value="${h(c)}">${h(c)}</option>`).join('')}
+    </select>
+    <select id="dcal-f-status" class="form-control" style="max-width:160px;font-size:.8rem" onchange="dcalApplyFilters()">
+      <option value="">Status: All</option>
+      <option value="sch">Scheduled</option>
+      <option value="tra">In transit</option>
+      <option value="del">Delivered</option>
+      <option value="ris">At risk</option>
+    </select>
+    <div style="margin-left:auto;display:flex;gap:12px;font-size:.72rem;color:var(--text-muted);flex-wrap:wrap">
+      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span>
+    </div>
+  </div>
+  <div id="dcal-body">
+    <div style="min-width:0">
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:0">
+        <div id="dcal-view-month" style="overflow-x:auto"><div class="dcal-grid" id="dcal-grid"></div></div>
+        <div id="dcal-view-agenda" style="display:none;padding:14px"></div>
+      </div>
+      <div class="card" id="dcal-agenda" style="margin-top:12px;margin-bottom:0;padding:14px 16px"></div>
+    </div>
+    <aside id="dcal-rail"></aside>
+  </div>`;
+  dcalRefresh();
+}
+
+function dcalFiltered() {
+  const s = _dcal;
+  return (s.dcs || []).filter(dc => {
+    if (dc.status === 'CANCELLED') return false;
+    if (s.client && dc.client_name !== s.client) return false;
+    if (s.status && dcalCls(dc, dcalDcDate(dc)) !== s.status) return false;
+    return true;
+  });
+}
+
+function dcalByDate() {
+  const map = {};
+  dcalFiltered().forEach(dc => {
+    const k = dcalDcDate(dc);
+    if (!k) return;
+    (map[k] = map[k] || []).push(dc);
+  });
+  Object.values(map).forEach(a => a.sort((x,y) => (x.scheduled_time||'99').localeCompare(y.scheduled_time||'99')));
+  return map;
+}
+
+function dcalRefresh() {
+  if (!_dcal || !document.getElementById('dcal-kpis')) return;
+  const by = dcalByDate();
+  dcalKpis(by);
+  const ml = document.getElementById('dcal-month-label');
+  if (ml) ml.textContent = new Date(_dcal.y, _dcal.m, 1).toLocaleDateString('en-IN', { month:'long', year:'numeric' });
+  if (_dcal.view === 'month') dcalGrid(by); else dcalAgendaView(by);
+  dcalAgendaDay(by);
+  dcalRail(by);
+}
+
+function dcalKpis(by) {
+  const pfx = `${_dcal.y}-${String(_dcal.m+1).padStart(2,'0')}`;
+  let tot = 0, com = 0, upc = 0, ris = 0;
+  Object.keys(by).forEach(k => by[k].forEach(dc => {
+    const risk = dcalIsRisk(dc, k);
+    if (risk) ris++;
+    if (!k.startsWith(pfx)) return;
+    tot++;
+    if (dc.status === 'DELIVERED') com++;
+    else if (!risk) upc++;
+  }));
+  const kp = (cls, l, v, s) => `<div class="dcal-kp ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  document.getElementById('dcal-kpis').innerHTML =
+    kp('', 'This month', tot, 'delivery challans')
+    + kp('com', 'Completed', com, tot ? Math.round(com/tot*100) + '% of month' : '—')
+    + kp('upc', 'Upcoming', upc, 'scheduled & in transit')
+    + `<button class="dcal-kp ris" onclick="dcalJumpRisk()"><div class="l">⚠ At risk</div><div class="v">${ris}</div><div class="s">past date, undelivered — click to view</div></button>`;
+}
+
+function dcalJumpRisk() {
+  const by = dcalByDate();
+  const today = dcalKey(new Date());
+  const k = Object.keys(by).sort().find(k => k < today && by[k].some(dc => dcalIsRisk(dc, k)));
+  if (!k) { showToast('Nothing at risk 🎉'); return; }
+  dcalSelect(k);
+}
+
+function dcalGrid(by) {
+  const { y, m } = _dcal, today = dcalKey(new Date());
+  const lead = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-start
+  const start = new Date(y, m, 1 - lead);
+  let html = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => `<div class="dcal-dow">${d}</div>`).join('');
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const k = dcalKey(d), inM = d.getMonth() === m;
+    const list = by[k] || [];
+    const risk = list.some(dc => dcalIsRisk(dc, k));
+    const chips = list.slice(0,3).map(dc =>
+      `<span class="dcal-chip ${dcalCls(dc,k)}" title="${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'')}">${dc.scheduled_time ? dc.scheduled_time+' ' : ''}${h(dc.client_name||dc.dc_number||dc.id)}</span>`).join('');
+    html += `<button class="dcal-day${inM?'':' out'}${k===today?' today':''}${k===_dcal.sel?' sel':''}" onclick="dcalSelect('${k}')">
+      <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${list.length?`<span class="n">${list.length}</span>`:''}</span>
+      ${chips}${list.length>3?`<div class="dcal-more">+${list.length-3} more</div>`:''}</button>`;
+  }
+  document.getElementById('dcal-grid').innerHTML = html;
+}
+
+function dcalSelect(k) {
+  _dcal.sel = k;
+  const [yy, mm] = k.split('-').map(Number);
+  if (yy !== _dcal.y || mm - 1 !== _dcal.m) { _dcal.y = yy; _dcal.m = mm - 1; }
+  if (_dcal.view !== 'month') { dcalSetView('month'); return; }
+  dcalRefresh();
+}
+
+function dcalAgItem(dc, k) {
+  const today = dcalKey(new Date());
+  const risk = dcalIsRisk(dc, k);
+  const days = Math.max(0, Math.round((new Date(today) - new Date(k)) / 86400000));
+  let pill;
+  if (dc.status === 'DELIVERED') pill = '<span class="dcal-pill grn">Delivered</span>';
+  else if (risk) pill = `<span class="dcal-pill red">Overdue ${days}d</span>`;
+  else if (['IN_TRANSIT','DISPATCHED'].includes(dc.status)) pill = '<span class="dcal-pill amb">In transit</span>';
+  else if (k === today) pill = '<span class="dcal-pill amb">Due today</span>';
+  else pill = '<span class="dcal-pill blu">Scheduled</span>';
+  const dateEdit = dc.status !== 'DELIVERED'
+    ? `<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <input type="date" id="dcal-date-${h(String(dc.id))}" class="form-control" style="max-width:150px;font-size:.78rem" value="${dcalDcDate(dc)}">
+        <button class="btn btn-primary btn-sm" onclick="dcalSaveDate('${h(String(dc.id))}')">${risk ? 'Reschedule' : 'Set date'}</button></span>`
+    : '';
+  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid ${risk?'#fecaca':'var(--border)'};background:${risk?'#fff5f5':'var(--surface)'};border-radius:10px;padding:10px 13px">
+    <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">${dc.scheduled_time||'—'}</span>
+    <div style="flex:1;min-width:170px">
+      <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'—')} ${pill}</div>
+      <div style="font-size:.72rem;color:var(--text-muted)">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'driver unassigned'}${dc.vehicle_no?` · ${h(dc.vehicle_no)}`:''}${dc.order_id?` · order ${h(dc.order_id)}`:''}</div>
+    </div>
+    ${dateEdit}
+    <button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">Open in Deliveries</button></div>`;
+}
+
+function dcalAgendaDay(by) {
+  const el = document.getElementById('dcal-agenda'); if (!el) return;
+  const k = _dcal.sel, list = by[k] || [];
+  const d = new Date(k + 'T00:00:00');
+  el.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-weight:800;color:var(--navy);font-size:1rem">${d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</span>
+      <span style="font-size:.74rem;color:var(--text-muted)">${list.length||'no'} deliver${list.length===1?'y':'ies'}</span></div>`
+    + (list.length
+      ? `<div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}</div>`
+      : `<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.83rem">Nothing scheduled this day.</div>`);
+}
+
+function dcalAgendaView(by) {
+  const el = document.getElementById('dcal-view-agenda'); if (!el) return;
+  const now = new Date();
+  let out = '';
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const k = dcalKey(d), list = by[k] || [];
+    if (!list.length) continue;
+    out += `<div style="margin-bottom:14px"><div style="font-weight:800;color:var(--navy);font-size:.9rem;margin-bottom:7px">${d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'})}${i===0?' <span style="font-size:.7rem;color:var(--text-muted)">· today</span>':''}</div>
+      <div style="display:flex;flex-direction:column;gap:8px">${list.map(dc => dcalAgItem(dc, k)).join('')}</div></div>`;
+  }
+  el.innerHTML = out || '<div style="padding:20px;text-align:center;color:var(--text-muted)">Nothing in the next 14 days.</div>';
+}
+
+function dcalRail(by) {
+  const el = document.getElementById('dcal-rail'); if (!el) return;
+  const today = dcalKey(new Date()), now = new Date();
+  const dotColor = { sch:'#33475f', tra:'#d97706', del:'#16a34a', ris:'#dc2626' };
+  const row = (k, dc) => {
+    const c = dcalCls(dc, k);
+    const days = Math.max(0, Math.round((new Date(today) - new Date(k)) / 86400000));
+    const pill = c==='ris' ? `<span class="dcal-pill red">Overdue ${days}d</span>`
+      : c==='del' ? '<span class="dcal-pill grn">Delivered</span>'
+      : k===today ? `<span class="dcal-pill amb">${c==='tra'?'In transit':'Due today'}</span>`
+      : '<span class="dcal-pill blu">Upcoming</span>';
+    return `<button class="dcal-rl" onclick="dcalSelect('${k}')"><span class="dcal-dot" style="background:${dotColor[c]}"></span>
+      <span class="m"><span class="t">${dc.scheduled_time?dc.scheduled_time+' · ':''}${h(dc.client_name||dc.dc_number||dc.id)}</span>
+      <span class="s">${fmtDate(k)} · ${h(dc.dc_number||dc.id)}</span></span>${pill}</button>`;
+  };
+  let next = '';
+  for (let i = 0; i < 7; i++) {
+    const k = dcalKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i));
+    (by[k] || []).forEach(dc => { if (dc.status !== 'DELIVERED') next += row(k, dc); });
+  }
+  let risk = '';
+  Object.keys(by).sort().forEach(k => {
+    if (k > today) return;
+    by[k].forEach(dc => {
+      if (dcalIsRisk(dc, k)) risk += row(k, dc);
+      else if (k === today && dc.status !== 'DELIVERED') risk += row(k, dc);
+    });
+  });
+  el.innerHTML =
+    `<div class="dcal-rail-card"><div class="dcal-rc-h">Next 7 days <span style="text-transform:none;font-weight:600">from today</span></div>${next||'<div style="font-size:.75rem;color:var(--text-muted);padding:4px 0">Nothing upcoming.</div>'}</div>
+     <div class="dcal-rail-card"><div class="dcal-rc-h" style="color:var(--danger)">⚠ At risk <span style="text-transform:none;font-weight:600">needs action</span></div>${risk||'<div style="font-size:.75rem;color:var(--text-muted);padding:4px 0">Nothing at risk 🎉</div>'}</div>`;
+}
+
+function dcalNav(d) { _dcal.m += d; if (_dcal.m < 0) { _dcal.m = 11; _dcal.y--; } if (_dcal.m > 11) { _dcal.m = 0; _dcal.y++; } dcalRefresh(); }
+function dcalToday() { const n = new Date(); _dcal.y = n.getFullYear(); _dcal.m = n.getMonth(); _dcal.sel = dcalKey(n); dcalRefresh(); }
+function dcalSetView(v) {
+  _dcal.view = v;
+  document.getElementById('dcal-v-month')?.classList.toggle('on', v === 'month');
+  document.getElementById('dcal-v-agenda')?.classList.toggle('on', v === 'agenda');
+  const vm = document.getElementById('dcal-view-month'), va = document.getElementById('dcal-view-agenda'), ag = document.getElementById('dcal-agenda');
+  if (vm) vm.style.display = v === 'month' ? '' : 'none';
+  if (va) va.style.display = v === 'agenda' ? '' : 'none';
+  if (ag) ag.style.display = v === 'month' ? '' : 'none';
+  dcalRefresh();
+}
+function dcalApplyFilters() {
+  _dcal.client = document.getElementById('dcal-f-client')?.value || '';
+  _dcal.status = document.getElementById('dcal-f-status')?.value || '';
+  dcalRefresh();
+}
+async function dcalSaveDate(id) {
+  const val = document.getElementById('dcal-date-' + id)?.value;
+  if (!val) { showToast('Pick a date first', 'error'); return; }
+  const res = await api('/delivery-challans/' + encodeURIComponent(id), { method:'PATCH', body: JSON.stringify({ scheduled_date: val }) });
+  if (!res) return;
+  const dc = (_dcal.dcs || []).find(d => String(d.id) === String(id));
+  if (dc) dc.scheduled_date = val;
+  showToast('Delivery scheduled for ' + fmtDate(val));
+  dcalSelect(val);
 }
 
 /* ============================================================
