@@ -1211,6 +1211,39 @@ async function renderOpsDashboard(el) {
     .ct-order-row:hover{background:#f8f9fa}
     .ct-client-bar{height:4px;background:#edf0f5;border-radius:3px;margin-top:4px;overflow:hidden}
     .ct-client-fill{height:100%;border-radius:3px}
+    /* ── Predictive radar (Phase 1) ── */
+    .tw-pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+    .tw-pk{background:#fff;border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:.15s}
+    .tw-pk:hover{border-color:var(--primary);transform:translateY(-1px)}
+    .tw-pk .l{font-size:.62rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+    .tw-pk .v{font-size:1.4rem;font-weight:900;color:var(--navy);margin-top:3px;line-height:1.1}
+    .tw-pk .v.g{color:var(--success)}.tw-pk .v.w{color:#d97706}.tw-pk .v.b{color:var(--danger)}
+    .tw-pk .t{font-size:.64rem;font-weight:800;margin-top:2px}
+    .tw-pk .t.up{color:var(--success)}.tw-pk .t.dn{color:var(--danger)}.tw-pk .t.fl{color:var(--text-muted)}
+    .tw-pk .f{font-size:.68rem;color:var(--navy);margin-top:7px;background:var(--primary-light);border-radius:7px;padding:5px 8px;line-height:1.45}
+    .tw-pk .f b{color:var(--primary-hover)}
+    .tw-fc{display:flex;gap:11px;align-items:flex-start;width:100%;text-align:left;font-family:inherit;border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:8px;background:#fff;cursor:pointer;transition:.13s}
+    .tw-fc:hover{border-color:var(--primary);transform:translateX(3px)}
+    .tw-fc:last-child{margin-bottom:0}
+    .tw-fc .ic{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
+    .tw-fc .ic.b{background:#fee2e2;color:#dc2626}.tw-fc .ic.w{background:#fef3c7;color:#b45309}
+    .tw-fc .m{flex:1;min-width:0}
+    .tw-fc .h4{font-size:.84rem;font-weight:700;color:var(--navy);display:block}
+    .tw-fc .p{font-size:.72rem;color:var(--text-muted);display:block;margin-top:1px;line-height:1.45}
+    .tw-fc .eta{font-size:.62rem;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0}
+    .tw-fc .eta.b{background:#fee2e2;color:#dc2626}.tw-fc .eta.w{background:#fef3c7;color:#b45309}
+    .tw-load{border:1px solid var(--border);border-radius:10px;background:var(--surface-2);padding:11px 13px;margin-bottom:10px}
+    .tw-load .lt{font-size:.7rem;font-weight:700;color:var(--navy);margin-bottom:8px}
+    .tw-bars{display:flex;align-items:flex-end;gap:6px;height:78px;position:relative;padding-top:6px}
+    .tw-bars .capline{position:absolute;left:0;right:0;border-top:2px dashed #fca5a5}
+    .tw-bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;height:100%}
+    .tw-bar i{display:block;width:100%;border-radius:4px 4px 2px 2px;background:#33475f}
+    .tw-bar i.gho{background:repeating-linear-gradient(45deg,#f97316,#f97316 3px,transparent 3px,transparent 6px)}
+    .tw-bar i.over{background:#dc2626}
+    .tw-bar .d{font-size:.58rem;font-weight:700;color:var(--text-muted)}
+    .tw-bar .n{font-size:.6rem;font-weight:800;color:var(--text-muted)}
+    .tw-bar .n.over{color:#dc2626}
+    @media(max-width:1050px){.tw-pulse{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(3,1fr)}}
     @media(max-width:1050px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
     @media(max-width:700px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
@@ -1282,6 +1315,12 @@ async function renderOpsDashboard(el) {
       <div class="ct-kpi-sub">Support queue</div>
     </div>
 
+  </div>
+
+  <!-- ── PREDICTIVE RADAR (Phase 1): pulse + what's coming ── -->
+  <div id="tower-radar-wrap" style="display:none;margin-bottom:16px">
+    <div class="tw-pulse" id="tower-pulse"></div>
+    <div class="ct-card" id="tower-radar"></div>
   </div>
 
   <!-- ── ORDER PIPELINE ── -->
@@ -1444,6 +1483,115 @@ async function renderOpsDashboard(el) {
       }
     });
   }
+
+  loadTowerRadar(); // predictive layer — fills in when the endpoint responds
+}
+
+/* ── Predictive Control Tower: pulse strip + radar (Phase 1) ──
+   Run-rate projections over live data. Every card and signal carries its
+   arithmetic in the hover title; projected dates are prefixed "~". */
+async function loadTowerRadar() {
+  const wrap = document.getElementById('tower-radar-wrap');
+  if (!wrap) return;
+  let d = null;
+  try { d = await api('/reports/tower-radar'); } catch(_) { /* endpoint missing */ }
+  if (!d || d.error || !document.getElementById('tower-pulse')) return; // stay hidden
+  wrap.style.display = '';
+
+  const fmtD = k => { try { return new Date(k+'T00:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short'}); } catch(_) { return k; } };
+  const f = d.fulfilment, b = d.budget, st = d.stock || [], cap = d.capacity, bill = d.billing;
+
+  // ── pulse: 4 stable KPIs with forecast lines ──
+  const cards = [];
+  if (f && f.mtd != null) {
+    const proj = f.projected_eom, below = proj != null && proj < f.target;
+    cards.push({ l:'Fulfilment MTD', v:f.mtd+'%', c:f.mtd>=f.target?'g':'w',
+      t:(f.trend_wk>0?'▲ +':f.trend_wk<0?'▼ −':'▬ ')+Math.abs(f.trend_wk)+'pt/wk', tc:f.trend_wk>0?'up':f.trend_wk<0?'dn':'fl',
+      fc: proj==null ? 'Not enough recent orders to project'
+        : `Projected <b>~${proj}%</b> by month-end — ${below?'<b>below</b>':'above'} the ${f.target}% target`,
+      basis:'MTD delivered ÷ ordered; trend = last 7 days vs the 7 before, projected over remaining weeks', nav:'fulfilment' });
+  } else {
+    cards.push({ l:'Fulfilment MTD', v:'—', c:'', t:'no orders yet this month', tc:'fl', fc:'Projection starts with the first order of the month', basis:'MTD delivered ÷ ordered', nav:'fulfilment' });
+  }
+  if (b) {
+    const worst = (b.clients||[])[0];
+    cards.push({ l:'Budget pace', v: b.hot ? b.hot+' hot' : 'all ok', c: b.hot?'b':'g',
+      t:(b.total||0)+' budgeted client'+(b.total===1?'':'s'), tc:'fl',
+      fc: !worst ? 'No client budgets set'
+        : worst.projected_pct>100
+          ? `<b>${h(worst.name)}</b> projected <b>~${worst.projected_pct}%</b>${worst.crossing?` — crosses <b>~${fmtD(worst.crossing)}</b>`:''}`
+          : `Highest pace: <b>${h(worst.name)}</b> at ~${worst.projected_pct}% projected`,
+      basis:'Per client: MTD spend ÷ days elapsed × days in month, vs monthly budget', nav:'exec_bi' });
+  }
+  cards.push({ l:'Stock cover', v: st.length ? st.length+' dry' : 'ok', c: st.length ? (st[0].days_cover<=7?'b':'w') : 'g',
+    t: st.length ? 'within 30 days' : 'no run-outs in 30d', tc: st.length?'up':'fl',
+    fc: st.length ? `<b>${h(st[0].name)}</b> first — dry <b>~${fmtD(st[0].runout)}</b> (${st[0].days_cover}d cover${st[0].critical?' · must-have':''})`
+      : 'Every consumed SKU has 30+ days of cover',
+    basis:'Per SKU: current stock ÷ 14-day average daily consumption', nav:'inventory' });
+  if (bill) cards.push({ l:'Billing runway', v: bill.unbilled||0, c: bill.unbilled?'w':'g',
+    t: bill.unbilled ? 'oldest '+(bill.oldest_days||0)+'d unbilled' : 'all invoiced', tc: bill.unbilled?'up':'fl',
+    fc: bill.unbilled ? `<b>${bill.unbilled} delivered DC${bill.unbilled===1?'':'s'}</b> billable right now` : 'Nothing waiting on an invoice',
+    basis:'Delivered challans not yet billed', nav:'dc_billing' });
+
+  document.getElementById('tower-pulse').innerHTML = cards.map(k =>
+    `<button class="tw-pk" title="Basis: ${h(k.basis)}" onclick="navigate('${k.nav}')">
+      <div class="l">${k.l}</div><div class="v ${k.c}">${k.v}</div>
+      <div class="t ${k.tc}">${k.t}</div><div class="f">${k.fc}</div></button>`).join('');
+
+  // ── radar signals ──
+  const sigs = [];
+  (b && b.clients || []).filter(c => c.projected_pct > 100).slice(0,2).forEach(c => sigs.push({
+    tone:'b', ic:'₹',
+    h:`${h(c.name)} projected to breach budget${c.crossing?` ~${fmtD(c.crossing)}`:''}`,
+    p:`Tracking ~${c.projected_pct}% of ${cdashINR(c.budget)} at the current burn (${cdashINR(Math.round(c.spend/Math.max(1,new Date().getDate())))}/day).`,
+    eta: c.crossing ? '~'+fmtD(c.crossing) : '~'+c.projected_pct+'%',
+    basis:`MTD spend ${cdashINR(c.spend)} ÷ ${new Date().getDate()} days × month length vs ${cdashINR(c.budget)} budget`, nav:'exec_bi' }));
+  st.slice(0,2).forEach(s => sigs.push({
+    tone: s.days_cover<=7?'b':'w', ic:'☕',
+    h:`${h(s.name)} runs out ~${fmtD(s.runout)}${s.critical?' — must-have item':''}`,
+    p:`${Math.round(s.stock)} in stock ÷ ${s.draw}/day (14-day average draw) ≈ ${s.days_cover} days of cover.`,
+    eta:`${s.days_cover}d cover`, basis:`Stock ${Math.round(s.stock)} ÷ draw ${s.draw}/day`, nav:'inventory' }));
+  (cap && cap.over || []).slice(0,1).forEach(k => {
+    const day = (cap.days||[]).find(x => x.date === k) || { booked:0, projected:0 };
+    sigs.push({ tone:'b', ic:'🚚', h:`${fmtD(k)} is over fleet capacity`,
+      p:`${day.booked} booked + ${day.projected} projected recurring vs ${cap.cap} slots — reschedule from the Delivery Calendar.`,
+      eta:`${day.booked+day.projected}/${cap.cap}`, basis:'Booked DCs + recurring projections vs the capacity setting', nav:'delivery_calendar' });
+  });
+  if (d.at_risk) sigs.push({ tone:'b', ic:'⚠',
+    h:`${d.at_risk} deliver${d.at_risk===1?'y is':'ies are'} past date, undelivered`,
+    p:'Live at-risk entries, not projections — reschedule or chase from the Delivery Calendar.',
+    eta:'now', basis:'Scheduled date earlier than today and status not delivered', nav:'delivery_calendar' });
+  (d.ghosts||[]).slice(0,2).forEach(g => sigs.push({ tone:'w', ic:'◌',
+    h:`Recurring “${h(g.name)}” due ~${fmtD(g.date)} — unconfirmed`,
+    p:`${h(g.client||'')} standing order — create the order or skip the cycle before picking day.`,
+    eta: fmtD(g.date), basis:'Standing-order cycle within 7 days with no order or skip recorded', nav:'delivery_calendar' }));
+
+  // ── 7-day load bars ──
+  let loadHtml = '';
+  if (cap && (cap.days||[]).length) {
+    const maxv = Math.max(cap.cap + 2, ...cap.days.map(x => x.booked + x.projected));
+    loadHtml = `<div class="tw-load"><div class="lt">Delivery load, next 7 days — booked ▦ + projected ◌ vs capacity ${cap.cap}/day</div>
+      <div class="tw-bars"><span class="capline" style="bottom:${Math.round(cap.cap/maxv*58)+16}px"></span>
+      ${cap.days.map(x => { const tot = x.booked + x.projected, over = tot > cap.cap;
+        return `<div class="tw-bar" title="${fmtD(x.date)}: ${x.booked} booked + ${x.projected} projected">
+          <span class="n${over?' over':''}">${tot||''}</span>
+          ${x.projected?`<i class="gho" style="height:${Math.max(3,Math.round(x.projected/maxv*58))}px"></i>`:''}
+          <i class="${over?'over':''}" style="height:${Math.max(2,Math.round(x.booked/maxv*58))}px"></i>
+          <span class="d">${new Date(x.date+'T00:00:00').toLocaleDateString('en-IN',{weekday:'short'})}</span></div>`; }).join('')}
+      </div></div>`;
+  }
+
+  document.getElementById('tower-radar').innerHTML =
+    `<div class="ct-card-hd"><div><div class="ct-card-title">📡 Radar — what's coming</div>
+      <div class="ct-card-sub">run-rate projections over live data · hover any signal for its arithmetic</div></div>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('delivery_calendar')">Calendar →</button></div>
+    <div style="padding:14px 16px">${loadHtml}
+      ${sigs.length ? sigs.map(s => `<button class="tw-fc" title="Basis: ${h(s.basis)}" onclick="navigate('${s.nav}')">
+        <span class="ic ${s.tone}">${s.ic}</span>
+        <span class="m"><span class="h4">${s.h}</span><span class="p">${s.p}</span></span>
+        <span class="eta ${s.tone}">${s.eta}</span></button>`).join('')
+      : '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:.83rem">Clear skies — nothing projected to break in the next 30 days.</div>'}
+    </div>`;
 }
 
 async function renderVendorDashboard(el) {

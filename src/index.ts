@@ -401,6 +401,7 @@ export default {
       if (path==="/api/reports/order-fulfilment-monthly" && method==="GET") return handleRptOrderFulfilmentMonthly(request,env);
       if (path==="/api/reports/category-breakdown"  && method==="GET") return handleRptCategoryBreakdown(request,env);
       if (path==="/api/reports/exec-summary"        && method==="GET") return handleRptExecSummary(request,env);
+      if (path==="/api/reports/tower-radar"         && method==="GET") return handleTowerRadar(request,env);
       if (path==="/api/reports/drill"               && method==="GET") return handleRptDrill(request,env);
       if (path==="/api/reports/sku-challans"        && method==="GET") return handleRptSkuChallans(request,env);
 
@@ -4768,6 +4769,145 @@ async function handleRptExecSummary(request: Request, env: Env): Promise<Respons
       clients,
     });
   } catch(e) { return json({error: String(e)}, 500); }
+}
+
+// ── Predictive Control Tower radar (Phase 1) — pure run-rate projections
+//    over live data: no models, every number carries its arithmetic. ──
+async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (['client_admin','client_approver','client_user','vendor','vendor_user'].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const now = new Date();
+  const isoD = (d: Date) => d.toISOString().slice(0,10);
+  const todayK = isoD(now);
+  const monthStart = todayK.slice(0,8) + '01';
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const dayOfMonth = now.getDate();
+  const out: Record<string, unknown> = {};
+
+  // 1) Fulfilment: MTD fill %, weekly trend (last 7d vs prior 7d), month-end projection
+  try {
+    const fill = async (from: string, to: string): Promise<number|null> => {
+      const r = await env.DB.prepare(`
+        SELECT COALESCE(SUM(oi.qty),0) AS oq, COALESCE(SUM(${DELIVERED_EXPR}),0) AS dq
+        FROM orders o JOIN order_items oi ON oi.order_id=o.id
+        WHERE o.created_at >= ? AND o.created_at < date(?, '+1 day') AND o.status NOT IN ('CANCELLED','DRAFT')`)
+        .bind(from, to).first() as Record<string,number>|null;
+      return r?.oq ? Math.round((r.dq / r.oq) * 1000) / 10 : null;
+    };
+    const mtd = await fill(monthStart, todayK);
+    const last7 = await fill(isoD(new Date(Date.now()-7*86400000)), todayK);
+    const prior7 = await fill(isoD(new Date(Date.now()-14*86400000)), isoD(new Date(Date.now()-8*86400000)));
+    const trend = (last7 != null && prior7 != null) ? Math.round((last7 - prior7) * 10) / 10 : 0;
+    const weeksLeft = Math.max(0, (daysInMonth - dayOfMonth) / 7);
+    const projected = mtd != null ? Math.max(0, Math.min(100, Math.round((mtd + trend * weeksLeft) * 10) / 10)) : null;
+    out.fulfilment = { mtd, trend_wk: trend, projected_eom: projected, target: 95 };
+  } catch { out.fulfilment = null; }
+
+  // 2) Budget pace per client: projected month-end % and breach crossing date
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT c.name, c.monthly_budget AS budget,
+        COALESCE((SELECT SUM(o.grand_total) FROM orders o WHERE o.client_id=c.id
+          AND o.created_at >= ? AND o.status NOT IN ('CANCELLED','DRAFT')),0) AS spend
+      FROM clients c WHERE c.active=1 AND c.monthly_budget > 0`).bind(monthStart).all();
+    const clients = (results as Record<string,unknown>[]).map(c => {
+      const spend = Number(c.spend)||0, budget = Number(c.budget)||0;
+      const daily = spend / Math.max(1, dayOfMonth);
+      const projected = budget ? Math.round(daily * daysInMonth / budget * 100) : 0;
+      let crossing: string | null = null;
+      if (projected > 100 && daily > 0) {
+        const crossDay = Math.min(daysInMonth, Math.ceil(budget / daily));
+        crossing = monthStart.slice(0,8) + String(crossDay).padStart(2,'0');
+      }
+      return { name: String(c.name), spend: Math.round(spend), budget, projected_pct: projected, crossing };
+    }).sort((a,b) => b.projected_pct - a.projected_pct);
+    out.budget = { clients: clients.slice(0,5), hot: clients.filter(c=>c.projected_pct>100).length, total: clients.length };
+  } catch { out.budget = null; }
+
+  // 3) Stock run-outs: days of cover = stock ÷ 14-day average consumption draw
+  try {
+    await ensureCriticalTable(env);
+    const { results } = await env.DB.prepare(`
+      SELECT i.sku, i.name, i.stock,
+        (SELECT COALESCE(SUM(cc.qty),0) FROM client_consumption cc
+          WHERE cc.sku=i.sku AND cc.consumed_at >= date('now','-14 day')) / 14.0 AS draw,
+        EXISTS(SELECT 1 FROM critical_skus cs WHERE cs.sku=i.sku) AS critical
+      FROM inventory i WHERE i.active=1`).all();
+    const rows = (results as Record<string,unknown>[])
+      .map(r => ({ sku: String(r.sku), name: String(r.name||r.sku), stock: Number(r.stock)||0,
+        draw: Math.round((Number(r.draw)||0)*10)/10, critical: !!Number(r.critical) }))
+      .filter(r => r.draw > 0)
+      .map(r => ({ ...r, days_cover: Math.round(r.stock / r.draw),
+        runout: isoD(new Date(Date.now() + Math.max(0, r.stock / r.draw) * 86400000)) }))
+      .filter(r => r.days_cover <= 30)
+      .sort((a,b) => a.days_cover - b.days_cover);
+    out.stock = rows.slice(0,6);
+  } catch { out.stock = []; }
+
+  // 4) Capacity next 7 days: booked DCs + recurring projections vs fleet capacity
+  try {
+    const pol = await getDcalPolicy(env);
+    const end = isoD(new Date(Date.now()+6*86400000));
+    const eff = "CASE WHEN dc.status='DELIVERED' AND dc.delivered_at IS NOT NULL THEN date(dc.delivered_at) ELSE COALESCE(dc.scheduled_date, date(dc.dispatched_at), date(dc.created_at)) END";
+    const { results } = await env.DB.prepare(`
+      SELECT ${eff} AS d, o.client_id AS cid, COUNT(*) AS n
+      FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id
+      WHERE dc.status != 'CANCELLED' AND ${eff} BETWEEN ? AND ?
+      GROUP BY d, cid`).bind(todayK, end).all();
+    const booked: Record<string, number> = {};
+    const covered = new Set<string>();
+    for (const r of results as Record<string,unknown>[]) {
+      const dd = String(r.d);
+      booked[dd] = (booked[dd]||0) + Number(r.n);
+      if (r.cid) covered.add(String(r.cid) + '|' + dd);
+    }
+    const projected: Record<string, number> = {};
+    const ghosts: Array<Record<string,unknown>> = [];
+    const sos = await env.DB.prepare("SELECT * FROM standing_orders WHERE active=1").all();
+    for (const so of sos.results as Record<string,unknown>[]) {
+      let k = String(so.next_run_date||'').slice(0,10);
+      if (!k) continue;
+      let guard = 0;
+      while (k < todayK && guard++ < 400) k = nextCycleDate(k, String(so.frequency||'MONTHLY'));
+      const evs = await env.DB.prepare("SELECT cycle_date FROM standing_order_events WHERE so_id=?").bind(so.id).all();
+      const done = new Set((evs.results as Record<string,string>[]).map(e => e.cycle_date));
+      guard = 0;
+      while (k <= end && guard++ < 10) {
+        if (!done.has(k) && !covered.has(String(so.client_id)+'|'+k)) {
+          projected[k] = (projected[k]||0) + 1;
+          if (ghosts.length < 5) {
+            const cl = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(so.client_id).first() as Record<string,string>|null;
+            ghosts.push({ so: so.id, name: so.name, client: cl?.name||'', date: k });
+          }
+        }
+        k = nextCycleDate(k, String(so.frequency||'MONTHLY'));
+      }
+    }
+    const days: Array<{date:string;booked:number;projected:number}> = [];
+    for (let i=0;i<7;i++){ const dk = isoD(new Date(Date.now()+i*86400000)); days.push({ date: dk, booked: booked[dk]||0, projected: projected[dk]||0 }); }
+    out.capacity = { cap: pol.capacity, days, over: days.filter(x => x.booked + x.projected > pol.capacity).map(x => x.date) };
+    out.ghosts = ghosts;
+  } catch { out.capacity = null; out.ghosts = []; }
+
+  // 5) At-risk deliveries (fact, not projection — but belongs on the radar)
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS c FROM delivery_challans dc
+      WHERE dc.status NOT IN ('DELIVERED','CANCELLED','RETURNED')
+      AND COALESCE(dc.scheduled_date, date(dc.dispatched_at), date(dc.created_at)) < date('now')`).first() as Record<string,number>|null;
+    out.at_risk = row?.c||0;
+  } catch { out.at_risk = 0; }
+
+  // 6) Billing runway: delivered & unbilled challans
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS c,
+      CAST(MAX(julianday('now') - julianday(dc.delivered_at)) AS INTEGER) AS old
+      FROM delivery_challans dc WHERE dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0`).first() as Record<string,number>|null;
+    out.billing = { unbilled: row?.c||0, oldest_days: row?.old||0 };
+  } catch { out.billing = null; }
+
+  return json(out);
 }
 
 // ── Generalized drill: group ordered vs delivered by category / subcategory / brand / sku ──
