@@ -5140,8 +5140,12 @@ async function editInventoryItem(sku) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
         <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
-        <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
-        <div class="form-group"><label>Sub-Category</label><select id="ei-subcat">${subOpts}</select></div>
+        <div class="form-group"><label>Category</label>
+          <select id="ei-cat" onchange="eiNewToggle('cat')">${catOpts}<option value="__new__">➕ Add new category…</option></select>
+          <input type="text" id="ei-cat-new" placeholder="Type the new category name" style="display:none;margin-top:6px"></div>
+        <div class="form-group"><label>Sub-Category</label>
+          <select id="ei-subcat" onchange="eiNewToggle('subcat')">${subOpts}<option value="__new__">➕ Add new sub-category…</option></select>
+          <input type="text" id="ei-subcat-new" placeholder="Type the new sub-category name" style="display:none;margin-top:6px"></div>
         <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
         <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>
         <div class="form-group"><label>Expiry Date</label><input type="date" id="ei-expiry" value="${item.expiry_date||''}"></div>
@@ -5274,15 +5278,30 @@ function switchEITab(tab) {
 }
 
 function eiVal(id, num=false) { const el=document.getElementById(id); if(!el)return num?0:''; return num?+el.value:el.value; }
+// "➕ Add new…" on the category selects: reveal the free-text input
+function eiNewToggle(kind) {
+  const sel = document.getElementById('ei-'+kind), inp = document.getElementById('ei-'+kind+'-new');
+  if (!sel || !inp) return;
+  const on = sel.value === '__new__';
+  inp.style.display = on ? '' : 'none';
+  if (on) inp.focus();
+}
+function eiCatVal(kind) {
+  const v = eiVal('ei-'+kind);
+  if (v !== '__new__') return v;
+  return (document.getElementById('ei-'+kind+'-new')?.value || '').trim();
+}
 async function saveInventoryItem(sku) {
+  if (eiVal('ei-cat') === '__new__' && !eiCatVal('cat')) { showToast('Type the new category name first', 'error'); return; }
+  if (eiVal('ei-subcat') === '__new__' && !eiCatVal('subcat')) { showToast('Type the new sub-category name first', 'error'); return; }
   const body = {
     // Product ID
     name:           eiVal('ei-name'),
     brand:          eiVal('ei-brand'),
-    category:       eiVal('ei-cat'),
+    category:       eiCatVal('cat'),
     emoji:          eiVal('ei-emoji'),
     barcode:        eiVal('ei-barcode'),
-    sub_category:   eiVal('ei-subcat'),
+    sub_category:   eiCatVal('subcat'),
     expiry_date:    eiVal('ei-expiry') || null,
     // Packing
     uom:            eiVal('ei-uom'),
