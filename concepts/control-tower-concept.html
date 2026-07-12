@@ -108,10 +108,11 @@
   .pk .l{font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
   .pk .v{font-size:1.28rem;font-weight:800;color:var(--ink);line-height:1.1;margin-top:3px}
   .pk .v.g{color:var(--good)}.pk .v.w{color:var(--warn)}.pk .v.b{color:var(--bad)}
-  .pk .t{font-size:.62rem;font-weight:700;margin-top:2px}
+  .pk .t{font-size:.6rem;font-weight:800;margin-top:2px}
   .pk .t.up{color:var(--good)}.pk .t.dn{color:var(--bad)}.pk .t.fl{color:var(--muted)}
-  .pk .f{font-size:.6rem;color:var(--muted);margin-top:4px;padding-top:4px;border-top:1px dashed var(--line);line-height:1.4}
+  .pk .f{font-size:.62rem;color:var(--ink-2);margin-top:6px;padding:5px 8px;border-radius:7px;background:color-mix(in srgb,var(--accent-wash) 55%,transparent);line-height:1.45}
   .pk .f b{color:var(--accent-2)}
+  .pk .hzt{position:absolute;top:8px;right:9px;font-size:.52rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);background:var(--steel-wash);border-radius:100px;padding:2px 7px}
 
   /* radar band */
   .body2{display:grid;grid-template-columns:1.5fr 1fr;gap:0}
@@ -155,7 +156,10 @@
   .aq .m{flex:1;min-width:0}
   .aq .h4{font-size:.8rem;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .aq .p{font-size:.68rem;color:var(--muted)}
-  .aq .n{font-size:.72rem;font-weight:800;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:100px;padding:2px 10px;flex-shrink:0}
+  .aq .n{font-size:.62rem;font-weight:800;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:100px;padding:3px 10px;flex-shrink:0;white-space:nowrap}
+  .aq .n.s1{background:var(--bad-wash);color:var(--bad);border-color:transparent}
+  .aq .n.s2{background:var(--warn-wash);color:var(--warn);border-color:transparent}
+  .aq .n.s3{background:var(--steel-wash);color:var(--steel-2);border-color:transparent}
   .aq.done{opacity:.45}
   .aq.done .h4{text-decoration:line-through}
 
@@ -223,7 +227,7 @@
   <!-- INTERACTIVE MOCK -->
   <section id="try">
     <div class="eyebrow"><span class="idx">01</span><h2>Try the tower</h2><span class="rule"></span></div>
-    <p class="lead-p">The signature control: a <b>horizon switch</b>. Flip between <b>Today</b>, <b>Next 7 days</b> and <b>Next 30 days</b> — the radar re-aims, and every KPI's forecast line updates. Click a forecast to see what the real build would open; tick items off the action queue.</p>
+    <p class="lead-p">The signature control: a <b>horizon switch</b>. Flip between <b>Today</b>, <b>Next 7 days</b> and <b>Next 30 days</b> — the radar re-aims, and every KPI's forecast line updates. Click a forecast to see what the real build would open; tick items off the action queue. <b>v1.1 trust pass:</b> the first four KPIs keep their identity on every horizon, every projection wears a “~” and shows its arithmetic on hover, and each queue item carries the reason for its rank.</p>
     <div class="stage">
       <div class="stage-cap"><b>Control Tower</b><span>· 4SYZ Platform · sample data</span><span class="live"><i></i>interactive</span></div>
       <div class="app">
@@ -287,7 +291,7 @@
         </div>
         <div class="note-toast" id="toast"></div>
       </div>
-      <div class="stage-foot">Horizon chips re-aim the radar · every forecast row is a doorway · queue items tick off · trajectory arrows carry the “why” on hover.</div>
+      <div class="stage-foot">Horizon chips re-aim the radar · the first four KPIs keep their identity on every horizon · hover any projection for its arithmetic · queue pills state the reason for the rank.</div>
     </div>
   </section>
 
@@ -354,6 +358,10 @@
         <p>Recompute the health score over the trailing 30 days and keep last month's value — the arrow is just the sign of the difference, and the hover explains <b>which input moved</b> (budget pace, fulfilment, due orders).</p>
       </div>
       <div class="tcard">
+        <h3><span class="ic">≈</span>Honest precision</h3>
+        <p>Every projected date wears a <b>“~”</b> and shows its arithmetic on hover — “₹31k/day × 20 days remaining”. The tower also keeps score on itself: a weekly <b>hit-rate</b> of its past predictions, because one confident miss costs more trust than ten hedged ones.</p>
+      </div>
+      <div class="tcard">
         <h3><span class="ic">→</span>Build order</h3>
         <ul class="tick">
           <li><b>1</b> — Pulse strip + forecast lines, radar with budget/stock/capacity projections (pure queries).</li>
@@ -374,68 +382,71 @@
 (function(){
   var HZ = 'week';
 
-  // ── pulse KPIs per horizon: [label, value, cls, trend(dir,txt), forecast] ──
-  var PULSE = {
-    today: [
-      ['Deliveries today','5','', ['fl','1 delayed'], 'Cohesity run slipping — <b>ETA 17:10</b> vs 16:30 slot'],
-      ['Fulfilment MTD','96.8%','g', ['dn','▼ 0.4pt/wk'], 'Holding above target <b>through today</b>'],
-      ['Due value','₹48,500','w', ['fl','15 lines'], '<b>₹12,400</b> of it clears with today’s two runs'],
-      ['Pending billing','₹12.6L','w', ['up','▲ oldest 5d'], '<b>7 DCs</b> billable right now'],
-      ['Open orders','87','', ['fl','across 4 stages'], '<b>Picking</b> is the slow stage today'],
-      ['Critical alerts','8','b', ['up','▲ 2 today'], '<b>2</b> resolvable before noon'],
-    ],
-    week: [
-      ['Deliveries next 7d','31','', ['up','▲ 6 vs last wk'], '<b>Thu 16 Jul</b> is over fleet capacity (7/6)'],
-      ['Fulfilment MTD','96.8%','g', ['dn','▼ 0.4pt/wk'], 'Trending to <b>96.2%</b> by next Sat — above target'],
-      ['Stock run-outs','3','b', ['up','within 7 days'], '<b>Filter Coffee</b> first — dry by <b>Thu 16 Jul</b>'],
-      ['Recurring due','6','w', ['fl','unconfirmed'], '<b>2</b> cycles need confirming before Wednesday'],
-      ['Budget pace','4 ok','w', ['dn','1 client hot'], '<b>ServiceNow</b> tracking 8% over pace this week'],
-      ['Billing runway','₹12.6L','w', ['up','▲ ₹3.2L/wk'], 'Clears in <b>~9 days</b> at current invoicing rate'],
-    ],
-    month: [
-      ['Projected orders','208','', ['up','▲ 12% vs Jun'], 'From run-rate + <b>14</b> recurring cycles due'],
-      ['Fulfilment月-end','94.6%','w', ['dn','▼ 0.4pt/wk'], 'Crosses below the <b>95% target ~28 Jul</b> unless picking speeds up'],
-      ['Budget breaches','1','b', ['fl','of 5 clients'], '<b>ServiceNow</b> projected <b>108%</b> — crosses <b>26 Jul</b>'],
-      ['Stock run-outs','7','b', ['up','within 30 days'], '<b>3</b> are must-have items — POs needed by <b>18 Jul</b>'],
-      ['Projected revenue','₹41.2L','g', ['up','▲ 6% vs Jun'], 'At current run-rate incl. recurring'],
-      ['Capacity days over','3','w', ['fl','of next 30'], 'Worst: <b>Thu 16 Jul</b> at 7/6 — move 1 run'],
-    ]
+  // ── pulse: 4 STABLE KPIs (same identity on every horizon; only the
+  //    forecast changes) + 2 horizon-specific slots, visually tagged ──
+  var STABLE = [
+    { l:'Fulfilment MTD', per:{
+      today:{v:'96.8%',c:'g',t:['dn','▼ 0.4pt/wk'],f:'Holding above the 95% target <b>through today</b>',basis:'MTD delivered ÷ ordered; trend = avg of last 3 weekly deltas'},
+      week:{v:'96.8%',c:'g',t:['dn','▼ 0.4pt/wk'],f:'Trending to <b>~96.2%</b> by next Sat — above target',basis:'−0.4pt/week × 1 week'},
+      month:{v:'96.8%',c:'w',t:['dn','▼ 0.4pt/wk'],f:'Crosses below the <b>95% target ~28 Jul</b> unless picking speeds up',basis:'−0.4pt/week × 2.5 weeks crosses 95% around 28 Jul'} } },
+    { l:'Budget pace', per:{
+      today:{v:'4 ok',c:'w',t:['fl','1 client hot'],f:'<b>ServiceNow</b> +8% over pace as of today',basis:'MTD spend ÷ days elapsed vs budget ÷ days in month'},
+      week:{v:'4 ok',c:'w',t:['fl','1 client hot'],f:'<b>ServiceNow</b> tracking 8% over pace this week',basis:'MTD spend ÷ days elapsed vs budget ÷ days in month'},
+      month:{v:'1 breach',c:'b',t:['fl','of 5 clients'],f:'<b>ServiceNow</b> projected <b>~108%</b> — crosses <b>~26 Jul</b>',basis:'₹31k/day burn × 20 days remaining vs ₹6.2L budget'} } },
+    { l:'Stock cover', per:{
+      today:{v:'1 out',c:'b',t:['fl','right now'],f:'<b>Hand Sanitizer</b> at zero in 2 pantries',basis:'current stock ÷ 14-day average daily draw'},
+      week:{v:'3 dry',c:'b',t:['up','≤ 7 days'],f:'<b>Filter Coffee</b> first — dry <b>~Thu 16 Jul</b>',basis:'240 units ÷ 38/day (14-day avg) ≈ 6 days of cover'},
+      month:{v:'7 dry',c:'b',t:['up','≤ 30 days'],f:'<b>3 must-have</b> items — POs needed by <b>18 Jul</b>',basis:'per SKU: stock ÷ 14-day average daily draw'} } },
+    { l:'Billing runway', per:{
+      today:{v:'₹12.6L',c:'w',t:['up','oldest 5d'],f:'<b>7 DCs</b> (₹4.1L) billable right now',basis:'delivered & unbilled DC totals'},
+      week:{v:'₹12.6L',c:'w',t:['up','▲ ₹3.2L/wk'],f:'Clears in <b>~9 days</b> at the current invoicing rate',basis:'pending ₹ ÷ invoiced ₹/day (14-day avg)'},
+      month:{v:'₹12.6L',c:'w',t:['up','▲ ₹3.2L/wk'],f:'Fully clears <b>~20 Jul</b>; new billing adds ~₹9L by month-end',basis:'runway + delivery-driven billing at run-rate'} } },
+  ];
+  var HSLOT = {
+    today:[
+      {l:'Deliveries today',v:'5',c:'',t:['fl','1 delayed'],f:'Cohesity slipping — <b>ETA ~17:10</b> vs 16:30 slot',basis:'today’s DCs + live transit status'},
+      {l:'Critical alerts',v:'8',c:'b',t:['up','▲ 2 today'],f:'<b>2</b> resolvable before noon',basis:'open alerts by category'} ],
+    week:[
+      {l:'Deliveries next 7d',v:'31',c:'',t:['up','▲ 6 vs last wk'],f:'<b>Thu 16 Jul</b> is over fleet capacity (7/6)',basis:'booked DCs + recurring projections vs capacity 6/day'},
+      {l:'Recurring due',v:'6',c:'w',t:['fl','unconfirmed'],f:'<b>2</b> cycles need confirming before Wednesday',basis:'standing-order cycles due within 7 days with no order yet'} ],
+    month:[
+      {l:'Projected orders',v:'208',c:'',t:['up','▲ 12% vs Jun'],f:'Run-rate plus <b>14</b> recurring cycles due',basis:'orders/day × days remaining + confirmed recurring cycles'},
+      {l:'Projected revenue',v:'₹41.2L',c:'g',t:['up','▲ 6% vs Jun'],f:'At current run-rate incl. recurring',basis:'revenue/day × days remaining + recurring order value'} ],
   };
-  // fix the mixed-language slip in month fulfilment label
-  PULSE.month[1][0] = 'Fulfilment month-end';
 
-  // ── radar forecasts per horizon ──
+  // ── radar forecasts per horizon: [tone, icon, headline, detail, eta, basis] ──
   var RADAR = {
     today: [
-      ['b','⏱','Cohesity 16:30 run is projected 40m late','Driver on the 14:00 Nike run; traffic on ORR. Swap to Imran S (free 15:30) to save the slot.','fix now'],
-      ['w','◌','Recurring cycle unconfirmed for Monday','Meta Weekly (SO-204) due 13 Jul — create the order today so picking has Monday morning.','due 13 Jul'],
-      ['i','₹','7 delivered DCs are billable today','₹4.1L of the ₹12.6L pending billing needs no one’s permission — just invoicing.','₹4.1L'],
+      ['b','⏱','Cohesity 16:30 run is projected ~40m late','Driver on the 14:00 Nike run; traffic on ORR. Swap to Imran S (free 15:30) to save the slot.','fix now','Basis: live transit ETA vs slot time'],
+      ['w','◌','Recurring cycle unconfirmed for Monday','Meta Weekly (SO-204) due 13 Jul — create the order today so picking has Monday morning.','due 13 Jul','Basis: standing-order cycle with no order or skip recorded'],
+      ['i','₹','7 delivered DCs are billable today','₹4.1L of the ₹12.6L pending billing needs no one’s permission — just invoicing.','₹4.1L','Basis: delivered & unbilled challans'],
     ],
     week: [
-      ['b','☕','Filter Coffee runs dry Thursday','6 days of cover at the 14-day draw rate. PO today lands Wednesday; the Meta and LinkedIn pantries drain first.','Thu 16 Jul'],
-      ['b','🚚','Thu 16 Jul is over fleet capacity','7 deliveries booked+projected vs 6 slots. Nike’s run is the most movable — Friday is at 2/6.','7/6 slots'],
-      ['w','☕','Hand Sanitizer & A4 Paper follow','Run out Sat 18 and Mon 20 at current draw. One combined stationery PO covers both.','18–20 Jul'],
-      ['w','◌','2 recurring cycles unconfirmed','Meta Weekly (Mon) and Sodexo Weekly (Wed) — confirm or skip before picking day.','by Wed'],
-      ['i','♥','ServiceNow health slipping','90 → trending 87: budget pace +8% and two late DCs this fortnight. A call this week beats a credit note next month.','↘ trend'],
+      ['b','☕','Filter Coffee runs dry ~Thursday','~6 days of cover at the 14-day draw rate. PO today lands Wednesday; the Meta and LinkedIn pantries drain first.','~Thu 16 Jul','Basis: 240 units ÷ 38/day (14-day average draw)'],
+      ['b','🚚','Thu 16 Jul is over fleet capacity','7 deliveries booked+projected vs 6 slots. Nike’s run is the most movable — Friday is at 2/6.','7/6 slots','Basis: booked DCs + recurring projections vs capacity setting'],
+      ['w','☕','Hand Sanitizer & A4 Paper follow','Run out ~Sat 18 and ~Mon 20 at current draw. One combined stationery PO covers both.','~18–20 Jul','Basis: per-SKU stock ÷ 14-day average draw'],
+      ['w','◌','2 recurring cycles unconfirmed','Meta Weekly (Mon) and Sodexo Weekly (Wed) — confirm or skip before picking day.','by Wed','Basis: standing-order cycles due within 7 days'],
+      ['i','♥','ServiceNow health slipping','90 → trending ~87: budget pace +8% and two late DCs this fortnight. A call this week beats a credit note next month.','↘ trend','Basis: health score, trailing 30 days vs prior 30'],
     ],
     month: [
-      ['b','₹','ServiceNow breaches budget on 26 Jul','Daily burn ₹31k vs ₹27k budget pace → projected 108% by month-end. Options: cap approvals, or renegotiate the budget line.','26 Jul'],
-      ['b','📉','Fulfilment crosses below target ~28 Jul','−0.4pt/week, driven by picking (1.8d avg). Two more pickers on Mon/Tue mornings flattens the line.','~28 Jul'],
-      ['w','☕','7 items run out within 30 days','3 are must-have SKUs. Raising the 4 vendor POs by 18 Jul keeps every client above reorder level.','PO by 18 Jul'],
-      ['w','🚚','3 days over capacity in the next 30','16 Jul (7/6), 23 Jul (7/6), 30 Jul (8/6) — all Thursdays. The weekly cycles cluster; stagger Sodexo to Tuesdays.','3 Thursdays'],
-      ['g','📈','Revenue projected ₹41.2L (+6%)','Run-rate plus 14 recurring cycles. Upside: Nike’s pending catalogue expansion isn’t in this number.','+6% vs Jun'],
+      ['b','₹','ServiceNow breaches budget ~26 Jul','Daily burn ₹31k vs ₹27k budget pace → projected ~108% by month-end. Options: cap approvals, or renegotiate the budget line.','~26 Jul','Basis: ₹31k/day × 20 days remaining vs ₹6.2L budget'],
+      ['b','📉','Fulfilment crosses below target ~28 Jul','−0.4pt/week, driven by picking (1.8d avg). Two more pickers on Mon/Tue mornings flattens the line.','~28 Jul','Basis: −0.4pt/week trend crosses 95% ~28 Jul'],
+      ['w','☕','7 items run out within 30 days','3 are must-have SKUs. Raising the 4 vendor POs by 18 Jul keeps every client above reorder level.','PO by 18 Jul','Basis: per-SKU stock ÷ 14-day average draw'],
+      ['w','🚚','3 days over capacity in the next 30','16 Jul (7/6), 23 Jul (7/6), 30 Jul (8/6) — all Thursdays. The weekly cycles cluster; stagger Sodexo to Tuesdays.','3 Thursdays','Basis: booked + projected deliveries vs capacity 6/day'],
+      ['g','📈','Revenue projected ~₹41.2L (+6%)','Run-rate plus 14 recurring cycles. Upside: Nike’s pending catalogue expansion isn’t in this number.','+6% vs Jun','Basis: revenue/day × days remaining + recurring value'],
     ]
   };
 
   var LOAD = { days:['Sat','Sun','Mon','Tue','Wed','Thu','Fri'], booked:[2,0,4,3,2,5,1], ghost:[0,0,1,0,1,2,1], cap:6 };
 
+  // [severity, task, detail, why-it-ranks-here]
   var QUEUE = [
-    ['s1','Reassign the 16:30 Cohesity run','projected 40m late · client SLA at 17:00','1'],
-    ['s1','Raise coffee PO before 14:00 cutoff','vendor ships next-day only on weekday orders','1'],
-    ['s2','Confirm Meta Weekly cycle (Mon 13 Jul)','picking needs Monday-morning start','1'],
-    ['s2','Invoice 7 delivered DCs','₹4.1L sitting unbilled, oldest 5 days','7'],
-    ['s2','Approve 3 orders waiting > 24h','LinkedIn ×2, Cohesity ×1','3'],
-    ['s3','Review ServiceNow budget pace with account owner','breach projected 26 Jul','—'],
+    ['s1','Reassign the 16:30 Cohesity run','projected ~40m late','SLA 17:00'],
+    ['s1','Raise coffee PO before 14:00 cutoff','vendor ships next-day only on weekday orders','cutoff 14:00'],
+    ['s2','Confirm Meta Weekly cycle (Mon 13 Jul)','picking needs a Monday-morning start','pick Mon'],
+    ['s2','Invoice 7 delivered DCs','oldest is 5 days unbilled','₹4.1L idle'],
+    ['s2','Approve 3 orders waiting > 24h','LinkedIn ×2, Cohesity ×1','> 24h'],
+    ['s3','Review ServiceNow budget pace with account owner','breach projected ~26 Jul','~26 Jul'],
   ];
 
   var NOTES = {
@@ -450,17 +461,20 @@
   };
 
   function pulse(){
-    document.getElementById('pulse').innerHTML = PULSE[HZ].map(function(k){
-      var tcls = k[3][0]==='up'?'up':k[3][0]==='dn'?'dn':'fl';
-      return '<button class="pk" onclick="twToast(\'In the real build this opens the drill for “'+k[0].replace(/'/g,'')+'”\')">'
-        + '<div class="l">'+k[0]+'</div><div class="v '+(k[2]||'')+' tnum">'+k[1]+'</div>'
-        + '<div class="t '+tcls+'">'+k[3][1]+'</div><div class="f">'+k[4]+'</div></button>';
+    var cards = STABLE.map(function(s){ return Object.assign({ l:s.l, hz:false }, s.per[HZ]); })
+      .concat(HSLOT[HZ].map(function(k){ return Object.assign({ hz:true }, k); }));
+    document.getElementById('pulse').innerHTML = cards.map(function(k){
+      var tcls = k.t[0]==='up'?'up':k.t[0]==='dn'?'dn':'fl';
+      return '<button class="pk" title="'+('Basis: '+k.basis).replace(/"/g,'&quot;')+'" onclick="twToast(\'In the real build this opens the drill for “'+k.l.replace(/'/g,'')+'”\')">'
+        + (k.hz?'<span class="hzt">horizon</span>':'')
+        + '<div class="l">'+k.l+'</div><div class="v '+(k.c||'')+' tnum">'+k.v+'</div>'
+        + '<div class="t '+tcls+'">'+k.t[1]+'</div><div class="f">'+k.f+'</div></button>';
     }).join('');
   }
 
   function radar(){
     document.getElementById('radar').innerHTML = RADAR[HZ].map(function(f){
-      return '<button class="fc" onclick="twToast(\'Opens: '+f[2].replace(/'/g,'')+'\')">'
+      return '<button class="fc" title="'+(f[5]||'').replace(/"/g,'&quot;')+'" onclick="twToast(\'Opens: '+f[2].replace(/'/g,'')+'\')">'
         + '<span class="ic '+f[0]+'">'+f[1]+'</span>'
         + '<span class="m"><span class="h4">'+f[2]+'</span><span class="p" style="display:block">'+f[3]+'</span></span>'
         + '<span class="eta '+(f[0]==='g'?'i':f[0])+'">'+f[4]+'</span></button>';
@@ -488,7 +502,7 @@
       return '<button class="aq" id="aq-'+i+'" onclick="twTick('+i+')">'
         + '<span class="sev '+q[0]+'"></span>'
         + '<span class="m"><span class="h4">'+q[1]+'</span><span class="p" style="display:block">'+q[2]+'</span></span>'
-        + '<span class="n">'+q[3]+'</span></button>';
+        + '<span class="n '+q[0]+'">'+q[3]+'</span></button>';
     }).join('');
   }
 
