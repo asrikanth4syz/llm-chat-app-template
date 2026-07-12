@@ -11561,8 +11561,7 @@ async function settingsTab(tab, btn) {
   }
 
   else if (tab === 'categories') {
-    const cats = await api('/categories') || [];
-    const inv = await api('/inventory') || [];
+    const [cats, inv] = await Promise.all([api('/categories'), api('/inventory')]).then(r => [r[0]||[], r[1]||[]]);
     const catMap = {};
     inv.forEach(i => {
       if (!catMap[i.category]) catMap[i.category] = { count:0, hsn: i.hsn_code||'—' };
