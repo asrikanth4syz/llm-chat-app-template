@@ -453,9 +453,9 @@ async function runSearch(q) {
   el.innerHTML = all.slice(0,10).map(r => `
     <div onclick="handleSearchResult('${r._type}','${r.id||r.sku||''}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
       <span style="font-size:1.2rem">${typeIcon[r._type]||'🔍'}</span>
-      <div>
-        <div style="font-weight:600;font-size:.875rem">${r.name||r.subject||r.id||''}</div>
-        <div style="font-size:.75rem;color:var(--text-muted)">${r._type.toUpperCase()} ${r.id||r.sku||''}</div>
+      <div style="min-width:0">
+        <div style="font-weight:600;font-size:.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(r.title||r.name||r.subject||r.id||r.sku||'')}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r._type.toUpperCase()}${(r.id||r.sku)?' · '+h(String(r.id||r.sku)):''}${r.subtitle?' · '+h(String(r.subtitle)):''}</div>
       </div>
     </div>`).join('');
 }
