@@ -5115,8 +5115,15 @@ async function editInventoryItem(sku) {
   const vendors = await api('/vendors') || [];
   const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
   const vendor2Opts = vendors.map(v => `<option value="${v.id}" ${v.id===item.secondary_vendor_id?'selected':''}>${v.name}</option>`).join('');
-  const cats = ['Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','Other'];
-  const catOpts = cats.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('');
+  // Categories: everything actually in the catalogue + standard defaults +
+  // this item's own value — so no existing category can ever go missing (or
+  // get silently overwritten because it wasn't in a hardcoded list).
+  const liveCats = Object.values(_invCache||{}).map(i => i.category).filter(Boolean);
+  const cats = [...new Set([...liveCats, 'Beverages','Snacks','Hygiene','Stationery','Office','Dairy','Fruits & Vegetables','Cleaning','Personal Care','DryFruits','Other', item.category].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const catOpts = cats.map(c => `<option value="${h(c)}" ${c===item.category?'selected':''}>${h(c)}</option>`).join('');
+  const liveSubs = Object.values(_invCache||{}).map(i => i.sub_category).filter(Boolean);
+  const subs = [...new Set([...liveSubs, 'Normal','Healthy', item.sub_category].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const subOpts = subs.map(s => `<option value="${h(s)}" ${s===(item.sub_category||'Normal')?'selected':''}>${h(s)}</option>`).join('');
   const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
   const uomOpts = uoms.map(u => `<option value="${u}" ${(item.uom||'unit')===u?'selected':''}>${u}</option>`).join('');
 
@@ -5134,10 +5141,7 @@ async function editInventoryItem(sku) {
         <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
         <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
         <div class="form-group"><label>Category</label><select id="ei-cat">${catOpts}</select></div>
-        <div class="form-group"><label>Sub-Category</label><select id="ei-subcat">
-          <option value="Normal" ${(item.sub_category||'Normal')==='Normal'?'selected':''}>Normal</option>
-          <option value="Healthy" ${item.sub_category==='Healthy'?'selected':''}>Healthy</option>
-        </select></div>
+        <div class="form-group"><label>Sub-Category</label><select id="ei-subcat">${subOpts}</select></div>
         <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
         <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>
         <div class="form-group"><label>Expiry Date</label><input type="date" id="ei-expiry" value="${item.expiry_date||''}"></div>
