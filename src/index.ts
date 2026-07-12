@@ -217,6 +217,10 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)").run();
   } catch { /* ignore */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tower_snapshots (
+      day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* ignore */ }
   for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
@@ -4950,6 +4954,79 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
       out.bottleneck = { stages, worst: { ...stages[0], ratio } };
     } else out.bottleneck = null;
   } catch { out.bottleneck = null; }
+
+  // 9) Client health trajectory: score = 0.6×fulfilment + 0.4×budget-pace,
+  //    trailing 30 days vs the prior 30 — the arrow is the sign of the change.
+  try {
+    const winStats = async (from: string, to: string): Promise<Record<string,{fill:number|null;spend:number}>> => {
+      const m: Record<string,{fill:number|null;spend:number}> = {};
+      const fillRows = await env.DB.prepare(`
+        SELECT o.client_id AS cid, COALESCE(SUM(oi.qty),0) AS oq, COALESCE(SUM(${DELIVERED_EXPR}),0) AS dq
+        FROM orders o JOIN order_items oi ON oi.order_id=o.id
+        WHERE o.created_at >= ? AND o.created_at < ? AND o.status NOT IN ('CANCELLED','DRAFT')
+        GROUP BY o.client_id`).bind(from, to).all();
+      for (const r of fillRows.results as Record<string,unknown>[]) {
+        const oq = Number(r.oq)||0, dq = Number(r.dq)||0;
+        m[String(r.cid)] = { fill: oq ? Math.round(dq/oq*100) : null, spend: 0 };
+      }
+      const spendRows = await env.DB.prepare(`
+        SELECT client_id AS cid, COALESCE(SUM(grand_total),0) AS sp FROM orders
+        WHERE created_at >= ? AND created_at < ? AND status NOT IN ('CANCELLED','DRAFT')
+        GROUP BY client_id`).bind(from, to).all();
+      for (const r of spendRows.results as Record<string,unknown>[]) {
+        const k = String(r.cid);
+        (m[k] = m[k] || { fill:null, spend:0 }).spend = Number(r.sp)||0;
+      }
+      return m;
+    };
+    const d30 = isoD(new Date(Date.now()-30*86400000));
+    const d60 = isoD(new Date(Date.now()-60*86400000));
+    const curW = await winStats(d30, todayK + ' 23:59:59');
+    const prevW = await winStats(d60, d30);
+    const { results: cls } = await env.DB.prepare("SELECT id, name, monthly_budget FROM clients WHERE active=1").all();
+    const paceScore = (spend: number, budget: number) => budget > 0 ? Math.max(0, 100 - Math.max(0, (spend/budget*100) - 100)) : 100;
+    const scoreOf = (w: {fill:number|null;spend:number}|undefined, budget: number): number|null => {
+      if (!w || w.fill == null) return null;
+      return Math.round(0.6 * w.fill + 0.4 * paceScore(w.spend, budget));
+    };
+    const health = (cls as Record<string,unknown>[]).map(c => {
+      const id = String(c.id), budget = Number(c.monthly_budget)||0;
+      const s = scoreOf(curW[id], budget), p = scoreOf(prevW[id], budget);
+      let dir = 'flat', why = '';
+      if (s != null && p != null) {
+        dir = s - p >= 2 ? 'up' : p - s >= 2 ? 'down' : 'flat';
+        const cf = curW[id]?.fill, pf = prevW[id]?.fill;
+        const cp = Math.round(paceScore(curW[id]?.spend||0, budget)), pp = Math.round(paceScore(prevW[id]?.spend||0, budget));
+        why = `fulfilment ${pf}% → ${cf}% · budget-pace score ${pp} → ${cp} (trailing 30d vs prior 30d)`;
+      } else if (s != null) why = 'no orders in the prior 30-day window to compare';
+      return { name: String(c.name), score: s, prev: p, dir, why };
+    }).filter(x => x.score != null)
+      .sort((a,b) => (a.score as number) - (b.score as number))
+      .slice(0, 6);
+    out.health = health;
+  } catch { out.health = []; }
+
+  // 10) "What changed" vs the last snapshot, then record today's (first
+  //     computation of the day wins, so intraday reloads don't erase it)
+  try {
+    const num = (v: unknown, k: string): number => { const o = v as Record<string,unknown>|null; return o ? Number(o[k])||0 : 0; };
+    const in7 = isoD(new Date(Date.now()+7*86400000));
+    const snap = {
+      at_risk: Number(out.at_risk)||0,
+      dry: Array.isArray(out.stock) ? (out.stock as unknown[]).length : 0,
+      hot: num(out.budget, 'hot'),
+      unbilled: num(out.billing, 'unbilled'),
+      stale: num(out.approvals_stale, 'count'),
+      ghosts: Array.isArray(out.ghosts) ? (out.ghosts as Array<Record<string,unknown>>).filter(g => String(g.date) <= in7).length : 0,
+      fulfil: (out.fulfilment as Record<string,unknown>|null)?.mtd ?? null,
+    };
+    const prevRow = await env.DB.prepare("SELECT day, data FROM tower_snapshots WHERE day < ? ORDER BY day DESC LIMIT 1")
+      .bind(todayK).first() as Record<string,string>|null;
+    if (prevRow?.data) {
+      try { out.changes = { since: prevRow.day, prev: JSON.parse(prevRow.data), cur: snap }; } catch { /* ignore */ }
+    }
+    await env.DB.prepare("INSERT OR IGNORE INTO tower_snapshots (day, data) VALUES (?,?)").bind(todayK, JSON.stringify(snap)).run();
+  } catch { /* ignore */ }
 
   return json(out);
 }

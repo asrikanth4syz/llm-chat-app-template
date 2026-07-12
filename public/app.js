@@ -1258,6 +1258,16 @@ async function renderOpsDashboard(el) {
     .tw-aq .p{font-size:.68rem;color:var(--text-muted);display:block}
     .tw-aq .r{font-size:.6rem;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0}
     .tw-aq .r.s1{background:#fee2e2;color:#dc2626}.tw-aq .r.s2{background:#fef3c7;color:#b45309}.tw-aq .r.s3{background:#e9eef4;color:#25384d}
+    .tw-chg{font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fff;border:1px solid var(--border);color:var(--navy);white-space:nowrap}
+    .tw-chg.g{background:#d1fae5;color:#047857;border-color:transparent}
+    .tw-chg.b{background:#fee2e2;color:#dc2626;border-color:transparent}
+    .tw-chg.lead{background:var(--surface-2);color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:.6rem}
+    .tw-h{display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--border-light);font-size:.8rem}
+    .tw-h:last-child{border-bottom:none}
+    .tw-h .n{flex:1;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tw-h .a{font-size:.95rem;width:18px;text-align:center;flex-shrink:0}
+    .tw-h .s{font-weight:900;width:30px;text-align:right;flex-shrink:0}
+    .tw-h .pv{font-size:.64rem;color:var(--text-muted);width:52px;text-align:right;flex-shrink:0}
     @media(max-width:1050px){.tw-pulse{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(3,1fr)}}
     @media(max-width:1050px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
@@ -1341,10 +1351,14 @@ async function renderOpsDashboard(el) {
       <button class="tw-hz" id="tw-hz-month" onclick="setTowerHz('month')">Next 30 days</button>
       <span id="tw-hz-note" style="margin-left:auto;font-size:.7rem;color:var(--text-muted)"></span>
     </div>
+    <div id="tw-changes" style="display:none;flex-wrap:wrap;gap:6px;margin:0 0 10px"></div>
     <div class="tw-pulse" id="tower-pulse"></div>
     <div class="tw-grid">
       <div class="ct-card" id="tower-radar"></div>
-      <div class="ct-card" id="tower-queue"></div>
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <div class="ct-card" id="tower-queue"></div>
+        <div class="ct-card" id="tower-health"></div>
+      </div>
     </div>
   </div>
 
@@ -1537,6 +1551,47 @@ async function loadTowerRadar() {
     bn.style.display = '';
     bn.title = 'Basis: average time between consecutive order_history transitions, last 30 days';
     bn.innerHTML = `⚠ <b>Bottleneck: ${h(w.stage)}</b> — avg ${w.avg_days} day${w.avg_days===1?'':'s'} per order over the last 30 days${w.ratio && w.ratio>1 ? `, ${w.ratio}× slower than the next stage` : ''}.`;
+  }
+
+  // "what changed" strip — vs the last recorded day (favourability-coloured)
+  const chEl = document.getElementById('tw-changes');
+  if (chEl) {
+    const chg = d.changes;
+    let chips = '';
+    if (chg && chg.prev && chg.cur) {
+      const defs = [
+        ['at_risk','At-risk', -1], ['dry','Run-outs ≤30d', -1], ['hot','Budget hot', -1],
+        ['unbilled','Unbilled DCs', -1], ['stale','Stale approvals', -1], ['ghosts','Unconfirmed cycles', -1],
+        ['fulfil','Fulfilment %', 1],
+      ];
+      chips = defs.map(dd => {
+        const a = chg.prev[dd[0]], b2 = chg.cur[dd[0]];
+        if (a == null || b2 == null || a === b2) return '';
+        const up = b2 > a, good = (up ? 1 : -1) === dd[2];
+        return `<span class="tw-chg ${good?'g':'b'}" title="${dd[1]}: ${a} on ${chg.since} → ${b2} now">${dd[1]} ${a} → ${b2} ${up?'▲':'▼'}</span>`;
+      }).filter(Boolean).join('');
+      if (chips) chips = `<span class="tw-chg lead">Δ since ${new Date(chg.since+'T00:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>` + chips;
+    }
+    chEl.innerHTML = chips;
+    chEl.style.display = chips ? 'flex' : 'none';
+  }
+
+  // client health trajectories (trailing 30d vs prior 30d)
+  const hEl = document.getElementById('tower-health');
+  if (hEl) {
+    const hs = d.health || [];
+    hEl.innerHTML = `<div class="ct-card-hd"><div><div class="ct-card-title">♥ Client health</div>
+      <div class="ct-card-sub">0.6×fulfilment + 0.4×budget-pace · 30d vs prior 30d</div></div></div>
+      <div style="padding:10px 14px">` + (hs.length ? hs.map(x => {
+        const arrow = x.dir==='up' ? '↗' : x.dir==='down' ? '↘' : '→';
+        const ac = x.dir==='up' ? '#16a34a' : x.dir==='down' ? '#dc2626' : '#94a3b8';
+        const sc = x.score>=90 ? '#16a34a' : x.score>=75 ? '#d97706' : '#dc2626';
+        return `<div class="tw-h" title="${h(x.why||'')}">
+          <span class="n">${h(x.name)}</span>
+          <span class="a" style="color:${ac}">${arrow}</span>
+          <span class="s" style="color:${sc}">${x.score}</span>
+          <span class="pv">${x.prev!=null ? 'was '+x.prev : 'new'}</span></div>`;
+      }).join('') : '<div style="padding:10px;text-align:center;color:var(--text-muted);font-size:.8rem">Not enough order history yet — the score needs 30 days of orders.</div>') + `</div>`;
   }
 }
 
