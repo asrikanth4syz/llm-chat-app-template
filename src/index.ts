@@ -4846,10 +4846,11 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
     out.stock = rows.slice(0,6);
   } catch { out.stock = []; }
 
-  // 4) Capacity next 7 days: booked DCs + recurring projections vs fleet capacity
+  // 4) Capacity next 30 days: booked DCs + recurring projections vs fleet capacity
+  //    (frontend charts the first 7, filters overloads per horizon)
   try {
     const pol = await getDcalPolicy(env);
-    const end = isoD(new Date(Date.now()+6*86400000));
+    const end = isoD(new Date(Date.now()+29*86400000));
     const eff = "CASE WHEN dc.status='DELIVERED' AND dc.delivered_at IS NOT NULL THEN date(dc.delivered_at) ELSE COALESCE(dc.scheduled_date, date(dc.dispatched_at), date(dc.created_at)) END";
     const { results } = await env.DB.prepare(`
       SELECT ${eff} AS d, o.client_id AS cid, COUNT(*) AS n
@@ -4874,10 +4875,10 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
       const evs = await env.DB.prepare("SELECT cycle_date FROM standing_order_events WHERE so_id=?").bind(so.id).all();
       const done = new Set((evs.results as Record<string,string>[]).map(e => e.cycle_date));
       guard = 0;
-      while (k <= end && guard++ < 10) {
+      while (k <= end && guard++ < 40) {
         if (!done.has(k) && !covered.has(String(so.client_id)+'|'+k)) {
           projected[k] = (projected[k]||0) + 1;
-          if (ghosts.length < 5) {
+          if (ghosts.length < 8) {
             const cl = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(so.client_id).first() as Record<string,string>|null;
             ghosts.push({ so: so.id, name: so.name, client: cl?.name||'', date: k });
           }
@@ -4886,7 +4887,7 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
       }
     }
     const days: Array<{date:string;booked:number;projected:number}> = [];
-    for (let i=0;i<7;i++){ const dk = isoD(new Date(Date.now()+i*86400000)); days.push({ date: dk, booked: booked[dk]||0, projected: projected[dk]||0 }); }
+    for (let i=0;i<30;i++){ const dk = isoD(new Date(Date.now()+i*86400000)); days.push({ date: dk, booked: booked[dk]||0, projected: projected[dk]||0 }); }
     out.capacity = { cap: pol.capacity, days, over: days.filter(x => x.booked + x.projected > pol.capacity).map(x => x.date) };
     out.ghosts = ghosts;
   } catch { out.capacity = null; out.ghosts = []; }
@@ -4906,6 +4907,49 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
       FROM delivery_challans dc WHERE dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0`).first() as Record<string,number>|null;
     out.billing = { unbilled: row?.c||0, oldest_days: row?.old||0 };
   } catch { out.billing = null; }
+
+  // 7) Approvals waiting more than 24 hours (queue fodder)
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS c,
+      CAST(MAX(julianday('now') - julianday(created_at)) * 24 AS INTEGER) AS h
+      FROM orders WHERE status='PENDING_APPROVAL' AND created_at < datetime('now','-1 day')`).first() as Record<string,number>|null;
+    out.approvals_stale = { count: row?.c||0, oldest_hours: row?.h||0 };
+  } catch { out.approvals_stale = null; }
+
+  // 8) Pipeline bottleneck: average days spent in each stage, from order_history
+  //    transitions over the last 30 days (stage = time between consecutive rows)
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT order_id, to_status, created_at FROM order_history
+      WHERE created_at >= datetime('now','-30 day')
+      ORDER BY order_id, created_at LIMIT 2000`).all();
+    const rows = results as Array<Record<string,string>>;
+    const stageNames: Record<string,string> = {
+      SUBMITTED:'Approval', PENDING_APPROVAL:'Approval', APPROVED:'Acknowledge',
+      ACKNOWLEDGED:'Picking', PICKED:'Dispatch', IN_SHIPMENT:'Delivery',
+    };
+    const agg: Record<string,{sum:number;n:number}> = {};
+    for (let i = 0; i < rows.length - 1; i++) {
+      const a = rows[i], nxt = rows[i+1];
+      if (a.order_id !== nxt.order_id) continue;
+      const stage = stageNames[a.to_status];
+      if (!stage) continue;
+      const t0 = new Date(String(a.created_at).replace(' ','T') + 'Z').getTime();
+      const t1 = new Date(String(nxt.created_at).replace(' ','T') + 'Z').getTime();
+      const daysIn = (t1 - t0) / 86400000;
+      if (!isFinite(daysIn) || daysIn < 0 || daysIn > 30) continue;
+      (agg[stage] = agg[stage] || { sum:0, n:0 });
+      agg[stage].sum += daysIn; agg[stage].n++;
+    }
+    const stages = Object.entries(agg)
+      .map(([stage, v]) => ({ stage, avg_days: Math.round(v.sum / v.n * 10) / 10, n: v.n }))
+      .filter(s => s.n >= 2)
+      .sort((x, y) => y.avg_days - x.avg_days);
+    if (stages.length >= 2 && stages[0].avg_days > 0) {
+      const ratio = stages[1].avg_days > 0 ? Math.round(stages[0].avg_days / stages[1].avg_days * 10) / 10 : null;
+      out.bottleneck = { stages, worst: { ...stages[0], ratio } };
+    } else out.bottleneck = null;
+  } catch { out.bottleneck = null; }
 
   return json(out);
 }
