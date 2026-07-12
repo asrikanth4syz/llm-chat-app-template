@@ -1,0 +1,514 @@
+<title>Smart Pantry — Predictive Control Tower Concept</title>
+<style>
+  :root{
+    --paper:#f6f1e9; --paper-2:#fbf8f2; --card:#ffffff;
+    --ink:#211c15; --ink-2:#4a4237; --muted:#7a7061; --faint:#a89e8d;
+    --line:#e6ddcf; --line-2:#efe8dc;
+    --accent:#e8681c; --accent-2:#c9520f; --accent-wash:#fbeadd;
+    --steel:#33475f; --steel-2:#25384d; --steel-wash:#e9eef4;
+    --good:#2f8f4e; --good-wash:#e7f4ea; --warn:#c47d13; --warn-wash:#fbf0da; --bad:#c8402f; --bad-wash:#fbe8e4; --info:#2f6bd6; --info-wash:#e7eefb;
+    --stage:#191410; --stage-ink:#f3ece0; --stage-muted:#a99c86;
+    --sh-sm:0 1px 2px rgba(40,30,15,.05);
+    --sh:0 2px 8px -2px rgba(40,30,15,.10),0 12px 32px -14px rgba(40,30,15,.22);
+    --sh-lg:0 30px 70px -30px rgba(40,30,15,.45);
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --paper:#14110c; --paper-2:#191510; --card:#211b14;
+    --ink:#f2ebdd; --ink-2:#cabfac; --muted:#9d9078; --faint:#6f6552;
+    --line:#332a1f; --line-2:#2a2118;
+    --accent:#f2833f; --accent-2:#f6a468; --accent-wash:#3a2414;
+    --steel:#9fb4cd; --steel-2:#b6c6da; --steel-wash:#1c2735;
+    --good:#5fc37f; --good-wash:#152a1c; --warn:#e0a53c; --warn-wash:#2e2410; --bad:#ef6a58; --bad-wash:#2f1713; --info:#6a9bf0; --info-wash:#14213a;
+    --stage:#0d0a07; --stage-ink:#f3ece0; --stage-muted:#9a8d78;
+    --sh:0 2px 8px -2px rgba(0,0,0,.5),0 14px 34px -16px rgba(0,0,0,.7);
+    --sh-lg:0 30px 80px -30px rgba(0,0,0,.8);
+  }}
+  :root[data-theme="dark"]{
+    --paper:#14110c; --paper-2:#191510; --card:#211b14;
+    --ink:#f2ebdd; --ink-2:#cabfac; --muted:#9d9078; --faint:#6f6552;
+    --line:#332a1f; --line-2:#2a2118;
+    --accent:#f2833f; --accent-2:#f6a468; --accent-wash:#3a2414;
+    --steel:#9fb4cd; --steel-2:#b6c6da; --steel-wash:#1c2735;
+    --good:#5fc37f; --good-wash:#152a1c; --warn:#e0a53c; --warn-wash:#2e2410; --bad:#ef6a58; --bad-wash:#2f1713; --info:#6a9bf0; --info-wash:#14213a;
+    --stage:#0d0a07; --stage-ink:#f3ece0; --stage-muted:#9a8d78;
+    --sh-lg:0 30px 80px -30px rgba(0,0,0,.8);
+  }
+  :root[data-theme="light"]{
+    --paper:#f6f1e9; --paper-2:#fbf8f2; --card:#ffffff;
+    --ink:#211c15; --ink-2:#4a4237; --muted:#7a7061; --faint:#a89e8d;
+    --line:#e6ddcf; --line-2:#efe8dc;
+    --accent:#e8681c; --accent-2:#c9520f; --accent-wash:#fbeadd;
+    --steel:#33475f; --steel-2:#25384d; --steel-wash:#e9eef4;
+    --good:#2f8f4e; --good-wash:#e7f4ea; --warn:#c47d13; --warn-wash:#fbf0da; --bad:#c8402f; --bad-wash:#fbe8e4; --info:#2f6bd6; --info-wash:#e7eefb;
+    --stage:#191410; --stage-ink:#f3ece0; --stage-muted:#a99c86;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(1200px 600px at 85% -5%, color-mix(in srgb,var(--accent) 7%,transparent), transparent 60%);}
+  .tnum{font-variant-numeric:tabular-nums}
+  .wrap{max-width:1220px;margin:0 auto;padding:0 24px}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .rise{opacity:0;animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+  @media (prefers-reduced-motion:reduce){.rise{opacity:1;animation:none}*{transition:none!important;animation:none!important;scroll-behavior:auto}}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .top{display:flex;align-items:center;gap:12px;padding:22px 0 8px}
+  .brand{display:flex;align-items:center;gap:11px}
+  .logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(140deg,var(--accent),#f7a24a);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px -8px color-mix(in srgb,var(--accent) 70%,transparent)}
+  .logo svg{width:21px;height:21px;color:#fff}
+  .brand b{font-size:.98rem;letter-spacing:-.01em}
+  .brand span{display:block;font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-2);font-weight:700}
+  .pill-tag{margin-left:auto;font-size:.68rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--warn);background:var(--warn-wash);border:1px solid color-mix(in srgb,var(--warn) 34%,transparent);padding:6px 13px;border-radius:100px}
+
+  .hero{padding:40px 0 8px;max-width:940px}
+  .kicker{font-size:.74rem;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-2);margin-bottom:18px;display:flex;align-items:center;gap:10px}
+  .kicker::before{content:"";width:34px;height:2px;background:var(--accent);border-radius:2px}
+  h1{font-family:var(--serif);font-weight:400;font-size:clamp(2.4rem,6vw,4.2rem);line-height:1.03;letter-spacing:-.02em;margin:0 0 22px;color:var(--ink);text-wrap:balance}
+  h1 em{font-style:italic;color:var(--accent)}
+  .lede{font-size:1.12rem;color:var(--ink-2);max-width:64ch;margin:0}
+
+  section{padding:60px 0 0}
+  .eyebrow{display:flex;align-items:baseline;gap:14px;margin-bottom:22px}
+  .eyebrow .idx{font-family:var(--mono);font-size:.8rem;color:var(--accent);font-weight:700}
+  .eyebrow h2{font-family:var(--serif);font-weight:400;font-size:1.8rem;letter-spacing:-.01em;margin:0;color:var(--ink)}
+  .eyebrow .rule{flex:1;height:1px;background:var(--line);align-self:center}
+  .lead-p{font-size:1.02rem;color:var(--ink-2);max-width:70ch;margin:-6px 0 26px}
+
+  /* stage */
+  .stage{background:var(--stage);border-radius:24px;padding:26px;box-shadow:var(--sh-lg);position:relative;overflow:hidden}
+  .stage::before{content:"";position:absolute;inset:0;background:radial-gradient(700px 300px at 18% 0%, color-mix(in srgb,var(--accent) 14%,transparent), transparent 55%);pointer-events:none}
+  .stage-cap{display:flex;align-items:center;gap:9px;color:var(--stage-muted);font-size:.78rem;margin-bottom:16px;position:relative}
+  .stage-cap b{color:var(--stage-ink);font-weight:700}
+  .stage-cap .live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;color:var(--good)}
+  .stage-cap .live i{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 25%,transparent)}
+  .stage-foot{margin-top:16px;color:var(--stage-muted);font-size:.76rem;text-align:center;position:relative}
+  .app{background:var(--card);border-radius:16px;overflow:hidden;box-shadow:0 24px 60px -24px rgba(0,0,0,.6);position:relative}
+  .app-top{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line);background:var(--paper-2);flex-wrap:wrap}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .app-top .who{margin-left:auto;font-size:.72rem;color:var(--muted);font-weight:600}
+
+  /* horizon bar */
+  .hzbar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .hz-lead{font-size:.6rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-2)}
+  .hzchip{border:1px solid var(--line);background:var(--card);color:var(--muted);font-size:.76rem;font-weight:700;padding:6px 14px;border-radius:100px;cursor:pointer;font-family:var(--sans);transition:.14s}
+  .hzchip:hover{border-color:var(--accent);color:var(--ink)}
+  .hzchip.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 10px -4px color-mix(in srgb,var(--accent) 60%,transparent)}
+  .hz-note{margin-left:auto;font-size:.7rem;color:var(--faint);font-weight:600}
+
+  /* pulse strip */
+  .pulse{display:grid;grid-template-columns:repeat(6,1fr);gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  @media(max-width:900px){.pulse{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:600px){.pulse{grid-template-columns:repeat(2,1fr)}}
+  .pk{background:var(--paper-2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;position:relative;cursor:pointer;transition:.14s;text-align:left;font-family:var(--sans)}
+  .pk:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .pk .l{font-size:.58rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+  .pk .v{font-size:1.28rem;font-weight:800;color:var(--ink);line-height:1.1;margin-top:3px}
+  .pk .v.g{color:var(--good)}.pk .v.w{color:var(--warn)}.pk .v.b{color:var(--bad)}
+  .pk .t{font-size:.62rem;font-weight:700;margin-top:2px}
+  .pk .t.up{color:var(--good)}.pk .t.dn{color:var(--bad)}.pk .t.fl{color:var(--muted)}
+  .pk .f{font-size:.6rem;color:var(--muted);margin-top:4px;padding-top:4px;border-top:1px dashed var(--line);line-height:1.4}
+  .pk .f b{color:var(--accent-2)}
+
+  /* radar band */
+  .body2{display:grid;grid-template-columns:1.5fr 1fr;gap:0}
+  @media(max-width:900px){.body2{grid-template-columns:1fr}}
+  .radar{padding:16px;border-right:1px solid var(--line);min-width:0}
+  @media(max-width:900px){.radar{border-right:none;border-bottom:1px solid var(--line)}}
+  .sec-h{display:flex;align-items:baseline;gap:9px;margin-bottom:11px}
+  .sec-h .t{font-size:.66rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
+  .sec-h .s{font-size:.68rem;color:var(--faint);margin-left:auto}
+  .fc{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);border-radius:11px;padding:10px 13px;margin-bottom:8px;background:var(--card);cursor:pointer;transition:.13s;text-align:left;font-family:var(--sans);width:100%}
+  .fc:hover{border-color:var(--accent);transform:translateX(3px)}
+  .fc .ic{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;margin-top:1px}
+  .fc .ic.b{background:var(--bad-wash);color:var(--bad)}.fc .ic.w{background:var(--warn-wash);color:var(--warn)}.fc .ic.i{background:var(--steel-wash);color:var(--steel)}.fc .ic.g{background:var(--good-wash);color:var(--good)}
+  .fc .m{flex:1;min-width:0}
+  .fc .h4{font-size:.83rem;font-weight:700;color:var(--ink)}
+  .fc .h4 b{color:var(--bad)}
+  .fc .p{font-size:.72rem;color:var(--muted);margin-top:1px;line-height:1.45}
+  .fc .eta{font-size:.62rem;font-weight:800;padding:3px 9px;border-radius:100px;white-space:nowrap;flex-shrink:0}
+  .fc .eta.b{background:var(--bad-wash);color:var(--bad)}.fc .eta.w{background:var(--warn-wash);color:var(--warn)}.fc .eta.i{background:var(--steel-wash);color:var(--steel-2)}
+
+  /* load chart */
+  .load{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--paper-2);margin-bottom:8px}
+  .load .lt{font-size:.72rem;font-weight:700;color:var(--ink);margin-bottom:9px;display:flex;justify-content:space-between}
+  .load .lt span{color:var(--muted);font-weight:600;font-size:.66rem}
+  .bars{display:flex;align-items:flex-end;gap:7px;height:74px;position:relative;padding-top:8px}
+  .bars .capline{position:absolute;left:0;right:0;border-top:2px dashed color-mix(in srgb,var(--bad) 55%,transparent)}
+  .bars .capline i{position:absolute;right:0;top:-16px;font-style:normal;font-size:.58rem;font-weight:800;color:var(--bad)}
+  .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end}
+  .bar i{display:block;width:100%;border-radius:5px 5px 2px 2px;background:var(--steel);opacity:.85}
+  .bar i.gho{background:repeating-linear-gradient(45deg,var(--accent),var(--accent) 3px,transparent 3px,transparent 6px);opacity:.9}
+  .bar i.over{background:var(--bad)}
+  .bar .d{font-size:.58rem;font-weight:700;color:var(--faint)}
+  .bar .n{font-size:.6rem;font-weight:800;color:var(--muted)}
+
+  /* action queue */
+  .queue{padding:16px;min-width:0}
+  .aq{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:9px 12px;margin-bottom:7px;background:var(--card);cursor:pointer;transition:.13s;width:100%;text-align:left;font-family:var(--sans)}
+  .aq:hover{border-color:var(--accent);transform:translateX(3px)}
+  .aq .sev{width:6px;align-self:stretch;border-radius:4px;flex-shrink:0}
+  .aq .sev.s1{background:var(--bad)}.aq .sev.s2{background:var(--warn)}.aq .sev.s3{background:var(--steel)}
+  .aq .m{flex:1;min-width:0}
+  .aq .h4{font-size:.8rem;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .aq .p{font-size:.68rem;color:var(--muted)}
+  .aq .n{font-size:.72rem;font-weight:800;color:var(--ink);background:var(--paper-2);border:1px solid var(--line);border-radius:100px;padding:2px 10px;flex-shrink:0}
+  .aq.done{opacity:.45}
+  .aq.done .h4{text-decoration:line-through}
+
+  /* today lane */
+  .lane{border-top:1px solid var(--line);padding:16px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:16px}
+  @media(max-width:900px){.lane{grid-template-columns:1fr}}
+  .runrow{display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:.78rem}
+  .runrow:last-child{border-bottom:none}
+  .runrow .tm{font-family:var(--mono);font-size:.7rem;font-weight:700;color:var(--muted);width:44px;flex-shrink:0}
+  .runrow .nm{flex:1;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .runrow .st{font-size:.6rem;font-weight:800;padding:2px 8px;border-radius:100px}
+  .runrow .st.g{background:var(--good-wash);color:var(--good)}.runrow .st.w{background:var(--warn-wash);color:var(--warn)}.runrow .st.b{background:var(--bad-wash);color:var(--bad)}.runrow .st.i{background:var(--steel-wash);color:var(--steel-2)}
+  .pipe{display:flex;flex-direction:column;gap:6px}
+  .pipe .pr{display:flex;align-items:center;gap:9px;font-size:.74rem}
+  .pipe .pr .pl{width:76px;color:var(--muted);font-weight:600;flex-shrink:0}
+  .pipe .pr .pt{flex:1;height:13px;border-radius:5px;background:var(--line-2);overflow:hidden}
+  .pipe .pr .pt i{display:block;height:100%;border-radius:5px;background:var(--steel)}
+  .pipe .pr .pv{width:26px;text-align:right;font-weight:800;color:var(--ink);font-size:.72rem}
+  .pipe .pr.slow .pt i{background:var(--warn)}
+  .bneck{margin-top:8px;font-size:.68rem;color:var(--warn);background:var(--warn-wash);border:1px dashed color-mix(in srgb,var(--warn) 45%,transparent);border-radius:8px;padding:6px 10px}
+  .cht{width:100%;border-collapse:collapse;font-size:.76rem}
+  .cht td{padding:6px 4px;border-bottom:1px solid var(--line-2)}
+  .cht tr:last-child td{border-bottom:none}
+  .cht .cn{font-weight:700;color:var(--ink)}
+  .cht .tr{font-size:.85rem;width:20px;text-align:center}
+  .cht .tr.up{color:var(--good)}.cht .tr.dn{color:var(--bad)}.cht .tr.fl{color:var(--faint)}
+  .cht .hs{font-weight:800;text-align:right}
+  .cht .hs.g{color:var(--good)}.cht .hs.w{color:var(--warn)}.cht .hs.b{color:var(--bad)}
+  .note-toast{position:sticky;bottom:12px;margin:12px auto 0;max-width:460px;background:var(--steel);color:#fff;font-size:.78rem;padding:10px 16px;border-radius:10px;text-align:center;display:none;z-index:5}
+
+  /* review cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .tcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 21px;box-shadow:var(--sh-sm);transition:.16s}
+  .tcard:hover{box-shadow:var(--sh);transform:translateY(-2px)}
+  .tcard h3{margin:0 0 10px;font-family:var(--serif);font-weight:400;font-size:1.14rem;color:var(--ink);display:flex;align-items:center;gap:10px}
+  .tcard h3 .ic{width:30px;height:30px;border-radius:9px;background:var(--accent-wash);color:var(--accent-2);display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0}
+  .tcard p{margin:0 0 9px;font-size:.88rem;color:var(--ink-2)} .tcard p:last-child{margin-bottom:0} .tcard b{color:var(--ink);font-weight:700}
+  ul.tick{list-style:none;padding:0;margin:0;font-size:.86rem;color:var(--ink-2)}
+  ul.tick li{padding:4px 0 4px 22px;position:relative}
+  ul.tick li::before{content:"↘";position:absolute;left:0;color:var(--accent);font-weight:700}
+  ul.tick li.keep::before{content:"✓";color:var(--good)}
+  ul.tick li.fix::before{content:"✕";color:var(--bad)}
+  code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);border:1px solid var(--line);padding:1px 6px;border-radius:6px}
+  .verdict{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:14px;padding:18px 20px;margin-bottom:20px;font-size:.95rem;color:var(--ink-2)}
+  .verdict b{color:var(--ink)}
+
+  footer{margin-top:70px;padding:26px 0 60px;border-top:1px solid var(--line);font-size:.8rem;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.5"/><path d="M12 2a10 10 0 0 1 10 10M12 6a6 6 0 0 1 6 6"/></svg></div>
+      <div><b>Smart Pantry</b><span>Control Tower</span></div>
+    </div>
+    <span class="pill-tag">Concept — not yet built</span>
+  </div>
+
+  <header class="hero">
+    <div class="kicker rise" style="animation-delay:.02s">Super Admin · Control Tower Redesign</div>
+    <h1 class="rise" style="animation-delay:.08s">See it <em>coming.</em></h1>
+    <p class="lede rise" style="animation-delay:.16s">Your reference dashboard reports the day well — but every panel on it looks <i>backward</i>. A control tower earns its name when it looks <b style="color:var(--ink)">forward</b>: which client breaches budget on the 26th, which item runs dry on Thursday, which day next week is over fleet capacity. Same data, one new question: <b style="color:var(--ink)">what happens next?</b></p>
+  </header>
+
+  <!-- INTERACTIVE MOCK -->
+  <section id="try">
+    <div class="eyebrow"><span class="idx">01</span><h2>Try the tower</h2><span class="rule"></span></div>
+    <p class="lead-p">The signature control: a <b>horizon switch</b>. Flip between <b>Today</b>, <b>Next 7 days</b> and <b>Next 30 days</b> — the radar re-aims, and every KPI's forecast line updates. Click a forecast to see what the real build would open; tick items off the action queue.</p>
+    <div class="stage">
+      <div class="stage-cap"><b>Control Tower</b><span>· 4SYZ Platform · sample data</span><span class="live"><i></i>interactive</span></div>
+      <div class="app">
+        <div class="app-top">
+          <span class="dot" style="background:#ef6a58"></span><span class="dot" style="background:#e0a53c"></span><span class="dot" style="background:#5fc37f"></span>
+          <span style="font-size:.8rem;font-weight:700;color:var(--ink)">Control Tower</span>
+          <span class="who">Super Admin · Sat 11 Jul 2026 · 09:12</span>
+        </div>
+
+        <div class="hzbar">
+          <span class="hz-lead">Horizon</span>
+          <button class="hzchip" id="hz-today" onclick="setHz('today')">Today</button>
+          <button class="hzchip on" id="hz-week" onclick="setHz('week')">Next 7 days</button>
+          <button class="hzchip" id="hz-month" onclick="setHz('month')">Next 30 days</button>
+          <span class="hz-note" id="hz-note">Radar aimed at the coming week</span>
+        </div>
+
+        <div class="pulse" id="pulse"></div>
+
+        <div class="body2">
+          <div class="radar">
+            <div class="sec-h"><span class="t">📡 Radar — what's coming</span><span class="s" id="radar-sub"></span></div>
+            <div id="loadwrap"></div>
+            <div id="radar"></div>
+          </div>
+          <div class="queue">
+            <div class="sec-h"><span class="t">⚡ Needs you now</span><span class="s">ranked by cost of waiting</span></div>
+            <div id="queue"></div>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div>
+            <div class="sec-h"><span class="t">🚚 Today's runs</span><span class="s">5 scheduled</span></div>
+            <div class="runrow"><span class="tm">09:00</span><span class="nm">Meta India · SP-2481 · 32 items</span><span class="st g">Delivered</span></div>
+            <div class="runrow"><span class="tm">10:30</span><span class="nm">LinkedIn · SP-2482 · 28 items</span><span class="st w">In transit</span></div>
+            <div class="runrow"><span class="tm">12:00</span><span class="nm">ServiceNow · SP-2483 · 19 items</span><span class="st i">Upcoming</span></div>
+            <div class="runrow"><span class="tm">14:00</span><span class="nm">Nike India · SP-2484 · 24 items</span><span class="st i">Upcoming</span></div>
+            <div class="runrow"><span class="tm">16:30</span><span class="nm">Cohesity · SP-2485 · 18 items</span><span class="st b">Delayed 40m</span></div>
+          </div>
+          <div>
+            <div class="sec-h"><span class="t">⛓ Pipeline</span><span class="s">87 open orders</span></div>
+            <div class="pipe">
+              <div class="pr"><span class="pl">Submitted</span><div class="pt"><i style="width:100%"></i></div><span class="pv">32</span></div>
+              <div class="pr"><span class="pl">Approved</span><div class="pt"><i style="width:88%"></i></div><span class="pv">28</span></div>
+              <div class="pr slow"><span class="pl">Picking</span><div class="pt"><i style="width:50%"></i></div><span class="pv">16</span></div>
+              <div class="pr"><span class="pl">Dispatched</span><div class="pt"><i style="width:34%"></i></div><span class="pv">11</span></div>
+            </div>
+            <div class="bneck">⚠ <b>Bottleneck: Picking</b> — avg 1.8 days per order this week, 2.2× slower than any other stage.</div>
+          </div>
+          <div>
+            <div class="sec-h"><span class="t">♥ Client health</span><span class="s">score · 30-day direction</span></div>
+            <table class="cht">
+              <tr><td class="cn">Meta India</td><td class="tr up" title="improving">↗</td><td class="hs g">98</td></tr>
+              <tr><td class="cn">LinkedIn</td><td class="tr fl" title="steady">→</td><td class="hs g">94</td></tr>
+              <tr><td class="cn">ServiceNow</td><td class="tr dn" title="declining — budget pace + 2 late DCs">↘</td><td class="hs w">90</td></tr>
+              <tr><td class="cn">Cohesity</td><td class="tr up" title="improving">↗</td><td class="hs w">88</td></tr>
+              <tr><td class="cn">Nike India</td><td class="tr dn" title="declining — fulfilment dip">↘</td><td class="hs w">86</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="note-toast" id="toast"></div>
+      </div>
+      <div class="stage-foot">Horizon chips re-aim the radar · every forecast row is a doorway · queue items tick off · trajectory arrows carry the “why” on hover.</div>
+    </div>
+  </section>
+
+  <!-- REVIEW OF THE REFERENCE -->
+  <section>
+    <div class="eyebrow"><span class="idx">02</span><h2>Review of the reference</h2><span class="rule"></span></div>
+    <div class="verdict"><b>Verdict:</b> the reference is a strong <b>operational snapshot</b> — right panels, clean hierarchy, honest use of an action center. Its one structural gap is that all fourteen widgets describe the past or the present; nothing on the screen answers “what breaks next?”. The redesign keeps its bones and adds the missing tense.</div>
+    <div class="cards">
+      <div class="tcard">
+        <h3><span class="ic" style="background:var(--good-wash);color:var(--good)">✓</span>Keep — it earns its place</h3>
+        <ul class="tick">
+          <li class="keep">KPI strip with targets (Fulfilment vs 95%)</li>
+          <li class="keep">Action Center — counts by category</li>
+          <li class="keep">Today's schedule with live statuses</li>
+          <li class="keep">Client Health as a table, not a chart</li>
+          <li class="keep">Pipeline funnel of open orders</li>
+        </ul>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic" style="background:var(--bad-wash);color:var(--bad)">✕</span>Fix — quiet problems</h3>
+        <ul class="tick">
+          <li class="fix"><b>Donut duplicates the funnel</b> — same 679 orders, same stages, twice on one screen. Drop it.</li>
+          <li class="fix"><b>Recent Orders table</b> repeats the Orders page. A link, not a panel.</li>
+          <li class="fix"><b>Numbers disagree</b> — 24 deliveries today vs 5 on the schedule; 679 pipeline vs 186 revenue orders. Consistency is trust.</li>
+          <li class="fix"><b>Health scores are static</b> — 86 means nothing without direction. Add the 30-day arrow.</li>
+        </ul>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">＋</span>Add — the missing tense</h3>
+        <ul class="tick">
+          <li>A <b>forecast line on every KPI</b> — “96.8%, trending to 94.6% by month-end”</li>
+          <li>The <b>Radar band</b>: budget-breach dates, stock run-outs in days, capacity overloads</li>
+          <li><b>Horizon switch</b> — Today / 7d / 30d re-aims the whole board</li>
+          <li><b>Bottleneck detection</b> on the pipeline, not just counts</li>
+          <li>Action queue <b>ranked by cost of waiting</b>, not category</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHERE PREDICTIONS COME FROM -->
+  <section>
+    <div class="eyebrow"><span class="idx">03</span><h2>Arithmetic, not AI</h2><span class="rule"></span></div>
+    <p class="lead-p">Every forecast on the radar is a run-rate projection over data Smart Pantry already stores. No models to train, no black boxes to explain to a client — and each one can graduate to something smarter later without changing the UI.</p>
+    <div class="cards">
+      <div class="tcard">
+        <h3><span class="ic">₹</span>Budget breach dates</h3>
+        <p>Daily burn = month-to-date spend ÷ days elapsed. Project to month-end; if projected &gt; budget, solve for the <b>crossing date</b>. Reads <code>orders</code> + <code>clients.monthly_budget</code> — the same query the client dashboard already runs, extended one line.</p>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">☕</span>Stock run-outs</h3>
+        <p>Days of cover = current stock ÷ daily draw (14-day average from <code>client_consumption</code> and order lines). Sort ascending; anything under the horizon makes the radar. The <b>Order all low-stock</b> button you already shipped is the one-click fix.</p>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">🚚</span>Capacity overloads</h3>
+        <p>The Delivery Calendar already knows booked DCs, recurring ghosts and fleet capacity per day. The radar simply sums <b>booked + projected</b> per day ahead and flags days over the line — the chart in the mock is that exact query.</p>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">⛓</span>Bottleneck detection</h3>
+        <p>Average time between statuses in <code>order_history</code>, per stage, this week vs trailing month. The slowest stage gets named on the funnel. Cheap to compute, disproportionately useful to ops.</p>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">♥</span>Health trajectory</h3>
+        <p>Recompute the health score over the trailing 30 days and keep last month's value — the arrow is just the sign of the difference, and the hover explains <b>which input moved</b> (budget pace, fulfilment, due orders).</p>
+      </div>
+      <div class="tcard">
+        <h3><span class="ic">→</span>Build order</h3>
+        <ul class="tick">
+          <li><b>1</b> — Pulse strip + forecast lines, radar with budget/stock/capacity projections (pure queries).</li>
+          <li><b>2</b> — Horizon switch, ranked action queue, bottleneck detection.</li>
+          <li><b>3</b> — Health trajectories + “what changed since yesterday” diffing.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Smart Pantry · Predictive Control Tower concept</span>
+    <span>Interactive mock · sample figures · Jul 2026</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  var HZ = 'week';
+
+  // ── pulse KPIs per horizon: [label, value, cls, trend(dir,txt), forecast] ──
+  var PULSE = {
+    today: [
+      ['Deliveries today','5','', ['fl','1 delayed'], 'Cohesity run slipping — <b>ETA 17:10</b> vs 16:30 slot'],
+      ['Fulfilment MTD','96.8%','g', ['dn','▼ 0.4pt/wk'], 'Holding above target <b>through today</b>'],
+      ['Due value','₹48,500','w', ['fl','15 lines'], '<b>₹12,400</b> of it clears with today’s two runs'],
+      ['Pending billing','₹12.6L','w', ['up','▲ oldest 5d'], '<b>7 DCs</b> billable right now'],
+      ['Open orders','87','', ['fl','across 4 stages'], '<b>Picking</b> is the slow stage today'],
+      ['Critical alerts','8','b', ['up','▲ 2 today'], '<b>2</b> resolvable before noon'],
+    ],
+    week: [
+      ['Deliveries next 7d','31','', ['up','▲ 6 vs last wk'], '<b>Thu 16 Jul</b> is over fleet capacity (7/6)'],
+      ['Fulfilment MTD','96.8%','g', ['dn','▼ 0.4pt/wk'], 'Trending to <b>96.2%</b> by next Sat — above target'],
+      ['Stock run-outs','3','b', ['up','within 7 days'], '<b>Filter Coffee</b> first — dry by <b>Thu 16 Jul</b>'],
+      ['Recurring due','6','w', ['fl','unconfirmed'], '<b>2</b> cycles need confirming before Wednesday'],
+      ['Budget pace','4 ok','w', ['dn','1 client hot'], '<b>ServiceNow</b> tracking 8% over pace this week'],
+      ['Billing runway','₹12.6L','w', ['up','▲ ₹3.2L/wk'], 'Clears in <b>~9 days</b> at current invoicing rate'],
+    ],
+    month: [
+      ['Projected orders','208','', ['up','▲ 12% vs Jun'], 'From run-rate + <b>14</b> recurring cycles due'],
+      ['Fulfilment月-end','94.6%','w', ['dn','▼ 0.4pt/wk'], 'Crosses below the <b>95% target ~28 Jul</b> unless picking speeds up'],
+      ['Budget breaches','1','b', ['fl','of 5 clients'], '<b>ServiceNow</b> projected <b>108%</b> — crosses <b>26 Jul</b>'],
+      ['Stock run-outs','7','b', ['up','within 30 days'], '<b>3</b> are must-have items — POs needed by <b>18 Jul</b>'],
+      ['Projected revenue','₹41.2L','g', ['up','▲ 6% vs Jun'], 'At current run-rate incl. recurring'],
+      ['Capacity days over','3','w', ['fl','of next 30'], 'Worst: <b>Thu 16 Jul</b> at 7/6 — move 1 run'],
+    ]
+  };
+  // fix the mixed-language slip in month fulfilment label
+  PULSE.month[1][0] = 'Fulfilment month-end';
+
+  // ── radar forecasts per horizon ──
+  var RADAR = {
+    today: [
+      ['b','⏱','Cohesity 16:30 run is projected 40m late','Driver on the 14:00 Nike run; traffic on ORR. Swap to Imran S (free 15:30) to save the slot.','fix now'],
+      ['w','◌','Recurring cycle unconfirmed for Monday','Meta Weekly (SO-204) due 13 Jul — create the order today so picking has Monday morning.','due 13 Jul'],
+      ['i','₹','7 delivered DCs are billable today','₹4.1L of the ₹12.6L pending billing needs no one’s permission — just invoicing.','₹4.1L'],
+    ],
+    week: [
+      ['b','☕','Filter Coffee runs dry Thursday','6 days of cover at the 14-day draw rate. PO today lands Wednesday; the Meta and LinkedIn pantries drain first.','Thu 16 Jul'],
+      ['b','🚚','Thu 16 Jul is over fleet capacity','7 deliveries booked+projected vs 6 slots. Nike’s run is the most movable — Friday is at 2/6.','7/6 slots'],
+      ['w','☕','Hand Sanitizer & A4 Paper follow','Run out Sat 18 and Mon 20 at current draw. One combined stationery PO covers both.','18–20 Jul'],
+      ['w','◌','2 recurring cycles unconfirmed','Meta Weekly (Mon) and Sodexo Weekly (Wed) — confirm or skip before picking day.','by Wed'],
+      ['i','♥','ServiceNow health slipping','90 → trending 87: budget pace +8% and two late DCs this fortnight. A call this week beats a credit note next month.','↘ trend'],
+    ],
+    month: [
+      ['b','₹','ServiceNow breaches budget on 26 Jul','Daily burn ₹31k vs ₹27k budget pace → projected 108% by month-end. Options: cap approvals, or renegotiate the budget line.','26 Jul'],
+      ['b','📉','Fulfilment crosses below target ~28 Jul','−0.4pt/week, driven by picking (1.8d avg). Two more pickers on Mon/Tue mornings flattens the line.','~28 Jul'],
+      ['w','☕','7 items run out within 30 days','3 are must-have SKUs. Raising the 4 vendor POs by 18 Jul keeps every client above reorder level.','PO by 18 Jul'],
+      ['w','🚚','3 days over capacity in the next 30','16 Jul (7/6), 23 Jul (7/6), 30 Jul (8/6) — all Thursdays. The weekly cycles cluster; stagger Sodexo to Tuesdays.','3 Thursdays'],
+      ['g','📈','Revenue projected ₹41.2L (+6%)','Run-rate plus 14 recurring cycles. Upside: Nike’s pending catalogue expansion isn’t in this number.','+6% vs Jun'],
+    ]
+  };
+
+  var LOAD = { days:['Sat','Sun','Mon','Tue','Wed','Thu','Fri'], booked:[2,0,4,3,2,5,1], ghost:[0,0,1,0,1,2,1], cap:6 };
+
+  var QUEUE = [
+    ['s1','Reassign the 16:30 Cohesity run','projected 40m late · client SLA at 17:00','1'],
+    ['s1','Raise coffee PO before 14:00 cutoff','vendor ships next-day only on weekday orders','1'],
+    ['s2','Confirm Meta Weekly cycle (Mon 13 Jul)','picking needs Monday-morning start','1'],
+    ['s2','Invoice 7 delivered DCs','₹4.1L sitting unbilled, oldest 5 days','7'],
+    ['s2','Approve 3 orders waiting > 24h','LinkedIn ×2, Cohesity ×1','3'],
+    ['s3','Review ServiceNow budget pace with account owner','breach projected 26 Jul','—'],
+  ];
+
+  var NOTES = {
+    today: 'Radar aimed at the rest of today',
+    week: 'Radar aimed at the coming week',
+    month: 'Radar aimed at month-end'
+  };
+  var SUBS = {
+    today: '3 signals · rest of today',
+    week: '5 signals · through Fri 17 Jul',
+    month: '5 signals · through 10 Aug'
+  };
+
+  function pulse(){
+    document.getElementById('pulse').innerHTML = PULSE[HZ].map(function(k){
+      var tcls = k[3][0]==='up'?'up':k[3][0]==='dn'?'dn':'fl';
+      return '<button class="pk" onclick="twToast(\'In the real build this opens the drill for “'+k[0].replace(/'/g,'')+'”\')">'
+        + '<div class="l">'+k[0]+'</div><div class="v '+(k[2]||'')+' tnum">'+k[1]+'</div>'
+        + '<div class="t '+tcls+'">'+k[3][1]+'</div><div class="f">'+k[4]+'</div></button>';
+    }).join('');
+  }
+
+  function radar(){
+    document.getElementById('radar').innerHTML = RADAR[HZ].map(function(f){
+      return '<button class="fc" onclick="twToast(\'Opens: '+f[2].replace(/'/g,'')+'\')">'
+        + '<span class="ic '+f[0]+'">'+f[1]+'</span>'
+        + '<span class="m"><span class="h4">'+f[2]+'</span><span class="p" style="display:block">'+f[3]+'</span></span>'
+        + '<span class="eta '+(f[0]==='g'?'i':f[0])+'">'+f[4]+'</span></button>';
+    }).join('');
+    document.getElementById('radar-sub').textContent = SUBS[HZ];
+    document.getElementById('hz-note').textContent = NOTES[HZ];
+    // load chart only on week horizon
+    var lw = document.getElementById('loadwrap');
+    if (HZ !== 'week') { lw.innerHTML=''; return; }
+    var maxv = 8;
+    lw.innerHTML = '<div class="load"><div class="lt">Delivery load — booked ▦ + projected ◌ vs capacity <span>next 7 days</span></div>'
+      + '<div class="bars"><span class="capline" style="bottom:'+(LOAD.cap/maxv*74)+'px"><i>cap '+LOAD.cap+'</i></span>'
+      + LOAD.days.map(function(d,i){
+          var b=LOAD.booked[i], g=LOAD.ghost[i], tot=b+g, over=tot>LOAD.cap;
+          return '<div class="bar"><span class="n'+(over?'" style="color:var(--bad)':'')+'">'+tot+'</span>'
+            + (g?'<i class="gho" style="height:'+(g/maxv*74)+'px"></i>':'')
+            + '<i class="'+(over?'over':'')+'" style="height:'+(b/maxv*74)+'px"></i>'
+            + '<span class="d">'+d+'</span></div>';
+        }).join('')
+      + '</div></div>';
+  }
+
+  function queue(){
+    document.getElementById('queue').innerHTML = QUEUE.map(function(q,i){
+      return '<button class="aq" id="aq-'+i+'" onclick="twTick('+i+')">'
+        + '<span class="sev '+q[0]+'"></span>'
+        + '<span class="m"><span class="h4">'+q[1]+'</span><span class="p" style="display:block">'+q[2]+'</span></span>'
+        + '<span class="n">'+q[3]+'</span></button>';
+    }).join('');
+  }
+
+  var toastTimer;
+  window.twToast = function(msg){
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.style.display='block';
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.style.display='none'; }, 2800);
+  };
+  window.twTick = function(i){
+    var el = document.getElementById('aq-'+i);
+    el.classList.toggle('done');
+    twToast(el.classList.contains('done') ? '✓ Done — in the real build this resolves the underlying task' : 'Reopened');
+  };
+  window.setHz = function(h){
+    HZ = h;
+    ['today','week','month'].forEach(function(x){ document.getElementById('hz-'+x).classList.toggle('on', x===h); });
+    pulse(); radar();
+  };
+
+  pulse(); radar(); queue();
+})();
+</script>
