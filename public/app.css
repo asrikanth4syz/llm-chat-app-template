@@ -220,6 +220,10 @@ button { font-family: var(--font); cursor: pointer; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; margin: 1px 8px; width: auto; }
 .sidebar.collapsed .nav-item.active { border-left: none; padding-left: 0; background: var(--sidebar-active-bg); border-radius: var(--radius-sm); }
 .sidebar.collapsed .nav-section-toggle { display: none; }
+/* In icon-rail mode every group is a flat icon list — never hide items */
+.sidebar.collapsed .nav-section-body { max-height: none !important; overflow: visible; }
+.sidebar.collapsed .nav-collapse-btn svg { transform: rotate(180deg); }
+.sidebar.collapsed .nav-collapse-btn .nav-collapse-lbl { display: none; }
 
 /* Sidebar header */
 .sidebar-header { padding: 14px 14px 10px; border-bottom: 1px solid var(--border-light); flex-shrink: 0; }
@@ -259,6 +263,13 @@ button { font-family: var(--font); cursor: pointer; }
 .nav-item.active .nav-item-icon svg { opacity: 1; }
 .nav-item-label { font-size: .8rem; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .nav-item-badge { font-size: .6rem; background: var(--danger); color: white; padding: 1px 5px; border-radius: 10px; font-weight: 700; flex-shrink: 0; line-height: 1.5; }
+
+/* Collapse-to-rail toggle (desktop) */
+.nav-collapse-btn { display: flex; align-items: center; gap: 9px; width: 100%; background: none; border: none; border-radius: var(--radius-sm); padding: 7px 10px; margin-bottom: 6px; cursor: pointer; color: var(--text-light); font-family: var(--font); font-size: .74rem; font-weight: 600; transition: background .12s, color .12s; }
+.nav-collapse-btn:hover { background: var(--sidebar-hover); color: var(--navy); }
+.nav-collapse-btn svg { flex-shrink: 0; transition: transform .2s; }
+.sidebar.collapsed .nav-collapse-btn { justify-content: center; padding: 7px 0; }
+@media (max-width: 768px) { .nav-collapse-btn { display: none; } }
 
 /* Sidebar footer */
 .sidebar-footer { border-top: 1px solid var(--border-light); padding: 10px 8px; flex-shrink: 0; }

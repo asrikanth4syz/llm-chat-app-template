@@ -513,10 +513,15 @@ function getDefaultPage() {
 }
 
 // ── Sidebar nav ────────────────────────────────────────────
+function navPrefLoad() {
+  if (!APP._navCollapsed) { try { APP._navCollapsed = JSON.parse(localStorage.getItem('sp_nav_sections')||'{}') || {}; } catch { APP._navCollapsed = {}; } }
+}
+function navPrefSave() { try { localStorage.setItem('sp_nav_sections', JSON.stringify(APP._navCollapsed||{})); } catch {} }
+
 function buildNav() {
   const nav = APP.user.nav;
   const items = NAV[nav] || NAV.platform;
-  if (!APP._navCollapsed) APP._navCollapsed = {};
+  navPrefLoad();
 
   // Group items into sections
   const sections = [];
@@ -554,12 +559,23 @@ function buildNav() {
       : `<div class="nav-section-body${collapsed ? ' collapsed' : ''}" id="nav-sec-${sec.label.replace(/\s+/g,'_')}" style="max-height:${collapsed ? '0' : bodyMaxH}">${itemsHtml}</div>`);
   }).join('');
 
-  document.getElementById('sidebar-nav').innerHTML = html;
+  const collapseBtn = `<button class="nav-collapse-btn" onclick="collapseSidebar()" title="Collapse menu">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/><path d="M21 18l-6-6 6-6" opacity=".5"/></svg>
+    <span class="nav-collapse-lbl">Collapse</span></button>`;
+  document.getElementById('sidebar-nav').innerHTML = html + collapseBtn;
+
+  // restore persisted icon-rail state (desktop only)
+  const sb = document.getElementById('sidebar');
+  if (sb && window.innerWidth > 768) {
+    let rail = false; try { rail = localStorage.getItem('sp_nav_rail') === '1'; } catch {}
+    sb.classList.toggle('collapsed', rail);
+  }
 }
 
 function toggleNavSection(label) {
-  if (!APP._navCollapsed) APP._navCollapsed = {};
+  navPrefLoad();
   APP._navCollapsed[label] = !APP._navCollapsed[label];
+  navPrefSave();
   const key = label.replace(/\s+/g,'_');
   const body = document.getElementById('nav-sec-' + key);
   const toggle = body?.previousElementSibling;
@@ -570,6 +586,22 @@ function toggleNavSection(label) {
   toggle.classList.toggle('collapsed', collapsed);
 }
 
+// Ensure the section holding the active page is open, and reveal it
+function revealActiveNavItem(page) {
+  const navEl = document.getElementById('nav-' + page);
+  if (!navEl) return;
+  const body = navEl.closest('.nav-section-body');
+  if (body && body.classList.contains('collapsed')) {
+    const label = (body.previousElementSibling?.querySelector('.nav-section-label')?.textContent || '').trim();
+    if (label) { navPrefLoad(); APP._navCollapsed[label] = false; navPrefSave(); }
+    body.classList.remove('collapsed');
+    body.style.maxHeight = (body.children.length * 44 + 'px');
+    body.previousElementSibling?.classList.remove('collapsed');
+  }
+  if (!document.getElementById('sidebar')?.classList.contains('collapsed'))
+    navEl.scrollIntoView({ block: 'nearest' });
+}
+
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebar-overlay');
@@ -577,8 +609,16 @@ function toggleSidebar() {
     sidebar.classList.toggle('mobile-open');
     overlay?.classList.toggle('show');
   } else {
-    sidebar.classList.toggle('collapsed');
+    collapseSidebar();
   }
+}
+
+// Desktop icon-rail toggle, persisted
+function collapseSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const rail = sidebar.classList.toggle('collapsed');
+  try { localStorage.setItem('sp_nav_rail', rail ? '1' : '0'); } catch {}
 }
 
 function closeMobileSidebar() {
@@ -634,7 +674,7 @@ function navigate(page) {
 
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const navEl = document.getElementById('nav-' + page);
-  if (navEl) navEl.classList.add('active');
+  if (navEl) { navEl.classList.add('active'); revealActiveNavItem(page); }
 
   document.getElementById('breadcrumb').textContent =
     (NAV[APP.user.nav] || []).find(i => i.id === page)?.label || page.replace(/_/g,' ');
