@@ -669,7 +669,7 @@ function ensureClientFAB() {
       <button onclick="toggleFAB();navigate('my_inventory')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📉 Log Use</button>
     </div>
     <button id="fab-main" onclick="toggleFAB()" title="Quick actions"
-      style="width:54px;height:54px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.7rem;font-weight:400;cursor:pointer;box-shadow:0 6px 18px rgba(249,115,22,.45);display:flex;align-items:center;justify-content:center;line-height:1;transition:transform .2s">+</button>`;
+      style="width:54px;height:54px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.7rem;font-weight:400;cursor:pointer;box-shadow:0 6px 18px rgba(13,148,136,.45);display:flex;align-items:center;justify-content:center;line-height:1;transition:transform .2s">+</button>`;
   document.body.appendChild(fab);
 }
 
@@ -883,8 +883,8 @@ async function renderClientDashboard(el) {
           : `<button class="btn btn-primary btn-sm" style="width:100%" onclick="addAttentionItem('${h(i.sku)}','${h(i.item_name||i.sku)}',this)">Order Now</button>`}
       </div>`).join('')}
       ${pendingApproval > 0 ? `
-      <div style="flex:0 0 240px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px">
-        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ffedd5;color:#c2410c;display:inline-block;margin-bottom:6px">APPROVAL</div>
+      <div style="flex:0 0 240px;background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;padding:14px 16px">
+        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ccfbf1;color:#0f766e;display:inline-block;margin-bottom:6px">APPROVAL</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px">${pendingApproval} order${pendingApproval>1?'s':''} awaiting sign-off</div>
         <button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('approvals')">Review Now</button>
       </div>` : ''}
@@ -1230,7 +1230,7 @@ async function renderOpsDashboard(el) {
   const pipeline = [
     { key:'SUBMITTED',        label:'Submitted',    color:'#3b82f6' },
     { key:'ACKNOWLEDGED',     label:'To Pick',      color:'#8b5cf6' },
-    { key:'PICKED',           label:'Picked',       color:'#f97316' },
+    { key:'PICKED',           label:'Picked',       color:'#0d9488' },
     { key:'IN_SHIPMENT',      label:'In Transit',   color:'#06b6d4' },
     { key:'PARTIALLY_CLOSED', label:'Partial',      color:'#f59e0b' },
     { key:'CLOSED',           label:'Closed',       color:'#16a34a' },
@@ -1241,15 +1241,19 @@ async function renderOpsDashboard(el) {
   el.innerHTML = `
   <style>
     .ct-kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
-    .ct-kpi{background:#fff;border-radius:12px;padding:20px 18px;box-shadow:0 1px 4px rgba(0,0,0,.06);cursor:pointer;transition:box-shadow .18s,transform .15s;position:relative;border:1.5px solid var(--border)}
-    .ct-kpi:hover{box-shadow:0 4px 18px rgba(0,0,0,.1);transform:translateY(-1px);border-color:#c5cdd8}
-    .ct-kpi.ct-urgent{border-left:3px solid #dc2626;border-left-color:#dc2626}
-    .ct-kpi.ct-warn{border-left:3px solid #d97706}
-    .ct-kpi-dot{position:absolute;top:14px;right:14px;width:7px;height:7px;border-radius:50%}
-    .ct-kpi-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.9rem;margin-bottom:14px}
-    .ct-kpi-val{font-size:2rem;font-weight:900;line-height:1;letter-spacing:-.04em;margin-bottom:5px}
-    .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px}
-    .ct-kpi-sub{font-size:.74rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ct-kpi{position:relative;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px 15px 16px;cursor:pointer;overflow:hidden;text-align:left;font-family:inherit;transition:transform .16s cubic-bezier(.2,.7,.2,1),box-shadow .18s,border-color .15s}
+    .ct-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac,var(--primary));opacity:.22;transition:opacity .18s}
+    .ct-kpi:hover{transform:translateY(-3px);box-shadow:0 12px 26px -14px rgba(20,26,36,.28);border-color:var(--border-mid)}
+    .ct-kpi:hover::before{opacity:.95}
+    .ct-kpi.ct-flag{background:linear-gradient(180deg,var(--acbg,#f8fafc),var(--surface) 62%)}
+    .ct-kpi.ct-flag::before{opacity:1}
+    .ct-kpi-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;min-height:40px}
+    .ct-kpi-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;background:var(--acbg,#eef2f7)}
+    .ct-kpi-chip{font-size:.58rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:100px;background:var(--ac,var(--primary));color:#fff;white-space:nowrap}
+    .ct-kpi-val{font-size:1.85rem;font-weight:800;line-height:1;letter-spacing:-.03em;color:var(--navy);font-variant-numeric:tabular-nums}
+    .ct-kpi-val.flag{color:var(--acic,var(--navy))}
+    .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-top:9px}
+    .ct-kpi-sub{font-size:.72rem;color:var(--text-light);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .ct-card{background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;border:1px solid var(--border)}
     .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
     .ct-card-title{font-weight:700;color:var(--navy);font-size:.88rem}
@@ -1296,7 +1300,7 @@ async function renderOpsDashboard(el) {
     .tw-bars .capline{position:absolute;left:0;right:0;border-top:2px dashed #fca5a5}
     .tw-bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;height:100%}
     .tw-bar i{display:block;width:100%;border-radius:4px 4px 2px 2px;background:#33475f}
-    .tw-bar i.gho{background:repeating-linear-gradient(45deg,#f97316,#f97316 3px,transparent 3px,transparent 6px)}
+    .tw-bar i.gho{background:repeating-linear-gradient(45deg,#0d9488,#0d9488 3px,transparent 3px,transparent 6px)}
     .tw-bar i.over{background:#dc2626}
     .tw-bar .d{font-size:.58rem;font-weight:700;color:var(--text-muted)}
     .tw-bar .n{font-size:.6rem;font-weight:800;color:var(--text-muted)}
@@ -1351,53 +1355,33 @@ async function renderOpsDashboard(el) {
 
   <!-- ── KPI TILES ── -->
   <div class="ct-kpi-grid">
-
-    <div class="ct-kpi" onclick="navigate('orders')">
-      <div class="ct-kpi-icon" style="background:#e8f0fb">📦</div>
-      <div class="ct-kpi-val" style="color:var(--navy)">${totalOrders||0}</div>
-      <div class="ct-kpi-lbl">Total Orders</div>
-      <div class="ct-kpi-sub">${pendingOrders||0} active</div>
-    </div>
-
-    <div class="ct-kpi${pendingApproval>0?' ct-warn':''}" onclick="navigate('orders')">
-      ${pendingApproval>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
-      <div class="ct-kpi-icon" style="background:${pendingApproval>0?'#fef3c7':'#f3f4f6'}">⏳</div>
-      <div class="ct-kpi-val" style="color:${pendingApproval>0?'#d97706':'var(--navy)'}">${pendingApproval}</div>
-      <div class="ct-kpi-lbl">Pending Approval</div>
-      <div class="ct-kpi-sub">${pickedPending} picked · ${inShipment} transit</div>
-    </div>
-
-    <div class="ct-kpi${dueCount>0?' ct-urgent':''}" onclick="navigate('fulfilment')">
-      ${dueCount>0?`<div class="ct-kpi-dot" style="background:#dc2626"></div>`:''}
-      <div class="ct-kpi-icon" style="background:${dueCount>0?'#fee2e2':'#f3f4f6'}">🚨</div>
-      <div class="ct-kpi-val" style="color:${dueCount>0?'#dc2626':'var(--navy)'}">${dueCount}</div>
-      <div class="ct-kpi-lbl">Due Line Items</div>
-      <div class="ct-kpi-sub">${pendingSupply?.kpis?.due_qty||0} units overdue</div>
-    </div>
-
-    <div class="ct-kpi${pendingDCBilling>0?' ct-warn':''}" onclick="navigate('dc_billing')">
-      ${pendingDCBilling>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
-      <div class="ct-kpi-icon" style="background:${pendingDCBilling>0?'#fef3c7':'#f3f4f6'}">🧾</div>
-      <div class="ct-kpi-val" style="color:${pendingDCBilling>0?'#d97706':'var(--navy)'}">${pendingDCBilling||0}</div>
-      <div class="ct-kpi-lbl">Pending Billing</div>
-      <div class="ct-kpi-sub">DCs awaiting invoice</div>
-    </div>
-
-    <div class="ct-kpi${lowStock>0?' ct-warn':''}" onclick="navigate('inventory')">
-      ${lowStock>0?`<div class="ct-kpi-dot" style="background:#d97706"></div>`:''}
-      <div class="ct-kpi-icon" style="background:${lowStock>0?'#fef3c7':'#f3f4f6'}">📊</div>
-      <div class="ct-kpi-val" style="color:${lowStock>0?'#d97706':'var(--navy)'}">${lowStock||0}</div>
-      <div class="ct-kpi-lbl">Low Stock SKUs</div>
-      <div class="ct-kpi-sub">Reorder required</div>
-    </div>
-
-    <div class="ct-kpi" onclick="navigate('service_desk')">
-      <div class="ct-kpi-icon" style="background:#f3f4f6">🎫</div>
-      <div class="ct-kpi-val" style="color:var(--navy)">${openTickets||0}</div>
-      <div class="ct-kpi-lbl">Open Tickets</div>
-      <div class="ct-kpi-sub">Support queue</div>
-    </div>
-
+    ${(() => {
+      const TONE = {
+        teal:  { ac:'#0d9488', bg:'#f0fdfa', ic:'#0f766e' },
+        amber: { ac:'#d97706', bg:'#fffbeb', ic:'#b45309' },
+        red:   { ac:'#dc2626', bg:'#fef2f2', ic:'#dc2626' },
+        blue:  { ac:'#2563eb', bg:'#eef4ff', ic:'#2563eb' },
+      };
+      const tiles = [
+        { icon:'📦', label:'Total Orders',    value:totalOrders||0,     sub:`${pendingOrders||0} active`,                     tone:'teal',  nav:'orders' },
+        { icon:'⏳', label:'Pending Approval', value:pendingApproval||0,  sub:`${pickedPending} picked · ${inShipment} transit`, tone:'amber', nav:'orders',      flag:pendingApproval>0, chip:'Action' },
+        { icon:'🚨', label:'Due Line Items',   value:dueCount||0,         sub:`${pendingSupply?.kpis?.due_qty||0} units overdue`, tone:'red',  nav:'fulfilment',  flag:dueCount>0,        chip:'Overdue' },
+        { icon:'🧾', label:'Pending Billing',  value:pendingDCBilling||0, sub:'DCs awaiting invoice',                          tone:'amber', nav:'dc_billing',  flag:pendingDCBilling>0, chip:'To bill' },
+        { icon:'📊', label:'Low Stock SKUs',   value:lowStock||0,         sub:'reorder required',                              tone:'amber', nav:'inventory',   flag:lowStock>0,        chip:'Reorder' },
+        { icon:'🎫', label:'Open Tickets',     value:openTickets||0,      sub:'support queue',                                 tone:'blue',  nav:'service_desk' },
+      ];
+      return tiles.map(t => { const c = TONE[t.tone];
+        return `<button class="ct-kpi${t.flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="navigate('${t.nav}')">
+          <div class="ct-kpi-top">
+            <span class="ct-kpi-icon">${t.icon}</span>
+            ${t.flag && t.chip ? `<span class="ct-kpi-chip">${t.chip}</span>` : ''}
+          </div>
+          <div class="ct-kpi-val${t.flag?' flag':''}">${t.value}</div>
+          <div class="ct-kpi-lbl">${t.label}</div>
+          <div class="ct-kpi-sub">${t.sub}</div>
+        </button>`;
+      }).join('');
+    })()}
   </div>
 
   <!-- ── PREDICTIVE RADAR: horizon switch + pulse + radar + queue ── -->
@@ -1461,7 +1445,7 @@ async function renderOpsDashboard(el) {
         </div>
         <div style="padding:16px 20px">
           ${(topClients||[]).slice(0,5).map((c,i)=>{
-            const cols = ['#2E75B6','#8b5cf6','#f97316','#06b6d4','#f59e0b'];
+            const cols = ['#2E75B6','#8b5cf6','#0d9488','#06b6d4','#f59e0b'];
             const col  = cols[i];
             const pct  = Math.round((c.total/(topClients[0]?.total||1))*100);
             return `
@@ -1558,7 +1542,7 @@ async function renderOpsDashboard(el) {
 
   // Render chart after DOM is ready
   const labels = ['SUBMITTED','ACKNOWLEDGED','PICKED','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
-  const colors  = ['#3b82f6','#8b5cf6','#f97316','#06b6d4','#f59e0b','#16a34a','#ef4444'];
+  const colors  = ['#3b82f6','#8b5cf6','#0d9488','#06b6d4','#f59e0b','#16a34a','#ef4444'];
   const counts  = labels.map(l => byStatus[l]||0);
   const ctx = document.getElementById('statusChart');
   if (ctx) {
@@ -3082,7 +3066,7 @@ async function renderMyOrders(el) {
 
     const STATUS_LABEL = { DRAFT:'Draft', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
     const ORDER_STEPS = ['SUBMITTED','APPROVED','READY_TO_PICK','IN_SHIPMENT','CLOSED'];
-    const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#f97316', PICKED:'#f97316', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
+    const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
       let list = APP._moTab === 'All' ? orders : orders.filter(o => o.status === APP._moTab);
@@ -4836,7 +4820,7 @@ async function renderInventory(el) {
         : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:#059669">Active</span>';
       const checked   = APP._invSelected.has(item.sku);
       return `
-      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#fff7ed':''}" onclick="toggleInvDetail('${item.sku}',this)">
+      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" onclick="toggleInvDetail('${item.sku}',this)">
         <td onclick="event.stopPropagation()" style="width:34px;text-align:center">
           <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
@@ -4967,7 +4951,7 @@ async function renderInventory(el) {
   </div>
 
   <!-- Bulk action bar (appears when rows selected) -->
-  <div id="inv-bulk-bar" style="display:none;background:var(--primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(249,115,22,.3)">
+  <div id="inv-bulk-bar" style="display:none;background:var(--primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(13,148,136,.3)">
     <span id="inv-bulk-count" style="color:#fff;font-weight:800;font-size:.84rem"></span>
     <div style="flex:1"></div>
     <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('price')">✏️ Update Price</button>
@@ -5038,7 +5022,7 @@ async function renderInventory(el) {
   window.invToggleSelect = function(sku, cb) {
     if (cb.checked) APP._invSelected.add(sku); else APP._invSelected.delete(sku);
     const row = cb.closest('tr');
-    if (row) row.style.background = cb.checked ? '#fff7ed' : '';
+    if (row) row.style.background = cb.checked ? '#f0fdfa' : '';
     updateInvBulkBar();
   };
 
@@ -9035,7 +9019,7 @@ async function renderExecBI(el) {
       <span style="font-size:.8rem;color:var(--text-muted)">to</span>
       <input type="date" id="xbi-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.to}">
       <button class="btn btn-primary btn-sm" onclick="xbiApplyCustom()">Apply</button>
-      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#c2410c)">${_xbi.timeLabel}</b></span>
+      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#0f766e)">${_xbi.timeLabel}</b></span>
     </div>
   </div>
   <style>
@@ -9556,7 +9540,7 @@ async function loadReportsOverview() {
       </div>`;
     barsWrap.innerHTML = `<div style="width:100%">
       ${row('Received', received, 'var(--primary)')}
-      ${row('Processed', processed, '#fb923c')}
+      ${row('Processed', processed, '#2dd4bf')}
       ${row('Delivered', delivered, '#9ca3af')}
     </div>`;
   }
@@ -10576,7 +10560,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-chip.tra{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
     .dcal-chip.del{background:#d1fae5;color:#047857;border:1px solid #a7f3d0}
     .dcal-chip.ris{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
-    .dcal-chip.gho{background:var(--primary-light);color:#c2410c;border:1.5px dashed var(--primary-border)}
+    .dcal-chip.gho{background:var(--primary-light);color:#0f766e;border:1.5px dashed var(--primary-border)}
     .dcal-more{margin-top:3px;font-size:.6rem;color:var(--text-muted);font-weight:700}
     .dcal-rail-card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 13px;margin-bottom:12px}
     .dcal-rc-h{font-size:.63rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;gap:8px}
@@ -10588,7 +10572,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-rl .t{font-size:.76rem;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
     .dcal-rl .s{font-size:.65rem;color:var(--text-muted);display:block}
     .dcal-pill{font-size:.58rem;font-weight:800;padding:2px 7px;border-radius:20px;white-space:nowrap}
-    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}.dcal-pill.org{background:#ffedd5;color:#c2410c}
+    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}.dcal-pill.org{background:#ccfbf1;color:#0f766e}
     .dcal-vbtn{padding:6px 13px;font-size:.76rem;font-weight:700;border:1px solid var(--border);background:var(--surface);border-radius:20px;cursor:pointer;color:var(--text-muted)}
     .dcal-vbtn.on{background:var(--primary);border-color:var(--primary);color:#fff}
   </style>
@@ -10614,7 +10598,7 @@ async function renderDeliveryCalendar(el) {
       <option value="gho">Recurring (projected)</option>
     </select>
     <div style="margin-left:auto;display:flex;gap:12px;font-size:.72rem;color:var(--text-muted);flex-wrap:wrap">
-      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span><span style="color:#c2410c">◌ Projected</span>
+      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span><span style="color:#0f766e">◌ Projected</span>
     </div>
   </div>
   <div id="dcal-body">
