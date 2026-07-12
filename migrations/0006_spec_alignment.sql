@@ -19,9 +19,10 @@ ALTER TABLE inventory ADD COLUMN inv_location TEXT DEFAULT 'instock';
 ALTER TABLE inventory ADD COLUMN amazon_url TEXT DEFAULT '';
 ALTER TABLE inventory ADD COLUMN flipkart_url TEXT DEFAULT '';
 
--- Order items: unit of measure, MRP at time of order
+-- Order items: unit of measure, MRP at time of order, product category snapshot
 ALTER TABLE order_items ADD COLUMN uom TEXT DEFAULT 'unit';
 ALTER TABLE order_items ADD COLUMN mrp REAL DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN category TEXT DEFAULT '';
 
 -- Staff master (delivery staff, order entry, viewers)
 CREATE TABLE IF NOT EXISTS staff (
