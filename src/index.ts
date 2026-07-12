@@ -1066,10 +1066,13 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   return json({sku}, 201);
 }
 
+let _criticalTableReady = false;
 async function ensureCriticalTable(env: Env): Promise<void> {
+  if (_criticalTableReady) return;
   await env.DB.prepare(
     `CREATE TABLE IF NOT EXISTS critical_skus (sku TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')))`
   ).run();
+  _criticalTableReady = true;
 }
 
 async function getCriticalSet(env: Env): Promise<Set<string>> {

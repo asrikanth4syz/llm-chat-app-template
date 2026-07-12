@@ -4888,66 +4888,7 @@ async function renderInventory(el) {
           <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" onclick="toggleCritical('${item.sku}',this)">${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
       </tr>
-      <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff">
-        <td colspan="14" style="padding:0">
-          <div style="padding:16px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;border-top:2px solid var(--primary)">
-
-            <!-- 1. Product Identification -->
-            <div>
-              <div style="font-size:.72rem;font-weight:800;color:var(--primary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Product Identification</div>
-              ${invDetailRow('SKU', item.sku)}
-              ${invDetailRow('Name', item.name)}
-              ${invDetailRow('Brand', item.brand||'—')}
-              ${invDetailRow('Category', item.category)}
-              ${invDetailRow('Sub-Category', item.sub_category||'Normal')}
-              ${invDetailRow('Emoji / Icon', item.emoji||'📦')}
-              ${invDetailRow('Barcode', item.barcode||'—')}
-            </div>
-
-            <!-- 2. Packing Details -->
-            <div>
-              <div style="font-size:.72rem;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Packing Details</div>
-              ${invDetailRow('UOM', item.uom||'unit')}
-              ${invDetailRow('Pack Size', item.pack_size||1)}
-              ${invDetailRow('Units / Case', item.units_per_case||1)}
-              ${invDetailRow('Weight (grams)', item.weight_grams||'—')}
-              ${invDetailRow('HSN Code', item.hsn_code||'—')}
-              ${invDetailRow('Expiry Date', item.expiry_date||'—')}
-              ${invDetailRow('Location', item.inv_location||'instock')}
-            </div>
-
-            <!-- 3. Pricing -->
-            <div>
-              <div style="font-size:.72rem;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Pricing</div>
-              ${invDetailRow('Unit Price (Selling)', fmt(item.unit_price))}
-              ${invDetailRow('MRP', item.mrp?fmt(item.mrp):'—')}
-              ${invDetailRow('Cost Excl GST', item.cost_excl_gst?fmt(item.cost_excl_gst):'—')}
-              ${invDetailRow('GST Rate', (item.gst_rate||18)+'%')}
-              ${invDetailRow('Margin %', item.margin_pct?item.margin_pct+'%':'—')}
-              ${invDetailRow('Amazon URL', item.amazon_url?`<a href="${item.amazon_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
-              ${invDetailRow('Flipkart URL', item.flipkart_url?`<a href="${item.flipkart_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
-            </div>
-
-            <!-- 4. Vendor Information -->
-            <div>
-              <div style="font-size:.72rem;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
-              ${invDetailRow('Primary Vendor', item.vendor_name||'—')}
-              ${invDetailRow('Secondary Vendor', item.secondary_vendor_name||'—')}
-              ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
-              ${invDetailRow('Lead Time (days)', item.vendor_lead_days||3)}
-              ${invDetailRow('MOQ', item.vendor_moq||1)}
-              ${invDetailRow('Reorder Level', item.reorder_level)}
-              ${invDetailRow('Max Stock', item.max_stock||200)}
-              ${invDetailRow('Reserved', item.reserved||0)}
-            </div>
-          </div>
-          <div style="padding:8px 20px 14px;display:flex;gap:8px;border-top:1px solid var(--border)">
-            <button class="btn btn-primary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit All Fields</button>
-            <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">Stock History</button>
-            <button class="btn btn-gold btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">Raise PO</button>
-          </div>
-        </td>
-      </tr>`;
+      <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff"><td colspan="14" style="padding:0"></td></tr>`;
     }).join('');
   }
 
@@ -5161,13 +5102,74 @@ function invDetailRow(label, value) {
   </div>`;
 }
 
+// Build the 4-section detail panel on demand (lazy — keeps the table light)
+function invDetailHTML(item) {
+  const safeName = (item.name||'').replace(/'/g,"\\'");
+  return `<div style="padding:16px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;border-top:2px solid var(--primary)">
+      <div>
+        <div style="font-size:.72rem;font-weight:800;color:var(--primary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Product Identification</div>
+        ${invDetailRow('SKU', item.sku)}
+        ${invDetailRow('Name', item.name)}
+        ${invDetailRow('Brand', item.brand||'—')}
+        ${invDetailRow('Category', item.category)}
+        ${invDetailRow('Sub-Category', item.sub_category||'Normal')}
+        ${invDetailRow('Emoji / Icon', item.emoji||'📦')}
+        ${invDetailRow('Barcode', item.barcode||'—')}
+      </div>
+      <div>
+        <div style="font-size:.72rem;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Packing Details</div>
+        ${invDetailRow('UOM', item.uom||'unit')}
+        ${invDetailRow('Pack Size', item.pack_size||1)}
+        ${invDetailRow('Units / Case', item.units_per_case||1)}
+        ${invDetailRow('Weight (grams)', item.weight_grams||'—')}
+        ${invDetailRow('HSN Code', item.hsn_code||'—')}
+        ${invDetailRow('Expiry Date', item.expiry_date||'—')}
+        ${invDetailRow('Location', item.inv_location||'instock')}
+      </div>
+      <div>
+        <div style="font-size:.72rem;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Pricing</div>
+        ${invDetailRow('Unit Price (Selling)', fmt(item.unit_price))}
+        ${invDetailRow('MRP', item.mrp?fmt(item.mrp):'—')}
+        ${invDetailRow('Cost Excl GST', item.cost_excl_gst?fmt(item.cost_excl_gst):'—')}
+        ${invDetailRow('GST Rate', (item.gst_rate||18)+'%')}
+        ${invDetailRow('Margin %', item.margin_pct?item.margin_pct+'%':'—')}
+        ${invDetailRow('Amazon URL', item.amazon_url?`<a href="${item.amazon_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
+        ${invDetailRow('Flipkart URL', item.flipkart_url?`<a href="${item.flipkart_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
+      </div>
+      <div>
+        <div style="font-size:.72rem;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
+        ${invDetailRow('Primary Vendor', item.vendor_name||'—')}
+        ${invDetailRow('Secondary Vendor', item.secondary_vendor_name||'—')}
+        ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
+        ${invDetailRow('Lead Time (days)', item.vendor_lead_days||3)}
+        ${invDetailRow('MOQ', item.vendor_moq||1)}
+        ${invDetailRow('Reorder Level', item.reorder_level)}
+        ${invDetailRow('Max Stock', item.max_stock||200)}
+        ${invDetailRow('Reserved', item.reserved||0)}
+      </div>
+    </div>
+    <div style="padding:8px 20px 14px;display:flex;gap:8px;border-top:1px solid var(--border)">
+      <button class="btn btn-primary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit All Fields</button>
+      <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">Stock History</button>
+      <button class="btn btn-gold btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">Raise PO</button>
+    </div>`;
+}
+
 function toggleInvDetail(sku, row) {
   const detailRow = document.getElementById('inv-detail-' + sku);
   if (!detailRow) return;
   const isOpen = detailRow.style.display !== 'none';
   // close all open detail rows
   document.querySelectorAll('[id^="inv-detail-"]').forEach(r => { r.style.display = 'none'; });
-  if (!isOpen) detailRow.style.display = '';
+  if (!isOpen) {
+    // Build the panel the first time it's opened
+    const cell = detailRow.firstElementChild;
+    if (cell && !cell.innerHTML) {
+      const item = (typeof _invCache !== 'undefined' && _invCache[sku]) ? _invCache[sku] : null;
+      if (item) cell.innerHTML = invDetailHTML(item);
+    }
+    detailRow.style.display = '';
+  }
 }
 
 async function viewStockHistory(sku, itemName) {
