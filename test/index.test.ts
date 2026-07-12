@@ -71,11 +71,24 @@ beforeAll(async () => {
       .map(s => s.replace(/--[^\n]*/g, "").trim())
       .filter(s => /^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP)\s/i.test(s));
     for (const stmt of stmts) {
-      await db.prepare(stmt).run().catch((e: unknown) => {
-        const msg = String(e);
-        // Ignore expected re-run errors; throw everything else
-        if (!msg.includes("duplicate column") && !msg.includes("already exists") && !msg.includes("UNIQUE constraint")) throw e;
-      });
+      // The local D1 simulator occasionally throws a transient "internal error"
+      // during cold-start replay — retry a few times before giving up.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await db.prepare(stmt).run();
+          break;
+        } catch (e: unknown) {
+          const msg = String(e);
+          // Ignore expected re-run errors
+          if (msg.includes("duplicate column") || msg.includes("already exists") || msg.includes("UNIQUE constraint")) break;
+          // Retry transient simulator faults
+          if (msg.includes("internal error") && attempt < 4) {
+            await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+            continue;
+          }
+          throw e;
+        }
+      }
     }
   }
 
