@@ -29,16 +29,16 @@
     .login-bg-grid {
       position: absolute; inset: 0;
       background-image:
-        linear-gradient(rgba(249,115,22,.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(249,115,22,.05) 1px, transparent 1px);
+        linear-gradient(rgba(13,148,136,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(13,148,136,.05) 1px, transparent 1px);
       background-size: 52px 52px;
     }
     .login-blob {
       position: absolute; border-radius: 50%; filter: blur(100px); pointer-events: none;
     }
-    .blob1 { width: 650px; height: 650px; background: rgba(249,115,22,.18); top: -160px; left: -80px; animation: blobFloat1 14s ease-in-out infinite; }
+    .blob1 { width: 650px; height: 650px; background: rgba(13,148,136,.18); top: -160px; left: -80px; animation: blobFloat1 14s ease-in-out infinite; }
     .blob2 { width: 450px; height: 450px; background: rgba(99,102,241,.14); bottom: -100px; left: 300px; animation: blobFloat2 18s ease-in-out infinite; }
-    .blob3 { width: 300px; height: 300px; background: rgba(249,115,22,.08); top: 50%; left: 45%; animation: blobFloat3 20s ease-in-out infinite; }
+    .blob3 { width: 300px; height: 300px; background: rgba(13,148,136,.08); top: 50%; left: 45%; animation: blobFloat3 20s ease-in-out infinite; }
     @keyframes blobFloat1 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(40px,30px)} }
     @keyframes blobFloat2 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-30px,-40px)} }
     @keyframes blobFloat3 { 0%,100%{transform:translate(0,-50%)} 50%{transform:translate(20px,calc(-50% + 20px))} }
@@ -79,30 +79,30 @@
     .brand-logo {
       display: flex; align-items: center; gap: 14px; margin-bottom: 36px;
     }
-    .brand-logo svg { filter: drop-shadow(0 0 20px rgba(249,115,22,.5)); }
+    .brand-logo svg { filter: drop-shadow(0 0 20px rgba(13,148,136,.5)); }
     .brand-name { font-size: 1.5rem; font-weight: 800; color: white; letter-spacing: -.03em; }
     .brand-sub { font-size: .75rem; color: rgba(255,255,255,.4); margin-top: 2px; letter-spacing: .08em; text-transform: uppercase; }
-    .brand-sub strong { color: #fb923c; }
+    .brand-sub strong { color: #2dd4bf; }
 
     /* Live badge */
     .live-badge {
       display: inline-flex; align-items: center; gap: 8px;
-      background: rgba(249,115,22,.1);
-      border: 1px solid rgba(249,115,22,.25);
+      background: rgba(13,148,136,.1);
+      border: 1px solid rgba(13,148,136,.25);
       border-radius: 100px;
       padding: 5px 14px 5px 10px;
       font-size: .7rem; font-weight: 600;
-      color: #fb923c;
+      color: #2dd4bf;
       letter-spacing: .06em;
       text-transform: uppercase;
       margin-bottom: 22px;
     }
     .live-dot {
-      width: 7px; height: 7px; background: #f97316; border-radius: 50%;
+      width: 7px; height: 7px; background: #0f766e; border-radius: 50%;
       animation: livePulse 2s ease-in-out infinite;
-      box-shadow: 0 0 6px #f97316;
+      box-shadow: 0 0 6px #0f766e;
     }
-    @keyframes livePulse { 0%,100%{opacity:1;box-shadow:0 0 6px #f97316} 50%{opacity:.4;box-shadow:0 0 2px #f97316} }
+    @keyframes livePulse { 0%,100%{opacity:1;box-shadow:0 0 6px #0f766e} 50%{opacity:.4;box-shadow:0 0 2px #0f766e} }
 
     /* Headline */
     .login-hero h2 {
@@ -111,7 +111,7 @@
       margin-bottom: 14px; color: #fff;
     }
     .login-hero h2 .grad {
-      background: linear-gradient(135deg, #f97316 0%, #fb923c 40%, #fbbf24 100%);
+      background: linear-gradient(135deg, #0f766e 0%, #2dd4bf 40%, #fbbf24 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
       background-clip: text;
     }
@@ -125,11 +125,11 @@
     .lf-item { display: flex; align-items: center; gap: 10px; font-size: .83rem; color: rgba(255,255,255,.75); font-weight: 500; }
     .lf-icon {
       width: 20px; height: 20px;
-      background: rgba(249,115,22,.15);
-      border: 1px solid rgba(249,115,22,.3);
+      background: rgba(13,148,136,.15);
+      border: 1px solid rgba(13,148,136,.3);
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; font-size: .65rem; color: #f97316; font-weight: 800;
+      flex-shrink: 0; font-size: .65rem; color: #0f766e; font-weight: 800;
     }
 
     /* Demo CTA */
@@ -149,18 +149,18 @@
     .btn-watch-demo:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); }
     .play-circle {
       width: 30px; height: 30px;
-      background: #f97316;
+      background: #0f766e;
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
-      box-shadow: 0 0 16px rgba(249,115,22,.5);
+      box-shadow: 0 0 16px rgba(13,148,136,.5);
     }
 
     /* Stats */
     .login-stats { display: flex; gap: 0; border-top: 1px solid rgba(255,255,255,.08); padding-top: 28px; }
     .ls-stat { flex: 1; text-align: center; padding: 0 8px; border-right: 1px solid rgba(255,255,255,.07); }
     .ls-stat:last-child { border-right: none; }
-    .ls-num { font-size: 1.7rem; font-weight: 900; color: #f97316; letter-spacing: -.03em; }
+    .ls-num { font-size: 1.7rem; font-weight: 900; color: #0f766e; letter-spacing: -.03em; }
     .ls-label { font-size: .66rem; color: rgba(255,255,255,.38); margin-top: 2px; text-transform: uppercase; letter-spacing: .08em; }
 
     /* ── MOCK UI PREVIEW (inside left panel) ─────────── */
@@ -179,9 +179,9 @@
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,.1);
       box-shadow:
-        0 0 0 1px rgba(249,115,22,.1),
+        0 0 0 1px rgba(13,148,136,.1),
         0 30px 80px rgba(0,0,0,.6),
-        0 0 60px rgba(249,115,22,.1);
+        0 0 60px rgba(13,148,136,.1);
       overflow: hidden;
       font-size: .6rem;
     }
@@ -202,10 +202,10 @@
       display: flex; align-items: center; gap: 5px;
       padding: 0 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); margin-bottom: 6px;
     }
-    .pf-sb-icon { width: 16px; height: 16px; background: #f97316; border-radius: 4px; flex-shrink: 0; }
+    .pf-sb-icon { width: 16px; height: 16px; background: #0f766e; border-radius: 4px; flex-shrink: 0; }
     .pf-sb-name { font-size: .55rem; font-weight: 800; color: #fff; }
     .pf-nav { padding: 4px 8px; font-size: .55rem; color: rgba(255,255,255,.35); display: flex; align-items: center; gap: 4px; }
-    .pf-nav.active { color: #fb923c; background: rgba(249,115,22,.1); border-left: 2px solid #f97316; font-weight: 700; }
+    .pf-nav.active { color: #2dd4bf; background: rgba(13,148,136,.1); border-left: 2px solid #0f766e; font-weight: 700; }
     .pf-main { flex: 1; background: #eef2fa; overflow: hidden; }
     .pf-topbar {
       background: #fff; padding: 6px 8px;
@@ -217,7 +217,7 @@
       padding: 2px 6px; border-radius: 10px;
       font-size: .52rem; font-weight: 700;
     }
-    .pf-tag-o { background: #fff7ed; color: #c2410c; }
+    .pf-tag-o { background: #f0fdfa; color: #115e59; }
     .pf-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; padding: 6px; }
     .pf-kpi { background: #fff; border-radius: 6px; padding: 5px 6px; border: 1px solid #e8edf7; }
     .pf-kpi-v { font-size: .75rem; font-weight: 900; color: #0f2040; }
@@ -240,7 +240,7 @@
       background: #fff;
       border-radius: 10px;
       padding: 8px 12px;
-      box-shadow: 0 8px 28px rgba(0,0,0,.25), 0 0 0 1px rgba(249,115,22,.1);
+      box-shadow: 0 8px 28px rgba(0,0,0,.25), 0 0 0 1px rgba(13,148,136,.1);
       display: flex; align-items: center; gap: 8px;
       z-index: 10;
       animation: chipFloat 4s ease-in-out infinite;
@@ -252,11 +252,11 @@
     .chip-num  { font-size: .95rem; font-weight: 900; color: #0f2040; }
     .chip-lbl  { font-size: .56rem; color: #8896b0; margin-top: 1px; }
     .chip-pill {
-      background: linear-gradient(135deg, #f97316, #fb923c);
+      background: linear-gradient(135deg, #0f766e, #2dd4bf);
       color: #fff;
       border-radius: 10px;
       padding: 8px 12px;
-      box-shadow: 0 8px 24px rgba(249,115,22,.4);
+      box-shadow: 0 8px 24px rgba(13,148,136,.4);
       animation-delay: -1s;
     }
     .chip-pill .chip-num { color: #fff; font-size: .8rem; }
@@ -279,7 +279,7 @@
       content: '';
       position: absolute;
       inset: 0;
-      background: linear-gradient(180deg, rgba(249,115,22,.04) 0%, transparent 60%);
+      background: linear-gradient(180deg, rgba(13,148,136,.04) 0%, transparent 60%);
       pointer-events: none;
     }
     .login-card {
@@ -295,7 +295,7 @@
       content: '';
       position: absolute; top: 0; left: 50%; transform: translateX(-50%);
       width: 60px; height: 3px;
-      background: linear-gradient(90deg, #f97316, #fb923c);
+      background: linear-gradient(90deg, #0f766e, #2dd4bf);
       border-radius: 0 0 4px 4px;
     }
     .login-card h3 { font-size: 1.35rem; font-weight: 800; color: #0f2040; margin-bottom: 3px; letter-spacing: -.02em; }
@@ -303,9 +303,9 @@
 
     .demo-banner {
       display: flex; align-items: center; gap: 8px;
-      background: #fff7ed; border: 1px solid #fed7aa;
+      background: #f0fdfa; border: 1px solid #99f6e4;
       border-radius: 8px; padding: 9px 12px; margin-bottom: 18px;
-      font-size: .78rem; color: #c2410c; font-weight: 500;
+      font-size: .78rem; color: #115e59; font-weight: 500;
     }
     .form-group { margin-bottom: 13px; }
     .form-group label { display: block; font-size: .78rem; font-weight: 600; color: #374151; margin-bottom: 5px; }
@@ -317,7 +317,7 @@
       background: #fff; outline: none; transition: border-color .2s, box-shadow .2s;
     }
     .form-group input:focus, .form-group select:focus {
-      border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,.12);
+      border-color: #0f766e; box-shadow: 0 0 0 3px rgba(13,148,136,.12);
     }
     .input-wrap { position: relative; }
     .input-wrap input { padding-right: 40px; }
@@ -333,26 +333,26 @@
       border: 1.5px solid #e2e8f0; border-radius: 9px; outline: none;
       font-family: 'Inter', system-ui, sans-serif;
     }
-    .otp-input:focus { border-color: #f97316; }
+    .otp-input:focus { border-color: #0f766e; }
     .otp-hint { font-size: .75rem; color: #94a3b8; margin-top: 6px; }
     .btn-login {
       width: 100%; padding: 12px;
-      background: linear-gradient(135deg, #f97316, #ea6d12);
+      background: linear-gradient(135deg, #0f766e, #115e59);
       color: white; border: none;
       border-radius: 10px; font-size: .9rem; font-weight: 700;
       cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
       transition: all .2s; margin-top: 8px;
-      box-shadow: 0 6px 20px rgba(249,115,22,.35);
+      box-shadow: 0 6px 20px rgba(13,148,136,.35);
       font-family: 'Inter', system-ui, sans-serif;
     }
-    .btn-login:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(249,115,22,.45); }
+    .btn-login:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(13,148,136,.45); }
     .btn-login:active { transform: translateY(0); }
     .login-footer-links {
       display: flex; align-items: center; gap: 8px; justify-content: center;
       margin-top: 16px; font-size: .76rem;
     }
     .login-footer-links a { color: #64748b; text-decoration: none; }
-    .login-footer-links a:hover { color: #f97316; }
+    .login-footer-links a:hover { color: #0f766e; }
     .login-footer-links span { color: #cbd5e1; }
     .login-clients { margin-top: 20px; padding-top: 18px; border-top: 1px solid #f1f5f9; }
     .login-clients p { font-size: .72rem; color: #94a3b8; margin-bottom: 10px; text-align: center; font-weight: 500; }
@@ -381,7 +381,7 @@
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,.1);
       overflow: hidden;
-      box-shadow: 0 40px 120px rgba(0,0,0,.8), 0 0 0 1px rgba(249,115,22,.1);
+      box-shadow: 0 40px 120px rgba(0,0,0,.8), 0 0 0 1px rgba(13,148,136,.1);
       transform: scale(.94) translateY(16px);
       transition: transform .35s ease;
       position: relative;
@@ -423,12 +423,12 @@
       white-space: nowrap;
       transition: all .2s;
     }
-    .demo-tab.active { color: #fb923c; border-bottom-color: #f97316; }
+    .demo-tab.active { color: #2dd4bf; border-bottom-color: #0f766e; }
 
     /* Progress bar */
     .demo-progress { height: 2px; background: rgba(255,255,255,.06); position: relative; }
     .demo-progress-fill {
-      height: 100%; background: linear-gradient(90deg, #f97316, #fbbf24);
+      height: 100%; background: linear-gradient(90deg, #0f766e, #fbbf24);
       border-radius: 2px; transition: width 6s linear;
       width: 0%;
     }
@@ -449,7 +449,7 @@
     }
     .slide-label {
       font-size: .68rem; font-weight: 700;
-      color: #fb923c; text-transform: uppercase; letter-spacing: .1em;
+      color: #2dd4bf; text-transform: uppercase; letter-spacing: .1em;
       margin-bottom: 8px;
     }
     .slide-title { font-size: 1.4rem; font-weight: 900; color: #fff; letter-spacing: -.02em; margin-bottom: 6px; }
@@ -472,7 +472,7 @@
     .ss-title { font-size: .75rem; font-weight: 800; color: #0f2040; }
     .ss-tags  { display: flex; gap: 5px; }
     .ss-tag   { padding: 2px 8px; border-radius: 10px; font-size: .62rem; font-weight: 700; }
-    .ss-tag-o { background: #fff7ed; color: #c2410c; }
+    .ss-tag-o { background: #f0fdfa; color: #115e59; }
     .ss-tag-g { background: #f0fdf4; color: #15803d; }
     .ss-tag-b { background: #eff6ff; color: #2563eb; }
     .ss-body  { padding: 12px; }
@@ -548,16 +548,16 @@
       color: rgba(255,255,255,.6);
     }
     .btn-next {
-      background: linear-gradient(135deg, #f97316, #ea6d12);
+      background: linear-gradient(135deg, #0f766e, #115e59);
       color: #fff;
-      box-shadow: 0 4px 14px rgba(249,115,22,.35);
+      box-shadow: 0 4px 14px rgba(13,148,136,.35);
     }
-    .btn-next:hover { box-shadow: 0 6px 20px rgba(249,115,22,.5); transform: translateY(-1px); }
+    .btn-next:hover { box-shadow: 0 6px 20px rgba(13,148,136,.5); transform: translateY(-1px); }
     .demo-step-info { font-size: .72rem; color: rgba(255,255,255,.3); }
 
     /* Animated typing cursor */
     @keyframes typing { 0%,100%{opacity:1} 50%{opacity:0} }
-    .cursor { display: inline-block; width: 2px; height: 1em; background: #f97316; margin-left: 2px; animation: typing 1s infinite; vertical-align: text-bottom; }
+    .cursor { display: inline-block; width: 2px; height: 1em; background: #0f766e; margin-left: 2px; animation: typing 1s infinite; vertical-align: text-bottom; }
 
     /* ── RESPONSIVE BREAKPOINTS ──────────────────────── */
 
@@ -643,10 +643,10 @@
         <!-- Brand -->
         <div class="brand-logo">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="#f97316"/>
+            <rect width="48" height="48" rx="12" fill="#0f766e"/>
             <path d="M12 28C12 22 17 16 24 14C31 16 36 22 36 28" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="24" cy="30" r="6" fill="white"/>
-            <path d="M20 30L22 32L28 26" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 30L22 32L28 26" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             <rect x="18" y="34" width="12" height="3" rx="1.5" fill="white" opacity="0.5"/>
           </svg>
           <div>
@@ -834,9 +834,9 @@
     <div class="demo-modal-header">
       <div class="demo-modal-title">
         <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
-          <rect width="48" height="48" rx="10" fill="#f97316"/>
+          <rect width="48" height="48" rx="10" fill="#0f766e"/>
           <circle cx="24" cy="24" r="8" fill="white"/>
-          <path d="M21 20l7 4-7 4V20z" fill="#f97316"/>
+          <path d="M21 20l7 4-7 4V20z" fill="#0f766e"/>
         </svg>
         Smart Pantry — Product Demo
         <span style="font-size:.65rem;font-weight:500;color:rgba(255,255,255,.4);margin-left:4px">5 feature highlights</span>
@@ -965,7 +965,7 @@
               </div>
               <div class="ss-bar-row" style="padding:4px 10px">
                 <div class="ss-bar-meta"><span><b>Dettol Hygiene</b></span><span style="color:#d97706">72.3%</span></div>
-                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:72%;background:#f97316"></div></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:72%;background:#0f766e"></div></div>
               </div>
               <div class="ss-bar-row" style="padding:4px 10px 8px">
                 <div class="ss-bar-meta"><span><b>Generic Office</b></span><span style="color:#dc2626">58.0%</span></div>
@@ -1013,7 +1013,7 @@
               </div>
               <div class="route-stat-col">
                 <div class="route-stat"><div class="rv" style="color:#16a34a">2.1h</div><div class="rl">Avg Delivery</div></div>
-                <div class="route-stat"><div class="rv" style="color:#f97316">8</div><div class="rl">Routes Today</div></div>
+                <div class="route-stat"><div class="rv" style="color:#0f766e">8</div><div class="rl">Routes Today</div></div>
                 <div class="route-stat"><div class="rv">₹5.8L</div><div class="rl">GMV Delivered</div></div>
               </div>
             </div>
@@ -1042,19 +1042,19 @@
               <div class="ss-thead" style="grid-template-columns:2fr 1fr 1fr 1fr"><span>Vendor</span><span>Fill Rate</span><span>Lead Days</span><span>Rating</span></div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Amul Beverages Ltd</div><div class="ss-sub">Beverage · Mumbai</div></div>
-                <div class="ss-val" style="color:#16a34a">98.4%</div><div class="ss-val">1.5d</div><div class="ss-val" style="color:#f97316">★ 4.9</div>
+                <div class="ss-val" style="color:#16a34a">98.4%</div><div class="ss-val">1.5d</div><div class="ss-val" style="color:#0f766e">★ 4.9</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">ITC Stationery</div><div class="ss-sub">Stationery · Delhi</div></div>
-                <div class="ss-val" style="color:#16a34a">94.1%</div><div class="ss-val">2.0d</div><div class="ss-val" style="color:#f97316">★ 4.6</div>
+                <div class="ss-val" style="color:#16a34a">94.1%</div><div class="ss-val">2.0d</div><div class="ss-val" style="color:#0f766e">★ 4.6</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Dettol Hygiene Products</div><div class="ss-sub">Hygiene · Pune</div></div>
-                <div class="ss-val" style="color:#d97706">72.3%</div><div class="ss-val">3.5d</div><div class="ss-val" style="color:#f97316">★ 3.8</div>
+                <div class="ss-val" style="color:#d97706">72.3%</div><div class="ss-val">3.5d</div><div class="ss-val" style="color:#0f766e">★ 3.8</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Generic Office Supplies</div><div class="ss-sub">Stationery · Chennai</div></div>
-                <div class="ss-val" style="color:#dc2626">58.0%</div><div class="ss-val">4.2d</div><div class="ss-val" style="color:#f97316">★ 3.2</div>
+                <div class="ss-val" style="color:#dc2626">58.0%</div><div class="ss-val">4.2d</div><div class="ss-val" style="color:#0f766e">★ 3.2</div>
               </div>
             </div>
           </div>
@@ -1086,10 +1086,10 @@
       <div class="sidebar-brand">
         <div class="sb-logo">
           <svg width="30" height="30" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="10" fill="#f97316"/>
+            <rect width="48" height="48" rx="10" fill="#0f766e"/>
             <path d="M12 28C12 22 17 16 24 14C31 16 36 22 36 28" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
             <circle cx="24" cy="30" r="6" fill="white"/>
-            <path d="M20 30L22 32L28 26" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 30L22 32L28 26" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </div>
         <div class="sb-titles">
