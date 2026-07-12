@@ -66,7 +66,7 @@ const NAV = {
     { id:'clients',         label:'Clients',          icon:iconClients,   badge:null },
     { id:'service_desk',    label:'Service Desk',     icon:iconDesk,      badge:null },
     { id:'approval_chains', label:'Approval Chains',  icon:iconApprove,   badge:null },
-    { section:'Analytics' },
+    { section:'Insights' },
     { id:'exec_bi',         label:'Executive BI',     icon:iconDashboard, badge:null },
     { id:'reports',         label:'Reports & BI',     icon:iconReports,   badge:null },
     { id:'sla_dashboard',   label:'SLA Dashboard',    icon:iconDashboard, badge:'!' },
@@ -82,7 +82,6 @@ const NAV = {
     { id:'staff',               label:'Staff',            icon:iconUsers,    badge:null },
     { id:'porter_expenses',     label:'Porter Expenses',  icon:iconBilling,  badge:null },
     { id:'users',               label:'Users & Roles',    icon:iconUsers,    badge:null },
-    { id:'settings',            label:'Settings',         icon:iconSettings, badge:null },
   ],
   ops: [
     { section:'Operations' },
@@ -138,7 +137,7 @@ const NAV = {
     { id:'client_budget',  label:'Budget & Spend', icon:iconReports,   badge:null },
     { section:'Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
-    { section:'Analytics' },
+    { section:'Insights' },
     { id:'client_reports', label:'Executive',       icon:iconReports,   badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
@@ -356,6 +355,12 @@ function initApp() {
   document.getElementById('user-role').textContent = u.org;
   document.getElementById('user-avatar').textContent = u.initials;
   document.getElementById('topbar-avatar').textContent = u.initials;
+  // header profile menu
+  setText('topbar-profile-name', (u.name||'').split(' ')[0]);
+  setText('pm-avatar', u.initials); setText('pm-name', u.name); setText('pm-role', u.org);
+  // Settings lives under the profile menu; only roles with the page see it
+  const settingsItem = document.getElementById('pm-settings');
+  if (settingsItem) settingsItem.style.display = (PAGE_MAP.settings && ['super_admin','ops_admin'].includes(u.role)) ? '' : 'none';
   buildNav();
   navigate(getDefaultPage());
   loadNotifications();
@@ -363,7 +368,60 @@ function initApp() {
 
   document.addEventListener('click', e => {
     if (!e.target.closest('.search-bar')) hideSearchResults();
+    if (!e.target.closest('.tb-pop-wrap')) closeTbMenus();
   });
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||'')) && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault(); document.getElementById('global-search')?.focus();
+    }
+    if (e.key === 'Escape') closeTbMenus();
+  });
+}
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+/* ── Header: Quick actions + Profile menu ── */
+function closeTbMenus() {
+  document.getElementById('quick-menu')?.classList.add('hidden');
+  document.getElementById('profile-menu')?.classList.add('hidden');
+}
+function toggleProfileMenu(e) {
+  if (e) e.stopPropagation();
+  const m = document.getElementById('profile-menu'); if (!m) return;
+  const open = m.classList.contains('hidden');
+  closeTbMenus();
+  if (open) m.classList.remove('hidden');
+}
+function toggleQuickActions(e) {
+  if (e) e.stopPropagation();
+  const m = document.getElementById('quick-menu'); if (!m) return;
+  const open = m.classList.contains('hidden');
+  closeTbMenus();
+  if (!open) return;
+  m.innerHTML = quickActionItems().map(a =>
+    `<button class="tb-menu-item" onclick="closeTbMenus();${a.action}">
+      <span class="tb-qa-ic">${a.icon}</span><span><span class="tb-qa-t">${a.label}</span><span class="tb-qa-s">${a.sub}</span></span></button>`).join('')
+    || '<div class="tb-menu-empty">No quick actions for your role.</div>';
+  m.classList.remove('hidden');
+}
+function quickActionItems() {
+  const nav = APP.user?.nav;
+  if (['client','client_user','approver'].includes(nav)) return [
+    { icon:'🛒', label:'Place order', sub:'browse the catalogue', action:"navigate('place_order')" },
+    { icon:'📋', label:'Upload order sheet', sub:'export &amp; import quantities', action:"navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" },
+    { icon:'📉', label:'Log use', sub:'record consumption', action:"navigate('my_inventory')" },
+  ];
+  if (nav === 'vendor' || nav === 'vendor_user') return [
+    { icon:'📦', label:'View purchase orders', sub:'respond to POs', action:"navigate('vendor_pos')" },
+    { icon:'🧾', label:'Invoices', sub:'raise &amp; track', action:"navigate('vendor_invoices')" },
+  ];
+  // admin / ops / procurement / warehouse / finance
+  const items = [
+    { icon:'📅', label:'Delivery calendar', sub:'plan &amp; reschedule', action:"navigate('delivery_calendar')" },
+    { icon:'📦', label:'Add product', sub:'to the catalogue', action:"navigate('inventory')" },
+    { icon:'🏢', label:'Onboard client', sub:'new organisation', action:"navigate('clients')" },
+    { icon:'🎫', label:'New ticket', sub:'service desk', action:"navigate('service_desk')" },
+  ];
+  return items.filter(a => { const id = (a.action.match(/navigate\('([^']+)'\)/)||[])[1]; return !id || PAGE_MAP[id]; });
 }
 
 // ── Global Search (Gap 10) ─────────────────────────────────

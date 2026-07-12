@@ -298,6 +298,37 @@ button { font-family: var(--font); cursor: pointer; }
 .notif-badge { position: absolute; top: -4px; right: -4px; width: 15px; height: 15px; background: var(--danger); color: white; border-radius: 50%; font-size: .6rem; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--surface); }
 .topbar-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #fb923c); color: white; font-weight: 800; font-size: .7rem; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; box-shadow: 0 2px 8px rgba(249,115,22,.35); }
 
+/* Search shortcut hint */
+.search-kbd { font-family: var(--font-mono, ui-monospace, monospace); font-size: .66rem; color: var(--text-light); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; line-height: 1.5; flex-shrink: 0; }
+
+/* Header pop wrappers (quick actions + profile) */
+.tb-pop-wrap { position: relative; }
+.tb-quick { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: var(--radius-sm); border: 1px solid var(--primary); background: var(--primary); color: #fff; font-weight: 700; font-size: .8rem; cursor: pointer; font-family: var(--font); white-space: nowrap; transition: background .14s; }
+.tb-quick:hover { background: var(--primary-hover, #ea6d12); }
+.tb-quick svg { flex-shrink: 0; }
+@media (max-width: 720px) { .tb-quick-label { display: none; } .tb-quick { padding: 0 9px; } }
+
+.topbar-profile-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 3px 10px 3px 3px; border: 1px solid var(--border); background: var(--surface); border-radius: 100px; cursor: pointer; font-family: var(--font); font-size: .8rem; font-weight: 700; color: var(--text); transition: border-color .14s; }
+.topbar-profile-btn:hover { border-color: var(--border-mid); }
+.tb-profile-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 720px) { .tb-profile-name { display: none; } .topbar-profile-btn { padding: 3px; border-radius: 50%; } }
+
+/* Header dropdown menus */
+.tb-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 232px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); z-index: 250; padding: 6px; }
+.tb-menu.hidden { display: none; }
+.tb-menu-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.tb-menu-name { font-weight: 800; font-size: .84rem; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-menu-sub { font-size: .72rem; color: var(--text-muted); }
+.tb-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: none; border-radius: 8px; padding: 9px 10px; font-size: .84rem; font-weight: 600; color: var(--text); cursor: pointer; font-family: var(--font); }
+.tb-menu-item:hover { background: var(--bg); }
+.tb-menu-item svg { color: var(--text-muted); flex-shrink: 0; }
+.tb-menu-item.danger { color: var(--danger); } .tb-menu-item.danger svg { color: var(--danger); }
+.tb-menu-div { height: 1px; background: var(--border); margin: 6px 0; }
+.tb-menu-empty { padding: 12px; text-align: center; color: var(--text-muted); font-size: .8rem; }
+.tb-qa-ic { width: 28px; height: 28px; border-radius: 8px; background: var(--bg); display: flex; align-items: center; justify-content: center; font-size: .95rem; flex-shrink: 0; }
+.tb-qa-t { display: block; font-weight: 700; color: var(--text); }
+.tb-qa-s { display: block; font-size: .7rem; font-weight: 500; color: var(--text-muted); }
+
 /* Notification panel */
 .notif-panel { position: absolute; top: var(--topbar-h); right: 14px; width: 340px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); z-index: 200; overflow: hidden; }
 .notif-header { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; border-bottom: 1px solid var(--border); }
