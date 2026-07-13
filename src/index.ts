@@ -221,6 +221,10 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tower_snapshots (
       day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS kpi_daily (
+      day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* ignore */ }
   for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
@@ -2357,6 +2361,34 @@ async function handleReadAllNotifications(request: Request, env: Env): Promise<R
 // DASHBOARD
 // ════════════════════════════════════════════════════════════════════
 
+// Record today's KPI snapshot (first write of the day wins, so intraday reloads
+// don't erase the morning baseline) and return the delta of each current value
+// vs the most recent prior day. Returns null keys until history exists.
+type KpiDiff = { prev: number; delta: number };
+async function recordKpiSnapshotAndDiff(
+  env: Env, kpis: Record<string, number>
+): Promise<Record<string, KpiDiff> | null> {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const prevRow = await env.DB.prepare(
+      "SELECT day, data FROM kpi_daily WHERE day < ? ORDER BY day DESC LIMIT 1"
+    ).bind(today).first() as Record<string, string> | null;
+
+    // First write of the day wins; ignore if today's row already exists.
+    await env.DB.prepare("INSERT OR IGNORE INTO kpi_daily (day, data) VALUES (?, ?)")
+      .bind(today, JSON.stringify(kpis)).run();
+
+    if (!prevRow?.data) return null;
+    let prev: Record<string, number>;
+    try { prev = JSON.parse(prevRow.data); } catch { return null; }
+    const out: Record<string, KpiDiff> = {};
+    for (const k of Object.keys(kpis)) {
+      if (typeof prev[k] === "number") out[k] = { prev: prev[k], delta: kpis[k] - prev[k] };
+    }
+    return out;
+  } catch { return null; }
+}
+
 async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -2395,22 +2427,40 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     return json({vendor, pendingPOs});
   }
 
-  const [totalOrders, pendingOrders, lowStock, pendingDCBilling, openTickets, {results:recentOrders}, {results:ordersByStatus}, {results:topClients}] = await Promise.all([
+  const [totalOrders, pendingOrders, lowStock, pendingDCBilling, openTickets, dueItems, {results:recentOrders}, {results:ordersByStatus}, {results:topClients}] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) as cnt FROM orders").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM orders WHERE status NOT IN ('CLOSED','CANCELLED')").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM inventory WHERE stock<=reorder_level AND active=1").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM delivery_challans WHERE status='DELIVERED' AND billed=0").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM tickets WHERE status!='RESOLVED'").first() as Promise<Record<string,number>>,
+    // Due line items: undelivered order lines across open orders (same rule as consolidated-due)
+    env.DB.prepare(`SELECT COUNT(*) as cnt FROM order_items oi JOIN orders o ON oi.order_id=o.id
+      WHERE o.status NOT IN ('CANCELLED','CLOSED','DRAFT')
+        AND oi.qty > COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci
+          JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)`).first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT o.id,o.status,o.grand_total,o.created_at,c.name as client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id ORDER BY o.created_at DESC LIMIT 8").all(),
     env.DB.prepare("SELECT status,COUNT(*) as cnt FROM orders GROUP BY status").all(),
     env.DB.prepare("SELECT c.id,c.name,SUM(o.grand_total) as total,COUNT(o.id) as order_count FROM orders o JOIN clients c ON o.client_id=c.id WHERE o.status NOT IN ('CANCELLED') GROUP BY c.id ORDER BY total DESC LIMIT 5").all(),
   ]);
 
+  const byStatus: Record<string,number> = {};
+  (ordersByStatus as Record<string,number>[]).forEach(r => { byStatus[String(r.status)] = Number(r.cnt); });
+
+  const kpis = {
+    totalOrders:    (totalOrders as Record<string,number>).cnt,
+    pendingApproval: byStatus['PENDING_APPROVAL'] || 0,
+    dueItems:       (dueItems as Record<string,number>).cnt,
+    pendingBilling: (pendingDCBilling as Record<string,number>).cnt,
+    lowStock:       (lowStock as Record<string,number>).cnt,
+    openTickets:    (openTickets as Record<string,number>).cnt,
+  };
+  const kpiTrends = await recordKpiSnapshotAndDiff(env, kpis);
+
   return json({
-    totalOrders: (totalOrders as Record<string,number>).cnt, pendingOrders: (pendingOrders as Record<string,number>).cnt,
-    lowStock: (lowStock as Record<string,number>).cnt, pendingDCBilling: (pendingDCBilling as Record<string,number>).cnt,
-    openTickets: (openTickets as Record<string,number>).cnt,
-    recentOrders, ordersByStatus, topClients,
+    totalOrders: kpis.totalOrders, pendingOrders: (pendingOrders as Record<string,number>).cnt,
+    lowStock: kpis.lowStock, pendingDCBilling: kpis.pendingBilling,
+    openTickets: kpis.openTickets, dueItems: kpis.dueItems,
+    recentOrders, ordersByStatus, topClients, kpiTrends,
   });
 }
 

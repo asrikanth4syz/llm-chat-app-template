@@ -749,7 +749,36 @@ function closeNotifications() {
 
 // ── Helpers ────────────────────────────────────────────────
 function fmt(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
+function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
 function pct(n) { return (+(n || 0)).toFixed(1) + '%'; }
+
+// Line icons for Control Tower KPI tiles (stroke paths, 24×24 viewBox)
+const CT_ICON = {
+  box:    '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+  clock:  '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  alert:  '<path d="M12 3l9 16H3l9-16z"/><path d="M12 10v4"/><path d="M12 17h.01"/>',
+  receipt:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6"/><path d="M9 12h6"/>',
+  bars:   '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M20 20H3"/>',
+  life:   '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4"/><path d="M5 5l4.2 4.2M14.8 14.8L19 19M19 5l-4.2 4.2M9.2 14.8L5 19"/>',
+};
+
+// Trend delta for a KPI tile. Colour follows whether the move is good/bad for
+// THAT metric (goodDir), not the raw direction. Small bases show an absolute
+// change instead of a noisy percentage. Renders nothing until history exists.
+function ctDelta(trends, key, goodDir) {
+  const t = trends && trends[key];
+  if (!t || typeof t.delta !== 'number') return '';
+  const UP = '<path d="M6 15l6-6 6 6"/>', DOWN = '<path d="M6 9l6 6 6-6"/>', FLAT = '<path d="M5 12h14"/>';
+  if (t.delta === 0)
+    return `<div class="ct-delta flat"><svg viewBox="0 0 24 24">${FLAT}</svg>0 <span class="ct-win">vs yesterday</span></div>`;
+  const dir = t.delta > 0 ? 'up' : 'down';
+  const sense = dir === goodDir ? 'good' : 'bad';
+  const small = Math.abs(t.prev) < 10;
+  const mag = small
+    ? (t.delta > 0 ? '+' : '−') + Math.abs(t.delta)
+    : Math.round(Math.abs(t.delta) / t.prev * 100) + '%';
+  return `<div class="ct-delta ${sense}"><svg viewBox="0 0 24 24">${dir === 'up' ? UP : DOWN}</svg>${mag} <span class="ct-win">vs yesterday</span></div>`;
+}
 function timeAgo(iso) {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
@@ -1282,18 +1311,24 @@ async function renderOpsDashboard(el) {
   <style>
     .ct-kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
     .ct-kpi{position:relative;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px 15px 16px;cursor:pointer;overflow:hidden;text-align:left;font-family:inherit;transition:transform .16s cubic-bezier(.2,.7,.2,1),box-shadow .18s,border-color .15s}
-    .ct-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac,var(--primary));opacity:.22;transition:opacity .18s}
+    .ct-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac,var(--primary));opacity:.4;transition:opacity .18s}
     .ct-kpi:hover{transform:translateY(-3px);box-shadow:0 12px 26px -14px rgba(20,26,36,.28);border-color:var(--border-mid)}
     .ct-kpi:hover::before{opacity:.95}
+    .ct-kpi:focus-visible{outline:2px solid var(--ac,var(--primary));outline-offset:2px}
     .ct-kpi.ct-flag{background:linear-gradient(180deg,var(--acbg,#f8fafc),var(--surface) 62%)}
     .ct-kpi.ct-flag::before{opacity:1}
     .ct-kpi-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;min-height:40px}
-    .ct-kpi-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;background:var(--acbg,#eef2f7)}
+    .ct-kpi-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;background:var(--acbg,#eef2f7);color:var(--acic,var(--navy))}
+    .ct-kpi-icon svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
     .ct-kpi-chip{font-size:.58rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:100px;background:var(--ac,var(--primary));color:#fff;white-space:nowrap}
     .ct-kpi-val{font-size:1.85rem;font-weight:800;line-height:1;letter-spacing:-.03em;color:var(--navy);font-variant-numeric:tabular-nums}
     .ct-kpi-val.flag{color:var(--acic,var(--navy))}
     .ct-kpi-lbl{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-top:9px}
     .ct-kpi-sub{font-size:.72rem;color:var(--text-light);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ct-delta{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:800;font-variant-numeric:tabular-nums;margin-top:11px}
+    .ct-delta.good{color:var(--success)}.ct-delta.bad{color:var(--danger)}.ct-delta.flat{color:var(--text-muted)}
+    .ct-delta svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+    .ct-delta .ct-win{color:var(--text-muted);font-weight:600}
     .ct-card{background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;border:1px solid var(--border)}
     .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
     .ct-card-title{font-weight:700;color:var(--navy);font-size:.88rem}
@@ -1397,28 +1432,30 @@ async function renderOpsDashboard(el) {
   <div class="ct-kpi-grid">
     ${(() => {
       const TONE = {
-        teal:  { ac:'#0d9488', bg:'#f0fdfa', ic:'#0f766e' },
-        amber: { ac:'#d97706', bg:'#fffbeb', ic:'#b45309' },
-        red:   { ac:'#dc2626', bg:'#fef2f2', ic:'#dc2626' },
-        blue:  { ac:'#2563eb', bg:'#eef4ff', ic:'#2563eb' },
+        calm: { ac:'#0d9488', bg:'#f0fdfa', ic:'#0f766e' },
+        warn: { ac:'#d97706', bg:'#fffbeb', ic:'#b45309' },
+        crit: { ac:'#dc2626', bg:'#fef2f2', ic:'#dc2626' },
+        info: { ac:'#2563eb', bg:'#eef4ff', ic:'#2563eb' },
       };
+      const trends = data.kpiTrends || null;
       const tiles = [
-        { icon:'📦', label:'Total Orders',    value:totalOrders||0,     sub:`${pendingOrders||0} active`,                     tone:'teal',  nav:'orders' },
-        { icon:'⏳', label:'Pending Approval', value:pendingApproval||0,  sub:`${pickedPending} picked · ${inShipment} transit`, tone:'amber', nav:'orders', click:'openPendingApprovals()', flag:pendingApproval>0, chip:'Action' },
-        { icon:'🚨', label:'Due Line Items',   value:dueCount||0,         sub:`${pendingSupply?.kpis?.due_qty||0} units overdue`, tone:'red',  nav:'fulfilment',  flag:dueCount>0,        chip:'Overdue' },
-        { icon:'🧾', label:'Pending Billing',  value:pendingDCBilling||0, sub:'DCs awaiting invoice',                          tone:'amber', nav:'dc_billing',  flag:pendingDCBilling>0, chip:'To bill' },
-        { icon:'📊', label:'Low Stock SKUs',   value:lowStock||0,         sub:'reorder required',                              tone:'amber', nav:'inventory',   flag:lowStock>0,        chip:'Reorder' },
-        { icon:'🎫', label:'Open Tickets',     value:openTickets||0,      sub:'support queue',                                 tone:'blue',  nav:'service_desk' },
+        { icon:CT_ICON.box,     label:'Total Orders',    value:totalOrders||0,     meta:`${pendingOrders||0} active`,                     state:'calm',                       nav:'orders',       trend:'totalOrders',    good:'up' },
+        { icon:CT_ICON.clock,   label:'Pending Approval', value:pendingApproval||0, meta:`${pickedPending} picked · ${inShipment} transit`, state:pendingApproval>0?'warn':'calm', nav:'orders', click:'openPendingApprovals()', pill:pendingApproval>0?'Action':null, trend:'pendingApproval', good:'down' },
+        { icon:CT_ICON.alert,   label:'Due Line Items',   value:dueCount||0,        meta:`${pendingSupply?.kpis?.due_qty||0} units overdue`, state:dueCount>0?'crit':'calm', nav:'fulfilment', pill:dueCount>0?'Overdue':null,  trend:'dueItems',       good:'down' },
+        { icon:CT_ICON.receipt, label:'Pending Billing',  value:pendingDCBilling||0,meta:'DCs awaiting invoice',                          state:pendingDCBilling>0?'warn':'calm', nav:'dc_billing', pill:pendingDCBilling>0?'To bill':null, trend:'pendingBilling', good:'down' },
+        { icon:CT_ICON.bars,    label:'Low Stock SKUs',   value:lowStock||0,        meta:'reorder required',                              state:lowStock>0?'warn':'calm', nav:'inventory',  pill:lowStock>0?'Reorder':null,  trend:'lowStock',       good:'down' },
+        { icon:CT_ICON.life,    label:'Open Tickets',     value:openTickets||0,     meta:'support queue',                                 state:'info',                       nav:'service_desk', trend:'openTickets',    good:'down' },
       ];
-      return tiles.map(t => { const c = TONE[t.tone];
-        return `<button class="ct-kpi${t.flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="${t.click||`navigate('${t.nav}')`}">
+      return tiles.map(t => { const c = TONE[t.state]; const flag = t.state==='warn'||t.state==='crit';
+        return `<button class="ct-kpi${flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="${t.click||`navigate('${t.nav}')`}">
           <div class="ct-kpi-top">
-            <span class="ct-kpi-icon">${t.icon}</span>
-            ${t.flag && t.chip ? `<span class="ct-kpi-chip">${t.chip}</span>` : ''}
+            <span class="ct-kpi-icon"><svg viewBox="0 0 24 24">${t.icon}</svg></span>
+            ${t.pill ? `<span class="ct-kpi-chip">${t.pill}</span>` : ''}
           </div>
-          <div class="ct-kpi-val${t.flag?' flag':''}">${t.value}</div>
+          <div class="ct-kpi-val${flag?' flag':''}">${fmtNum(t.value)}</div>
           <div class="ct-kpi-lbl">${t.label}</div>
-          <div class="ct-kpi-sub">${t.sub}</div>
+          <div class="ct-kpi-sub">${t.meta}</div>
+          ${ctDelta(trends, t.trend, t.good)}
         </button>`;
       }).join('');
     })()}
