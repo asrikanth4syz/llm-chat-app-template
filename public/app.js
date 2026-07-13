@@ -3815,7 +3815,13 @@ async function renderOrderQueue(el) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
     const active = fOrders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status));
     const byS = s => fOrders.filter(o=>o.status===s);
-    const needsAction  = byS('SUBMITTED').length + byS('PENDING_APPROVAL').length + byS('APPROVED').length;
+    const nSubmitted = byS('SUBMITTED').length, nPending = byS('PENDING_APPROVAL').length, nApproved = byS('APPROVED').length;
+    const needsAction  = nSubmitted + nPending + nApproved;
+    const needsBreakdown = [
+      nSubmitted && `${nSubmitted} submitted`,
+      nPending   && `${nPending} pending`,
+      nApproved  && `${nApproved} approved`,
+    ].filter(Boolean).join(' · ') || 'all clear';
     const inShipment   = byS('IN_SHIPMENT').length + byS('PARTIALLY_CLOSED').length;
     const toPick       = byS('ACKNOWLEDGED').length + byS('READY_TO_PICK').length;
     const totalValue   = active.reduce((s,o)=>s+(o.grand_total||0),0);
@@ -3835,7 +3841,7 @@ async function renderOrderQueue(el) {
       <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('PENDING_APPROVAL')">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Needs Attention</div>
         <div style="font-size:1.9rem;font-weight:700;color:${needsAction?'#d97706':'var(--navy)'};line-height:1">${needsAction}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${byS('PENDING_APPROVAL').length} pending approval</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${needsBreakdown}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid #8b5cf6;margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('IN_SHIPMENT')">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Shipment</div>
