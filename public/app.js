@@ -4824,6 +4824,7 @@ async function renderInventory(el) {
   APP._invSearch = '';
   APP._invSort = APP._invSort || { col: null, dir: 1 };
   APP._invSelected = new Set();
+  APP._invShowAll = false;
 
   const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
   const lowStock = inv.filter(i => i.stock <= i.reorder_level);
@@ -4844,6 +4845,26 @@ async function renderInventory(el) {
       });
     }
     return items;
+  }
+
+  // Render window: cap DOM rows for large catalogues; KPIs, filters, search,
+  // sort and bulk-select all still operate over the full filtered set.
+  const INV_ROW_CAP = 200;
+
+  function renderInvBody() {
+    const filtered = getFiltered();
+    const capped = !APP._invShowAll && filtered.length > INV_ROW_CAP;
+    const shown = capped ? filtered.slice(0, INV_ROW_CAP) : filtered;
+    let html = invTableRows(shown);
+    if (filtered.length === 0) {
+      html = `<tr><td colspan="14" style="padding:28px;text-align:center;color:var(--text-muted)">No items match your filters.</td></tr>`;
+    } else if (capped) {
+      html += `<tr><td colspan="14" style="padding:12px 16px;text-align:center;background:#f8fafc;color:var(--text-muted);font-size:.82rem">
+        Showing first <b>${INV_ROW_CAP}</b> of <b>${filtered.length}</b> items — refine your search or category to narrow down,
+        or <button class="btn btn-secondary btn-sm" style="margin-left:6px" onclick="APP._invShowAll=true;refreshInvTable()">Show all ${filtered.length}</button>
+      </td></tr>`;
+    }
+    document.getElementById('inv-tbody').innerHTML = html;
   }
 
   function invTableRows(items) {
@@ -4921,7 +4942,7 @@ async function renderInventory(el) {
   <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
     <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
       style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
-      oninput="APP._invSearch=this.value.toLowerCase();refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+      oninput="APP._invSearch=this.value.toLowerCase();APP._invShowAll=false;refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
     <div id="inv-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
       ${cats.map(c=>{
         const active = APP._invFilter===c;
@@ -4955,7 +4976,7 @@ async function renderInventory(el) {
               ? `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="invSortBy('${col}')">${label} <span data-sort-arrow="${col}" style="font-size:.65rem;opacity:.5">⇅</span></th>`
               : `<th>${label}</th>`).join('')}
         </tr></thead>
-        <tbody id="inv-tbody">${invTableRows(getFiltered())}</tbody>
+        <tbody id="inv-tbody"></tbody>
       </table>
     </div>
   </div>`;
@@ -4986,9 +5007,10 @@ async function renderInventory(el) {
   })();
 
   window.refreshInvTable = function() {
-    document.getElementById('inv-tbody').innerHTML = invTableRows(getFiltered());
+    renderInvBody();
     updateInvBulkBar();
   };
+  renderInvBody(); // initial paint
 
   function updateInvBulkBar() {
     const bar = document.getElementById('inv-bulk-bar');
@@ -5071,6 +5093,7 @@ async function renderInventory(el) {
 
   window.invFilterCat = function(cat) {
     APP._invFilter = cat;
+    APP._invShowAll = false;
     document.querySelectorAll('#inv-filter-bar [data-inv-cat]').forEach(b => {
       const active = b.dataset.invCat === cat;
       b.style.background = active ? 'var(--blue)' : '#fff';
@@ -5083,6 +5106,7 @@ async function renderInventory(el) {
 
   window.invFilterSubCat = function(sub) {
     APP._invSubFilter = sub;
+    APP._invShowAll = false;
     document.querySelectorAll('#inv-filter-bar [data-inv-sub]').forEach(b => {
       const active = b.dataset.invSub === sub;
       const isHealthy = b.dataset.invSub === 'Healthy';
