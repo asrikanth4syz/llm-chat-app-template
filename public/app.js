@@ -1404,14 +1404,14 @@ async function renderOpsDashboard(el) {
       };
       const tiles = [
         { icon:'📦', label:'Total Orders',    value:totalOrders||0,     sub:`${pendingOrders||0} active`,                     tone:'teal',  nav:'orders' },
-        { icon:'⏳', label:'Pending Approval', value:pendingApproval||0,  sub:`${pickedPending} picked · ${inShipment} transit`, tone:'amber', nav:'orders',      flag:pendingApproval>0, chip:'Action' },
+        { icon:'⏳', label:'Pending Approval', value:pendingApproval||0,  sub:`${pickedPending} picked · ${inShipment} transit`, tone:'amber', nav:'orders', click:'openPendingApprovals()', flag:pendingApproval>0, chip:'Action' },
         { icon:'🚨', label:'Due Line Items',   value:dueCount||0,         sub:`${pendingSupply?.kpis?.due_qty||0} units overdue`, tone:'red',  nav:'fulfilment',  flag:dueCount>0,        chip:'Overdue' },
         { icon:'🧾', label:'Pending Billing',  value:pendingDCBilling||0, sub:'DCs awaiting invoice',                          tone:'amber', nav:'dc_billing',  flag:pendingDCBilling>0, chip:'To bill' },
         { icon:'📊', label:'Low Stock SKUs',   value:lowStock||0,         sub:'reorder required',                              tone:'amber', nav:'inventory',   flag:lowStock>0,        chip:'Reorder' },
         { icon:'🎫', label:'Open Tickets',     value:openTickets||0,      sub:'support queue',                                 tone:'blue',  nav:'service_desk' },
       ];
       return tiles.map(t => { const c = TONE[t.tone];
-        return `<button class="ct-kpi${t.flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="navigate('${t.nav}')">
+        return `<button class="ct-kpi${t.flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="${t.click||`navigate('${t.nav}')`}">
           <div class="ct-kpi-top">
             <span class="ct-kpi-icon">${t.icon}</span>
             ${t.flag && t.chip ? `<span class="ct-kpi-chip">${t.chip}</span>` : ''}
@@ -1531,7 +1531,7 @@ async function renderOpsDashboard(el) {
       </div>
       <div style="padding:12px 14px">
         ${[
-          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders'      },
+          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', click:'openPendingApprovals()' },
           { label:'Due Line Items',     val:dueCount,          color:'var(--danger)', bg:'#fee2e2', icon:'🚨', page:'fulfilment' },
           { label:'Overdue Deliveries', val:delayedDel,        color:'var(--danger)', bg:'#fee2e2', icon:'🚚', page:'delivery'   },
           { label:'Orders to Pick',     val:toPickCount,       color:'#8b5cf6', bg:'#f3e8ff', icon:'🏭', page:'warehouse'   },
@@ -1540,7 +1540,7 @@ async function renderOpsDashboard(el) {
           { label:'Open Tickets',       val:openTickets||0,    color:'#7c3aed', bg:'#f3e8ff', icon:'🎫', page:'service_desk' },
         ].map(a => {
           const hot = a.val > 0;
-          return `<div class="ct-action${hot?' hot':''}" onclick="navigate('${a.page}')">
+          return `<div class="ct-action${hot?' hot':''}" onclick="${a.click||`navigate('${a.page}')`}">
             <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'}">${a.icon}</div>
             <div style="flex:1;min-width:0">
               <div style="font-size:.82rem;font-weight:${hot?'600':'500'};color:${hot?'var(--text)':'var(--text-muted)'}">${a.label}</div>
@@ -4015,6 +4015,22 @@ function switchOQTab(tab) {
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
   if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(tab);
+}
+
+// Deep-link into the Orders queue focused on all pending-approval orders,
+// clearing the default current-month filter so nothing is hidden by month.
+// Keeps the Control Tower's all-time approval count in sync with what the
+// user actually sees when they click through.
+function openPendingApprovals() {
+  navigate('orders');
+  setTimeout(() => {
+    try {
+      APP._oqMonthInit = true;   // prevent render from re-defaulting to this month
+      oqSetMonth('');            // all time
+      switchOQMainTab('orders');
+      switchOQTab('PENDING_APPROVAL');
+    } catch (_) { /* orders view not ready */ }
+  }, 350);
 }
 
 function oqFilterByType(type) {
