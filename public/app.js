@@ -8545,13 +8545,22 @@ function clientFormFields(prefix, c={}) {
       <label>Map Location <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(paste Google Maps link, or lat,lng e.g. 12.9716,77.5946)</span></label>
       <input type="text" id="${prefix}-mappin" value="${c.map_pin||''}" placeholder="https://maps.google.com/... or 12.9716,77.5946">
     </div>
-    <div class="form-group">
-      <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 15 letters/digits, e.g. 29ABCDE1234F1Z5)</span></label>
-      <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1Z5"
-        maxlength="15" autocapitalize="characters" spellcheck="false"
-        style="text-transform:uppercase;letter-spacing:.04em"
-        oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,15)">
-      <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+    <div class="grid-2">
+      <div class="form-group">
+        <label>PAN <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 10 chars, e.g. ABCDE1234F)</span></label>
+        <input type="text" id="${prefix}-pan" value="${c.pan||''}" placeholder="ABCDE1234F"
+          maxlength="10" spellcheck="false" style="text-transform:uppercase;letter-spacing:.04em"
+          oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,10)">
+        <div id="${prefix}-pan-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+      </div>
+      <div class="form-group">
+        <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 15-char GSTIN)</span></label>
+        <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1Z5"
+          maxlength="15" autocapitalize="characters" spellcheck="false"
+          style="text-transform:uppercase;letter-spacing:.04em"
+          oninput="onGstInput('${prefix}',this)">
+        <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+      </div>
     </div>
     <div class="grid-2">
       <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="${prefix}-budget" value="${c.monthly_budget||500000}"></div>
@@ -8559,20 +8568,53 @@ function clientFormFields(prefix, c={}) {
     </div>`;
 }
 
-// GSTIN is optional; when provided it must be exactly 15 letters/digits.
-// Returns { ok, value } — value is normalised (upper-case, trimmed) or ''.
-function readGstin(prefix) {
-  const el = document.getElementById(prefix + '-gstin');
-  const msg = document.getElementById(prefix + '-gstin-msg');
-  const v = (el?.value || '').trim().toUpperCase();
-  if (v === '') { if (msg) msg.textContent = ''; return { ok: true, value: '' }; }
-  if (!/^[0-9A-Z]{15}$/.test(v)) {
-    if (msg) { msg.textContent = `GST number must be exactly 15 letters/digits (${v.length}/15).`; msg.style.color = 'var(--danger)'; }
-    if (el) el.style.borderColor = 'var(--danger)';
-    return { ok: false, value: v };
+// Canonical formats. PAN: 5 letters + 4 digits + 1 letter. GSTIN: 2-digit state
+// code + PAN + entity digit + 'Z' + checksum. The GSTIN embeds the PAN at 3–12.
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+function taxMsg(prefix, field, text) {
+  const el = document.getElementById(prefix + '-' + field);
+  const msg = document.getElementById(prefix + '-' + field + '-msg');
+  if (msg) { msg.textContent = text || ''; msg.style.color = text ? 'var(--danger)' : ''; }
+  if (el) el.style.borderColor = text ? 'var(--danger)' : 'var(--border)';
+}
+
+// Live GST input: sanitise, and auto-fill PAN from the GSTIN when PAN is empty.
+function onGstInput(prefix, el) {
+  el.value = el.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 15);
+  if (GSTIN_RE.test(el.value)) {
+    const panEl = document.getElementById(prefix + '-pan');
+    if (panEl && !panEl.value.trim()) panEl.value = el.value.slice(2, 12);
   }
-  if (msg) msg.textContent = '';
-  return { ok: true, value: v };
+}
+
+// Read + validate the client's PAN and GSTIN together. Both optional; when
+// present each must match its format, and a present pair must agree.
+// Returns { ok, gstin, pan } with normalised values.
+function readTaxIds(prefix) {
+  const pan = (document.getElementById(prefix + '-pan')?.value || '').trim().toUpperCase();
+  const gstin = (document.getElementById(prefix + '-gstin')?.value || '').trim().toUpperCase();
+  taxMsg(prefix, 'pan', ''); taxMsg(prefix, 'gstin', '');
+
+  if (pan && !PAN_RE.test(pan)) {
+    taxMsg(prefix, 'pan', 'PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F).');
+    return { ok: false };
+  }
+  if (gstin && !GSTIN_RE.test(gstin)) {
+    taxMsg(prefix, 'gstin', 'Enter a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5).');
+    return { ok: false };
+  }
+  let finalPan = pan;
+  if (gstin) {
+    const embedded = gstin.slice(2, 12);
+    if (pan && pan !== embedded) {
+      taxMsg(prefix, 'gstin', 'GST number does not match the PAN (PAN is chars 3–12 of the GSTIN).');
+      return { ok: false };
+    }
+    finalPan = pan || embedded;
+  }
+  return { ok: true, gstin, pan: finalPan };
 }
 
 function addClientModal() {
@@ -8594,9 +8636,9 @@ async function saveClient() {
     approval_threshold: +document.getElementById('cl-threshold').value,
   };
   if (!body.name) { showToast('Company name required','error'); return; }
-  const gst = readGstin('cl');
-  if (!gst.ok) { showToast('GST number must be exactly 15 letters/digits','error'); return; }
-  body.gstin = gst.value;
+  const tax = readTaxIds('cl');
+  if (!tax.ok) { showToast('Check the PAN / GST number','error'); return; }
+  body.gstin = tax.gstin; body.pan = tax.pan;
   const res = await api('/clients', { method:'POST', body: JSON.stringify(body) });
   if (!res) return;
   closeModal();
@@ -8622,6 +8664,7 @@ function viewClientModal(c) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${c.pan||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Health Score</div><div style="font-weight:700;color:${hColor}">★ ${c.health_score||0}/100</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div><div style="font-weight:600">${fmt(c.monthly_budget)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Approval Threshold</div><div style="font-weight:600">${fmt(c.approval_threshold)}</div></div>
@@ -8653,9 +8696,9 @@ async function saveEditClient(id) {
     approval_threshold: +document.getElementById('ecl-threshold').value,
   };
   if (!body.name) { showToast('Company name required','error'); return; }
-  const gst = readGstin('ecl');
-  if (!gst.ok) { showToast('GST number must be exactly 15 letters/digits','error'); return; }
-  body.gstin = gst.value;
+  const tax = readTaxIds('ecl');
+  if (!tax.ok) { showToast('Check the PAN / GST number','error'); return; }
+  body.gstin = tax.gstin; body.pan = tax.pan;
   const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast('Client updated'); navigate('clients'); }
 }
