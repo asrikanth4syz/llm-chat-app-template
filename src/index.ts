@@ -257,6 +257,20 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
   } catch { /* column already exists */ }
+  try {
+    await env.DB.prepare("ALTER TABLE clients ADD COLUMN gstin TEXT").run();
+  } catch { /* column already exists */ }
+}
+
+// GSTIN is optional; when supplied it must be exactly 15 letters/digits.
+// Returns the normalised (upper-cased, trimmed) value, or an error string.
+function normalizeGstin(raw: unknown): { gstin: string | null; error?: string } {
+  if (raw === undefined || raw === null) return { gstin: null };
+  const v = String(raw).trim().toUpperCase();
+  if (v === "") return { gstin: null };
+  if (!/^[0-9A-Z]{15}$/.test(v))
+    return { gstin: null, error: "GST number must be exactly 15 letters/digits" };
+  return { gstin: v };
 }
 
 export default {
@@ -1933,9 +1947,11 @@ async function handleAddClient(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
+  const { gstin, error: gstErr } = normalizeGstin(body.gstin);
+  if (gstErr) return json({ error: gstErr }, 400);
   const id = `c${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin,address) VALUES (?,?,?,?,?,?,?,?,?,?)")
-    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'',body.address||'').run();
+  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin,address,gstin) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'',body.address||'',gstin).run();
   await audit(env, user, "CREATE", "client", id, undefined, body.name as string);
   return json({id}, 201);
 }
@@ -1971,6 +1987,11 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   if (body.contact_phone      !== undefined) { fields.push("contact_phone=?");      vals.push(body.contact_phone||''); }
   if (body.map_pin            !== undefined) { fields.push("map_pin=?");            vals.push(body.map_pin||''); }
   if (body.address            !== undefined) { fields.push("address=?");            vals.push(body.address||''); }
+  if (body.gstin              !== undefined) {
+    const { gstin, error: gstErr } = normalizeGstin(body.gstin);
+    if (gstErr) return json({ error: gstErr }, 400);
+    fields.push("gstin=?"); vals.push(gstin);
+  }
   if (body.active             !== undefined) { fields.push("active=?");             vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);

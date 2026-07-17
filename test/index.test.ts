@@ -252,6 +252,40 @@ describe("Vendors", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════
+// CLIENTS — GST number (optional, 15 chars when present)
+// ════════════════════════════════════════════════════════════════════
+describe("Clients / GSTIN", () => {
+  it("POST /api/clients — accepts a valid 15-char GSTIN and stores it upper-cased", async () => {
+    const res = await post("/api/clients", { name: "GST Valid Co", gstin: "29abcde1234f1z5" }, adminToken);
+    expect(res.status).toBe(201);
+    const { id } = await res.json() as { id: string };
+    const list = await (await get("/api/clients", adminToken)).json() as Array<{id:string; gstin:string}>;
+    expect(list.find(c => c.id === id)?.gstin).toBe("29ABCDE1234F1Z5");
+  });
+
+  it("POST /api/clients — no GSTIN is allowed (field is optional)", async () => {
+    const res = await post("/api/clients", { name: "No GST Co" }, adminToken);
+    expect(res.status).toBe(201);
+  });
+
+  it("POST /api/clients — rejects a GSTIN that isn't 15 characters", async () => {
+    const res = await post("/api/clients", { name: "GST Short Co", gstin: "29ABCDE1234F1Z" }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/clients — rejects a GSTIN with non-alphanumeric characters", async () => {
+    const res = await post("/api/clients", { name: "GST Bad Co", gstin: "29ABCDE-234F1Z5" }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/clients/:id — rejects an invalid GSTIN on update", async () => {
+    const created = await (await post("/api/clients", { name: "GST Patch Co" }, adminToken)).json() as { id: string };
+    const res = await patch(`/api/clients/${created.id}`, { gstin: "TOOSHORT" }, adminToken);
+    expect(res.status).toBe(400);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
 // ORDERS
 // ════════════════════════════════════════════════════════════════════
 describe("Orders", () => {

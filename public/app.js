@@ -8545,10 +8545,34 @@ function clientFormFields(prefix, c={}) {
       <label>Map Location <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(paste Google Maps link, or lat,lng e.g. 12.9716,77.5946)</span></label>
       <input type="text" id="${prefix}-mappin" value="${c.map_pin||''}" placeholder="https://maps.google.com/... or 12.9716,77.5946">
     </div>
+    <div class="form-group">
+      <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 15 letters/digits, e.g. 29ABCDE1234F1Z5)</span></label>
+      <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1Z5"
+        maxlength="15" autocapitalize="characters" spellcheck="false"
+        style="text-transform:uppercase;letter-spacing:.04em"
+        oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,15)">
+      <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+    </div>
     <div class="grid-2">
       <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="${prefix}-budget" value="${c.monthly_budget||500000}"></div>
       <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="${prefix}-threshold" value="${c.approval_threshold||100000}"></div>
     </div>`;
+}
+
+// GSTIN is optional; when provided it must be exactly 15 letters/digits.
+// Returns { ok, value } — value is normalised (upper-case, trimmed) or ''.
+function readGstin(prefix) {
+  const el = document.getElementById(prefix + '-gstin');
+  const msg = document.getElementById(prefix + '-gstin-msg');
+  const v = (el?.value || '').trim().toUpperCase();
+  if (v === '') { if (msg) msg.textContent = ''; return { ok: true, value: '' }; }
+  if (!/^[0-9A-Z]{15}$/.test(v)) {
+    if (msg) { msg.textContent = `GST number must be exactly 15 letters/digits (${v.length}/15).`; msg.style.color = 'var(--danger)'; }
+    if (el) el.style.borderColor = 'var(--danger)';
+    return { ok: false, value: v };
+  }
+  if (msg) msg.textContent = '';
+  return { ok: true, value: v };
 }
 
 function addClientModal() {
@@ -8570,9 +8594,13 @@ async function saveClient() {
     approval_threshold: +document.getElementById('cl-threshold').value,
   };
   if (!body.name) { showToast('Company name required','error'); return; }
+  const gst = readGstin('cl');
+  if (!gst.ok) { showToast('GST number must be exactly 15 letters/digits','error'); return; }
+  body.gstin = gst.value;
   const res = await api('/clients', { method:'POST', body: JSON.stringify(body) });
+  if (!res) return;
   closeModal();
-  if (res) { showToast('Client added'); navigate('clients'); }
+  showToast('Client added'); navigate('clients');
 }
 
 /* Open client detail from anywhere (e.g. dashboard Top Clients) by id */
@@ -8593,6 +8621,7 @@ function viewClientModal(c) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Name</div><div style="font-weight:600">${c.contact_name||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Health Score</div><div style="font-weight:700;color:${hColor}">★ ${c.health_score||0}/100</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div><div style="font-weight:600">${fmt(c.monthly_budget)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Approval Threshold</div><div style="font-weight:600">${fmt(c.approval_threshold)}</div></div>
@@ -8624,6 +8653,9 @@ async function saveEditClient(id) {
     approval_threshold: +document.getElementById('ecl-threshold').value,
   };
   if (!body.name) { showToast('Company name required','error'); return; }
+  const gst = readGstin('ecl');
+  if (!gst.ok) { showToast('GST number must be exactly 15 letters/digits','error'); return; }
+  body.gstin = gst.value;
   const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast('Client updated'); navigate('clients'); }
 }
