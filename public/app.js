@@ -8555,7 +8555,7 @@ function clientFormFields(prefix, c={}) {
       </div>
       <div class="form-group">
         <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 15-char GSTIN)</span></label>
-        <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1Z5"
+        <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1ZW"
           maxlength="15" autocapitalize="characters" spellcheck="false"
           style="text-transform:uppercase;letter-spacing:.04em"
           oninput="onGstInput('${prefix}',this)">
@@ -8572,6 +8572,19 @@ function clientFormFields(prefix, c={}) {
 // code + PAN + entity digit + 'Z' + checksum. The GSTIN embeds the PAN at 3–12.
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+// GSTIN 15th-character checksum (GSTN mod-36 algorithm) — catches single-char typos.
+const GSTIN_CP = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function gstinChecksumOk(g) {
+  let factor = 2, sum = 0; const m = GSTIN_CP.length;
+  for (let i = 13; i >= 0; i--) {
+    let d = factor * GSTIN_CP.indexOf(g[i]);
+    factor = factor === 2 ? 1 : 2;
+    d = Math.floor(d / m) + (d % m);
+    sum += d;
+  }
+  return GSTIN_CP[(m - (sum % m)) % m] === g[14];
+}
 
 function taxMsg(prefix, field, text) {
   const el = document.getElementById(prefix + '-' + field);
@@ -8602,7 +8615,11 @@ function readTaxIds(prefix) {
     return { ok: false };
   }
   if (gstin && !GSTIN_RE.test(gstin)) {
-    taxMsg(prefix, 'gstin', 'Enter a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5).');
+    taxMsg(prefix, 'gstin', 'Enter a valid 15-character GSTIN (e.g. 29ABCDE1234F1ZW).');
+    return { ok: false };
+  }
+  if (gstin && !gstinChecksumOk(gstin)) {
+    taxMsg(prefix, 'gstin', 'GST number checksum is invalid — check for a typo.');
     return { ok: false };
   }
   let finalPan = pan;

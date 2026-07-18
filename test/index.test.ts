@@ -255,14 +255,19 @@ describe("Vendors", () => {
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
 describe("Clients / GSTIN + PAN", () => {
-  it("POST /api/clients — accepts a valid GSTIN, stores it upper-cased and derives the PAN", async () => {
-    const res = await post("/api/clients", { name: "GST Valid Co", gstin: "29abcde1234f1z5" }, adminToken);
+  it("POST /api/clients — accepts a checksum-valid GSTIN, stores it upper-cased and derives the PAN", async () => {
+    const res = await post("/api/clients", { name: "GST Valid Co", gstin: "27aapfu0939f1zv" }, adminToken);
     expect(res.status).toBe(201);
     const { id } = await res.json() as { id: string };
     const list = await (await get("/api/clients", adminToken)).json() as Array<{id:string; gstin:string; pan:string}>;
     const c = list.find(x => x.id === id);
-    expect(c?.gstin).toBe("29ABCDE1234F1Z5");
-    expect(c?.pan).toBe("ABCDE1234F"); // derived from chars 3–12 of the GSTIN
+    expect(c?.gstin).toBe("27AAPFU0939F1ZV");
+    expect(c?.pan).toBe("AAPFU0939F"); // derived from chars 3–12 of the GSTIN
+  });
+
+  it("POST /api/clients — rejects a well-formed GSTIN with a wrong checksum digit", async () => {
+    const res = await post("/api/clients", { name: "GST Checksum Co", gstin: "27AAPFU0939F1ZX" }, adminToken);
+    expect(res.status).toBe(400);
   });
 
   it("POST /api/clients — no tax ids is allowed (both optional)", async () => {
@@ -294,7 +299,7 @@ describe("Clients / GSTIN + PAN", () => {
   });
 
   it("POST /api/clients — rejects a GSTIN whose embedded PAN disagrees with the PAN field", async () => {
-    const res = await post("/api/clients", { name: "Mismatch Co", gstin: "29ABCDE1234F1Z5", pan: "ZZZZZ9999Z" }, adminToken);
+    const res = await post("/api/clients", { name: "Mismatch Co", gstin: "27AAPFU0939F1ZV", pan: "ZZZZZ9999Z" }, adminToken);
     expect(res.status).toBe(400);
   });
 

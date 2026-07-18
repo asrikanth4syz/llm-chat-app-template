@@ -264,8 +264,23 @@ async function fixCategoryNames(env: Env): Promise<void> {
 
 // Indian PAN: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F).
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-// GSTIN: 2-digit state code + 10-char PAN + entity digit + 'Z' + checksum (e.g. 29ABCDE1234F1Z5).
+// GSTIN: 2-digit state code + 10-char PAN + entity digit + 'Z' + checksum (e.g. 29ABCDE1234F1ZW).
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+// GSTIN 15th-character checksum (GSTN mod-36 algorithm): weight the first 14
+// code points by an alternating 2/1 factor from the right, digit-sum each, and
+// the 36-complement of the total mod 36 must equal the final character.
+const GSTIN_CP = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function gstinChecksumOk(g: string): boolean {
+  let factor = 2, sum = 0; const m = GSTIN_CP.length;
+  for (let i = 13; i >= 0; i--) {
+    let d = factor * GSTIN_CP.indexOf(g[i]);
+    factor = factor === 2 ? 1 : 2;
+    d = Math.floor(d / m) + (d % m);
+    sum += d;
+  }
+  return GSTIN_CP[(m - (sum % m)) % m] === g[14];
+}
 
 // PAN is optional; when supplied it must match the canonical PAN format.
 function normalizePan(raw: unknown): { pan: string | null; error?: string } {
@@ -283,7 +298,9 @@ function normalizeGstin(raw: unknown): { gstin: string | null; error?: string } 
   const v = String(raw).trim().toUpperCase();
   if (v === "") return { gstin: null };
   if (!GSTIN_RE.test(v))
-    return { gstin: null, error: "GST number must be a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5)" };
+    return { gstin: null, error: "GST number must be a valid 15-character GSTIN (e.g. 29ABCDE1234F1ZW)" };
+  if (!gstinChecksumOk(v))
+    return { gstin: null, error: "GST number checksum is invalid — check for a typo" };
   return { gstin: v };
 }
 
