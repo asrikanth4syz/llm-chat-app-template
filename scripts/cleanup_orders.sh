@@ -19,12 +19,13 @@ DB="smart-pantry-db"
 REMOTE="${1:-}"   # pass --remote for production; empty = local
 IDS="'SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888'"
 DC_SUB="SELECT id FROM delivery_challans WHERE order_id IN ($IDS)"
+PO_SUB="SELECT id FROM purchase_orders WHERE order_id IN ($IDS)"
 
 run() {
   local label="$1" sql="$2" out
   out=$(npx wrangler d1 execute "$DB" $REMOTE --command "$sql" 2>&1)
-  if echo "$out" | grep -qiE "no such table"; then
-    echo "  ↳ skipped (table not present): $label"
+  if echo "$out" | grep -qiE "no such table|no such column"; then
+    echo "  ↳ skipped (not present in this schema): $label"
   elif echo "$out" | grep -qiE "\berror\b|SQLITE_"; then
     echo "  ✘ ERROR on $label:"; echo "$out" | tail -6; exit 1
   else
@@ -52,8 +53,11 @@ run "order_allocations"      "DELETE FROM order_allocations     WHERE order_id I
 run "dunning_events"         "DELETE FROM dunning_events        WHERE order_id IN ($IDS)"
 run "standing_order_events"  "DELETE FROM standing_order_events WHERE order_id IN ($IDS)"
 
-# 4) preserve vendor POs, just unlink them from the deleted orders
-run "purchase_orders (unlink)" "UPDATE purchase_orders SET order_id = NULL WHERE order_id IN ($IDS)"
+# 4) vendor POs raised from these orders + their children (test data — delete)
+run "po_items (of order POs)"     "DELETE FROM po_items        WHERE po_id IN ($PO_SUB)"
+run "grn_records (of order POs)"  "DELETE FROM grn_records     WHERE po_id IN ($PO_SUB)"
+run "vendor_feedback (of order POs)" "DELETE FROM vendor_feedback WHERE po_id IN ($PO_SUB)"
+run "purchase_orders"             "DELETE FROM purchase_orders WHERE order_id IN ($IDS)"
 
 # 5) the orders themselves
 run "orders" "DELETE FROM orders WHERE id IN ($IDS)"

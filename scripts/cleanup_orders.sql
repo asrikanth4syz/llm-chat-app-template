@@ -17,8 +17,8 @@
 -- Child rows removed (per order): order_items, order_history, order_comments,
 --   order_allocations, dunning_events, standing_order_events, delivery_challans
 --   and their dc_items / dc_documents / delivery_returns / returns.
--- Vendor purchase orders raised from these orders are UNLINKED (order_id set to
---   NULL), not deleted, so vendor/financial documents are preserved.
+-- Vendor purchase orders raised from these orders are DELETED along with their
+--   po_items / grn_records / per-PO dunning_events (these are test orders).
 -- ============================================================================
 
 -- 1) Delivery-challan children (delete BEFORE the challans they belong to) ----
@@ -51,8 +51,14 @@ DELETE FROM dunning_events        WHERE order_id IN
 DELETE FROM standing_order_events WHERE order_id IN
   ('SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888');
 
--- 4) Preserve vendor POs but unlink them from the deleted orders --------------
-UPDATE purchase_orders SET order_id = NULL WHERE order_id IN
+-- 4) Vendor POs raised from these orders + their children (delete) ------------
+DELETE FROM po_items       WHERE po_id IN (SELECT id FROM purchase_orders WHERE order_id IN
+  ('SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888'));
+DELETE FROM grn_records    WHERE po_id IN (SELECT id FROM purchase_orders WHERE order_id IN
+  ('SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888'));
+DELETE FROM vendor_feedback WHERE po_id IN (SELECT id FROM purchase_orders WHERE order_id IN
+  ('SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888'));
+DELETE FROM purchase_orders WHERE order_id IN
   ('SP-2607-3170','SP-2606-3795','SP-2606-5234','SP-2606-5603','SP-2606-3464','SP-2606-6069','SP-2406-0891','SP-2406-0888');
 
 -- 5) The orders themselves ----------------------------------------------------
