@@ -357,6 +357,7 @@ function initApp() {
   document.getElementById('topbar-avatar').textContent = u.initials;
   // header profile menu
   setText('topbar-profile-name', (u.name||'').split(' ')[0]);
+  setText('topbar-profile-org', u.org || '');
   setText('pm-avatar', u.initials); setText('pm-name', u.name); setText('pm-role', u.org);
   // Settings lives under the profile menu; only roles with the page see it
   const settingsItem = document.getElementById('pm-settings');
@@ -8741,6 +8742,7 @@ async function saveEditClient(id) {
       APP.user.org = body.name;
       setText('user-role', body.name);
       setText('pm-role', body.name);
+      setText('topbar-profile-org', body.name);
     }
     closeModal(); showToast('Client updated'); navigate('clients');
   }
