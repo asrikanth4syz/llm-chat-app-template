@@ -593,6 +593,9 @@ button { font-family: var(--font); cursor: pointer; }
 .qty-btn { width: 28px; height: 28px; border: 1.5px solid var(--border-mid); border-radius: 50%; background: var(--surface); cursor: pointer; font-size: 1rem; line-height: 1; display: flex; align-items: center; justify-content: center; transition: all .15s; color: var(--navy); }
 .qty-btn:hover { border-color: var(--primary); background: var(--primary); color: white; }
 .qty-val { font-weight: 700; min-width: 22px; text-align: center; font-size: .88rem; }
+.qty-input { width: 48px; font-weight: 700; text-align: center; font-size: .88rem; color: var(--navy); border: 1.5px solid var(--border-mid); border-radius: 7px; padding: 4px 2px; background: var(--surface); outline: none; transition: border-color .15s; -moz-appearance: textfield; }
+.qty-input:focus { border-color: var(--primary); }
+.qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .add-btn { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--primary); background: var(--primary-light); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--primary); transition: all .15s; }
 .add-btn:hover { background: var(--primary); color: white; }
 .add-btn.added { background: var(--success); border-color: var(--success); color: white; }

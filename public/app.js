@@ -2240,7 +2240,10 @@ function refreshCartReviewUI() {
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
               <div class="catalog-qty" style="margin:0">
                 <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
-                <span class="qty-val" data-name="${item.name.replace(/"/g,'&quot;')}">${item.qty}</span>
+                <input type="number" class="qty-input" min="1" step="1" value="${item.qty}" inputmode="numeric"
+                  data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
+                  onchange="setQty('${item.sku}', this.value)"
+                  onkeydown="if(event.key==='Enter'){this.blur();}" onfocus="this.select()">
                 <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
@@ -2582,6 +2585,20 @@ function changeQty(sku, delta, price, btnOrName) {
   }
   const qtyEl = document.getElementById('qty-' + sku);
   if (qtyEl) qtyEl.textContent = APP.cart.find(c => c.sku === sku)?.qty || 0;
+  refreshCartUI();
+}
+
+// Set a cart line to a manually-typed quantity (review step). Integer ≥ 1;
+// clearing the field or entering 0 removes the line, matching the −/+ behaviour.
+function setQty(sku, value) {
+  const existing = APP.cart.find(c => c.sku === sku);
+  if (!existing) return;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) {
+    APP.cart = APP.cart.filter(c => c.sku !== sku);
+  } else {
+    existing.qty = Math.min(n, 100000); // guard against absurd values
+  }
   refreshCartUI();
 }
 
