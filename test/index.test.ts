@@ -254,6 +254,20 @@ describe("Vendors", () => {
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
+describe("Clients / rename propagation", () => {
+  it("PATCH /api/clients/:id name — /auth/me for that client's user shows the new org live", async () => {
+    // clientToken belongs to client c1 (seeded as "Meta India")
+    const before = await (await get("/api/auth/me", clientToken)).json() as { user: { org: string; client_id: string } };
+    expect(before.user.client_id).toBe("c1");
+
+    const rename = await patch("/api/clients/c1", { name: "Meta Platforms India" }, adminToken);
+    expect(ok(rename.status)).toBe(true);
+
+    const after = await (await get("/api/auth/me", clientToken)).json() as { user: { org: string } };
+    expect(after.user.org).toBe("Meta Platforms India");
+  });
+});
+
 describe("Clients / GSTIN + PAN", () => {
   it("POST /api/clients — accepts a checksum-valid GSTIN, stores it upper-cased and derives the PAN", async () => {
     const res = await post("/api/clients", { name: "GST Valid Co", gstin: "27aapfu0939f1zv" }, adminToken);

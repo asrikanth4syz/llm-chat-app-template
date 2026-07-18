@@ -668,6 +668,14 @@ async function issueToken(row: Record<string,string>, env: Env): Promise<Respons
 async function handleMe(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   if (!user) return json({error:"Unauthorized"}, 401);
+  // The JWT's `org` is a snapshot from login; for client users keep it in sync
+  // with the live client name so a rename shows everywhere without re-login.
+  if (user.client_id) {
+    try {
+      const c = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(user.client_id).first() as {name?:string}|null;
+      if (c?.name) user.org = c.name;
+    } catch { /* clients row missing — keep token value */ }
+  }
   return json({user});
 }
 
@@ -2045,6 +2053,10 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
   await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  // Keep the denormalised org name on this client's users in sync with the rename.
+  if (body.name !== undefined) {
+    await env.DB.prepare("UPDATE users SET org=? WHERE client_id=?").bind(body.name||'', id).run();
+  }
   return json({id});
 }
 

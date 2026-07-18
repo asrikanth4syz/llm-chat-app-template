@@ -8734,7 +8734,16 @@ async function saveEditClient(id) {
   if (!tax.ok) { showToast('Check the PAN / GST number','error'); return; }
   body.gstin = tax.gstin; body.pan = tax.pan;
   const res = await api('/clients/' + id, { method:'PATCH', body: JSON.stringify(body) });
-  if (res) { closeModal(); showToast('Client updated'); navigate('clients'); }
+  if (res) {
+    // If the logged-in user belongs to this client, reflect the new name in the
+    // chrome (sidebar org, profile menu, "Ordering for") without a re-login.
+    if (APP.user && APP.user.client_id === id && body.name) {
+      APP.user.org = body.name;
+      setText('user-role', body.name);
+      setText('pm-role', body.name);
+    }
+    closeModal(); showToast('Client updated'); navigate('clients');
+  }
 }
 
 async function toggleClientActive(id, name, active) {
