@@ -6697,7 +6697,13 @@ async function confirmCreateDCFromPicklist(orderId) {
     body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
   });
   closeModal();
-  if (res) { showToast(`Order ${orderId} dispatched — DC created`); switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]); }
+  if (!res) return;
+  showToast(`Order ${orderId} dispatched — DC created`);
+  // Refresh the view the button was clicked from, so the row's status/actions
+  // reflect IN_SHIPMENT immediately (otherwise a second click re-fires the same
+  // transition and the FSM rejects IN_SHIPMENT→IN_SHIPMENT).
+  if (APP.page === 'warehouse') switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]);
+  else navigate(APP.page);
 }
 
 async function pickOrderModal(orderId) {
