@@ -1986,9 +1986,12 @@ async function renderPlaceOrder(el) {
           <div style="min-width:0">
             <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${o.id}</div>
             <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}</div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}${(o.items||[]).length>3?` +${o.items.length-3} more`:''}</div>
           </div>
-          <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder</button>
+          <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+            <button class="btn btn-secondary btn-sm" style="white-space:nowrap" onclick="previewReorder('${o.id}')">👁 Preview</button>
+            <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder all</button>
+          </div>
         </div>`).join('')}
       </div>
     </div>` : ''}
@@ -2449,7 +2452,8 @@ async function loadQuickReorder() {
         <div><b>${o.id}</b> &nbsp;${statusBadge(o.status)} &nbsp;<span style="color:var(--text-muted);font-size:.84rem">${fmtDate(o.created_at)}</span></div>
         <div style="display:flex;gap:8px;align-items:center">
           <span style="font-weight:600">${fmt(o.grand_total)}</span>
-          <button class="btn btn-gold btn-sm" onclick="reorderFromHistory('${o.id}')">Reorder</button>
+          <button class="btn btn-secondary btn-sm" onclick="previewReorder('${o.id}')">👁 Preview</button>
+          <button class="btn btn-gold btn-sm" onclick="reorderFromHistory('${o.id}')">Reorder all</button>
         </div>
       </div>
       <div class="card-body" style="padding:10px 16px;font-size:.84rem;color:var(--text-muted)">
@@ -2469,6 +2473,88 @@ async function reorderFromHistory(orderId) {
     else APP.cart.push({ sku: i.sku || i.name, name: i.name, qty: i.qty, unit_price: price, emoji: item?.emoji || '📦' });
   });
   showToast('Items added to cart');
+  refreshCartUI();
+}
+
+// Preview a past order's items so the client can pick exactly what to reorder.
+async function previewReorder(orderId) {
+  const order = await api('/orders/' + orderId);
+  if (!order || !order.items || !order.items.length) { showToast('No items found for this order', 'error'); return; }
+  // Resolve current catalogue price/emoji for each line; keep the row data for confirm.
+  APP._reorderPreview = order.items.map(i => {
+    const item = APP._catalog && APP._catalog.find(it => it.sku === i.sku || it.name === i.name);
+    return { sku: i.sku || i.name, name: i.name, qty: i.qty || 1,
+             price: item ? item.unit_price : (i.unit_price || 0), emoji: item?.emoji || '📦' };
+  });
+  const rows = APP._reorderPreview.map((r, idx) => `
+    <tr>
+      <td style="text-align:center"><input type="checkbox" class="pr-chk" data-idx="${idx}" checked
+        onchange="updateReorderPreview()" style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></td>
+      <td><span style="font-size:1.05rem">${r.emoji}</span> <b style="font-size:.85rem">${h(r.name)}</b>
+        <div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)} · ${fmt(r.price)}/unit</div></td>
+      <td style="text-align:center">
+        <input type="number" class="pr-qty" data-idx="${idx}" value="${r.qty}" min="1" step="1" inputmode="numeric"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'')" onchange="updateReorderPreview()"
+          style="width:56px;text-align:center;border:1.5px solid var(--border-mid);border-radius:7px;padding:4px 2px;font-weight:700"></td>
+      <td class="pr-line" data-idx="${idx}" style="text-align:right;font-weight:700;white-space:nowrap">${fmt(r.price * r.qty)}</td>
+    </tr>`).join('');
+  openModal(`Reorder from ${order.id}`, `
+    <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Placed ${fmtDate(order.created_at)} · pick the items and quantities to add to your cart.</div>
+    <div class="table-wrap" style="max-height:52vh;overflow:auto">
+      <table class="table" style="margin:0">
+        <thead><tr>
+          <th style="width:34px;text-align:center"><input type="checkbox" id="pr-all" checked onchange="toggleReorderAll(this)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></th>
+          <th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Line total</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" id="pr-add" onclick="confirmReorderPreview()">Add to cart</button>`);
+  updateReorderPreview();
+}
+
+function toggleReorderAll(cb) {
+  document.querySelectorAll('.pr-chk').forEach(c => { c.checked = cb.checked; });
+  updateReorderPreview();
+}
+
+// Recompute per-line totals, the running total and the button label/state.
+function updateReorderPreview() {
+  const rows = APP._reorderPreview || [];
+  let total = 0, count = 0;
+  document.querySelectorAll('.pr-chk').forEach(chk => {
+    const idx = +chk.dataset.idx;
+    const qtyEl = document.querySelector(`.pr-qty[data-idx="${idx}"]`);
+    const qty = Math.max(1, parseInt(qtyEl?.value) || 1);
+    const line = (rows[idx]?.price || 0) * qty;
+    const lineEl = document.querySelector(`.pr-line[data-idx="${idx}"]`);
+    if (lineEl) { lineEl.textContent = fmt(line); lineEl.style.opacity = chk.checked ? '1' : '.35'; }
+    if (chk.checked) { total += line; count++; }
+  });
+  const allEl = document.getElementById('pr-all');
+  if (allEl) allEl.checked = count > 0 && count === document.querySelectorAll('.pr-chk').length;
+  const btn = document.getElementById('pr-add');
+  if (btn) { btn.disabled = count === 0; btn.textContent = count ? `Add ${count} item${count>1?'s':''} · ${fmt(total)}` : 'Select items'; }
+}
+
+function confirmReorderPreview() {
+  const rows = APP._reorderPreview || [];
+  let added = 0;
+  document.querySelectorAll('.pr-chk').forEach(chk => {
+    if (!chk.checked) return;
+    const idx = +chk.dataset.idx;
+    const r = rows[idx];
+    if (!r) return;
+    const qty = Math.max(1, parseInt(document.querySelector(`.pr-qty[data-idx="${idx}"]`)?.value) || 1);
+    const existing = APP.cart.find(c => c.sku === r.sku);
+    if (existing) existing.qty += qty;
+    else APP.cart.push({ sku: r.sku, name: r.name, qty, unit_price: r.price, emoji: r.emoji });
+    added++;
+  });
+  if (!added) { showToast('Select at least one item', 'error'); return; }
+  closeModal();
+  showToast(`${added} item${added>1?'s':''} added to cart`);
   refreshCartUI();
 }
 
