@@ -254,6 +254,25 @@ describe("Vendors", () => {
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
+describe("Client inventory / catalogue scoping", () => {
+  it("GET /api/client-inventory — only returns items in the client's allocated catalogue", async () => {
+    const db = env.DB as D1Database;
+    // c1's catalogue holds SKU001 & SKU002 (seeded). Add a client_inventory row
+    // for an assigned SKU and one for an UNASSIGNED SKU (as the DC backfill would).
+    await db.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,qty_on_hand,reorder_level) VALUES (?,?,?,?,?)")
+      .bind("c1","SKU001","Basmati Rice 5kg",0,5).run();
+    await db.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,qty_on_hand,reorder_level) VALUES (?,?,?,?,?)")
+      .bind("c1","SKU-UNASSIGNED","Sister Aruba Cranberry Lemonade",3,10).run();
+
+    const res = await get("/api/client-inventory", clientToken);
+    expect(res.status).toBe(200);
+    const rows = await res.json() as Array<{ sku: string }>;
+    const skus = rows.map(r => r.sku);
+    expect(skus).toContain("SKU001");           // allocated → shown
+    expect(skus).not.toContain("SKU-UNASSIGNED"); // not allocated → hidden
+  });
+});
+
 describe("Clients / rename propagation", () => {
   it("PATCH /api/clients/:id name — /auth/me for that client's user shows the new org live", async () => {
     // clientToken belongs to client c1 (seeded as "Meta India")

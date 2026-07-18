@@ -4503,8 +4503,14 @@ async function handleListClientInventory(request: Request, env: Env): Promise<Re
     CASE WHEN ci.qty_on_hand = 0 THEN 'out' WHEN ci.reorder_level > 0 AND ci.qty_on_hand <= ci.reorder_level THEN 'low' ELSE 'ok' END AS stock_status
     FROM client_inventory ci
     LEFT JOIN inventory inv ON inv.sku = ci.sku
-    WHERE ci.client_id=?`;
-  const binds: unknown[] = [clientId];
+    WHERE ci.client_id=?
+    -- Only surface items in the client's allocated catalogue; if none is
+    -- assigned, fall back to showing everything they hold (same rule as the
+    -- master inventory). Prevents historically-delivered but unassigned items
+    -- (e.g. from the DC backfill) leaking into the low/out-of-stock reorder view.
+    AND (ci.sku IN (SELECT sku FROM client_catalog WHERE client_id=?)
+         OR NOT EXISTS (SELECT 1 FROM client_catalog WHERE client_id=?))`;
+  const binds: unknown[] = [clientId, clientId, clientId];
   if (q) { sql += ` AND (ci.item_name LIKE ? OR ci.sku LIKE ? OR COALESCE(inv.category, ci.category) LIKE ?)`; const like = `%${q}%`; binds.push(like,like,like); }
   sql += ` ORDER BY ci.item_name ASC`;
 
