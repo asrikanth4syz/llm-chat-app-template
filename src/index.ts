@@ -251,7 +251,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN closed_at TEXT").run();
   } catch { /* column already exists */ }
-  for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT"]) {
+  for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT",
+    "registration_type TEXT DEFAULT 'unregistered'","gstin TEXT","pan TEXT",
+    "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE vendors ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -1270,15 +1272,43 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
   return json(results);
 }
 
+// Validate a vendor's registration + food-safety compliance.
+// registered ⇒ a valid GSTIN (PAN derived/checked); food ⇒ 14-digit FSSAI + expiry.
+type VendorCompliance = { registration_type: string; gstin: string|null; pan: string|null;
+  vendor_type: string; fssai_licence: string|null; fssai_expiry: string|null; error?: string };
+function resolveVendorCompliance(body: Record<string,unknown>): VendorCompliance {
+  const reg = body.registration_type === 'registered' ? 'registered' : 'unregistered';
+  const vtype = body.vendor_type === 'food' ? 'food' : 'non_food';
+  let gstin: string|null = null, pan: string|null = null;
+  if (reg === 'registered') {
+    const t = resolveTaxIds(body.gstin, body.pan);
+    if (t.error) return { registration_type: reg, gstin:null, pan:null, vendor_type: vtype, fssai_licence:null, fssai_expiry:null, error: t.error };
+    if (!t.gstin) return { registration_type: reg, gstin:null, pan:null, vendor_type: vtype, fssai_licence:null, fssai_expiry:null, error: "GST number is required for a registered vendor" };
+    gstin = t.gstin; pan = t.pan;
+  }
+  let fssai: string|null = null, fssaiExp: string|null = null;
+  if (vtype === 'food') {
+    const lic = String(body.fssai_licence || '').trim();
+    if (!/^\d{14}$/.test(lic)) return { registration_type: reg, gstin, pan, vendor_type: vtype, fssai_licence:null, fssai_expiry:null, error: "A valid 14-digit FSSAI licence number is required for a food vendor" };
+    const exp = String(body.fssai_expiry || '').trim();
+    if (!exp) return { registration_type: reg, gstin, pan, vendor_type: vtype, fssai_licence:null, fssai_expiry:null, error: "FSSAI expiry date is required for a food vendor" };
+    fssai = lic; fssaiExp = exp;
+  }
+  return { registration_type: reg, gstin, pan, vendor_type: vtype, fssai_licence: fssai, fssai_expiry: fssaiExp };
+}
+
 async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
+  const comp = resolveVendorCompliance(body);
+  if (comp.error) return json({ error: comp.error }, 400);
   const id = `v${uid().slice(0,6)}`;
   const leadDays = body.avg_lead_days != null && body.avg_lead_days !== '' ? Number(body.avg_lead_days) : 3;
-  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .bind(id,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null,
-      isNaN(leadDays)?3:leadDays, body.notes||null, body.visit_frequency||null, body.visit_day||null).run();
+      isNaN(leadDays)?3:leadDays, body.notes||null, body.visit_frequency||null, body.visit_day||null,
+      comp.registration_type, comp.gstin, comp.pan, comp.vendor_type, comp.fssai_licence, comp.fssai_expiry).run();
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
     `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor ID: ${id}\n\nRegards,\n4SYZ Smart Pantry Team`);
   await audit(env, user, "CREATE", "vendor", id, undefined, body.name as string);
@@ -1303,6 +1333,16 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
   if (body.notes         !== undefined) { fields.push("notes=?");           vals.push(body.notes||null); }
   if (body.visit_frequency !== undefined) { fields.push("visit_frequency=?"); vals.push(body.visit_frequency||null); }
   if (body.visit_day     !== undefined) { fields.push("visit_day=?");       vals.push(body.visit_day||null); }
+  if (body.registration_type !== undefined || body.vendor_type !== undefined) {
+    const comp = resolveVendorCompliance(body);
+    if (comp.error) return json({ error: comp.error }, 400);
+    fields.push("registration_type=?"); vals.push(comp.registration_type);
+    fields.push("gstin=?");             vals.push(comp.gstin);
+    fields.push("pan=?");               vals.push(comp.pan);
+    fields.push("vendor_type=?");       vals.push(comp.vendor_type);
+    fields.push("fssai_licence=?");     vals.push(comp.fssai_licence);
+    fields.push("fssai_expiry=?");      vals.push(comp.fssai_expiry);
+  }
   if (body.active        !== undefined) { fields.push("active=?");        vals.push(body.active); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);

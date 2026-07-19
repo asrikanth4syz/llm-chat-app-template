@@ -6023,6 +6023,52 @@ function vendorFormFields(prefix, v={}) {
       <div class="form-group"><label>Contact Phone</label><input type="tel" id="${prefix}-phone" value="${v.contact_phone||''}"></div>
     </div>
 
+    <div style="border-top:1px solid var(--border);margin:6px 0 12px;padding-top:12px;font-size:.78rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Registration &amp; Compliance</div>
+    <div class="grid-2">
+      <div class="form-group"><label>Registration</label>
+        <select id="${prefix}-regtype" onchange="onVendorRegChange('${prefix}')">
+          <option value="registered" ${(v.registration_type||'registered')==='registered'?'selected':''}>Registered (GST)</option>
+          <option value="unregistered" ${v.registration_type==='unregistered'?'selected':''}>Unregistered</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Vendor Type</label>
+        <select id="${prefix}-vtype" onchange="onVendorTypeChange('${prefix}')">
+          <option value="non_food" ${(v.vendor_type||'non_food')==='non_food'?'selected':''}>Non-food</option>
+          <option value="food" ${v.vendor_type==='food'?'selected':''}>Food</option>
+        </select>
+      </div>
+    </div>
+    <div id="${prefix}-reg-fields" style="display:${(v.registration_type||'registered')==='registered'?'block':'none'}">
+      <div class="grid-2">
+        <div class="form-group">
+          <label>PAN <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(10 chars, e.g. ABCDE1234F)</span></label>
+          <input type="text" id="${prefix}-pan" value="${v.pan||''}" placeholder="ABCDE1234F" maxlength="10" spellcheck="false"
+            style="text-transform:uppercase;letter-spacing:.04em" oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,10)">
+          <div id="${prefix}-pan-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+        </div>
+        <div class="form-group">
+          <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(15-char GSTIN)</span></label>
+          <input type="text" id="${prefix}-gstin" value="${v.gstin||''}" placeholder="29ABCDE1234F1ZW" maxlength="15" spellcheck="false"
+            style="text-transform:uppercase;letter-spacing:.04em" oninput="onGstInput('${prefix}',this)">
+          <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+        </div>
+      </div>
+    </div>
+    <div id="${prefix}-food-fields" style="display:${v.vendor_type==='food'?'block':'none'}">
+      <div class="grid-2">
+        <div class="form-group">
+          <label>FSSAI Licence No. <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(14 digits)</span></label>
+          <input type="text" id="${prefix}-fssai" value="${v.fssai_licence||''}" placeholder="10012345000123" maxlength="14" inputmode="numeric"
+            oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,14)">
+          <div id="${prefix}-fssai-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
+        </div>
+        <div class="form-group">
+          <label>FSSAI Expiry Date</label>
+          <input type="date" id="${prefix}-fssai-exp" value="${v.fssai_expiry||''}">
+        </div>
+      </div>
+    </div>
+
     <div style="border-top:1px solid var(--border);margin:6px 0 12px;padding-top:12px;font-size:.78rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Delivery & Visit Schedule</div>
     <div class="grid-2">
       <div class="form-group">
@@ -6060,6 +6106,40 @@ function vendorVisitDayField(prefix, freq, current) {
   </select>`;
 }
 
+function onVendorRegChange(prefix) {
+  const reg = document.getElementById(`${prefix}-regtype`)?.value === 'registered';
+  const el = document.getElementById(`${prefix}-reg-fields`);
+  if (el) el.style.display = reg ? 'block' : 'none';
+}
+function onVendorTypeChange(prefix) {
+  const food = document.getElementById(`${prefix}-vtype`)?.value === 'food';
+  const el = document.getElementById(`${prefix}-food-fields`);
+  if (el) el.style.display = food ? 'block' : 'none';
+}
+
+// Validate a vendor's compliance client-side and fold the values into `body`.
+// registered ⇒ valid GSTIN (+ PAN); food ⇒ 14-digit FSSAI + expiry.
+function validateVendorCompliance(prefix, body) {
+  if (body.registration_type === 'registered') {
+    const gst = (document.getElementById(`${prefix}-gstin`)?.value || '').trim();
+    if (!gst) { taxMsg(prefix, 'gstin', 'GST number is required for a registered vendor.'); showToast('Registered vendor needs a GST number', 'error'); return false; }
+    const tax = readTaxIds(prefix);
+    if (!tax.ok) { showToast('Check the PAN / GST number', 'error'); return false; }
+    body.gstin = tax.gstin; body.pan = tax.pan;
+  } else { body.gstin = null; body.pan = null; }
+
+  if (body.vendor_type === 'food') {
+    const lic = (document.getElementById(`${prefix}-fssai`)?.value || '').trim();
+    const exp = document.getElementById(`${prefix}-fssai-exp`)?.value || '';
+    const msg = document.getElementById(`${prefix}-fssai-msg`);
+    if (!/^\d{14}$/.test(lic)) { if (msg) { msg.textContent = `FSSAI licence must be 14 digits (${lic.length}/14).`; msg.style.color = 'var(--danger)'; } showToast('Enter a valid 14-digit FSSAI licence', 'error'); return false; }
+    if (!exp) { showToast('Enter the FSSAI expiry date', 'error'); return false; }
+    if (msg) msg.textContent = '';
+    body.fssai_licence = lic; body.fssai_expiry = exp;
+  } else { body.fssai_licence = null; body.fssai_expiry = null; }
+  return true;
+}
+
 function onVendorVisitFreqChange(prefix) {
   const freq = document.getElementById(`${prefix}-visitfreq`)?.value || '';
   const wrap = document.getElementById(`${prefix}-visitday-wrap`);
@@ -6092,15 +6172,19 @@ function collectVendorForm(prefix) {
     visit_frequency: freq || null,
     visit_day: ['Weekly','Fortnightly','Monthly'].includes(freq) ? (document.getElementById(`${prefix}-visitday`)?.value || null) : null,
     notes: document.getElementById(`${prefix}-notes`)?.value?.trim() || null,
+    registration_type: document.getElementById(`${prefix}-regtype`)?.value || 'unregistered',
+    vendor_type: document.getElementById(`${prefix}-vtype`)?.value || 'non_food',
   };
 }
 
 async function saveVendor() {
   const body = collectVendorForm('v');
   if (!body.name) { showToast('Vendor name required','error'); return; }
+  if (!validateVendorCompliance('v', body)) return;
   const res = await api('/vendors', { method:'POST', body: JSON.stringify(body) });
+  if (!res) return;
   closeModal();
-  if (res) { showToast(`Vendor added — welcome email sent`); navigate('vendors'); }
+  showToast(`Vendor added — welcome email sent`); navigate('vendors');
 }
 
 function catChips(category) {
@@ -6127,6 +6211,14 @@ function viewVendorModal(v) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Lead Time</div><div style="font-weight:600">${v.avg_lead_days!=null?v.avg_lead_days+' days':'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Visit Schedule</div><div style="font-weight:600">${v.visit_frequency?`${v.visit_frequency}${v.visit_day?' · '+(v.visit_frequency==='Monthly'?'day '+v.visit_day:v.visit_day):''}`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Registration</div><div style="font-weight:600">${v.registration_type==='registered'?'Registered':'Unregistered'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Vendor Type</div><div style="font-weight:600">${v.vendor_type==='food'?'🍽 Food':'Non-food'}</div></div>
+      ${v.registration_type==='registered'?`
+      <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${v.gstin||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${v.pan||'—'}</div></div>`:''}
+      ${v.vendor_type==='food'?(()=>{ const exp=v.fssai_expiry; const expired=exp&&exp<new Date().toISOString().slice(0,10);
+        return `<div><div style="font-size:.72rem;color:var(--text-muted)">FSSAI Licence</div><div style="font-weight:600;letter-spacing:.03em">${v.fssai_licence||'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">FSSAI Expiry</div><div style="font-weight:700;color:${expired?'var(--danger)':exp?'var(--success)':'var(--text-muted)'}">${exp?fmtDate(exp)+(expired?' ⚠ Expired':''):'—'}</div></div>`; })():''}
     </div>
     ${v.notes?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Comments / Notes</div><div style="font-size:.84rem;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;line-height:1.5">${h(v.notes)}</div></div>`:''}
     ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
@@ -6144,6 +6236,7 @@ function editVendorModal(v) {
 async function saveEditVendor(id) {
   const body = collectVendorForm('ev');
   if (!body.name) { showToast('Vendor name required','error'); return; }
+  if (!validateVendorCompliance('ev', body)) return;
   const res = await api('/vendors/' + id, { method:'PATCH', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast('Vendor updated'); APP._vendorSearch=''; APP._vendorCat=''; APP._vendorLoc=''; navigate('vendors'); }
 }

@@ -249,6 +249,39 @@ describe("Vendors", () => {
     const res = await get("/api/vendors");
     expect(res.status).toBe(401);
   });
+
+  it("POST /api/vendors — registered vendor stores validated GSTIN + derived PAN", async () => {
+    const res = await post("/api/vendors", { name: "Reg Vendor", category: "Grocery",
+      registration_type: "registered", gstin: "27aapfu0939f1zv" }, adminToken);
+    expect(res.status).toBe(201);
+    const { id } = await res.json() as { id: string };
+    const list = await (await get("/api/vendors", adminToken)).json() as Array<{id:string;gstin:string;pan:string}>;
+    const v = list.find(x => x.id === id);
+    expect(v?.gstin).toBe("27AAPFU0939F1ZV");
+    expect(v?.pan).toBe("AAPFU0939F");
+  });
+
+  it("POST /api/vendors — registered vendor without a GSTIN is rejected", async () => {
+    const res = await post("/api/vendors", { name: "No GST Vendor", registration_type: "registered" }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/vendors — unregistered vendor needs no GSTIN", async () => {
+    const res = await post("/api/vendors", { name: "Unreg Vendor", category: "Grocery", registration_type: "unregistered" }, adminToken);
+    expect(res.status).toBe(201);
+  });
+
+  it("POST /api/vendors — food vendor requires a 14-digit FSSAI licence + expiry", async () => {
+    const bad = await post("/api/vendors", { name: "Food Bad", category: "Grocery", registration_type: "unregistered",
+      vendor_type: "food", fssai_licence: "123", fssai_expiry: "2027-01-01" }, adminToken);
+    expect(bad.status).toBe(400);
+    const noExp = await post("/api/vendors", { name: "Food NoExp", category: "Grocery", registration_type: "unregistered",
+      vendor_type: "food", fssai_licence: "10012345000123" }, adminToken);
+    expect(noExp.status).toBe(400);
+    const ok = await post("/api/vendors", { name: "Food Good", category: "Grocery", registration_type: "unregistered",
+      vendor_type: "food", fssai_licence: "10012345000123", fssai_expiry: "2027-01-01" }, adminToken);
+    expect(ok.status).toBe(201);
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════
