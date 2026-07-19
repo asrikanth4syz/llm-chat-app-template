@@ -253,9 +253,24 @@ async function fixCategoryNames(env: Env): Promise<void> {
   } catch { /* column already exists */ }
   for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT",
     "registration_type TEXT DEFAULT 'unregistered'","gstin TEXT","pan TEXT",
-    "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT"]) {
+    "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT",
+    "onboarding_status TEXT DEFAULT 'active'",
+    "bank_account_name TEXT","bank_account_no TEXT","bank_ifsc TEXT","bank_name TEXT",
+    "bank_branch TEXT","upi_id TEXT","payment_terms TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE vendors ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS vendor_documents (
+      id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, kind TEXT NOT NULL,
+      filename TEXT, mime TEXT, size INTEGER, data TEXT, expiry_date TEXT,
+      uploaded_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* ignore */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS vendor_products (
+      id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, sku TEXT, name TEXT NOT NULL,
+      pack TEXT, moq REAL DEFAULT 1, rate REAL DEFAULT 0, lead_days INTEGER DEFAULT 3,
+      status TEXT DEFAULT 'new_sku')`).run();
+  } catch { /* ignore */ }
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
   } catch { /* column already exists */ }
@@ -371,6 +386,8 @@ export default {
       // Vendors
       if (path==="/api/vendors"  && method==="GET")  return handleListVendors(request,env);
       if (path==="/api/vendors"  && method==="POST") return handleAddVendor(request,env);
+      if (path.match(/^\/api\/vendors\/[^/]+\/documents$/) && method==="GET") return handleListVendorDocuments(request,env,path);
+      if (path.match(/^\/api\/vendors\/[^/]+\/products$/)  && method==="GET") return handleListVendorProducts(request,env,path);
       if (path.match(/^\/api\/vendors\/[^/]+$/) && method==="PATCH") return handlePatchVendor(request,env,path);
 
       // Purchase Orders
@@ -1297,18 +1314,50 @@ function resolveVendorCompliance(body: Record<string,unknown>): VendorCompliance
   return { registration_type: reg, gstin, pan, vendor_type: vtype, fssai_licence: fssai, fssai_expiry: fssaiExp };
 }
 
+const VENDOR_ONB_STATES = ['draft','pending','active','rejected'];
+// Persist a vendor's onboarding sub-resources (documents & products) — replace-all
+// semantics, so the wizard's step lists are the source of truth. Each document is
+// stored as a base64 data URL (MVP; move to R2 later). Capped to keep D1 lean.
+const MAX_DOC_BYTES = 1_200_000; // ~1.2 MB per file
+async function saveVendorSubResources(env: Env, vendorId: string, body: Record<string,unknown>): Promise<string|undefined> {
+  if (Array.isArray(body.documents)) {
+    await env.DB.prepare("DELETE FROM vendor_documents WHERE vendor_id=?").bind(vendorId).run();
+    for (const d of body.documents as Array<Record<string,unknown>>) {
+      const data = String(d.data || '');
+      if (data && data.length > MAX_DOC_BYTES) return `${d.kind || 'A document'} is too large — keep uploads under 1 MB`;
+      await env.DB.prepare("INSERT INTO vendor_documents (id,vendor_id,kind,filename,mime,size,data,expiry_date) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(uid(), vendorId, String(d.kind||'other'), String(d.filename||''), String(d.mime||''), Number(d.size)||0, data||null, d.expiry_date?String(d.expiry_date):null).run();
+    }
+  }
+  if (Array.isArray(body.products)) {
+    await env.DB.prepare("DELETE FROM vendor_products WHERE vendor_id=?").bind(vendorId).run();
+    for (const pr of body.products as Array<Record<string,unknown>>) {
+      if (!pr.name) continue;
+      await env.DB.prepare("INSERT INTO vendor_products (id,vendor_id,sku,name,pack,moq,rate,lead_days,status) VALUES (?,?,?,?,?,?,?,?,?)")
+        .bind(uid(), vendorId, pr.sku?String(pr.sku):null, String(pr.name), pr.pack?String(pr.pack):null,
+          Number(pr.moq)||1, Number(pr.rate)||0, Number(pr.lead_days)||3, pr.sku?'linked':'new_sku').run();
+    }
+  }
+  return undefined;
+}
+
 async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const comp = resolveVendorCompliance(body);
   if (comp.error) return json({ error: comp.error }, 400);
+  const status = VENDOR_ONB_STATES.includes(String(body.onboarding_status)) ? String(body.onboarding_status) : 'active';
   const id = `v${uid().slice(0,6)}`;
   const leadDays = body.avg_lead_days != null && body.avg_lead_days !== '' ? Number(body.avg_lead_days) : 3;
-  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry,onboarding_status,bank_account_name,bank_account_no,bank_ifsc,bank_name,bank_branch,upi_id,payment_terms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .bind(id,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null,
       isNaN(leadDays)?3:leadDays, body.notes||null, body.visit_frequency||null, body.visit_day||null,
-      comp.registration_type, comp.gstin, comp.pan, comp.vendor_type, comp.fssai_licence, comp.fssai_expiry).run();
+      comp.registration_type, comp.gstin, comp.pan, comp.vendor_type, comp.fssai_licence, comp.fssai_expiry,
+      status, body.bank_account_name||null, body.bank_account_no||null, body.bank_ifsc||null, body.bank_name||null,
+      body.bank_branch||null, body.upi_id||null, body.payment_terms||null).run();
+  const subErr = await saveVendorSubResources(env, id, body);
+  if (subErr) return json({ error: subErr }, 400);
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
     `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor ID: ${id}\n\nRegards,\n4SYZ Smart Pantry Team`);
   await audit(env, user, "CREATE", "vendor", id, undefined, body.name as string);
@@ -1343,11 +1392,35 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
     fields.push("fssai_licence=?");     vals.push(comp.fssai_licence);
     fields.push("fssai_expiry=?");      vals.push(comp.fssai_expiry);
   }
+  for (const c of ["bank_account_name","bank_account_no","bank_ifsc","bank_name","bank_branch","upi_id","payment_terms"]) {
+    if (body[c] !== undefined) { fields.push(`${c}=?`); vals.push(body[c]||null); }
+  }
+  if (body.onboarding_status !== undefined && VENDOR_ONB_STATES.includes(String(body.onboarding_status))) {
+    fields.push("onboarding_status=?"); vals.push(String(body.onboarding_status));
+  }
   if (body.active        !== undefined) { fields.push("active=?");        vals.push(body.active); }
-  if (!fields.length) return json({error:"Nothing to update"}, 400);
+  const subErr = await saveVendorSubResources(env, id, body);
+  if (subErr) return json({ error: subErr }, 400);
+  if (!fields.length) return json({id}); // sub-resources may be all that changed
   vals.push(id);
   await env.DB.prepare(`UPDATE vendors SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
   return json({id});
+}
+
+async function handleListVendorDocuments(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const vid = path.split("/")[3];
+  const { results } = await env.DB.prepare("SELECT id,kind,filename,mime,size,data,expiry_date,uploaded_at FROM vendor_documents WHERE vendor_id=? ORDER BY uploaded_at").bind(vid).all();
+  return json(results);
+}
+
+async function handleListVendorProducts(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const vid = path.split("/")[3];
+  const { results } = await env.DB.prepare("SELECT id,sku,name,pack,moq,rate,lead_days,status FROM vendor_products WHERE vendor_id=? ORDER BY name").bind(vid).all();
+  return json(results);
 }
 
 // ════════════════════════════════════════════════════════════════════

@@ -617,6 +617,35 @@ button { font-family: var(--font); cursor: pointer; }
 .ord-sec.open .ord-chev { transform: rotate(90deg); }
 .ord-sec-body { display: none; border-top: 1px solid var(--border); padding: 12px 14px; }
 .ord-sec.open .ord-sec-body { display: block; }
+
+/* Vendor onboarding wizard */
+.vw-stepper { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.vw-step { flex: 1; min-width: 96px; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 8px 10px; cursor: pointer; text-align: left; font-family: var(--font); transition: .15s; }
+.vw-step:hover { border-color: var(--border-mid); }
+.vw-step.on { border-color: var(--primary); background: var(--primary-light); }
+.vw-step .n { width: 19px; height: 19px; border-radius: 50%; background: var(--surface-2); color: var(--text-muted); font-size: .68rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); }
+.vw-step.on .n { background: var(--primary); color: #fff; border-color: var(--primary); }
+.vw-step .lab { display: block; font-size: .74rem; font-weight: 700; color: var(--navy); margin-top: 5px; }
+.vw-prog { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin: 10px 0 16px; }
+.vw-prog i { display: block; height: 100%; background: var(--primary); transition: width .3s; }
+.vw-panel { display: none; }
+.vw-panel.on { display: block; animation: vwfade .2s ease; }
+@keyframes vwfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .vw-panel.on { animation: none; } }
+.vw-step-title { font-size: 1rem; font-weight: 800; color: var(--navy); margin: 0 0 3px; }
+.vw-step-desc { font-size: .82rem; color: var(--text-muted); margin: 0 0 14px; }
+.vw-drop { border: 1.6px dashed var(--border-mid); border-radius: 11px; padding: 11px 13px; display: flex; align-items: center; gap: 12px; background: var(--surface-2); margin-bottom: 9px; }
+.vw-drop.done { border-style: solid; border-color: var(--success); background: #f0fdf4; }
+.vw-drop .ic { width: 38px; height: 38px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 1.05rem; flex-shrink: 0; }
+.vw-drop.done .ic { background: var(--success); color: #fff; border-color: var(--success); }
+.vw-drop .t { font-size: .83rem; font-weight: 700; color: var(--navy); }
+.vw-drop .s { font-size: .72rem; color: var(--text-muted); margin-top: 1px; }
+.vw-drop .act { margin-left: auto; flex-shrink: 0; }
+.vw-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.vw-ci { display: flex; align-items: center; gap: 9px; font-size: .84rem; margin-bottom: 6px; }
+.vw-ci .b { width: 18px; height: 18px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: .7rem; font-weight: 900; flex-shrink: 0; }
+.vw-ci .b.y { background: var(--success); color: #fff; }
+.vw-ci .b.n { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
 .add-btn { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--primary); background: var(--primary-light); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--primary); transition: all .15s; }
 .add-btn:hover { background: var(--primary); color: white; }
 .add-btn.added { background: var(--success); border-color: var(--success); color: white; }

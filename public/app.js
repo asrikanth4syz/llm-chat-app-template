@@ -6172,10 +6172,215 @@ function onVendorVisitFreqChange(prefix) {
   if (field) field.innerHTML = vendorVisitDayField(prefix, freq, '');
 }
 
-function addVendorModal() {
-  openModal('Add Vendor', vendorFormFields('v'),
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveVendor()">Add Vendor</button>`);
+// ── Vendor onboarding wizard ────────────────────────────────
+const VW_STEPS = ['Business & compliance','Bank','Documents','Products','Review'];
+const VW_DOCS = [
+  { kind:'cancelled_cheque', label:'Cancelled cheque' },
+  { kind:'gst_cert',        label:'GST certificate' },
+  { kind:'fssai',           label:'FSSAI licence copy' },
+  { kind:'pan',             label:'PAN card', opt:true },
+  { kind:'agreement',       label:'Supply agreement', opt:true },
+];
+const _gv = id => (document.getElementById(id)?.value || '').trim();
+
+function addVendorModal() { openVendorWizard(null); }
+
+function openVendorWizard(v) {
+  APP._vw = { step:0, editId: v?.id || null, docs:{}, steps: VW_STEPS.length };
+  openModal(v ? `Edit vendor: ${v.name}` : 'Vendor onboarding',
+    vendorWizardHtml(v || {}),
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`);
+  VW_DOCS.forEach(d => vwRenderDrop(d.kind));
+  if (!v || !v.id) vwAddProductRow({});
+  else vwLoadExisting(v.id);
+  vwGo(0);
+}
+
+function vendorWizardHtml(v) {
+  const inS = 'width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:.85rem;box-sizing:border-box';
+  return `
+    <div class="vw-stepper">
+      ${VW_STEPS.map((s,i)=>`<button class="vw-step${i===0?' on':''}" id="vwstep-${i}" onclick="vwGo(${i})"><span class="n">${i+1}</span><span class="lab">${s}</span></button>`).join('')}
+    </div>
+    <div class="vw-prog"><i id="vw-prog" style="width:20%"></i></div>
+
+    <div class="vw-panel on" id="vwp-0">${vendorFormFields('vw', v)}</div>
+
+    <div class="vw-panel" id="vwp-1">
+      <p class="vw-step-title">Bank &amp; payout</p>
+      <p class="vw-step-desc">Where payments go. Upload the cancelled cheque on the next step.</p>
+      <div class="grid-2">
+        <div class="form-group"><label>Account holder name</label><input id="vw-bank-acname" style="${inS}" value="${h(v.bank_account_name||'')}" placeholder="As per bank records"></div>
+        <div class="form-group"><label>Account number</label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
+        <div class="form-group"><label>IFSC <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
+          <input id="vw-bank-ifsc" style="${inS};text-transform:uppercase;letter-spacing:.04em" value="${h(v.bank_ifsc||'')}" maxlength="11" spellcheck="false"
+            oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,11)"><div id="vw-bank-ifsc-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div></div>
+        <div class="form-group"><label>Bank name</label><input id="vw-bank-bankname" style="${inS}" value="${h(v.bank_name||'')}" placeholder="e.g. HDFC Bank"></div>
+        <div class="form-group"><label>Branch</label><input id="vw-bank-branch" style="${inS}" value="${h(v.bank_branch||'')}" placeholder="e.g. BTM Layout"></div>
+        <div class="form-group"><label>UPI ID <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional)</span></label><input id="vw-upi" style="${inS}" value="${h(v.upi_id||'')}" placeholder="name@bank"></div>
+      </div>
+      <div class="form-group"><label>Payment terms</label><input id="vw-terms" style="${inS}" value="${h(v.payment_terms||'')}" placeholder="e.g. Net 15 days"></div>
+    </div>
+
+    <div class="vw-panel" id="vwp-2">
+      <p class="vw-step-title">Documents</p>
+      <p class="vw-step-desc">PDF, JPG or PNG · up to 1 MB each. Required set depends on registration &amp; type.</p>
+      ${VW_DOCS.map(d=>`<div class="vw-drop" id="vwdrop-${d.kind}"></div>`).join('')}
+    </div>
+
+    <div class="vw-panel" id="vwp-3">
+      <p class="vw-step-title">Products supplied</p>
+      <p class="vw-step-desc">What they sell us — basis for POs. Link a catalogue SKU or leave blank for a new one.</p>
+      <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px">
+        <table class="table" style="margin:0">
+          <thead><tr><th>Item</th><th>Pack</th><th style="width:66px">MOQ</th><th style="width:86px">Rate ₹</th><th style="width:66px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
+          <tbody id="vw-products"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="vwAddProductRow({})">+ Add product</button>
+    </div>
+
+    <div class="vw-panel" id="vwp-4">
+      <p class="vw-step-title">Review &amp; submit</p>
+      <p class="vw-step-desc">Completeness at a glance. You can submit now — ops verifies and activates the vendor.</p>
+      <div id="vw-review"></div>
+    </div>
+
+    <div class="vw-nav">
+      <button class="btn btn-secondary" id="vw-back" onclick="vwStep(-1)">← Back</button>
+      <span style="font-size:.74rem;color:var(--text-muted)">Step <b id="vw-stepno">1</b> of ${VW_STEPS.length}</span>
+      <button class="btn btn-primary" id="vw-next" onclick="vwStep(1)">Continue →</button>
+    </div>`;
+}
+
+function vwGo(i) {
+  const last = APP._vw.steps - 1;
+  APP._vw.step = i;
+  VW_STEPS.forEach((_,k)=>{ document.getElementById('vwstep-'+k)?.classList.toggle('on', k===i);
+    document.getElementById('vwp-'+k)?.classList.toggle('on', k===i); });
+  const prog = document.getElementById('vw-prog'); if (prog) prog.style.width = Math.round((i+1)/VW_STEPS.length*100)+'%';
+  const back = document.getElementById('vw-back'); if (back) back.style.visibility = i===0 ? 'hidden' : 'visible';
+  const next = document.getElementById('vw-next'); if (next) next.textContent = i===last ? 'Submit for verification' : 'Continue →';
+  const sn = document.getElementById('vw-stepno'); if (sn) sn.textContent = i+1;
+  if (i===last) vwRenderReview();
+  document.getElementById('modal-body')?.scrollTo({ top:0, behavior:'smooth' });
+}
+function vwStep(d) {
+  const ni = APP._vw.step + d;
+  if (ni > APP._vw.steps - 1) { saveVendorWizard(); return; }
+  vwGo(Math.max(0, ni));
+}
+
+function vwRenderDrop(kind) {
+  const el = document.getElementById('vwdrop-' + kind); if (!el) return;
+  const meta = VW_DOCS.find(x => x.kind === kind) || { label: kind };
+  const d = APP._vw.docs[kind];
+  if (d) {
+    el.className = 'vw-drop done';
+    el.innerHTML = `<div class="ic">✓</div><div style="min-width:0"><div class="t">${meta.label}</div>
+      <div class="s">${h(d.filename||'file')} · ${Math.max(1,Math.round((d.size||0)/1024))} KB${d.existing?' · on file':''}</div></div>
+      <button class="btn btn-secondary btn-sm act" onclick="vwRemoveDoc('${kind}')">Remove</button>`;
+  } else {
+    el.className = 'vw-drop';
+    el.innerHTML = `<div class="ic">＋</div><div style="min-width:0"><div class="t">${meta.label}${meta.opt?' <span style="color:var(--text-muted);font-weight:400">(optional)</span>':''}</div>
+      <div class="s">Click to upload · PDF/JPG/PNG · max 1 MB</div></div>
+      <label class="btn btn-secondary btn-sm act" style="cursor:pointer;margin:0">Upload<input type="file" accept="image/*,application/pdf" style="display:none" onchange="vwPickFile('${kind}',this)"></label>`;
+  }
+}
+function vwPickFile(kind, input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  if (f.size > 1200000) { showToast('File too large — keep uploads under 1 MB', 'error'); input.value=''; return; }
+  const r = new FileReader();
+  r.onload = () => { APP._vw.docs[kind] = { kind, filename:f.name, mime:f.type, size:f.size, data:r.result }; vwRenderDrop(kind); };
+  r.readAsDataURL(f);
+}
+function vwRemoveDoc(kind) { delete APP._vw.docs[kind]; vwRenderDrop(kind); }
+
+function vwAddProductRow(p) {
+  const tb = document.getElementById('vw-products'); if (!tb) return;
+  const cs = 'width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 7px;font-size:.8rem;box-sizing:border-box';
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="vwp-name" style="${cs}" value="${h(p.name||'')}" placeholder="Item name"></td>
+    <td><input class="vwp-pack" style="${cs}" value="${h(p.pack||'')}" placeholder="Carton·24"></td>
+    <td><input class="vwp-moq" type="number" min="1" style="${cs};text-align:right" value="${p.moq||1}"></td>
+    <td><input class="vwp-rate" type="number" min="0" style="${cs};text-align:right" value="${p.rate!=null?p.rate:''}"></td>
+    <td><input class="vwp-lead" type="number" min="0" style="${cs};text-align:right" value="${p.lead_days!=null?p.lead_days:3}"></td>
+    <td><input class="vwp-sku" style="${cs}" value="${h(p.sku||'')}" placeholder="optional"></td>
+    <td><button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="this.closest('tr').remove()">✕</button></td>`;
+  tb.appendChild(tr);
+}
+function vwCollectProducts() {
+  return [...document.querySelectorAll('#vw-products tr')].map(tr => ({
+    name: tr.querySelector('.vwp-name').value.trim(),
+    pack: tr.querySelector('.vwp-pack').value.trim(),
+    moq: +tr.querySelector('.vwp-moq').value || 1,
+    rate: +tr.querySelector('.vwp-rate').value || 0,
+    lead_days: +tr.querySelector('.vwp-lead').value || 3,
+    sku: tr.querySelector('.vwp-sku').value.trim() || null,
+  })).filter(p => p.name);
+}
+
+async function vwLoadExisting(id) {
+  const [docs, prods] = await Promise.all([
+    api(`/vendors/${id}/documents`).catch(()=>[]),
+    api(`/vendors/${id}/products`).catch(()=>[]),
+  ]);
+  (docs||[]).forEach(d => { APP._vw.docs[d.kind] = { kind:d.kind, filename:d.filename, mime:d.mime, size:d.size, data:d.data, existing:true }; vwRenderDrop(d.kind); });
+  const tb = document.getElementById('vw-products');
+  if (tb) { tb.innerHTML = ''; (prods||[]).forEach(p => vwAddProductRow(p)); if (!(prods||[]).length) vwAddProductRow({}); }
+}
+
+function vwRenderReview() {
+  const regd = _gv('vw-regtype') === 'registered';
+  const food = _gv('vw-vtype') === 'food';
+  const items = [
+    { label:'Business details', ok: !!_gv('vw-name') },
+    { label: regd ? 'GST + PAN validated' : 'Registration set', ok: regd ? !!_gv('vw-gstin') : true },
+    { label:'FSSAI licence + expiry', ok: !!_gv('vw-fssai') && !!_gv('vw-fssai-exp'), show: food },
+    { label:'Bank account + IFSC', ok: !!_gv('vw-bank-acno') && !!_gv('vw-bank-ifsc') },
+    { label:'Cancelled cheque', ok: !!APP._vw.docs.cancelled_cheque },
+    { label:'GST certificate copy', ok: !!APP._vw.docs.gst_cert, show: regd },
+    { label:'FSSAI licence copy', ok: !!APP._vw.docs.fssai, show: food },
+    { label:'Products added', ok: vwCollectProducts().length > 0 },
+  ].filter(x => x.show !== false);
+  const done = items.filter(x => x.ok).length, pct = Math.round(done/items.length*100);
+  document.getElementById('vw-review').innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:220px">${items.map(x=>`<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span> ${x.label}${x.ok?'':' <span style="color:var(--text-muted)">— missing</span>'}</div>`).join('')}</div>
+      <div style="flex:0 0 210px;border:1px solid var(--primary-border,#99f6e4);background:var(--primary-light);border-radius:12px;padding:14px 16px">
+        <div style="font-size:1.4rem;font-weight:800;color:var(--primary-hover)">${pct}% complete</div>
+        <div style="font-size:.8rem;color:var(--text);margin-top:6px">${pct===100?'All set — submit for verification.':'You can submit now; ops will verify and activate the vendor, or bounce it back with a note.'}</div>
+      </div>
+    </div>`;
+}
+
+async function saveVendorWizard() {
+  const body = collectVendorForm('vw');
+  if (!body.name) { showToast('Vendor name required', 'error'); vwGo(0); return; }
+  if (!validateVendorCompliance('vw', body)) { vwGo(0); return; }
+  const ifsc = (_gv('vw-bank-ifsc') || '').toUpperCase();
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+    const m = document.getElementById('vw-bank-ifsc-msg'); if (m) { m.textContent = 'IFSC must be 4 letters, 0, then 6 letters/digits.'; m.style.color = 'var(--danger)'; }
+    showToast('Enter a valid IFSC (e.g. HDFC0001234)', 'error'); vwGo(1); return;
+  }
+  Object.assign(body, {
+    bank_account_name: _gv('vw-bank-acname')||null, bank_account_no: _gv('vw-bank-acno')||null, bank_ifsc: ifsc||null,
+    bank_name: _gv('vw-bank-bankname')||null, bank_branch: _gv('vw-bank-branch')||null,
+    upi_id: _gv('vw-upi')||null, payment_terms: _gv('vw-terms')||null,
+    documents: Object.values(APP._vw.docs).map(d => ({ kind:d.kind, filename:d.filename, mime:d.mime, size:d.size, data:d.data,
+      expiry_date: d.kind==='fssai' ? (body.fssai_expiry||null) : null })),
+    products: vwCollectProducts(),
+  });
+  if (!APP._vw.editId) body.onboarding_status = 'pending';
+  const btn = document.getElementById('vw-next'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const res = APP._vw.editId
+    ? await api('/vendors/' + APP._vw.editId, { method:'PATCH', body: JSON.stringify(body) })
+    : await api('/vendors', { method:'POST', body: JSON.stringify(body) });
+  if (!res) { if (btn) { btn.disabled = false; btn.textContent = 'Submit for verification'; } return; }
+  closeModal();
+  showToast(APP._vw.editId ? 'Vendor updated' : 'Vendor submitted for verification');
+  APP._vendorSearch=''; APP._vendorCat=''; APP._vendorLoc=''; navigate('vendors');
 }
 
 function collectVendorForm(prefix) {
@@ -6232,8 +6437,10 @@ function viewVendorModal(v) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Lead Time</div><div style="font-weight:600">${v.avg_lead_days!=null?v.avg_lead_days+' days':'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Visit Schedule</div><div style="font-weight:600">${v.visit_frequency?`${v.visit_frequency}${v.visit_day?' · '+(v.visit_frequency==='Monthly'?'day '+v.visit_day:v.visit_day):''}`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Onboarding</div><div style="font-weight:700">${vendorOnbBadge(v.onboarding_status)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Registration</div><div style="font-weight:600">${v.registration_type==='registered'?'Registered':'Unregistered'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Vendor Type</div><div style="font-weight:600">${v.vendor_type==='food'?'🍽 Food':'Non-food'}</div></div>
+      ${v.bank_account_no?`<div><div style="font-size:.72rem;color:var(--text-muted)">Bank</div><div style="font-weight:600">${h(v.bank_name||'—')} · ****${String(v.bank_account_no).slice(-4)}${v.bank_ifsc?' · '+h(v.bank_ifsc):''}</div></div>`:''}
       ${v.registration_type==='registered'?`
       <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${v.gstin||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${v.pan||'—'}</div></div>`:''}
@@ -6244,15 +6451,24 @@ function viewVendorModal(v) {
     ${v.notes?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Comments / Notes</div><div style="font-size:.84rem;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;line-height:1.5">${h(v.notes)}</div></div>`:''}
     ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
-    `<button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
+    `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
+     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
-function editVendorModal(v) {
-  openModal(`Edit Vendor: ${v.name}`, vendorFormFields('ev', v),
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveEditVendor('${v.id}')">Save Changes</button>`);
+function vendorOnbBadge(s) {
+  const m = { active:['Active','var(--success)','#f0fdf4'], pending:['Pending verify','#b45309','#fffbeb'],
+    draft:['Draft','var(--text-muted)','var(--surface-2)'], rejected:['Rejected','var(--danger)','#fef2f2'] };
+  const [label,color,bg] = m[s||'active'] || m.active;
+  return `<span style="display:inline-block;font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:${color};background:${bg};border:1px solid ${color}44;border-radius:100px;padding:2px 9px">${label}</span>`;
 }
+
+async function approveVendor(id) {
+  const res = await api('/vendors/' + id, { method:'PATCH', body: JSON.stringify({ onboarding_status:'active' }) });
+  if (res) { closeModal(); showToast('Vendor activated'); navigate('vendors'); }
+}
+
+function editVendorModal(v) { openVendorWizard(v); }
 
 async function saveEditVendor(id) {
   const body = collectVendorForm('ev');

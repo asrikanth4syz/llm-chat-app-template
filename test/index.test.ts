@@ -271,6 +271,41 @@ describe("Vendors", () => {
     expect(res.status).toBe(201);
   });
 
+  it("POST /api/vendors — onboarding payload stores bank, documents and products", async () => {
+    const res = await post("/api/vendors", {
+      name: "Onboard Co", category: "Grocery", registration_type: "unregistered",
+      onboarding_status: "pending",
+      bank_account_name: "Onboard Co", bank_account_no: "50100245678", bank_ifsc: "HDFC0001234",
+      bank_name: "HDFC Bank", bank_branch: "BTM",
+      documents: [{ kind: "cancelled_cheque", filename: "cheque.jpg", mime: "image/jpeg", size: 2048, data: "data:image/jpeg;base64,AAAA" }],
+      products: [{ name: "Bru Coffee 200g", pack: "Carton·24", moq: 2, rate: 185, lead_days: 3, sku: "SKU001" },
+                 { name: "New Item", moq: 1, rate: 50, lead_days: 2 }],
+    }, adminToken);
+    expect(res.status).toBe(201);
+    const { id } = await res.json() as { id: string };
+
+    const v = (await (await get("/api/vendors", adminToken)).json() as Array<Record<string,unknown>>).find(x => x.id === id);
+    expect(v?.onboarding_status).toBe("pending");
+    expect(v?.bank_ifsc).toBe("HDFC0001234");
+
+    const docs = await (await get(`/api/vendors/${id}/documents`, adminToken)).json() as Array<{kind:string}>;
+    expect(docs.length).toBe(1);
+    expect(docs[0].kind).toBe("cancelled_cheque");
+
+    const prods = await (await get(`/api/vendors/${id}/products`, adminToken)).json() as Array<{name:string;status:string}>;
+    expect(prods.length).toBe(2);
+    expect(prods.find(p => p.name === "Bru Coffee 200g")?.status).toBe("linked"); // has SKU
+    expect(prods.find(p => p.name === "New Item")?.status).toBe("new_sku");
+  });
+
+  it("PATCH /api/vendors/:id — approve flips onboarding_status to active", async () => {
+    const { id } = await (await post("/api/vendors", { name: "Approve Co", category: "Grocery", onboarding_status: "pending" }, adminToken)).json() as { id: string };
+    const res = await patch(`/api/vendors/${id}`, { onboarding_status: "active" }, adminToken);
+    expect(ok(res.status)).toBe(true);
+    const v = (await (await get("/api/vendors", adminToken)).json() as Array<Record<string,unknown>>).find(x => x.id === id);
+    expect(v?.onboarding_status).toBe("active");
+  });
+
   it("POST /api/vendors — food vendor requires a 14-digit FSSAI licence + expiry", async () => {
     const bad = await post("/api/vendors", { name: "Food Bad", category: "Grocery", registration_type: "unregistered",
       vendor_type: "food", fssai_licence: "123", fssai_expiry: "2027-01-01" }, adminToken);
