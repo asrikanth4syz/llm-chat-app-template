@@ -3472,7 +3472,7 @@ async function viewOrder(id) {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
           <div style="display:flex;gap:4px">
-            <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
+            <button class="btn btn-secondary btn-sm" onclick="toggleDCItemsInline('${dc.id}',this)">View Items</button>
             ${dc.status==='SCHEDULED'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>`:''}
             ${dc.status==='IN_TRANSIT'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-success btn-sm" onclick="closeModal();markDelivered('${dc.id}')">Confirm Delivery</button>`:''}
           </div>
@@ -3480,6 +3480,7 @@ async function viewOrder(id) {
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
         ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
         ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch — remaining items from partial delivery</div>`:''}
+        <div id="dcitems-${dc.id}" style="display:none"></div>
       </div>`).join('')}
   </div>` : '';
 
@@ -7460,6 +7461,35 @@ async function viewDCItems(dcId) {
       </table>
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+// Inline (in-order-modal) DC item breakdown — expands within the order window
+// instead of opening a separate popup, so closing it never loses the order view.
+async function toggleDCItemsInline(dcId, btn) {
+  const box = document.getElementById('dcitems-' + dcId);
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; if (btn) btn.textContent = 'View Items'; return; }
+  if (!box.dataset.loaded) {
+    box.style.display = '';
+    box.innerHTML = `<div style="padding:8px 2px;color:var(--text-muted);font-size:.82rem">Loading items…</div>`;
+    const items = await api('/delivery-challans/' + dcId + '/items');
+    if (!items) { box.innerHTML = `<div style="padding:8px 2px;color:var(--danger);font-size:.82rem">Failed to load items.</div>`; return; }
+    const rows = items.length ? items.map(i => `<tr>
+        <td style="font-family:monospace;font-size:.78rem;color:var(--text-muted)">${h(i.sku)}</td>
+        <td><b>${h(i.name)}</b></td>
+        <td style="text-align:right">${i.qty_ordered}</td>
+        <td style="text-align:right;color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
+        <td style="text-align:right;color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
+      </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No items</td></tr>`;
+    box.innerHTML = `<div class="table-wrap" style="margin-top:8px;border:1px solid var(--border);border-radius:8px">
+      <table class="table" style="margin:0;font-size:.82rem">
+        <thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">Dispatched</th><th style="text-align:right">Delivered</th><th style="text-align:right">Pending</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    box.dataset.loaded = '1';
+  }
+  box.style.display = '';
+  if (btn) btn.textContent = 'Hide Items';
 }
 
 async function dispatchDCModal(dcId) {
