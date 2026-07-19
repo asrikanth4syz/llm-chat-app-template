@@ -5896,7 +5896,28 @@ async function renderVendors(el) {
     </div>`;
   }
 
+  // FSSAI licence alert — food vendors whose licence has expired or lapses within 30 days.
+  const _today = new Date().toISOString().slice(0,10);
+  const _soon  = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  const fssaiFlagged = (allVendors||[]).filter(v => v.active!==0 && v.vendor_type==='food' && v.fssai_expiry && v.fssai_expiry <= _soon)
+    .sort((a,b) => (a.fssai_expiry||'').localeCompare(b.fssai_expiry||''));
+  const fssaiExpired = fssaiFlagged.filter(v => v.fssai_expiry < _today);
+  const fssaiSoon    = fssaiFlagged.filter(v => v.fssai_expiry >= _today);
+  const anyExpired = fssaiExpired.length > 0;
+  const fssaiChip = v => {
+    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Renew</button>`;
+    const expd = v.fssai_expiry < _today;
+    return `<span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid ${expd?'#fca5a5':'#fde68a'};border-radius:8px;padding:5px 8px 5px 11px;font-size:.78rem">
+      <span><b>${h(v.name)}</b> · <span style="color:${expd?'var(--danger)':'#b45309'};font-weight:700">${expd?'expired':'expires'} ${fmtDate(v.fssai_expiry)}</span></span>${btn}</span>`;
+  };
+  const fssaiBanner = fssaiFlagged.length ? `
+    <div style="background:${anyExpired?'#fef2f2':'#fffbeb'};border:1.5px solid ${anyExpired?'#fca5a5':'#fde68a'};border-radius:12px;padding:13px 16px;margin-bottom:16px">
+      <div style="font-weight:800;color:${anyExpired?'#dc2626':'#b45309'};font-size:.9rem;margin-bottom:8px">🍽 FSSAI licence attention — ${fssaiFlagged.length} food vendor${fssaiFlagged.length>1?'s':''}${anyExpired?` · ${fssaiExpired.length} expired`:''}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${[...fssaiExpired, ...fssaiSoon].map(fssaiChip).join('')}</div>
+    </div>` : '';
+
   el.innerHTML = `
+  ${fssaiBanner}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Vendor Directory</div>
