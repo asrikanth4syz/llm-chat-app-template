@@ -3442,11 +3442,12 @@ async function renderMyOrders(el) {
 }
 
 async function viewOrder(id) {
-  const [order, comments, dcRes, allocations] = await Promise.all([
+  const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
     api('/orders/' + id + '/comments'),
     api('/delivery-challans').catch(()=>null),
-    api('/orders/' + id + '/allocations').catch(()=>[])
+    api('/orders/' + id + '/allocations').catch(()=>[]),
+    api('/orders/' + id + '/drilldown').catch(()=>null)
   ]);
   if (!order) return;
 
@@ -3454,6 +3455,13 @@ async function viewOrder(id) {
   const allocMap = {};
   (allocations||[]).forEach(a => { allocMap[a.sku] = (allocMap[a.sku]||0) + a.qty; });
   const hasPartialPick = Object.keys(allocMap).length > 0;
+
+  // Delivered qty per sku comes from the delivery-challan breakdown (drilldown).
+  // Once an order has been dispatched, show DELIVERED (what the client received)
+  // instead of PICKED (what the warehouse pulled).
+  const deliveredMap = {};
+  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: l.qty_delivered||0, due: l.qty_due||0 }; });
+  const showDelivered = ['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(order.status) && (drill?.lines||[]).length > 0;
 
   const orderDCs = (dcRes||[]).filter(d => d.order_id === id);
   const dcSection = orderDCs.length ? `
@@ -3475,15 +3483,29 @@ async function viewOrder(id) {
       </div>`).join('')}
   </div>` : '';
 
-  const itemsTableHeader = hasPartialPick
+  const qtyMode = showDelivered ? 'delivered' : hasPartialPick ? 'picked' : 'plain';
+  const itemsTableHeader = qtyMode === 'delivered'
+    ? `<tr><th>Item</th><th>Ordered</th><th>Delivered</th><th>Unit</th><th>Total</th></tr>`
+    : qtyMode === 'picked'
     ? `<tr><th>Item</th><th>Ordered</th><th>Picked</th><th>Unit</th><th>Total</th></tr>`
     : `<tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>`;
 
   const itemsTableRows = (order.items||[]).map(i => {
-    const picked = allocMap[i.sku];
-    const isShort = hasPartialPick && picked !== undefined && picked < i.qty;
     const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
-    if (hasPartialPick) {
+    if (qtyMode === 'delivered') {
+      const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
+      const short = d.due > 0;
+      return `<tr>
+        <td>${i.name}${noteHtml}</td>
+        <td style="color:var(--text-muted)">${i.qty}</td>
+        <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
+        <td>${fmt(i.unit_price)}</td>
+        <td>${fmt(i.total)}</td>
+      </tr>`;
+    }
+    if (qtyMode === 'picked') {
+      const picked = allocMap[i.sku];
+      const isShort = picked !== undefined && picked < i.qty;
       return `<tr>
         <td>${i.name}${noteHtml}</td>
         <td style="color:var(--text-muted)">${i.qty}</td>
@@ -3558,7 +3580,8 @@ async function viewOrder(id) {
       ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${order.notes}</span></div>` : ''}
       ${order.order_image ? `<div style="margin-top:10px"><div style="font-weight:700;font-size:.8rem;color:var(--navy);margin-bottom:6px">📷 Attached Photo</div><a href="${order.order_image}" target="_blank"><img src="${order.order_image}" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" title="Click to open full size"></a></div>` : ''}
     </div>
-    <b>Items</b>${hasPartialPick?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
+    ${dcSection}
+    <b>Items</b>${qtyMode==='delivered'?` <span style="font-size:.78rem;color:var(--text-muted);margin-left:6px">delivered qty shown</span>`:qtyMode==='picked'?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
     <table class="table" style="margin-top:8px">
       <thead>${itemsTableHeader}</thead>
       <tbody>${itemsTableRows}</tbody>
@@ -3572,7 +3595,6 @@ async function viewOrder(id) {
       <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
     </div>`).join('')}
     </div>` : ''}
-    ${dcSection}
     ${commentsHtml}`,
     (() => {
       const s = order.status;
