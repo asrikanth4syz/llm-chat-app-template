@@ -6210,9 +6210,9 @@ function vendorWizardHtml(v) {
       <p class="vw-step-title">Bank &amp; payout</p>
       <p class="vw-step-desc">Where payments go. Upload the cancelled cheque on the next step.</p>
       <div class="grid-2">
-        <div class="form-group"><label>Account holder name</label><input id="vw-bank-acname" style="${inS}" value="${h(v.bank_account_name||'')}" placeholder="As per bank records"></div>
-        <div class="form-group"><label>Account number</label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
-        <div class="form-group"><label>IFSC <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
+        <div class="form-group"><label>Account holder name <span style="color:var(--danger)">*</span></label><input id="vw-bank-acname" style="${inS}" value="${h(v.bank_account_name||'')}" placeholder="As per bank records"></div>
+        <div class="form-group"><label>Account number <span style="color:var(--danger)">*</span></label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
+        <div class="form-group"><label>IFSC <span style="color:var(--danger)">*</span> <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
           <input id="vw-bank-ifsc" style="${inS};text-transform:uppercase;letter-spacing:.04em" value="${h(v.bank_ifsc||'')}" maxlength="11" spellcheck="false"
             oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,11)"><div id="vw-bank-ifsc-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div></div>
         <div class="form-group"><label>Bank name</label><input id="vw-bank-bankname" style="${inS}" value="${h(v.bank_name||'')}" placeholder="e.g. HDFC Bank"></div>
@@ -6331,26 +6331,55 @@ async function vwLoadExisting(id) {
   if (tb) { tb.innerHTML = ''; (prods||[]).forEach(p => vwAddProductRow(p)); if (!(prods||[]).length) vwAddProductRow({}); }
 }
 
-function vwRenderReview() {
+// Single source of truth for what the wizard needs. `required` items block
+// submission; the rest are recommended. `show:false` items don't apply to this
+// vendor (e.g. GST cert for an unregistered vendor).
+function vwRequirements() {
   const regd = _gv('vw-regtype') === 'registered';
   const food = _gv('vw-vtype') === 'food';
-  const items = [
-    { label:'Business details', ok: !!_gv('vw-name') },
-    { label: regd ? 'GST + PAN validated' : 'Registration set', ok: regd ? !!_gv('vw-gstin') : true },
-    { label:'FSSAI licence + expiry', ok: !!_gv('vw-fssai') && !!_gv('vw-fssai-exp'), show: food },
-    { label:'Bank account + IFSC', ok: !!_gv('vw-bank-acno') && !!_gv('vw-bank-ifsc') },
-    { label:'Cancelled cheque', ok: !!APP._vw.docs.cancelled_cheque },
-    { label:'GST certificate copy', ok: !!APP._vw.docs.gst_cert, show: regd },
-    { label:'FSSAI licence copy', ok: !!APP._vw.docs.fssai, show: food },
-    { label:'Products added', ok: vwCollectProducts().length > 0 },
+  const ifsc = (_gv('vw-bank-ifsc') || '').toUpperCase();
+  const ifscValid = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc);
+  return [
+    { label:'Company name',              step:0, required:true,  ok: !!_gv('vw-name') },
+    { label:'GST number',                step:0, required:true,  ok: !!_gv('vw-gstin'),  show: regd },
+    { label:'FSSAI licence + expiry',    step:0, required:true,  ok: !!_gv('vw-fssai') && !!_gv('vw-fssai-exp'), show: food },
+    { label:'Account holder name',       step:1, required:true,  ok: !!_gv('vw-bank-acname') },
+    { label:'Account number',            step:1, required:true,  ok: !!_gv('vw-bank-acno') },
+    { label:'Valid IFSC',                step:1, required:true,  ok: ifscValid },
+    { label:'Cancelled cheque',          step:2, required:true,  ok: !!APP._vw.docs.cancelled_cheque },
+    { label:'GST certificate copy',      step:2, required:true,  ok: !!APP._vw.docs.gst_cert, show: regd },
+    { label:'FSSAI licence copy',        step:2, required:true,  ok: !!APP._vw.docs.fssai,    show: food },
+    { label:'At least one product',      step:3, required:true,  ok: vwCollectProducts().length > 0 },
+    { label:'UPI ID',                    step:1, required:false, ok: !!_gv('vw-upi') },
+    { label:'PAN card copy',             step:2, required:false, ok: !!APP._vw.docs.pan },
+    { label:'Supply agreement',          step:2, required:false, ok: !!APP._vw.docs.agreement },
   ].filter(x => x.show !== false);
-  const done = items.filter(x => x.ok).length, pct = Math.round(done/items.length*100);
+}
+function vwMissingRequired() { return vwRequirements().filter(r => r.required && !r.ok); }
+
+function vwRenderReview() {
+  const reqs = vwRequirements();
+  const required = reqs.filter(r => r.required), optional = reqs.filter(r => !r.required);
+  const missing = required.filter(r => !r.ok);
+  const done = required.filter(r => r.ok).length, pct = Math.round(done/required.length*100);
+  const row = x => `<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span>
+    <span style="cursor:pointer" onclick="vwGo(${x.step})">${x.label}${x.ok?'':` <span style="color:var(--danger)">— fill this</span>`}</span></div>`;
   document.getElementById('vw-review').innerHTML = `
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
-      <div style="flex:1;min-width:220px">${items.map(x=>`<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span> ${x.label}${x.ok?'':' <span style="color:var(--text-muted)">— missing</span>'}</div>`).join('')}</div>
-      <div style="flex:0 0 210px;border:1px solid var(--primary-border,#99f6e4);background:var(--primary-light);border-radius:12px;padding:14px 16px">
-        <div style="font-size:1.4rem;font-weight:800;color:var(--primary-hover)">${pct}% complete</div>
-        <div style="font-size:.8rem;color:var(--text);margin-top:6px">${pct===100?'All set — submit for verification.':'You can submit now; ops will verify and activate the vendor, or bounce it back with a note.'}</div>
+    ${missing.length ? `<div style="background:var(--red-wash,#fef2f2);border:1.5px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:14px">
+      <div style="font-weight:800;color:var(--danger);font-size:.86rem">${missing.length} required item${missing.length>1?'s':''} still needed to submit</div>
+      <div style="font-size:.78rem;color:#991b1b;margin-top:3px">${missing.map(m=>`<b>${m.label}</b>`).join(' · ')} — click any item below to jump to it.</div>
+    </div>` : `<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-weight:700;color:var(--success);font-size:.86rem">✓ All required information is in — ready to submit for verification.</div>`}
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:220px">
+        <div style="font-size:.66rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">Required</div>
+        ${required.map(row).join('')}
+        <div style="font-size:.66rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:14px 0 8px">Recommended</div>
+        ${optional.map(row).join('')}
+      </div>
+      <div style="flex:0 0 190px;border:1px solid var(--primary-border,#99f6e4);background:var(--primary-light);border-radius:12px;padding:14px 16px">
+        <div style="font-size:1.4rem;font-weight:800;color:var(--primary-hover)">${pct}%</div>
+        <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700">required complete</div>
+        <div style="font-size:.8rem;color:var(--text);margin-top:8px">${missing.length?'Finish the required items, then submit — ops verifies &amp; activates.':'Submit for verification; ops will activate the vendor.'}</div>
       </div>
     </div>`;
 }
@@ -6363,6 +6392,13 @@ async function saveVendorWizard() {
   if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
     const m = document.getElementById('vw-bank-ifsc-msg'); if (m) { m.textContent = 'IFSC must be 4 letters, 0, then 6 letters/digits.'; m.style.color = 'var(--danger)'; }
     showToast('Enter a valid IFSC (e.g. HDFC0001234)', 'error'); vwGo(1); return;
+  }
+  // Mandatory-info gate: everything marked required must be present to submit.
+  const missing = vwMissingRequired();
+  if (missing.length) {
+    showToast(`Fill ${missing.length} required item${missing.length>1?'s':''} before submitting for verification`, 'error');
+    vwGo(missing[0].step);              // jump to the first gap so they can fill it
+    return;
   }
   Object.assign(body, {
     bank_account_name: _gv('vw-bank-acname')||null, bank_account_no: _gv('vw-bank-acno')||null, bank_ifsc: ifsc||null,
