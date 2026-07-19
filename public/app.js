@@ -3452,6 +3452,18 @@ async function renderMyOrders(el) {
   </div>`;
 }
 
+// Collapsible section for the order detail (Option B — progressive disclosure).
+function orderSection(title, badge, body, open) {
+  return `<div class="ord-sec${open ? ' open' : ''}">
+    <div class="ord-sec-head" onclick="this.parentElement.classList.toggle('open')">
+      <svg class="ord-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="ord-sec-title">${title}</span>
+      ${badge ? `<span class="ord-sec-badge">${badge}</span>` : ''}
+    </div>
+    <div class="ord-sec-body">${body}</div>
+  </div>`;
+}
+
 async function viewOrder(id) {
   const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
@@ -3474,10 +3486,21 @@ async function viewOrder(id) {
   (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: l.qty_delivered||0, due: l.qty_due||0 }; });
   const showDelivered = ['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(order.status) && (drill?.lines||[]).length > 0;
 
+  // Fulfilment totals for the progress meter (from the delivery breakdown).
+  const dLines = drill?.lines || [];
+  const orderedUnits   = dLines.length ? dLines.reduce((s,l)=>s+(l.qty_ordered||0),0) : (order.items||[]).reduce((s,i)=>s+(i.qty||0),0);
+  const deliveredUnits = dLines.reduce((s,l)=>s+(l.qty_delivered||0),0);
+  const dueUnits       = dLines.reduce((s,l)=>s+(l.qty_due||0),0);
+  const fulfilPct      = orderedUnits ? Math.round(deliveredUnits/orderedUnits*100) : 0;
+  const dueValue       = drill?.summary?.total_due_value || 0;
+  const meterHtml = showDelivered ? `
+    <div class="ord-meter">
+      <div class="ord-meter-bar"><i class="del" style="width:${fulfilPct}%"></i><i class="due" style="width:${100-fulfilPct}%"></i></div>
+      <div class="ord-meter-cap">${fulfilPct}% delivered — <b>${deliveredUnits} of ${orderedUnits} units</b>${dueUnits>0?` · <b>${dueUnits}</b> due${dueValue?` (${fmt(dueValue)})`:''}`:''}</div>
+    </div>` : '';
+
   const orderDCs = (dcRes||[]).filter(d => d.order_id === id);
-  const dcSection = orderDCs.length ? `
-  <div style="margin-top:20px">
-    <div style="font-weight:600;margin-bottom:10px">Delivery Status</div>
+  const dcCards = orderDCs.length ? `
     ${orderDCs.map(dc=>`
       <div style="border:1px solid ${dc.status==='SCHEDULED'?'var(--warning)':'var(--border)'};border-radius:8px;padding:12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -3492,8 +3515,7 @@ async function viewOrder(id) {
         ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
         ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch — remaining items from partial delivery</div>`:''}
         <div id="dcitems-${dc.id}" style="display:none"></div>
-      </div>`).join('')}
-  </div>` : '';
+      </div>`).join('')}` : '';
 
   const qtyMode = showDelivered ? 'delivered' : hasPartialPick ? 'picked' : 'plain';
   const itemsTableHeader = qtyMode === 'delivered'
@@ -3530,8 +3552,7 @@ async function viewOrder(id) {
   }).join('');
 
   const commentsHtml = `
-    <b style="display:block;margin-top:16px">Comments</b>
-    <div id="order-comments" style="margin-top:8px;display:grid;gap:8px;max-height:180px;overflow-y:auto">
+    <div id="order-comments" style="display:grid;gap:8px;max-height:180px;overflow-y:auto">
       ${(comments||[]).map(c=>`
         <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px">
@@ -3592,22 +3613,25 @@ async function viewOrder(id) {
       ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${order.notes}</span></div>` : ''}
       ${order.order_image ? `<div style="margin-top:10px"><div style="font-weight:700;font-size:.8rem;color:var(--navy);margin-bottom:6px">📷 Attached Photo</div><a href="${order.order_image}" target="_blank"><img src="${order.order_image}" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" title="Click to open full size"></a></div>` : ''}
     </div>
-    ${dcSection}
-    <b>Items</b>${qtyMode==='delivered'?` <span style="font-size:.78rem;color:var(--text-muted);margin-left:6px">delivered qty shown</span>`:qtyMode==='picked'?` <span style="font-size:.78rem;color:var(--warning);margin-left:6px">⚠ Partial pick — picked qty shown</span>`:''}
-    <table class="table" style="margin-top:8px">
-      <thead>${itemsTableHeader}</thead>
-      <tbody>${itemsTableRows}</tbody>
-    </table>
-    <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>
-    ${order.history?.length ? `<b style="display:block;margin-top:16px">Timeline</b>
-    <div style="margin-top:8px;display:grid;gap:6px">
-    ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
-      <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
-      <span>${statusBadge(h.to_status)}</span>
-      <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
-    </div>`).join('')}
-    </div>` : ''}
-    ${commentsHtml}`,
+    ${meterHtml}
+    ${orderSection('Line items',
+      qtyMode==='delivered' ? 'delivered qty' : qtyMode==='picked' ? '⚠ picked qty' : `${(order.items||[]).length} items`,
+      `<table class="table" style="margin:0">
+        <thead>${itemsTableHeader}</thead>
+        <tbody>${itemsTableRows}</tbody>
+      </table>
+      <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>`,
+      true)}
+    ${orderDCs.length ? orderSection('Deliveries', `${orderDCs.length} challan${orderDCs.length>1?'s':''}`, dcCards, true) : ''}
+    ${order.history?.length ? orderSection('Timeline', `${order.history.length} event${order.history.length>1?'s':''}`,
+      `<div style="display:grid;gap:6px">
+      ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
+        <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
+        <span>${statusBadge(h.to_status)}</span>
+        <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
+      </div>`).join('')}
+      </div>`, false) : ''}
+    ${orderSection('Comments', (comments||[]).length ? `${comments.length}` : '', commentsHtml, false)}`,
     (() => {
       const s = order.status;
       const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');

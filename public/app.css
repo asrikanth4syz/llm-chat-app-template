@@ -599,6 +599,24 @@ button { font-family: var(--font); cursor: pointer; }
 .qty-input { width: 48px; font-weight: 700; text-align: center; font-size: .88rem; color: var(--navy); border: 1.5px solid var(--border-mid); border-radius: 7px; padding: 4px 2px; background: var(--surface); outline: none; transition: border-color .15s; -moz-appearance: textfield; }
 .qty-input:focus { border-color: var(--primary); }
 .qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Order detail (Option B — progressive disclosure) */
+.ord-meter { margin: 0 0 16px; }
+.ord-meter-bar { height: 9px; border-radius: 5px; background: var(--surface-2); overflow: hidden; display: flex; }
+.ord-meter-bar i { display: block; height: 100%; }
+.ord-meter-bar i.del { background: var(--success); }
+.ord-meter-bar i.due { background: var(--warning); }
+.ord-meter-cap { font-size: .8rem; color: var(--text-muted); margin-top: 7px; }
+.ord-meter-cap b { color: var(--navy); font-variant-numeric: tabular-nums; }
+.ord-sec { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; overflow: hidden; background: var(--surface); }
+.ord-sec-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; user-select: none; }
+.ord-sec-head:hover { background: var(--surface-2); }
+.ord-sec-title { font-size: .9rem; font-weight: 700; color: var(--navy); }
+.ord-sec-badge { margin-left: auto; font-size: .72rem; color: var(--text-muted); font-weight: 600; }
+.ord-chev { width: 17px; height: 17px; color: var(--text-light); flex-shrink: 0; transition: transform .2s; }
+.ord-sec.open .ord-chev { transform: rotate(90deg); }
+.ord-sec-body { display: none; border-top: 1px solid var(--border); padding: 12px 14px; }
+.ord-sec.open .ord-sec-body { display: block; }
 .add-btn { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--primary); background: var(--primary-light); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--primary); transition: all .15s; }
 .add-btn:hover { background: var(--primary); color: white; }
 .add-btn.added { background: var(--success); border-color: var(--success); color: white; }
