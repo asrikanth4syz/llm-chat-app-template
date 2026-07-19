@@ -3241,7 +3241,16 @@ async function renderMyOrders(el) {
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   if (isClient) {
-    const statuses = ['All','DRAFT','SUBMITTED','PENDING_APPROVAL','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
+    const statuses = ['All','DRAFT','SUBMITTED','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
+    // Client-facing buckets: internal pipeline statuses collapse into "Submitted"
+    // so an order in progress still appears under a meaningful filter (not only "All").
+    const MO_BUCKETS = {
+      DRAFT: ['DRAFT'],
+      SUBMITTED: ['SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','VENDOR_PO_RAISED','IN_SHIPMENT'],
+      PARTIALLY_CLOSED: ['PARTIALLY_CLOSED'],
+      CLOSED: ['CLOSED'],
+      CANCELLED: ['CANCELLED'],
+    };
     if (!APP._moTab) APP._moTab = 'All';
     if (!APP._moSearch) APP._moSearch = '';
 
@@ -3250,7 +3259,9 @@ async function renderMyOrders(el) {
     const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
-      let list = APP._moTab === 'All' ? orders : orders.filter(o => o.status === APP._moTab);
+      let list;
+      if (APP._moTab === 'All') list = orders;
+      else { const bucket = MO_BUCKETS[APP._moTab] || [APP._moTab]; list = orders.filter(o => bucket.includes(o.status)); }
       if (APP._moSearch) {
         const q = APP._moSearch.toLowerCase();
         list = list.filter(o => o.id.toLowerCase().includes(q) || (o.notes||'').toLowerCase().includes(q));
