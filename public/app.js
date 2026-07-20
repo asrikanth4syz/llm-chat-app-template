@@ -5133,7 +5133,9 @@ async function renderInventory(el) {
   APP._invShowAll = false;
 
   const cats = ['All', ...[...new Set(inv.map(i=>i.category))].sort()];
-  const lowStock = inv.filter(i => i.stock <= i.reorder_level);
+  // "Below reorder" counts only SKUs actually in use (ever ordered/consumed) —
+  // never-used catalogue rows would otherwise dominate the count.
+  const lowStock = inv.filter(i => i.stock <= i.reorder_level && i.used);
   const outOfStock = inv.filter(i => i.stock === 0);
   const criticalLow = inv.filter(i => i.is_critical && i.stock <= i.reorder_level);
 

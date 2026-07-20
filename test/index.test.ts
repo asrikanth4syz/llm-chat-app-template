@@ -222,6 +222,23 @@ describe("Inventory", () => {
     const res = await patch("/api/inventory/SKU001", { stock: 50 });
     expect(res.status).toBe(401);
   });
+
+  it("GET /api/inventory — rows carry a `used` flag; low-stock KPI counts only used SKUs", async () => {
+    const db = env.DB as D1Database;
+    const before = (await (await get("/api/dashboard", adminToken)).json() as { lowStock: number }).lowStock;
+    // below reorder AND used (has an order line)
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,reorder_level,active) VALUES ('USED-LOW','Used Low','Grocery',10,0,10,1)").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('oi-usedlow','TST-ORDER-001','USED-LOW','Used Low',1,10,10)").run();
+    // below reorder but never used (dead catalogue row)
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,reorder_level,active) VALUES ('DEAD-LOW','Dead Low','Grocery',10,0,10,1)").run();
+
+    const inv = await (await get("/api/inventory", adminToken)).json() as Array<{ sku: string; used: number }>;
+    expect(inv.find(i => i.sku === "USED-LOW")?.used).toBe(1);
+    expect(inv.find(i => i.sku === "DEAD-LOW")?.used).toBe(0);
+
+    const after = (await (await get("/api/dashboard", adminToken)).json() as { lowStock: number }).lowStock;
+    expect(after - before).toBe(1); // only the used below-reorder SKU is counted
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════

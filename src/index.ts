@@ -1106,11 +1106,12 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
           ).bind(...params).all();
           results = r;
         }
-        // Replace unit_price with client-specific price where set, overlay is_critical
-        const critSet2 = await getCriticalSet(env);
+        // Replace unit_price with client-specific price where set, overlay is_critical + used
+        const [critSet2, usedSet2] = await Promise.all([getCriticalSet(env), getUsedSkuSet(env)]);
         results = (results as Record<string,unknown>[]).map(item => {
           const cp = priceMap[item.sku as string];
-          return { ...(cp != null ? {...item, unit_price: cp, client_price: cp} : item), is_critical: critSet2.has(item.sku as string) ? 1 : 0 };
+          return { ...(cp != null ? {...item, unit_price: cp, client_price: cp} : item),
+            is_critical: critSet2.has(item.sku as string) ? 1 : 0, used: usedSet2.has(item.sku as string) ? 1 : 0 };
         });
         return json(results);
       }
@@ -1130,11 +1131,12 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
     ).bind(...params).all();
     results = r;
   }
-  // Overlay is_critical from critical_skus table (no migration required)
-  const critSet = await getCriticalSet(env);
+  // Overlay is_critical + used (no migration required)
+  const [critSet, usedSet] = await Promise.all([getCriticalSet(env), getUsedSkuSet(env)]);
   results = (results as Record<string,unknown>[]).map(item => ({
     ...item,
-    is_critical: critSet.has(item.sku as string) ? 1 : 0
+    is_critical: critSet.has(item.sku as string) ? 1 : 0,
+    used: usedSet.has(item.sku as string) ? 1 : 0
   }));
   return json(results);
 }
@@ -1172,6 +1174,15 @@ async function getCriticalSet(env: Env): Promise<Set<string>> {
   try {
     await ensureCriticalTable(env);
     const {results} = await env.DB.prepare("SELECT sku FROM critical_skus").all();
+    return new Set((results as {sku:string}[]).map(r => r.sku));
+  } catch { return new Set(); }
+}
+
+// SKUs that are actually in use — ever ordered or consumed. Lets the UI scope
+// "below reorder" alerts to real items, not never-used catalogue rows.
+async function getUsedSkuSet(env: Env): Promise<Set<string>> {
+  try {
+    const {results} = await env.DB.prepare("SELECT sku FROM order_items UNION SELECT sku FROM client_consumption").all();
     return new Set((results as {sku:string}[]).map(r => r.sku));
   } catch { return new Set(); }
 }
@@ -2625,7 +2636,11 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const [totalOrders, pendingOrders, lowStock, pendingDCBilling, openTickets, dueItems, {results:recentOrders}, {results:ordersByStatus}, {results:topClients}] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) as cnt FROM orders").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM orders WHERE status NOT IN ('CLOSED','CANCELLED')").first() as Promise<Record<string,number>>,
-    env.DB.prepare("SELECT COUNT(*) as cnt FROM inventory WHERE stock<=reorder_level AND active=1").first() as Promise<Record<string,number>>,
+    // Low stock = below reorder AND actually in use (ever ordered or consumed) —
+    // excludes never-used catalogue rows that would otherwise dominate the count.
+    env.DB.prepare(`SELECT COUNT(*) as cnt FROM inventory i WHERE i.stock<=i.reorder_level AND i.active=1
+      AND (EXISTS(SELECT 1 FROM order_items oi WHERE oi.sku=i.sku)
+        OR EXISTS(SELECT 1 FROM client_consumption cc WHERE cc.sku=i.sku))`).first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM delivery_challans WHERE status='DELIVERED' AND billed=0").first() as Promise<Record<string,number>>,
     env.DB.prepare("SELECT COUNT(*) as cnt FROM tickets WHERE status!='RESOLVED'").first() as Promise<Record<string,number>>,
     // Due line items: undelivered order lines across open orders (same rule as consolidated-due)
