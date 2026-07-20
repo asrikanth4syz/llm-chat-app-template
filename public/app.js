@@ -566,13 +566,80 @@ function buildNav() {
   const collapseBtn = `<button class="nav-collapse-btn" onclick="collapseSidebar()" title="Collapse menu">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/><path d="M21 18l-6-6 6-6" opacity=".5"/></svg>
     <span class="nav-collapse-lbl">Collapse</span></button>`;
-  document.getElementById('sidebar-nav').innerHTML = html + collapseBtn;
+
+  // Menu search — super admin only (their sidebar is the largest)
+  const searchHtml = nav === 'platform' ? `
+    <div class="nav-search-wrap">
+      <svg class="nav-search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="nav-search" class="nav-search" type="search" placeholder="Search menu…" autocomplete="off" spellcheck="false"
+        oninput="filterNav(this.value)" onkeydown="navSearchKey(event)">
+    </div>
+    <div id="nav-no-results" class="nav-no-results" style="display:none">No menu matches.</div>` : '';
+
+  document.getElementById('sidebar-nav').innerHTML = searchHtml + html + collapseBtn;
 
   // restore persisted icon-rail state (desktop only)
   const sb = document.getElementById('sidebar');
   if (sb && window.innerWidth > 768) {
     let rail = false; try { rail = localStorage.getItem('sp_nav_rail') === '1'; } catch {}
     sb.classList.toggle('collapsed', rail);
+  }
+}
+
+// Live-filter the sidebar menu by label (super-admin search box). Matching items
+// stay, their sections force-open; empty query restores the persisted state.
+function filterNav(q) {
+  const wrap = document.getElementById('sidebar-nav'); if (!wrap) return;
+  q = (q || '').trim().toLowerCase();
+  const items = [...wrap.querySelectorAll('.nav-item')];
+  const nores = document.getElementById('nav-no-results');
+
+  if (!q) {
+    items.forEach(el => { el.style.display = ''; });
+    // restore each collapsible section to its saved state
+    wrap.querySelectorAll('.nav-section-body').forEach(body => {
+      const hdr = body.previousElementSibling;
+      const label = (hdr?.querySelector('.nav-section-label')?.textContent || '').trim();
+      const collapsed = !!(APP._navCollapsed && APP._navCollapsed[label]);
+      body.classList.toggle('collapsed', collapsed);
+      body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
+      if (hdr) { hdr.classList.toggle('collapsed', collapsed); hdr.style.display = ''; }
+    });
+    wrap.querySelectorAll('.nav-section').forEach(h => { h.style.display = ''; });
+    if (nores) nores.style.display = 'none';
+    return;
+  }
+
+  let any = false;
+  items.forEach(el => {
+    const label = (el.querySelector('.nav-item-label')?.textContent || '').toLowerCase();
+    const match = label.includes(q);
+    el.style.display = match ? '' : 'none';
+    if (match) any = true;
+  });
+  // Collapsible sections: open + show only those with a visible item
+  wrap.querySelectorAll('.nav-section-body').forEach(body => {
+    const hasVisible = [...body.querySelectorAll('.nav-item')].some(it => it.style.display !== 'none');
+    body.classList.remove('collapsed');
+    body.style.maxHeight = hasVisible ? 'none' : '0';
+    const hdr = body.previousElementSibling;
+    if (hdr) { hdr.classList.remove('collapsed'); hdr.style.display = hasVisible ? '' : 'none'; }
+  });
+  // First (non-collapsible) section header: its items are direct siblings
+  const firstHdr = wrap.querySelector('.nav-section');
+  if (firstHdr) {
+    let anyFirst = false, n = firstHdr.nextElementSibling;
+    while (n && n.classList.contains('nav-item')) { if (n.style.display !== 'none') anyFirst = true; n = n.nextElementSibling; }
+    firstHdr.style.display = anyFirst ? '' : 'none';
+  }
+  if (nores) nores.style.display = any ? 'none' : '';
+}
+
+function navSearchKey(e) {
+  if (e.key === 'Escape') { e.target.value = ''; filterNav(''); e.target.blur(); }
+  else if (e.key === 'Enter') {
+    const first = [...document.querySelectorAll('#sidebar-nav .nav-item')].find(el => el.style.display !== 'none');
+    if (first) { e.target.value = ''; filterNav(''); navigate(first.id.replace('nav-', '')); }
   }
 }
 
