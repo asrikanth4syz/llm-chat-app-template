@@ -5084,25 +5084,36 @@ async function handleTowerRadar(request: Request, env: Env): Promise<Response> {
     out.budget = { clients: clients.slice(0,5), hot: clients.filter(c=>c.projected_pct>100).length, total: clients.length };
   } catch { out.budget = null; }
 
-  // 3) Stock run-outs: days of cover = stock ÷ 14-day average consumption draw
+  // 3) Stock run-outs: days of cover = stock ÷ 14-day average consumption draw.
+  //    The forecast can only project SKUs with recent consumption; also report
+  //    whether ANY consumption exists and the below-reorder count, so the UI can
+  //    tell "all clear" apart from "no data to forecast from".
   try {
     await ensureCriticalTable(env);
     const { results } = await env.DB.prepare(`
-      SELECT i.sku, i.name, i.stock,
+      SELECT i.sku, i.name, i.stock, i.reorder_level,
         (SELECT COALESCE(SUM(cc.qty),0) FROM client_consumption cc
           WHERE cc.sku=i.sku AND cc.consumed_at >= date('now','-14 day')) / 14.0 AS draw,
         EXISTS(SELECT 1 FROM critical_skus cs WHERE cs.sku=i.sku) AS critical
       FROM inventory i WHERE i.active=1`).all();
-    const rows = (results as Record<string,unknown>[])
+    const all = (results as Record<string,unknown>[])
       .map(r => ({ sku: String(r.sku), name: String(r.name||r.sku), stock: Number(r.stock)||0,
-        draw: Math.round((Number(r.draw)||0)*10)/10, critical: !!Number(r.critical) }))
-      .filter(r => r.draw > 0)
+        reorder_level: Number(r.reorder_level)||0, draw: Math.round((Number(r.draw)||0)*10)/10, critical: !!Number(r.critical) }));
+    const consumed = all.filter(r => r.draw > 0);
+    out.stock = consumed
       .map(r => ({ ...r, days_cover: Math.round(r.stock / r.draw),
         runout: isoD(new Date(Date.now() + Math.max(0, r.stock / r.draw) * 86400000)) }))
       .filter(r => r.days_cover <= 30)
-      .sort((a,b) => a.days_cover - b.days_cover);
-    out.stock = rows.slice(0,6);
-  } catch { out.stock = []; }
+      .sort((a,b) => a.days_cover - b.days_cover)
+      .slice(0,6);
+    const below = all.filter(r => r.stock <= r.reorder_level);
+    out.stock_meta = {
+      has_consumption: consumed.length > 0,
+      below_reorder: below.length,
+      below_top: below.sort((a,b) => (a.stock - a.reorder_level) - (b.stock - b.reorder_level))
+        .slice(0,5).map(r => ({ name: r.name, stock: r.stock, reorder_level: r.reorder_level, critical: r.critical })),
+    };
+  } catch { out.stock = []; out.stock_meta = null; }
 
   // 4) Capacity next 30 days: booked DCs + recurring projections vs fleet capacity
   //    (frontend charts the first 7, filters overloads per horizon)

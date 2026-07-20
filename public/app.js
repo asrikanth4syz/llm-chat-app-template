@@ -1836,11 +1836,18 @@ function renderTowerRadar() {
       t:(b.total||0)+' budgeted client'+(b.total===1?'':'s'), tc:'fl', fc,
       basis:'Per client: MTD spend ÷ days elapsed × days in month, vs monthly budget', nav:'exec_bi' });
   }
-  cards.push({ l:'Stock cover', v: stH.length ? stH.length+' dry' : 'ok', c: stH.length ? (stH[0].days_cover<=7?'b':'w') : 'g',
-    t: stH.length ? winLabel : 'no run-outs '+winLabel, tc: stH.length?'up':'fl',
+  const sm = d.stock_meta || {};
+  const noConsumption = sm.has_consumption === false;   // forecast is blind, not clear
+  const belowN = sm.below_reorder || 0;
+  cards.push({ l:'Stock cover',
+    v: stH.length ? stH.length+' dry' : (noConsumption ? (belowN ? belowN+' low' : 'no data') : 'ok'),
+    c: stH.length ? (stH[0].days_cover<=7?'b':'w') : (noConsumption && belowN ? 'w' : 'g'),
+    t: stH.length ? winLabel : (noConsumption ? 'no consumption data' : 'no run-outs '+winLabel), tc: stH.length?'up':'fl',
     fc: stH.length ? `<b>${h(stH[0].name)}</b> first — dry <b>~${fmtD(stH[0].runout)}</b> (${stH[0].days_cover}d cover${stH[0].critical?' · must-have':''})`
-      : `Every consumed SKU has cover ${hz==='today'?'for today':winLabel.replace('within','beyond')}`,
-    basis:'Per SKU: current stock ÷ 14-day average daily consumption', nav:'inventory' });
+      : (noConsumption
+          ? (belowN ? `No consumption logged in 14 days — can't forecast run-outs. <b>${belowN}</b> SKU${belowN>1?'s':''} below reorder to review.` : `No consumption logged in 14 days — nothing to forecast yet.`)
+          : `Every consumed SKU has cover ${hz==='today'?'for today':winLabel.replace('within','beyond')}`),
+    basis:'Per SKU: current stock ÷ 14-day average daily consumption (needs consumption logs)', nav:'inventory' });
   if (bill) cards.push({ l:'Billing runway', v: bill.unbilled||0, c: bill.unbilled?'w':'g',
     t: bill.unbilled ? 'oldest '+(bill.oldest_days||0)+'d unbilled' : 'all invoiced', tc: bill.unbilled?'up':'fl',
     fc: bill.unbilled ? `<b>${bill.unbilled} delivered DC${bill.unbilled===1?'':'s'}</b> billable right now` : 'Nothing waiting on an invoice',
@@ -1868,6 +1875,14 @@ function renderTowerRadar() {
     h:`${h(s.name)} runs out ~${fmtD(s.runout)}${s.critical?' — must-have item':''}`,
     p:`${Math.round(s.stock)} in stock ÷ ${s.draw}/day (14-day average draw) ≈ ${s.days_cover} days of cover.`,
     eta:`${s.days_cover}d cover`, basis:`Stock ${Math.round(s.stock)} ÷ draw ${s.draw}/day`, nav:'inventory' }));
+  // Forecast is blind (no consumption logged) but stock is low — say so, don't imply all-clear.
+  if (noConsumption && belowN > 0) {
+    const t0 = (sm.below_top || [])[0];
+    sigs.push({ tone:'w', ic:'📦',
+      h:`${belowN} SKU${belowN>1?'s':''} below reorder — can't forecast run-outs`,
+      p:`No consumption logged in the last 14 days, so days-of-cover can't be projected.${t0?` Lowest: <b>${h(t0.name)}</b> (${Math.round(t0.stock)} on hand vs reorder ${Math.round(t0.reorder_level)}${t0.critical?' · must-have':''}).`:''} Review the below-reorder list in Inventory.`,
+      eta:'Data gap', basis:'Active SKUs with stock ≤ reorder level; forecast needs client_consumption logs', nav:'inventory' });
+  }
   if (hz==='month' && overH.length > 1) {
     sigs.push({ tone:'b', ic:'🚚', h:`${overH.length} days over fleet capacity in the next 30`,
       p:`First: ${fmtD(overH[0])}. Reschedule or stagger recurring cycles from the Delivery Calendar.`,
