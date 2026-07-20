@@ -2957,6 +2957,18 @@ async function renderMyInventory(el) {
   const totalUsedWeek= consumedWeek.reduce((s,c) => s + (c.qty||0), 0);
   APP._clientInvItems = items;
 
+  // Nudge: no usage logged in 14 days starves the reorder forecast — encourage it.
+  const consumed14 = (consumption||[]).filter(c => c.consumed_at >= new Date(Date.now()-14*86400000).toISOString().slice(0,10)).length;
+  const nudgeHtml = (items.length > 0 && consumed14 === 0) ? `
+    <div style="background:var(--primary-light);border:1.5px solid var(--primary-border,#99f6e4);border-radius:12px;padding:13px 16px;margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="font-size:1.5rem;flex-shrink:0">📉</div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:800;color:var(--primary-hover);font-size:.9rem">Log what you use — get smarter reorder alerts</div>
+        <div style="font-size:.8rem;color:var(--text);margin-top:3px">No usage logged in the last 2 weeks. When you record consumption, we can predict run-outs and flag reorders before you run dry.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="logFirstItemUse()">Log usage</button>
+    </div>` : '';
+
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
@@ -2968,6 +2980,7 @@ async function renderMyInventory(el) {
       <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
     </div>
   </div>
+  ${nudgeHtml}
 
   <!-- KPI Cards -->
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:14px;margin-bottom:18px">
@@ -3221,6 +3234,15 @@ function updateAttnReviewBtn() {
   const count = (APP.cart || []).reduce((s, i) => s + (i.qty||0), 0);
   btn.style.display = count > 0 ? 'inline-flex' : 'none';
   const c = document.getElementById('attn-review-count'); if (c) c.textContent = count;
+}
+
+// Open the log-usage modal for the most relevant item (nudge CTA).
+function logFirstItemUse() {
+  const items = APP._clientInvItems || [];
+  if (!items.length) return;
+  const t = items.find(i => i.stock_status === 'low' || i.stock_status === 'out')
+    || items.find(i => i.is_critical) || items[0];
+  logConsumptionModal(t.sku, t.item_name || t.sku, t.qty_on_hand || 0, t.uom || 'unit');
 }
 
 function logConsumptionModal(sku, name, qty, uom) {
