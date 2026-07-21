@@ -154,6 +154,17 @@ describe("Auth", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/auth/login — locks out after repeated failures", async () => {
+    const email = "bruteforce@sp.test"; // unique email so it can't affect other tests
+    for (let i = 0; i < 5; i++) {
+      const r = await post("/api/auth/login", { email, password: "x" });
+      expect(r.status).toBe(401); // first five failures are rejected but allowed
+    }
+    const locked = await post("/api/auth/login", { email, password: "x" });
+    expect(locked.status).toBe(429); // sixth attempt is throttled
+    expect((await locked.json() as { error: string }).error).toMatch(/too many/i);
+  });
+
   it("GET /api/auth/me — valid token returns user info", async () => {
     const res = await get("/api/auth/me", adminToken);
     expect(res.status).toBe(200);

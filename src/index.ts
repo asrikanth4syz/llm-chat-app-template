@@ -56,6 +56,36 @@ function cors(): Response {
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
   }});
 }
+
+// Defense-in-depth response headers applied to every response (API + static assets).
+// The CSP allowlists the two CDNs the shell actually loads (Google Fonts, Chart.js)
+// and still keeps 'unsafe-inline' for scripts because the UI relies on inline event
+// handlers today — removing those (and tightening script-src to 'self') is the
+// tracked next step. frame-ancestors/object-src/base-uri harden what we can now.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "media-src 'self' blob: data:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+function withSecurityHeaders(res: Response): Response {
+  const h = new Headers(res.headers);
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("X-Frame-Options", "DENY");
+  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  h.set("Cross-Origin-Opener-Policy", "same-origin");
+  h.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  h.set("Content-Security-Policy", CSP);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+}
 function uid(): string { return crypto.randomUUID().replace(/-/g,"").slice(0,16); }
 
 async function getUser(req: Request, env: Env): Promise<JWTPayload | null> {
@@ -216,6 +246,10 @@ async function fixCategoryNames(env: Env): Promise<void> {
   } catch { /* ignore */ }
   try {
     await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)").run();
+  } catch { /* ignore */ }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS login_throttle (
+      email TEXT PRIMARY KEY, fails INTEGER DEFAULT 0, first_fail TEXT, locked_until TEXT)`).run();
   } catch { /* ignore */ }
   try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tower_snapshots (
@@ -379,14 +413,14 @@ export default {
   },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return cors();
-    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    if (request.method === "OPTIONS") return withSecurityHeaders(cors());
+    if (!url.pathname.startsWith("/api/")) return withSecurityHeaders(await env.ASSETS.fetch(request));
     ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
 
     const path = url.pathname.replace(/\/$/,"");
     const method = request.method;
 
-    try {
+    const route = async (): Promise<Response> => {
       // Auth
       if (path==="/api/auth/login"      && method==="POST") return handleLogin(request,env);
       if (path==="/api/auth/me"         && method==="GET")  return handleMe(request,env);
@@ -627,9 +661,13 @@ export default {
       if (path.match(/^\/api\/client-inventory\/[^/]+$/)  && method==="PATCH") return handlePatchClientInventory(request,env,path);
 
       return json({error:"Not found"}, 404);
+    };
+
+    try {
+      return withSecurityHeaders(await route());
     } catch (err) {
       console.error(err);
-      return json({error:"Internal server error"}, 500);
+      return withSecurityHeaders(json({error:"Internal server error"}, 500));
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -638,18 +676,60 @@ export default {
 // AUTH + OTP (Gap 13)
 // ════════════════════════════════════════════════════════════════════
 
+// ---- Login brute-force throttle (per email) ----
+const LOGIN_MAX_FAILS = 5;      // attempts before lockout
+const LOGIN_WINDOW_MIN = 15;    // rolling window for counting failures
+const LOGIN_LOCKOUT_MIN = 15;   // lockout duration once tripped
+
+async function loginLockedFor(env: Env, email: string): Promise<number> {
+  try {
+    const row = await env.DB.prepare("SELECT locked_until FROM login_throttle WHERE email=?")
+      .bind(email).first() as { locked_until?: string } | null;
+    if (row?.locked_until) {
+      const ms = Date.parse(row.locked_until) - Date.now();
+      if (ms > 0) return Math.ceil(ms / 1000); // seconds remaining
+    }
+  } catch { /* table missing — treat as unlocked */ }
+  return 0;
+}
+async function loginRecordFail(env: Env, email: string): Promise<void> {
+  const now = Date.now();
+  try {
+    const row = await env.DB.prepare("SELECT fails, first_fail FROM login_throttle WHERE email=?")
+      .bind(email).first() as { fails?: number; first_fail?: string } | null;
+    const firstMs = row?.first_fail ? Date.parse(row.first_fail) : now;
+    const withinWindow = row && (now - firstMs) <= LOGIN_WINDOW_MIN * 60000;
+    const fails = withinWindow ? (Number(row?.fails) || 0) + 1 : 1;
+    const firstFail = withinWindow ? (row?.first_fail as string) : new Date(now).toISOString();
+    const lockedUntil = fails >= LOGIN_MAX_FAILS ? new Date(now + LOGIN_LOCKOUT_MIN * 60000).toISOString() : null;
+    await env.DB.prepare("INSERT OR REPLACE INTO login_throttle (email, fails, first_fail, locked_until) VALUES (?,?,?,?)")
+      .bind(email, fails, firstFail, lockedUntil).run();
+  } catch { /* non-fatal */ }
+}
+async function loginClearFails(env: Env, email: string): Promise<void> {
+  try { await env.DB.prepare("DELETE FROM login_throttle WHERE email=?").bind(email).run(); } catch { /* ignore */ }
+}
+
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   const { email, password } = await request.json() as {email:string;password:string};
   if (!email || !password) return json({error:"Email and password required"}, 400);
+  const emailKey = String(email).toLowerCase();
+
+  const locked = await loginLockedFor(env, emailKey);
+  if (locked > 0) {
+    return json({ error: `Too many failed attempts. Try again in about ${Math.ceil(locked/60)} minute(s).` }, 429);
+  }
 
   const row = await env.DB.prepare("SELECT * FROM users WHERE email=? AND active=1").bind(email).first() as Record<string,string>|null;
-  if (!row) return json({error:"Invalid credentials"}, 401);
+  if (!row) { await loginRecordFail(env, emailKey); return json({error:"Invalid credentials"}, 401); }
 
   let valid = false;
   const hash = row.password_hash;
   if (hash.startsWith("SEED:"))  valid = password === hash.slice(5);
   else if (hash.startsWith("hash:")) valid = await verifyPassword(password, hash.slice(5));
-  if (!valid) return json({error:"Invalid credentials"}, 401);
+  if (!valid) { await loginRecordFail(env, emailKey); return json({error:"Invalid credentials"}, 401); }
+
+  await loginClearFails(env, emailKey); // successful credentials — reset the counter
 
   // If OTP enabled, issue a partial token and require OTP step
   if (env.OTP_ENABLED === "true") {
