@@ -102,11 +102,11 @@ async function renderVendors(el) {
       </div>`:''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="viewVendorById('${_regVendor(v)}')">View</button>
-        <button class="btn btn-gold btn-sm" onclick="editVendorById('${_regVendor(v)}')">Edit</button>
-        <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'#fee2e2'};color:${v.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleVendorActive('${v.id}','${v.name.replace(/'/g,"\\'")}',${v.active===0?0:1})">${v.active===0?'Enable':'Disable'}</button>
-        <button class="btn btn-gold btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
-        <button class="btn btn-secondary btn-sm" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
+        <button class="btn btn-gold btn-sm" ${dataAct('editVendorById', _regVendor(v))}>Edit</button>
+        <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'#fee2e2'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
+        <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>New PO</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('openVendorFeedbackModal', v.id, v.name)}>Rate</button>
       </div>
     </div>`;
   }
@@ -120,7 +120,7 @@ async function renderVendors(el) {
   const fssaiSoon    = fssaiFlagged.filter(v => v.fssai_expiry >= _today);
   const anyExpired = fssaiExpired.length > 0;
   const fssaiChip = v => {
-    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" onclick="editVendorById('${_regVendor(v)}')">Renew</button>`;
+    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" ${dataAct('editVendorById', _regVendor(v))}>Renew</button>`;
     const expd = v.fssai_expiry < _today;
     return `<span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid ${expd?'#fca5a5':'#fde68a'};border-radius:8px;padding:5px 8px 5px 11px;font-size:.78rem">
       <span><b>${h(v.name)}</b> · <span style="color:${expd?'var(--danger)':'#b45309'};font-weight:700">${expd?'expired':'expires'} ${fmtDate(v.fssai_expiry)}</span></span>${btn}</span>`;
@@ -686,7 +686,7 @@ async function viewVendorModal(v) {
   const footer = document.getElementById('modal-footer');
   if (footer) footer.innerHTML =
     `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
-     <button class="btn btn-primary" onclick="editVendorById('${_regVendor(v)}')">Edit vendor</button>
+     <button class="btn btn-primary" ${dataAct('editVendorById', _regVendor(v))}>Edit vendor</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
 }
 

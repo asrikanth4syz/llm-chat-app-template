@@ -314,10 +314,10 @@ async function renderClients(el) {
       </div>` : ''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="viewClientById('${_regClient(c)}')">View</button>
-        <button class="btn btn-gold btn-sm" onclick="editClientById('${_regClient(c)}')">Edit</button>
-        <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" onclick="manageClientCatalog('${c.id}','${c.name.replace(/'/g,"\\'")}')">📦 Products</button>
-        <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'#fee2e2'};color:${c.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleClientActive('${c.id}','${c.name.replace(/'/g,"\\'")}',${c.active===0?0:1})">${c.active===0?'Enable':'Disable'}</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('viewClientById', _regClient(c))}>View</button>
+        <button class="btn btn-gold btn-sm" ${dataAct('editClientById', _regClient(c))}>Edit</button>
+        <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" ${dataAct('manageClientCatalog', c.id, c.name)}>📦 Products</button>
+        <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'#fee2e2'};color:${c.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleClientActive', c.id, c.name, c.active===0?0:1)}>${c.active===0?'Enable':'Disable'}</button>
       </div>
     </div>`;
   }
@@ -893,7 +893,7 @@ function viewClientModal(c) {
     </div>
     ${c.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${c.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
-    `<button class="btn btn-primary" onclick="editClientById('${_regClient(c)}')">Edit</button>
+    `<button class="btn btn-primary" ${dataAct('editClientById', _regClient(c))}>Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 

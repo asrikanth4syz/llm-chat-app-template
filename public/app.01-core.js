@@ -964,6 +964,25 @@ function editVendorById(id) { const v = APP._vendorById && APP._vendorById[id]; 
 function viewClientById(id) { const c = APP._clientById && APP._clientById[id]; if (c) viewClientModal(c); }
 function editClientById(id) { const c = APP._clientById && APP._clientById[id]; if (c) editClientModal(c); }
 
+// ---- Event delegation (replaces inline onclick, step toward a strict CSP) ----
+// Markup carries data-act="fnName" and data-args="<json array>"; a single document
+// listener resolves the global function and calls it with the decoded args. The
+// dataAct() helper JSON-encodes args and HTML-escapes them (so names with quotes/
+// apostrophes are safe), returning the attribute pair to drop into a tag.
+function dataAct(fn, ...args) {
+  return `data-act="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`;
+}
+function _dispatchAct(e) {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const fn = window[el.dataset.act];
+  if (typeof fn !== 'function') return;
+  let args = [];
+  if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
+  fn(...args);
+}
+document.addEventListener('click', _dispatchAct);
+
 function notImplemented(page) {
   return `<div class="empty-state">
     <div class="empty-icon">🚧</div>
