@@ -308,8 +308,8 @@ async function openProfileModal() {
   openModal('My Profile', `
     <div style="text-align:center;margin-bottom:20px">
       <div style="width:64px;height:64px;border-radius:50%;background:var(--gold);color:#fff;font-size:1.4rem;font-weight:800;display:flex;align-items:center;justify-content:center;margin:0 auto 10px">${profile.initials}</div>
-      <div style="font-weight:800;font-size:1rem;color:var(--navy)">${profile.name}</div>
-      <div style="font-size:.8rem;color:var(--text-muted);margin-top:2px">${profile.email} · ${roleLabel}</div>
+      <div style="font-weight:800;font-size:1rem;color:var(--navy)">${h(profile.name)}</div>
+      <div style="font-size:.8rem;color:var(--text-muted);margin-top:2px">${h(profile.email)} · ${roleLabel}</div>
     </div>
     <hr style="border:none;border-top:1px solid var(--border);margin-bottom:16px">
     <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:10px">Edit Profile</div>
@@ -804,7 +804,7 @@ async function loadNotifications() {
   const list = document.getElementById('notif-list');
   list.innerHTML = data.map(n => `
     <div class="notif-item${n.read_flag ? '' : ' unread'}">
-      <div class="notif-text">${n.message}</div>
+      <div class="notif-text">${h(n.message)}</div>
       <div class="notif-time">${timeAgo(n.created_at)}</div>
     </div>`).join('') || '<div style="padding:16px;text-align:center;color:var(--text-muted)">No notifications</div>';
 }
@@ -1603,7 +1603,7 @@ async function renderOpsDashboard(el) {
               <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
               <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-                  <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;color:var(--blue)">${c.name}</span>
+                  <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;color:var(--blue)">${h(c.name)}</span>
                   <span style="font-size:.82rem;font-weight:800;color:var(--navy);flex-shrink:0;margin-left:8px">${fmt(c.total)}</span>
                 </div>
                 <div class="ct-client-bar"><div class="ct-client-fill" style="width:${pct}%;background:${col}"></div></div>
@@ -2323,7 +2323,7 @@ function refreshCartReviewUI() {
           <div style="display:flex;align-items:center;gap:12px">
             <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="flex:1;min-width:0">
-              <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${item.name}</div>
+              <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${h(item.name)}</div>
               <div style="font-size:.73rem;color:var(--text-muted);margin-top:1px">${item.sku} · ${fmt(item.unit_price)}/unit</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -2682,7 +2682,7 @@ function renderCatalogItems(items) {
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <div style="font-size:1.4rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="min-width:0">
-              <div style="font-weight:600;font-size:.88rem;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
+              <div style="font-weight:600;font-size:.88rem;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
               <div style="font-size:.72rem;color:var(--text-muted)">${item.sku}${item.brand?' · '+item.brand:''}</div>
             </div>
           </div>
@@ -2711,7 +2711,7 @@ function renderCatalogItems(items) {
         <div class="catalog-emoji">${item.emoji||'📦'}</div>
         ${qty>0?`<div style="position:absolute;top:-8px;right:-8px;width:20px;height:20px;border-radius:50%;background:var(--navy);color:#fff;font-size:.7rem;font-weight:800;display:flex;align-items:center;justify-content:center">${qty}</div>`:''}
       </div>
-      <div class="catalog-name">${item.name}</div>
+      <div class="catalog-name">${h(item.name)}</div>
       <div class="catalog-cat">${item.category}${item.brand?' · '+item.brand:''}</div>
       <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-bottom:4px">
         <div class="catalog-price">${fmt(item.unit_price)}</div>
@@ -2840,7 +2840,7 @@ async function submitOrder() {
     openModal('Confirm Order',
       `<div style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
         <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:2px">Ordering for</div>
-        <div style="font-weight:700;font-size:1rem">${clientName}</div>
+        <div style="font-weight:700;font-size:1rem">${h(clientName)}</div>
       </div>
       ${summary}`,
       `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -2849,7 +2849,7 @@ async function submitOrder() {
   } else {
     // Ops / admin roles pick the client from the list
     const clients = await api('/clients');
-    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
     openModal('Confirm Order',
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
@@ -2919,7 +2919,7 @@ async function saveDraft() {
        <button class="btn btn-gold" onclick="confirmOrder(true)">Save Draft</button>`);
   } else {
     const clients = await api('/clients');
-    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
     openModal('Save as Draft',
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
@@ -3637,7 +3637,7 @@ async function viewOrder(id) {
       const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
       const short = d.due > 0;
       return `<tr>
-        <td>${i.name}${noteHtml}</td>
+        <td>${h(i.name)}${noteHtml}</td>
         <td style="color:var(--text-muted)">${i.qty}</td>
         <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
@@ -3648,14 +3648,14 @@ async function viewOrder(id) {
       const picked = allocMap[i.sku];
       const isShort = picked !== undefined && picked < i.qty;
       return `<tr>
-        <td>${i.name}${noteHtml}</td>
+        <td>${h(i.name)}${noteHtml}</td>
         <td style="color:var(--text-muted)">${i.qty}</td>
         <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
     }
-    return `<tr><td>${i.name}${noteHtml}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
+    return `<tr><td>${h(i.name)}${noteHtml}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
   }).join('');
 
   const commentsHtml = `
@@ -3663,10 +3663,10 @@ async function viewOrder(id) {
       ${(comments||[]).map(c=>`
         <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <b>${c.author_name}</b>
+            <b>${h(c.author_name)}</b>
             <span style="color:var(--text-muted)">${timeAgo(c.created_at)}</span>
           </div>
-          <div>${c.message}</div>
+          <div>${h(c.message)}</div>
         </div>`).join('') || '<div style="color:var(--text-muted);font-size:.84rem">No comments yet.</div>'}
     </div>
     <div style="display:flex;gap:8px;margin-top:10px">
@@ -3717,7 +3717,7 @@ async function viewOrder(id) {
           }
         </div>
       </div>
-      ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${order.notes}</span></div>` : ''}
+      ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${h(order.notes)}</span></div>` : ''}
       ${order.order_image ? `<div style="margin-top:10px"><div style="font-weight:700;font-size:.8rem;color:var(--navy);margin-bottom:6px">📷 Attached Photo</div><a href="${order.order_image}" target="_blank"><img src="${order.order_image}" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" title="Click to open full size"></a></div>` : ''}
     </div>
     ${meterHtml}
@@ -4428,8 +4428,8 @@ async function oqLoadItems() {
               const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
               return `<tr style="${rowBg}">
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
-                <td><b>${r.item_name}</b></td>
-                <td style="font-size:.82rem">${r.vendor_name}</td>
+                <td><b>${h(r.item_name)}</b></td>
+                <td style="font-size:.82rem">${h(r.vendor_name)}</td>
                 <td><span style="font-size:.78rem;background:var(--light);padding:2px 6px;border-radius:4px">${r.orders.size} order${r.orders.size!==1?'s':''}</span></td>
                 <td><b>${r.ordered_qty}</b></td>
                 <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
@@ -4467,7 +4467,7 @@ async function oqLoadItems() {
       <div class="card" style="margin-bottom:14px;border-top:3px solid ${headerColor}">
         <div class="card-header" style="padding:10px 16px">
           <div>
-            <span style="font-weight:700;font-size:.95rem">${vendor_name}</span>
+            <span style="font-weight:700;font-size:.95rem">${h(vendor_name)}</span>
             <span style="font-size:.75rem;color:var(--text-muted);margin-left:8px">${Object.keys(skuMap).length} SKUs</span>
           </div>
           <div style="display:flex;gap:6px">
@@ -4490,7 +4490,7 @@ async function oqLoadItems() {
               return `<tr style="${rowBg}">
                 <td style="font-size:.8rem">${r.brand||'—'}</td>
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
-                <td><b>${r.item_name}</b></td>
+                <td><b>${h(r.item_name)}</b></td>
                 <td><b>${r.ordered_qty}</b></td>
                 <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
                 <td>${gap>0?`<b style="color:var(--danger)">${gap}</b>`:'<span style="color:var(--success)">—</span>'}</td>
@@ -4521,13 +4521,13 @@ async function oqLoadItems() {
             return `<tr style="${rowBg}">
               <td style="font-size:.8rem">${r.brand||'—'}</td>
               <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
-              <td><b>${r.item_name}</b></td>
+              <td><b>${h(r.item_name)}</b></td>
               <td style="font-size:.8rem"><b>${r.order_id}</b></td>
-              <td style="font-size:.8rem">${r.client_name}</td>
+              <td style="font-size:.8rem">${h(r.client_name)}</td>
               <td>${r.ordered_qty}</td>
               <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'#d97706':'var(--success)'};font-weight:700">${r.stock}</td>
               <td style="color:${gap>0?'var(--danger)':'var(--success)'}">${gap>0?'+'+gap:'—'}</td>
-              <td style="font-size:.8rem">${r.vendor_name}</td>
+              <td style="font-size:.8rem">${h(r.vendor_name)}</td>
               <td>${ss==='oos'?'<span class="badge badge-danger">OOS</span>':ss==='short'?'<span class="badge badge-warning">Short</span>':'<span class="badge badge-success">OK</span>'}</td>
             </tr>`;
           }).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No line items</td></tr>'}
@@ -4846,7 +4846,7 @@ async function renderDCBilling(el) {
             const risk = b90>0?'High':b60>0?'Medium':b30>0?'Low':'Clean';
             const riskCls = {High:'danger',Medium:'warning',Low:'info',Clean:'success'}[risk];
             return `<tr>
-              <td><b>${c.name}</b></td>
+              <td><b>${h(c.name)}</b></td>
               <td>${c.items.length}</td>
               <td style="color:var(--success)">${fmt(b0)}</td>
               <td style="color:${b30>0?'var(--warning)':'var(--text-muted)'}">${fmt(b30)}</td>
@@ -4976,7 +4976,7 @@ function renderAPAging(pos) {
         const risk = a90>0?'Overdue':a30>0?'Due Soon':'Current';
         const riskCls = {Overdue:'danger','Due Soon':'warning',Current:'success'}[risk];
         return `<tr>
-          <td><b>${v.name}</b></td>
+          <td><b>${h(v.name)}</b></td>
           <td>${v.items.length}</td>
           <td style="color:var(--success)">${fmt(a0)}</td>
           <td style="color:${a15>0?'var(--warning)':'var(--text-muted)'}">${fmt(a15)}</td>
@@ -5099,7 +5099,7 @@ function renderMarginAnalysis(inv) {
         <tbody>${topItems.map(i=>{
           const m = marginOf(i).toFixed(1);
           return `<tr>
-            <td><b>${i.name}</b></td><td>${i.category||'—'}</td>
+            <td><b>${h(i.name)}</b></td><td>${i.category||'—'}</td>
             <td>${fmt(i.unit_price)}</td><td>${fmt(i.cost_excl_gst)}</td>
             <td><span style="font-weight:700;color:${marginColor(m)}">${m}%</span></td>
           </tr>`;
@@ -5114,7 +5114,7 @@ function renderMarginAnalysis(inv) {
         <tbody>${bottomItems.map(i=>{
           const m = marginOf(i).toFixed(1);
           return `<tr>
-            <td><b>${i.name}</b></td><td>${i.category||'—'}</td>
+            <td><b>${h(i.name)}</b></td><td>${i.category||'—'}</td>
             <td>${fmt(i.unit_price)}</td><td>${fmt(i.cost_excl_gst)}</td>
             <td><span style="font-weight:700;color:${marginColor(m)}">${m}%</span></td>
           </tr>`;
@@ -5216,7 +5216,7 @@ async function renderInventory(el) {
           <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
-        <td><b>${item.name}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${item.brand}</div>`:''}</td>
+        <td><b>${h(item.name)}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${h(item.brand)}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
         <td style="font-weight:700">${fmt(item.unit_price)}</td>
@@ -5259,14 +5259,14 @@ async function renderInventory(el) {
   <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
     <div>
       <div style="font-weight:800;color:#dc2626;font-size:.92rem;margin-bottom:4px">🔴 ${criticalLow.length} Critical Item${criticalLow.length>1?'s':''} Need Reorder</div>
-      <div style="font-size:.8rem;color:#991b1b">${criticalLow.slice(0,4).map(i=>`<b>${i.name}</b> (${i.stock} left)`).join(' · ')}${criticalLow.length>4?` +${criticalLow.length-4} more`:''}</div>
+      <div style="font-size:.8rem;color:#991b1b">${criticalLow.slice(0,4).map(i=>`<b>${h(i.name)}</b> (${i.stock} left)`).join(' · ')}${criticalLow.length>4?` +${criticalLow.length-4} more`:''}</div>
     </div>
     <div style="display:flex;gap:8px;flex-shrink:0">
       <button class="btn btn-secondary btn-sm" onclick="navigate('reports');setTimeout(()=>viewReport('critical-stock'),300)">View Report</button>
       <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" onclick="sendCriticalAlerts(this)">📧 Send Alert Email</button>
     </div>
   </div>` : ''}
-  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${i.name}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
+  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${h(i.name)}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
 
   <!-- Search + filter -->
   <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
@@ -5551,8 +5551,8 @@ async function editInventoryItem(sku) {
   const item = _invCache[sku];
   if (!item) return;
   const vendors = await api('/vendors') || [];
-  const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${v.name}</option>`).join('');
-  const vendor2Opts = vendors.map(v => `<option value="${v.id}" ${v.id===item.secondary_vendor_id?'selected':''}>${v.name}</option>`).join('');
+  const vendorOpts = vendors.map(v => `<option value="${v.id}" ${v.id===item.vendor_id?'selected':''}>${h(v.name)}</option>`).join('');
+  const vendor2Opts = vendors.map(v => `<option value="${v.id}" ${v.id===item.secondary_vendor_id?'selected':''}>${h(v.name)}</option>`).join('');
   // Categories: everything actually in the catalogue + standard defaults +
   // this item's own value — so no existing category can ever go missing (or
   // get silently overwritten because it wasn't in a hardcoded list).
@@ -5816,7 +5816,7 @@ async function createVendorInline(suffix = '') {
 
 async function reorderItem(sku, name, price, vendorId) {
   const vendors = await api('/vendors');
-  const vendorOpts = (vendors||[]).map(v=>`<option value="${v.id}" ${v.id===vendorId?'selected':''}>${v.name}</option>`).join('');
+  const vendorOpts = (vendors||[]).map(v=>`<option value="${v.id}" ${v.id===vendorId?'selected':''}>${h(v.name)}</option>`).join('');
   openModal('Raise PO — ' + name,
     `<div class="form-group"><label>Vendor</label><select id="po-vendor">${vendorOpts}</select></div>
      <div class="form-group"><label>Quantity</label><input type="number" id="po-qty" value="100" min="1"></div>
@@ -5948,7 +5948,7 @@ async function renderVendors(el) {
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
           <div>
-            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${v.name}</div>
+            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${h(v.name)}</div>
             ${v.vendor_code?`<div style="font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;letter-spacing:.03em;color:var(--text-muted);margin-top:1px">${v.vendor_code}</div>`:''}
             <div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
               ${(v.category||'—').split(',').filter(Boolean).map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.trim()}</span>`).join('')}
@@ -5988,7 +5988,7 @@ async function renderVendors(el) {
       <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:${v.address?'6px':'14px'};flex-wrap:wrap">
         <span>⏱ ${v.avg_lead_days||'—'}d lead time</span>
         ${v.location?`<span>🏙 ${v.location}</span>`:''}
-        ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a></span>`:''}
+        ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${h(v.contact_email)}</a></span>`:''}
         ${v.contact_phone?`<span>📞 ${v.contact_phone}</span>`:''}
       </div>
       ${v.address||v.map_pin?`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:14px;display:flex;align-items:flex-start;gap:6px">
@@ -6680,7 +6680,7 @@ function vendorViewHTML(v, docs, products) {
           ${field('Registration', regd?'Registered':'Unregistered')}
           ${field('Vendor type', food?'🍽 Food':'Non-food')}
           ${field('Lead time', v.avg_lead_days!=null?v.avg_lead_days+' days':'—')}
-          ${field('Contact email', v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a>`:'—')}
+          ${field('Contact email', v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${h(v.contact_email)}</a>`:'—')}
           ${field('Contact phone', v.contact_phone||'—')}
           ${field('On-time rate', `<span style="color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>`)}
           ${field('Fill rate', `<span style="color:${fillColor}">${pct(v.fill_rate||0)}</span>`)}
@@ -6753,7 +6753,7 @@ async function toggleVendorActive(id, name, active) {
 
 async function newPOForVendor(vendorId, vendorName) {
   const inv = await api('/inventory');
-  const itemOpts = (inv||[]).map(i=>`<option value="${i.sku}" data-price="${i.unit_price}">${i.name} (${fmt(i.unit_price)})</option>`).join('');
+  const itemOpts = (inv||[]).map(i=>`<option value="${i.sku}" data-price="${i.unit_price}">${h(i.name)} (${fmt(i.unit_price)})</option>`).join('');
   openModal(`New PO — ${vendorName}`,
     `<div class="form-group"><label>Item</label><select id="po-item" onchange="updatePOPrice(this)">${itemOpts}</select></div>
      <div class="form-group"><label>Quantity</label><input type="number" id="po-qty2" value="50" min="1"></div>
@@ -7101,7 +7101,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
       <div class="card" style="margin-bottom:0;border-top:3px solid ${whActive?color:'var(--border)'}">
         <div class="card-header" style="padding:12px 16px">
           <div>
-            <div style="font-weight:700;font-size:.95rem">${w.name}</div>
+            <div style="font-weight:700;font-size:.95rem">${h(w.name)}</div>
             ${w.city ? `<div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${w.city}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -7181,7 +7181,7 @@ function renderWHBins(el, bins, warehouses) {
   const whMap = {};
   warehouses.forEach(w => { whMap[w.id] = w.name; });
 
-  const whOptions = warehouses.map(w=>`<option value="${w.id}">${w.name}</option>`).join('');
+  const whOptions = warehouses.map(w=>`<option value="${w.id}">${h(w.name)}</option>`).join('');
 
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -7255,7 +7255,7 @@ function renderWHPickList(el, picklist) {
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div>
               <b>${order.order_id}</b>
-              <span style="margin-left:8px;color:var(--text-muted)">${order.client_name}</span>
+              <span style="margin-left:8px;color:var(--text-muted)">${h(order.client_name)}</span>
               <span style="margin-left:8px;font-size:.8rem;color:var(--text-muted)">${fmtDate(order.created_at)}</span>
               ${statusBadge(order.status)}
               ${(order.status==='PICKED'||order.status==='QUALITY_CHECK')&&order.picker_name?`<span style="margin-left:6px;font-size:.78rem;color:var(--text-muted)">Picked by ${order.picker_name}</span>`:''}
@@ -7274,7 +7274,7 @@ function renderWHPickList(el, picklist) {
             <table class="table" style="margin:0">
               <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
               <tbody>${order.items.map(item=>`<tr>
-                <td><b>${item.item_name}</b></td>
+                <td><b>${h(item.item_name)}</b></td>
                 <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
                 <td>${item.qty}</td>
                 <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
@@ -7377,7 +7377,7 @@ async function saveGRN() {
 
 function addBinModal(warehouseId) {
   api('/warehouses').then(warehouses => {
-    const whOptions = (warehouses||[]).map(w=>`<option value="${w.id}" ${w.id===warehouseId?'selected':''}>${w.name}</option>`).join('');
+    const whOptions = (warehouses||[]).map(w=>`<option value="${w.id}" ${w.id===warehouseId?'selected':''}>${h(w.name)}</option>`).join('');
     openModal('Add Bin Location',
       `<div class="form-group"><label>Warehouse</label>
          <select id="bin-wh">${whOptions}</select></div>
@@ -8076,7 +8076,7 @@ async function viewDCItems(dcId) {
   if (!items) return;
   const rows = items.length ? items.map(i => `<tr>
     <td>${i.sku}</td>
-    <td><b>${i.name}</b></td>
+    <td><b>${h(i.name)}</b></td>
     <td>${i.qty_ordered}</td>
     <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
     <td style="color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
@@ -8126,7 +8126,7 @@ async function toggleDCItemsInline(dcId, btn) {
 async function dispatchDCModal(dcId) {
   const staff = await api('/staff') || [];
   const staffOpts = staff.filter(s=>s.active && s.role==='delivery_staff')
-    .map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+    .map(s=>`<option value="${s.id}">${h(s.name)}</option>`).join('');
   openModal(`Dispatch DC — ${dcId}`,
     `<p style="margin-bottom:12px;color:var(--text-muted)">Enter vehicle and driver details to dispatch DC <b>${dcId}</b>. Order status will advance to IN_SHIPMENT.</p>
      <div class="form-group"><label>DC Number</label><input type="text" id="dp-dcnum" placeholder="e.g. 702037"></div>
@@ -8189,7 +8189,7 @@ async function markDelivered(dcId) {
       <tbody>
         ${items.map(i=>{ const maxDeliver = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
           <td><b>${i.sku}</b></td>
-          <td>${i.name}</td>
+          <td>${h(i.name)}</td>
           <td style="text-align:center;color:var(--text-muted)">${i.qty_ordered}</td>
           <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
           <td style="text-align:center"><input type="number" class="form-control form-control-sm deliver-qty"
@@ -8860,7 +8860,7 @@ async function renderClients(el) {
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:40px;height:40px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
           <div>
-            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${c.name}</div>
+            <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${h(c.name)}</div>
             <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
               ${c.zone?`<span style="font-size:.68rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.zone}</span>`:''}
               <span style="font-size:.72rem;color:${hColor};font-weight:700">★ ${c.health_score||0}/100</span>
@@ -8897,7 +8897,7 @@ async function renderClients(el) {
 
       <!-- Contact -->
       ${c.contact_name ? `<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:8px">
-        👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${c.contact_phone}</a>`:''}
+        👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${h(c.contact_email)}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${h(c.contact_phone)}</a>`:''}
       </div>` : ''}
       ${(c.address||c.map_pin) ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:flex-start;gap:5px">
         <span>📍</span><span>${c.address||''}${(c.address&&c.map_pin)?' · ':''}${c.map_pin?`<a href="${mapsLink(c.map_pin,c.address)}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</span>
@@ -9039,7 +9039,7 @@ function ccAssignedRow(item) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:1.1rem;flex-shrink:0">${item.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
+        <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
         <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''}</div>
       </div>
       <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" onclick="removeCCItem('${item.sku}')">Remove</button>
@@ -9114,7 +9114,7 @@ function renderCCSearchResults() {
       onclick="addCCItem('${i.sku}')">
       <span>${i.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:.84rem">${i.name}</div>
+        <div style="font-weight:600;font-size:.84rem">${h(i.name)}</div>
         <div style="font-size:.72rem;color:var(--text-muted)">${i.sku} · ${i.category||''} · ₹${i.unit_price}</div>
       </div>
       <span style="font-size:.72rem;color:var(--blue);font-weight:700;flex-shrink:0">+ Add</span>
@@ -9269,7 +9269,7 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
         ${matched.map(i=>`
           <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
             <span>${i.emoji||'📦'}</span>
-            <span style="font-weight:600;flex:1">${i.name}</span>
+            <span style="font-weight:600;flex:1">${h(i.name)}</span>
             <span style="color:var(--text-muted)">${i.sku}</span>
             <span style="color:#16a34a;font-weight:700">✓</span>
           </div>`).join('')}
@@ -9468,10 +9468,10 @@ function viewClientModal(c) {
   const mapUrl = mapsLink(c.map_pin, c.address);
   openModal(`Client: ${c.name}`, `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${c.name}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${h(c.name)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Zone</div><div style="font-weight:600">${c.zone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Name</div><div style="font-weight:600">${c.contact_name||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${c.contact_email}</a>`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${h(c.contact_email)}</a>`:'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${c.pan||'—'}</div></div>
@@ -9578,7 +9578,7 @@ async function renderServiceDesk(el) {
             <span style="font-size:.68rem;font-weight:700;background:${pm.bg};color:${pm.color};border-radius:4px;padding:1px 7px">${pm.label}</span>
             <span style="font-size:.68rem;font-weight:700;background:${sm.bg};color:${sm.color};border-radius:4px;padding:1px 7px">${sm.dot} ${t.status.replace('_',' ')}</span>
           </div>
-          <div style="font-size:.88rem;font-weight:600;color:var(--navy);margin-top:6px">${t.subject}</div>
+          <div style="font-size:.88rem;font-weight:600;color:var(--navy);margin-top:6px">${h(t.subject)}</div>
           <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">
             ${fmtDate(t.created_at)}${t.client_name&&!isClient?' · '+t.client_name:''}
           </div>
@@ -10444,7 +10444,7 @@ function renderReports(el) {
         <div style="display:flex;align-items:center;gap:10px">
           <div style="font-size:1.6rem;line-height:1">${r.icon}</div>
           <div>
-            <div style="font-weight:700;font-size:.92rem;color:${cat.color}">${r.title}</div>
+            <div style="font-weight:700;font-size:.92rem;color:${cat.color}">${h(r.title)}</div>
             <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${r.desc}</div>
           </div>
         </div>
@@ -10469,7 +10469,7 @@ function renderReports(el) {
         <div style="display:flex;align-items:center;gap:10px">
           <div style="font-size:1.6rem;line-height:1">${r.icon}</div>
           <div>
-            <div style="font-weight:700;font-size:.92rem">${r.title}</div>
+            <div style="font-weight:700;font-size:.92rem">${h(r.title)}</div>
             <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${r.desc}</div>
           </div>
         </div>
@@ -12020,13 +12020,13 @@ async function renderUsers(el) {
       <div style="width:44px;height:44px;border-radius:50%;background:${u.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${u.initials||u.name[0]}</div>
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-weight:700;font-size:.9rem;color:var(--navy)">${u.name}</span>
+          <span style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(u.name)}</span>
           ${u.active?'':'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 6px">INACTIVE</span>'}
         </div>
-        <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${u.email}</div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${h(u.email)}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
           <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${roleName}</span>
-          <span style="font-size:.68rem;color:var(--text-muted)">${u.org}</span>
+          <span style="font-size:.68rem;color:var(--text-muted)">${h(u.org)}</span>
           ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:#d1fae5;color:#059669;border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
         </div>
       </div>
@@ -12439,7 +12439,7 @@ async function settingsTab(tab, btn) {
           <thead><tr><th>Client</th><th>Monthly Budget (₹)</th><th>Auto-Approve Below (₹)</th></tr></thead>
           <tbody>
             ${clients.length ? clients.map(c=>`<tr>
-              <td style="font-weight:600">${c.name}</td>
+              <td style="font-weight:600">${h(c.name)}</td>
               <td><input type="number" class="budget-input" data-id="${c.id}" data-field="monthly_budget"
                 value="${c.monthly_budget||''}" min="0" placeholder="No limit"
                 style="width:140px;padding:6px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:.86rem"></td>
@@ -12502,7 +12502,7 @@ async function settingsTab(tab, btn) {
           <thead><tr><th>Name</th><th>Location</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             ${warehouses.length ? warehouses.map(w=>`<tr>
-              <td><b>${w.name}</b></td>
+              <td><b>${h(w.name)}</b></td>
               <td>${w.location||'—'}</td>
               <td>${w.type||'—'}</td>
               <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'}</td>
@@ -12698,7 +12698,7 @@ async function renderVendorPOs(el) {
       <!-- items preview -->
       ${(po.items||[]).length ? `
       <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:12px;display:flex;flex-wrap:wrap;gap:4px">
-        ${(po.items||[]).slice(0,4).map(i=>`<span style="background:#f3f4f6;border-radius:4px;padding:2px 7px">${i.name} ×${i.qty}</span>`).join('')}
+        ${(po.items||[]).slice(0,4).map(i=>`<span style="background:#f3f4f6;border-radius:4px;padding:2px 7px">${h(i.name)} ×${i.qty}</span>`).join('')}
         ${(po.items||[]).length>4?`<span style="background:#f3f4f6;border-radius:4px;padding:2px 7px;color:var(--text-muted)">+${(po.items||[]).length-4} more</span>`:''}
       </div>`:''}
       <div style="display:flex;gap:8px;flex-wrap:wrap">${poActions(po)}</div>
@@ -13107,7 +13107,7 @@ async function renderDeliveryRoutes(el) {
     <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${statusColor}">
       <div style="padding:14px 16px 10px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-          <span style="font-weight:700">${r.name}</span>
+          <span style="font-weight:700">${h(r.name)}</span>
           ${statusBadge(r.status)}
         </div>
         <div style="font-size:.8rem;color:var(--text-muted)">${fmtDate(r.route_date)} · ${stops.length} stop${stops.length!==1?'s':''}</div>
@@ -13642,14 +13642,14 @@ async function renderTemplates(el) {
     <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${typeColor}">
       <div style="padding:16px 18px 12px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
-          <div style="font-weight:700;font-size:.95rem">${t.name}</div>
+          <div style="font-weight:700;font-size:.95rem">${h(t.name)}</div>
           <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:${typeColor};white-space:nowrap;padding:2px 8px;background:${typeColor}1a;border-radius:10px">${typeLabel}</span>
         </div>
         <div style="display:flex;gap:16px;font-size:.8rem;color:var(--text-muted)">
           <span><b style="color:var(--text)">${items.length}</b> item${items.length!==1?'s':''}</span>
           <span>Created ${fmtDate(t.created_at)}</span>
         </div>
-        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${t.notes}</div>` : ''}
+        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${h(t.notes)}</div>` : ''}
       </div>
       ${items.length ? `
       <div style="padding:0 18px 10px">
@@ -13706,14 +13706,14 @@ function tplTab(tab, btn) {
     <div class="card" style="padding:0;overflow:hidden;border-top:3px solid ${typeColor}">
       <div style="padding:16px 18px 12px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
-          <div style="font-weight:700;font-size:.95rem">${t.name}</div>
+          <div style="font-weight:700;font-size:.95rem">${h(t.name)}</div>
           <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:${typeColor};white-space:nowrap;padding:2px 8px;background:${typeColor}1a;border-radius:10px">${typeLabel}</span>
         </div>
         <div style="display:flex;gap:16px;font-size:.8rem;color:var(--text-muted)">
           <span><b style="color:var(--text)">${items.length}</b> item${items.length!==1?'s':''}</span>
           <span>Created ${fmtDate(t.created_at)}</span>
         </div>
-        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${t.notes}</div>` : ''}
+        ${t.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:6px;font-style:italic">${h(t.notes)}</div>` : ''}
       </div>
       ${items.length ? `
       <div style="padding:0 18px 10px">
@@ -13896,7 +13896,7 @@ async function renderSLADashboard(el) {
     rules.map((r,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
       <div>
-        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${r.name}</div>
+        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${h(r.name)}</div>
         <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Trigger: ${r.trigger_status?.replace(/_/g,' ')||'—'} → Action: ${r.action||'—'}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
@@ -13978,7 +13978,7 @@ async function renderApprovalChains(el) {
       return `
       <div class="card" style="padding:0;overflow:hidden;border-top:3px solid var(--navy)">
         <div style="padding:14px 16px 10px">
-          <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">${c.name}</div>
+          <div style="font-weight:700;font-size:.95rem;margin-bottom:4px">${h(c.name)}</div>
           <div style="font-size:.78rem;color:var(--text-muted)">
             Min: ${fmt(c.min_amount||0)} · ${steps.length} step${steps.length!==1?'s':''}
             ${c.entity_type?` · ${c.entity_type}`:''}
@@ -14119,7 +14119,7 @@ async function switchFulfilTab(tab, btn) {
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <select id="ovd-client" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
             <option value="">All Clients</option>
-            ${(clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}
+            ${(clients||[]).map(c=>`<option value="${c.id}">${h(c.name)}</option>`).join('')}
           </select>
           <select id="ovd-range" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
             <option value="30">Last 30 days</option>
@@ -14168,11 +14168,11 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Location</th><th>Order</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Due Since</th><th>Ageing (days)</th><th>Vendor</th><th>Status</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
-          <td><b>${r.client_name}</b></td>
+          <td><b>${h(r.client_name)}</b></td>
           <td>${r.location||'—'}</td>
           <td><b>${r.order_number}</b></td>
           <td>${r.brand_name||'—'}</td>
-          <td>${r.item_name}</td>
+          <td>${h(r.item_name)}</td>
           <td>${r.ordered_qty}</td>
           <td>${r.delivered_qty}</td>
           <td><b style="color:var(--danger)">${r.due_qty}</b></td>
@@ -14221,7 +14221,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Open Orders</th><th>Due Qty</th><th>Due Value</th><th>Actions</th></tr></thead>
         <tbody>${(data.clients||[]).map(c=>`<tr>
-          <td><b>${c.name}</b></td>
+          <td><b>${h(c.name)}</b></td>
           <td>${c.order_count}</td>
           <td><b style="color:var(--danger)">${c.due_qty||0}</b></td>
           <td>${fmt(c.due_value)}</td>
@@ -14311,7 +14311,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Fulfilment %</th><th>Vendor</th></tr></thead>
         <tbody>${data.sort((a,b)=>a.fulfilment_pct-b.fulfilment_pct).map(r=>`<tr>
-          <td><b>${r.brand_name}</b></td>
+          <td><b>${h(r.brand_name)}</b></td>
           <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
           <td><b style="color:var(--danger)">${r.due_qty}</b></td>
           <td>
@@ -14358,7 +14358,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
-          <td><b>${r.brand_name}</b></td><td>${r.category}</td>
+          <td><b>${h(r.brand_name)}</b></td><td>${r.category}</td>
           <td title="${r.clients}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
@@ -14405,7 +14405,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Location</th><th>Orders</th><th>Ordered Qty</th><th>Delivered Qty</th><th>Due Qty</th><th>Due Value</th><th>Fulfilment %</th><th>Avg Delivery Days</th></tr></thead>
         <tbody>${data.sort((a,b)=>(a.fulfilment_pct||0)-(b.fulfilment_pct||0)).map(r=>`<tr>
-          <td><b>${r.client_name}</b></td>
+          <td><b>${h(r.client_name)}</b></td>
           <td>${r.location||'—'}</td>
           <td>${r.total_orders}</td>
           <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
@@ -14472,7 +14472,7 @@ async function switchFulfilTab(tab, btn) {
             const completionColor = r.completion_date ? '#059669' : (r.status==='CLOSED'?'var(--danger)':'var(--text-muted)');
             return `<tr>
               <td><b style="color:var(--navy);cursor:pointer" onclick="viewOrderDrilldown('${r.id}')">${r.id}</b></td>
-              <td>${r.client_name}</td>
+              <td>${h(r.client_name)}</td>
               <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
               <td style="text-align:right;font-weight:600">${r.total_ordered}</td>
               <td style="text-align:right">
@@ -14533,7 +14533,7 @@ async function switchFulfilTab(tab, btn) {
         <tbody>${(data.dcs||[]).map(r=>`<tr>
           <td><b>${r.dc_number}</b></td>
           <td>${fmtDate(r.dc_date)}</td>
-          <td>${r.client_name}</td>
+          <td>${h(r.client_name)}</td>
           <td>${r.order_number}</td>
           <td>${r.delivered_qty||'—'}</td>
           <td>${r.delivery_executive||'—'}</td>
@@ -14583,8 +14583,8 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.sort((a,b)=>(b.due_qty||0)-(a.due_qty||0)).map(r=>`<tr style="${r.current_stock<(r.due_qty||0)?'background:#fff5f5':''}">
-          <td>${r.brand_name}</td>
-          <td><b>${r.item_name}</b></td>
+          <td>${h(r.brand_name)}</td>
+          <td><b>${h(r.item_name)}</b></td>
           <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
           <td><b style="color:var(--danger)">${r.due_qty}</b></td>
           <td><span style="color:${r.current_stock<r.due_qty?'var(--danger)':'var(--success)'}${r.current_stock<r.due_qty?';font-weight:700':''}">
@@ -14824,7 +14824,7 @@ async function drillPendingClient(clientId, clientName) {
     `<div class="table-wrap"><table class="table">
       <thead><tr><th>Order</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Ageing</th></tr></thead>
       <tbody>${data.map(r=>`<tr>
-        <td>${r.order_number}</td><td>${r.brand_name||'—'}</td><td>${r.item_name}</td>
+        <td>${r.order_number}</td><td>${r.brand_name||'—'}</td><td>${h(r.item_name)}</td>
         <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
         <td><b style="color:var(--danger)">${r.due_qty}</b></td>
         <td><span class="badge badge-${r.due_ageing_days>=15?'danger':r.due_ageing_days>=8?'warning':'info'}">${r.due_ageing_days}d</span></td>
@@ -14950,7 +14950,7 @@ async function renderStaff(el) {
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${s.active?1:.55}">
       <div style="width:44px;height:44px;border-radius:50%;background:${s.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${s.name}
+        <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(s.name)}
           ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
         </div>
         ${s.phone?`<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px"><a href="tel:${s.phone}" style="color:inherit">📞 ${s.phone}</a></div>`:''}
@@ -15215,7 +15215,7 @@ async function renderTodaysSchedule(el) {
 async function assignDCModal(dcId, currentDcNum, currentTime) {
   const staff = await api('/staff') || [];
   const staffOpts = staff.filter(s=>s.active && s.role==='delivery_staff')
-    .map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+    .map(s=>`<option value="${s.id}">${h(s.name)}</option>`).join('');
   openModal(`Assign & Schedule — DC ${dcId}`,
     `<div class="form-group"><label>DC Number</label><input type="text" id="dc-num" value="${currentDcNum}" placeholder="e.g. 702037"></div>
      <div class="form-group"><label>Assign Staff</label><select id="dc-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
@@ -15271,7 +15271,7 @@ async function renderConsolidatedOrders(el) {
         <thead><tr><th>SKU</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Clients</th><th>Client Names</th></tr></thead>
         <tbody>${data.length ? data.sort((a,b)=>(b.total_due_qty||0)-(a.total_due_qty||0)).map(r=>`<tr style="${r.total_due_qty>0?'':'opacity:.65'}">
           <td style="font-size:.8rem;color:var(--text-muted)">${r.sku}</td>
-          <td><b>${r.item_name}</b></td>
+          <td><b>${h(r.item_name)}</b></td>
           <td>${r.total_ordered_qty}</td>
           <td style="color:var(--success)">${r.total_delivered_qty}</td>
           <td style="color:${r.total_due_qty>0?'var(--danger)':'var(--success)'};font-weight:700">${r.total_due_qty}</td>
@@ -15333,11 +15333,11 @@ async function renderConsolidatedDue(el) {
         <tbody>${data.length ? data.sort((a,b)=>(b.days_overdue||0)-(a.days_overdue||0)).map(r=>{
           const daysColor = r.days_overdue>7?'var(--danger)':r.days_overdue>3?'var(--warning)':'var(--text)';
           return `<tr style="${r.days_overdue>7?'background:#fff5f5':''}">
-            <td><b>${r.client_name}</b></td>
+            <td><b>${h(r.client_name)}</b></td>
             <td><span class="badge badge-secondary">${r.zone||'—'}</span></td>
             <td style="font-size:.82rem">${r.order_id}</td>
             <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.order_date)}</td>
-            <td>${r.item_name}</td>
+            <td>${h(r.item_name)}</td>
             <td style="color:var(--text-muted)">${r.ordered_qty}</td>
             <td style="color:var(--success)">${r.delivered_qty}</td>
             <td style="color:var(--danger);font-weight:700">${r.due_qty}</td>
@@ -15379,8 +15379,8 @@ async function renderPorterExpenses(el) {
   const today   = new Date().toISOString().slice(0,10);
   const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
   const thisWeek = exps.filter(e=>e.trip_date>=weekAgo).reduce((s,e)=>s+(e.amount||0),0);
-  const clientOpts = (clients||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-  const staffOpts = (staff||[]).filter(s=>s.active).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  const clientOpts = (clients||[]).map(c=>`<option value="${c.id}">${h(c.name)}</option>`).join('');
+  const staffOpts = (staff||[]).filter(s=>s.active).map(s=>`<option value="${s.id}">${h(s.name)}</option>`).join('');
 
   el.innerHTML = `
   ${pageHeader('Porter Expenses', 'Track delivery trip costs and driver expenses')}
