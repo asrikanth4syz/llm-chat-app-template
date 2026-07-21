@@ -313,7 +313,7 @@ async function openProfileModal() {
     </div>
     <hr style="border:none;border-top:1px solid var(--border);margin-bottom:16px">
     <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:10px">Edit Profile</div>
-    <div class="form-group"><label>Display Name</label><input type="text" id="prof-name" value="${profile.name}"></div>
+    <div class="form-group"><label>Display Name</label><input type="text" id="prof-name" value="${h(profile.name)}"></div>
     <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin:16px 0 10px">Change Password</div>
     <div class="form-group"><label>Current Password</label><input type="password" id="prof-cur-pw" placeholder="Enter current password"></div>
     <div class="form-group"><label>New Password</label><input type="password" id="prof-new-pw" placeholder="Enter new password (min 6 chars)"></div>
@@ -1080,7 +1080,7 @@ async function renderClientDashboard(el) {
         <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#dbeafe;color:#1d4ed8;display:inline-block;margin-bottom:6px">ARRIVING</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:2px">${dc.dc_number||dc.id}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'🚚 En route'}${dc.scheduled_time?` · ETA ${dc.scheduled_time}`:''}</div>
-        ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('track_delivery')">Track</button>`}
+        ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('track_delivery')">Track</button>`}
       </div>`).join('')}
       ${lowStock.length > 6 ? `
       <div style="flex:0 0 140px;display:flex;align-items:center;justify-content:center">
@@ -1202,7 +1202,7 @@ async function renderClientDashboard(el) {
               ${dc.vehicle_no?`<div>🚚 ${dc.vehicle_no}</div>`:`<div style="color:#d97706">🚚 En route</div>`}
               ${dc.scheduled_time?`<div>⏱ ETA: <b>${dc.scheduled_time}</b></div>`:''}
             </div>
-            ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:.74rem;font-weight:600;color:#d97706;text-decoration:none;background:#fef3c7;border-radius:6px;padding:3px 8px">📞 Call Driver</a>`:''}
+            ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:.74rem;font-weight:600;color:#d97706;text-decoration:none;background:#fef3c7;border-radius:6px;padding:3px 8px">📞 Call Driver</a>`:''}
           </div>`).join('')}
       </div>
 
@@ -2589,7 +2589,7 @@ async function loadQuickReorder() {
         </div>
       </div>
       <div class="card-body" style="padding:10px 16px;font-size:.84rem;color:var(--text-muted)">
-        ${(o.items||[]).map(i=>`${i.name} ×${i.qty}`).join(' · ')||'—'}
+        ${(o.items||[]).map(i=>`${h(i.name)} ×${i.qty}`).join(' · ')||'—'}
       </div>
     </div>`).join('');
 }
@@ -4076,7 +4076,7 @@ async function renderTrackDelivery(el) {
         ${dc.scheduled_time?`<div>⏱ ETA: <b>${dc.scheduled_time}</b></div>`:''}
         ${dc.delivered_at?`<div>✅ Delivered: <b>${fmtDate(dc.delivered_at)}</b></div>`:''}
       </div>
-      ${dc.driver_phone?`<a href="tel:${dc.driver_phone}" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:.75rem;font-weight:600;color:${textColor};text-decoration:none;background:${badgeBg};border-radius:6px;padding:4px 10px">📞 Call Driver</a>`:''}
+      ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:.75rem;font-weight:600;color:${textColor};text-decoration:none;background:${badgeBg};border-radius:6px;padding:4px 10px">📞 Call Driver</a>`:''}
       ${type!=='DELIVERED'?`<button class="btn btn-secondary btn-sm" style="margin-top:8px;margin-left:6px" onclick="viewOrder('${dc.order_id}')">View Order</button>`:''}
     </div>`;
   }
@@ -6035,7 +6035,7 @@ async function renderVendors(el) {
       <div style="display:flex;align-items:center;gap:12px;font-size:.74rem;color:var(--text-muted);margin-bottom:${v.address?'6px':'14px'};flex-wrap:wrap">
         <span>⏱ ${v.avg_lead_days||'—'}d lead time</span>
         ${v.location?`<span>🏙 ${v.location}</span>`:''}
-        ${v.contact_email?`<span>✉ <a href="mailto:${v.contact_email}" style="color:var(--blue)">${h(v.contact_email)}</a></span>`:''}
+        ${v.contact_email?`<span>✉ <a href="mailto:${h(v.contact_email)}" style="color:var(--blue)">${h(v.contact_email)}</a></span>`:''}
         ${v.contact_phone?`<span>📞 ${v.contact_phone}</span>`:''}
       </div>
       ${v.address||v.map_pin?`<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:14px;display:flex;align-items:flex-start;gap:6px">
@@ -6727,7 +6727,7 @@ function vendorViewHTML(v, docs, products) {
           ${field('Registration', regd?'Registered':'Unregistered')}
           ${field('Vendor type', food?'🍽 Food':'Non-food')}
           ${field('Lead time', v.avg_lead_days!=null?v.avg_lead_days+' days':'—')}
-          ${field('Contact email', v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${h(v.contact_email)}</a>`:'—')}
+          ${field('Contact email', v.contact_email?`<a href="mailto:${h(v.contact_email)}" style="color:var(--blue)">${h(v.contact_email)}</a>`:'—')}
           ${field('Contact phone', v.contact_phone||'—')}
           ${field('On-time rate', `<span style="color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>`)}
           ${field('Fill rate', `<span style="color:${fillColor}">${pct(v.fill_rate||0)}</span>`)}
@@ -7615,7 +7615,7 @@ async function saveWarehouse() {
 
 function editWarehouseModal(id, name, capacity) {
   openModal('Edit Warehouse',
-    `<div class="form-group"><label>Warehouse Name</label><input type="text" id="ewh-name" value="${name}"></div>
+    `<div class="form-group"><label>Warehouse Name</label><input type="text" id="ewh-name" value="${h(name)}"></div>
      <div class="form-group"><label>Capacity (units)</label><input type="number" id="ewh-cap" value="${capacity}" min="1"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveWarehouseEdit('${id}')">Save Changes</button>`);
@@ -8944,7 +8944,7 @@ async function renderClients(el) {
 
       <!-- Contact -->
       ${c.contact_name ? `<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:8px">
-        👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${c.contact_email}" style="color:var(--blue)">${h(c.contact_email)}</a>`:''}${c.contact_phone?` · <a href="tel:${c.contact_phone}" style="color:var(--blue)">${h(c.contact_phone)}</a>`:''}
+        👤 ${c.contact_name}${c.contact_email?` · <a href="mailto:${h(c.contact_email)}" style="color:var(--blue)">${h(c.contact_email)}</a>`:''}${c.contact_phone?` · <a href="tel:${h(c.contact_phone)}" style="color:var(--blue)">${h(c.contact_phone)}</a>`:''}
       </div>` : ''}
       ${(c.address||c.map_pin) ? `<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:flex-start;gap:5px">
         <span>📍</span><span>${c.address||''}${(c.address&&c.map_pin)?' · ':''}${c.map_pin?`<a href="${mapsLink(c.map_pin,c.address)}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</span>
@@ -9518,7 +9518,7 @@ function viewClientModal(c) {
       <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${h(c.name)}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Zone</div><div style="font-weight:600">${c.zone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Name</div><div style="font-weight:600">${c.contact_name||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${c.contact_email}" style="color:var(--blue)">${h(c.contact_email)}</a>`:'—'}</div></div>
+      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${h(c.contact_email)}" style="color:var(--blue)">${h(c.contact_email)}</a>`:'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
       <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${c.pan||'—'}</div></div>
@@ -14406,7 +14406,7 @@ async function switchFulfilTab(tab, btn) {
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
           <td><b>${h(r.brand_name)}</b></td><td>${r.category}</td>
-          <td title="${r.clients}">${r.client_count} clients</td>
+          <td title="${h(r.clients)}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
           <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
@@ -15000,7 +15000,7 @@ async function renderStaff(el) {
         <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(s.name)}
           ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
         </div>
-        ${s.phone?`<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px"><a href="tel:${s.phone}" style="color:inherit">📞 ${s.phone}</a></div>`:''}
+        ${s.phone?`<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px"><a href="tel:${h(s.phone)}" style="color:inherit">📞 ${s.phone}</a></div>`:''}
         <div style="margin-top:5px">
           <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${STAFF_ROLE_LABEL[s.role]||s.role}</span>
         </div>
@@ -15081,7 +15081,7 @@ async function saveStaff() {
 
 function editStaffModal(id, name, phone, role) {
   openModal('Edit Staff Member',
-    `<div class="form-group"><label>Full Name</label><input type="text" id="em-name" value="${name}"></div>
+    `<div class="form-group"><label>Full Name</label><input type="text" id="em-name" value="${h(name)}"></div>
      <div class="form-group"><label>Phone</label><input type="tel" id="em-phone" value="${phone}"></div>
      <div class="form-group"><label>Role</label>
        <select id="em-role">
