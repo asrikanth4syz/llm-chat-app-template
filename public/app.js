@@ -6597,7 +6597,7 @@ function viewVendorModal(v) {
     ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
-     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')});closeModal()">Edit</button>
+     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
