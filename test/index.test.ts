@@ -267,6 +267,22 @@ describe("Vendors", () => {
     expect(res.status).toBe(401);
   });
 
+  it("POST /api/vendors — assigns a unique VDR-YYYY-NNNNN vendor code that increments", async () => {
+    const r1 = await post("/api/vendors", { name: "Code Vendor A", category: "Beverages" }, adminToken);
+    const r2 = await post("/api/vendors", { name: "Code Vendor B", category: "Beverages" }, adminToken);
+    const { id: id1 } = await r1.json() as { id: string };
+    const { id: id2 } = await r2.json() as { id: string };
+    const list = await (await get("/api/vendors", adminToken)).json() as Array<{id:string;vendor_code:string}>;
+    const c1 = list.find(x => x.id === id1)?.vendor_code || "";
+    const c2 = list.find(x => x.id === id2)?.vendor_code || "";
+    expect(c1).toMatch(/^VDR-\d{4}-\d{5}$/);
+    expect(c2).toMatch(/^VDR-\d{4}-\d{5}$/);
+    expect(c1).not.toBe(c2);
+    const n1 = parseInt(c1.split("-").pop() as string, 10);
+    const n2 = parseInt(c2.split("-").pop() as string, 10);
+    expect(n2).toBe(n1 + 1);
+  });
+
   it("POST /api/vendors — registered vendor stores validated GSTIN + derived PAN", async () => {
     const res = await post("/api/vendors", { name: "Reg Vendor", category: "Grocery",
       registration_type: "registered", gstin: "27aapfu0939f1zv" }, adminToken);

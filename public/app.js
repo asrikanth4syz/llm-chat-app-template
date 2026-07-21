@@ -5949,6 +5949,7 @@ async function renderVendors(el) {
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
           <div>
             <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${v.name}</div>
+            ${v.vendor_code?`<div style="font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;letter-spacing:.03em;color:var(--text-muted);margin-top:1px">${v.vendor_code}</div>`:''}
             <div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
               ${(v.category||'—').split(',').filter(Boolean).map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.trim()}</span>`).join('')}
               ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
@@ -6565,40 +6566,160 @@ function catChips(category) {
     .join('');
 }
 
-function viewVendorModal(v) {
+async function viewVendorModal(v) {
+  const code = v.vendor_code || v.id;
+  // Open immediately with a light skeleton, then fill once documents/products load.
+  openModal(`Vendor · ${code}`,
+    `<div id="vv-body" style="min-height:220px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.85rem">Loading vendor profile…</div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+  const [docs, products] = await Promise.all([
+    api(`/vendors/${v.id}/documents`).catch(()=>[]),
+    api(`/vendors/${v.id}/products`).catch(()=>[]),
+  ]);
+  const body = document.getElementById('vv-body');
+  if (body) body.outerHTML = vendorViewHTML(v, docs||[], products||[]);
+  const footer = document.getElementById('modal-footer');
+  if (footer) footer.innerHTML =
+    `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
+     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit vendor</button>
+     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
+}
+
+// Data-driven completeness for the read-only view (mirror of the wizard's rules,
+// but computed from the saved vendor + its documents rather than live form fields).
+function vendorSections(v, docsByKind) {
+  const regd = v.registration_type === 'registered';
+  const food = v.vendor_type === 'food';
+  const ifscOk = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(v.bank_ifsc||'').toUpperCase());
+  const has = k => !!docsByKind[k];
+  return [
+    { label:'Business & compliance', ok: !!v.name && !!v.category && (!regd || (!!v.gstin && !!v.pan)) && (!food || (!!v.fssai_licence && !!v.fssai_expiry)) },
+    { label:'Bank & payout',         ok: !!v.bank_account_no && !!v.bank_account_name && ifscOk },
+    { label:'Documents',             ok: has('cancelled_cheque') && (!regd || has('gst_cert')) && (!food || has('fssai')) },
+    { label:'Products',              ok: (Array.isArray(v._products)? v._products.length : 0) > 0 },
+    { label:'Activation',            ok: v.onboarding_status === 'active' },
+  ];
+}
+
+function vendorViewHTML(v, docs, products) {
+  v._products = products;
+  const code = v.vendor_code || v.id;
   const onTimeColor = v.on_time_rate>=90?'var(--success)':v.on_time_rate>=75?'#d97706':'var(--danger)';
   const fillColor   = v.fill_rate>=90?'var(--success)':v.fill_rate>=75?'#d97706':'var(--danger)';
   const mapUrl = mapsLink(v.map_pin, v.address);
-  openModal(`Vendor: ${v.name}`, `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${v.name}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">City / Area</div><div style="font-weight:600">${v.location||'—'}</div></div>
-      <div style="grid-column:1/-1"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Category / Brand</div><div>${catChips(v.category)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a>`:'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${v.contact_phone||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Rating</div><div style="font-weight:600">${(+v.rating||0).toFixed(1)} / 5.0</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">On-time Rate</div><div style="font-weight:700;color:${onTimeColor}">${pct(v.on_time_rate||0)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Fill Rate</div><div style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Lead Time</div><div style="font-weight:600">${v.avg_lead_days!=null?v.avg_lead_days+' days':'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Visit Schedule</div><div style="font-weight:600">${v.visit_frequency?`${v.visit_frequency}${v.visit_day?' · '+(v.visit_frequency==='Monthly'?'day '+v.visit_day:v.visit_day):''}`:'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Onboarding</div><div style="font-weight:700">${vendorOnbBadge(v.onboarding_status)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Registration</div><div style="font-weight:600">${v.registration_type==='registered'?'Registered':'Unregistered'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Vendor Type</div><div style="font-weight:600">${v.vendor_type==='food'?'🍽 Food':'Non-food'}</div></div>
-      ${v.bank_account_no?`<div><div style="font-size:.72rem;color:var(--text-muted)">Bank</div><div style="font-weight:600">${h(v.bank_name||'—')} · ****${String(v.bank_account_no).slice(-4)}${v.bank_ifsc?' · '+h(v.bank_ifsc):''}</div></div>`:''}
-      ${v.registration_type==='registered'?`
-      <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${v.gstin||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${v.pan||'—'}</div></div>`:''}
-      ${v.vendor_type==='food'?(()=>{ const exp=v.fssai_expiry; const expired=exp&&exp<new Date().toISOString().slice(0,10);
-        return `<div><div style="font-size:.72rem;color:var(--text-muted)">FSSAI Licence</div><div style="font-weight:600;letter-spacing:.03em">${v.fssai_licence||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">FSSAI Expiry</div><div style="font-weight:700;color:${expired?'var(--danger)':exp?'var(--success)':'var(--text-muted)'}">${exp?fmtDate(exp)+(expired?' ⚠ Expired':''):'—'}</div></div>`; })():''}
+  const regd = v.registration_type === 'registered';
+  const food = v.vendor_type === 'food';
+  const docsByKind = {}; (docs||[]).forEach(d => { docsByKind[d.kind] = d; });
+
+  const sections = vendorSections(v, docsByKind);
+  const done = sections.filter(s => s.ok).length;
+  const pctDone = Math.round(done / sections.length * 100);
+  const missing = sections.filter(s => !s.ok && s.label !== 'Activation');
+
+  const field = (k, val) => `<div><div style="font-size:.68rem;letter-spacing:.02em;text-transform:uppercase;color:var(--text-muted);margin-bottom:2px">${k}</div><div style="font-weight:600;font-size:.86rem">${val}</div></div>`;
+
+  // Required-documents panel (chips reflect what's actually uploaded).
+  const docRows = VW_DOCS.map(d => {
+    const required = d.kind==='cancelled_cheque' || (d.kind==='gst_cert' && regd) || (d.kind==='fssai' && food);
+    if (!required && !docsByKind[d.kind] && d.opt) {
+      // optional & not uploaded → show as optional
+    }
+    const up = docsByKind[d.kind];
+    const chip = up
+      ? `<span style="font-size:.68rem;font-weight:700;color:var(--success);background:#f0fdf4;border-radius:100px;padding:3px 10px">✓ Uploaded</span>`
+      : required
+        ? `<span style="font-size:.68rem;font-weight:700;color:#b45309;background:#fffbeb;border-radius:100px;padding:3px 10px">⚠ Pending</span>`
+        : `<span style="font-size:.68rem;font-weight:700;color:var(--text-muted);background:var(--surface-2);border-radius:100px;padding:3px 10px">Optional</span>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--surface-2)">
+      <span style="font-size:1rem">📄</span>
+      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.82rem">${d.label}</div>
+        <div style="font-size:.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${up?h(up.filename||'file'):(required?'Required':'Optional')}</div></div>
+      ${chip}</div>`;
+  }).join('');
+
+  // Activity — derived from real document upload timestamps (honest empty-state).
+  const acts = (docs||[]).filter(d=>d.uploaded_at)
+    .sort((a,b)=> String(b.uploaded_at).localeCompare(String(a.uploaded_at)))
+    .map(d => {
+      const lbl = (VW_DOCS.find(x=>x.kind===d.kind)||{}).label || d.kind;
+      return `<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--surface-2)">
+        <span style="flex:none;width:9px;height:9px;border-radius:50%;background:var(--success);margin-top:5px"></span>
+        <div style="flex:1"><div style="font-weight:600;font-size:.82rem">${lbl} uploaded</div></div>
+        <div style="font-size:.7rem;color:var(--text-muted);white-space:nowrap">${fmtDate(d.uploaded_at)}</div></div>`;
+    }).join('');
+  const activityHtml = acts || `<div style="padding:14px 0;color:var(--text-muted);font-size:.8rem">No document activity recorded yet.</div>`;
+
+  const chkRow = s => `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--surface-2)">
+    <span style="flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:.66rem;font-weight:800;${s.ok?'background:var(--success);color:#fff':'background:var(--surface-2);color:var(--text-muted);border:1.5px solid var(--border-mid)'}">${s.ok?'✓':''}</span>
+    <span style="flex:1;font-size:.82rem;font-weight:${s.ok?600:500};color:${s.ok?'var(--text)':'var(--text-muted)'}">${s.label}</span>
+    <span style="font-size:.68rem;color:var(--text-muted)">${s.ok?'Done':'Pending'}</span></div>`;
+
+  const fssaiExp = v.fssai_expiry; const fssaiExpired = fssaiExp && fssaiExp < new Date().toISOString().slice(0,10);
+
+  return `<div>
+    <!-- header strip -->
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-size:1.1rem;font-weight:800;color:var(--navy);line-height:1.2">${h(v.name)}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${catChips(v.category)}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-family:ui-monospace,monospace;font-size:.78rem;font-weight:700;letter-spacing:.03em;color:var(--navy);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:5px 11px">${code}</span>
+        ${vendorOnbBadge(v.onboarding_status)}
+      </div>
     </div>
-    ${v.notes?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Comments / Notes</div><div style="font-size:.84rem;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;line-height:1.5">${h(v.notes)}</div></div>`:''}
-    ${v.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${v.address}</div></div>`:''}
-    ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
-    `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
-     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit</button>
-     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+
+    ${missing.length ? `<div style="display:flex;gap:10px;align-items:center;background:#fffbeb;border:1px solid #fcd9a5;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:.8rem;color:#92400e">
+      <span style="font-size:1.1rem">🛡️</span><div><b>${missing.length} item${missing.length>1?'s':''} still needed to activate:</b> ${missing.map(m=>m.label).join(' · ')}. Use <b>Edit vendor</b> to fill and submit for verification.</div></div>` : ''}
+
+    <!-- two-column: details + rail -->
+    <div style="display:grid;grid-template-columns:1.7fr 1fr;gap:18px;align-items:start" class="vv-grid">
+      <div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          ${field('City / Area', v.location||'—')}
+          ${field('Registration', regd?'Registered':'Unregistered')}
+          ${field('Vendor type', food?'🍽 Food':'Non-food')}
+          ${field('Lead time', v.avg_lead_days!=null?v.avg_lead_days+' days':'—')}
+          ${field('Contact email', v.contact_email?`<a href="mailto:${v.contact_email}" style="color:var(--blue)">${v.contact_email}</a>`:'—')}
+          ${field('Contact phone', v.contact_phone||'—')}
+          ${field('On-time rate', `<span style="color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>`)}
+          ${field('Fill rate', `<span style="color:${fillColor}">${pct(v.fill_rate||0)}</span>`)}
+          ${field('Rating', `${(+v.rating||0).toFixed(1)} / 5.0`)}
+          ${field('Status', v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>')}
+          ${regd?field('GST number', `<span style="letter-spacing:.03em">${v.gstin||'—'}</span>`):''}
+          ${regd?field('PAN', `<span style="letter-spacing:.03em">${v.pan||'—'}</span>`):''}
+          ${food?field('FSSAI licence', `<span style="letter-spacing:.03em">${v.fssai_licence||'—'}</span>`):''}
+          ${food?field('FSSAI expiry', `<span style="color:${fssaiExpired?'var(--danger)':fssaiExp?'var(--success)':'var(--text-muted)'}">${fssaiExp?fmtDate(fssaiExp)+(fssaiExpired?' ⚠ Expired':''):'—'}</span>`):''}
+          ${v.bank_account_no?field('Bank', `${h(v.bank_name||'—')} · ****${String(v.bank_account_no).slice(-4)}${v.bank_ifsc?' · '+h(v.bank_ifsc):''}`):''}
+          ${field('Visit schedule', v.visit_frequency?`${v.visit_frequency}${v.visit_day?' · '+(v.visit_frequency==='Monthly'?'day '+v.visit_day:v.visit_day):''}`:'—')}
+        </div>
+        ${v.notes?`<div style="margin-top:16px"><div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.02em;color:var(--text-muted);margin-bottom:4px">Notes</div><div style="font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;line-height:1.5">${h(v.notes)}</div></div>`:''}
+        ${v.address?`<div style="margin-top:14px"><div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.02em;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.82rem">📍 ${h(v.address)}${mapUrl?` · <a href="${mapUrl}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</div></div>`:''}
+      </div>
+
+      <!-- rail -->
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+          <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Onboarding progress</div>
+          <div style="display:flex;justify-content:space-between;font-size:.74rem;color:var(--text-muted);margin-bottom:6px"><span>Overall completion</span><b style="color:var(--primary)">${pctDone}%</b></div>
+          <div style="height:8px;background:var(--surface-2);border-radius:100px;overflow:hidden;margin-bottom:12px"><i style="display:block;height:100%;width:${pctDone}%;background:linear-gradient(90deg,var(--primary),#14b8a6)"></i></div>
+          ${sections.map(chkRow).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom row: documents + activity -->
+    <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;margin-top:18px" class="vv-grid">
+      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+        <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Required documents</div>
+        ${docRows}
+      </div>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+        <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Activity</div>
+        ${activityHtml}
+      </div>
+    </div>
+  </div>`;
 }
 
 function vendorOnbBadge(s) {

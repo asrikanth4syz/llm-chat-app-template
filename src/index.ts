@@ -254,11 +254,24 @@ async function fixCategoryNames(env: Env): Promise<void> {
   for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT",
     "registration_type TEXT DEFAULT 'unregistered'","gstin TEXT","pan TEXT",
     "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT",
-    "onboarding_status TEXT DEFAULT 'active'",
+    "onboarding_status TEXT DEFAULT 'active'","vendor_code TEXT",
     "bank_account_name TEXT","bank_account_no TEXT","bank_ifsc TEXT","bank_name TEXT",
     "bank_branch TEXT","upi_id TEXT","payment_terms TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE vendors ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
+  // Backfill a human-readable vendor code (VDR-YYYY-NNNNN) for any vendor missing one.
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id FROM vendors WHERE vendor_code IS NULL OR vendor_code='' ORDER BY rowid").all();
+    if (results && results.length) {
+      let seq = await nextVendorSeq(env);
+      const year = new Date().getFullYear();
+      for (const r of results as Array<{id:string}>) {
+        await env.DB.prepare("UPDATE vendors SET vendor_code=? WHERE id=?")
+          .bind(formatVendorCode(year, seq++), r.id).run();
+      }
+    }
+  } catch { /* ignore */ }
   try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS vendor_documents (
       id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -277,6 +290,24 @@ async function fixCategoryNames(env: Env): Promise<void> {
   for (const col of ["gstin TEXT", "pan TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE clients ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
+}
+
+// Human-readable vendor code: VDR-<year>-<5-digit running number>, globally
+// sequential so it stays unique even across years.
+function formatVendorCode(year: number, seq: number): string {
+  return `VDR-${year}-${String(seq).padStart(5, '0')}`;
+}
+async function nextVendorSeq(env: Env): Promise<number> {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT vendor_code FROM vendors WHERE vendor_code LIKE 'VDR-%'").all();
+    let max = 0;
+    for (const r of (results||[]) as Array<{vendor_code:string}>) {
+      const n = parseInt(String(r.vendor_code).split('-').pop() || '', 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+    return max + 1;
+  } catch { return 1; }
 }
 
 // Indian PAN: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F).
@@ -1360,9 +1391,10 @@ async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   if (comp.error) return json({ error: comp.error }, 400);
   const status = VENDOR_ONB_STATES.includes(String(body.onboarding_status)) ? String(body.onboarding_status) : 'active';
   const id = `v${uid().slice(0,6)}`;
+  const vendorCode = formatVendorCode(new Date().getFullYear(), await nextVendorSeq(env));
   const leadDays = body.avg_lead_days != null && body.avg_lead_days !== '' ? Number(body.avg_lead_days) : 3;
-  await env.DB.prepare("INSERT INTO vendors (id,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry,onboarding_status,bank_account_name,bank_account_no,bank_ifsc,bank_name,bank_branch,upi_id,payment_terms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(id,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null,
+  await env.DB.prepare("INSERT INTO vendors (id,vendor_code,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry,onboarding_status,bank_account_name,bank_account_no,bank_ifsc,bank_name,bank_branch,upi_id,payment_terms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .bind(id,vendorCode,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null,
       isNaN(leadDays)?3:leadDays, body.notes||null, body.visit_frequency||null, body.visit_day||null,
       comp.registration_type, comp.gstin, comp.pan, comp.vendor_type, comp.fssai_licence, comp.fssai_expiry,
       status, body.bank_account_name||null, body.bank_account_no||null, body.bank_ifsc||null, body.bank_name||null,
@@ -1370,7 +1402,7 @@ async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const subErr = await saveVendorSubResources(env, id, body);
   if (subErr) return json({ error: subErr }, 400);
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
-    `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor ID: ${id}\n\nRegards,\n4SYZ Smart Pantry Team`);
+    `Dear ${body.name},\n\nYou have been registered as a vendor on the Smart Pantry platform.\n\nVendor Code: ${vendorCode}\n\nRegards,\n4SYZ Smart Pantry Team`);
   await audit(env, user, "CREATE", "vendor", id, undefined, body.name as string);
   return json({id}, 201);
 }

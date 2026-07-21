@@ -816,6 +816,7 @@ button { font-family: var(--font); cursor: pointer; }
   .form-row { grid-template-columns: 1fr; }
   .cart-panel { width: 100%; position: static; max-height: none; }
   .modal { width: 95%; max-width: 95vw; }
+  .vv-grid { grid-template-columns: 1fr !important; }
   .table-wrap { border-radius: 0; margin: 0 -16px; }
 }
 
