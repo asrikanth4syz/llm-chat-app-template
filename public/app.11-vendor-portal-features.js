@@ -629,10 +629,10 @@ async function renderImportData(el) {
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
-    <button class="tab-pill${startTab==='inventory'?' active':''}" onclick="importTab('inventory',this)">Inventory</button>
-    <button class="tab-pill${startTab==='orders'?' active':''}" onclick="importTab('orders',this)">Orders</button>
+    <button class="tab-pill${startTab==='inventory'?' active':''}" ${dataActEl('importTab', 'inventory')}>Inventory</button>
+    <button class="tab-pill${startTab==='orders'?' active':''}" ${dataActEl('importTab', 'orders')}>Orders</button>
     ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
-    <button class="tab-pill${startTab==='jobs'?' active':''}" onclick="importTab('jobs',this)">Import History</button>
+    <button class="tab-pill${startTab==='jobs'?' active':''}" ${dataActEl('importTab', 'jobs')}>Import History</button>
   </div>
   <div id="import-content"></div>`;
 
@@ -1043,8 +1043,8 @@ async function renderTemplates(el) {
     </div>`)}
   ${kpis}
   <div class="tabs" id="tpl-tabs" style="margin-bottom:16px">
-    <button class="tab-btn${APP._tplTab==='orders'?' active':''}" onclick="tplTab('orders',this)">Order Templates <span style="font-size:.72rem;opacity:.7">(${oTpls.length})</span></button>
-    <button class="tab-btn${APP._tplTab==='po'?' active':''}" onclick="tplTab('po',this)">PO Templates <span style="font-size:.72rem;opacity:.7">(${pTpls.length})</span></button>
+    <button class="tab-btn${APP._tplTab==='orders'?' active':''}" ${dataActEl('tplTab', 'orders')}>Order Templates <span style="font-size:.72rem;opacity:.7">(${oTpls.length})</span></button>
+    <button class="tab-btn${APP._tplTab==='po'?' active':''}" ${dataActEl('tplTab', 'po')}>PO Templates <span style="font-size:.72rem;opacity:.7">(${pTpls.length})</span></button>
   </div>
   <div id="tpl-content">${tabContent(APP._tplTab)}</div>`;
 }

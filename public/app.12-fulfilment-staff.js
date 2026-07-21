@@ -5,16 +5,16 @@ async function renderFulfilment(el) {
   el.innerHTML = `
   ${pageHeader('Fulfilment & Reconciliation', 'Order vs Delivery Management')}
   <div class="tabs" id="fulfilment-tabs">
-    <button class="tab-btn active" onclick="switchFulfilTab('ovd',this)">Order vs Delivery</button>
-    <button class="tab-btn" onclick="switchFulfilTab('due-items',this)">Due Items</button>
-    <button class="tab-btn" onclick="switchFulfilTab('pending-supply',this)">Pending Supply</button>
-    <button class="tab-btn" onclick="switchFulfilTab('ageing',this)">Due Ageing</button>
-    <button class="tab-btn" onclick="switchFulfilTab('brand-shortfall',this)">Brand Shortfall</button>
-    <button class="tab-btn" onclick="switchFulfilTab('brand-procurement',this)">Brand Procurement</button>
-    <button class="tab-btn" onclick="switchFulfilTab('client-scorecard',this)">Client Scorecard</button>
-    <button class="tab-btn" onclick="switchFulfilTab('dc-per-order',this)">DC per Order</button>
-    <button class="tab-btn" onclick="switchFulfilTab('dc-recon',this)">DC Reconciliation</button>
-    <button class="tab-btn" onclick="switchFulfilTab('procurement-forecast',this)">Procurement Forecast</button>
+    <button class="tab-btn active" ${dataActEl('switchFulfilTab', 'ovd')}>Order vs Delivery</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'due-items')}>Due Items</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'pending-supply')}>Pending Supply</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'ageing')}>Due Ageing</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'brand-shortfall')}>Brand Shortfall</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'brand-procurement')}>Brand Procurement</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'client-scorecard')}>Client Scorecard</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'dc-per-order')}>DC per Order</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'dc-recon')}>DC Reconciliation</button>
+    <button class="tab-btn" ${dataActEl('switchFulfilTab', 'procurement-forecast')}>Procurement Forecast</button>
   </div>
   <div id="fulfilment-content"></div>`;
   switchFulfilTab('ovd', document.querySelector('#fulfilment-tabs .tab-btn'));

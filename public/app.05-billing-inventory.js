@@ -513,7 +513,7 @@ async function renderInventory(el) {
         : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:#059669">Active</span>';
       const checked   = APP._invSelected.has(item.sku);
       return `
-      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" onclick="toggleInvDetail('${item.sku}',this)">
+      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
         <td onclick="event.stopPropagation()" style="width:34px;text-align:center">
           <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
@@ -538,7 +538,7 @@ async function renderInventory(el) {
           <button class="btn btn-secondary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit</button>
           <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>History</button>
           <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
-          <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" onclick="toggleCritical('${item.sku}',this)">${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
+          <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" ${dataActEl('toggleCritical', item.sku)}>${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
       </tr>
       <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff"><td colspan="14" style="padding:0"></td></tr>`;
@@ -565,7 +565,7 @@ async function renderInventory(el) {
     </div>
     <div style="display:flex;gap:8px;flex-shrink:0">
       <button class="btn btn-secondary btn-sm" onclick="navigate('reports');setTimeout(()=>viewReport('critical-stock'),300)">View Report</button>
-      <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" onclick="sendCriticalAlerts(this)">📧 Send Alert Email</button>
+      <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" ${dataActEl('sendCriticalAlerts')}>📧 Send Alert Email</button>
     </div>
   </div>` : ''}
   ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${h(i.name)}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}

@@ -972,6 +972,11 @@ function editClientById(id) { const c = APP._clientById && APP._clientById[id]; 
 function dataAct(fn, ...args) {
   return `data-act="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`;
 }
+// Variant for handlers whose original inline form passed `this` (the clicked
+// element) as the last argument, e.g. ${dataActEl('switchTab', 'x')}.
+function dataActEl(fn, ...args) {
+  return `${dataAct(fn, ...args)} data-el`;
+}
 function _dispatchAct(e) {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -979,7 +984,8 @@ function _dispatchAct(e) {
   if (typeof fn !== 'function') return;
   let args = [];
   if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
-  fn(...args);
+  if (el.hasAttribute('data-el')) fn(...args, el); // pass the element as the trailing arg
+  else fn(...args);
 }
 document.addEventListener('click', _dispatchAct);
 

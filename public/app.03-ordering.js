@@ -59,7 +59,7 @@ async function renderPlaceOrder(el) {
         style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
         oninput="searchCatalog(this.value)" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
       <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
-        ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" onclick="filterCatalog('${c}',this)">${c}</button>`).join('')}
+        ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" ${dataActEl('filterCatalog', c)}>${c}</button>`).join('')}
       </div>
     </div>
 
@@ -214,7 +214,7 @@ function renderCartReview(container) {
             ${['Regular','Urgent','Ad-Hoc'].map(t=>{
               const colors = {Regular:'var(--blue)',Urgent:'var(--danger)','Ad-Hoc':'#d97706'};
               const active = (APP._orderType||'Regular')===t;
-              return `<button id="ot-btn-${t.replace('-','')}" onclick="setOrderType('${t}',this)"
+              return `<button id="ot-btn-${t.replace('-','')}" ${dataActEl('setOrderType', t)}
                 style="flex:1;padding:10px 0;border-radius:8px;border:1.5px solid ${colors[t]};
                 background:${active?colors[t]:'#fff'};color:${active?'#fff':colors[t]};
                 font-size:.82rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
@@ -301,12 +301,12 @@ function refreshCartReviewUI() {
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
               <div class="catalog-qty" style="margin:0">
-                <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
+                <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)}>−</button>
                 <input type="number" class="qty-input" min="1" step="1" value="${item.qty}" inputmode="numeric"
                   data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
                   onchange="setQty('${item.sku}', this.value)"
                   onkeydown="if(event.key==='Enter'){this.blur();}" onfocus="this.select()">
-                <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
+                <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
               <button ${dataAct('removeCartItem', item.sku)}
@@ -665,9 +665,9 @@ function renderCatalogItems(items) {
           </div>`}
           <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
           <div style="display:flex;align-items:center;justify-content:center;gap:6px">
-            <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)" style="width:26px;height:26px;border-radius:50%">−</button>
+            <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">−</button>
             <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}" style="min-width:20px;text-align:center;font-weight:700;font-size:.9rem;color:${qty>0?'var(--navy)':'var(--text-muted)'}">${qty}</span>
-            <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)" style="width:26px;height:26px;border-radius:50%">+</button>
+            <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">+</button>
           </div>
         </div>`;
       }).join('')}
@@ -695,9 +695,9 @@ function renderCatalogItems(items) {
         ${lowStock?'⚠️ ':''}Stock: ${item.stock}
       </div>`}
       <div class="catalog-qty">
-        <button class="qty-btn" onclick="changeQty('${item.sku}',-1,${item.unit_price},this)">−</button>
+        <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)}>−</button>
         <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}">${qty}</span>
-        <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
+        <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
       </div>
     </div>`;
   }).join('');
@@ -950,7 +950,7 @@ async function renderMyInventory(el) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${reorderItems.length ? `<button class="btn btn-gold btn-sm" ${dataAct('orderAllLowStock')} title="Add every low & out-of-stock item to your order">🛒 Reorder all low/out (${reorderItems.length})</button>` : ''}
-      <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
+      <button class="btn btn-secondary btn-sm" ${dataActEl('syncClientInventory')}>🔄 Sync from Deliveries</button>
     </div>
   </div>
   ${nudgeHtml}
@@ -1065,7 +1065,7 @@ function myInvRow(i) {
     <td data-label="Last Used" style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm inv-crit-btn" onclick="toggleClientCritical('${h(i.sku)}',this)" title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
+        <button class="btn btn-secondary btn-sm inv-crit-btn" ${dataActEl('toggleClientCritical', i.sku)} title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
         <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" ${dataAct('orderMoreItem', h(i.sku), h(i.item_name||i.sku))}>Order More</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>

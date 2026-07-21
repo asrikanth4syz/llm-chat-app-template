@@ -272,7 +272,7 @@ async function viewOrder(id) {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
           <div style="display:flex;gap:4px">
-            <button class="btn btn-secondary btn-sm" onclick="toggleDCItemsInline('${dc.id}',this)">View Items</button>
+            <button class="btn btn-secondary btn-sm" ${dataActEl('toggleDCItemsInline', dc.id)}>View Items</button>
             ${dc.status==='SCHEDULED'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>`:''}
             ${dc.status==='IN_TRANSIT'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-success btn-sm" onclick="closeModal();markDelivered('${dc.id}')">Confirm Delivery</button>`:''}
           </div>

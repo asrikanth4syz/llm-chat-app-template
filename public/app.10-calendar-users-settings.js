@@ -277,7 +277,7 @@ function dcalAgItem(dc, k) {
     : '';
   const bellState = dc.reminder_armed === 1 ? '🔔 On' : dc.reminder_armed === 0 ? '🔕 Muted' : '🔔 Auto';
   const bell = dc.status !== 'DELIVERED'
-    ? `<button class="btn btn-secondary btn-sm" title="Reminder for this delivery — Auto follows the global policy, then On, then Muted" onclick="dcalCycleBell('${h(String(dc.id))}',this)">${bellState}</button>`
+    ? `<button class="btn btn-secondary btn-sm" title="Reminder for this delivery — Auto follows the global policy, then On, then Muted" ${dataActEl('dcalCycleBell', String(dc.id))}>${bellState}</button>`
     : '';
   return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid ${risk?'#fecaca':'var(--border)'};background:${risk?'#fff5f5':'var(--surface)'};border-radius:10px;padding:10px 13px">
     <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">${dc.scheduled_time||'—'}</span>
@@ -299,8 +299,8 @@ function dcalGhostItem(so, k) {
       <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(so.name||so.id)} · ${h(so.client_name||'—')} <span class="dcal-pill org">Projected</span></div>
       <div style="font-size:.72rem;color:var(--text-muted)">Standing order ${h(so.id)} · ${h(so.frequency||'MONTHLY')}${n?` · ${n} item${n===1?'':'s'}`:''} · no order created yet</div>
     </div>
-    <button class="btn btn-primary btn-sm" onclick="dcalGhostCreate('${h(so.id)}','${k}',this)">Create order</button>
-    <button class="btn btn-secondary btn-sm" onclick="dcalGhostSkip('${h(so.id)}','${k}',this)">Skip this cycle</button></div>`;
+    <button class="btn btn-primary btn-sm" ${dataActEl('dcalGhostCreate', so.id, k)}>Create order</button>
+    <button class="btn btn-secondary btn-sm" ${dataActEl('dcalGhostSkip', so.id, k)}>Skip this cycle</button></div>`;
 }
 
 function dcalAgendaDay(by, gh) {
@@ -372,7 +372,7 @@ function dcalRail(by, gh) {
     ${polRow('ghost_nudge','Recurring nudges','unconfirmed cycles, 2 days out')}
     <div style="display:flex;align-items:center;gap:8px;padding:7px 0 2px;font-size:.78rem;color:var(--navy)"><b>Fleet capacity / day</b>
       <input type="number" min="1" max="99" value="${pol.capacity||6}" class="form-control" style="width:64px;font-size:.8rem;padding:4px 8px" onchange="dcalPolSave('capacity',this)"></div>
-    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:9px" onclick="dcalSendReminders(this)">📨 Send reminders now</button>
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:9px" ${dataActEl('dcalSendReminders')}>📨 Send reminders now</button>
     <div style="font-size:.63rem;color:var(--text-muted);margin-top:7px;line-height:1.5">Runs automatically every morning (9:00 IST). Bells on individual deliveries override this policy.</div>
   </div>`;
   el.innerHTML =
@@ -789,7 +789,7 @@ async function renderSettings(el) {
   <div style="display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start">
     <div class="card" style="padding:8px">
       ${SETTINGS_NAV.map(n=>`
-      <button onclick="settingsTab('${n.id}',this)" class="settings-nav-btn ${APP._settingsTab===n.id?'active':''}"
+      <button ${dataActEl('settingsTab', n.id)} class="settings-nav-btn ${APP._settingsTab===n.id?'active':''}"
         style="width:100%;text-align:left;background:${APP._settingsTab===n.id?'var(--primary)':'transparent'};color:${APP._settingsTab===n.id?'#fff':'inherit'};border:none;border-radius:8px;padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:2px;transition:background .15s">
         <span style="font-size:1.1rem;flex-shrink:0">${n.icon}</span>
         <div>

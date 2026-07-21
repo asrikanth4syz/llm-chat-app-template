@@ -76,7 +76,7 @@ async function renderClientDashboard(el) {
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(i.item_name||i.sku)}">${h(i.item_name||i.sku)}</div>
         ${(APP.cart||[]).some(c => c.sku === i.sku)
           ? `<button class="btn btn-secondary btn-sm" style="width:100%;background:#dcfce7;color:#15803d;border-color:#86efac" onclick="APP._postNavStep='review';navigate('place_order')">✓ Added — Review</button>`
-          : `<button class="btn btn-primary btn-sm" style="width:100%" onclick="addAttentionItem('${h(i.sku)}','${h(i.item_name||i.sku)}',this)">Order Now</button>`}
+          : `<button class="btn btn-primary btn-sm" style="width:100%" ${dataActEl('addAttentionItem', i.sku, i.item_name||i.sku)}>Order Now</button>`}
       </div>`).join('')}
       ${pendingApproval > 0 ? `
       <div style="flex:0 0 240px;background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;padding:14px 16px">

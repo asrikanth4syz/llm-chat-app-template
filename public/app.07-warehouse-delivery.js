@@ -13,11 +13,11 @@ async function renderWarehouse(el) {
     `<button class="btn btn-primary" ${dataAct('addWarehouseModal')}>${iconPlus(14)} Add Warehouse</button>`)}
   <div id="wh-returns-queue"></div>
   <div class="tabs" id="wh-tabs" style="margin-bottom:16px">
-    <button class="tab-btn active" onclick="switchWHTab('overview',this)">Overview</button>
-    <button class="tab-btn" onclick="switchWHTab('grn',this)">GRN Records</button>
-    <button class="tab-btn" onclick="switchWHTab('bins',this)">Bin Locations</button>
-    <button class="tab-btn" onclick="switchWHTab('picklist',this)">Pick List</button>
-    <button class="tab-btn" onclick="switchWHTab('transfers',this)">Stock Transfers</button>
+    <button class="tab-btn active" ${dataActEl('switchWHTab', 'overview')}>Overview</button>
+    <button class="tab-btn" ${dataActEl('switchWHTab', 'grn')}>GRN Records</button>
+    <button class="tab-btn" ${dataActEl('switchWHTab', 'bins')}>Bin Locations</button>
+    <button class="tab-btn" ${dataActEl('switchWHTab', 'picklist')}>Pick List</button>
+    <button class="tab-btn" ${dataActEl('switchWHTab', 'transfers')}>Stock Transfers</button>
   </div>
   <div id="wh-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
 
@@ -702,7 +702,7 @@ async function renderDelivery(el) {
       const labels = ['Scheduled','In Transit','Delivered','Returns','POD & Scans','All'];
       const counts = [scheduled.length, transit.length, delivered.length, returns.length, delivered.length, dcs.length];
       const badge  = t === 'pod' && podPending ? `<span style="background:var(--warning);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px">${podPending}</span>` : `<span style="font-size:.72rem;opacity:.7">(${counts[i]})</span>`;
-      return `<button class="tab-btn${active===t?' active':''}" onclick="switchDeliveryTab('${t}',this)">${labels[i]} ${badge}</button>`;
+      return `<button class="tab-btn${active===t?' active':''}" ${dataActEl('switchDeliveryTab', t)}>${labels[i]} ${badge}</button>`;
     }).join('');
   }
 
@@ -1549,7 +1549,7 @@ async function viewDCDocuments(dcId) {
   }).join('');
 
   const pdfBtn = imgDocs.length
-    ? `<button class="btn btn-primary" onclick="downloadDCDocsPDF('${dcId}', this)">⬇ Download PDF (${imgDocs.length} page${imgDocs.length>1?'s':''})</button>`
+    ? `<button class="btn btn-primary" ${dataActEl('downloadDCDocsPDF', dcId)}>⬇ Download PDF (${imgDocs.length} page${imgDocs.length>1?'s':''})</button>`
     : '';
 
   openModal(
