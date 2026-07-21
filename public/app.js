@@ -952,6 +952,16 @@ function closeModal() {
   _modalPrevFocus = null;
 }
 
+// Record registry + id resolvers. Buttons carry a system-generated id (quote-free)
+// instead of a whole record serialized into the onclick attribute — smaller DOM
+// and no attribute-escaping fragility. Records are registered inline at render time.
+function _regVendor(v) { (APP._vendorById || (APP._vendorById = {}))[v.id] = v; return v.id; }
+function _regClient(c) { (APP._clientById || (APP._clientById = {}))[c.id] = c; return c.id; }
+function viewVendorById(id) { const v = APP._vendorById && APP._vendorById[id]; if (v) viewVendorModal(v); }
+function editVendorById(id) { const v = APP._vendorById && APP._vendorById[id]; if (v) editVendorModal(v); }
+function viewClientById(id) { const c = APP._clientById && APP._clientById[id]; if (c) viewClientModal(c); }
+function editClientById(id) { const c = APP._clientById && APP._clientById[id]; if (c) editClientModal(c); }
+
 function notImplemented(page) {
   return `<div class="empty-state">
     <div class="empty-icon">🚧</div>
@@ -6044,8 +6054,8 @@ async function renderVendors(el) {
       </div>`:''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="viewVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">View</button>
-        <button class="btn btn-gold btn-sm" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="viewVendorById('${_regVendor(v)}')">View</button>
+        <button class="btn btn-gold btn-sm" onclick="editVendorById('${_regVendor(v)}')">Edit</button>
         <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'#fee2e2'};color:${v.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleVendorActive('${v.id}','${v.name.replace(/'/g,"\\'")}',${v.active===0?0:1})">${v.active===0?'Enable':'Disable'}</button>
         <button class="btn btn-gold btn-sm" onclick="newPOForVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')">New PO</button>
         <button class="btn btn-secondary btn-sm" onclick="openVendorFeedbackModal('${v.id}','${v.name.replace(/'/g,"\\'")}')">Rate</button>
@@ -6062,7 +6072,7 @@ async function renderVendors(el) {
   const fssaiSoon    = fssaiFlagged.filter(v => v.fssai_expiry >= _today);
   const anyExpired = fssaiExpired.length > 0;
   const fssaiChip = v => {
-    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Renew</button>`;
+    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" onclick="editVendorById('${_regVendor(v)}')">Renew</button>`;
     const expd = v.fssai_expiry < _today;
     return `<span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid ${expd?'#fca5a5':'#fde68a'};border-radius:8px;padding:5px 8px 5px 11px;font-size:.78rem">
       <span><b>${h(v.name)}</b> · <span style="color:${expd?'var(--danger)':'#b45309'};font-weight:700">${expd?'expired':'expires'} ${fmtDate(v.fssai_expiry)}</span></span>${btn}</span>`;
@@ -6628,7 +6638,7 @@ async function viewVendorModal(v) {
   const footer = document.getElementById('modal-footer');
   if (footer) footer.innerHTML =
     `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
-     <button class="btn btn-primary" onclick="editVendorModal(${JSON.stringify(v).replace(/"/g,'&quot;')})">Edit vendor</button>
+     <button class="btn btn-primary" onclick="editVendorById('${_regVendor(v)}')">Edit vendor</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
 }
 
@@ -8951,8 +8961,8 @@ async function renderClients(el) {
       </div>` : ''}
 
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="viewClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')})">View</button>
-        <button class="btn btn-gold btn-sm" onclick="editClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')})">Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="viewClientById('${_regClient(c)}')">View</button>
+        <button class="btn btn-gold btn-sm" onclick="editClientById('${_regClient(c)}')">Edit</button>
         <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" onclick="manageClientCatalog('${c.id}','${c.name.replace(/'/g,"\\'")}')">📦 Products</button>
         <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'#fee2e2'};color:${c.active===0?'#fff':'var(--danger)'};border:none" onclick="toggleClientActive('${c.id}','${c.name.replace(/'/g,"\\'")}',${c.active===0?0:1})">${c.active===0?'Enable':'Disable'}</button>
       </div>
@@ -9530,7 +9540,7 @@ function viewClientModal(c) {
     </div>
     ${c.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${c.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
-    `<button class="btn btn-primary" onclick="editClientModal(${JSON.stringify(c).replace(/"/g,'&quot;')});closeModal()">Edit</button>
+    `<button class="btn btn-primary" onclick="editClientById('${_regClient(c)}')">Edit</button>
      <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
