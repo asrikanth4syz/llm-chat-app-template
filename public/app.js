@@ -897,13 +897,60 @@ function showToast(msg, type = 'success') {
   setTimeout(() => t.remove(), 3200);
 }
 
+// ---- Modal manager: focus trap, ESC/backdrop close, focus restore, ARIA ----
+let _modalPrevFocus = null;
+function _modalFocusables() {
+  const m = document.getElementById('modal');
+  if (!m) return [];
+  return [...m.querySelectorAll('a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+    .filter(el => el.offsetParent !== null);
+}
+function _modalKeydown(e) {
+  const overlay = document.getElementById('modal-overlay');
+  if (!overlay || overlay.classList.contains('hidden')) return;
+  if (e.key === 'Escape') { e.preventDefault(); requestCloseModal(); return; }
+  if (e.key === 'Tab') {
+    const f = _modalFocusables();
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+}
+// ESC / backdrop go through here so an in-progress wizard isn't dismissed by
+// accident (which would discard unsaved input). Explicit Cancel/Close buttons
+// still call closeModal() directly.
+function requestCloseModal() {
+  if (typeof APP !== 'undefined' && APP && APP._vw) return;
+  closeModal();
+}
 function openModal(title, body, footer = '') {
+  const overlay = document.getElementById('modal-overlay');
+  const modal = document.getElementById('modal');
+  if (overlay.classList.contains('hidden')) _modalPrevFocus = document.activeElement;
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
   document.getElementById('modal-footer').innerHTML = footer;
-  document.getElementById('modal-overlay').classList.remove('hidden');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'modal-title');
+  modal.tabIndex = -1;
+  overlay.classList.remove('hidden');
+  overlay.onclick = e => { if (e.target === overlay) requestCloseModal(); };
+  document.removeEventListener('keydown', _modalKeydown, true);
+  document.addEventListener('keydown', _modalKeydown, true);
+  setTimeout(() => { const f = _modalFocusables(); (f[0] || modal).focus(); }, 0);
 }
-function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+function closeModal() {
+  const overlay = document.getElementById('modal-overlay');
+  overlay.classList.add('hidden');
+  overlay.onclick = null;
+  document.removeEventListener('keydown', _modalKeydown, true);
+  if (_modalPrevFocus && typeof _modalPrevFocus.focus === 'function') {
+    try { _modalPrevFocus.focus(); } catch { /* element gone */ }
+  }
+  _modalPrevFocus = null;
+}
 
 function notImplemented(page) {
   return `<div class="empty-state">
