@@ -97,6 +97,14 @@ const result = await page.evaluate(async () => {
     out.modalCloses = document.getElementById("modal-overlay").classList.contains("hidden");
   } catch (e) { out.modalErr = String(e.message); }
 
+  // Every route target resolves to a real function across the split files:
+  try {
+    out.unresolvedRoutes = Object.entries(PAGE_MAP)
+      .filter(([, name]) => typeof window[name] !== "function")
+      .map(([page, name]) => `${page}->${name}`);
+    out.routeCount = Object.keys(PAGE_MAP).length;
+  } catch (e) { out.routeErr = String(e.message); }
+
   // A pure render function produces HTML and escapes user text:
   try {
     const v = { id: "v1", vendor_code: "VDR-2026-00001", name: "Smoke <b>Co</b> & Sons",
@@ -110,6 +118,7 @@ const result = await page.evaluate(async () => {
 });
 
 check("all core globals defined", result.coreGlobals.length === 0 || (console.log("    missing:", result.coreGlobals), false));
+check(`all ${result.routeCount || "?"} routes resolve to a function`, Array.isArray(result.unresolvedRoutes) && result.unresolvedRoutes.length === 0 || (console.log("    unresolved:", result.unresolvedRoutes), false));
 check("openModal shows the dialog", result.modalOpens === true);
 check("closeModal hides the dialog", result.modalCloses === true);
 check("vendorViewHTML returns markup", result.rendersHtml === true);

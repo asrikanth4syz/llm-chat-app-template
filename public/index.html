@@ -1208,7 +1208,20 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<!-- app.js was split into ordered domain modules (classic scripts share one global
+     scope, so load order is preserved and inline onclick handlers keep working). -->
+<script src="app.01-core.js"></script>
+<script src="app.02-dashboard.js"></script>
+<script src="app.03-ordering.js"></script>
+<script src="app.04-orders-delivery.js"></script>
+<script src="app.05-billing-inventory.js"></script>
+<script src="app.06-vendors-procurement.js"></script>
+<script src="app.07-warehouse-delivery.js"></script>
+<script src="app.08-clients-desk-approvals.js"></script>
+<script src="app.09-reports.js"></script>
+<script src="app.10-calendar-users-settings.js"></script>
+<script src="app.11-vendor-portal-features.js"></script>
+<script src="app.12-fulfilment-staff.js"></script>
 
 <!-- Demo modal JS (self-contained, no conflicts with app.js) -->
 <script>
