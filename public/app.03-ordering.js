@@ -27,8 +27,8 @@ async function renderPlaceOrder(el) {
         <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse the catalogue and add items to your cart</div>
       </div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-secondary btn-sm" onclick="showCSVUploadModal()">📋 Order via Spreadsheet</button>
-        <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">My Orders</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('showCSVUploadModal')}>📋 Order via Spreadsheet</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_orders')}>My Orders</button>
       </div>
     </div>
 
@@ -47,8 +47,8 @@ async function renderPlaceOrder(el) {
             <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}${(o.items||[]).length>3?` +${o.items.length-3} more`:''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-            <button class="btn btn-secondary btn-sm" style="white-space:nowrap" onclick="previewReorder('${o.id}')">👁 Preview</button>
-            <button class="btn btn-gold btn-sm" style="white-space:nowrap" onclick="reorderFromHistory('${o.id}')">Reorder all</button>
+            <button class="btn btn-secondary btn-sm" style="white-space:nowrap" ${dataAct('previewReorder', o.id)}>👁 Preview</button>
+            <button class="btn btn-gold btn-sm" style="white-space:nowrap" ${dataAct('reorderFromHistory', o.id)}>Reorder all</button>
           </div>
         </div>`).join('')}
       </div>
@@ -66,11 +66,11 @@ async function renderPlaceOrder(el) {
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted)">${inventory.length} items in catalogue</div>
       <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
-        <button id="view-tile-btn" onclick="setCatalogView('tile')" title="Tile view"
+        <button id="view-tile-btn" ${dataAct('setCatalogView', 'tile')} title="Tile view"
           style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='tile'?'var(--navy)':'#fff'};color:${APP._catalogView==='tile'?'#fff':'var(--text-muted)'}">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="6" height="6" rx="1"/><rect x="10" y="0" width="6" height="6" rx="1"/><rect x="0" y="10" width="6" height="6" rx="1"/><rect x="10" y="10" width="6" height="6" rx="1"/></svg>
         </button>
-        <button id="view-list-btn" onclick="setCatalogView('list')" title="List view"
+        <button id="view-list-btn" ${dataAct('setCatalogView', 'list')} title="List view"
           style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='list'?'var(--navy)':'#fff'};color:${APP._catalogView==='list'?'#fff':'var(--text-muted)'}">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="1" width="16" height="2" rx="1"/><rect x="0" y="7" width="16" height="2" rx="1"/><rect x="0" y="13" width="16" height="2" rx="1"/></svg>
         </button>
@@ -94,7 +94,7 @@ async function renderPlaceOrder(el) {
         <span style="font-size:.75rem;opacity:.65;margin-left:4px">incl. GST</span>
       </div>
     </div>
-    <button class="btn btn-gold" style="padding:9px 22px;font-size:.9rem;font-weight:700" onclick="switchOrderStep('review')">
+    <button class="btn btn-gold" style="padding:9px 22px;font-size:.9rem;font-weight:700" ${dataAct('switchOrderStep', 'review')}>
       Review Order →
     </button>
   </div>
@@ -119,7 +119,7 @@ async function renderPlaceOrder(el) {
           <div style="flex:1">
             <div style="font-weight:700;font-size:.88rem;color:#1e40af;margin-bottom:4px">Export your assigned item list</div>
             <div style="font-size:.78rem;color:#1e3a8a;margin-bottom:10px">Downloads a CSV with all your items (SKU, name, category, price). The <b>Quantity</b> column is blank — fill it in.</div>
-            <button class="btn btn-primary btn-sm" onclick="downloadOrderTemplate()">⬇ Download Item List</button>
+            <button class="btn btn-primary btn-sm" ${dataAct('downloadOrderTemplate')}>⬇ Download Item List</button>
           </div>
         </div>
 
@@ -146,7 +146,7 @@ async function renderPlaceOrder(el) {
       <div id="csv-import-feedback" style="margin-bottom:14px"></div>
 
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="processCSVUpload()" style="flex:1">Import to Cart</button>
+        <button class="btn btn-primary" ${dataAct('processCSVUpload')} style="flex:1">Import to Cart</button>
         <button class="btn btn-secondary" onclick="document.getElementById('csv-upload-modal').style.display='none'">Cancel</button>
       </div>
     </div>
@@ -185,7 +185,7 @@ function renderCartReview(container) {
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
       <div>
-        <button class="btn btn-secondary btn-sm" onclick="switchOrderStep('catalogue')">← Back to Catalogue</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>← Back to Catalogue</button>
       </div>
       <div style="display:flex;align-items:center;gap:10px;font-size:.84rem">
         <span style="color:var(--text-muted)">① Browse</span>
@@ -202,7 +202,7 @@ function renderCartReview(container) {
         <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px">
           <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
             <b style="font-size:.95rem;color:var(--navy)">Cart Items</b>
-            <button class="btn btn-secondary btn-sm" onclick="switchOrderStep('catalogue')">+ Add More Items</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>+ Add More Items</button>
           </div>
           <div id="review-cart-items"></div>
         </div>
@@ -248,7 +248,7 @@ function renderCartReview(container) {
             style="display:block;width:100%;padding:8px;border:1.5px dashed var(--border);border-radius:8px;font-size:.8rem;box-sizing:border-box;background:#fafbfc">
           <div id="cart-image-preview" style="margin-top:8px;display:none;align-items:center;gap:10px">
             <img id="cart-image-thumb" style="max-height:70px;border-radius:8px;border:1px solid var(--border)">
-            <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="removeOrderImage()">✕ Remove</button>
+            <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('removeOrderImage')}>✕ Remove</button>
           </div>
         </div>
       </div>
@@ -259,10 +259,10 @@ function renderCartReview(container) {
           <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><b>Order Summary</b></div>
           <div style="padding:16px 18px" id="review-summary"></div>
           <div style="padding:0 18px 18px;display:flex;flex-direction:column;gap:8px">
-            <button class="btn btn-gold" style="width:100%;padding:11px;font-size:.95rem" onclick="submitOrder()">
+            <button class="btn btn-gold" style="width:100%;padding:11px;font-size:.95rem" ${dataAct('submitOrder')}>
               ${iconCheck(14)} Place Order
             </button>
-            <button class="btn btn-secondary" style="width:100%;font-size:.83rem" onclick="saveDraft()">Save as Draft</button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.83rem" ${dataAct('saveDraft')}>Save as Draft</button>
             <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" onclick="APP.cart=[];switchOrderStep('catalogue');showToast('Cart cleared')">Clear Cart</button>
           </div>
         </div>
@@ -309,7 +309,7 @@ function refreshCartReviewUI() {
                 <button class="qty-btn" onclick="changeQty('${item.sku}',1,${item.unit_price},this)">+</button>
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
-              <button onclick="removeCartItem('${item.sku}')"
+              <button ${dataAct('removeCartItem', item.sku)}
                 style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
                 onmouseover="this.style.background='#fef2f2';this.style.borderColor='#fca5a5';this.style.color='var(--danger)'"
                 onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">✕</button>
@@ -510,8 +510,8 @@ async function loadQuickReorder() {
         <div><b>${o.id}</b> &nbsp;${statusBadge(o.status)} &nbsp;<span style="color:var(--text-muted);font-size:.84rem">${fmtDate(o.created_at)}</span></div>
         <div style="display:flex;gap:8px;align-items:center">
           <span style="font-weight:600">${fmt(o.grand_total)}</span>
-          <button class="btn btn-secondary btn-sm" onclick="previewReorder('${o.id}')">👁 Preview</button>
-          <button class="btn btn-gold btn-sm" onclick="reorderFromHistory('${o.id}')">Reorder all</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('previewReorder', o.id)}>👁 Preview</button>
+          <button class="btn btn-gold btn-sm" ${dataAct('reorderFromHistory', o.id)}>Reorder all</button>
         </div>
       </div>
       <div class="card-body" style="padding:10px 16px;font-size:.84rem;color:var(--text-muted)">
@@ -567,8 +567,8 @@ async function previewReorder(orderId) {
         <tbody>${rows}</tbody>
       </table>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" id="pr-add" onclick="confirmReorderPreview()">Add to cart</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" id="pr-add" ${dataAct('confirmReorderPreview')}>Add to cart</button>`);
   updateReorderPreview();
 }
 
@@ -816,8 +816,8 @@ async function submitOrder() {
         <div style="font-weight:700;font-size:1rem">${h(clientName)}</div>
       </div>
       ${summary}`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-gold" onclick="confirmOrder()">Confirm & Submit</button>`
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-gold" ${dataAct('confirmOrder')}>Confirm & Submit</button>`
     );
   } else {
     // Ops / admin roles pick the client from the list
@@ -833,8 +833,8 @@ async function submitOrder() {
         </select>
       </div>
       ${summary}`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button id="confirm-order-btn" class="btn btn-gold" onclick="confirmOrder()" disabled>Confirm & Submit</button>`
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button id="confirm-order-btn" class="btn btn-gold" ${dataAct('confirmOrder')} disabled>Confirm & Submit</button>`
     );
   }
 }
@@ -888,8 +888,8 @@ async function saveDraft() {
   if (isClientRole) {
     openModal('Save as Draft',
       `<p style="color:var(--text-muted);margin-bottom:12px">Draft will be saved to My Orders. You can submit it later.</p>${summary}`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-gold" onclick="confirmOrder(true)">Save Draft</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-gold" ${dataAct('confirmOrder', true)}>Save Draft</button>`);
   } else {
     const clients = await api('/clients');
     const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
@@ -902,8 +902,8 @@ async function saveDraft() {
           ${clientOpts}
         </select>
       </div>${summary}`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button id="save-draft-btn" class="btn btn-gold" onclick="confirmOrder(true)" disabled>Save Draft</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button id="save-draft-btn" class="btn btn-gold" ${dataAct('confirmOrder', true)} disabled>Save Draft</button>`);
   }
 }
 
@@ -939,7 +939,7 @@ async function renderMyInventory(el) {
         <div style="font-weight:800;color:var(--primary-hover);font-size:.9rem">Log what you use — get smarter reorder alerts</div>
         <div style="font-size:.8rem;color:var(--text);margin-top:3px">No usage logged in the last 2 weeks. When you record consumption, we can predict run-outs and flag reorders before you run dry.</div>
       </div>
-      <button class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="logFirstItemUse()">Log usage</button>
+      <button class="btn btn-primary btn-sm" style="flex-shrink:0" ${dataAct('logFirstItemUse')}>Log usage</button>
     </div>` : '';
 
   el.innerHTML = `
@@ -949,7 +949,7 @@ async function renderMyInventory(el) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Track items received, mark what's critical, log consumption, and reorder in one tap</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      ${reorderItems.length ? `<button class="btn btn-gold btn-sm" onclick="orderAllLowStock()" title="Add every low & out-of-stock item to your order">🛒 Reorder all low/out (${reorderItems.length})</button>` : ''}
+      ${reorderItems.length ? `<button class="btn btn-gold btn-sm" ${dataAct('orderAllLowStock')} title="Add every low & out-of-stock item to your order">🛒 Reorder all low/out (${reorderItems.length})</button>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="syncClientInventory(this)">🔄 Sync from Deliveries</button>
     </div>
   </div>
@@ -984,7 +984,7 @@ async function renderMyInventory(el) {
 
   <!-- Tabs -->
   <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
-    ${['stock','consumption'].map((t,i) => `<button id="inv-tab-${t}" onclick="switchMyInvTab('${t}')" style="padding:9px 20px;font-size:.85rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:${i===0?'2px solid var(--primary)':'2px solid transparent'};margin-bottom:-2px;color:${i===0?'var(--primary)':'var(--text-muted)'}">${['Current Stock','Consumption Log'][i]}</button>`).join('')}
+    ${['stock','consumption'].map((t,i) => `<button id="inv-tab-${t}" ${dataAct('switchMyInvTab', t)} style="padding:9px 20px;font-size:.85rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:${i===0?'2px solid var(--primary)':'2px solid transparent'};margin-bottom:-2px;color:${i===0?'var(--primary)':'var(--text-muted)'}">${['Current Stock','Consumption Log'][i]}</button>`).join('')}
   </div>
 
   <!-- Current Stock Tab -->
@@ -1067,7 +1067,7 @@ function myInvRow(i) {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm inv-crit-btn" onclick="toggleClientCritical('${h(i.sku)}',this)" title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
         <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
-        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" onclick="orderMoreItem('${h(i.sku)}','${h(i.item_name||i.sku)}')">Order More</button>` : ''}
+        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" ${dataAct('orderMoreItem', h(i.sku), h(i.item_name||i.sku))}>Order More</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>
       </div>
     </td>
@@ -1234,8 +1234,8 @@ function logConsumptionModal(sku, name, qty, uom) {
       <label class="form-label">Notes (optional)</label>
       <input id="cons-notes" type="text" class="form-control" placeholder="e.g. Used for lunch service">
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button id="cons-save-btn" class="btn btn-primary" onclick="submitConsumption('${h(sku)}',${onHand})">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button id="cons-save-btn" class="btn btn-primary" ${dataAct('submitConsumption', h(sku), onHand)}>Save</button>`);
 }
 
 function validateConsQty(onHand) {
@@ -1281,8 +1281,8 @@ function editInvItemModal(sku, currentName, currentLevel) {
       <label class="form-label">Reorder Level</label>
       <input id="edit-inv-reorder" type="number" min="0" step="1" class="form-control" value="${currentLevel||0}" style="max-width:160px">
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveInvItemEdit('${h(sku)}')">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveInvItemEdit', h(sku))}>Save</button>`);
 }
 
 async function saveInvItemEdit(sku) {

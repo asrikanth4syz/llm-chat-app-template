@@ -87,13 +87,13 @@ async function renderDeliveryCalendar(el) {
   <div id="dcal-kpis"></div>
   <div class="card" style="padding:10px 14px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <div style="display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden">
-      <button onclick="dcalNav(-1)" aria-label="Previous month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">‹</button>
+      <button ${dataAct('dcalNav', -1)} aria-label="Previous month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">‹</button>
       <span id="dcal-month-label" style="padding:6px 12px;font-weight:700;color:var(--navy);min-width:130px;text-align:center"></span>
-      <button onclick="dcalNav(1)" aria-label="Next month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">›</button>
+      <button ${dataAct('dcalNav', 1)} aria-label="Next month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">›</button>
     </div>
-    <button class="btn btn-secondary btn-sm" onclick="dcalToday()">Today</button>
-    <button class="dcal-vbtn on" id="dcal-v-month" onclick="dcalSetView('month')">Month</button>
-    <button class="dcal-vbtn" id="dcal-v-agenda" onclick="dcalSetView('agenda')">Next 14 days</button>
+    <button class="btn btn-secondary btn-sm" ${dataAct('dcalToday')}>Today</button>
+    <button class="dcal-vbtn on" id="dcal-v-month" ${dataAct('dcalSetView', 'month')}>Month</button>
+    <button class="dcal-vbtn" id="dcal-v-agenda" ${dataAct('dcalSetView', 'agenda')}>Next 14 days</button>
     <select id="dcal-f-client" class="form-control" style="max-width:180px;font-size:.8rem" onchange="dcalApplyFilters()">
       <option value="">Client: All</option>${clients.map(c=>`<option value="${h(c)}">${h(c)}</option>`).join('')}
     </select>
@@ -215,7 +215,7 @@ function dcalKpis(by, gh) {
     kp('', 'This month', tot, 'delivery challans')
     + kp('com', 'Completed', com, tot ? Math.round(com/tot*100) + '% of month' : '—')
     + kp('upc', 'Upcoming', upc, 'scheduled & in transit')
-    + `<button class="dcal-kp ris" onclick="dcalJumpRisk()"><div class="l">⚠ At risk</div><div class="v">${ris}</div><div class="s">past date, undelivered — click to view</div></button>`
+    + `<button class="dcal-kp ris" ${dataAct('dcalJumpRisk')}><div class="l">⚠ At risk</div><div class="v">${ris}</div><div class="s">past date, undelivered — click to view</div></button>`
     + kp('rec', 'Recurring due', rec, 'next 30 days — unconfirmed');
 }
 
@@ -245,7 +245,7 @@ function dcalGrid(by, gh) {
       `<span class="dcal-chip gho" title="Projected from standing order ${h(so.id)}">◌ ${h(so.client_name||so.name)}</span>`));
     const cap = (_dcal.pol && _dcal.pol.capacity) || 6;
     const atCap = list.length >= cap;
-    html += `<button class="dcal-day${inM?'':' out'}${k===today?' today':''}${k===_dcal.sel?' sel':''}" onclick="dcalSelect('${k}')">
+    html += `<button class="dcal-day${inM?'':' out'}${k===today?' today':''}${k===_dcal.sel?' sel':''}" ${dataAct('dcalSelect', k)}>
       <span class="dn">${k===today?`<i>${d.getDate()}</i>`:d.getDate()}${risk?'<span class="dcal-riskbadge">At risk</span>':''}${total?`<span class="n${atCap?' full':''}" title="${list.length}/${cap} fleet slots used">${list.length ? list.length+'/'+cap : total}</span>`:''}</span>
       ${chipArr.slice(0,3).join('')}${total>3?`<div class="dcal-more">+${total-3} more</div>`:''}</button>`;
   }
@@ -273,7 +273,7 @@ function dcalAgItem(dc, k) {
   const dateEdit = dc.status !== 'DELIVERED'
     ? `<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
         <input type="date" id="dcal-date-${h(String(dc.id))}" class="form-control" style="max-width:150px;font-size:.78rem" value="${dcalDcDate(dc)}">
-        <button class="btn btn-primary btn-sm" onclick="dcalSaveDate('${h(String(dc.id))}')">${risk ? 'Reschedule' : 'Set date'}</button></span>`
+        <button class="btn btn-primary btn-sm" ${dataAct('dcalSaveDate', h(String(dc.id)))}>${risk ? 'Reschedule' : 'Set date'}</button></span>`
     : '';
   const bellState = dc.reminder_armed === 1 ? '🔔 On' : dc.reminder_armed === 0 ? '🔕 Muted' : '🔔 Auto';
   const bell = dc.status !== 'DELIVERED'
@@ -286,7 +286,7 @@ function dcalAgItem(dc, k) {
       <div style="font-size:.72rem;color:var(--text-muted)">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'driver unassigned'}${dc.vehicle_no?` · ${h(dc.vehicle_no)}`:''}${dc.order_id?` · order ${h(dc.order_id)}`:''}</div>
     </div>
     ${dateEdit}${bell}
-    <button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">Open in Deliveries</button></div>`;
+    <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'delivery')}>Open in Deliveries</button></div>`;
 }
 
 // Ghost row: a projected recurring occurrence — not an order yet.
@@ -334,7 +334,7 @@ function dcalRail(by, gh) {
   const el = document.getElementById('dcal-rail'); if (!el) return;
   const today = dcalKey(new Date()), now = new Date();
   const dotColor = { sch:'#33475f', tra:'#d97706', del:'#16a34a', ris:'#dc2626' };
-  const ghostRow = (k, so) => `<button class="dcal-rl" onclick="dcalSelect('${k}')"><span class="dcal-dot" style="background:transparent;border:2px dashed var(--primary)"></span>
+  const ghostRow = (k, so) => `<button class="dcal-rl" ${dataAct('dcalSelect', k)}><span class="dcal-dot" style="background:transparent;border:2px dashed var(--primary)"></span>
     <span class="m"><span class="t">${h(so.client_name||so.name)}</span>
     <span class="s">${fmtDate(k)} · ${h(so.frequency||'MONTHLY')}</span></span><span class="dcal-pill org">Projected</span></button>`;
   const row = (k, dc) => {
@@ -344,7 +344,7 @@ function dcalRail(by, gh) {
       : c==='del' ? '<span class="dcal-pill grn">Delivered</span>'
       : k===today ? `<span class="dcal-pill amb">${c==='tra'?'In transit':'Due today'}</span>`
       : '<span class="dcal-pill blu">Upcoming</span>';
-    return `<button class="dcal-rl" onclick="dcalSelect('${k}')"><span class="dcal-dot" style="background:${dotColor[c]}"></span>
+    return `<button class="dcal-rl" ${dataAct('dcalSelect', k)}><span class="dcal-dot" style="background:${dotColor[c]}"></span>
       <span class="m"><span class="t">${dc.scheduled_time?dc.scheduled_time+' · ':''}${h(dc.client_name||dc.dc_number||dc.id)}</span>
       <span class="s">${fmtDate(k)} · ${h(dc.dc_number||dc.id)}</span></span>${pill}</button>`;
   };
@@ -524,10 +524,10 @@ async function renderUsers(el) {
           2FA
         </label>
         <div style="display:flex;gap:5px">
-          <button class="btn btn-secondary btn-sm" onclick="editUserModal('${u.id}')" style="font-size:.7rem;padding:3px 8px">✏️ Edit</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('editUserModal', u.id)} style="font-size:.7rem;padding:3px 8px">✏️ Edit</button>
           ${u.active
             ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}','${u.name.replace(/'/g,"\\'")}')" style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
-            : `<button class="btn btn-primary btn-sm" onclick="activateUser('${u.id}')" style="font-size:.7rem;padding:3px 8px">Activate</button>`}
+            : `<button class="btn btn-primary btn-sm" ${dataAct('activateUser', u.id)} style="font-size:.7rem;padding:3px 8px">Activate</button>`}
         </div>
       </div>
     </div>`;
@@ -539,7 +539,7 @@ async function renderUsers(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Users & Roles</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${users.length} total · ${activeUsers.length} active · ${with2FA} with 2FA</div>
     </div>
-    <button class="btn btn-gold" onclick="addUserModal()">${iconPlus(14)} Add User</button>
+    <button class="btn btn-gold" ${dataAct('addUserModal')}>${iconPlus(14)} Add User</button>
   </div>
 
   <!-- KPI tiles -->
@@ -654,8 +654,8 @@ async function addUserModal() {
        <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, vendors, null, '')}</div>
      </div>
      <div class="form-group"><label>Temporary Password</label><input type="password" id="u-pw" value="password"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveUser()">Create User</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveUser')}>Create User</button>`);
   bindUserRoleToggle('u', clients, vendors, null, '');
 }
 
@@ -709,8 +709,8 @@ async function editUserModal(id) {
        <label>Reset Password <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(leave blank to keep current)</span></label>
        <input type="password" id="eu-pw" placeholder="New password">
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveUserEdit('${id}')">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveUserEdit', id)}>Save Changes</button>`);
   bindUserRoleToggle('eu', clients, vendors, u.client_id, u.org);
 }
 
@@ -753,8 +753,8 @@ async function saveUserEdit(id) {
 function deactivateUser(id, name) {
   openModal('Deactivate User',
     `<p style="margin:0;color:var(--text-muted)">Are you sure you want to deactivate <b>${name||'this user'}</b>? They will no longer be able to log in.</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmDeactivateUser('${id}')">Deactivate</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-danger" ${dataAct('confirmDeactivateUser', id)}>Deactivate</button>`);
 }
 
 async function confirmDeactivateUser(id) {
@@ -879,7 +879,7 @@ async function settingsTab(tab, btn) {
             ${statusPill(s.twilio_configured, 'Configured', 'Not configured')}
           </div>
         </div>
-        <button class="btn btn-secondary" style="width:fit-content" onclick="testEmail()">Send Test Email</button>
+        <button class="btn btn-secondary" style="width:fit-content" ${dataAct('testEmail')}>Send Test Email</button>
       </div>
     </div>`;
   }
@@ -920,7 +920,7 @@ async function settingsTab(tab, btn) {
     <div class="card">
       <div class="card-header">
         <span>Client Budgets & Approval Thresholds</span>
-        <button class="btn btn-primary btn-sm" onclick="saveClientBudgets()">Save Changes</button>
+        <button class="btn btn-primary btn-sm" ${dataAct('saveClientBudgets')}>Save Changes</button>
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -950,7 +950,7 @@ async function settingsTab(tab, btn) {
     el.innerHTML = `
     <div class="card">
       <div class="card-header"><span>Approval Rules</span>
-        <button class="btn btn-gold btn-sm" onclick="addApprovalRuleModal()">+ Add Rule</button>
+        <button class="btn btn-gold btn-sm" ${dataAct('addApprovalRuleModal')}>+ Add Rule</button>
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -964,7 +964,7 @@ async function settingsTab(tab, btn) {
             <td>${r.auto_approve ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-warning">No</span>'}</td>
             <td>${r.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
             <td>
-              <button class="btn btn-danger btn-sm" onclick="deactivateApprovalRule('${r.id}')">Disable</button>
+              <button class="btn btn-danger btn-sm" ${dataAct('deactivateApprovalRule', r.id)}>Disable</button>
             </td>
           </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No rules configured</td></tr>'}
           </tbody>
@@ -979,9 +979,9 @@ async function settingsTab(tab, btn) {
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div style="font-size:.82rem;color:var(--text-muted)">
         Showing warehouse summary. For full GRN, bins and stock transfers →
-        <button class="btn btn-secondary btn-sm" style="margin-left:6px" onclick="navigate('warehouse')">Open Warehouse page</button>
+        <button class="btn btn-secondary btn-sm" style="margin-left:6px" ${dataAct('navigate', 'warehouse')}>Open Warehouse page</button>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="addWarehouseModal()">+ Add Warehouse</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('addWarehouseModal')}>+ Add Warehouse</button>
     </div>
     <div class="card">
       <div class="card-header"><span>Warehouses (${warehouses.length})</span></div>
@@ -994,7 +994,7 @@ async function settingsTab(tab, btn) {
               <td>${w.location||'—'}</td>
               <td>${w.type||'—'}</td>
               <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'}</td>
-              <td><button class="btn btn-secondary btn-sm" onclick="navigate('warehouse')">Manage</button></td>
+              <td><button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'warehouse')}>Manage</button></td>
             </tr>`).join('')
             : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No warehouses configured</td></tr>'}
           </tbody>
@@ -1054,7 +1054,7 @@ async function settingsTab(tab, btn) {
     <div class="card" style="margin-top:16px">
       <div class="card-body" style="padding:16px">
         <b>Add items to the catalogue</b> to create and manage categories. Each inventory item is assigned a category.
-        <button class="btn btn-secondary btn-sm" style="margin-top:8px;display:block" onclick="navigate('inventory')">Go to Inventory</button>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;display:block" ${dataAct('navigate', 'inventory')}>Go to Inventory</button>
       </div>
     </div>`;
   }
@@ -1104,8 +1104,8 @@ function addApprovalRuleModal() {
      <div class="form-group"><label>Auto-Approve</label>
        <select id="ar-auto"><option value="0">No</option><option value="1">Yes</option></select>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveApprovalRule()">Save Rule</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveApprovalRule')}>Save Rule</button>`);
 }
 
 async function saveApprovalRule() {

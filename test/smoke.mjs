@@ -79,8 +79,21 @@ for (const src of localScripts) {
   check(`loads ${src} without error`, errors.length === before);
 }
 
+// Every delegated target (data-act via dataAct('fn', ...)) must resolve to a real
+// function, else clicking that button silently does nothing. Allowlisted:
+//  - openNewRouteModal: pre-existing dead code (undefined before delegation too),
+//  - inv*: assigned lazily as window.x = function inside the inventory render, so
+//    they exist whenever their buttons are on-screen but not at page load.
+const DEAD_TARGETS = new Set([
+  "openNewRouteModal",
+  "invBulkModal", "invClearSelection", "invSortBy", "invBulkApply",
+]);
+const allSource = localScripts.map((s) => readFileSync(path.join(PUBLIC, s), "utf8")).join("\n");
+const actTargets = [...new Set([...allSource.matchAll(/dataAct\('([A-Za-z_$][\w$]*)'/g)].map((m) => m[1]))]
+  .filter((n) => !DEAD_TARGETS.has(n));
+
 console.log("\nGlobals & behavior:");
-const result = await page.evaluate(async () => {
+const result = await page.evaluate(async (actTargets) => {
   const out = {};
   // Bare-name lookup: top-level `const`/`let` globals (APP, svg, h) are shared
   // lexical globals but not window properties, so `n in window` misses them.
@@ -114,8 +127,12 @@ const result = await page.evaluate(async () => {
     out.rendersHtml = typeof frag === "string" && frag.length > 200;
     out.escapesUserText = frag.includes("Smoke &lt;b&gt;Co&lt;/b&gt;") && !frag.includes("Smoke <b>Co</b>");
   } catch (e) { out.renderErr = String(e.message); }
+
+  // Every delegated (data-act) target resolves to a callable function:
+  out.unresolvedActs = actTargets.filter((n) => typeof window[n] !== "function");
+  out.actCount = actTargets.length;
   return out;
-});
+}, actTargets);
 
 check("all core globals defined", result.coreGlobals.length === 0 || (console.log("    missing:", result.coreGlobals), false));
 check(`all ${result.routeCount || "?"} routes resolve to a function`, Array.isArray(result.unresolvedRoutes) && result.unresolvedRoutes.length === 0 || (console.log("    unresolved:", result.unresolvedRoutes), false));
@@ -123,6 +140,7 @@ check("openModal shows the dialog", result.modalOpens === true);
 check("closeModal hides the dialog", result.modalCloses === true);
 check("vendorViewHTML returns markup", result.rendersHtml === true);
 check("vendorViewHTML escapes user text", result.escapesUserText === true);
+check(`all ${result.actCount || 0} delegated targets resolve`, Array.isArray(result.unresolvedActs) && result.unresolvedActs.length === 0 || (console.log("    unresolved:", result.unresolvedActs), false));
 if (result.modalErr) console.log("    modal error:", result.modalErr);
 if (result.renderErr) console.log("    render error:", result.renderErr);
 

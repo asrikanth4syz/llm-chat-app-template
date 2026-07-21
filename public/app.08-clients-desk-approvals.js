@@ -24,7 +24,7 @@ async function renderDeliveryExecDashboard(el) {
       <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Good ${new Date().getHours()<12?'morning':'afternoon'}, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
       <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">Delivery Executive · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
     </div>
-    <button class="btn btn-secondary" onclick="navigate('delivery')">View All DCs</button>
+    <button class="btn btn-secondary" ${dataAct('navigate', 'delivery')}>View All DCs</button>
   </div>
 
   <!-- KPI row -->
@@ -92,10 +92,10 @@ async function renderDeliveryExecDashboard(el) {
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-sm ${dc.pod_uploaded ? 'btn-secondary' : 'btn-primary'}" onclick="markPOD('${dc.id}')" ${dc.pod_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
+        <button class="btn btn-sm ${dc.pod_uploaded ? 'btn-secondary' : 'btn-primary'}" ${dataAct('markPOD', dc.id)} ${dc.pod_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
           ${dc.pod_uploaded ? '✓ POD Uploaded' : '📄 Upload POD'}
         </button>
-        <button class="btn btn-sm ${dc.dc_scan_uploaded ? 'btn-secondary' : 'btn-primary'}" onclick="markScan('${dc.id}')" ${dc.dc_scan_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
+        <button class="btn btn-sm ${dc.dc_scan_uploaded ? 'btn-secondary' : 'btn-primary'}" ${dataAct('markScan', dc.id)} ${dc.dc_scan_uploaded ? 'disabled style="opacity:.6;cursor:default"' : ''}>
           ${dc.dc_scan_uploaded ? '✓ DC Scanned' : '🔍 Scan POD'}
         </button>
       </div>
@@ -134,9 +134,9 @@ function execDCCard(dc, today) {
       </div>
       <!-- Action buttons -->
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" style="flex:1;min-width:140px" onclick="execMarkDelivered('${dc.id}')">✓ Mark Delivered</button>
-        <button class="btn btn-secondary" style="flex:0 0 auto" onclick="viewDCItems('${dc.id}')" title="View items">📋</button>
-        <button class="btn btn-secondary" style="flex:0 0 auto;color:var(--danger)" onclick="returnDCModal('${dc.id}')" title="Return DC">↩</button>
+        <button class="btn btn-primary" style="flex:1;min-width:140px" ${dataAct('execMarkDelivered', dc.id)}>✓ Mark Delivered</button>
+        <button class="btn btn-secondary" style="flex:0 0 auto" ${dataAct('viewDCItems', dc.id)} title="View items">📋</button>
+        <button class="btn btn-secondary" style="flex:0 0 auto;color:var(--danger)" ${dataAct('returnDCModal', dc.id)} title="Return DC">↩</button>
       </div>
     </div>
   </div>`;
@@ -170,14 +170,14 @@ async function execMarkDelivered(dcId) {
     <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
       <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button type="button" id="voice-rec-btn" class="btn btn-secondary btn-sm" onclick="toggleVoiceRecording()">● Record</button>
+        <button type="button" id="voice-rec-btn" class="btn btn-secondary btn-sm" ${dataAct('toggleVoiceRecording')}>● Record</button>
         <span id="voice-rec-status" style="font-size:.76rem;color:var(--text-muted)">Not recorded</span>
         <audio id="voice-preview" controls style="display:none;height:32px;max-width:220px"></audio>
-        <button type="button" id="voice-del-btn" class="btn btn-secondary btn-sm" style="display:none;color:var(--danger)" onclick="discardVoiceNote()">✕</button>
+        <button type="button" id="voice-del-btn" class="btn btn-secondary btn-sm" style="display:none;color:var(--danger)" ${dataAct('discardVoiceNote')}>✕</button>
       </div>
     </div>`,
     `<button class="btn btn-secondary" onclick="stopVoiceIfRecording();closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmExecDelivery('${dcId}')">Confirm Delivery</button>`
+     <button class="btn btn-primary" ${dataAct('confirmExecDelivery', dcId)}>Confirm Delivery</button>`
   );
 }
 
@@ -328,7 +328,7 @@ async function renderClients(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Client Directory</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${clients.length} clients · ${fmt(totalSpent)} spent of ${fmt(totalBudget)} total budget</div>
     </div>
-    <button class="btn btn-gold" onclick="addClientModal()">${iconPlus(14)} Add Client</button>
+    <button class="btn btn-gold" ${dataAct('addClientModal')}>${iconPlus(14)} Add Client</button>
   </div>
 
   <!-- Summary tiles -->
@@ -406,7 +406,7 @@ async function manageClientCatalog(clientId, clientName) {
          <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:110px;background:#fff">
            <option value="">— Select —</option>${catOpts}
          </select>
-         <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" onclick="importCCByCategory()">Import</button>
+         <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('importCCByCategory')}>Import</button>
        </div>
        <!-- By CSV -->
        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
@@ -428,8 +428,8 @@ async function manageClientCatalog(clientId, clientName) {
          Assigned Products <span id="cc-count" style="font-weight:400">(${assignedSkus.size})</span>
        </div>
        <div style="display:flex;gap:6px">
-         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#e0f2fe;color:#0369a1;border:none" onclick="downloadCCAssigned()">↓ Download CSV</button>` : ''}
-         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" onclick="removeAllCCItems()">Remove All</button>` : ''}
+         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#e0f2fe;color:#0369a1;border:none" ${dataAct('downloadCCAssigned')}>↓ Download CSV</button>` : ''}
+         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" ${dataAct('removeAllCCItems')}>Remove All</button>` : ''}
        </div>
      </div>
      <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
@@ -438,7 +438,7 @@ async function manageClientCatalog(clientId, clientName) {
          : (assigned||[]).map(item => ccAssignedRow(item)).join('')}
      </div>`,
     `<div style="font-size:.76rem;color:var(--text-muted);flex:1">Clients see only assigned products when placing orders.</div>
-     <button class="btn btn-secondary" onclick="closeModal()">Done</button>`);
+     <button class="btn btn-secondary" ${dataAct('closeModal')}>Done</button>`);
 }
 
 function ccAssignedRow(item) {
@@ -452,7 +452,7 @@ function ccAssignedRow(item) {
         <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
         <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''}</div>
       </div>
-      <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" onclick="removeCCItem('${item.sku}')">Remove</button>
+      <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
       <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Global ₹${globalPrice}</span>
@@ -521,7 +521,7 @@ function renderCCSearchResults() {
   container.innerHTML = matches.map(i => `
     <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#edf0f4)"
       onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background=''"
-      onclick="addCCItem('${i.sku}')">
+      ${dataAct('addCCItem', i.sku)}>
       <span>${i.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:.84rem">${h(i.name)}</div>
@@ -553,7 +553,7 @@ async function importCCByCategory() {
   const toAdd = _ccAllInventory.filter(i => i.category === cat && !assignedSkus.has(i.sku));
   if (!toAdd.length) { showToast(`All "${cat}" items are already assigned`); return; }
   const btn = document.querySelector('#cc-import-cat + button') ||
-    document.querySelector('[onclick="importCCByCategory()"]');
+    document.querySelector('[data-act="importCCByCategory"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
   const res = await api(`/clients/${_ccClientId}/catalog`, {
     method:'POST', body: JSON.stringify({skus: toAdd.map(i=>i.sku)})
@@ -839,8 +839,8 @@ function readTaxIds(prefix) {
 
 function addClientModal() {
   openModal('Add Client', clientFormFields('cl'),
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveClient()">Add Client</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveClient')}>Add Client</button>`);
 }
 
 async function saveClient() {
@@ -894,13 +894,13 @@ function viewClientModal(c) {
     ${c.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${c.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `<button class="btn btn-primary" ${dataAct('editClientById', _regClient(c))}>Edit</button>
-     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+     <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
 function editClientModal(c) {
   openModal(`Edit Client: ${c.name}`, clientFormFields('ecl', c),
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveEditClient('${c.id}')">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveEditClient', c.id)}>Save Changes</button>`);
 }
 
 async function saveEditClient(id) {
@@ -982,7 +982,7 @@ async function renderServiceDesk(el) {
     return `
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-        <div style="min-width:0;cursor:pointer" onclick="viewTicketModal('${t.id}')" title="View ticket details">
+        <div style="min-width:0;cursor:pointer" ${dataAct('viewTicketModal', t.id)} title="View ticket details">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="font-weight:700;font-size:.88rem;color:var(--blue)">${t.id}</span>
             <span style="font-size:.68rem;font-weight:700;background:${pm.bg};color:${pm.color};border-radius:4px;padding:1px 7px">${pm.label}</span>
@@ -996,13 +996,13 @@ async function renderServiceDesk(el) {
         </div>
         ${!isRaiserRole ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-          ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-primary btn-sm" onclick="resolveTicket('${t.id}')">✓ Resolve</button>`:''}
-          ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" onclick="startTicket('${t.id}')">▶ Start</button>`:''}
+          ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-primary btn-sm" ${dataAct('resolveTicket', t.id)}>✓ Resolve</button>`:''}
+          ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" ${dataAct('startTicket', t.id)}>▶ Start</button>`:''}
           ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>`:''}
         </div>` : t.status==='RESOLVED' ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-          <button class="btn btn-primary btn-sm" onclick="confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
-          <button class="btn btn-secondary btn-sm" onclick="reopenTicket('${t.id}')">↩ Reopen</button>
+          <button class="btn btn-primary btn-sm" ${dataAct('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('reopenTicket', t.id)}>↩ Reopen</button>
         </div>` : `
         <div style="flex-shrink:0;font-size:.72rem;color:var(--text-muted);text-align:right;max-width:120px">
           ${t.status==='CLOSED'?'Closed':'Being handled by support team'}
@@ -1030,7 +1030,7 @@ async function renderServiceDesk(el) {
         }).join('')}
       </select>
       ${cf?`<button class="btn btn-secondary btn-sm" onclick="APP._sdClientFilter='';navigate('service_desk')">✕ Clear</button>`:''}` : ''}
-      <button class="btn btn-gold" onclick="newTicketModal()">${iconPlus(14)} New Ticket</button>
+      <button class="btn btn-gold" ${dataAct('newTicketModal')}>${iconPlus(14)} New Ticket</button>
     </div>
   </div>
 
@@ -1094,8 +1094,8 @@ function newTicketModal() {
      <div class="form-group"><label>Description</label>
        <textarea id="tk-desc" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="Describe the issue…"></textarea>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveTicket()">Submit Ticket</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveTicket')}>Submit Ticket</button>`);
 }
 
 async function saveTicket() {
@@ -1130,8 +1130,8 @@ function editTicketModal(id, subject, priority, status, description) {
      <div class="form-group"><label>Description</label>
        <textarea id="etk-desc" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${description}</textarea>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="updateTicket('${id}')">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('updateTicket', id)}>Save Changes</button>`);
 }
 
 async function updateTicket(id) {
@@ -1187,12 +1187,12 @@ async function viewTicketModal(id) {
       <input type="text" id="ticket-chat-input" maxlength="2000" placeholder="Write a message…"
         style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
         onkeydown="if(event.key==='Enter')postTicketComment('${t.id}')">
-      <button class="btn btn-primary" onclick="postTicketComment('${t.id}')">Send</button>
+      <button class="btn btn-primary" ${dataAct('postTicketComment', t.id)}>Send</button>
     </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">Ticket closed — conversation is read-only</div>`}`,
     `${isRaiserRole && t.status==='RESOLVED' ? `
       <button class="btn btn-primary" onclick="closeModal();confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
       <button class="btn btn-secondary" onclick="closeModal();reopenTicket('${t.id}')">↩ Reopen</button>` : ''}
-     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+     <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 
   loadTicketChat(id);
 }
@@ -1245,8 +1245,8 @@ async function confirmCloseTicket(id) {
 async function reopenTicket(id) {
   openModal(`Reopen Ticket ${id}`,
     `<p style="margin:0;color:var(--text-muted)">The support team will be notified that the issue is not fully resolved. Reopen this ticket?</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmReopenTicket('${id}')">↩ Reopen Ticket</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmReopenTicket', id)}>↩ Reopen Ticket</button>`);
 }
 
 async function confirmReopenTicket(id) {
@@ -1317,9 +1317,9 @@ async function renderApprovals(el) {
     </div>
     ${o.notes?`<div style="font-size:.78rem;color:var(--text-muted);background:#f8f9fa;padding:10px 12px;border-radius:8px;margin-bottom:14px">📝 ${o.notes}</div>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" onclick="approveOrder('${o.id}')">✓ Approve & Submit</button>
-      <button class="btn btn-danger" onclick="rejectOrder('${o.id}')">✕ Reject</button>
-      <button class="btn btn-secondary" onclick="viewOrder('${o.id}')">View Details</button>
+      <button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve & Submit</button>
+      <button class="btn btn-danger" ${dataAct('rejectOrder', o.id)}>✕ Reject</button>
+      <button class="btn btn-secondary" ${dataAct('viewOrder', o.id)}>View Details</button>
     </div>
   </div>`).join('')}
 
@@ -1328,7 +1328,7 @@ async function renderApprovals(el) {
   <div style="margin-top:20px">
     <div style="font-size:.84rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recently Approved — In Progress</div>
     ${approved.slice(0,4).map(o=>`
-    <div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="viewOrder('${o.id}')">
+    <div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" ${dataAct('viewOrder', o.id)}>
       <div>
         <div style="font-weight:700;font-size:.88rem">${o.id}</div>
         <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}</div>
@@ -1354,8 +1354,8 @@ function rejectOrder(id) {
        <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
        <textarea id="reject-reason" rows="4" placeholder="Explain why this order is being rejected…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmRejectOrder('${id}')">Reject Order</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-danger" ${dataAct('confirmRejectOrder', id)}>Reject Order</button>`);
 }
 
 async function confirmRejectOrder(id) {

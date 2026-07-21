@@ -45,7 +45,7 @@ async function renderClientDashboard(el) {
       <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Welcome back, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
       <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">${client?.name||'My Organization'} · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
     </div>
-    <button class="btn btn-primary" onclick="navigate('place_order')" style="padding:10px 22px;font-weight:700">${iconPlus(15)} Place Order</button>
+    <button class="btn btn-primary" ${dataAct('navigate', 'place_order')} style="padding:10px 22px;font-weight:700">${iconPlus(15)} Place Order</button>
   </div>
 
   <!-- ═══ WHAT NEEDS ATTENTION TODAY ═══ -->
@@ -54,7 +54,7 @@ async function renderClientDashboard(el) {
       <span style="font-size:.85rem;font-weight:800;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">⚡ Needs attention today</span>
       ${attentionCount ? `<span style="background:#fee2e2;color:#dc2626;border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
       ${lowStock.length ? `<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-gold btn-sm" onclick="orderAllAttention()" title="Add every low & out-of-stock item to your order">🛒 Order all (${lowStock.length})</button>
+        <button class="btn btn-gold btn-sm" ${dataAct('orderAllAttention')} title="Add every low & out-of-stock item to your order">🛒 Order all (${lowStock.length})</button>
         <button id="attn-review-btn" class="btn btn-primary btn-sm" style="display:${cartCount>0?'inline-flex':'none'}" onclick="APP._postNavStep='review';navigate('place_order')">Review order (<span id="attn-review-count">${cartCount}</span>) →</button>
       </div>` : ''}
     </div>
@@ -82,18 +82,18 @@ async function renderClientDashboard(el) {
       <div style="flex:0 0 240px;background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;padding:14px 16px">
         <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ccfbf1;color:#0f766e;display:inline-block;margin-bottom:6px">APPROVAL</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px">${pendingApproval} order${pendingApproval>1?'s':''} awaiting sign-off</div>
-        <button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('approvals')">Review Now</button>
+        <button class="btn btn-secondary btn-sm" style="width:100%" ${dataAct('navigate', 'approvals')}>Review Now</button>
       </div>` : ''}
       ${inTransitDCs.slice(0,2).map(dc => `
       <div style="flex:0 0 240px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 16px">
         <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#dbeafe;color:#1d4ed8;display:inline-block;margin-bottom:6px">ARRIVING</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:2px">${dc.dc_number||dc.id}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'🚚 En route'}${dc.scheduled_time?` · ETA ${dc.scheduled_time}`:''}</div>
-        ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" onclick="navigate('track_delivery')">Track</button>`}
+        ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" ${dataAct('navigate', 'track_delivery')}>Track</button>`}
       </div>`).join('')}
       ${lowStock.length > 6 ? `
       <div style="flex:0 0 140px;display:flex;align-items:center;justify-content:center">
-        <button class="btn btn-secondary btn-sm" onclick="navigate('my_inventory')">+${lowStock.length-6} more →</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_inventory')}>+${lowStock.length-6} more →</button>
       </div>` : ''}
     </div>`}
   </div>
@@ -116,10 +116,10 @@ async function renderClientDashboard(el) {
 
   <!-- ═══ STATUS CHIPS ROW ═══ -->
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-    <button onclick="navigate('my_orders')" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+    <button ${dataAct('navigate', 'my_orders')} style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
       <b style="color:var(--navy)">${activeOrders}</b> active orders
     </button>
-    <button onclick="navigate('track_delivery')" style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'#fef3c7':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+    <button ${dataAct('navigate', 'track_delivery')} style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'#fef3c7':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
       <b style="color:${inTransitDCs.length?'#d97706':'var(--navy)'}">${inTransitDCs.length}</b> in transit
     </button>
     <span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:.78rem">
@@ -239,11 +239,11 @@ async function renderClientDashboard(el) {
   <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <div style="font-weight:800;font-size:.95rem;color:var(--navy)">Recent Orders</div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('my_orders')">View All</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_orders')}>View All</button>
     </div>
     <div style="padding:0">
       ${(recentOrders||[]).slice(0,5).map(o=>`
-      <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''" onclick="viewOrder('${o.id}')">
+      <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''" ${dataAct('viewOrder', o.id)}>
         <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">🧾</div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
@@ -259,12 +259,12 @@ async function renderClientDashboard(el) {
   </div>
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0;cursor:pointer" onclick="navigate('fulfilment')">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
       <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Items</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1" id="due-items-count">—</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending delivery</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="navigate('fulfilment')">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
       <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Fulfilment Rate</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1" id="client-fulfilment-pct">—</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">this month</div>
@@ -392,7 +392,7 @@ async function renderClientBudget(el) {
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:.9rem;color:var(--navy)">Recent Spend</div>
       <div>
         ${closed.slice(0,6).map(o=>`
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer" onclick="viewOrder('${o.id}')">
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer" ${dataAct('viewOrder', o.id)}>
           <div style="flex:1;min-width:0">
             <div style="font-weight:700;font-size:.86rem">${o.id}</div>
             <div style="font-size:.74rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
@@ -548,10 +548,10 @@ async function renderOpsDashboard(el) {
       <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-secondary btn-sm" onclick="navigate('inventory')">Inventory</button>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">Orders</button>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('fulfilment')">Fulfilment</button>
-      <button class="btn btn-primary btn-sm" onclick="navigate('reports')">Reports →</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'inventory')}>Inventory</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>Orders</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'fulfilment')}>Fulfilment</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('navigate', 'reports')}>Reports →</button>
     </div>
   </div>
 
@@ -592,9 +592,9 @@ async function renderOpsDashboard(el) {
   <div id="tower-radar-wrap" style="display:none;margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-size:.62rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--primary-hover)">🕐 Horizon</span>
-      <button class="tw-hz" id="tw-hz-today" onclick="setTowerHz('today')">Today</button>
-      <button class="tw-hz on" id="tw-hz-week" onclick="setTowerHz('week')">Next 7 days</button>
-      <button class="tw-hz" id="tw-hz-month" onclick="setTowerHz('month')">Next 30 days</button>
+      <button class="tw-hz" id="tw-hz-today" ${dataAct('setTowerHz', 'today')}>Today</button>
+      <button class="tw-hz on" id="tw-hz-week" ${dataAct('setTowerHz', 'week')}>Next 7 days</button>
+      <button class="tw-hz" id="tw-hz-month" ${dataAct('setTowerHz', 'month')}>Next 30 days</button>
       <span id="tw-hz-note" style="margin-left:auto;font-size:.7rem;color:var(--text-muted)"></span>
     </div>
     <div id="tw-changes" style="display:none;flex-wrap:wrap;gap:6px;margin:0 0 10px"></div>
@@ -615,7 +615,7 @@ async function renderOpsDashboard(el) {
         <div class="ct-card-title">Order Pipeline</div>
         <div class="ct-card-sub">${totalOrders||0} orders across all stages</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All →</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>View All →</button>
     </div>
     <div style="padding:16px 18px">
       <div class="ct-pipe-wrap">
@@ -645,7 +645,7 @@ async function renderOpsDashboard(el) {
       <div class="ct-card">
         <div class="ct-card-hd">
           <div class="ct-card-title">Top Clients</div>
-          <button class="btn btn-secondary btn-sm" onclick="navigate('clients')">View All →</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'clients')}>View All →</button>
         </div>
         <div style="padding:16px 20px">
           ${(topClients||[]).slice(0,5).map((c,i)=>{
@@ -655,7 +655,7 @@ async function renderOpsDashboard(el) {
             return `
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px;cursor:pointer;border-radius:8px;padding:4px 6px;margin-left:-6px;margin-right:-6px;transition:background .15s"
                  onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''"
-                 onclick="openClientDetail('${c.id}')" title="View ${h(c.name)} details">
+                 ${dataAct('openClientDetail', c.id)} title="View ${h(c.name)} details">
               <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
               <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
@@ -724,10 +724,10 @@ async function renderOpsDashboard(el) {
         <div class="ct-card-title">Recent Orders</div>
         <div class="ct-card-sub">Latest activity across all clients</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('orders')">View All →</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>View All →</button>
     </div>
     ${(recentOrders||[]).map(o=>`
-    <div class="ct-order-row" onclick="viewOrder('${o.id}')">
+    <div class="ct-order-row" ${dataAct('viewOrder', o.id)}>
       <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0">🧾</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
@@ -910,7 +910,7 @@ function renderTowerRadar() {
     basis:'Delivered challans not yet billed', nav:'dc_billing' });
 
   document.getElementById('tower-pulse').innerHTML = cards.map(k =>
-    `<button class="tw-pk" title="Basis: ${h(k.basis)}" onclick="navigate('${k.nav}')">
+    `<button class="tw-pk" title="Basis: ${h(k.basis)}" ${dataAct('navigate', k.nav)}>
       <div class="l">${k.l}</div><div class="v ${k.c}">${k.v}</div>
       <div class="t ${k.tc}">${k.t}</div><div class="f">${k.fc}</div></button>`).join('');
 
@@ -977,9 +977,9 @@ function renderTowerRadar() {
   document.getElementById('tower-radar').innerHTML =
     `<div class="ct-card-hd"><div><div class="ct-card-title">📡 Radar — what's coming</div>
       <div class="ct-card-sub">run-rate projections · hover any signal for its arithmetic</div></div>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('delivery_calendar')">Calendar →</button></div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'delivery_calendar')}>Calendar →</button></div>
     <div style="padding:14px 16px">${loadHtml}
-      ${sigs.length ? sigs.map(s => `<button class="tw-fc" title="Basis: ${h(s.basis)}" onclick="navigate('${s.nav}')">
+      ${sigs.length ? sigs.map(s => `<button class="tw-fc" title="Basis: ${h(s.basis)}" ${dataAct('navigate', s.nav)}>
         <span class="ic ${s.tone}">${s.ic}</span>
         <span class="m"><span class="h4">${s.h}</span><span class="p">${s.p}</span></span>
         <span class="eta ${s.tone}">${s.eta}</span></button>`).join('')
@@ -1002,7 +1002,7 @@ function renderTowerRadar() {
     `<div class="ct-card-hd"><div><div class="ct-card-title">⚡ Needs you now</div>
       <div class="ct-card-sub">ranked by cost of waiting — the pill is the reason</div></div></div>
     <div style="padding:12px 14px">
-      ${q.length ? q.map(x => `<button class="tw-aq" onclick="navigate('${x.nav}')">
+      ${q.length ? q.map(x => `<button class="tw-aq" ${dataAct('navigate', x.nav)}>
         <span class="sev s${x.sev}"></span>
         <span class="m"><span class="h4">${x.t}</span><span class="p">${x.s}</span></span>
         <span class="r s${x.sev}">${x.r}</span></button>`).join('')
@@ -1042,7 +1042,7 @@ async function renderVendorDashboard(el) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${leadDays}d</div>
         <div style="font-size:.75rem;color:${leadColor};margin-top:6px">${leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement'}</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="navigate('vendor_pos')">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'vendor_pos')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending POs</div>
         <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'#d97706':'var(--navy)'};line-height:1">${pendingCount}</div>
         <div style="font-size:.75rem;color:${pendingCount>0?'#d97706':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
@@ -1051,7 +1051,7 @@ async function renderVendorDashboard(el) {
   </div>
   <div class="card">
     <div class="card-header"><span>Pending Purchase Orders</span>
-      <button class="btn btn-secondary btn-sm" onclick="navigate('vendor_pos')">View All</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'vendor_pos')}>View All</button>
     </div>
     <div class="table-wrap">
       <table class="table">
@@ -1071,12 +1071,12 @@ async function renderVendorDashboard(el) {
 
 function poActions(po) {
   if (po.status === 'SENT') return `
-    <button class="btn btn-primary btn-sm" onclick="acceptPO('${po.id}',${po.grand_total||0})">Accept</button>
-    <button class="btn btn-danger btn-sm" onclick="rejectPO('${po.id}')">Reject</button>`;
+    <button class="btn btn-primary btn-sm" ${dataAct('acceptPO', po.id, po.grand_total||0)}>Accept</button>
+    <button class="btn btn-danger btn-sm" ${dataAct('rejectPO', po.id)}>Reject</button>`;
   if (po.status === 'ACCEPTED') return `
-    <button class="btn btn-gold btn-sm" onclick="dispatchPO('${po.id}')">Mark Dispatched</button>`;
+    <button class="btn btn-gold btn-sm" ${dataAct('dispatchPO', po.id)}>Mark Dispatched</button>`;
   if (po.status === 'DISPATCHED') return `
-    <button class="btn btn-secondary btn-sm" onclick="uploadInvoice('${po.id}')">Upload Invoice</button>`;
+    <button class="btn btn-secondary btn-sm" ${dataAct('uploadInvoice', po.id)}>Upload Invoice</button>`;
   return `<span style="color:var(--text-muted);font-size:.8rem">${po.status}</span>`;
 }
 

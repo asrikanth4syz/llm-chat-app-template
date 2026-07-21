@@ -51,7 +51,7 @@ async function renderMyOrders(el) {
           <div style="font-size:3rem;margin-bottom:12px">📋</div>
           <div style="font-weight:700;font-size:1rem;color:var(--navy)">No orders found</div>
           <div style="font-size:.83rem;color:var(--text-muted);margin-top:6px">Try "All" or clear the search filter</div>
-          <button class="btn btn-gold" style="margin-top:16px" onclick="navigate('place_order')">${iconPlus(13)} Place New Order</button>
+          <button class="btn btn-gold" style="margin-top:16px" ${dataAct('navigate', 'place_order')}>${iconPlus(13)} Place New Order</button>
         </div>`;
         return;
       }
@@ -117,10 +117,10 @@ async function renderMyOrders(el) {
 
             <!-- Action buttons -->
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View Details</button>
-              ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" onclick="submitDraftOrder('${o.id}')">Submit Order</button>`:''}
-              ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" onclick="viewOrderDrilldown('${o.id}')">📦 Delivery Breakdown</button>`:''}
-              ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" onclick="reorderFromHistory('${o.id}')">🔄 Reorder</button>`:''}
+              <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View Details</button>
+              ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', o.id)}>Submit Order</button>`:''}
+              ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" ${dataAct('viewOrderDrilldown', o.id)}>📦 Delivery Breakdown</button>`:''}
+              ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', o.id)}>🔄 Reorder</button>`:''}
               ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="event.stopPropagation();cancelOrder('${o.id}')">Cancel</button>`:''}
             </div>
           </div>
@@ -142,7 +142,7 @@ async function renderMyOrders(el) {
         <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Orders</div>
         <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count">${orders.length} orders</div>
       </div>
-      <button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>
+      <button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>
     </div>
 
     <!-- KPI tiles -->
@@ -195,7 +195,7 @@ async function renderMyOrders(el) {
   // Ops/admin table view (unchanged)
   el.innerHTML = `
   ${pageHeader('My Orders', `${orders.length} orders`,
-    `<button class="btn btn-gold" onclick="navigate('place_order')">${iconPlus(14)} New Order</button>`)}
+    `<button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>`)}
   <div class="card">
     <div class="table-wrap">
       <table class="table">
@@ -208,8 +208,8 @@ async function renderMyOrders(el) {
           <td>${orderTypeBadge(o.order_type||'Regular')}</td>
           <td>${fmtDate(o.created_at)}</td>
           <td>
-            <button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>
-            ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button>`:''}
+            <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button>
+            ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" ${dataAct('cancelOrder', o.id)}>Cancel</button>`:''}
           </td>
         </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No orders found</td></tr>'}
         </tbody>
@@ -330,7 +330,7 @@ async function viewOrder(id) {
     </div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.875rem">
-      <button class="btn btn-primary btn-sm" onclick="addOrderComment('${id}')">Post</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', id)}>Post</button>
     </div>`;
 
   const isOpsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
@@ -368,7 +368,7 @@ async function viewOrder(id) {
                </button>
                <span id="pdd-edit" style="display:none;align-items:center;gap:4px">
                  <input type="date" id="pdd-input" value="${pdd||''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
-                 <button class="btn btn-primary btn-sm" style="padding:3px 10px" onclick="savePredictedDelivery('${id}')">Save</button>
+                 <button class="btn btn-primary btn-sm" style="padding:3px 10px" ${dataAct('savePredictedDelivery', id)}>Save</button>
                  <button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="document.getElementById('pdd-edit').style.display='none';document.querySelector('[onclick*=pdd-edit]').style.display=''">✕</button>
                </span>`
             : pddLabel
@@ -401,7 +401,7 @@ async function viewOrder(id) {
     (() => {
       const s = order.status;
       const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
-      const footer = [`<button class="btn btn-secondary" onclick="closeModal()">Close</button>`];
+      const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
       if (opsRole) {
         if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
           footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','APPROVED','Approved via order detail')">✓ Approve</button>`);
@@ -475,8 +475,8 @@ async function addOrderComment(orderId) {
 function cancelOrder(id) {
   openModal(`Cancel Order ${id}`,
     `<p style="margin:0;color:var(--text-muted)">Are you sure you want to cancel order <b>${id}</b>? This action cannot be undone.</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Keep Order</button>
-     <button class="btn btn-danger" onclick="confirmCancelOrder('${id}')">Cancel Order</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep Order</button>
+     <button class="btn btn-danger" ${dataAct('confirmCancelOrder', id)}>Cancel Order</button>`);
 }
 
 async function confirmCancelOrder(id) {
@@ -489,8 +489,8 @@ async function confirmCancelOrder(id) {
 async function submitDraftOrder(id) {
   openModal(`Submit Order ${id}`,
     `<p style="color:var(--text-muted)">Submit draft order <b>${id}</b> to 4SYZ for processing?</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Not Yet</button>
-     <button class="btn btn-gold" onclick="confirmSubmitDraft('${id}')">Submit Order</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Not Yet</button>
+     <button class="btn btn-gold" ${dataAct('confirmSubmitDraft', id)}>Submit Order</button>`);
 }
 
 async function confirmSubmitDraft(id) {
@@ -633,7 +633,7 @@ async function viewOrderDrilldown(orderId) {
   openModal(
     `Delivery Breakdown — ${orderId}`,
     body,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
      <button class="btn btn-primary" onclick="closeModal();viewOrder('${orderId}')">Full Order View</button>`
   );
 }
@@ -689,7 +689,7 @@ async function renderTrackDelivery(el) {
         ${dc.delivered_at?`<div>✅ Delivered: <b>${fmtDate(dc.delivered_at)}</b></div>`:''}
       </div>
       ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:.75rem;font-weight:600;color:${textColor};text-decoration:none;background:${badgeBg};border-radius:6px;padding:4px 10px">📞 Call Driver</a>`:''}
-      ${type!=='DELIVERED'?`<button class="btn btn-secondary btn-sm" style="margin-top:8px;margin-left:6px" onclick="viewOrder('${dc.order_id}')">View Order</button>`:''}
+      ${type!=='DELIVERED'?`<button class="btn btn-secondary btn-sm" style="margin-top:8px;margin-left:6px" ${dataAct('viewOrder', dc.order_id)}>View Order</button>`:''}
     </div>`;
   }
 
@@ -798,7 +798,7 @@ async function renderOrderQueue(el) {
     ];
     return `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:12px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders')">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" ${dataAct('switchOQMainTab', 'orders')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(totalValue)}</div>
@@ -824,7 +824,7 @@ async function renderOrderQueue(el) {
         const cnt = byType(type).length;
         const val = byType(type).reduce((s,o)=>s+(o.grand_total||0),0);
         const active = APP._oqTypeFilter===type;
-        return `<div class="card" onclick="oqFilterByType('${type}')"
+        return `<div class="card" ${dataAct('oqFilterByType', type)}
           style="padding:12px 16px;border-top:3px solid ${color};margin-bottom:0;cursor:pointer;
           ${active?`background:${color}10;box-shadow:0 0 0 2px ${color}40`:''}">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
@@ -854,7 +854,7 @@ async function renderOrderQueue(el) {
     return `<div class="tabs" style="margin-bottom:0;flex-wrap:wrap">
       ${STATUS_TABS.map(s=>{
         const cnt = s==='All' ? fOrders.length : fOrders.filter(o=>o.status===s).length;
-        return `<button class="tab-btn${APP._oqStatusTab===s?' active':''}" onclick="switchOQTab('${s}')">
+        return `<button class="tab-btn${APP._oqStatusTab===s?' active':''}" ${dataAct('switchOQTab', s)}>
           ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
         </button>`;
       }).join('')}
@@ -910,8 +910,8 @@ async function renderOrderQueue(el) {
   <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
 
   <div class="tabs" style="margin-bottom:16px">
-    <button class="tab-btn${APP._oqTab==='orders'?' active':''}" onclick="switchOQMainTab('orders')">Orders</button>
-    <button class="tab-btn${APP._oqTab==='items'?' active':''}" onclick="switchOQMainTab('items')">Line Items</button>
+    <button class="tab-btn${APP._oqTab==='orders'?' active':''}" ${dataAct('switchOQMainTab', 'orders')}>Orders</button>
+    <button class="tab-btn${APP._oqTab==='items'?' active':''}" ${dataAct('switchOQMainTab', 'items')}>Line Items</button>
   </div>
 
   <div id="oq-main-content">
@@ -1038,9 +1038,9 @@ async function oqLoadItems() {
 
   function viewBtns() {
     return `<div style="display:flex;gap:6px">
-      <button class="btn btn-sm ${APP._oqItemView==='brand'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('brand')">By Brand</button>
-      <button class="btn btn-sm ${APP._oqItemView==='vendor'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('vendor')">By Vendor</button>
-      <button class="btn btn-sm ${APP._oqItemView==='all'?'btn-primary':'btn-secondary'}" onclick="oqSetItemView('all')">All Items</button>
+      <button class="btn btn-sm ${APP._oqItemView==='brand'?'btn-primary':'btn-secondary'}" ${dataAct('oqSetItemView', 'brand')}>By Brand</button>
+      <button class="btn btn-sm ${APP._oqItemView==='vendor'?'btn-primary':'btn-secondary'}" ${dataAct('oqSetItemView', 'vendor')}>By Vendor</button>
+      <button class="btn btn-sm ${APP._oqItemView==='all'?'btn-primary':'btn-secondary'}" ${dataAct('oqSetItemView', 'all')}>All Items</button>
     </div>`;
   }
 
@@ -1232,51 +1232,51 @@ function oqSetItemView(view) {
 function orderQueueActions(o) {
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
   if (isClient) {
-    return `<div style="display:flex;gap:6px;align-items:center">${statusBadge(o.status)}<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button></div>`;
+    return `<div style="display:flex;gap:6px;align-items:center">${statusBadge(o.status)}<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button></div>`;
   }
-  const btns = [`<button class="btn btn-secondary btn-sm" onclick="viewOrder('${o.id}')">View</button>`];
+  const btns = [`<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button>`];
   switch (o.status) {
     case 'SUBMITTED':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Approved by ops')">✓ Approve</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Approved by ops')}>✓ Approve</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
       break;
     case 'PENDING_APPROVAL':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','APPROVED','Client/ops approval')">✓ Approve</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Reject</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Client/ops approval')}>✓ Approve</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
       break;
     case 'APPROVED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','ACKNOWLEDGED','Order acknowledged — processing started')">Acknowledge</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Cancel</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" ${dataAct('advanceOrder', o.id, 'ACKNOWLEDGED', 'Order acknowledged — processing started')}>Acknowledge</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Cancel</button>`);
       break;
     case 'ACKNOWLEDGED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','INVENTORY_CHECK','Inventory check initiated')">Inventory Check</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" onclick="opsRejectOrder('${o.id}')">✕ Cancel</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" ${dataAct('advanceOrder', o.id, 'INVENTORY_CHECK', 'Inventory check initiated')}>Inventory Check</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Cancel</button>`);
       break;
     case 'INVENTORY_CHECK':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Stock available — ready for picking')">✓ Stock In</button>`);
-      btns.push(`<button class="btn btn-gold btn-sm" onclick="inventoryShortageModal('${o.id}')">⚠ Raise PO</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'READY_TO_PICK', 'Stock available — ready for picking')}>✓ Stock In</button>`);
+      btns.push(`<button class="btn btn-gold btn-sm" ${dataAct('inventoryShortageModal', o.id)}>⚠ Raise PO</button>`);
       break;
     case 'VENDOR_PO_RAISED':
       btns.push(`<button class="btn btn-secondary btn-sm" style="cursor:default;opacity:.65" disabled>Awaiting Vendor</button>`);
-      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','APPROVED','PO rejected — reverted for reprocessing')">↩ Reopen</button>`);
+      btns.push(`<button class="btn btn-warning btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'PO rejected — reverted for reprocessing')}>↩ Reopen</button>`);
       break;
     case 'READY_TO_PICK':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${o.id}')">Pick Items</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" ${dataAct('pickOrderModal', o.id)}>Pick Items</button>`);
       break;
     case 'PICKED':
-      btns.push(`<button class="btn btn-info btn-sm" onclick="advanceOrder('${o.id}','QUALITY_CHECK','Items picked — quality check & packing')">Quality Check</button>`);
+      btns.push(`<button class="btn btn-info btn-sm" ${dataAct('advanceOrder', o.id, 'QUALITY_CHECK', 'Items picked — quality check & packing')}>Quality Check</button>`);
       break;
     case 'QUALITY_CHECK':
-      btns.push(`<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${o.id}')">✓ Pass &rarr; Dispatch</button>`);
-      btns.push(`<button class="btn btn-warning btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('createDCFromPicklist', o.id)}>✓ Pass &rarr; Dispatch</button>`);
+      btns.push(`<button class="btn btn-warning btn-sm" ${dataAct('advanceOrder', o.id, 'READY_TO_PICK', 'Quality check failed — returned for re-pick')}>↩ Re-Pick</button>`);
       break;
     case 'PARTIALLY_CLOSED':
-      btns.push(`<button class="btn btn-primary btn-sm" onclick="advanceOrder('${o.id}','READY_TO_PICK','Replenishment — next batch ready for picking')">Replenish</button>`);
-      btns.push(`<button class="btn btn-secondary btn-sm" onclick="dispatchRemainingModal('${o.id}')">Dispatch Remaining</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" onclick="preCloseOrder('${o.id}')">Pre-Close</button>`);
+      btns.push(`<button class="btn btn-primary btn-sm" ${dataAct('advanceOrder', o.id, 'READY_TO_PICK', 'Replenishment — next batch ready for picking')}>Replenish</button>`);
+      btns.push(`<button class="btn btn-secondary btn-sm" ${dataAct('dispatchRemainingModal', o.id)}>Dispatch Remaining</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('preCloseOrder', o.id)}>Pre-Close</button>`);
       break;
     case 'IN_SHIPMENT':
-      btns.push(`<button class="btn btn-secondary btn-sm" onclick="navigate('delivery')">→ Delivery</button>`);
+      btns.push(`<button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'delivery')}>→ Delivery</button>`);
       break;
   }
   return `<div style="display:flex;gap:4px;flex-wrap:wrap">${btns.join('')}</div>`;
@@ -1290,7 +1290,7 @@ function inventoryShortageModal(orderId) {
      <p style="font-size:.85rem;color:var(--warning)">
        ⚠ Once you raise a PO linked to this order, it will automatically move to <b>VENDOR PO RAISED</b> status.
      </p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-gold" onclick="closeModal();navigate('procurement');showToast('Raise a PO and link it to order ${orderId}','info')">→ Go to Procurement</button>`);
 }
 
@@ -1318,15 +1318,15 @@ async function dispatchRemainingModal(orderId) {
     </div>`).join('');
   openModal(`Dispatch Remaining — Order ${orderId}`,
     `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.87rem">Select a pending DC to dispatch:</p>${dcList}`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
 async function preCloseOrder(orderId) {
   openModal('Pre-Close Order',
     `<p>Pre-closing <b>${orderId}</b> will mark it as <b>CLOSED</b> without completing all deliveries.</p>
      <p style="color:var(--warning);margin-top:8px;font-size:.87rem">⚠️ Any remaining scheduled DCs will be left undelivered. This action cannot be undone.</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmPreClose('${orderId}')">Pre-Close Order</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-danger" ${dataAct('confirmPreClose', orderId)}>Pre-Close Order</button>`);
 }
 
 async function confirmPreClose(orderId) {
@@ -1344,8 +1344,8 @@ function opsRejectOrder(id) {
   openModal(`Reject / Cancel Order ${id}`,
     `<p style="color:var(--text-muted);margin:0">Reason for rejection (shown to client):</p>
      <textarea id="reject-reason" rows="3" style="width:100%;margin-top:10px;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-size:.85rem;resize:vertical" placeholder="e.g. Budget exceeded, items unavailable…"></textarea>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Keep Order</button>
-     <button class="btn btn-danger" onclick="confirmOpsReject('${id}')">Reject & Cancel</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep Order</button>
+     <button class="btn btn-danger" ${dataAct('confirmOpsReject', id)}>Reject & Cancel</button>`);
 }
 
 async function confirmOpsReject(id) {

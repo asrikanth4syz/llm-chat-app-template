@@ -318,8 +318,8 @@ async function openProfileModal() {
     <div class="form-group"><label>Current Password</label><input type="password" id="prof-cur-pw" placeholder="Enter current password"></div>
     <div class="form-group"><label>New Password</label><input type="password" id="prof-new-pw" placeholder="Enter new password (min 6 chars)"></div>
     <div class="form-group"><label>Confirm New Password</label><input type="password" id="prof-conf-pw" placeholder="Confirm new password"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveProfile')}>Save Changes</button>`);
 }
 
 async function saveProfile() {
@@ -552,7 +552,7 @@ function buildNav() {
          </div>`;
 
     const itemsHtml = sec.items.map(item => `
-      <div class="nav-item" id="nav-${item.id}" onclick="navigate('${item.id}')" title="${item.label}">
+      <div class="nav-item" id="nav-${item.id}" ${dataAct('navigate', item.id)} title="${item.label}">
         <span class="nav-item-icon">${item.icon(18)}</span>
         <span class="nav-item-label">${item.label}</span>
         ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
@@ -563,7 +563,7 @@ function buildNav() {
       : `<div class="nav-section-body${collapsed ? ' collapsed' : ''}" id="nav-sec-${sec.label.replace(/\s+/g,'_')}" style="max-height:${collapsed ? '0' : bodyMaxH}">${itemsHtml}</div>`);
   }).join('');
 
-  const collapseBtn = `<button class="nav-collapse-btn" onclick="collapseSidebar()" title="Collapse menu">
+  const collapseBtn = `<button class="nav-collapse-btn" ${dataAct('collapseSidebar')} title="Collapse menu">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/><path d="M21 18l-6-6 6-6" opacity=".5"/></svg>
     <span class="nav-collapse-lbl">Collapse</span></button>`;
 
@@ -781,7 +781,7 @@ function ensureClientFAB() {
       <button onclick="toggleFAB();navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📋 Upload Order Sheet</button>
       <button onclick="toggleFAB();navigate('my_inventory')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📉 Log Use</button>
     </div>
-    <button id="fab-main" onclick="toggleFAB()" title="Quick actions"
+    <button id="fab-main" ${dataAct('toggleFAB')} title="Quick actions"
       style="width:54px;height:54px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.7rem;font-weight:400;cursor:pointer;box-shadow:0 6px 18px rgba(13,148,136,.45);display:flex;align-items:center;justify-content:center;line-height:1;transition:transform .2s">+</button>`;
   document.body.appendChild(fab);
 }

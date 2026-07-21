@@ -52,7 +52,7 @@ async function switchFulfilTab(tab, btn) {
             <option value="90">Last 90 days</option>
           </select>
           <label style="font-size:.82rem;display:flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="ovd-due-only" onchange="reloadOVD()"> Due Only</label>
-          <button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ovd')">&#8595; CSV</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'ovd')}>&#8595; CSV</button>
         </div>
       </div>
     </div>
@@ -89,7 +89,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><span>Due Items</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('due-items')">&#8595; CSV</button></div>
+      <div class="card-header"><span>Due Items</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'due-items')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Location</th><th>Order</th><th>Brand</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Due Since</th><th>Ageing (days)</th><th>Vendor</th><th>Status</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
@@ -150,7 +150,7 @@ async function switchFulfilTab(tab, btn) {
           <td>${c.order_count}</td>
           <td><b style="color:var(--danger)">${c.due_qty||0}</b></td>
           <td>${fmt(c.due_value)}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick="drillPendingClient('${c.id}','${c.name}')">Drilldown</button></td>
+          <td><button class="btn btn-secondary btn-sm" ${dataAct('drillPendingClient', c.id, c.name)}>Drilldown</button></td>
         </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No pending supply</td></tr>'}
         </tbody>
       </table></div>
@@ -187,7 +187,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('ageing')">&#8595; CSV</button></div>
+      <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'ageing')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Age Bucket</th><th>Orders</th><th>Clients</th><th>Vendors</th><th>Due Qty</th><th>Due Value</th></tr></thead>
         <tbody>${data.map(r=>{
@@ -232,7 +232,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-shortfall')">&#8595; CSV</button></div>
+      <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'brand-shortfall')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Fulfilment %</th><th>Vendor</th></tr></thead>
         <tbody>${data.sort((a,b)=>a.fulfilment_pct-b.fulfilment_pct).map(r=>`<tr>
@@ -279,7 +279,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('brand-procurement')">&#8595; CSV</button></div>
+      <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'brand-procurement')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map(r=>`<tr>
@@ -326,7 +326,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" onclick="exportFulfilCSV('client-scorecard')">&#8595; CSV</button></div>
+      <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'client-scorecard')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Client</th><th>Location</th><th>Orders</th><th>Ordered Qty</th><th>Delivered Qty</th><th>Due Qty</th><th>Due Value</th><th>Fulfilment %</th><th>Avg Delivery Days</th></tr></thead>
         <tbody>${data.sort((a,b)=>(a.fulfilment_pct||0)-(b.fulfilment_pct||0)).map(r=>`<tr>
@@ -396,7 +396,7 @@ async function switchFulfilTab(tab, btn) {
             const complete = r.completion_date ? fmtDate(r.completion_date) : '—';
             const completionColor = r.completion_date ? '#059669' : (r.status==='CLOSED'?'var(--danger)':'var(--text-muted)');
             return `<tr>
-              <td><b style="color:var(--navy);cursor:pointer" onclick="viewOrderDrilldown('${r.id}')">${r.id}</b></td>
+              <td><b style="color:var(--navy);cursor:pointer" ${dataAct('viewOrderDrilldown', r.id)}>${r.id}</b></td>
               <td>${h(r.client_name)}</td>
               <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
               <td style="text-align:right;font-weight:600">${r.total_ordered}</td>
@@ -411,7 +411,7 @@ async function switchFulfilTab(tab, btn) {
               </td>
               <td style="text-align:center">
                 <span class="badge badge-${r.dc_count>2?'warning':r.dc_count>1?'info':'success'}"
-                  style="cursor:pointer" onclick="drillOrderDCs('${r.id}','${r.id}')"
+                  style="cursor:pointer" ${dataAct('drillOrderDCs', r.id, r.id)}
                   title="Click to view DC breakdown">
                   ${r.dc_count} DC${r.dc_count!==1?'s':''}
                 </span>
@@ -503,7 +503,7 @@ async function switchFulfilTab(tab, btn) {
     <div class="card">
       <div class="card-header">
         <span>Procurement Demand Forecast</span>
-        <button class="btn btn-primary btn-sm" onclick="generateRFQFromForecast()">Generate RFQ for All</button>
+        <button class="btn btn-primary btn-sm" ${dataAct('generateRFQFromForecast')}>Generate RFQ for All</button>
       </div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
@@ -628,7 +628,7 @@ function renderOVDTable(data) {
           <th></th>
         </tr></thead>
         <tbody>
-          ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" onclick="viewOrderDrilldown('${o.id}')" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''">
+          ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" ${dataAct('viewOrderDrilldown', o.id)} onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''">
             <td><b style="color:var(--navy)">${o.id}</b></td>
             <td style="white-space:nowrap">${fmtDate(o.date)}</td>
             <td style="font-weight:600">${o.client}</td>
@@ -735,7 +735,7 @@ async function drillOrderDCs(orderId, label) {
   </div>`;
 
   openModal(`DC Breakdown — ${label}`, body,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
      <button class="btn btn-primary" onclick="closeModal();viewOrderDrilldown('${orderId}')">Full Line-Item View</button>`
   );
 }
@@ -810,9 +810,9 @@ async function initiateBrandPO(brand, vendorId, from, to) {
       <label>Notes (optional)</label>
       <input type="text" id="bpo-notes" placeholder="e.g. Consolidated procurement for shortfall">
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-secondary" onclick="submitBrandPO('whatsapp')">📱 WhatsApp</button>
-     <button class="btn btn-primary" onclick="submitBrandPO('email')">📧 Create &amp; Email PO</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-secondary" ${dataAct('submitBrandPO', 'whatsapp')}>📱 WhatsApp</button>
+     <button class="btn btn-primary" ${dataAct('submitBrandPO', 'email')}>📧 Create &amp; Email PO</button>`);
   updateBrandPOTotal();
 }
 
@@ -885,7 +885,7 @@ async function renderStaff(el) {
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
         <button class="btn btn-secondary btn-sm" onclick="editStaffModal('${s.id}','${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.role}')" style="font-size:.7rem;padding:3px 8px">Edit</button>
-        <button class="btn btn-${s.active?'danger':'success'} btn-sm" onclick="toggleStaff('${s.id}',${s.active?0:1})" style="font-size:.7rem;padding:3px 8px">${s.active?'Disable':'Enable'}</button>
+        <button class="btn btn-${s.active?'danger':'success'} btn-sm" ${dataAct('toggleStaff', s.id, s.active?0:1)} style="font-size:.7rem;padding:3px 8px">${s.active?'Disable':'Enable'}</button>
       </div>
     </div>`;
   }
@@ -896,7 +896,7 @@ async function renderStaff(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Staff</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${staff.length} total · ${activeStaff.length} active</div>
     </div>
-    <button class="btn btn-primary" onclick="addStaffModal()">${iconPlus(14)} Add Staff</button>
+    <button class="btn btn-primary" ${dataAct('addStaffModal')}>${iconPlus(14)} Add Staff</button>
   </div>
 
   <!-- Role summary tiles -->
@@ -941,8 +941,8 @@ function addStaffModal() {
          <option value="viewer">Viewer</option>
        </select>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveStaff()">Add</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveStaff')}>Add</button>`);
 }
 
 async function saveStaff() {
@@ -968,8 +968,8 @@ function editStaffModal(id, name, phone, role) {
          <option value="viewer" ${role==='viewer'?'selected':''}>Viewer</option>
        </select>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveStaffEdit('${id}')">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveStaffEdit', id)}>Save</button>`);
 }
 
 async function saveStaffEdit(id) {
@@ -1024,7 +1024,7 @@ async function renderTodaysSchedule(el) {
 
   el.innerHTML = `
   ${pageHeader("Today's Delivery Schedule", today,
-    `<button class="btn btn-secondary" onclick="navigate('todays_schedule')">&#8635; Refresh</button>`)}
+    `<button class="btn btn-secondary" ${dataAct('navigate', 'todays_schedule')}>&#8635; Refresh</button>`)}
 
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
@@ -1102,8 +1102,8 @@ async function renderTodaysSchedule(el) {
           <td>${dc.total_qty||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
-            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Deliver</button>`:''}
-            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" onclick="logReturnModal('${dc.id}')">Return</button>`:''}
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Deliver</button>`:''}
+            ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" ${dataAct('logReturnModal', dc.id)}>Return</button>`:''}
             <button class="btn btn-secondary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Edit</button>
           </td>
         </tr>`).join('')}
@@ -1145,8 +1145,8 @@ async function assignDCModal(dcId, currentDcNum, currentTime) {
     `<div class="form-group"><label>DC Number</label><input type="text" id="dc-num" value="${currentDcNum}" placeholder="e.g. 702037"></div>
      <div class="form-group"><label>Assign Staff</label><select id="dc-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
      <div class="form-group"><label>Scheduled Time</label><input type="time" id="dc-time" value="${currentTime}"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveAssignDC('${dcId}')">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveAssignDC', dcId)}>Save</button>`);
 }
 
 async function saveAssignDC(dcId) {
@@ -1175,7 +1175,7 @@ async function renderConsolidatedOrders(el) {
 
   el.innerHTML = `
   ${pageHeader('Procurement View', 'Consolidated view of items needed across all orders',
-    `<button class="btn btn-secondary" onclick="exportConsolidated()">Export CSV</button>`)}
+    `<button class="btn btn-secondary" ${dataAct('exportConsolidated')}>Export CSV</button>`)}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
     ${[
       {label:'Items with Due Qty',val:data.filter(r=>r.total_due_qty>0).length,sub:`of ${data.length} items`,color:'var(--danger)'},
@@ -1236,7 +1236,7 @@ async function renderConsolidatedDue(el) {
 
   el.innerHTML = `
   ${pageHeader('Due Items', 'Pending line items not yet delivered to clients',
-    `<button class="btn btn-secondary" onclick="exportDue()">Export CSV</button>`)}
+    `<button class="btn btn-secondary" ${dataAct('exportDue')}>Export CSV</button>`)}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
     ${[
       {label:'Pending Line Items',val:data.length,sub:'unfulfilled items',color:data.length?'var(--danger)':'var(--success)'},
@@ -1334,7 +1334,7 @@ async function renderPorterExpenses(el) {
         <div class="form-group"><label>Staff</label><select id="pe-staff"><option value="">— Unspecified —</option>${staffOpts}</select></div>
         <div class="form-group"><label>Notes</label><input type="text" id="pe-notes" placeholder="e.g. Morning route"></div>
       </div>
-      <button class="btn btn-primary" onclick="savePorterExpense()">Log Trip</button>
+      <button class="btn btn-primary" ${dataAct('savePorterExpense')}>Log Trip</button>
     </div>
   </div>
   <div class="card">

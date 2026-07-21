@@ -139,9 +139,9 @@ async function renderVendors(el) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${activeVendors.length} active vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-secondary" onclick="navigate('procurement')">View POs</button>
+      <button class="btn btn-secondary" ${dataAct('navigate', 'procurement')}>View POs</button>
       ${!['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user?.role) ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
-      <button class="btn btn-gold" onclick="addVendorModal()">${iconPlus(14)} Add Vendor</button>
+      <button class="btn btn-gold" ${dataAct('addVendorModal')}>${iconPlus(14)} Add Vendor</button>
     </div>
   </div>
 
@@ -404,7 +404,7 @@ function openVendorWizard(v) {
   APP._vw = { step:0, editId: v?.id || null, docs:{}, steps: VW_STEPS.length };
   openModal(v ? `Edit vendor: ${v.name}` : 'Vendor onboarding',
     vendorWizardHtml(v || {}),
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>`);
   VW_DOCS.forEach(d => vwRenderDrop(d.kind));
   if (!v || !v.id) vwAddProductRow({});
   else vwLoadExisting(v.id);
@@ -415,7 +415,7 @@ function vendorWizardHtml(v) {
   const inS = 'width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:.85rem;box-sizing:border-box';
   return `
     <div class="vw-stepper">
-      ${VW_STEPS.map((s,i)=>`<button class="vw-step${i===0?' on':''}" id="vwstep-${i}" onclick="vwGo(${i})"><span class="n">${i+1}</span><span class="lab">${s}</span></button>`).join('')}
+      ${VW_STEPS.map((s,i)=>`<button class="vw-step${i===0?' on':''}" id="vwstep-${i}" ${dataAct('vwGo', i)}><span class="n">${i+1}</span><span class="lab">${s}</span></button>`).join('')}
     </div>
     <div class="vw-prog"><i id="vw-prog" style="width:20%"></i></div>
 
@@ -462,9 +462,9 @@ function vendorWizardHtml(v) {
     </div>
 
     <div class="vw-nav">
-      <button class="btn btn-secondary" id="vw-back" onclick="vwStep(-1)">← Back</button>
+      <button class="btn btn-secondary" id="vw-back" ${dataAct('vwStep', -1)}>← Back</button>
       <span style="font-size:.74rem;color:var(--text-muted)">Step <b id="vw-stepno">1</b> of ${VW_STEPS.length}</span>
-      <button class="btn btn-primary" id="vw-next" onclick="vwStep(1)">Continue →</button>
+      <button class="btn btn-primary" id="vw-next" ${dataAct('vwStep', 1)}>Continue →</button>
     </div>`;
 }
 
@@ -494,7 +494,7 @@ function vwRenderDrop(kind) {
     el.className = 'vw-drop done';
     el.innerHTML = `<div class="ic">✓</div><div style="min-width:0"><div class="t">${meta.label}</div>
       <div class="s">${h(d.filename||'file')} · ${Math.max(1,Math.round((d.size||0)/1024))} KB${d.existing?' · on file':''}</div></div>
-      <button class="btn btn-secondary btn-sm act" onclick="vwRemoveDoc('${kind}')">Remove</button>`;
+      <button class="btn btn-secondary btn-sm act" ${dataAct('vwRemoveDoc', kind)}>Remove</button>`;
   } else {
     el.className = 'vw-drop';
     el.innerHTML = `<div class="ic">＋</div><div style="min-width:0"><div class="t">${meta.label}${meta.opt?' <span style="color:var(--text-muted);font-weight:400">(optional)</span>':''}</div>
@@ -578,7 +578,7 @@ function vwRenderReview() {
   const missing = required.filter(r => !r.ok);
   const done = required.filter(r => r.ok).length, pct = Math.round(done/required.length*100);
   const row = x => `<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span>
-    <span style="cursor:pointer" onclick="vwGo(${x.step})">${x.label}${x.ok?'':` <span style="color:var(--danger)">— fill this</span>`}</span></div>`;
+    <span style="cursor:pointer" ${dataAct('vwGo', x.step)}>${x.label}${x.ok?'':` <span style="color:var(--danger)">— fill this</span>`}</span></div>`;
   document.getElementById('vw-review').innerHTML = `
     ${missing.length ? `<div style="background:var(--red-wash,#fef2f2);border:1.5px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:14px">
       <div style="font-weight:800;color:var(--danger);font-size:.86rem">${missing.length} required item${missing.length>1?'s':''} still needed to submit</div>
@@ -676,7 +676,7 @@ async function viewVendorModal(v) {
   // Open immediately with a light skeleton, then fill once documents/products load.
   openModal(`Vendor · ${code}`,
     `<div id="vv-body" style="min-height:220px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.85rem">Loading vendor profile…</div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
   const [docs, products] = await Promise.all([
     api(`/vendors/${v.id}/documents`).catch(()=>[]),
     api(`/vendors/${v.id}/products`).catch(()=>[]),
@@ -685,9 +685,9 @@ async function viewVendorModal(v) {
   if (body) body.outerHTML = vendorViewHTML(v, docs||[], products||[]);
   const footer = document.getElementById('modal-footer');
   if (footer) footer.innerHTML =
-    `${v.onboarding_status==='pending'?`<button class="btn btn-success" onclick="approveVendor('${v.id}')">✓ Approve &amp; activate</button>`:''}
+    `${v.onboarding_status==='pending'?`<button class="btn btn-success" ${dataAct('approveVendor', v.id)}>✓ Approve &amp; activate</button>`:''}
      <button class="btn btn-primary" ${dataAct('editVendorById', _regVendor(v))}>Edit vendor</button>
-     <button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
+     <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
 }
 
 // Data-driven completeness for the read-only view (mirror of the wizard's rules,
@@ -864,8 +864,8 @@ async function newPOForVendor(vendorId, vendorName) {
      <div class="form-group"><label>Quantity</label><input type="number" id="po-qty2" value="50" min="1"></div>
      <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="po-price2" value="${inv?.[0]?.unit_price||0}"></div>
      <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-del2" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="sendPOToVendor('${vendorId}')">Send PO</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('sendPOToVendor', vendorId)}>Send PO</button>`);
 }
 
 function updatePOPrice(sel) {
@@ -911,12 +911,12 @@ async function renderProcurement(el) {
 
   el.innerHTML = `
   ${pageHeader('Procurement', `${totalOpen} open POs`,
-    `<button class="btn btn-gold" onclick="navigate('vendors')">${iconPlus(14)} New PO</button>`)}
+    `<button class="btn btn-gold" ${dataAct('navigate', 'vendors')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
     ${statusTiles.map(t=>`
-    <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" onclick="filterPO('${t.key}')">
+    <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" ${dataAct('filterPO', t.key)}>
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
       <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${t.color};margin-bottom:4px">${t.label}</div>
       <div style="font-size:1.8rem;font-weight:800;color:#1f2937;line-height:1">${byStatus(t.key).length}</div>
@@ -945,7 +945,7 @@ async function renderProcurement(el) {
               <div style="font-weight:700;font-size:.84rem">${po.id} <span style="font-weight:400;color:var(--text-muted)">· ${po.vendor_name||'—'}</span></div>
               <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(po.grand_total)} · Expected ${fmtDate(po.expected_delivery)}</div>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="receiveGRN('${po.id}')">Receive GRN</button>
+            <button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>
           </div>`).join('')
       }
     </div>
@@ -972,7 +972,7 @@ async function renderProcurement(el) {
           <td>${statusBadge(po.status)}</td>
           <td>${fmtDate(po.expected_delivery)||'—'}</td>
           <td>${po.status==='DISPATCHED'
-            ? `<button class="btn btn-primary btn-sm" onclick="receiveGRN('${po.id}')">Receive GRN</button>`
+            ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
             : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No POs</td></tr>'}
         </tbody>
@@ -1015,8 +1015,8 @@ async function receiveGRN(poId) {
   openModal('Receive GRN — PO ' + poId,
     `<div class="form-group"><label>Quantity Received</label><input type="number" id="grn-qty" value="100" min="0"></div>
      <div class="form-group"><label>Notes</label><textarea id="grn-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmGRN('${poId}')">Confirm Receipt</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmGRN', poId)}>Confirm Receipt</button>`);
 }
 
 async function confirmGRN(poId) {

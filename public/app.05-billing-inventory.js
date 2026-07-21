@@ -64,7 +64,7 @@ async function renderDCBilling(el) {
               <td><b>${fmt(dc.order_value)}</b></td>
               <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
               <td>${agingBadge(dc)}</td>
-              <td><button class="btn btn-gold btn-sm" onclick="billDC('${dc.id}')">Bill DC</button></td>
+              <td><button class="btn btn-gold btn-sm" ${dataAct('billDC', dc.id)}>Bill DC</button></td>
             </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">All DCs are billed</td></tr>'}
             </tbody>
           </table>
@@ -200,7 +200,7 @@ async function renderDCBilling(el) {
   el.innerHTML = `
   ${pageHeader('DC Billing', 'Delivery challan billing pipeline')}
   <div class="tabs" style="margin-bottom:20px">
-    ${FINANCE_TABS.map(t=>`<button class="tab-btn${APP._financeTab===t.id?' active':''}" onclick="switchFinanceTab('${t.id}')">${t.label}</button>`).join('')}
+    ${FINANCE_TABS.map(t=>`<button class="tab-btn${APP._financeTab===t.id?' active':''}" ${dataAct('switchFinanceTab', t.id)}>${t.label}</button>`).join('')}
   </div>
   <div id="finance-tab-content">${financeTabContent(APP._financeTab)}</div>`;
 
@@ -429,8 +429,8 @@ function renderMarginAnalysis(inv) {
 
 async function billDC(id) {
   openModal('Confirm DC Billing', `<p>Bill DC <b>${id}</b> and close the linked order?</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="confirmBillDC('${id}')">Confirm Billing</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('confirmBillDC', id)}>Confirm Billing</button>`);
 }
 
 async function confirmBillDC(id) {
@@ -535,8 +535,8 @@ async function renderInventory(el) {
         <td>${stPill}</td>
         <td style="font-size:.8rem">${item.vendor_name||'—'}</td>
         <td onclick="event.stopPropagation()">
-          <button class="btn btn-secondary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit</button>
-          <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">History</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>History</button>
           <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
           <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" onclick="toggleCritical('${item.sku}',this)">${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
@@ -547,7 +547,7 @@ async function renderInventory(el) {
 
   el.innerHTML = `
   ${pageHeader('Inventory', `${inv.length} SKUs`,
-    `<button class="btn btn-secondary" onclick="renderAddItem()">${iconPlus(14)} Add Item</button>`)}
+    `<button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
 
   <!-- KPI tiles — icon-chip style, responsive -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-bottom:16px">
@@ -588,12 +588,12 @@ async function renderInventory(el) {
   <div id="inv-bulk-bar" style="display:none;background:var(--primary);border-radius:10px;padding:10px 16px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(13,148,136,.3)">
     <span id="inv-bulk-count" style="color:#fff;font-weight:800;font-size:.84rem"></span>
     <div style="flex:1"></div>
-    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('price')">✏️ Update Price</button>
-    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('category')">📂 Change Category</button>
-    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('subcategory')">🏷️ Sub-Category</button>
-    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('stock')">📦 Adjust Stock</button>
-    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" onclick="invBulkModal('reorder')">🎯 Set Reorder Point</button>
-    <button class="btn btn-sm" style="background:#b91c1c;color:#fff;border:none;font-weight:700" onclick="invClearSelection()">✕ Cancel</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" ${dataAct('invBulkModal', 'price')}>✏️ Update Price</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" ${dataAct('invBulkModal', 'category')}>📂 Change Category</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" ${dataAct('invBulkModal', 'subcategory')}>🏷️ Sub-Category</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" ${dataAct('invBulkModal', 'stock')}>📦 Adjust Stock</button>
+    <button class="btn btn-sm" style="background:rgba(255,255,255,.92);color:var(--primary);border:none;font-weight:700" ${dataAct('invBulkModal', 'reorder')}>🎯 Set Reorder Point</button>
+    <button class="btn btn-sm" style="background:#b91c1c;color:#fff;border:none;font-weight:700" ${dataAct('invClearSelection')}>✕ Cancel</button>
   </div>
 
   <!-- Table — click row to expand 4-section detail -->
@@ -605,7 +605,7 @@ async function renderInventory(el) {
           <th style="width:34px;text-align:center"><input type="checkbox" id="inv-select-all" onchange="invSelectAll(this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)"></th>
           ${[['sku','SKU'],['name','Item'],['category','Category'],[null,'UOM'],['unit_price','Price'],['mrp','MRP'],['stock','Stock'],['reserved','Reserved'],[null,'Available'],[null,'Level'],[null,'Status'],[null,'Vendor'],[null,'Actions']]
             .map(([col,label]) => col
-              ? `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="invSortBy('${col}')">${label} <span data-sort-arrow="${col}" style="font-size:.65rem;opacity:.5">⇅</span></th>`
+              ? `<th style="cursor:pointer;user-select:none;white-space:nowrap" ${dataAct('invSortBy', col)}>${label} <span data-sort-arrow="${col}" style="font-size:.65rem;opacity:.5">⇅</span></th>`
               : `<th>${label}</th>`).join('')}
         </tr></thead>
         <tbody id="inv-tbody"></tbody>
@@ -700,8 +700,8 @@ async function renderInventory(el) {
     openModal(`${d.title} — ${n} item${n>1?'s':''}`, `
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">This will apply to all ${n} selected item${n>1?'s':''}.</div>
       <div class="form-group"><label class="form-label">${d.label}</label>${inputHtml}</div>`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="invBulkApply('${d.field}','${d.type}')">Apply to ${n} item${n>1?'s':''}</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-primary" ${dataAct('invBulkApply', d.field, d.type)}>Apply to ${n} item${n>1?'s':''}</button>`);
   };
 
   window.invBulkApply = async function(field, type) {
@@ -805,8 +805,8 @@ function invDetailHTML(item) {
       </div>
     </div>
     <div style="padding:8px 20px 14px;display:flex;gap:8px;border-top:1px solid var(--border)">
-      <button class="btn btn-primary btn-sm" onclick="editInventoryItem('${item.sku}')">Edit All Fields</button>
-      <button class="btn btn-secondary btn-sm" onclick="viewStockHistory('${item.sku}','${safeName}')">Stock History</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit All Fields</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>Stock History</button>
       <button class="btn btn-gold btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">Raise PO</button>
     </div>`;
 }
@@ -846,7 +846,7 @@ async function viewStockHistory(sku, itemName) {
         <tbody>${rows}</tbody>
       </table>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
 async function editInventoryItem(sku) {
@@ -871,7 +871,7 @@ async function editInventoryItem(sku) {
     `<!-- Section tabs -->
     <div style="display:flex;gap:6px;border-bottom:2px solid var(--border);margin-bottom:16px;padding-bottom:10px">
       ${[['prod','Product ID','#1F3864'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
-        `<button class="ei-tab" data-tab="${id}" data-color="${color}" onclick="switchEITab('${id}')" style="padding:6px 14px;border:none;border-radius:20px;background:transparent;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .18s;white-space:nowrap">${label}</button>`
+        `<button class="ei-tab" data-tab="${id}" data-color="${color}" ${dataAct('switchEITab', id)} style="padding:6px 14px;border:none;border-radius:20px;background:transparent;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--text-muted);transition:all .18s;white-space:nowrap">${label}</button>`
       ).join('')}
     </div>
 
@@ -923,7 +923,7 @@ async function editInventoryItem(sku) {
         <div class="form-group" style="grid-column:1/-1">
           <label style="display:flex;justify-content:space-between;align-items:center">
             Primary Vendor
-            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" onclick="toggleAddVendorInline()">+ Add New Vendor</button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" ${dataAct('toggleAddVendorInline')}>+ Add New Vendor</button>
           </label>
           <select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select>
           <!-- Inline new-vendor form -->
@@ -947,15 +947,15 @@ async function editInventoryItem(sku) {
               <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Location / City</label><input type="text" id="nv-location" placeholder="e.g. Mumbai"></div>
             </div>
             <div style="display:flex;gap:8px;margin-top:12px">
-              <button type="button" class="btn btn-primary btn-sm" onclick="createVendorInline()">Create & Select</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAddVendorInline()">Cancel</button>
+              <button type="button" class="btn btn-primary btn-sm" ${dataAct('createVendorInline')}>Create & Select</button>
+              <button type="button" class="btn btn-secondary btn-sm" ${dataAct('toggleAddVendorInline')}>Cancel</button>
             </div>
           </div>
         </div>
         <div class="form-group" style="grid-column:1/-1">
           <label style="display:flex;justify-content:space-between;align-items:center">
             Secondary Vendor <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(fallback supplier)</span>
-            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" onclick="toggleAddVendorInline('2')">+ Add New Vendor</button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" ${dataAct('toggleAddVendorInline', '2')}>+ Add New Vendor</button>
           </label>
           <select id="ei-vendor2"><option value="">— None —</option>${vendor2Opts}</select>
           <!-- Inline new-vendor form for secondary -->
@@ -979,8 +979,8 @@ async function editInventoryItem(sku) {
               <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Location / City</label><input type="text" id="nv2-location" placeholder="e.g. Delhi"></div>
             </div>
             <div style="display:flex;gap:8px;margin-top:12px">
-              <button type="button" class="btn btn-primary btn-sm" onclick="createVendorInline('2')">Create & Select</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAddVendorInline('2')">Cancel</button>
+              <button type="button" class="btn btn-primary btn-sm" ${dataAct('createVendorInline', '2')}>Create & Select</button>
+              <button type="button" class="btn btn-secondary btn-sm" ${dataAct('toggleAddVendorInline', '2')}>Cancel</button>
             </div>
           </div>
         </div>
@@ -992,8 +992,8 @@ async function editInventoryItem(sku) {
         <div class="form-group"><label>Max Stock</label><input type="number" id="ei-maxstock" value="${item.max_stock||200}" min="0"></div>
       </div>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveInventoryItem('${sku}')">Save All Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveInventoryItem', sku)}>Save All Changes</button>`);
 
   // activate first tab
   switchEITab('prod');
@@ -1124,7 +1124,7 @@ async function reorderItem(sku, name, price, vendorId) {
      <div class="form-group"><label>Quantity</label><input type="number" id="po-qty" value="100" min="1"></div>
      <div class="form-group"><label>Unit Price</label><input type="number" id="po-price" value="${price}" min="0" step="0.01"></div>
      <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-delivery" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" onclick="confirmReorder('${sku}','${name.replace(/'/g,"\\'")}')">Raise PO</button>`);
 }
 
@@ -1176,8 +1176,8 @@ function renderAddItem() {
      <div class="form-group"><label>Opening Stock</label><input type="number" id="item-stock" value="0" min="0"></div>
      <div class="form-group"><label>HSN Code</label><input type="text" id="item-hsn" value="2101"></div>
      <div class="form-group"><label>Emoji</label><input type="text" id="item-emoji" value="📦" maxlength="2"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveNewItem()">Add Item</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveNewItem')}>Add Item</button>`);
 }
 
 async function saveNewItem() {

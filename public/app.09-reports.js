@@ -75,12 +75,12 @@ async function renderExecBI(el) {
   <div class="card" style="padding:12px 16px;margin-bottom:16px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       ${[['today','Today'],['week','This Week'],['month','This Month'],['quarter','Quarter'],['fy','Financial Year'],['cy','Calendar Year']]
-        .map(([k,l])=>`<button class="btn btn-sm" id="xbi-t-${k}" onclick="xbiSetPreset('${k}')" style="font-size:.76rem;${_xbi.preset===k?'':''}">${l}</button>`).join('')}
+        .map(([k,l])=>`<button class="btn btn-sm" id="xbi-t-${k}" ${dataAct('xbiSetPreset', k)} style="font-size:.76rem;${_xbi.preset===k?'':''}">${l}</button>`).join('')}
       <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
       <input type="date" id="xbi-from" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.from}">
       <span style="font-size:.8rem;color:var(--text-muted)">to</span>
       <input type="date" id="xbi-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.to}">
-      <button class="btn btn-primary btn-sm" onclick="xbiApplyCustom()">Apply</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('xbiApplyCustom')}>Apply</button>
       <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#0f766e)">${_xbi.timeLabel}</b></span>
     </div>
   </div>
@@ -120,7 +120,7 @@ function xbiRail() {
   rail.innerHTML = '<div class="xbi-rail-title">Drill path</div>' + EXEC_LEVELS.map((lv,i)=>{
     const cls = i<depth ? 'done' : i===depth ? 'active' : '';
     const visited = i <= depth;
-    return `<div class="xbi-step ${cls}" ${visited?`onclick="xbiGoTo(${i})"`:''}><span class="xbi-idx">${i+1}</span><span>${EXEC_LEVEL_NAME[lv]}</span></div>`;
+    return `<div class="xbi-step ${cls}" ${visited?`${dataAct('xbiGoTo', i)}`:''}><span class="xbi-idx">${i+1}</span><span>${EXEC_LEVEL_NAME[lv]}</span></div>`;
   }).join('');
 }
 
@@ -143,7 +143,7 @@ function xbiCrumbs() {
     _xbi.path.map((p,i)=>{
       const last = i===_xbi.path.length-1;
       return (i?'<span style="color:var(--text-muted)">›</span>':'')+
-        `<button onclick="xbiGoTo(${i})" ${last?'disabled':''} style="background:${last?'none':'none'};border:none;cursor:${last?'default':'pointer'};font-size:.85rem;font-weight:${last?'700':'600'};color:${last?'var(--navy)':'var(--blue)'};padding:3px 6px;border-radius:6px">${h(p.label)}</button>`;
+        `<button ${dataAct('xbiGoTo', i)} ${last?'disabled':''} style="background:${last?'none':'none'};border:none;cursor:${last?'default':'pointer'};font-size:.85rem;font-weight:${last?'700':'600'};color:${last?'var(--navy)':'var(--blue)'};padding:3px 6px;border-radius:6px">${h(p.label)}</button>`;
     }).join('') + '</div>';
 }
 function xbiGoTo(i){ _xbi.path = _xbi.path.slice(0,i+1); xbiRender(); }
@@ -428,16 +428,16 @@ function renderReports(el) {
         <option value="">Loading clients…</option>
       </select>
       <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        ${['month','quarter','year'].map(g=>`<button id="aftab-${g}" onclick="setAdminFulfilGran('${g}')" style="padding:6px 12px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
+        ${['month','quarter','year'].map(g=>`<button id="aftab-${g}" ${dataAct('setAdminFulfilGran', g)} style="padding:6px 12px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
       </div>
       <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <button id="afmode-chart" onclick="setAdminFulfilMode('chart')" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
-        <button id="afmode-table" onclick="setAdminFulfilMode('table')" style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
+        <button id="afmode-chart" ${dataAct('setAdminFulfilMode', 'chart')} style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
+        <button id="afmode-table" ${dataAct('setAdminFulfilMode', 'table')} style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
       </div>
       <input type="date" id="adm-rpt-from" class="form-control" style="max-width:150px;font-size:.8rem" value="${admFrom}">
       <span style="font-size:.8rem;color:var(--text-muted)">to</span>
       <input type="date" id="adm-rpt-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${admTo}">
-      <button class="btn btn-primary btn-sm" onclick="loadAdminFulfil()">Apply</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('loadAdminFulfil')}>Apply</button>
     </div>
     <div id="rpt-fulfil-content"><div style="text-align:center;padding:30px;color:var(--text-muted)">Select a client to view fulfilment.</div></div>
   </div>
@@ -466,7 +466,7 @@ function renderReports(el) {
     <div class="card" style="padding:18px 20px;margin-bottom:0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-weight:800;font-size:.92rem;color:var(--navy)">Open Tickets</div>
-        <button class="btn btn-secondary btn-sm" onclick="navigate('service_desk')">View All →</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'service_desk')}>View All →</button>
       </div>
       <div id="open-tickets-list" style="min-height:120px;display:flex;align-items:center;justify-content:center">
         <div class="spinner" style="width:24px;height:24px"></div>
@@ -491,9 +491,9 @@ function renderReports(el) {
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" onclick="viewReport('${r.key}')">View</button>
-          <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV('${r.key}')">CSV</button>
-          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print</button>
+          <button class="btn btn-primary btn-sm" ${dataAct('viewReport', r.key)}>View</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('downloadReportCSV', r.key)}>CSV</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('printReport', r.key)}>Print</button>
         </div>
       </div>`;}).join('')}
     </div>
@@ -516,9 +516,9 @@ function renderReports(el) {
           </div>
         </div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-primary btn-sm" onclick="viewReport('${r.key}')">View</button>
-          <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV('${r.key}')">CSV</button>
-          <button class="btn btn-secondary btn-sm" onclick="printReport('${r.key}')">Print</button>
+          <button class="btn btn-primary btn-sm" ${dataAct('viewReport', r.key)}>View</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('downloadReportCSV', r.key)}>CSV</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('printReport', r.key)}>Print</button>
         </div>
       </div>`).join('')}
     </div>
@@ -615,7 +615,7 @@ async function loadReportsOverview() {
     ticketsWrap.innerHTML = open.length ? `<div style="width:100%">
       ${open.map(t => {
         const [bg,fg] = pillColor(t.priority);
-        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('service_desk')">
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" ${dataAct('navigate', 'service_desk')}>
           <div style="width:8px;height:8px;border-radius:50%;background:${fg};flex-shrink:0"></div>
           <div style="flex:1;min-width:0">
             <div style="font-size:.8rem;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${t.id}: ${h(t.subject||'')}</div>
@@ -693,7 +693,7 @@ async function viewReport(key, from, to) {
         <tbody>${tbody}</tbody>
       </table>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
      <button class="btn btn-primary" onclick="downloadReportCSV('${key}');closeModal()">Download CSV</button>`);
 }
 
@@ -757,7 +757,7 @@ function renderClientReports(el) {
 
   const presets = [['today','Today'],['thisweek','This Week'],['thismonth','This Month'],['quarter','Quarter'],['fy','Financial Year']];
   const tabs = [['overview','Overview'],['orders','Orders'],['spend','Spend'],['consumption','Consumption'],['inventory','Inventory'],['downloads','Downloads']];
-  const spendSubtab = (id,label)=>`<button id="stab-${id}" onclick="switchSpendTab('${id}')" style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">${label}</button>`;
+  const spendSubtab = (id,label)=>`<button id="stab-${id}" ${dataAct('switchSpendTab', id)} style="padding:8px 16px;font-size:.82rem;font-weight:600;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text-muted);margin-bottom:-2px">${label}</button>`;
 
   el.innerHTML = `
   ${pageHeader('Executive Dashboard', 'Your pantry — budget, orders & consumption, driven by the period you pick')}
@@ -795,15 +795,15 @@ function renderClientReports(el) {
   <div class="card" style="padding:11px 15px;margin-bottom:14px">
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span style="font-weight:700;font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;color:var(--primary);display:inline-flex;align-items:center;gap:5px">🕐 Period</span>
-      ${presets.map(p=>`<button class="cdash-chip" id="cdash-pre-${p[0]}" onclick="clientRptPreset('${p[0]}')">${p[1]}</button>`).join('')}
+      ${presets.map(p=>`<button class="cdash-chip" id="cdash-pre-${p[0]}" ${dataAct('clientRptPreset', p[0])}>${p[1]}</button>`).join('')}
       <span style="width:1px;height:20px;background:var(--border)"></span>
       <input type="date" id="rpt-from" class="form-control" style="max-width:140px;font-size:.8rem" value="${firstOfMonth}" onchange="cdashClearPreset()">
       <span style="color:var(--text-muted);font-size:.8rem">to</span>
       <input type="date" id="rpt-to" class="form-control" style="max-width:140px;font-size:.8rem" value="${today}" onchange="cdashClearPreset()">
-      <button class="btn btn-primary btn-sm" onclick="loadClientReports()">Apply</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('loadClientReports')}>Apply</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="cdash-chip" id="cdash-cmp" onclick="cdashToggleCompare()">⇄ Compare</button>
-        <button class="btn btn-secondary btn-sm" id="cdash-refresh" onclick="cdashRefresh()">↻ Refresh</button>
+        <button class="cdash-chip" id="cdash-cmp" ${dataAct('cdashToggleCompare')}>⇄ Compare</button>
+        <button class="btn btn-secondary btn-sm" id="cdash-refresh" ${dataAct('cdashRefresh')}>↻ Refresh</button>
         <span id="cdash-period-badge" style="font-size:.74rem;font-weight:700;color:var(--primary);background:var(--primary-light);border:1px solid var(--primary-border);padding:4px 10px;border-radius:100px">This Month</span>
       </div>
     </div>
@@ -817,7 +817,7 @@ function renderClientReports(el) {
 
   <!-- TABS -->
   <div class="cdash-tabs">
-    ${tabs.map((t,i)=>`<button class="cdash-tab ${i===0?'on':''}" id="cdash-tab-${t[0]}" onclick="cdashSwitchTab('${t[0]}')">${t[1]}</button>`).join('')}
+    ${tabs.map((t,i)=>`<button class="cdash-tab ${i===0?'on':''}" id="cdash-tab-${t[0]}" ${dataAct('cdashSwitchTab', t[0])}>${t[1]}</button>`).join('')}
   </div>
   <div id="cdash-tabpane">
     <div class="cdash-pane" data-pane="overview"><div id="cdash-overview"></div></div>
@@ -827,21 +827,21 @@ function renderClientReports(el) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Order vs Delivery</span>
         <div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div>
-        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">${['month','quarter','year'].map(g=>`<button id="ftab-${g}" onclick="switchFulfilGranularity('${g}')" style="padding:6px 13px;font-size:.75rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}</div>
-        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden"><button id="fmode-chart" onclick="switchFulfilMode('chart')" title="Chart" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📊</button><button id="fmode-table" onclick="switchFulfilMode('table')" title="Table" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📋</button></div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">${['month','quarter','year'].map(g=>`<button id="ftab-${g}" ${dataAct('switchFulfilGranularity', g)} style="padding:6px 13px;font-size:.75rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}</div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden"><button id="fmode-chart" ${dataAct('switchFulfilMode', 'chart')} title="Chart" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📊</button><button id="fmode-table" ${dataAct('switchFulfilMode', 'table')} title="Table" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📋</button></div>
       </div>
       <div id="rpt-fulfil-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
     </div>
 
     <div class="cdash-pane" data-pane="spend" style="display:none">
       <div id="cdash-spend-gauge"></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Spend detail</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" onclick="downloadClientSpendCSV()">⬇ CSV</button></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Spend detail</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" ${dataAct('downloadClientSpendCSV')}>⬇ CSV</button></div>
       <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">${spendSubtab('monthly','Monthly Trend')}${spendSubtab('yearly','Yearly Summary')}${spendSubtab('po','PO-wise')}</div>
       <div id="rpt-spend-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
     </div>
 
     <div class="cdash-pane" data-pane="consumption" style="display:none">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Consumption analytics</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" onclick="downloadClientConsumptionCSV()">⬇ CSV</button></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-weight:700;font-size:.9rem;color:var(--navy)">Consumption analytics</span><div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div><button class="btn btn-secondary btn-sm" ${dataAct('downloadClientConsumptionCSV')}>⬇ CSV</button></div>
       <div id="rpt-consumption-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px"><div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
     </div>
 
@@ -850,8 +850,8 @@ function renderClientReports(el) {
     <div class="cdash-pane" data-pane="downloads" style="display:none">
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px">Export the current period (<b id="cdash-dl-period" style="color:var(--navy)">this month</b>) and scope.</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
-        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="downloadClientSpendCSV()"><div style="font-size:1.3rem">💰</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Spend CSV</div><div style="font-size:.7rem;color:var(--text-muted)">monthly / PO-wise</div></button>
-        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="downloadClientConsumptionCSV()"><div style="font-size:1.3rem">🍽️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Consumption CSV</div><div style="font-size:.7rem;color:var(--text-muted)">items used</div></button>
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" ${dataAct('downloadClientSpendCSV')}><div style="font-size:1.3rem">💰</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Spend CSV</div><div style="font-size:.7rem;color:var(--text-muted)">monthly / PO-wise</div></button>
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" ${dataAct('downloadClientConsumptionCSV')}><div style="font-size:1.3rem">🍽️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Consumption CSV</div><div style="font-size:.7rem;color:var(--text-muted)">items used</div></button>
         <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="window.print()"><div style="font-size:1.3rem">🖨️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Print / PDF</div><div style="font-size:.7rem;color:var(--text-muted)">current view</div></button>
       </div>
       <div class="card" style="padding:12px 15px;margin-top:14px;font-size:.78rem;color:var(--text-muted);background:var(--surface-2)">Scheduled email delivery (monthly executive summary) is planned — exports today are on-demand.</div>
@@ -999,7 +999,7 @@ function renderCdashKpis() {
     { tab:'orders', l:'Due Value',          v:cdashINR(d.due_value), s:'not yet received',             c:dueVTone,  d:chip(d.due_value, pv && pv.delivery.due_value, 'pct','down') },
     { tab:'spend',  l:'Avg Order',          v:cdashINR(o.avg),    s:'per order',                        c:'',        d:chip(o.avg, pv && pv.orders.avg, 'pct','neu') },
   ];
-  el.innerHTML = cards.map(k => `<div class="cdash-kpi" onclick="cdashSwitchTab('${k.tab}')"><div class="kl">${k.l}</div><div class="kv ${k.c}">${k.v}</div><div class="ks">${k.s}</div>${k.d}</div>`).join('');
+  el.innerHTML = cards.map(k => `<div class="cdash-kpi" ${dataAct('cdashSwitchTab', k.tab)}><div class="kl">${k.l}</div><div class="kv ${k.c}">${k.v}</div><div class="ks">${k.s}</div>${k.d}</div>`).join('');
 }
 
 function renderCdashInsights() {
@@ -1154,7 +1154,7 @@ function renderFulfilContent() {
     <div><div style="font-size:.72rem;color:var(--text-muted)">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
     <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'#dc2626':'#16a34a'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
     <div style="flex:1"></div>
-    <button class="btn btn-secondary btn-sm" onclick="openCategoryDrill('','All periods in range')">🔍 Category Split (all)</button>
+    <button class="btn btn-secondary btn-sm" ${dataAct('openCategoryDrill', '', 'All periods in range')}>🔍 Category Split (all)</button>
   </div>`;
 
   if (_fulfilMode === 'table') {
@@ -1279,7 +1279,7 @@ function drillWindow() {
 async function openCategoryDrill(periodKey, baseLabel) {
   _drillState = { periodKey: periodKey||'', baseLabel: baseLabel||'All periods', gran: periodKey ? 'month' : 'custom', category:null };
   openModal('Category Breakdown', '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:24px;height:24px;margin:0 auto"></div></div>',
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
   loadDrill();
 }
 
@@ -1309,14 +1309,14 @@ async function loadDrill() {
   // Granularity selector (only meaningful when drilled from a specific month)
   const granBar = periodKey ? `<div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px">
     ${[['month','Month'],['quarter','Quarter'],['year','Fiscal Year'],['custom','Custom']].map(([g,lbl])=>
-      `<button onclick="setDrillGran('${g}')" style="padding:5px 12px;font-size:.74rem;font-weight:600;border:none;cursor:pointer;background:${_drillState.gran===g?'var(--primary)':'#fff'};color:${_drillState.gran===g?'#fff':'var(--text-muted)'}">${lbl}</button>`).join('')}
+      `<button ${dataAct('setDrillGran', g)} style="padding:5px 12px;font-size:.74rem;font-weight:600;border:none;cursor:pointer;background:${_drillState.gran===g?'var(--primary)':'#fff'};color:${_drillState.gran===g?'#fff':'var(--text-muted)'}">${lbl}</button>`).join('')}
   </div>` : '';
 
   // Breadcrumb
   const crumb = `<div style="display:flex;align-items:center;gap:6px;font-size:.8rem;margin-bottom:10px;flex-wrap:wrap">
     <span style="color:var(--text-muted)">📅 ${h(win.label)}</span>
     <span style="color:var(--border)">›</span>
-    <button onclick="drillBackToCategory()" style="background:none;border:none;cursor:pointer;padding:0;font-size:.8rem;font-weight:${category==null?'700':'400'};color:${category==null?'var(--navy)':'var(--blue)'}">Categories</button>
+    <button ${dataAct('drillBackToCategory')} style="background:none;border:none;cursor:pointer;padding:0;font-size:.8rem;font-weight:${category==null?'700':'400'};color:${category==null?'var(--navy)':'var(--blue)'}">Categories</button>
     ${category!=null?`<span style="color:var(--border)">›</span><span style="font-weight:700;color:var(--navy)">${h(category)}</span>`:''}
   </div>` + granBar;
 

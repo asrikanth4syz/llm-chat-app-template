@@ -135,8 +135,8 @@ async function acceptPO(id, vendorTotal) {
       <label style="font-weight:600;display:block;margin-bottom:6px">Notes (optional)</label>
       <textarea id="po-accept-notes" rows="3" placeholder="Any delivery notes or commitments…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical"></textarea>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmAcceptPO('${id}')">Accept PO</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmAcceptPO', id)}>Accept PO</button>`);
 }
 
 async function confirmAcceptPO(id) {
@@ -157,8 +157,8 @@ async function rejectPO(id) {
       <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
       <textarea id="rej-reason" rows="4" placeholder="Explain why you are rejecting this PO…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical"></textarea>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmRejectPO('${id}')">Reject PO</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-danger" ${dataAct('confirmRejectPO', id)}>Reject PO</button>`);
 }
 
 async function confirmRejectPO(id) {
@@ -175,15 +175,15 @@ async function confirmRejectPO(id) {
 async function dispatchPO(id) {
   openModal(`Mark PO ${id} Dispatched`,
     `<p>Confirm dispatch of goods for PO <b>${id}</b>.</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="confirmPOAction('${id}','DISPATCHED','Goods dispatched')">Confirm Dispatch</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('confirmPOAction', id, 'DISPATCHED', 'Goods dispatched')}>Confirm Dispatch</button>`);
 }
 
 async function uploadInvoice(id) {
   openModal(`Upload Invoice — PO ${id}`,
     `<div class="form-group"><label>Invoice URL / Reference</label><input type="text" id="inv-url" placeholder="https://... or INV-2024-001"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmUploadInvoice('${id}')">Upload Invoice</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmUploadInvoice', id)}>Upload Invoice</button>`);
 }
 
 async function confirmUploadInvoice(id) {
@@ -241,7 +241,7 @@ async function renderVendorInvoices(el) {
       <div style="font-weight:700;font-size:.92rem;color:var(--navy)">${po.id}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">Dispatched ${fmtDate(po.updated_at)} · ${fmt(po.grand_total)}</div>
     </div>
-    <button class="btn btn-primary btn-sm" onclick="uploadInvoice('${po.id}')">Upload Invoice</button>
+    <button class="btn btn-primary btn-sm" ${dataAct('uploadInvoice', po.id)}>Upload Invoice</button>
   </div>`).join('')}
   <div style="margin-bottom:18px"></div>` : ''}
 
@@ -386,8 +386,8 @@ function openVendorFeedbackModal(vendorId, vendorName) {
      <div class="form-group"><label>Delivery (1-5)</label><input type="number" id="fb-delivery" value="4" min="1" max="5"></div>
      <div class="form-group"><label>Service (1-5)</label><input type="number" id="fb-service" value="4" min="1" max="5"></div>
      <div class="form-group"><label>Comments</label><textarea id="fb-comments" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitVendorFeedback('${vendorId}')">Submit Rating</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('submitVendorFeedback', vendorId)}>Submit Rating</button>`);
 }
 
 async function submitVendorFeedback(vendorId) {
@@ -437,7 +437,7 @@ async function renderDeliveryRoutes(el) {
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
       <span>Unrouted Delivery Challans (${undelivered.length})</span>
-      <button class="btn btn-gold btn-sm" onclick="createOptimizedRoute()">Create Route from Selected</button>
+      <button class="btn btn-gold btn-sm" ${dataAct('createOptimizedRoute')}>Create Route from Selected</button>
     </div>
     <div style="padding:12px 16px">
       <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Select challans to bundle into a route:</div>
@@ -471,15 +471,15 @@ async function renderDeliveryRoutes(el) {
         <div style="font-size:.8rem;color:var(--text-muted)">${fmtDate(r.route_date)} · ${stops.length} stop${stops.length!==1?'s':''}</div>
       </div>
       <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
-        ${r.status==='PLANNED'?`<button class="btn btn-primary btn-sm" onclick="updateRouteStatus('${r.id}','IN_PROGRESS')">Start Route</button>`:''}
-        ${r.status==='IN_PROGRESS'?`<button class="btn btn-success btn-sm" onclick="updateRouteStatus('${r.id}','COMPLETED')">Complete</button>`:''}
+        ${r.status==='PLANNED'?`<button class="btn btn-primary btn-sm" ${dataAct('updateRouteStatus', r.id, 'IN_PROGRESS')}>Start Route</button>`:''}
+        ${r.status==='IN_PROGRESS'?`<button class="btn btn-success btn-sm" ${dataAct('updateRouteStatus', r.id, 'COMPLETED')}>Complete</button>`:''}
       </div>
     </div>`;
   }
 
   el.innerHTML = `
   ${pageHeader('Route Optimization', 'Plan and track delivery routes',
-    `<button class="btn btn-gold" onclick="openNewRouteModal()">New Route</button>`)}
+    `<button class="btn btn-gold" ${dataAct('openNewRouteModal')}>New Route</button>`)}
   ${kpis}
   ${dcSelector}
   ${routes.length ? `
@@ -525,8 +525,8 @@ async function renderDunning(el) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${rules.length} escalation rule${rules.length===1?'':'s'} · ${recentEvents.length} recent event${recentEvents.length===1?'':'s'}</div>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="btn btn-secondary" onclick="addDunningRuleModal()">${iconPlus(14)} Add Rule</button>
-      <button class="btn btn-gold" onclick="runDunningCheck()">▶ Run Check</button>
+      <button class="btn btn-secondary" ${dataAct('addDunningRuleModal')}>${iconPlus(14)} Add Rule</button>
+      <button class="btn btn-gold" ${dataAct('runDunningCheck')}>▶ Run Check</button>
     </div>
   </div>
 
@@ -539,7 +539,7 @@ async function renderDunning(el) {
         <div style="font-size:1.8rem;margin-bottom:10px">📋</div>
         <div style="font-weight:600;color:var(--navy)">No rules configured</div>
         <div style="font-size:.82rem;margin-top:6px">Add rules to automate payment escalation.</div>
-        <button class="btn btn-primary" style="margin-top:14px" onclick="addDunningRuleModal()">Add First Rule</button>
+        <button class="btn btn-primary" style="margin-top:14px" ${dataAct('addDunningRuleModal')}>Add First Rule</button>
       </div>` :
       `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
         ${rules.sort((a,b)=>(a.days_overdue||0)-(b.days_overdue||0)).map((r,i)=>{
@@ -601,8 +601,8 @@ function addDunningRuleModal() {
        <select id="dr-action"><option>EMAIL</option><option>SMS</option><option>ESCALATE</option><option>SUSPEND</option></select>
      </div>
      <div class="form-group"><label>Message Template</label><textarea id="dr-msg" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveDunningRule()">Save Rule</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveDunningRule')}>Save Rule</button>`);
 }
 
 async function saveDunningRule() {
@@ -669,7 +669,7 @@ function showImportTab(tab, jobs) {
           <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import Vendors</div>
           <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers. Duplicates detected by vendor name (case-insensitive).</div>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="downloadSampleCSV('vendors')">⬇ Download Sample Template</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', 'vendors')}>⬇ Download Sample Template</button>
       </div>
       <div style="padding:16px 20px">
         <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
@@ -695,7 +695,7 @@ function showImportTab(tab, jobs) {
             </label>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <button class="btn btn-primary" onclick="submitVendorImport()">Import Vendors</button>
+            <button class="btn btn-primary" ${dataAct('submitVendorImport')}>Import Vendors</button>
             <span id="csv-row-count" style="font-size:.84rem;color:var(--text-muted)"></span>
           </div>
         </div>
@@ -715,7 +715,7 @@ function showImportTab(tab, jobs) {
         <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import ${isInventory ? 'Inventory Items' : 'Orders'}</div>
         <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="downloadSampleCSV('${tab}')">⬇ Download Sample Template</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', tab)}>⬇ Download Sample Template</button>
     </div>
     <div style="padding:16px 20px">
       <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
@@ -728,7 +728,7 @@ function showImportTab(tab, jobs) {
       </div>
       <div id="csv-preview" style="margin-top:12px"></div>
       <div id="csv-actions" style="display:none;margin-top:12px;align-items:center;gap:12px">
-        <button class="btn btn-primary" onclick="submitCSVImport('${tab}')">Import Data</button>
+        <button class="btn btn-primary" ${dataAct('submitCSVImport', tab)}>Import Data</button>
         <span id="csv-row-count" style="font-size:.84rem;color:var(--text-muted)"></span>
       </div>
     </div>
@@ -1038,8 +1038,8 @@ async function renderTemplates(el) {
   el.innerHTML = `
   ${pageHeader('Order & PO Templates', 'Reusable templates for quick order/PO creation',
     `<div style="display:flex;gap:8px">
-      <button class="btn btn-secondary" onclick="savePOTemplateModal()">Save PO Template</button>
-      <button class="btn btn-gold" onclick="saveOrderTemplateModal()">Save Order Template</button>
+      <button class="btn btn-secondary" ${dataAct('savePOTemplateModal')}>Save PO Template</button>
+      <button class="btn btn-gold" ${dataAct('saveOrderTemplateModal')}>Save Order Template</button>
     </div>`)}
   ${kpis}
   <div class="tabs" id="tpl-tabs" style="margin-bottom:16px">
@@ -1112,8 +1112,8 @@ function saveOrderTemplateModal() {
   openModal('Save Order Template',
     `<div class="form-group"><label>Template Name</label><input type="text" id="tpl-name" placeholder="e.g. Monthly Beverages"></div>
      <div class="form-group"><label>Notes</label><textarea id="tpl-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveOrderTemplate()">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveOrderTemplate')}>Save</button>`);
 }
 
 async function saveOrderTemplate() {
@@ -1132,8 +1132,8 @@ function savePOTemplateModal() {
   openModal('Save PO Template',
     `<div class="form-group"><label>Template Name</label><input type="text" id="potpl-name" placeholder="e.g. Weekly Dairy Order"></div>
      <div class="form-group"><label>Notes</label><textarea id="potpl-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="savePOTemplate()">Save</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('savePOTemplate')}>Save</button>`);
 }
 
 async function savePOTemplate() {
@@ -1160,8 +1160,8 @@ function loadPOTemplate(id) {
 function deleteTemplate(type, id) {
   openModal('Delete Template',
     `<p style="margin:0;color:var(--text-muted)">Are you sure you want to delete this template? This cannot be undone.</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-danger" onclick="confirmDeleteTemplate('${type}','${id}')">Delete</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-danger" ${dataAct('confirmDeleteTemplate', type, id)}>Delete</button>`);
 }
 
 async function confirmDeleteTemplate(type, id) {
@@ -1193,7 +1193,7 @@ async function renderSLADashboard(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">SLA Dashboard</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${rules.length} rules configured · ${activeBreaches.length} active breach${activeBreaches.length===1?'':'es'}</div>
     </div>
-    <button class="btn btn-gold" onclick="runSLACheck()">▶ Run SLA Check</button>
+    <button class="btn btn-gold" ${dataAct('runSLACheck')}>▶ Run SLA Check</button>
   </div>
 
   <!-- KPI tiles -->
@@ -1316,8 +1316,8 @@ async function renderApprovalChains(el) {
         <div style="font-size:.82rem;color:var(--text-muted)">${inst.chain_name||'Chain #'+inst.chain_id}</div>
       </div>
       <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn btn-danger btn-sm" onclick="actOnChain('${inst.id}','REJECTED')">Reject</button>
-        <button class="btn btn-success btn-sm" onclick="actOnChain('${inst.id}','APPROVED')">Approve</button>
+        <button class="btn btn-danger btn-sm" ${dataAct('actOnChain', inst.id, 'REJECTED')}>Reject</button>
+        <button class="btn btn-success btn-sm" ${dataAct('actOnChain', inst.id, 'APPROVED')}>Approve</button>
       </div>
     </div>
     `).join('')}
@@ -1356,7 +1356,7 @@ async function renderApprovalChains(el) {
 
   el.innerHTML = `
   ${pageHeader('Approval Chains', 'Multi-step approval workflows for orders',
-    `<button class="btn btn-gold" onclick="newApprovalChainModal()">New Chain</button>`)}
+    `<button class="btn btn-gold" ${dataAct('newApprovalChainModal')}>New Chain</button>`)}
   ${kpis}
   ${pendingSection}
   ${chainsSection}`;
@@ -1376,9 +1376,9 @@ function newApprovalChainModal() {
          <select class="chain-step-role" data-step="1">${roleOpts}</select>
        </div>
      </div>
-     <button type="button" class="btn btn-secondary btn-sm" onclick="addChainStep()">+ Add Step</button>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveApprovalChain()">Create Chain</button>`);
+     <button type="button" class="btn btn-secondary btn-sm" ${dataAct('addChainStep')}>+ Add Step</button>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveApprovalChain')}>Create Chain</button>`);
 }
 
 function addChainStep() {
@@ -1411,8 +1411,8 @@ function actOnChain(instanceId, action) {
         <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection (optional)</label>
         <textarea id="chain-reject-reason" rows="3" placeholder="Explain why you are rejecting this step…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
       </div>`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-danger" onclick="confirmActOnChain('${instanceId}','REJECTED')">Reject</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-danger" ${dataAct('confirmActOnChain', instanceId, 'REJECTED')}>Reject</button>`);
   } else {
     confirmActOnChain(instanceId, action);
   }

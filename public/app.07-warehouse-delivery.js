@@ -4,13 +4,13 @@
 async function renderWarehouse(el) {
   el.innerHTML = `
   <div style="margin-bottom:12px">
-    <button class="btn btn-secondary btn-sm" onclick="navigate('settings')" style="display:inline-flex;align-items:center;gap:5px">
+    <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'settings')} style="display:inline-flex;align-items:center;gap:5px">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
       Back to Settings
     </button>
   </div>
   ${pageHeader('Warehouse', 'Warehouses, bins, GRN, picklist & stock transfers',
-    `<button class="btn btn-primary" onclick="addWarehouseModal()">${iconPlus(14)} Add Warehouse</button>`)}
+    `<button class="btn btn-primary" ${dataAct('addWarehouseModal')}>${iconPlus(14)} Add Warehouse</button>`)}
   <div id="wh-returns-queue"></div>
   <div class="tabs" id="wh-tabs" style="margin-bottom:16px">
     <button class="tab-btn active" onclick="switchWHTab('overview',this)">Overview</button>
@@ -50,8 +50,8 @@ async function loadWarehouseReturnsQueue() {
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0">
-          <button class="btn btn-primary btn-sm" onclick="reviewReturn('${r.id}','approve')">✓ Checked & Approve</button>
-          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="reviewReturn('${r.id}','reject')">✕ Reject</button>
+          <button class="btn btn-primary btn-sm" ${dataAct('reviewReturn', r.id, 'approve')}>✓ Checked & Approve</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('reviewReturn', r.id, 'reject')}>✕ Reject</button>
         </div>
       </div>
     </div>`).join('')}
@@ -65,8 +65,8 @@ async function reviewReturn(retId, action) {
       ? 'Confirm the returned goods have been physically checked at the warehouse. Approving will <b>restock the returned quantities</b>.'
       : 'Rejecting will send the DC back to its previous status. No stock changes.'}</p>
      <div class="form-group"><label>Note (optional)</label><input type="text" id="ret-review-note" placeholder="e.g. All items verified in good condition"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn ${action==='approve'?'btn-primary':'btn-danger'}" onclick="confirmReviewReturn('${retId}','${action}')">${action==='approve'?'✓ Approve & Restock':'✕ Reject Return'}</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn ${action==='approve'?'btn-primary':'btn-danger'}" ${dataAct('confirmReviewReturn', retId, action)}>${action==='approve'?'✓ Approve & Restock':'✕ Reject Return'}</button>`);
 }
 
 async function confirmReviewReturn(retId, action) {
@@ -220,7 +220,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
           <div style="display:flex;gap:6px">
             <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
             <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
-            <button class="btn btn-primary btn-sm" onclick="addBinModal('${w.id}')">${iconPlus(12)} Bin</button>
+            <button class="btn btn-primary btn-sm" ${dataAct('addBinModal', w.id)}>${iconPlus(12)} Bin</button>
           </div>
         </div>
       </div>`;
@@ -231,7 +231,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
 function renderWHGRN(el, grns) {
   el.innerHTML = `
   <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="recordGRNModal()">${iconPlus(14)} Record GRN</button>
+    <button class="btn btn-primary" ${dataAct('recordGRNModal')}>${iconPlus(14)} Record GRN</button>
   </div>
   <div class="card">
     <div class="card-header"><span>GRN Records</span></div>
@@ -268,7 +268,7 @@ function renderWHBins(el, bins, warehouses) {
         ${whOptions}
       </select>
     </div>
-    <button class="btn btn-primary" onclick="addBinModal()">${iconPlus(14)} Add Bin</button>
+    <button class="btn btn-primary" ${dataAct('addBinModal')}>${iconPlus(14)} Add Bin</button>
   </div>
   <div class="card">
     <div class="card-header"><span>Bin Locations</span></div>
@@ -338,11 +338,11 @@ function renderWHPickList(el, picklist) {
             </div>
             <div>
               ${order.status==='QUALITY_CHECK'
-                ? `<button class="btn btn-success btn-sm" onclick="createDCFromPicklist('${order.order_id}')">✓ Pass &rarr; Dispatch</button>
-                   <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="advanceOrder('${order.order_id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`
+                ? `<button class="btn btn-success btn-sm" ${dataAct('createDCFromPicklist', order.order_id)}>✓ Pass &rarr; Dispatch</button>
+                   <button class="btn btn-warning btn-sm" style="margin-left:4px" ${dataAct('advanceOrder', order.order_id, 'READY_TO_PICK', 'Quality check failed — returned for re-pick')}>↩ Re-Pick</button>`
                 : order.status==='PICKED'
                   ? `<button class="btn btn-info btn-sm" onclick="advanceOrder('${order.order_id}','QUALITY_CHECK','Items picked — quality check &amp; packing')">Quality Check</button>`
-                  : `<button class="btn btn-primary btn-sm" onclick="pickOrderModal('${order.order_id}')">Pick Items</button>`
+                  : `<button class="btn btn-primary btn-sm" ${dataAct('pickOrderModal', order.order_id)}>Pick Items</button>`
               }
             </div>
           </div>
@@ -397,7 +397,7 @@ function renderWHTransfers(el, movements, bins) {
           <input type="text" id="st-note" placeholder="Optional note">
         </div>
         <div>
-          <button class="btn btn-primary" onclick="submitStockTransfer()">Transfer Stock</button>
+          <button class="btn btn-primary" ${dataAct('submitStockTransfer')}>Transfer Stock</button>
         </div>
       </div>
     </div>
@@ -432,8 +432,8 @@ function recordGRNModal() {
        <div class="form-group"><label>SKU</label><input type="text" id="grn-sku" placeholder="e.g. SKU001"></div>
        <div class="form-group"><label>Qty Received</label><input type="number" id="grn-qty" value="1" min="1"></div>
        <div class="form-group"><label>Notes</label><input type="text" id="grn-notes" placeholder="Optional notes"></div>`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="saveGRN()">Record GRN</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-primary" ${dataAct('saveGRN')}>Record GRN</button>`);
   });
 }
 
@@ -460,8 +460,8 @@ function addBinModal(warehouseId) {
        <div class="form-group"><label>Bin Code</label><input type="text" id="bin-code" placeholder="e.g. A-01-01"></div>
        <div class="form-group"><label>Zone</label><input type="text" id="bin-zone" placeholder="e.g. A, Cold Storage, Dry"></div>
        <div class="form-group"><label>Capacity (units)</label><input type="number" id="bin-cap" value="100" min="1"></div>`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="saveBin()">Add Bin</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-primary" ${dataAct('saveBin')}>Add Bin</button>`);
   });
 }
 
@@ -484,8 +484,8 @@ function editBinModal(binId, code, zone, cap, sku) {
      <div class="form-group"><label>Zone</label><input type="text" id="ebin-zone" value="${zone}"></div>
      <div class="form-group"><label>Capacity (units)</label><input type="number" id="ebin-cap" value="${cap}" min="1"></div>
      <div class="form-group"><label>Assigned SKU</label><input type="text" id="ebin-sku" value="${sku}" placeholder="Leave blank to unassign"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveBinEdit('${binId}')">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveBinEdit', binId)}>Save Changes</button>`);
 }
 
 async function saveBinEdit(binId) {
@@ -503,8 +503,8 @@ async function saveBinEdit(binId) {
 function createDCFromPicklist(orderId) {
   openModal(`Dispatch Order ${orderId}`,
     `<p style="margin:0;color:var(--text-muted)">This will deduct stock and create a Delivery Challan for order <b>${orderId}</b>. Confirm dispatch?</p>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-gold" onclick="confirmCreateDCFromPicklist('${orderId}')">Confirm Dispatch</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('confirmCreateDCFromPicklist', orderId)}>Confirm Dispatch</button>`);
 }
 
 async function confirmCreateDCFromPicklist(orderId) {
@@ -557,8 +557,8 @@ async function pickOrderModal(orderId) {
       </tbody>
     </table>
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmPick('${orderId}')">Confirm Pick</button>
+      <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+      <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
     </div>
   `);
 }
@@ -615,7 +615,7 @@ function viewBins(warehouseId, warehouseName) {
           </tbody>
         </table>
       </div>`,
-      `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
   });
 }
 
@@ -625,8 +625,8 @@ function addWarehouseModal() {
      <div class="form-group"><label>City</label><input type="text" id="wh-city"></div>
      <div class="form-group"><label>Address</label><textarea id="wh-addr" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>
      <div class="form-group"><label>Capacity (units)</label><input type="number" id="wh-cap" value="1000" min="1"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveWarehouse()">Add Warehouse</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveWarehouse')}>Add Warehouse</button>`);
 }
 
 async function saveWarehouse() {
@@ -646,8 +646,8 @@ function editWarehouseModal(id, name, capacity) {
   openModal('Edit Warehouse',
     `<div class="form-group"><label>Warehouse Name</label><input type="text" id="ewh-name" value="${h(name)}"></div>
      <div class="form-group"><label>Capacity (units)</label><input type="number" id="ewh-cap" value="${capacity}" min="1"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveWarehouseEdit('${id}')">Save Changes</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveWarehouseEdit', id)}>Save Changes</button>`);
 }
 
 async function saveWarehouseEdit(id) {
@@ -722,8 +722,8 @@ async function renderDelivery(el) {
           ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
         </div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
-          ${canDispatch ? `<button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>` : ''}
+          <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
+          ${canDispatch ? `<button class="btn btn-primary btn-sm" ${dataAct('dispatchDCModal', dc.id)}>Dispatch →</button>` : ''}
         </div>
       </div>
     </div>`;
@@ -763,9 +763,9 @@ async function renderDelivery(el) {
           ${dc.expected_delivery_date ? ` · Due ${fmtDate(dc.expected_delivery_date)}` : ''}
         </div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">Items</button>
-          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
-          <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>
+          <button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Delivered</button>
         </div>
       </div>
     </div>`;
@@ -796,9 +796,9 @@ async function renderDelivery(el) {
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td>
         <td>${fmtDate(dc.delivered_at)}</td>
-        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
-        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
-        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markScan', dc.id)}>Scan POD</button>`}</td>
+        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" ${dataAct('billDC', dc.id)}>Bill</button>`}</td>
       </tr>`).join('');
       const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
       let html = '';
@@ -861,7 +861,7 @@ async function renderDelivery(el) {
     return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       ${['','SCHEDULED','IN_TRANSIT','DELIVERED','CANCELLED'].map(s=>`
-        <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')">${s||'All'}</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('filterDCTable', s)}>${s||'All'}</button>
       `).join('')}
     </div>
     <div class="card"><div class="table-wrap"><table class="table">
@@ -925,8 +925,8 @@ async function switchDeliveryTab(tab, btn) {
               ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
             </div>
             <div style="display:flex;gap:6px">
-              <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">View Items</button>
-              <button class="btn btn-primary btn-sm" onclick="dispatchDCModal('${dc.id}')">Dispatch →</button>
+              <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
+              <button class="btn btn-primary btn-sm" ${dataAct('dispatchDCModal', dc.id)}>Dispatch →</button>
             </div>
           </div>
         </div>`;
@@ -963,9 +963,9 @@ async function switchDeliveryTab(tab, btn) {
               ${dc.expected_delivery_date?` · Due ${fmtDate(dc.expected_delivery_date)}`:''}
             </div>
             <div style="display:flex;gap:6px">
-              <button class="btn btn-secondary btn-sm" onclick="viewDCItems('${dc.id}')">Items</button>
-              <button class="btn btn-secondary btn-sm" style="color:var(--danger)" onclick="returnDCModal('${dc.id}')">Return</button>
-              <button class="btn btn-success btn-sm" onclick="markDelivered('${dc.id}')">✓ Delivered</button>
+              <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
+              <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>
+              <button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Delivered</button>
             </div>
           </div>
         </div>`;
@@ -987,9 +987,9 @@ async function switchDeliveryTab(tab, btn) {
         <td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.delivered_at)}</td>
-        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`}</td>
-        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`}</td>
-        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" onclick="billDC('${dc.id}')">Bill</button>`}</td>
+        <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`}</td>
+        <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markScan', dc.id)}>Scan POD</button>`}</td>
+        <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" ${dataAct('billDC', dc.id)}>Bill</button>`}</td>
       </tr>`).join('');
       const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
       let html = '';
@@ -1057,7 +1057,7 @@ async function switchDeliveryTab(tab, btn) {
       content.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         ${['','SCHEDULED','IN_TRANSIT','DELIVERED','CANCELLED'].map(s=>`
-          <button class="btn btn-secondary btn-sm" onclick="filterDCTable('${s}')">${s||'All'}</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('filterDCTable', s)}>${s||'All'}</button>
         `).join('')}
       </div>
       <div class="card"><div class="table-wrap"><table class="table">
@@ -1080,7 +1080,7 @@ async function switchDeliveryTab(tab, btn) {
   } catch(e) {
     const content = document.getElementById('dc-tab-content');
     if (content) content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
-      Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchDeliveryTab('${tab}',null)">Retry</button>
+      Error loading data. <button class="btn btn-secondary btn-sm" ${dataAct('switchDeliveryTab', tab, null)}>Retry</button>
     </div>`;
   }
 }
@@ -1096,14 +1096,14 @@ function podScanRow(dc) {
   const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
 
   const podCell = podOk
-    ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
+    ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
     : scanOk
-      ? `<span class="badge badge-success" style="background:#d1fae5;color:#065f46">✓ via Scan</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markPOD('${dc.id}')">Re-upload</button>`
-      : `<button class="btn btn-secondary btn-sm" onclick="markPOD('${dc.id}')">Upload POD</button>`;
+      ? `<span class="badge badge-success" style="background:#d1fae5;color:#065f46">✓ via Scan</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
+      : `<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`;
 
   const scanCell = scanOk
-    ? `<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="markScan('${dc.id}')">Re-scan</button>`
-    : `<button class="btn btn-primary btn-sm" onclick="markScan('${dc.id}')">Scan POD</button>`;
+    ? `<span class="badge badge-success">✓ Scanned</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markScan', dc.id)}>Re-scan</button>`
+    : `<button class="btn btn-primary btn-sm" ${dataAct('markScan', dc.id)}>Scan POD</button>`;
 
   const statusCell = complete
     ? '<span class="badge badge-success">Complete</span>'
@@ -1112,7 +1112,7 @@ function podScanRow(dc) {
       : '<span class="badge" style="background:#fef9c3;color:#92400e">Scan missing</span>';
 
   const docsCell = docCount > 0
-    ? `<button class="btn btn-secondary btn-sm" onclick="viewDCDocuments('${dc.id}')">📂 ${docCount} page${docCount>1?'s':''}</button>`
+    ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewDCDocuments', dc.id)}>📂 ${docCount} page${docCount>1?'s':''}</button>`
     : '<span style="color:var(--text-muted);font-size:.8rem">—</span>';
 
   return `<tr data-search="${search}">
@@ -1167,7 +1167,7 @@ async function viewDCItems(dcId) {
         <tbody>${rows}</tbody>
       </table>
     </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
 // Inline (in-order-modal) DC item breakdown — expands within the order window
@@ -1212,8 +1212,8 @@ async function dispatchDCModal(dcId) {
      <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar"></div>
      <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>
      <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected"></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="confirmDispatch('${dcId}')">Dispatch Now</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
 }
 
 async function confirmDispatch(dcId) {
@@ -1277,8 +1277,8 @@ async function markDelivered(dcId) {
     </table>
     ${capped?'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Deliverable qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-success" onclick="confirmDelivery('${dcId}')">Confirm Delivery</button>
+      <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+      <button class="btn btn-success" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
     </div>
   `);
 }
@@ -1310,8 +1310,8 @@ function uploadDCDocModal(dcId, docType) {
        <img id="dc-doc-img" style="max-width:100%;max-height:260px;border-radius:6px;display:none">
        <div id="dc-doc-name" style="font-size:.82rem;color:var(--text-muted);margin-top:6px"></div>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" id="dc-doc-submit" onclick="confirmDCDocUpload('${dcId}','${docType}')">Upload ${label}</button>`
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" id="dc-doc-submit" ${dataAct('confirmDCDocUpload', dcId, docType)}>Upload ${label}</button>`
   );
 }
 
@@ -1347,12 +1347,12 @@ function scanDCDocModal(dcId) {
          <div id="scan-preview-name" style="font-size:.75rem;color:var(--text-muted);margin-top:5px"></div>
        </div>
        <div style="display:flex;gap:8px">
-         <button class="btn btn-secondary" style="flex:1" onclick="retakeScanPage('${dcId}')">🔄 Retake</button>
-         <button class="btn btn-secondary" style="flex:1" onclick="addScanPage('${dcId}')">➕ Add Page</button>
-         <button class="btn btn-primary" style="flex:1" id="dc-scan-submit" onclick="uploadAllScanPages('${dcId}')">⬆ Upload</button>
+         <button class="btn btn-secondary" style="flex:1" ${dataAct('retakeScanPage', dcId)}>🔄 Retake</button>
+         <button class="btn btn-secondary" style="flex:1" ${dataAct('addScanPage', dcId)}>➕ Add Page</button>
+         <button class="btn btn-primary" style="flex:1" id="dc-scan-submit" ${dataAct('uploadAllScanPages', dcId)}>⬆ Upload</button>
        </div>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>`
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>`
   );
 }
 
@@ -1555,7 +1555,7 @@ async function viewDCDocuments(dcId) {
   openModal(
     `DC #${dcId} — ${docs.length} page${docs.length>1?'s':''} uploaded`,
     pagesHtml,
-    `${pdfBtn}<button class="btn btn-secondary" onclick="closeModal()">Close</button>`
+    `${pdfBtn}<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`
   );
 }
 
@@ -1635,8 +1635,8 @@ async function returnDCModal(dcId) {
      <div class="form-group"><label>Reason for Return <span style="color:var(--danger)">*</span></label>
        <textarea id="return-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" placeholder="e.g. Goods damaged in transit, wrong items, quality issue…"></textarea>
      </div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" style="background:var(--danger)" onclick="confirmReturnDC('${dcId}')">Submit Return for Approval</button>`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" style="background:var(--danger)" ${dataAct('confirmReturnDC', dcId)}>Submit Return for Approval</button>`);
 }
 
 async function confirmReturnDC(dcId) {
