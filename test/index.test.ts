@@ -169,6 +169,23 @@ describe("Auth", () => {
     expect(res.status).toBe(400);
   });
 
+  it("vendor documents round-trip through R2 storage (stored as pointer, resolved on read)", async () => {
+    const db = env.DB as D1Database;
+    const b64 = "aGVsbG8gcGRmIGJsb2I=";  // "hello pdf blob"
+    const res = await post("/api/vendors", {
+      name: "Doc R2 Vendor", category: "Beverages",
+      documents: [{ kind: "pan", filename: "pan.pdf", mime: "application/pdf", size: 12, data: b64 }],
+    }, adminToken);
+    expect(res.status).toBe(201);
+    const { id } = await res.json() as { id: string };
+    // stored value in D1 is an r2: pointer (blob moved out of the row)
+    const raw = await db.prepare("SELECT data FROM vendor_documents WHERE vendor_id=?").bind(id).first() as { data: string };
+    expect(raw.data.startsWith("r2:")).toBe(true);
+    // the list endpoint resolves it back to the original base64
+    const list = await (await get(`/api/vendors/${id}/documents`, adminToken)).json() as Array<{ data: string }>;
+    expect(list[0].data).toBe(b64);
+  });
+
   it("GET /api/import-jobs — returns an array (import history)", async () => {
     const res = await get("/api/import-jobs", adminToken);
     expect(res.status).toBe(200);

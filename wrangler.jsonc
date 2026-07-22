@@ -28,6 +28,13 @@
 			"migrations_dir": "./migrations"
 		}
 	],
+	// Document storage (#9): create the bucket, then uncomment to move vendor/DC
+	// document blobs out of D1 into R2. Unbound is safe — the app falls back to
+	// base64-in-D1 automatically (see docPut/docGet in src/index.ts).
+	//   wrangler r2 bucket create smart-pantry-docs
+	// "r2_buckets": [
+	//   { "binding": "DOCS", "bucket_name": "smart-pantry-docs" }
+	// ],
 	"vars": {
 		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod",
 		"APP_ENV": "development",

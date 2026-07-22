@@ -1512,14 +1512,56 @@ const VENDOR_ONB_STATES = ['draft','pending','active','rejected'];
 // semantics, so the wizard's step lists are the source of truth. Each document is
 // stored as a base64 data URL (MVP; move to R2 later). Capped to keep D1 lean.
 const MAX_DOC_BYTES = 1_200_000; // ~1.2 MB per file
+
+// ── Document storage (#9) ────────────────────────────────────────────────────
+// R2 when the DOCS bucket is bound, else base64 inline in D1 (legacy fallback).
+// The DB column holds either the base64 itself or an "r2:<key>" pointer; docGet
+// resolves either form transparently, so old base64 rows keep working after R2
+// is enabled. Base64 is stored verbatim as the R2 object for an exact round-trip.
+// Accessed via a cast so the code compiles whether or not the binding is present
+// in the generated Env (uncomment the r2_buckets block in wrangler.jsonc + run
+// `wrangler types` to make it a first-class binding).
+function docsBucket(env: Env): R2Bucket | undefined {
+  return (env as unknown as { DOCS?: R2Bucket }).DOCS;
+}
+async function docPut(env: Env, prefix: string, b64: string): Promise<string> {
+  const bucket = docsBucket(env);
+  if (bucket && b64) {
+    const key = `${prefix}/${uid()}`;
+    await bucket.put(key, b64);
+    return `r2:${key}`;
+  }
+  return b64; // fallback: keep the base64 inline in D1
+}
+async function docGet(env: Env, stored: string | null): Promise<string> {
+  if (stored && stored.startsWith("r2:")) {
+    const bucket = docsBucket(env);
+    if (!bucket) return ""; // pointer exists but bucket unbound
+    try { const obj = await bucket.get(stored.slice(3)); return obj ? await obj.text() : ""; }
+    catch { return ""; }
+  }
+  return stored || "";
+}
+async function docDelete(env: Env, stored: string | null): Promise<void> {
+  const bucket = docsBucket(env);
+  if (stored && stored.startsWith("r2:") && bucket) {
+    try { await bucket.delete(stored.slice(3)); } catch { /* ignore */ }
+  }
+}
 async function saveVendorSubResources(env: Env, vendorId: string, body: Record<string,unknown>): Promise<string|undefined> {
   if (Array.isArray(body.documents)) {
+    // documents are replace-all — free any R2 objects backing the old rows first
+    try {
+      const { results } = await env.DB.prepare("SELECT data FROM vendor_documents WHERE vendor_id=?").bind(vendorId).all();
+      for (const r of (results || []) as Array<{ data: string }>) await docDelete(env, r.data);
+    } catch { /* ignore */ }
     await env.DB.prepare("DELETE FROM vendor_documents WHERE vendor_id=?").bind(vendorId).run();
     for (const d of body.documents as Array<Record<string,unknown>>) {
       const data = String(d.data || '');
       if (data && data.length > MAX_DOC_BYTES) return `${d.kind || 'A document'} is too large — keep uploads under 1 MB`;
+      const storedData = data ? await docPut(env, `vendor/${vendorId}`, data) : null;
       await env.DB.prepare("INSERT INTO vendor_documents (id,vendor_id,kind,filename,mime,size,data,expiry_date) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), vendorId, String(d.kind||'other'), String(d.filename||''), String(d.mime||''), Number(d.size)||0, data||null, d.expiry_date?String(d.expiry_date):null).run();
+        .bind(uid(), vendorId, String(d.kind||'other'), String(d.filename||''), String(d.mime||''), Number(d.size)||0, storedData, d.expiry_date?String(d.expiry_date):null).run();
     }
   }
   if (Array.isArray(body.products)) {
@@ -1606,6 +1648,7 @@ async function handleListVendorDocuments(request: Request, env: Env, path: strin
   const denied = requireUser(user); if (denied) return denied;
   const vid = path.split("/")[3];
   const { results } = await env.DB.prepare("SELECT id,kind,filename,mime,size,data,expiry_date,uploaded_at FROM vendor_documents WHERE vendor_id=? ORDER BY uploaded_at").bind(vid).all();
+  for (const r of (results || []) as Array<Record<string, unknown>>) r.data = await docGet(env, r.data as string | null);
   return json(results);
 }
 
@@ -2065,10 +2108,11 @@ async function handleUploadDCDoc(request: Request, env: Env, path: string, docTy
   if (body.file_size && body.file_size > 5 * 1024 * 1024) return json({ error: "File too large (max 5 MB)" }, 400);
 
   try {
+    const storedContent = await docPut(env, `dc/${id}`, body.content_b64);
     await env.DB.prepare(
       `INSERT INTO dc_documents (dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_by)
        VALUES (?,?,?,?,?,?,?)`
-    ).bind(id, docType, body.filename||null, body.mime_type||null, body.content_b64, body.file_size||null, user?.name||null).run();
+    ).bind(id, docType, body.filename||null, body.mime_type||null, storedContent, body.file_size||null, user?.name||null).run();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("no such table")) {
@@ -2095,6 +2139,7 @@ async function handleListDCDocs(request: Request, env: Env, path: string): Promi
       `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
        FROM dc_documents WHERE dc_id=? ORDER BY uploaded_at DESC`
     ).bind(id).all();
+    for (const r of (results || []) as Array<Record<string, unknown>>) r.content_b64 = await docGet(env, r.content_b64 as string | null);
     return json(results);
   } catch {
     return json([]); // table not yet created — return empty list gracefully

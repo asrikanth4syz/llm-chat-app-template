@@ -6,6 +6,9 @@ export default defineWorkersConfig({
       workers: {
         singleWorker: true,
         wrangler: { configPath: "./wrangler.jsonc" },
+        // Test-only R2 bucket so the document-storage R2 path is exercised
+        // (production wrangler.jsonc keeps the binding commented until provisioned).
+        miniflare: { r2Buckets: ["DOCS"] },
       },
     },
   },
