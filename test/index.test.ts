@@ -154,6 +154,12 @@ describe("Auth", () => {
     expect(res.status).toBe(400);
   });
 
+  it("GET /api/import-jobs — returns an array (import history)", async () => {
+    const res = await get("/api/import-jobs", adminToken);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(await res.json())).toBe(true);
+  });
+
   it("POST /api/auth/login — locks out after repeated failures", async () => {
     const email = "bruteforce@sp.test"; // unique email so it can't affect other tests
     for (let i = 0; i < 5; i++) {

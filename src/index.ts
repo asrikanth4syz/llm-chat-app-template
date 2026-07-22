@@ -248,6 +248,15 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)").run();
   } catch { /* ignore */ }
   try {
+    // import_jobs powers the CSV "Import History" tab. It was only ever created by
+    // migration 0003, so on any DB where that migration wasn't applied the history
+    // query 500s and the tab shows empty — self-heal it like the other tables.
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS import_jobs (
+      id TEXT PRIMARY KEY, type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'DONE',
+      total INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0,
+      errors TEXT DEFAULT '[]', created_by TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* ignore */ }
+  try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS login_throttle (
       email TEXT PRIMARY KEY, fails INTEGER DEFAULT 0, first_fail TEXT, locked_until TEXT)`).run();
   } catch { /* ignore */ }
@@ -3911,10 +3920,14 @@ async function handleImportVendors(request: Request, env: Env): Promise<Response
 async function handleListImportJobs(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare(
-    "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT 50"
-  ).all();
-  return json(results);
+  try {
+    const {results} = await env.DB.prepare(
+      "SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT 50"
+    ).all();
+    return json(results);
+  } catch {
+    return json([]); // table may not exist yet — show the empty state, don't error
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
