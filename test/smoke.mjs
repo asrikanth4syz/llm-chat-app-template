@@ -89,7 +89,7 @@ const DEAD_TARGETS = new Set([
   "invBulkModal", "invClearSelection", "invSortBy", "invBulkApply",
 ]);
 const allSource = localScripts.map((s) => readFileSync(path.join(PUBLIC, s), "utf8")).join("\n");
-const actTargets = [...new Set([...allSource.matchAll(/dataAct\('([A-Za-z_$][\w$]*)'/g)].map((m) => m[1]))]
+const actTargets = [...new Set([...allSource.matchAll(/dataAct(?:El|Close)?\('([A-Za-z_$][\w$]*)'/g)].map((m) => m[1]))]
   .filter((n) => !DEAD_TARGETS.has(n));
 
 console.log("\nGlobals & behavior:");

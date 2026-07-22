@@ -1190,8 +1190,8 @@ async function viewTicketModal(id) {
       <button class="btn btn-primary" ${dataAct('postTicketComment', t.id)}>Send</button>
     </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">Ticket closed — conversation is read-only</div>`}`,
     `${isRaiserRole && t.status==='RESOLVED' ? `
-      <button class="btn btn-primary" onclick="closeModal();confirmCloseTicket('${t.id}')">✓ Confirm &amp; Close</button>
-      <button class="btn btn-secondary" onclick="closeModal();reopenTicket('${t.id}')">↩ Reopen</button>` : ''}
+      <button class="btn btn-primary" ${dataActClose('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
+      <button class="btn btn-secondary" ${dataActClose('reopenTicket', t.id)}>↩ Reopen</button>` : ''}
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 
   loadTicketChat(id);

@@ -736,7 +736,7 @@ async function drillOrderDCs(orderId, label) {
 
   openModal(`DC Breakdown — ${label}`, body,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
-     <button class="btn btn-primary" onclick="closeModal();viewOrderDrilldown('${orderId}')">Full Line-Item View</button>`
+     <button class="btn btn-primary" ${dataActClose('viewOrderDrilldown', orderId)}>Full Line-Item View</button>`
   );
 }
 

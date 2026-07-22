@@ -273,8 +273,8 @@ async function viewOrder(id) {
           <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
           <div style="display:flex;gap:4px">
             <button class="btn btn-secondary btn-sm" ${dataActEl('toggleDCItemsInline', dc.id)}>View Items</button>
-            ${dc.status==='SCHEDULED'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>`:''}
-            ${dc.status==='IN_TRANSIT'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-success btn-sm" onclick="closeModal();markDelivered('${dc.id}')">Confirm Delivery</button>`:''}
+            ${dc.status==='SCHEDULED'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>`:''}
+            ${dc.status==='IN_TRANSIT'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-success btn-sm" ${dataActClose('markDelivered', dc.id)}>Confirm Delivery</button>`:''}
           </div>
         </div>
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
@@ -404,37 +404,37 @@ async function viewOrder(id) {
       const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
       if (opsRole) {
         if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
-          footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','APPROVED','Approved via order detail')">✓ Approve</button>`);
+          footer.push(`<button class="btn btn-success" ${dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail')}>✓ Approve</button>`);
         if (s==='APPROVED')
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','ACKNOWLEDGED','Order acknowledged — processing started')">Acknowledge</button>`);
+          footer.push(`<button class="btn btn-primary" ${dataActClose('advanceOrder', id, 'ACKNOWLEDGED', 'Order acknowledged — processing started')}>Acknowledge</button>`);
         if (s==='ACKNOWLEDGED')
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','INVENTORY_CHECK','Inventory check initiated')">Inventory Check</button>`);
+          footer.push(`<button class="btn btn-primary" ${dataActClose('advanceOrder', id, 'INVENTORY_CHECK', 'Inventory check initiated')}>Inventory Check</button>`);
         if (s==='INVENTORY_CHECK') {
-          footer.push(`<button class="btn btn-success" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Stock available — ready for picking')">✓ Stock In</button>`);
-          footer.push(`<button class="btn btn-gold" onclick="closeModal();inventoryShortageModal('${id}')">⚠ Raise PO</button>`);
+          footer.push(`<button class="btn btn-success" ${dataActClose('advanceOrder', id, 'READY_TO_PICK', 'Stock available — ready for picking')}>✓ Stock In</button>`);
+          footer.push(`<button class="btn btn-gold" ${dataActClose('inventoryShortageModal', id)}>⚠ Raise PO</button>`);
         }
         if (s==='READY_TO_PICK')
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();pickOrderModal('${id}')">Pick Items</button>`);
+          footer.push(`<button class="btn btn-primary" ${dataActClose('pickOrderModal', id)}>Pick Items</button>`);
         if (s==='PICKED')
-          footer.push(`<button class="btn btn-info" onclick="closeModal();advanceOrder('${id}','QUALITY_CHECK','Items picked — quality check & packing')">Quality Check</button>`);
+          footer.push(`<button class="btn btn-info" ${dataActClose('advanceOrder', id, 'QUALITY_CHECK', 'Items picked — quality check & packing')}>Quality Check</button>`);
         if (s==='QUALITY_CHECK') {
-          footer.push(`<button class="btn btn-success" onclick="closeModal();createDCFromPicklist('${id}')">✓ Pass → Dispatch</button>`);
-          footer.push(`<button class="btn btn-warning" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Quality check failed — returned for re-pick')">↩ Re-Pick</button>`);
+          footer.push(`<button class="btn btn-success" ${dataActClose('createDCFromPicklist', id)}>✓ Pass → Dispatch</button>`);
+          footer.push(`<button class="btn btn-warning" ${dataActClose('advanceOrder', id, 'READY_TO_PICK', 'Quality check failed — returned for re-pick')}>↩ Re-Pick</button>`);
         }
         if (s==='VENDOR_PO_RAISED')
-          footer.push(`<button class="btn btn-warning" onclick="closeModal();advanceOrder('${id}','APPROVED','PO rejected — reopened')">↩ Reopen for Reprocessing</button>`);
+          footer.push(`<button class="btn btn-warning" ${dataActClose('advanceOrder', id, 'APPROVED', 'PO rejected — reopened')}>↩ Reopen for Reprocessing</button>`);
         if (s==='PARTIALLY_CLOSED') {
-          footer.push(`<button class="btn btn-primary" onclick="closeModal();advanceOrder('${id}','READY_TO_PICK','Replenishment — next batch ready for picking')">Replenish</button>`);
-          footer.push(`<button class="btn btn-secondary" onclick="closeModal();dispatchRemainingModal('${id}')">Dispatch Remaining</button>`);
-          footer.push(`<button class="btn btn-danger" onclick="closeModal();preCloseOrder('${id}')">Pre-Close Order</button>`);
+          footer.push(`<button class="btn btn-primary" ${dataActClose('advanceOrder', id, 'READY_TO_PICK', 'Replenishment — next batch ready for picking')}>Replenish</button>`);
+          footer.push(`<button class="btn btn-secondary" ${dataActClose('dispatchRemainingModal', id)}>Dispatch Remaining</button>`);
+          footer.push(`<button class="btn btn-danger" ${dataActClose('preCloseOrder', id)}>Pre-Close Order</button>`);
         }
         if (!['CLOSED','CANCELLED'].includes(s))
-          footer.push(`<button class="btn btn-danger" onclick="closeModal();opsRejectOrder('${id}')">Cancel Order</button>`);
+          footer.push(`<button class="btn btn-danger" ${dataActClose('opsRejectOrder', id)}>Cancel Order</button>`);
       } else {
         if (s==='DRAFT')
-          footer.push(`<button class="btn btn-gold btn-sm" onclick="closeModal();submitDraftOrder('${id}')">Submit Order</button>`);
+          footer.push(`<button class="btn btn-gold btn-sm" ${dataActClose('submitDraftOrder', id)}>Submit Order</button>`);
         if (s==='SUBMITTED'||s==='APPROVED')
-          footer.push(`<button class="btn btn-danger btn-sm" onclick="closeModal();cancelOrder('${id}')">Cancel Order</button>`);
+          footer.push(`<button class="btn btn-danger btn-sm" ${dataActClose('cancelOrder', id)}>Cancel Order</button>`);
       }
       return footer.join(' ');
     })()
@@ -634,7 +634,7 @@ async function viewOrderDrilldown(orderId) {
     `Delivery Breakdown — ${orderId}`,
     body,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
-     <button class="btn btn-primary" onclick="closeModal();viewOrder('${orderId}')">Full Order View</button>`
+     <button class="btn btn-primary" ${dataActClose('viewOrder', orderId)}>Full Order View</button>`
   );
 }
 
@@ -1314,7 +1314,7 @@ async function dispatchRemainingModal(orderId) {
         <div style="font-weight:600">${dc.id}</div>
         <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units — ready to dispatch</div>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="closeModal();dispatchDCModal('${dc.id}')">Dispatch</button>
+      <button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>
     </div>`).join('');
   openModal(`Dispatch Remaining — Order ${orderId}`,
     `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.87rem">Select a pending DC to dispatch:</p>${dcList}`,

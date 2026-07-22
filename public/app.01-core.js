@@ -973,15 +973,22 @@ function dataAct(fn, ...args) {
   return `data-act="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`;
 }
 // Variant for handlers whose original inline form passed `this` (the clicked
-// element) as the last argument, e.g. ${dataActEl('switchTab', 'x')}.
+// element) as the last argument, e.g. a tab switcher called with (key, this).
 function dataActEl(fn, ...args) {
   return `${dataAct(fn, ...args)} data-el`;
+}
+// Variant for the common onclick="closeModal();fn(...)" pattern.
+function dataActClose(fn, ...args) {
+  return `${dataAct(fn, ...args)} data-close`;
 }
 function _dispatchAct(e) {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = window[el.dataset.act];
   if (typeof fn !== 'function') return;
+  if (el.hasAttribute('data-prevent')) e.preventDefault();
+  if (el.hasAttribute('data-stop')) e.stopPropagation();
+  if (el.hasAttribute('data-close')) closeModal(); // matches inline "closeModal();fn()"
   let args = [];
   if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
   if (el.hasAttribute('data-el')) fn(...args, el); // pass the element as the trailing arg
