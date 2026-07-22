@@ -572,7 +572,7 @@ function buildNav() {
     <div class="nav-search-wrap">
       <svg class="nav-search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input id="nav-search" class="nav-search" type="search" placeholder="Search menu…" autocomplete="off" spellcheck="false"
-        oninput="filterNav(this.value)" onkeydown="navSearchKey(event)">
+        ${dataInputVal('filterNav')} data-keydown="navSearchKey">
     </div>
     <div id="nav-no-results" class="nav-no-results" style="display:none">No menu matches.</div>` : '';
 
@@ -989,12 +989,56 @@ function _dispatchAct(e) {
   if (el.hasAttribute('data-prevent')) e.preventDefault();
   if (el.hasAttribute('data-stop')) e.stopPropagation();
   if (el.hasAttribute('data-close')) closeModal(); // matches inline "closeModal();fn()"
+  if (el.hasAttribute('data-tbclose')) closeTbMenus(); // matches "closeTbMenus();fn()"
   let args = [];
   if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
   if (el.hasAttribute('data-el')) fn(...args, el); // pass the element as the trailing arg
   else fn(...args);
 }
 document.addEventListener('click', _dispatchAct);
+
+// change / input / keydown delegation — same data-args convention as click, with
+// optional data-val (pass the element's value) and data-el (pass the element).
+function _runData(el, attr) {
+  const fn = window[el.getAttribute(attr)];
+  if (typeof fn !== 'function') return;
+  let args = [];
+  if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
+  if (el.hasAttribute('data-val')) args.push(el.value);
+  if (el.hasAttribute('data-el')) args.push(el);
+  fn(...args);
+}
+document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (el) _runData(el, 'data-change'); });
+document.addEventListener('input',  e => { const el = e.target.closest('[data-input]');  if (el) _runData(el, 'data-input'); });
+document.addEventListener('keydown', e => {
+  const kEl = e.target.closest('[data-keydown]');
+  if (kEl) { const fn = window[kEl.getAttribute('data-keydown')]; if (typeof fn === 'function') fn(e); }
+  if (e.key === 'Enter') { const el = e.target.closest('[data-enter]'); if (el) _runData(el, 'data-enter'); }
+});
+function dataChange(fn, ...args) { return `data-change="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`; }
+function dataInput(fn, ...args)  { return `data-input="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`; }
+function dataChangeVal(fn, ...args) { return `${dataChange(fn, ...args)} data-val`; }
+function dataInputVal(fn, ...args)  { return `${dataInput(fn, ...args)} data-val`; }
+function dataInputEl(fn, ...args)   { return `${dataInput(fn, ...args)} data-el`; }
+function dataEnter(fn, ...args)  { return `data-enter="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`; }
+function dataChangeEl(fn, ...args) { return `${dataChange(fn, ...args)} data-el`; }
+function dataEnterEl(fn, ...args)  { return `${dataEnter(fn, ...args)} data-el`; }
+// data-el appends the element as the LAST argument, so these take (…args, el).
+function _blurEl(el) { el.blur(); }
+function maskUpper(max, el) { el.value = el.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, max); }
+function maskDigits(max, el) { el.value = el.value.replace(/[^0-9]/g, '').slice(0, max || 9999); }
+function toggle2FAEl(id, el) { toggle2FA(id, el.checked); }
+function previewCSVEl(tab, el) { previewCSV(el, tab); }
+function onScanCapturedEl(dcId, el) { onScanCaptured(el, dcId); }
+function toggleDisabledByValue(id, el) { const b = document.getElementById(id); if (b) b.disabled = !el.value; }
+function vendorToggleInactive(el) { APP._vendorShowInactive = el.checked; renderVendors(document.getElementById('main-content')); }
+function vendorSetCat(el) { APP._vendorCat = el.value; renderVendors(document.getElementById('main-content')); }
+function sdSetClientFilter(el) { APP._sdClientFilter = el.value; navigate('service_desk'); }
+function moSearch(el) { APP._moSearch = el.value; moRender(); }
+function invSearch(el) { APP._invSearch = el.value.toLowerCase(); APP._invShowAll = false; refreshInvTable(); }
+function colorByOrdered(el) { el.style.color = +el.value < +el.dataset.ordered ? 'var(--warning)' : 'inherit'; }
+function clampDeliver(max, el) { if (+el.value > max) el.value = max; el.style.color = +el.value < max ? 'var(--warning)' : 'inherit'; }
+function clampMax(max, el) { if (+el.value > max) el.value = max; }
 
 // Named handlers extracted from former multi-statement inline onclick bodies, so
 // they can be invoked through the delegation dispatcher like any other action.

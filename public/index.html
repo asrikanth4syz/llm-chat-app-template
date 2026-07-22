@@ -679,7 +679,7 @@
 
           <!-- CTA -->
           <div class="hero-cta-row">
-            <button class="btn-watch-demo" onclick="openDemo()">
+            <button class="btn-watch-demo" data-act="openDemo">
               <span class="play-circle">
                 <svg width="10" height="12" viewBox="0 0 10 12" fill="white"><path d="M1 1l8 5-8 5V1z"/></svg>
               </span>
@@ -784,8 +784,8 @@
         <div class="form-group">
           <label>Password</label>
           <div class="input-wrap">
-            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" />
-            <button class="toggle-pw" type="button" onclick="togglePw()">
+            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" data-enter="doLogin" />
+            <button class="toggle-pw" type="button" data-act="togglePw">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
@@ -804,15 +804,15 @@
           <p class="otp-hint">OTP sent to your registered email. <a href="#">Resend</a></p>
         </div>
 
-        <button class="btn-login" id="login-btn" onclick="doLogin()">
+        <button class="btn-login" id="login-btn" data-act="doLogin">
           <span>Sign In</span>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </button>
 
         <div class="login-footer-links">
-          <a href="#" onclick="showToast('Contact your administrator to reset your password','info');return false">Forgot password?</a>
+          <a href="#" data-act="showToast" data-args="[&quot;Contact your administrator to reset your password&quot;,&quot;info&quot;]" data-prevent>Forgot password?</a>
           <span>·</span>
-          <a href="#" onclick="showToast('Contact your administrator for account access','info');return false">Request access</a>
+          <a href="#" data-act="showToast" data-args="[&quot;Contact your administrator for account access&quot;,&quot;info&quot;]" data-prevent>Request access</a>
         </div>
 
         <div class="login-clients">
@@ -829,8 +829,8 @@
 <!-- ══════════════════════════════════════════════════════
      DEMO VIDEO MODAL
 ══════════════════════════════════════════════════════ -->
-<div class="demo-overlay" id="demo-overlay" onclick="handleDemoOverlayClick(event)">
-  <div class="demo-modal" onclick="event.stopPropagation()">
+<div class="demo-overlay" id="demo-overlay">
+  <div class="demo-modal">
     <div class="demo-modal-header">
       <div class="demo-modal-title">
         <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
@@ -841,18 +841,18 @@
         Smart Pantry — Product Demo
         <span style="font-size:.65rem;font-weight:500;color:rgba(255,255,255,.4);margin-left:4px">5 feature highlights</span>
       </div>
-      <button class="demo-close" onclick="closeDemo()">
+      <button class="demo-close" data-act="closeDemo">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
 
     <!-- Chapter tabs -->
     <div class="demo-tabs" id="demo-tabs">
-      <div class="demo-tab active" onclick="gotoSlide(0)">📊 Inventory</div>
-      <div class="demo-tab" onclick="gotoSlide(1)">🛒 Orders</div>
-      <div class="demo-tab" onclick="gotoSlide(2)">📈 Reports &amp; BI</div>
-      <div class="demo-tab" onclick="gotoSlide(3)">🚚 Deliveries</div>
-      <div class="demo-tab" onclick="gotoSlide(4)">🏪 Vendors</div>
+      <div class="demo-tab active" data-act="gotoSlide" data-args="[0]">📊 Inventory</div>
+      <div class="demo-tab" data-act="gotoSlide" data-args="[1]">🛒 Orders</div>
+      <div class="demo-tab" data-act="gotoSlide" data-args="[2]">📈 Reports &amp; BI</div>
+      <div class="demo-tab" data-act="gotoSlide" data-args="[3]">🚚 Deliveries</div>
+      <div class="demo-tab" data-act="gotoSlide" data-args="[4]">🏪 Vendors</div>
     </div>
 
     <div class="demo-progress"><div class="demo-progress-fill" id="demo-progress-fill"></div></div>
@@ -1064,12 +1064,12 @@
 
     <!-- Nav -->
     <div class="demo-nav">
-      <button class="demo-nav-btn btn-prev" onclick="prevSlide()">
+      <button class="demo-nav-btn btn-prev" data-act="prevSlide">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         Previous
       </button>
       <span class="demo-step-info" id="demo-step-info">1 of 5</span>
-      <button class="demo-nav-btn btn-next" id="demo-next-btn" onclick="nextSlide()">
+      <button class="demo-nav-btn btn-next" id="demo-next-btn" data-act="nextSlide">
         Next
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
       </button>
@@ -1101,12 +1101,12 @@
     <nav id="sidebar-nav" class="sidebar-nav"></nav>
     <div class="sidebar-footer">
       <div class="sidebar-user">
-        <div class="su-avatar" id="user-avatar" onclick="openProfileModal()" title="View / Edit Profile" style="cursor:pointer">SA</div>
-        <div class="su-info" onclick="openProfileModal()" style="cursor:pointer;flex:1;min-width:0">
+        <div class="su-avatar" id="user-avatar" data-act="openProfileModal" title="View / Edit Profile" style="cursor:pointer">SA</div>
+        <div class="su-info" data-act="openProfileModal" style="cursor:pointer;flex:1;min-width:0">
           <div class="su-name" id="user-name">Super Admin</div>
           <div class="su-role" id="user-role">4SYZ Platform</div>
         </div>
-        <button class="su-logout" onclick="doLogout()" title="Sign out">
+        <button class="su-logout" data-act="doLogout" title="Sign out">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
         </button>
       </div>
@@ -1116,7 +1116,7 @@
   <div class="main-wrap">
     <header class="topbar">
       <div class="topbar-left">
-        <button class="menu-btn" onclick="toggleSidebar()">
+        <button class="menu-btn" data-act="toggleSidebar">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
         </button>
         <div class="breadcrumb" id="breadcrumb">Dashboard</div>
@@ -1124,26 +1124,26 @@
       <div class="topbar-right">
         <div class="search-bar" style="position:relative">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input type="text" id="global-search" placeholder="Search orders, items, clients..." oninput="debounceSearch(this.value)" autocomplete="off" />
+          <input type="text" id="global-search" placeholder="Search orders, items, clients..." data-input="debounceSearch" data-val autocomplete="off" />
           <kbd class="search-kbd">/</kbd>
           <div id="search-results" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface,#fff);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;max-height:360px;overflow-y:auto;margin-top:4px"></div>
         </div>
 
         <div class="tb-pop-wrap">
-          <button class="tb-quick" onclick="toggleQuickActions(event)" aria-haspopup="true">
+          <button class="tb-quick" data-act="toggleQuickActions" data-stop aria-haspopup="true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
             <span class="tb-quick-label">Quick action</span>
           </button>
           <div class="tb-menu hidden" id="quick-menu"></div>
         </div>
 
-        <button class="topbar-icon-btn" onclick="toggleNotifications()" style="position:relative" title="Notifications">
+        <button class="topbar-icon-btn" data-act="toggleNotifications" style="position:relative" title="Notifications">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notif-badge">4</span>
         </button>
 
         <div class="tb-pop-wrap">
-          <button class="topbar-profile-btn" id="topbar-profile-btn" onclick="toggleProfileMenu(event)" aria-haspopup="true">
+          <button class="topbar-profile-btn" id="topbar-profile-btn" data-act="toggleProfileMenu" data-stop aria-haspopup="true">
             <span class="topbar-avatar" id="topbar-avatar">SA</span>
             <span class="tb-profile-text">
               <span class="tb-profile-name" id="topbar-profile-name">Super Admin</span>
@@ -1159,16 +1159,16 @@
                 <div class="tb-menu-sub" id="pm-role">4SYZ Platform</div>
               </div>
             </div>
-            <button class="tb-menu-item" onclick="closeTbMenus();openProfileModal()">
+            <button class="tb-menu-item" data-act="openProfileModal" data-tbclose>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/></svg>
               View profile
             </button>
-            <button class="tb-menu-item" id="pm-settings" onclick="closeTbMenus();navigate('settings')">
+            <button class="tb-menu-item" id="pm-settings" data-act="navigate" data-args="[&quot;settings&quot;]" data-tbclose>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               Settings
             </button>
             <div class="tb-menu-div"></div>
-            <button class="tb-menu-item danger" onclick="closeTbMenus();doLogout()">
+            <button class="tb-menu-item danger" data-act="doLogout" data-tbclose>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
               Sign out
             </button>
@@ -1180,7 +1180,7 @@
     <div class="notif-panel hidden" id="notif-panel">
       <div class="notif-header">
         <h4>Notifications</h4>
-        <button class="link-btn" onclick="closeNotifications()">Close</button>
+        <button class="link-btn" data-act="closeNotifications">Close</button>
       </div>
       <div class="notif-list" id="notif-list"></div>
     </div>
@@ -1192,14 +1192,14 @@
       </div>
     </main>
   </div>
-  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeMobileSidebar()"></div>
+  <div class="sidebar-overlay" id="sidebar-overlay" data-act="closeMobileSidebar"></div>
 </div>
 
 <div class="modal-overlay hidden" id="modal-overlay">
   <div class="modal" id="modal">
     <div class="modal-header">
       <h3 id="modal-title">Modal</h3>
-      <button onclick="closeModal()" title="Close" aria-label="Close">
+      <button data-act="closeModal" title="Close" aria-label="Close">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
@@ -1224,86 +1224,6 @@
 <script src="app.12-fulfilment-staff.js"></script>
 
 <!-- Demo modal JS (self-contained, no conflicts with app.js) -->
-<script>
-(function() {
-  var currentSlide = 0;
-  var totalSlides = 5;
-  var autoTimer = null;
-  var progressTimer = null;
-  var SLIDE_DURATION = 7000;
-
-  window.openDemo = function() {
-    var o = document.getElementById('demo-overlay');
-    o.classList.add('open');
-    gotoSlide(0);
-    startAutoAdvance();
-  };
-  window.closeDemo = function() {
-    document.getElementById('demo-overlay').classList.remove('open');
-    stopAutoAdvance();
-  };
-  window.handleDemoOverlayClick = function(e) {
-    if (e.target === document.getElementById('demo-overlay')) closeDemo();
-  };
-
-  window.gotoSlide = function(n) {
-    stopAutoAdvance();
-    var slides = document.querySelectorAll('.demo-slide');
-    var tabs   = document.querySelectorAll('.demo-tab');
-    slides.forEach(function(s, i) { s.classList.toggle('active', i === n); });
-    tabs.forEach(function(t, i) { t.classList.toggle('active', i === n); });
-    currentSlide = n;
-
-    document.getElementById('demo-step-info').textContent = (n + 1) + ' of ' + totalSlides;
-    var nextBtn = document.getElementById('demo-next-btn');
-    if (n === totalSlides - 1) {
-      nextBtn.innerHTML = 'Sign In &nbsp;<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
-      nextBtn.onclick = function() { closeDemo(); };
-    } else {
-      nextBtn.innerHTML = 'Next &nbsp;<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
-      nextBtn.onclick = nextSlide;
-    }
-
-    // Animate progress bar
-    var fill = document.getElementById('demo-progress-fill');
-    fill.style.transition = 'none';
-    fill.style.width = '0%';
-    requestAnimationFrame(function() {
-      requestAnimationFrame(function() {
-        fill.style.transition = 'width ' + (SLIDE_DURATION / 1000) + 's linear';
-        fill.style.width = '100%';
-      });
-    });
-
-    startAutoAdvance();
-  };
-
-  window.nextSlide = function() {
-    if (currentSlide < totalSlides - 1) gotoSlide(currentSlide + 1);
-  };
-  window.prevSlide = function() {
-    if (currentSlide > 0) gotoSlide(currentSlide - 1);
-  };
-
-  function startAutoAdvance() {
-    stopAutoAdvance();
-    autoTimer = setTimeout(function() {
-      if (currentSlide < totalSlides - 1) gotoSlide(currentSlide + 1);
-    }, SLIDE_DURATION);
-  }
-  function stopAutoAdvance() {
-    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
-  }
-
-  // Keyboard nav
-  document.addEventListener('keydown', function(e) {
-    var overlay = document.getElementById('demo-overlay');
-    if (!overlay.classList.contains('open')) return;
-    if (e.key === 'Escape') closeDemo();
-    if (e.key === 'ArrowRight') nextSlide();
-    if (e.key === 'ArrowLeft')  prevSlide();
-  });
-})();
-</script>
+<script src="demo.js"></script>
 </body>
 </html>

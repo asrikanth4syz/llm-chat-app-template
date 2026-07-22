@@ -424,7 +424,7 @@ function renderReports(el) {
       <span style="font-size:.76rem;color:var(--text-muted)">— orders vs delivery by month/quarter/year, then drill into category → sub-category</span>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-      <select id="adm-fulfil-client" class="form-control" style="max-width:240px" onchange="loadAdminFulfil()">
+      <select id="adm-fulfil-client" class="form-control" style="max-width:240px" ${dataChange('loadAdminFulfil')}>
         <option value="">Loading clients…</option>
       </select>
       <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
@@ -797,9 +797,9 @@ function renderClientReports(el) {
       <span style="font-weight:700;font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;color:var(--primary);display:inline-flex;align-items:center;gap:5px">🕐 Period</span>
       ${presets.map(p=>`<button class="cdash-chip" id="cdash-pre-${p[0]}" ${dataAct('clientRptPreset', p[0])}>${p[1]}</button>`).join('')}
       <span style="width:1px;height:20px;background:var(--border)"></span>
-      <input type="date" id="rpt-from" class="form-control" style="max-width:140px;font-size:.8rem" value="${firstOfMonth}" onchange="cdashClearPreset()">
+      <input type="date" id="rpt-from" class="form-control" style="max-width:140px;font-size:.8rem" value="${firstOfMonth}" ${dataChange('cdashClearPreset')}>
       <span style="color:var(--text-muted);font-size:.8rem">to</span>
-      <input type="date" id="rpt-to" class="form-control" style="max-width:140px;font-size:.8rem" value="${today}" onchange="cdashClearPreset()">
+      <input type="date" id="rpt-to" class="form-control" style="max-width:140px;font-size:.8rem" value="${today}" ${dataChange('cdashClearPreset')}>
       <button class="btn btn-primary btn-sm" ${dataAct('loadClientReports')}>Apply</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button class="cdash-chip" id="cdash-cmp" ${dataAct('cdashToggleCompare')}>⇄ Compare</button>

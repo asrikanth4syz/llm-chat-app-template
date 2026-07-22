@@ -162,7 +162,7 @@ async function execMarkDelivered(dcId) {
         <td>${it.item_name||it.sku}</td>
         <td style="text-align:center;color:var(--text-muted)">${it.qty_ordered}</td>
         <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
-        <td style="text-align:center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" oninput="if(+this.value>${maxDeliver})this.value=${maxDeliver}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+        <td style="text-align:center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       </tr>`;}).join('')}
       </tbody>
     </table>
@@ -391,9 +391,9 @@ async function manageClientCatalog(clientId, clientName) {
      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
        <input id="cc-search" type="search" placeholder="Search by name or SKU…"
          style="flex:1;min-width:140px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem"
-         oninput="renderCCSearchResults()" onfocus="renderCCSearchResults()">
+         ${dataInput('renderCCSearchResults')} onfocus="renderCCSearchResults()">
        <select id="cc-cat-filter" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;color:var(--navy);background:#fff"
-         onchange="renderCCSearchResults()">
+         ${dataChange('renderCCSearchResults')}>
          <option value="">All Categories</option>${catOpts}
        </select>
      </div>
@@ -411,7 +411,7 @@ async function manageClientCatalog(clientId, clientName) {
        <!-- By CSV -->
        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
          <span style="font-size:.76rem;font-weight:700;color:#166534;white-space:nowrap">By CSV:</span>
-         <input type="file" id="cc-csv-input" accept=".csv,text/csv" style="display:none" onchange="handleCCCsvUpload(this)">
+         <input type="file" id="cc-csv-input" accept=".csv,text/csv" style="display:none" ${dataChangeEl('handleCCCsvUpload')}>
          <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('clickEl', 'cc-csv-input')}>Upload CSV</button>
          <a id="cc-csv-template" href="#" style="font-size:.72rem;color:#16a34a;text-decoration:underline;white-space:nowrap" ${dataAct('downloadCCTemplate')} data-prevent>Download template</a>
        </div>
@@ -463,7 +463,7 @@ function ccAssignedRow(item) {
         style="flex:1;min-width:70px;padding:4px 8px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.85rem;background:#fff"
         id="cc-price-${item.sku}"
         onblur="saveCCPrice('${item.sku}',this)"
-        onkeydown="if(event.key==='Enter'){this.blur()}"
+        ${dataEnterEl('_blurEl')}
         title="Leave blank to use global price ₹${globalPrice}">
       ${hasCustom
         ? `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:4px;white-space:nowrap;font-weight:600">Custom</span>`
@@ -753,7 +753,7 @@ function clientFormFields(prefix, c={}) {
         <label>PAN <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional — 10 chars, e.g. ABCDE1234F)</span></label>
         <input type="text" id="${prefix}-pan" value="${c.pan||''}" placeholder="ABCDE1234F"
           maxlength="10" spellcheck="false" style="text-transform:uppercase;letter-spacing:.04em"
-          oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,10)">
+          ${dataInputEl('maskUpper', 10)}>
         <div id="${prefix}-pan-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
       </div>
       <div class="form-group">
@@ -761,7 +761,7 @@ function clientFormFields(prefix, c={}) {
         <input type="text" id="${prefix}-gstin" value="${c.gstin||''}" placeholder="29ABCDE1234F1ZW"
           maxlength="15" autocapitalize="characters" spellcheck="false"
           style="text-transform:uppercase;letter-spacing:.04em"
-          oninput="onGstInput('${prefix}',this)">
+          ${dataInputEl('onGstInput', prefix)}>
         <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
       </div>
     </div>
@@ -1022,7 +1022,7 @@ async function renderServiceDesk(el) {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       ${!isClientRole && clientOptions.length ? `
       <select id="sd-client-filter" class="form-control" style="max-width:220px;font-size:.84rem"
-        onchange="APP._sdClientFilter=this.value;navigate('service_desk')">
+        ${dataChangeEl('sdSetClientFilter')}>
         <option value="">All Clients (${allTickets.length})</option>
         ${clientOptions.map(c=>{
           const n = allTickets.filter(t=>t.client_id===c.id).length;
@@ -1186,7 +1186,7 @@ async function viewTicketModal(id) {
     <div style="display:flex;gap:8px">
       <input type="text" id="ticket-chat-input" maxlength="2000" placeholder="Write a message…"
         style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
-        onkeydown="if(event.key==='Enter')postTicketComment('${t.id}')">
+        ${dataEnter('postTicketComment', t.id)}>
       <button class="btn btn-primary" ${dataAct('postTicketComment', t.id)}>Send</button>
     </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">Ticket closed — conversation is read-only</div>`}`,
     `${isRaiserRole && t.status==='RESOLVED' ? `

@@ -178,7 +178,7 @@ async function renderMyOrders(el) {
     <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <input type="search" placeholder="🔍  Search orders…" value="${APP._moSearch||''}"
         style="flex:1;min-width:180px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
-        oninput="APP._moSearch=this.value;moRender()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+        ${dataInputEl('moSearch')} onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${statuses.map(s=>`<button ${dataActEl('moGoTabPill', s)} data-s="${s}" class="tab-pill mo-pill${APP._moTab===s?' active':''}" style="font-size:.78rem;padding:5px 12px">${s==='All'?'All orders':STATUS_LABEL[s]||s.replace(/_/g,' ')}</button>`).join('')}
       </div>
@@ -842,7 +842,7 @@ async function renderOrderQueue(el) {
   function monthPickerHtml() {
     return `<div style="display:flex;align-items:center;gap:8px">
       <label style="font-size:.8rem;color:var(--text-muted);font-weight:600">Month</label>
-      <select class="filter-select" style="font-size:.82rem" onchange="oqSetMonth(this.value)">
+      <select class="filter-select" style="font-size:.82rem" ${dataChangeVal('oqSetMonth')}>
         <option value="" ${!APP._oqMonth?'selected':''}>All time</option>
         ${months.map(m=>`<option value="${m}" ${APP._oqMonth===m?'selected':''}>${m}</option>`).join('')}
       </select>

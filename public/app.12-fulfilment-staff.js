@@ -42,16 +42,16 @@ async function switchFulfilTab(tab, btn) {
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span style="font-weight:700;font-size:.85rem;color:var(--navy)">Order vs Delivery Reconciliation</span>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="ovd-client" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
+          <select id="ovd-client" class="filter-select" ${dataChange('reloadOVD')} style="font-size:.8rem">
             <option value="">All Clients</option>
             ${(clients||[]).map(c=>`<option value="${c.id}">${h(c.name)}</option>`).join('')}
           </select>
-          <select id="ovd-range" class="filter-select" onchange="reloadOVD()" style="font-size:.8rem">
+          <select id="ovd-range" class="filter-select" ${dataChange('reloadOVD')} style="font-size:.8rem">
             <option value="30">Last 30 days</option>
             <option value="60">Last 60 days</option>
             <option value="90">Last 90 days</option>
           </select>
-          <label style="font-size:.82rem;display:flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="ovd-due-only" onchange="reloadOVD()"> Due Only</label>
+          <label style="font-size:.82rem;display:flex;align-items:center;gap:5px;white-space:nowrap"><input type="checkbox" id="ovd-due-only" ${dataChange('reloadOVD')}> Due Only</label>
           <button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'ovd')}>&#8595; CSV</button>
         </div>
       </div>
@@ -801,7 +801,7 @@ async function initiateBrandPO(brand, vendorId, from, to) {
           <td style="font-size:.84rem"><b>${h(it.name||it.sku)}</b></td>
           <td style="font-size:.76rem;color:var(--text-muted)">${h(it.sku)}</td>
           <td style="text-align:right">${fmt(it.unit_price||0)}</td>
-          <td style="text-align:center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" oninput="updateBrandPOTotal()"></td>
+          <td style="text-align:center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('updateBrandPOTotal')}></td>
         </tr>`).join('')}</tbody>
       </table></div>
       <div id="bpo-total" style="text-align:right;font-weight:700;margin-top:8px;color:var(--navy)"></div>

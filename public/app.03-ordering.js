@@ -57,7 +57,7 @@ async function renderPlaceOrder(el) {
     <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
       <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
         style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
-        oninput="searchCatalog(this.value)" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+        ${dataInputVal('searchCatalog')} onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
       <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
         ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" ${dataActEl('filterCatalog', c)}>${c}</button>`).join('')}
       </div>
@@ -244,7 +244,7 @@ function renderCartReview(container) {
             onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
 
           <label style="font-weight:700;font-size:.88rem;display:block;margin:14px 0 6px;color:var(--navy)">📷 Attach Photo <span style="font-weight:400;color:var(--text-muted)">(optional — reference image, handwritten list, product photo)</span></label>
-          <input type="file" id="cart-image" accept="image/*" onchange="attachOrderImage(this)"
+          <input type="file" id="cart-image" accept="image/*" ${dataChangeEl('attachOrderImage')}
             style="display:block;width:100%;padding:8px;border:1.5px dashed var(--border);border-radius:8px;font-size:.8rem;box-sizing:border-box;background:#fafbfc">
           <div id="cart-image-preview" style="margin-top:8px;display:none;align-items:center;gap:10px">
             <img id="cart-image-thumb" style="max-height:70px;border-radius:8px;border:1px solid var(--border)">
@@ -304,8 +304,8 @@ function refreshCartReviewUI() {
                 <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)}>−</button>
                 <input type="number" class="qty-input" min="1" step="1" value="${item.qty}" inputmode="numeric"
                   data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
-                  onchange="setQty('${item.sku}', this.value)"
-                  onkeydown="if(event.key==='Enter'){this.blur();}" onfocus="this.select()">
+                  ${dataChangeVal('setQty', item.sku)}
+                  ${dataEnterEl('_blurEl')} onfocus="this.select()">
                 <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
@@ -316,7 +316,7 @@ function refreshCartReviewUI() {
             </div>
           </div>
           <input type="text" maxlength="200" value="${h(item.note||'')}" placeholder="💬 Remark for this item — brand preference, size, urgency… (optional)"
-            oninput="setCartItemNote('${item.sku}', this.value)"
+            ${dataInputVal('setCartItemNote', item.sku)}
             style="width:100%;margin-top:8px;padding:6px 10px;border:1px dashed var(--border);border-radius:7px;font-size:.76rem;box-sizing:border-box;outline:none;background:#fafbfc;transition:border .15s"
             onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid'" onblur="this.style.borderColor='var(--border)';this.style.borderStyle='dashed'">
         </div>`).join('');
@@ -547,12 +547,12 @@ async function previewReorder(orderId) {
   const rows = APP._reorderPreview.map((r, idx) => `
     <tr>
       <td style="text-align:center"><input type="checkbox" class="pr-chk" data-idx="${idx}" checked
-        onchange="updateReorderPreview()" style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></td>
+        ${dataChange('updateReorderPreview')} style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></td>
       <td><span style="font-size:1.05rem">${r.emoji}</span> <b style="font-size:.85rem">${h(r.name)}</b>
         <div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)} · ${fmt(r.price)}/unit</div></td>
       <td style="text-align:center">
         <input type="number" class="pr-qty" data-idx="${idx}" value="${r.qty}" min="1" step="1" inputmode="numeric"
-          oninput="this.value=this.value.replace(/[^0-9]/g,'')" onchange="updateReorderPreview()"
+          ${dataInputEl('maskDigits', 0)} ${dataChange('updateReorderPreview')}
           style="width:56px;text-align:center;border:1.5px solid var(--border-mid);border-radius:7px;padding:4px 2px;font-weight:700"></td>
       <td class="pr-line" data-idx="${idx}" style="text-align:right;font-weight:700;white-space:nowrap">${fmt(r.price * r.qty)}</td>
     </tr>`).join('');
@@ -561,7 +561,7 @@ async function previewReorder(orderId) {
     <div class="table-wrap" style="max-height:52vh;overflow:auto">
       <table class="table" style="margin:0">
         <thead><tr>
-          <th style="width:34px;text-align:center"><input type="checkbox" id="pr-all" checked onchange="toggleReorderAll(this)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></th>
+          <th style="width:34px;text-align:center"><input type="checkbox" id="pr-all" checked ${dataChangeEl('toggleReorderAll')} style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></th>
           <th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Line total</th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -827,7 +827,7 @@ async function submitOrder() {
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
         <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
-          onchange="document.getElementById('confirm-order-btn').disabled=!this.value">
+          ${dataChangeEl('toggleDisabledByValue', 'confirm-order-btn')}>
           <option value="">— Select a client —</option>
           ${clientOpts}
         </select>
@@ -897,7 +897,7 @@ async function saveDraft() {
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
         <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
-          onchange="document.getElementById('save-draft-btn').disabled=!this.value">
+          ${dataChangeEl('toggleDisabledByValue', 'save-draft-btn')}>
           <option value="">— Select a client —</option>
           ${clientOpts}
         </select>
@@ -990,15 +990,15 @@ async function renderMyInventory(el) {
   <!-- Current Stock Tab -->
   <div id="inv-panel-stock">
     <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-      <input id="inv-search" type="text" placeholder="Search items…" class="form-control" style="max-width:240px" oninput="filterMyInventoryTable()">
-      <select id="inv-filter-status" class="form-control" style="max-width:160px" onchange="filterMyInventoryTable()">
+      <input id="inv-search" type="text" placeholder="Search items…" class="form-control" style="max-width:240px" ${dataInput('filterMyInventoryTable')}>
+      <select id="inv-filter-status" class="form-control" style="max-width:160px" ${dataChange('filterMyInventoryTable')}>
         <option value="">All Status</option>
         <option value="critical">★ Critical</option>
         <option value="ok">In Stock</option>
         <option value="low">Low Stock</option>
         <option value="out">Out of Stock</option>
       </select>
-      <select id="inv-filter-cat" class="form-control" style="max-width:180px" onchange="filterMyInventoryTable()">
+      <select id="inv-filter-cat" class="form-control" style="max-width:180px" ${dataChange('filterMyInventoryTable')}>
         <option value="">All Categories</option>
         ${[...new Set(items.map(i=>i.category).filter(Boolean))].sort().map(c=>`<option value="${h(c)}">${h(c)}</option>`).join('')}
       </select>
@@ -1029,9 +1029,9 @@ async function renderMyInventory(el) {
   <!-- Consumption Log Tab -->
   <div id="inv-panel-consumption" style="display:none">
     <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-      <input type="date" id="inv-cons-from" class="form-control" style="max-width:160px" value="${new Date(Date.now()-7*86400000).toISOString().slice(0,10)}" onchange="reloadConsumptionLog()">
+      <input type="date" id="inv-cons-from" class="form-control" style="max-width:160px" value="${new Date(Date.now()-7*86400000).toISOString().slice(0,10)}" ${dataChange('reloadConsumptionLog')}>
       <span style="color:var(--text-muted);font-size:.85rem">to</span>
-      <input type="date" id="inv-cons-to" class="form-control" style="max-width:160px" value="${new Date().toISOString().slice(0,10)}" onchange="reloadConsumptionLog()">
+      <input type="date" id="inv-cons-to" class="form-control" style="max-width:160px" value="${new Date().toISOString().slice(0,10)}" ${dataChange('reloadConsumptionLog')}>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
       <table class="table" style="margin:0">
@@ -1227,7 +1227,7 @@ function logConsumptionModal(sku, name, qty, uom) {
     <div class="form-group">
       <label class="form-label">Quantity Used <span style="color:var(--danger)">*</span></label>
       <input id="cons-qty" type="number" min="1" step="1" max="${onHand}" class="form-control" placeholder="e.g. 5" style="max-width:160px"
-        oninput="validateConsQty(${onHand})">
+        ${dataInput('validateConsQty', onHand)}>
       <div id="cons-qty-warn" style="display:none;font-size:.76rem;color:var(--danger);margin-top:5px"></div>
     </div>
     <div class="form-group">

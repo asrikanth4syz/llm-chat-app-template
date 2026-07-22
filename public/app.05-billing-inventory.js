@@ -515,7 +515,7 @@ async function renderInventory(el) {
       return `
       <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
         <td ${dataAct('_noop')} data-stop style="width:34px;text-align:center">
-          <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
+          <input type="checkbox" ${checked?'checked':''} ${dataChangeEl('invToggleSelect', item.sku)} style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
         <td><b>${h(item.name)}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${h(item.brand)}</div>`:''}</td>
@@ -574,7 +574,7 @@ async function renderInventory(el) {
   <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
     <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
       style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
-      oninput="APP._invSearch=this.value.toLowerCase();APP._invShowAll=false;refreshInvTable()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+      ${dataInputEl('invSearch')} onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
     <div id="inv-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
       ${cats.map(c=>{
         const active = APP._invFilter===c;
@@ -602,7 +602,7 @@ async function renderInventory(el) {
     <div class="table-wrap">
       <table class="table" id="inv-table" style="margin:0">
         <thead><tr>
-          <th style="width:34px;text-align:center"><input type="checkbox" id="inv-select-all" onchange="invSelectAll(this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)"></th>
+          <th style="width:34px;text-align:center"><input type="checkbox" id="inv-select-all" ${dataChangeEl('invSelectAll')} style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)"></th>
           ${[['sku','SKU'],['name','Item'],['category','Category'],[null,'UOM'],['unit_price','Price'],['mrp','MRP'],['stock','Stock'],['reserved','Reserved'],[null,'Available'],[null,'Level'],[null,'Status'],[null,'Vendor'],[null,'Actions']]
             .map(([col,label]) => col
               ? `<th style="cursor:pointer;user-select:none;white-space:nowrap" ${dataAct('invSortBy', col)}>${label} <span data-sort-arrow="${col}" style="font-size:.65rem;opacity:.5">⇅</span></th>`
@@ -881,10 +881,10 @@ async function editInventoryItem(sku) {
         <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
         <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
         <div class="form-group"><label>Category</label>
-          <select id="ei-cat" onchange="eiNewToggle('cat')">${catOpts}<option value="__new__">➕ Add new category…</option></select>
+          <select id="ei-cat" ${dataChange('eiNewToggle', 'cat')}>${catOpts}<option value="__new__">➕ Add new category…</option></select>
           <input type="text" id="ei-cat-new" placeholder="Type the new category name" style="display:none;margin-top:6px"></div>
         <div class="form-group"><label>Sub-Category</label>
-          <select id="ei-subcat" onchange="eiNewToggle('subcat')">${subOpts}<option value="__new__">➕ Add new sub-category…</option></select>
+          <select id="ei-subcat" ${dataChange('eiNewToggle', 'subcat')}>${subOpts}<option value="__new__">➕ Add new sub-category…</option></select>
           <input type="text" id="ei-subcat-new" placeholder="Type the new sub-category name" style="display:none;margin-top:6px"></div>
         <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
         <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>

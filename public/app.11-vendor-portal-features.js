@@ -681,7 +681,7 @@ function showImportTab(tab, jobs) {
         </div>
         <div class="form-group" style="margin-bottom:0">
           <label style="font-weight:600">Choose CSV file</label>
-          <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" onchange="previewVendorCSV(this)">
+          <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" ${dataChangeEl('previewVendorCSV')}>
         </div>
         <div id="csv-preview" style="margin-top:12px"></div>
         <div id="csv-actions" style="display:none;margin-top:12px">
@@ -724,7 +724,7 @@ function showImportTab(tab, jobs) {
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label style="font-weight:600">Choose CSV file</label>
-        <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" onchange="previewCSV(this,'${tab}')">
+        <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" ${dataChangeEl('previewCSVEl', tab)}>
       </div>
       <div id="csv-preview" style="margin-top:12px"></div>
       <div id="csv-actions" style="display:none;margin-top:12px;align-items:center;gap:12px">

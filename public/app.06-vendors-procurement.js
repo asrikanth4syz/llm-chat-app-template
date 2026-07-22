@@ -149,17 +149,17 @@ async function renderVendors(el) {
   <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <input type="text" id="vendor-search-q" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      oninput="filterVendorCards()">
+      ${dataInput('filterVendorCards')}>
     <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:#fff"
-      onchange="APP._vendorCat=this.value;renderVendors(document.getElementById('main-content'))">
+      ${dataChangeEl('vendorSetCat')}>
       <option value="">All Categories</option>
       ${allCategories.map(c=>`<option value="${c}"${APP._vendorCat===c?' selected':''}>${c}</option>`).join('')}
     </select>
     <input type="text" id="vendor-search-loc" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
       style="width:160px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      oninput="filterVendorCards()">
+      ${dataInput('filterVendorCards')}>
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
-      <input type="checkbox" ${APP._vendorShowInactive?'checked':''} onchange="APP._vendorShowInactive=this.checked;renderVendors(document.getElementById('main-content'))"> Show inactive
+      <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
     </label>
     <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" ${dataAct('clearVendorSearch')}>Clear</button>
   </div>
@@ -262,13 +262,13 @@ function vendorFormFields(prefix, v={}) {
     <div style="border-top:1px solid var(--border);margin:6px 0 12px;padding-top:12px;font-size:.78rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Registration &amp; Compliance</div>
     <div class="grid-2">
       <div class="form-group"><label>Registration</label>
-        <select id="${prefix}-regtype" onchange="onVendorRegChange('${prefix}')">
+        <select id="${prefix}-regtype" ${dataChange('onVendorRegChange', prefix)}>
           <option value="registered" ${(v.registration_type||'registered')==='registered'?'selected':''}>Registered (GST)</option>
           <option value="unregistered" ${v.registration_type==='unregistered'?'selected':''}>Unregistered</option>
         </select>
       </div>
       <div class="form-group"><label>Vendor Type</label>
-        <select id="${prefix}-vtype" onchange="onVendorTypeChange('${prefix}')">
+        <select id="${prefix}-vtype" ${dataChange('onVendorTypeChange', prefix)}>
           <option value="non_food" ${(v.vendor_type||'non_food')==='non_food'?'selected':''}>Non-food</option>
           <option value="food" ${v.vendor_type==='food'?'selected':''}>Food</option>
         </select>
@@ -279,13 +279,13 @@ function vendorFormFields(prefix, v={}) {
         <div class="form-group">
           <label>PAN <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(10 chars, e.g. ABCDE1234F)</span></label>
           <input type="text" id="${prefix}-pan" value="${v.pan||''}" placeholder="ABCDE1234F" maxlength="10" spellcheck="false"
-            style="text-transform:uppercase;letter-spacing:.04em" oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,10)">
+            style="text-transform:uppercase;letter-spacing:.04em" ${dataInputEl('maskUpper', 10)}>
           <div id="${prefix}-pan-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
         </div>
         <div class="form-group">
           <label>GST Number <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(15-char GSTIN)</span></label>
           <input type="text" id="${prefix}-gstin" value="${v.gstin||''}" placeholder="29ABCDE1234F1ZW" maxlength="15" spellcheck="false"
-            style="text-transform:uppercase;letter-spacing:.04em" oninput="onGstInput('${prefix}',this)">
+            style="text-transform:uppercase;letter-spacing:.04em" ${dataInputEl('onGstInput', prefix)}>
           <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
         </div>
       </div>
@@ -295,7 +295,7 @@ function vendorFormFields(prefix, v={}) {
         <div class="form-group">
           <label>FSSAI Licence No. <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(14 digits)</span></label>
           <input type="text" id="${prefix}-fssai" value="${v.fssai_licence||''}" placeholder="10012345000123" maxlength="14" inputmode="numeric"
-            oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,14)">
+            ${dataInputEl('maskDigits', 14)}>
           <div id="${prefix}-fssai-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
         </div>
         <div class="form-group">
@@ -313,7 +313,7 @@ function vendorFormFields(prefix, v={}) {
       </div>
       <div class="form-group">
         <label>Visit Frequency</label>
-        <select id="${prefix}-visitfreq" onchange="onVendorVisitFreqChange('${prefix}')">
+        <select id="${prefix}-visitfreq" ${dataChange('onVendorVisitFreqChange', prefix)}>
           ${['','Weekly','Fortnightly','Monthly','On-Demand'].map(f=>`<option value="${f}" ${(v.visit_frequency||'')===f?'selected':''}>${f||'— Not scheduled —'}</option>`).join('')}
         </select>
       </div>
@@ -429,7 +429,7 @@ function vendorWizardHtml(v) {
         <div class="form-group"><label>Account number <span style="color:var(--danger)">*</span></label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
         <div class="form-group"><label>IFSC <span style="color:var(--danger)">*</span> <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
           <input id="vw-bank-ifsc" style="${inS};text-transform:uppercase;letter-spacing:.04em" value="${h(v.bank_ifsc||'')}" maxlength="11" spellcheck="false"
-            oninput="this.value=this.value.toUpperCase().replace(/[^0-9A-Z]/g,'').slice(0,11)"><div id="vw-bank-ifsc-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div></div>
+            ${dataInputEl('maskUpper', 11)}><div id="vw-bank-ifsc-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div></div>
         <div class="form-group"><label>Bank name</label><input id="vw-bank-bankname" style="${inS}" value="${h(v.bank_name||'')}" placeholder="e.g. HDFC Bank"></div>
         <div class="form-group"><label>Branch</label><input id="vw-bank-branch" style="${inS}" value="${h(v.bank_branch||'')}" placeholder="e.g. BTM Layout"></div>
         <div class="form-group"><label>UPI ID <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(optional)</span></label><input id="vw-upi" style="${inS}" value="${h(v.upi_id||'')}" placeholder="name@bank"></div>
@@ -499,7 +499,7 @@ function vwRenderDrop(kind) {
     el.className = 'vw-drop';
     el.innerHTML = `<div class="ic">＋</div><div style="min-width:0"><div class="t">${meta.label}${meta.opt?' <span style="color:var(--text-muted);font-weight:400">(optional)</span>':''}</div>
       <div class="s">Click to upload · PDF/JPG/PNG · max 1 MB</div></div>
-      <label class="btn btn-secondary btn-sm act" style="cursor:pointer;margin:0">Upload<input type="file" accept="image/*,application/pdf" style="display:none" onchange="vwPickFile('${kind}',this)"></label>`;
+      <label class="btn btn-secondary btn-sm act" style="cursor:pointer;margin:0">Upload<input type="file" accept="image/*,application/pdf" style="display:none" ${dataChangeEl('vwPickFile', kind)}></label>`;
   }
 }
 function vwPickFile(kind, input) {
@@ -860,7 +860,7 @@ async function newPOForVendor(vendorId, vendorName) {
   const inv = await api('/inventory');
   const itemOpts = (inv||[]).map(i=>`<option value="${i.sku}" data-price="${i.unit_price}">${h(i.name)} (${fmt(i.unit_price)})</option>`).join('');
   openModal(`New PO — ${vendorName}`,
-    `<div class="form-group"><label>Item</label><select id="po-item" onchange="updatePOPrice(this)">${itemOpts}</select></div>
+    `<div class="form-group"><label>Item</label><select id="po-item" ${dataChangeEl('updatePOPrice')}>${itemOpts}</select></div>
      <div class="form-group"><label>Quantity</label><input type="number" id="po-qty2" value="50" min="1"></div>
      <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="po-price2" value="${inv?.[0]?.unit_price||0}"></div>
      <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-del2" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
@@ -956,7 +956,7 @@ async function renderProcurement(el) {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem">All Purchase Orders</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" onchange="filterPOTable()">
+        <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" ${dataChange('filterPOTable')}>
           <option value="">All Status</option>
           ${['SENT','ACCEPTED','DISPATCHED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s}</option>`).join('')}
         </select>

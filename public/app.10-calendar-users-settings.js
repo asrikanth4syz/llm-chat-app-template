@@ -94,10 +94,10 @@ async function renderDeliveryCalendar(el) {
     <button class="btn btn-secondary btn-sm" ${dataAct('dcalToday')}>Today</button>
     <button class="dcal-vbtn on" id="dcal-v-month" ${dataAct('dcalSetView', 'month')}>Month</button>
     <button class="dcal-vbtn" id="dcal-v-agenda" ${dataAct('dcalSetView', 'agenda')}>Next 14 days</button>
-    <select id="dcal-f-client" class="form-control" style="max-width:180px;font-size:.8rem" onchange="dcalApplyFilters()">
+    <select id="dcal-f-client" class="form-control" style="max-width:180px;font-size:.8rem" ${dataChange('dcalApplyFilters')}>
       <option value="">Client: All</option>${clients.map(c=>`<option value="${h(c)}">${h(c)}</option>`).join('')}
     </select>
-    <select id="dcal-f-status" class="form-control" style="max-width:160px;font-size:.8rem" onchange="dcalApplyFilters()">
+    <select id="dcal-f-status" class="form-control" style="max-width:160px;font-size:.8rem" ${dataChange('dcalApplyFilters')}>
       <option value="">Status: All</option>
       <option value="sch">Scheduled</option>
       <option value="tra">In transit</option>
@@ -364,14 +364,14 @@ function dcalRail(by, gh) {
   });
   const pol = _dcal.pol || {};
   const polRow = (field, label, sub) => `<label style="display:flex;align-items:flex-start;gap:8px;font-size:.78rem;padding:4px 0;cursor:pointer;color:var(--navy)">
-    <input type="checkbox" ${pol[field]?'checked':''} onchange="dcalPolSave('${field}',this)" style="margin-top:2px">
+    <input type="checkbox" ${pol[field]?'checked':''} ${dataChangeEl('dcalPolSave', field)} style="margin-top:2px">
     <span><b>${label}</b><span style="display:block;font-size:.66rem;color:var(--text-muted)">${sub}</span></span></label>`;
   const policyCard = `<div class="dcal-rail-card"><div class="dcal-rc-h">Reminders &amp; capacity <span style="text-transform:none;font-weight:600">global policy</span></div>
     ${polRow('email_t1','1 day before','email + alert to ops')}
     ${polRow('dayof','Day-of digest','morning summary of today’s runs')}
     ${polRow('ghost_nudge','Recurring nudges','unconfirmed cycles, 2 days out')}
     <div style="display:flex;align-items:center;gap:8px;padding:7px 0 2px;font-size:.78rem;color:var(--navy)"><b>Fleet capacity / day</b>
-      <input type="number" min="1" max="99" value="${pol.capacity||6}" class="form-control" style="width:64px;font-size:.8rem;padding:4px 8px" onchange="dcalPolSave('capacity',this)"></div>
+      <input type="number" min="1" max="99" value="${pol.capacity||6}" class="form-control" style="width:64px;font-size:.8rem;padding:4px 8px" ${dataChangeEl('dcalPolSave', 'capacity')}></div>
     <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:9px" ${dataActEl('dcalSendReminders')}>📨 Send reminders now</button>
     <div style="font-size:.63rem;color:var(--text-muted);margin-top:7px;line-height:1.5">Runs automatically every morning (9:00 IST). Bells on individual deliveries override this policy.</div>
   </div>`;
@@ -520,7 +520,7 @@ async function renderUsers(el) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
         <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:.72rem;color:var(--text-muted)">
-          <input type="checkbox" ${u.two_fa_enabled?'checked':''} onchange="toggle2FA('${u.id}',this.checked)">
+          <input type="checkbox" ${u.two_fa_enabled?'checked':''} ${dataChangeEl('toggle2FAEl', u.id)}>
           2FA
         </label>
         <div style="display:flex;gap:5px">

@@ -263,7 +263,7 @@ function renderWHBins(el, bins, warehouses) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
     <div style="display:flex;gap:8px;align-items:center">
       <label style="font-size:.875rem;color:var(--text-muted)">Filter by Warehouse:</label>
-      <select id="bin-wh-filter" onchange="filterBinsTable()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px">
+      <select id="bin-wh-filter" ${dataChange('filterBinsTable')} style="padding:6px 10px;border:1px solid var(--border);border-radius:6px">
         <option value="">All Warehouses</option>
         ${whOptions}
       </select>
@@ -545,7 +545,7 @@ async function pickOrderModal(orderId) {
               data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
               value="${item.qty}" min="0" max="${item.qty}"
               style="width:72px;text-align:center"
-              oninput="this.style.color=+this.value<+this.dataset.ordered?'var(--warning)':'inherit'">
+              ${dataInputEl('colorByOrdered')}>
           </td>
           <td>
             <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
@@ -834,7 +834,7 @@ async function renderDelivery(el) {
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
         <div style="position:relative;flex:1;max-width:400px">
           <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" oninput="filterPODTable(this.value)"
+          <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" ${dataInputVal('filterPODTable')}
             style="width:100%;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;outline:none">
         </div>
         <span id="pod-result-count" style="font-size:.82rem;color:var(--text-muted)"></span>
@@ -1028,7 +1028,7 @@ async function switchDeliveryTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <div style="position:relative;flex:1;max-width:400px">
             <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" oninput="filterPODTable(this.value)"
+            <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" ${dataInputVal('filterPODTable')}
               style="width:100%;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box">
           </div>
           <span id="pod-result-count" style="font-size:.82rem;color:var(--text-muted)"></span>
@@ -1271,7 +1271,7 @@ async function markDelivered(dcId) {
           <td style="text-align:center"><input type="number" class="form-control form-control-sm deliver-qty"
             data-sku="${i.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}"
             style="width:80px;text-align:center"
-            oninput="if(+this.value>${maxDeliver})this.value=${maxDeliver};this.style.color=+this.value<${maxDeliver}?'var(--warning)':'inherit'"></td>
+            ${dataInputEl('clampDeliver', maxDeliver)}></td>
         </tr>`;}).join('')}
       </tbody>
     </table>
@@ -1303,7 +1303,7 @@ function uploadDCDocModal(dcId, docType) {
   openModal(`Upload ${label} — DC #${dcId}`,
     `<div class="form-group">
        <label>Select file (PDF or image, max 5 MB)</label>
-       <input type="file" id="dc-doc-file" accept="image/*,application/pdf" onchange="previewDCDoc(this)"
+       <input type="file" id="dc-doc-file" accept="image/*,application/pdf" ${dataChangeEl('previewDCDoc')}
          style="display:block;width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;margin-top:6px">
      </div>
      <div id="dc-doc-preview" style="display:none;margin-top:12px;text-align:center">
@@ -1319,7 +1319,7 @@ function scanDCDocModal(dcId) {
   APP._scanPages = []; // [{dataUrl, name}]
   openModal(`Scan POD Document — DC #${dcId}`,
     `<input type="file" id="dc-scan-file" accept="image/*" capture="environment"
-       style="display:none" onchange="onScanCaptured(this,'${dcId}')">
+       style="display:none" ${dataChangeEl('onScanCapturedEl', dcId)}>
 
      <!-- captured pages thumbnails (hidden until first page) -->
      <div id="scan-pages-wrap" style="display:none;margin-bottom:14px">
