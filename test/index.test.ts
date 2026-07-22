@@ -184,6 +184,20 @@ describe("Auth", () => {
     }
   });
 
+  it("POST /api/auth/login — a plaintext SEED account is upgraded to a hash on login", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("tst-seedup", "seedup@sp.test", "SEED:seedpass", "ops_manager", "Seed Up", "SmartPantry", "SU", 1).run();
+    const res = await post("/api/auth/login", { email: "seedup@sp.test", password: "seedpass" });
+    expect(res.status).toBe(200);
+    const row = await db.prepare("SELECT password_hash FROM users WHERE id='tst-seedup'").first() as { password_hash: string };
+    expect(row.password_hash.startsWith("hash:")).toBe(true);  // plaintext removed
+    expect(row.password_hash.startsWith("SEED:")).toBe(false);
+    // still logs in via the hashed path
+    const res2 = await post("/api/auth/login", { email: "seedup@sp.test", password: "seedpass" });
+    expect(res2.status).toBe(200);
+  });
+
   it("POST /api/auth/login — locks out after repeated failures", async () => {
     const email = "bruteforce@sp.test"; // unique email so it can't affect other tests
     for (let i = 0; i < 5; i++) {

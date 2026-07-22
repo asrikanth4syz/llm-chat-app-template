@@ -247,10 +247,25 @@ async function ensureFeatureTables(env: Env): Promise<void> {
   for (const sql of stmts) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
 }
 
+// One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
+// credential is left at rest for accounts that never log in.
+async function migrateSeedPasswords(env: Env): Promise<void> {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id, password_hash FROM users WHERE password_hash LIKE 'SEED:%'").all();
+    for (const r of (results || []) as Array<{ id: string; password_hash: string }>) {
+      const pw = String(r.password_hash).slice(5);
+      await env.DB.prepare("UPDATE users SET password_hash=? WHERE id=?")
+        .bind("hash:" + await hashPassword(pw), r.id).run();
+    }
+  } catch { /* non-fatal */ }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
   await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
+  await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
       ['Beverage',   'Beverages'],
@@ -772,13 +787,20 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT * FROM users WHERE email=? AND active=1").bind(email).first() as Record<string,string>|null;
   if (!row) { await loginRecordFail(env, emailKey); return json({error:"Invalid credentials"}, 401); }
 
-  let valid = false;
+  let valid = false, wasSeed = false;
   const hash = row.password_hash;
-  if (hash.startsWith("SEED:"))  valid = password === hash.slice(5);
-  else if (hash.startsWith("hash:")) valid = await verifyPassword(password, hash.slice(5));
+  if (hash.startsWith("hash:")) valid = await verifyPassword(password, hash.slice(5));
+  // Legacy demo/seed accounts stored the password in plaintext (SEED:). Still
+  // accept them during the transition, but upgrade to PBKDF2 on the spot below so
+  // plaintext is removed. Startup migration handles accounts that never log in.
+  else if (hash.startsWith("SEED:")) { valid = password === hash.slice(5); wasSeed = valid; }
   if (!valid) { await loginRecordFail(env, emailKey); return json({error:"Invalid credentials"}, 401); }
 
   await loginClearFails(env, emailKey); // successful credentials — reset the counter
+  if (wasSeed) {
+    try { await env.DB.prepare("UPDATE users SET password_hash=? WHERE id=?")
+      .bind("hash:" + await hashPassword(password), row.id).run(); } catch { /* non-fatal */ }
+  }
 
   // If OTP enabled, issue a partial token and require OTP step
   if (env.OTP_ENABLED === "true") {
