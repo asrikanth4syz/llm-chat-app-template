@@ -133,7 +133,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
 
   const kpiTile = (label, value, sub, subColor, borderColor) => `
     <div class="card" style="padding:16px 18px;border-top:3px solid ${borderColor};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${label}</div>
+      <div class="u-label">${label}</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${value}</div>
       <div style="font-size:.75rem;color:${subColor};margin-top:6px">${sub}</div>
     </div>`;
@@ -205,7 +205,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
           </div>
           <div style="margin-bottom:12px">
             <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px">
-              <span style="color:var(--text-muted)">Bin Utilisation</span>
+              <span class="u-muted">Bin Utilisation</span>
               <span style="font-weight:700;color:${color}">${utilPct}%</span>
             </div>
             <div style="background:var(--border);height:7px;border-radius:4px;overflow:hidden">
@@ -246,7 +246,7 @@ function renderWHGRN(el, grns) {
           <td><b style="color:var(--success)">${g.qty_received}</b></td>
           <td>${g.receiver_name||g.received_by||'—'}</td>
           <td>${fmtDate(g.received_at)}</td>
-        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No GRN records yet</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="7" class="u-empty">No GRN records yet</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -283,7 +283,7 @@ function renderWHBins(el, bins, warehouses) {
               <td><b>${b.code}</b></td>
               <td>${whMap[b.warehouse_id]||b.warehouse_id||'—'}</td>
               <td>${b.zone||'—'}</td>
-              <td>${b.sku||'<em style="color:var(--text-muted)">Unassigned</em>'}</td>
+              <td>${b.sku||'<em class="u-muted">Unassigned</em>'}</td>
               <td>${b.capacity||0}</td>
               <td>${b.occupied||0}</td>
               <td>
@@ -298,7 +298,7 @@ function renderWHBins(el, bins, warehouses) {
                 <button class="btn btn-secondary btn-sm" ${dataAct('editBinModal', b.id, b.code||'', b.zone||'', b.capacity||0, b.sku||'')}>Edit</button>
               </td>
             </tr>`;
-          }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No bins yet</td></tr>'}
+          }).join('')||'<tr><td colspan="8" class="u-empty">No bins yet</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -415,7 +415,7 @@ function renderWHTransfers(el, movements, bins) {
           <td>${m.reference_id||'—'}</td>
           <td>${m.note||'—'}</td>
           <td>${m.actor||'—'}</td>
-        </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No transfers yet</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="7" class="u-empty">No transfers yet</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -539,7 +539,7 @@ async function pickOrderModal(orderId) {
         ${(items||[]).map(item=>`<tr>
           <td><b>${item.name||item.item_name}</b></td>
           <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
-          <td style="color:var(--text-muted)">${item.qty}</td>
+          <td class="u-muted">${item.qty}</td>
           <td>
             <input type="number" class="form-control form-control-sm pick-qty"
               data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
@@ -611,7 +611,7 @@ function viewBins(warehouseId, warehouseName) {
             <td>${b.capacity}</td>
             <td>${b.occupied}</td>
             <td style="color:${b.capacity-b.occupied<10?'var(--danger)':'var(--success)'}">${b.capacity-b.occupied}</td>
-          </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No bins</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No bins</td></tr>'}
           </tbody>
         </table>
       </div>`,
@@ -1156,7 +1156,7 @@ async function viewDCItems(dcId) {
     <td>${i.qty_ordered}</td>
     <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
     <td style="color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
-  </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No items</td></tr>';
+  </tr>`).join('') : '<tr><td colspan="5" class="u-empty">No items</td></tr>';
   openModal(`DC Items — ${dcId}`,
     `<p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px">
       "Dispatched" = qty in this DC (picked from warehouse). "Delivered" = confirmed at drop-off. "Pending" = yet to be confirmed delivered.
@@ -1184,13 +1184,13 @@ async function toggleDCItemsInline(dcId, btn) {
     const rows = items.length ? items.map(i => `<tr>
         <td style="font-family:monospace;font-size:.78rem;color:var(--text-muted)">${h(i.sku)}</td>
         <td><b>${h(i.name)}</b></td>
-        <td style="text-align:right">${i.qty_ordered}</td>
+        <td class="u-right">${i.qty_ordered}</td>
         <td style="text-align:right;color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
         <td style="text-align:right;color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
-      </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No items</td></tr>`;
+      </tr>`).join('') : `<tr><td colspan="5" class="u-empty">No items</td></tr>`;
     box.innerHTML = `<div class="table-wrap" style="margin-top:8px;border:1px solid var(--border);border-radius:8px">
       <table class="table" style="margin:0;font-size:.82rem">
-        <thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">Dispatched</th><th style="text-align:right">Delivered</th><th style="text-align:right">Pending</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Item</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th><th class="u-right">Pending</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
     box.dataset.loaded = '1';
@@ -1261,14 +1261,14 @@ async function markDelivered(dcId) {
       Enter actual qty delivered for each item. You cannot deliver more than the order's outstanding balance — if less, a follow-up DC is created for the remainder.
     </p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Outstanding</th><th style="text-align:center">Delivered</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Outstanding</th><th class="u-center">Delivered</th></tr></thead>
       <tbody>
         ${items.map(i=>{ const maxDeliver = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
           <td><b>${i.sku}</b></td>
           <td>${h(i.name)}</td>
-          <td style="text-align:center;color:var(--text-muted)">${i.qty_ordered}</td>
+          <td class="u-empty">${i.qty_ordered}</td>
           <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
-          <td style="text-align:center"><input type="number" class="form-control form-control-sm deliver-qty"
+          <td class="u-center"><input type="number" class="form-control form-control-sm deliver-qty"
             data-sku="${i.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}"
             style="width:80px;text-align:center"
             ${dataInputEl('clampDeliver', maxDeliver)}></td>
@@ -1621,18 +1621,18 @@ async function returnDCModal(dcId) {
      ${items.length ? `
      <div class="table-wrap" style="margin-bottom:14px">
        <table class="table" style="margin:0">
-         <thead><tr><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Return Qty</th></tr></thead>
+         <thead><tr><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Return Qty</th></tr></thead>
          <tbody>${items.map(it => {
            const maxQ = it.qty_delivered || it.qty_ordered;
            return `<tr>
              <td><b style="font-size:.84rem">${h(it.item_name||it.name||it.sku)}</b><div style="font-size:.7rem;color:var(--text-muted)">${h(it.sku)}</div></td>
-             <td style="text-align:center;color:var(--text-muted)">${maxQ}</td>
-             <td style="text-align:center"><input type="number" data-ret-sku="${h(it.sku)}" data-ret-name="${h(it.item_name||it.name||it.sku)}" value="0" min="0" max="${maxQ}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+             <td class="u-empty">${maxQ}</td>
+             <td class="u-center"><input type="number" data-ret-sku="${h(it.sku)}" data-ret-name="${h(it.item_name||it.name||it.sku)}" value="0" min="0" max="${maxQ}" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
            </tr>`;}).join('')}
          </tbody>
        </table>
      </div>` : '<div class="alert alert-warning" style="margin-bottom:12px">No item breakdown found for this DC — the full DC will be returned.</div>'}
-     <div class="form-group"><label>Reason for Return <span style="color:var(--danger)">*</span></label>
+     <div class="form-group"><label>Reason for Return <span class="u-danger">*</span></label>
        <textarea id="return-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" placeholder="e.g. Goods damaged in transit, wrong items, quality issue…"></textarea>
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>

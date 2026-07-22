@@ -92,7 +92,7 @@ async function renderMyOrders(el) {
                 </div>
                 <div>
                   <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${o.id}</div>
-                  <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}${(o.items||[]).length?' · '+(o.items||[]).length+' item'+(o.items.length!==1?'s':''):''}</div>
+                  <div class="u-subtiny">${fmtDate(o.created_at)}${(o.items||[]).length?' · '+(o.items||[]).length+' item'+(o.items.length!==1?'s':''):''}</div>
                 </div>
               </div>
               <div style="text-align:right;flex-shrink:0">
@@ -211,7 +211,7 @@ async function renderMyOrders(el) {
             <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button>
             ${o.status==='DRAFT'||o.status==='SUBMITTED'?`<button class="btn btn-danger btn-sm" ${dataAct('cancelOrder', o.id)}>Cancel</button>`:''}
           </td>
-        </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No orders found</td></tr>'}
+        </tr>`).join('') : '<tr><td colspan="7" class="u-empty">No orders found</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -297,7 +297,7 @@ async function viewOrder(id) {
       const short = d.due > 0;
       return `<tr>
         <td>${h(i.name)}${noteHtml}</td>
-        <td style="color:var(--text-muted)">${i.qty}</td>
+        <td class="u-muted">${i.qty}</td>
         <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
@@ -308,7 +308,7 @@ async function viewOrder(id) {
       const isShort = picked !== undefined && picked < i.qty;
       return `<tr>
         <td>${h(i.name)}${noteHtml}</td>
-        <td style="color:var(--text-muted)">${i.qty}</td>
+        <td class="u-muted">${i.qty}</td>
         <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
@@ -323,7 +323,7 @@ async function viewOrder(id) {
         <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px">
             <b>${h(c.author_name)}</b>
-            <span style="color:var(--text-muted)">${timeAgo(c.created_at)}</span>
+            <span class="u-muted">${timeAgo(c.created_at)}</span>
           </div>
           <div>${h(c.message)}</div>
         </div>`).join('') || '<div style="color:var(--text-muted);font-size:.84rem">No comments yet.</div>'}
@@ -394,7 +394,7 @@ async function viewOrder(id) {
       ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
         <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
         <span>${statusBadge(h.to_status)}</span>
-        <span style="color:var(--text-muted)">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
+        <span class="u-muted">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
       </div>`).join('')}
       </div>`, false) : ''}
     ${orderSection('Comments', (comments||[]).length ? `${comments.length}` : '', commentsHtml, false)}`,
@@ -466,7 +466,7 @@ async function addOrderComment(orderId) {
   if (container) {
     const div = document.createElement('div');
     div.style.cssText = 'background:var(--bg);border-radius:8px;padding:10px 12px;font-size:.84rem';
-    div.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>${APP.user.name}</b><span style="color:var(--text-muted)">just now</span></div><div>${msg}</div>`;
+    div.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>${APP.user.name}</b><span class="u-muted">just now</span></div><div>${msg}</div>`;
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
   }
@@ -488,7 +488,7 @@ async function confirmCancelOrder(id) {
 
 async function submitDraftOrder(id) {
   openModal(`Submit Order ${id}`,
-    `<p style="color:var(--text-muted)">Submit draft order <b>${id}</b> to 4SYZ for processing?</p>`,
+    `<p class="u-muted">Submit draft order <b>${id}</b> to 4SYZ for processing?</p>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Not Yet</button>
      <button class="btn btn-gold" ${dataAct('confirmSubmitDraft', id)}>Submit Order</button>`);
 }
@@ -526,11 +526,11 @@ async function viewOrderDrilldown(orderId) {
     const sc = statusColor(l.status);
     return `<tr>
       <td style="font-family:monospace;font-size:.8rem;color:var(--text-muted)">${l.sku}</td>
-      <td style="font-weight:600">${l.name||l.sku}</td>
-      <td style="text-align:right">${l.qty_ordered}</td>
+      <td class="u-b600">${l.name||l.sku}</td>
+      <td class="u-right">${l.qty_ordered}</td>
       <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
       <td style="text-align:right;color:${l.qty_due>0?'var(--red)':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
-      <td style="text-align:right">${fmt(l.value_ordered)}</td>
+      <td class="u-right">${fmt(l.value_ordered)}</td>
       <td style="text-align:right;color:#10b981;font-weight:600">${fmt(l.value_delivered)}</td>
       <td style="text-align:right;color:${l.value_due>0?'var(--red)':'var(--text-muted)'}">${fmt(l.value_due)}</td>
       <td><span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(l.status)}</span></td>
@@ -544,10 +544,10 @@ async function viewOrderDrilldown(orderId) {
         <span style="font-weight:700;color:var(--navy)">${dc.id}</span>
         <span style="margin-left:8px;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${c}22;color:${c}">${dc.status}</span>
       </div>
-      <div style="color:var(--text-muted)">
+      <div class="u-muted">
         ${dc.driver_name?`${dc.driver_name} · `:''}${dc.vehicle_no||''}
       </div>
-      <div style="font-weight:600">
+      <div class="u-b600">
         ${dc.delivered_qty||0} delivered / ${dc.total_qty||0} dispatched
       </div>
     </div>`;
@@ -612,12 +612,12 @@ async function viewOrderDrilldown(orderId) {
     <table class="table" style="font-size:.82rem">
       <thead><tr>
         <th>SKU</th><th>Item</th>
-        <th style="text-align:right">Ordered</th>
-        <th style="text-align:right">Delivered</th>
-        <th style="text-align:right">Due</th>
-        <th style="text-align:right">Ordered ₹</th>
-        <th style="text-align:right">Delivered ₹</th>
-        <th style="text-align:right">Due ₹</th>
+        <th class="u-right">Ordered</th>
+        <th class="u-right">Delivered</th>
+        <th class="u-right">Due</th>
+        <th class="u-right">Ordered ₹</th>
+        <th class="u-right">Delivered ₹</th>
+        <th class="u-right">Due ₹</th>
         <th>Status</th>
       </tr></thead>
       <tbody>${lineRows || '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
@@ -697,24 +697,24 @@ async function renderTrackDelivery(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Scheduled</div>
+      <div class="u-label2">Scheduled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${scheduledDCs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">upcoming deliveries</div>
+      <div class="u-subtiny">upcoming deliveries</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'var(--amber)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Transit</div>
+      <div class="u-label2">In Transit</div>
       <div style="font-size:2rem;font-weight:800;color:${inTransitDCs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${inTransitDCs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">on the way now</div>
+      <div class="u-subtiny">on the way now</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered (Month)</div>
+      <div class="u-label2">Delivered (Month)</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${deliveredMonth.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">this month</div>
+      <div class="u-subtiny">this month</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Units In Transit</div>
+      <div class="u-label2">Units In Transit</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${itemsInTransit}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">units en route</div>
+      <div class="u-subtiny">units en route</div>
     </div>
   </div>
 
@@ -799,24 +799,24 @@ async function renderOrderQueue(el) {
     return `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:12px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" ${dataAct('switchOQMainTab', 'orders')}>
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Active Orders</div>
+        <div class="u-label">Active Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(totalValue)}</div>
+        <div class="u-sub">${fmt(totalValue)}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'var(--warning)':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'PENDING_APPROVAL')}>
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Needs Attention</div>
+        <div class="u-label">Needs Attention</div>
         <div style="font-size:1.9rem;font-weight:700;color:${needsAction?'var(--warning)':'var(--navy)'};line-height:1">${needsAction}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${needsBreakdown}</div>
+        <div class="u-sub">${needsBreakdown}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--violet);margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'IN_SHIPMENT')}>
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Shipment</div>
+        <div class="u-label">In Shipment</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inShipment}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">en route to client</div>
+        <div class="u-sub">en route to client</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'ACKNOWLEDGED')}>
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">To Pick</div>
+        <div class="u-label">To Pick</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${toPick}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in warehouse queue</div>
+        <div class="u-sub">in warehouse queue</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
@@ -878,11 +878,11 @@ async function renderOrderQueue(el) {
         <td style="font-weight:700">${fmt(o.grand_total)}</td>
         <td>${statusBadge(o.status)}</td>
         <td>${orderTypeBadge(o.order_type||'Regular')}</td>
-        <td style="text-align:center">
+        <td class="u-center">
           <span style="font-weight:700;font-size:.88rem">${o.item_count||0}</span>
           <span style="font-size:.72rem;color:var(--text-muted);display:block">items</span>
         </td>
-        <td style="text-align:center">
+        <td class="u-center">
           <span style="font-weight:700;font-size:.88rem">${o.total_qty||0}</span>
           <span style="font-size:.72rem;color:var(--text-muted);display:block">units</span>
         </td>
@@ -922,7 +922,7 @@ async function renderOrderQueue(el) {
       </div>
       <div class="table-wrap">
         <table class="table" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${oqTableHtml(APP._oqStatusTab)}
         </table>
       </div>
@@ -969,7 +969,7 @@ function switchOQMainTab(tab) {
       </div>
       <div class="table-wrap">
         <table class="table" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th style="text-align:center">Items</th><th style="text-align:center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
         </table>
       </div>
@@ -1152,7 +1152,7 @@ async function oqLoadItems() {
                 <td><b>${h(r.item_name)}</b></td>
                 <td><b>${r.ordered_qty}</b></td>
                 <td style="color:${ss==='oos'?'var(--danger)':ss==='short'?'var(--warning)':'var(--success)'};font-weight:700">${r.stock}</td>
-                <td>${gap>0?`<b style="color:var(--danger)">${gap}</b>`:'<span style="color:var(--success)">—</span>'}</td>
+                <td>${gap>0?`<b class="u-danger">${gap}</b>`:'<span style="color:var(--success)">—</span>'}</td>
                 <td>${ss==='oos'?'<span class="badge badge-danger">Out of Stock</span>':ss==='short'?'<span class="badge badge-warning">Short</span>':'<span class="badge badge-success">In Stock</span>'}</td>
               </tr>`;
             }).join('')}
@@ -1311,7 +1311,7 @@ async function dispatchRemainingModal(orderId) {
   const dcList = pending.map(dc => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div>
-        <div style="font-weight:600">${dc.id}</div>
+        <div class="u-b600">${dc.id}</div>
         <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units — ready to dispatch</div>
       </div>
       <button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>

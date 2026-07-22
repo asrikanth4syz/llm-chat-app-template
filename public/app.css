@@ -919,3 +919,21 @@ details.card > summary { user-select: none; }
 [data-focusdanger]:focus { border-color: var(--danger) !important; }
 [data-focussolid]:focus  { border-color: var(--blue) !important; border-style: solid !important; }
 [data-blurdashed]:not(:focus) { border-style: dashed; }
+
+/* Utility classes — promoted from the most-repeated inline styles (#7 part 3).
+   !important preserves the inline-style precedence they replace. Applied only to
+   elements that had no class (so no merge/specificity surprises). */
+.u-right      { text-align: right !important; }
+.u-center     { text-align: center !important; }
+.u-m0         { margin: 0 !important; }
+.u-muted      { color: var(--text-muted) !important; }
+.u-danger     { color: var(--danger) !important; }
+.u-b600       { font-weight: 600 !important; }
+.u-flex1      { flex: 1 !important; min-width: 0 !important; }
+.u-muted-xs   { font-size: .72rem !important; color: var(--text-muted) !important; }
+.u-label      { font-size: .7rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: .05em !important; color: var(--text-muted) !important; margin-bottom: 6px !important; }
+.u-label2     { font-size: .7rem !important; font-weight: 700 !important; color: var(--text-muted) !important; text-transform: uppercase !important; letter-spacing: .06em !important; }
+.u-sub        { font-size: .75rem !important; color: var(--text-muted) !important; margin-top: 6px !important; }
+.u-subtiny    { font-size: .74rem !important; color: var(--text-muted) !important; margin-top: 2px !important; }
+.u-empty      { text-align: center !important; color: var(--text-muted) !important; }
+.u-empty-lg   { padding: 40px !important; text-align: center !important; color: var(--text-muted) !important; }

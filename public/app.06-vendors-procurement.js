@@ -167,21 +167,21 @@ async function renderVendors(el) {
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Vendors</div>
+      <div class="u-label2">Total Vendors</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeVendors.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg On-time Rate</div>
+      <div class="u-label2">Avg On-time Rate</div>
       <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgOnTime)};margin-top:6px">${avgOnTime}%</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgFill)}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg Fill Rate</div>
+      <div class="u-label2">Avg Fill Rate</div>
       <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgFill)};margin-top:6px">${avgFill}%</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
+      <div class="u-label2">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">below performance threshold</div>
+      <div class="u-subtiny">below performance threshold</div>
     </div>
   </div>
 
@@ -425,9 +425,9 @@ function vendorWizardHtml(v) {
       <p class="vw-step-title">Bank &amp; payout</p>
       <p class="vw-step-desc">Where payments go. Upload the cancelled cheque on the next step.</p>
       <div class="grid-2">
-        <div class="form-group"><label>Account holder name <span style="color:var(--danger)">*</span></label><input id="vw-bank-acname" style="${inS}" value="${h(v.bank_account_name||'')}" placeholder="As per bank records"></div>
-        <div class="form-group"><label>Account number <span style="color:var(--danger)">*</span></label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
-        <div class="form-group"><label>IFSC <span style="color:var(--danger)">*</span> <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
+        <div class="form-group"><label>Account holder name <span class="u-danger">*</span></label><input id="vw-bank-acname" style="${inS}" value="${h(v.bank_account_name||'')}" placeholder="As per bank records"></div>
+        <div class="form-group"><label>Account number <span class="u-danger">*</span></label><input id="vw-bank-acno" style="${inS}" value="${h(v.bank_account_no||'')}" inputmode="numeric" placeholder="Bank account no."></div>
+        <div class="form-group"><label>IFSC <span class="u-danger">*</span> <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(11 chars, e.g. HDFC0001234)</span></label>
           <input id="vw-bank-ifsc" style="${inS};text-transform:uppercase;letter-spacing:.04em" value="${h(v.bank_ifsc||'')}" maxlength="11" spellcheck="false"
             ${dataInputEl('maskUpper', 11)}><div id="vw-bank-ifsc-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div></div>
         <div class="form-group"><label>Bank name</label><input id="vw-bank-bankname" style="${inS}" value="${h(v.bank_name||'')}" placeholder="e.g. HDFC Bank"></div>
@@ -578,7 +578,7 @@ function vwRenderReview() {
   const missing = required.filter(r => !r.ok);
   const done = required.filter(r => r.ok).length, pct = Math.round(done/required.length*100);
   const row = x => `<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span>
-    <span style="cursor:pointer" ${dataAct('vwGo', x.step)}>${x.label}${x.ok?'':` <span style="color:var(--danger)">— fill this</span>`}</span></div>`;
+    <span style="cursor:pointer" ${dataAct('vwGo', x.step)}>${x.label}${x.ok?'':` <span class="u-danger">— fill this</span>`}</span></div>`;
   document.getElementById('vw-review').innerHTML = `
     ${missing.length ? `<div style="background:var(--red-wash,var(--danger-bg));border:1.5px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:14px">
       <div style="font-weight:800;color:var(--danger);font-size:.86rem">${missing.length} required item${missing.length>1?'s':''} still needed to submit</div>
@@ -737,7 +737,7 @@ function vendorViewHTML(v, docs, products) {
         : `<span style="font-size:.68rem;font-weight:700;color:var(--text-muted);background:var(--surface-2);border-radius:100px;padding:3px 10px">Optional</span>`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--surface-2)">
       <span style="font-size:1rem">📄</span>
-      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.82rem">${d.label}</div>
+      <div class="u-flex1"><div style="font-weight:600;font-size:.82rem">${d.label}</div>
         <div style="font-size:.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${up?h(up.filename||'file'):(required?'Required':'Optional')}</div></div>
       ${chip}</div>`;
   }).join('');
@@ -766,7 +766,7 @@ function vendorViewHTML(v, docs, products) {
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px">
       <div>
         <div style="font-size:1.1rem;font-weight:800;color:var(--navy);line-height:1.2">${h(v.name)}</div>
-        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${catChips(v.category)}</div>
+        <div class="u-subtiny">${catChips(v.category)}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <span style="font-family:ui-monospace,monospace;font-size:.78rem;font-weight:700;letter-spacing:.03em;color:var(--navy);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:5px 11px">${code}</span>
@@ -790,7 +790,7 @@ function vendorViewHTML(v, docs, products) {
           ${field('On-time rate', `<span style="color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>`)}
           ${field('Fill rate', `<span style="color:${fillColor}">${pct(v.fill_rate||0)}</span>`)}
           ${field('Rating', `${(+v.rating||0).toFixed(1)} / 5.0`)}
-          ${field('Status', v.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>')}
+          ${field('Status', v.active===0?'<span class="u-danger">Disabled</span>':'<span style="color:var(--success)">Active</span>')}
           ${regd?field('GST number', `<span style="letter-spacing:.03em">${v.gstin||'—'}</span>`):''}
           ${regd?field('PAN', `<span style="letter-spacing:.03em">${v.pan||'—'}</span>`):''}
           ${food?field('FSSAI licence', `<span style="letter-spacing:.03em">${v.fssai_licence||'—'}</span>`):''}
@@ -943,7 +943,7 @@ async function renderProcurement(el) {
           <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;background:#f8f9fa;margin-bottom:8px;border:1px solid #e5e7eb">
             <div>
               <div style="font-weight:700;font-size:.84rem">${po.id} <span style="font-weight:400;color:var(--text-muted)">· ${po.vendor_name||'—'}</span></div>
-              <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(po.grand_total)} · Expected ${fmtDate(po.expected_delivery)}</div>
+              <div class="u-subtiny">${fmt(po.grand_total)} · Expected ${fmtDate(po.expected_delivery)}</div>
             </div>
             <button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>
           </div>`).join('')
@@ -974,7 +974,7 @@ async function renderProcurement(el) {
           <td>${po.status==='DISPATCHED'
             ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
             : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No POs</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>
     </div>

@@ -68,24 +68,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (15+ days)</div>
+        <div class="u-label">Critical (15+ days)</div>
         <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
         <div style="font-size:.75rem;color:${critical>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical>0?'immediate action needed':'none critical'}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Items</div>
+        <div class="u-label">Total Due Items</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending</div>
+        <div class="u-sub">items pending</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div class="u-label">Total Due Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.reduce((s,r)=>s+(r.due_qty||0),0)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+        <div class="u-sub">units outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Value</div>
+        <div class="u-label">Due Value</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0))}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">estimated at cost</div>
+        <div class="u-sub">estimated at cost</div>
       </div>
     </div>
     <div class="card">
@@ -100,12 +100,12 @@ async function switchFulfilTab(tab, btn) {
           <td>${h(r.item_name)}</td>
           <td>${r.ordered_qty}</td>
           <td>${r.delivered_qty}</td>
-          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td><b class="u-danger">${r.due_qty}</b></td>
           <td>${fmtDate(r.due_since_date)}</td>
           <td><span class="badge badge-${r.due_ageing_days>=15?'danger':r.due_ageing_days>=8?'warning':'info'}">${r.due_ageing_days}d</span></td>
           <td>${r.responsible_vendor||'—'}</td>
           <td>${statusBadge(r.due_status?.replace(' ','_').toUpperCase()||'DUE')}</td>
-        </tr>`).join('')||'<tr><td colspan="12" style="text-align:center;color:var(--text-muted)">No due items</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="12" class="u-empty">No due items</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -116,29 +116,29 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Open Orders</div>
+        <div class="u-label">Open Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.open_orders}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in progress</div>
+        <div class="u-sub">in progress</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Partial Orders</div>
+        <div class="u-label">Partial Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${data.kpis.partial_orders}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">partly delivered</div>
+        <div class="u-sub">partly delivered</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Quantity</div>
+        <div class="u-label">Due Quantity</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${data.kpis.due_qty}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+        <div class="u-sub">units outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Value</div>
+        <div class="u-label">Due Value</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${fmt(data.kpis.due_value)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">at risk</div>
+        <div class="u-sub">at risk</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delayed Deliveries</div>
+        <div class="u-label">Delayed Deliveries</div>
         <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--navy)'};line-height:1">${data.kpis.delayed_deliveries}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">past expected date</div>
+        <div class="u-sub">past expected date</div>
       </div>
     </div>
     <div class="card">
@@ -148,10 +148,10 @@ async function switchFulfilTab(tab, btn) {
         <tbody>${(data.clients||[]).map(c=>`<tr>
           <td><b>${h(c.name)}</b></td>
           <td>${c.order_count}</td>
-          <td><b style="color:var(--danger)">${c.due_qty||0}</b></td>
+          <td><b class="u-danger">${c.due_qty||0}</b></td>
           <td>${fmt(c.due_value)}</td>
           <td><button class="btn btn-secondary btn-sm" ${dataAct('drillPendingClient', c.id, c.name)}>Drilldown</button></td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No pending supply</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="5" class="u-empty">No pending supply</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -166,24 +166,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${critical?.order_count?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (15+ days)</div>
+        <div class="u-label">Critical (15+ days)</div>
         <div style="font-size:1.9rem;font-weight:700;color:${critical?.order_count?'var(--danger)':'var(--navy)'};line-height:1">${critical?.order_count||0}</div>
         <div style="font-size:.75rem;color:${critical?.order_count?'var(--danger)':'var(--text-muted)'};margin-top:6px">${fmt(critical?.due_value||0)} at risk</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Orders</div>
+        <div class="u-label">Total Due Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalOrders}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all buckets</div>
+        <div class="u-sub">across all buckets</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div class="u-label">Total Due Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDueQty}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+        <div class="u-sub">units outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Value</div>
+        <div class="u-label">Total Due Value</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueValue)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">estimated at cost</div>
+        <div class="u-sub">estimated at cost</div>
       </div>
     </div>
     <div class="card">
@@ -197,7 +197,7 @@ async function switchFulfilTab(tab, btn) {
             <td>${r.order_count}</td><td>${r.client_count}</td><td>${r.vendor_count}</td>
             <td><b>${r.due_qty}</b></td><td>${fmt(r.due_value)}</td>
           </tr>`;
-        }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No overdue items</td></tr>'}
+        }).join('')||'<tr><td colspan="6" class="u-empty">No overdue items</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -211,24 +211,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical Brands (&lt;70%)</div>
+        <div class="u-label">Critical Brands (&lt;70%)</div>
         <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
+        <div class="u-sub">of ${data.length} brands</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
+        <div class="u-label">Avg Fulfilment</div>
         <div style="font-size:1.9rem;font-weight:700;color:${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};line-height:1">${avgFill}%</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all brands</div>
+        <div class="u-sub">across all brands</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Units</div>
+        <div class="u-label">Total Due Units</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
+        <div class="u-sub">outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands Tracked</div>
+        <div class="u-label">Brands Tracked</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+        <div class="u-sub">last 30 days</div>
       </div>
     </div>
     <div class="card">
@@ -238,13 +238,13 @@ async function switchFulfilTab(tab, btn) {
         <tbody>${data.sort((a,b)=>a.fulfilment_pct-b.fulfilment_pct).map(r=>`<tr>
           <td><b>${h(r.brand_name)}</b></td>
           <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
-          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td><b class="u-danger">${r.due_qty}</b></td>
           <td>
             <span class="badge badge-${r.fulfilment_pct>=90?'success':r.fulfilment_pct>=70?'warning':'danger'}">${r.fulfilment_pct}%</span>
             <div style="background:var(--border);height:3px;border-radius:2px;margin-top:4px;overflow:hidden"><div style="height:100%;width:${Math.min(r.fulfilment_pct,100)}%;background:${r.fulfilment_pct>=90?'var(--success)':r.fulfilment_pct>=70?'var(--warning)':'var(--danger)'}"></div></div>
           </td>
           <td>${r.primary_vendor||'—'}</td>
-        </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No shortfall</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No shortfall</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -258,24 +258,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${brandsWithShortfall>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands w/ Shortfall</div>
+        <div class="u-label">Brands w/ Shortfall</div>
         <div style="font-size:1.9rem;font-weight:700;color:${brandsWithShortfall>0?'var(--warning)':'var(--navy)'};line-height:1">${brandsWithShortfall}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
+        <div class="u-sub">of ${data.length} brands</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${totalShortfall>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Shortfall Qty</div>
+        <div class="u-label">Total Shortfall Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:${totalShortfall>0?'var(--danger)':'var(--navy)'};line-height:1">${totalShortfall}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units to procure</div>
+        <div class="u-sub">units to procure</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Suggested PO Qty</div>
+        <div class="u-label">Suggested PO Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">total units to order</div>
+        <div class="u-sub">total units to order</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands Tracked</div>
+        <div class="u-label">Brands Tracked</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+        <div class="u-sub">last 30 days</div>
       </div>
     </div>
     <div class="card">
@@ -290,7 +290,7 @@ async function switchFulfilTab(tab, btn) {
           <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
           <td>${r.primary_vendor||'—'}</td>
           <td>${r.suggested_po_qty>0?`<button class="btn btn-primary btn-sm" ${dataAct('initiateBrandPO', String(r.brand_name), r.vendor_id||'', from30, today)}>🛒 Initiate PO</button>`:'<span style="color:var(--success);font-size:.8rem">✓ Fulfilled</span>'}</td>
-        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="9" class="u-empty">No data</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -305,24 +305,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${atRisk>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">At-Risk Clients</div>
+        <div class="u-label">At-Risk Clients</div>
         <div style="font-size:1.9rem;font-weight:700;color:${atRisk>0?'var(--danger)':'var(--navy)'};line-height:1">${atRisk}</div>
         <div style="font-size:.75rem;color:${atRisk>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">fulfilment &lt;70%</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
+        <div class="u-label">Avg Fulfilment</div>
         <div style="font-size:1.9rem;font-weight:700;color:${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};line-height:1">${avgFill}%</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all clients</div>
+        <div class="u-sub">across all clients</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDueVal>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Value</div>
+        <div class="u-label">Total Due Value</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueVal)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
+        <div class="u-sub">outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Delivery Time</div>
+        <div class="u-label">Avg Delivery Time</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${avgDelivery!=null?avgDelivery+'d':'—'}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">days from order</div>
+        <div class="u-sub">days from order</div>
       </div>
     </div>
     <div class="card">
@@ -343,7 +343,7 @@ async function switchFulfilTab(tab, btn) {
             </div>
           </td>
           <td>${r.avg_delivery_days ? r.avg_delivery_days + ' days' : '—'}</td>
-        </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="9" class="u-empty">No data</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -354,24 +354,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Orders</div>
+        <div class="u-label">Total Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.totalOrders}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+        <div class="u-sub">last 30 days</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Single DC Orders</div>
+        <div class="u-label">Single DC Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.singleDC}</div>
         <div style="font-size:.75rem;color:var(--success);margin-top:6px">one-shot delivery</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.multiDC>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Multi-DC Orders</div>
+        <div class="u-label">Multi-DC Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.multiDC}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">split deliveries</div>
+        <div class="u-sub">split deliveries</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg DCs per Order</div>
+        <div class="u-label">Avg DCs per Order</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.avgDCsPerOrder}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">delivery challans</div>
+        <div class="u-sub">delivery challans</div>
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
@@ -385,9 +385,9 @@ async function switchFulfilTab(tab, btn) {
             <th>Order ID</th>
             <th>Client</th>
             <th>Ordered Date</th>
-            <th style="text-align:right">Ordered Qty</th>
-            <th style="text-align:right">Delivered Qty</th>
-            <th style="text-align:center">DC Count</th>
+            <th class="u-right">Ordered Qty</th>
+            <th class="u-right">Delivered Qty</th>
+            <th class="u-center">DC Count</th>
             <th>Completion Date</th>
             <th>Status</th>
           </tr></thead>
@@ -400,7 +400,7 @@ async function switchFulfilTab(tab, btn) {
               <td>${h(r.client_name)}</td>
               <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
               <td style="text-align:right;font-weight:600">${r.total_ordered}</td>
-              <td style="text-align:right">
+              <td class="u-right">
                 <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
                   <div style="width:60px;height:5px;background:#e5e7eb;border-radius:3px;overflow:hidden">
                     <div style="height:100%;width:${pct}%;background:${pct===100?'var(--success-strong)':pct>50?'var(--amber)':'var(--red)'};border-radius:3px"></div>
@@ -409,7 +409,7 @@ async function switchFulfilTab(tab, btn) {
                   <span style="font-size:.7rem;color:var(--text-muted)">${pct}%</span>
                 </div>
               </td>
-              <td style="text-align:center">
+              <td class="u-center">
                 <span class="badge badge-${r.dc_count>2?'warning':r.dc_count>1?'info':'success'}"
                   style="cursor:pointer" ${dataAct('drillOrderDCs', r.id, r.id)}
                   title="Click to view DC breakdown">
@@ -431,22 +431,22 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total DCs</div>
+        <div class="u-label">Total DCs</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.total_dcs}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 30 days</div>
+        <div class="u-sub">last 30 days</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">POD Uploaded</div>
+        <div class="u-label">POD Uploaded</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.pod_uploaded}</div>
         <div style="font-size:.75rem;color:var(--success);margin-top:6px">proof of delivery</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_pod>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Missing POD</div>
+        <div class="u-label">Missing POD</div>
         <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_pod}</div>
         <div style="font-size:.75rem;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_pod>0?'upload required':'all clear'}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Missing DC Scan</div>
+        <div class="u-label">Missing DC Scan</div>
         <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_dc_scan}</div>
         <div style="font-size:.75rem;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_dc_scan>0?'scan required':'all clear'}</div>
       </div>
@@ -466,7 +466,7 @@ async function switchFulfilTab(tab, btn) {
           <td>${r.dc_scan_uploaded?'<span class="badge badge-success">&#10003; Yes</span>':'<span class="badge badge-danger">&#10007; Missing</span>'}</td>
           <td>${r.is_billed?'<span class="badge badge-success">Billed</span>':'<span class="badge badge-warning">Pending</span>'}</td>
           <td>${statusBadge(r.status)}</td>
-        </tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No DCs</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="10" class="u-empty">No DCs</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -480,24 +480,24 @@ async function switchFulfilTab(tab, btn) {
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
       <div class="card" style="padding:16px 18px;border-top:3px solid ${stockout>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Stockout Risk</div>
+        <div class="u-label">Stockout Risk</div>
         <div style="font-size:1.9rem;font-weight:700;color:${stockout>0?'var(--danger)':'var(--navy)'};line-height:1">${stockout}</div>
         <div style="font-size:.75rem;color:${stockout>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">stock &lt; due qty</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Needing PO</div>
+        <div class="u-label">Items Needing PO</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">to be procured</div>
+        <div class="u-sub">to be procured</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
+        <div class="u-label">Total Due Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
+        <div class="u-sub">units outstanding</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total PO Qty Needed</div>
+        <div class="u-label">Total PO Qty Needed</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">suggested order</div>
+        <div class="u-sub">suggested order</div>
       </div>
     </div>
     <div class="card">
@@ -511,7 +511,7 @@ async function switchFulfilTab(tab, btn) {
           <td>${h(r.brand_name)}</td>
           <td><b>${h(r.item_name)}</b></td>
           <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
-          <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+          <td><b class="u-danger">${r.due_qty}</b></td>
           <td><span style="color:${r.current_stock<r.due_qty?'var(--danger)':'var(--success)'}${r.current_stock<r.due_qty?';font-weight:700':''}">
             ${r.current_stock}
             ${r.current_stock<r.due_qty?'<span title="Stockout risk" style="margin-left:4px">⚠</span>':''}
@@ -521,7 +521,7 @@ async function switchFulfilTab(tab, btn) {
           <td>
             <button class="btn btn-primary btn-sm" ${dataAct('raisePOFromForecast', r.sku, r.item_name, r.suggested_procurement_qty, r.vendor_id||'')}>Raise PO</button>
           </td>
-        </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No procurement required</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="8" class="u-empty">No procurement required</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -617,13 +617,13 @@ function renderOVDTable(data) {
           <th>Date</th>
           <th>Client</th>
           <th>Location</th>
-          <th style="text-align:center">Status</th>
-          <th style="text-align:right">Lines</th>
-          <th style="text-align:right">Ordered Qty</th>
-          <th style="text-align:right">Delivered</th>
-          <th style="text-align:right">Due Qty</th>
-          <th style="text-align:right">Due Value</th>
-          <th style="text-align:right">DCs</th>
+          <th class="u-center">Status</th>
+          <th class="u-right">Lines</th>
+          <th class="u-right">Ordered Qty</th>
+          <th class="u-right">Delivered</th>
+          <th class="u-right">Due Qty</th>
+          <th class="u-right">Due Value</th>
+          <th class="u-right">DCs</th>
           <th>Last Delivery</th>
           <th></th>
         </tr></thead>
@@ -631,10 +631,10 @@ function renderOVDTable(data) {
           ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" ${dataAct('viewOrderDrilldown', o.id)} data-hover>
             <td><b style="color:var(--navy)">${o.id}</b></td>
             <td style="white-space:nowrap">${fmtDate(o.date)}</td>
-            <td style="font-weight:600">${o.client}</td>
+            <td class="u-b600">${o.client}</td>
             <td style="color:var(--text-muted);font-size:.8rem">${o.location||'—'}</td>
-            <td style="text-align:center">${statusBadgeOVD(o.status)}</td>
-            <td style="text-align:right">
+            <td class="u-center">${statusBadgeOVD(o.status)}</td>
+            <td class="u-right">
               <span style="font-weight:700">${o.line_count}</span>
               ${o.due_lines>0?`<span style="font-size:.7rem;color:var(--danger);margin-left:4px">(${o.due_lines} due)</span>`:''}
             </td>
@@ -706,9 +706,9 @@ async function drillOrderDCs(orderId, label) {
         <th>Dispatch Date</th>
         <th>Delivery Date</th>
         <th>Status</th>
-        <th style="text-align:right">Lines</th>
-        <th style="text-align:right">Qty Dispatched</th>
-        <th style="text-align:right">Qty Delivered</th>
+        <th class="u-right">Lines</th>
+        <th class="u-right">Qty Dispatched</th>
+        <th class="u-right">Qty Delivered</th>
         <th>Driver / Vehicle</th>
       </tr></thead>
       <tbody>
@@ -716,14 +716,14 @@ async function drillOrderDCs(orderId, label) {
           const sc = statusColor(dc.status);
           const pct = dc.total_qty_ordered>0 ? Math.round((dc.total_qty_delivered/dc.total_qty_ordered)*100) : 0;
           return `<tr>
-            <td style="color:var(--text-muted)">${i+1}</td>
+            <td class="u-muted">${i+1}</td>
             <td><b style="color:var(--navy)">${dc.dc_number}</b></td>
             <td style="white-space:nowrap">${dc.dc_date ? fmtDate(dc.dc_date) : '—'}</td>
             <td style="white-space:nowrap;color:${dc.delivered_at?'var(--success-strong)':'var(--text-muted)'};font-weight:${dc.delivered_at?600:400}">${dc.delivered_at ? fmtDate(dc.delivered_at) : '—'}</td>
             <td><span style="font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(dc.status)}</span></td>
             <td style="text-align:right;font-weight:700">${dc.line_count||0}</td>
             <td style="text-align:right;font-weight:600">${dc.total_qty_ordered||0}</td>
-            <td style="text-align:right">
+            <td class="u-right">
               <span style="font-weight:700;color:${pct===100?'var(--success-strong)':pct>0?'var(--warning)':'var(--text-muted)'}">${dc.total_qty_delivered||0}</span>
               ${dc.total_qty_ordered>0?`<span style="font-size:.7rem;color:var(--text-muted);margin-left:4px">${pct}%</span>`:''}
             </td>
@@ -751,9 +751,9 @@ async function drillPendingClient(clientId, clientName) {
       <tbody>${data.map(r=>`<tr>
         <td>${r.order_number}</td><td>${r.brand_name||'—'}</td><td>${h(r.item_name)}</td>
         <td>${r.ordered_qty}</td><td>${r.delivered_qty}</td>
-        <td><b style="color:var(--danger)">${r.due_qty}</b></td>
+        <td><b class="u-danger">${r.due_qty}</b></td>
         <td><span class="badge badge-${r.due_ageing_days>=15?'danger':r.due_ageing_days>=8?'warning':'info'}">${r.due_ageing_days}d</span></td>
-      </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No due items</td></tr>'}
+      </tr>`).join('')||'<tr><td colspan="7" class="u-empty">No due items</td></tr>'}
       </tbody></table></div>`
   );
 }
@@ -790,18 +790,18 @@ async function initiateBrandPO(brand, vendorId, from, to) {
 
   openModal(`Initiate PO — ${brand}`, `
     <div class="form-group">
-      <label>Vendor <span style="color:var(--danger)">*</span></label>
+      <label>Vendor <span class="u-danger">*</span></label>
       <select id="bpo-vendor">${vendorOpts||'<option value="">No vendors — add one first</option>'}</select>
     </div>
     <div class="form-group">
       <label>Items & Quantities <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(pre-filled with shortfall; edit as needed)</span></label>
       <div class="table-wrap"><table class="table" style="margin:0">
-        <thead><tr><th>Item</th><th>SKU</th><th style="text-align:right">Unit ₹</th><th style="text-align:center">Qty</th></tr></thead>
+        <thead><tr><th>Item</th><th>SKU</th><th class="u-right">Unit ₹</th><th class="u-center">Qty</th></tr></thead>
         <tbody>${items.map((it,i)=>`<tr>
           <td style="font-size:.84rem"><b>${h(it.name||it.sku)}</b></td>
           <td style="font-size:.76rem;color:var(--text-muted)">${h(it.sku)}</td>
-          <td style="text-align:right">${fmt(it.unit_price||0)}</td>
-          <td style="text-align:center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('updateBrandPOTotal')}></td>
+          <td class="u-right">${fmt(it.unit_price||0)}</td>
+          <td class="u-center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('updateBrandPOTotal')}></td>
         </tr>`).join('')}</tbody>
       </table></div>
       <div id="bpo-total" style="text-align:right;font-weight:700;margin-top:8px;color:var(--navy)"></div>
@@ -874,7 +874,7 @@ async function renderStaff(el) {
     return `
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${s.active?1:.55}">
       <div style="width:44px;height:44px;border-radius:50%;background:${s.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
-      <div style="flex:1;min-width:0">
+      <div class="u-flex1">
         <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(s.name)}
           ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:var(--danger-soft-bg);color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
         </div>
@@ -1028,27 +1028,27 @@ async function renderTodaysSchedule(el) {
 
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total DCs</div>
+      <div class="u-label">Total DCs</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDCs}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${staffCount} staff on route</div>
+      <div class="u-sub">${staffCount} staff on route</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delivered</div>
+      <div class="u-label">Delivered</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--success);line-height:1">${delivered}</div>
       <div style="font-size:.75rem;color:var(--success);margin-top:6px">${donePct}% complete</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Transit</div>
+      <div class="u-label">In Transit</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${inTransit}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">out for delivery</div>
+      <div class="u-sub">out for delivery</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Scheduled</div>
+      <div class="u-label">Scheduled</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${pending}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">not yet started</div>
+      <div class="u-sub">not yet started</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${unassigned.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Unassigned</div>
+      <div class="u-label">Unassigned</div>
       <div style="font-size:1.9rem;font-weight:700;color:${unassigned.length>0?'var(--warning)':'var(--navy)'};line-height:1">${unassigned.length}</div>
       <div style="font-size:.75rem;color:${unassigned.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${unassigned.length?'needs staff':'all assigned'}</div>
     </div>
@@ -1056,7 +1056,7 @@ async function renderTodaysSchedule(el) {
 
   <div style="margin:12px 0 20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
     <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:6px">
-      <span style="font-weight:600">Overall Progress</span>
+      <span class="u-b600">Overall Progress</span>
       <span style="color:${donePct===100?'var(--success)':donePct>60?'var(--warning)':'var(--text-muted)'}"><b>${delivered}</b> of ${totalDCs} delivered</span>
     </div>
     <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
@@ -1083,7 +1083,7 @@ async function renderTodaysSchedule(el) {
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        <div style="text-align:right">
+        <div class="u-right">
           <div style="font-size:.75rem;color:var(--text-muted)">${staffDone}/${dcs.length} done</div>
           <div style="background:var(--border);height:4px;border-radius:2px;width:80px;margin-top:4px;overflow:hidden">
             <div style="height:100%;width:${staffPct}%;background:${staffPct===100?'var(--success)':'var(--primary)'};border-radius:2px"></div>
@@ -1098,7 +1098,7 @@ async function renderTodaysSchedule(el) {
           <td><b>${dc.dc_number||dc.id}</b></td>
           <td><b>${dc.client_name||'—'}</b></td>
           <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
-          <td style="font-weight:600">${dc.scheduled_time||'—'}</td>
+          <td class="u-b600">${dc.scheduled_time||'—'}</td>
           <td>${dc.total_qty||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
@@ -1200,7 +1200,7 @@ async function renderConsolidatedOrders(el) {
           <td>${r.total_ordered_qty}</td>
           <td style="color:var(--success)">${r.total_delivered_qty}</td>
           <td style="color:${r.total_due_qty>0?'var(--danger)':'var(--success)'};font-weight:700">${r.total_due_qty}</td>
-          <td style="text-align:center">${r.client_count}</td>
+          <td class="u-center">${r.client_count}</td>
           <td style="font-size:.78rem;color:var(--text-muted)">${r.clients||'—'}</td>
         </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--success)">✓ All items delivered — nothing pending</td></tr>'}
         </tbody>
@@ -1263,7 +1263,7 @@ async function renderConsolidatedDue(el) {
             <td style="font-size:.82rem">${r.order_id}</td>
             <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(r.order_date)}</td>
             <td>${h(r.item_name)}</td>
-            <td style="color:var(--text-muted)">${r.ordered_qty}</td>
+            <td class="u-muted">${r.ordered_qty}</td>
             <td style="color:var(--success)">${r.delivered_qty}</td>
             <td style="color:var(--danger);font-weight:700">${r.due_qty}</td>
             <td><span style="display:inline-block;min-width:36px;text-align:center;padding:2px 8px;border-radius:10px;font-size:.78rem;font-weight:700;background:${r.days_overdue>7?'var(--danger-bg)':r.days_overdue>3?'var(--amber-bg)':'var(--success-bg)'};color:${daysColor}">${r.days_overdue}d</span></td>
@@ -1345,7 +1345,7 @@ async function renderPorterExpenses(el) {
         <tbody>${exps.length ? exps.map(e=>`<tr>
           <td style="font-size:.82rem">${fmtDate(e.trip_date)}</td>
           <td><b>${e.route||'—'}</b></td>
-          <td style="font-weight:600">${fmt(e.amount)}</td>
+          <td class="u-b600">${fmt(e.amount)}</td>
           <td>${e.client_name||'—'}</td>
           <td>${e.staff_name||'—'}</td>
           <td style="color:var(--text-muted);font-size:.82rem">${e.notes||'—'}</td>

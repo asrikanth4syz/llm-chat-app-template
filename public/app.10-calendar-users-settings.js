@@ -283,7 +283,7 @@ function dcalAgItem(dc, k) {
     <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">${dc.scheduled_time||'—'}</span>
     <div style="flex:1;min-width:170px">
       <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'—')} ${pill}</div>
-      <div style="font-size:.72rem;color:var(--text-muted)">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'driver unassigned'}${dc.vehicle_no?` · ${h(dc.vehicle_no)}`:''}${dc.order_id?` · order ${h(dc.order_id)}`:''}</div>
+      <div class="u-muted-xs">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'driver unassigned'}${dc.vehicle_no?` · ${h(dc.vehicle_no)}`:''}${dc.order_id?` · order ${h(dc.order_id)}`:''}</div>
     </div>
     ${dateEdit}${bell}
     <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'delivery')}>Open in Deliveries</button></div>`;
@@ -297,7 +297,7 @@ function dcalGhostItem(so, k) {
     <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">—</span>
     <div style="flex:1;min-width:170px">
       <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(so.name||so.id)} · ${h(so.client_name||'—')} <span class="dcal-pill org">Projected</span></div>
-      <div style="font-size:.72rem;color:var(--text-muted)">Standing order ${h(so.id)} · ${h(so.frequency||'MONTHLY')}${n?` · ${n} item${n===1?'':'s'}`:''} · no order created yet</div>
+      <div class="u-muted-xs">Standing order ${h(so.id)} · ${h(so.frequency||'MONTHLY')}${n?` · ${n} item${n===1?'':'s'}`:''} · no order created yet</div>
     </div>
     <button class="btn btn-primary btn-sm" ${dataActEl('dcalGhostCreate', so.id, k)}>Create order</button>
     <button class="btn btn-secondary btn-sm" ${dataActEl('dcalGhostSkip', so.id, k)}>Skip this cycle</button></div>`;
@@ -506,7 +506,7 @@ async function renderUsers(el) {
     return `
     <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${u.active?1:.6}">
       <div style="width:44px;height:44px;border-radius:50%;background:${u.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${u.initials||u.name[0]}</div>
-      <div style="flex:1;min-width:0">
+      <div class="u-flex1">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(u.name)}</span>
           ${u.active?'':'<span style="font-size:.66rem;font-weight:700;background:var(--danger-soft-bg);color:var(--danger);border-radius:4px;padding:1px 6px">INACTIVE</span>'}
@@ -545,21 +545,21 @@ async function renderUsers(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Users</div>
+      <div class="u-label2">Total Users</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${users.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
+      <div class="u-label2">Active</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeUsers.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'var(--gray-light)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inactive</div>
+      <div class="u-label2">Inactive</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inactiveUsers.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--purple)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">2FA Enabled</div>
+      <div class="u-label2">2FA Enabled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${with2FA}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${users.length?Math.round(with2FA/users.length*100):0}% of users</div>
+      <div class="u-subtiny">${users.length?Math.round(with2FA/users.length*100):0}% of users</div>
     </div>
   </div>
 
@@ -927,7 +927,7 @@ async function settingsTab(tab, btn) {
           <thead><tr><th>Client</th><th>Monthly Budget (₹)</th><th>Auto-Approve Below (₹)</th></tr></thead>
           <tbody>
             ${clients.length ? clients.map(c=>`<tr>
-              <td style="font-weight:600">${h(c.name)}</td>
+              <td class="u-b600">${h(c.name)}</td>
               <td><input type="number" class="budget-input" data-id="${c.id}" data-field="monthly_budget"
                 value="${c.monthly_budget||''}" min="0" placeholder="No limit"
                 style="width:140px;padding:6px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:.86rem"></td>
@@ -935,7 +935,7 @@ async function settingsTab(tab, btn) {
                 value="${c.approval_threshold||''}" min="0" placeholder="No auto-approve"
                 style="width:160px;padding:6px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:.86rem"></td>
             </tr>`).join('')
-            : '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No clients found</td></tr>'}
+            : '<tr><td colspan="3" class="u-empty">No clients found</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -966,7 +966,7 @@ async function settingsTab(tab, btn) {
             <td>
               <button class="btn btn-danger btn-sm" ${dataAct('deactivateApprovalRule', r.id)}>Disable</button>
             </td>
-          </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No rules configured</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="8" class="u-empty">No rules configured</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -996,7 +996,7 @@ async function settingsTab(tab, btn) {
               <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'}</td>
               <td><button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'warehouse')}>Manage</button></td>
             </tr>`).join('')
-            : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No warehouses configured</td></tr>'}
+            : '<tr><td colspan="5" class="u-empty">No warehouses configured</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1019,7 +1019,7 @@ async function settingsTab(tab, btn) {
             <td style="font-family:monospace;font-size:.8rem">${l.entity_id||'—'}</td>
             <td style="font-size:.8rem;color:var(--text-muted)">${l.old_value||'—'}</td>
             <td style="font-size:.8rem">${l.new_value||'—'}</td>
-          </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No audit logs yet</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="7" class="u-empty">No audit logs yet</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1046,7 +1046,7 @@ async function settingsTab(tab, btn) {
             <td><b>${c}</b></td>
             <td>${catMap[c]?.hsn||'—'}</td>
             <td>${catMap[c]?.count||0} items</td>
-          </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No categories yet — add inventory items first</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="3" class="u-empty">No categories yet — add inventory items first</td></tr>'}
           </tbody>
         </table>
       </div>

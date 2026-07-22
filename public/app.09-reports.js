@@ -142,7 +142,7 @@ function xbiCrumbs() {
   c.innerHTML = '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.85rem">' +
     _xbi.path.map((p,i)=>{
       const last = i===_xbi.path.length-1;
-      return (i?'<span style="color:var(--text-muted)">›</span>':'')+
+      return (i?'<span class="u-muted">›</span>':'')+
         `<button ${dataAct('xbiGoTo', i)} ${last?'disabled':''} style="background:${last?'none':'none'};border:none;cursor:${last?'default':'pointer'};font-size:.85rem;font-weight:${last?'700':'600'};color:${last?'var(--navy)':'var(--blue)'};padding:3px 6px;border-radius:6px">${h(p.label)}</button>`;
     }).join('') + '</div>';
 }
@@ -196,7 +196,7 @@ function xbiRow(name, meta, val, opts={}){
   const share = opts.share!=null?`<div style="display:flex;align-items:center;gap:8px;min-width:130px"><div style="flex:1;height:8px;border-radius:5px;background:var(--border);overflow:hidden"><i style="display:block;height:100%;width:${opts.share}%;background:var(--primary)"></i></div><span style="font-size:.74rem;font-weight:700;color:var(--text-muted);width:34px;text-align:right">${opts.share}%</span></div>`:'';
   const pill = opts.fill!=null?`<div style="margin-top:4px">${xbiFillPill(opts.fill)}</div>`:'';
   return `<button class="xbi-row" data-k="${h(opts.key||name)}" style="display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface,#fff);cursor:pointer;text-align:left;font-family:inherit;width:100%;transition:border-color .12s,transform .12s" data-hoverslide>
-    <div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:.87rem">${h(name)}</div><div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${meta}</div></div>
+    <div class="u-flex1"><div style="font-weight:700;color:var(--navy);font-size:.87rem">${h(name)}</div><div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${meta}</div></div>
     ${share}
     <div style="text-align:right;flex-shrink:0"><div style="font-weight:800;font-size:.9rem">${val}</div>${pill}</div>
     <span class="xbi-chev" style="color:var(--text-muted);transition:transform .12s,color .12s">›</span>
@@ -367,9 +367,9 @@ async function xbiDc(node, body) {
       xbiKpi('POD', dc.pod_count>0?'Uploaded':'Pending', '', dc.pod_count>0?'g':'w')])}
     <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:18px 0 8px">Items in this challan</div>
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Item</th><th>SKU</th><th style="text-align:right">Dispatched</th><th style="text-align:right">Delivered</th></tr></thead>
-      <tbody>${items.length ? items.map(i=>`<tr><td>${h(i.name||i.item_name||i.sku)}</td><td style="color:var(--text-muted)">${h(i.sku)}</td><td style="text-align:right">${i.qty_ordered}</td><td style="text-align:right;font-weight:700">${i.qty_delivered}</td></tr>`).join('')
-        : '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No item detail</td></tr>'}</tbody>
+      <thead><tr><th>Item</th><th>SKU</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th></tr></thead>
+      <tbody>${items.length ? items.map(i=>`<tr><td>${h(i.name||i.item_name||i.sku)}</td><td class="u-muted">${h(i.sku)}</td><td class="u-right">${i.qty_ordered}</td><td style="text-align:right;font-weight:700">${i.qty_delivered}</td></tr>`).join('')
+        : '<tr><td colspan="4" class="u-empty">No item detail</td></tr>'}</tbody>
     </table></div></div>
     <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin:6px 0 8px">Billing <span style="font-weight:400;color:var(--faint)">— view the invoice</span></div>
     <div style="display:flex;flex-direction:column;gap:7px">
@@ -617,7 +617,7 @@ async function loadReportsOverview() {
         const [bg,fg] = pillColor(t.priority);
         return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" ${dataAct('navigate', 'service_desk')}>
           <div style="width:8px;height:8px;border-radius:50%;background:${fg};flex-shrink:0"></div>
-          <div style="flex:1;min-width:0">
+          <div class="u-flex1">
             <div style="font-size:.8rem;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${t.id}: ${h(t.subject||'')}</div>
             <div style="font-size:.7rem;color:var(--text-muted)">${fmtDate(t.created_at)}</div>
           </div>
@@ -668,7 +668,7 @@ async function viewReport(key, from, to) {
       return '<td>' + (v!=null?v:'—') + '</td>';
     }).join('');
     return '<tr>' + cells + '</tr>';
-  }).join('') : '<tr><td colspan="' + def.cols.length + '" style="text-align:center;color:var(--text-muted)">No data</td></tr>';
+  }).join('') : '<tr><td colspan="' + def.cols.length + '" class="u-empty">No data</td></tr>';
 
   const fmtD = s => { const d = new Date(s+'T00:00:00'); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}); };
   const periodBar = def.datable ? `
@@ -1069,7 +1069,7 @@ function renderCdashSpendGauge() {
   if (!el || !ex || ex.error) { if (el) el.innerHTML = ''; return; }
   const f = ex.finance; const u = Math.min(f.budget_util||0, 100);
   const c = f.budget_util>100?'var(--danger)':f.budget_util>90?'#d97706':'var(--primary)';
-  el.innerHTML = `<div class="card" style="padding:15px 17px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:8px"><span style="font-weight:700;color:var(--navy)">Budget utilization</span><span style="color:var(--text-muted)">${f.budget_util||0}% of ${cdashINR(f.budget)}</span></div><div style="height:20px;border-radius:7px;background:var(--surface-2);overflow:hidden"><div style="height:100%;width:${u}%;background:${c};border-radius:7px"></div></div><div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--text-muted);margin-top:7px"><span><b style="color:var(--navy)">${cdashINR(f.spend)}</b> spent</span><span><b style="color:var(--navy)">${cdashINR(Math.max(0,(f.budget||0)-(f.spend||0)))}</b> headroom</span></div></div>`;
+  el.innerHTML = `<div class="card" style="padding:15px 17px;margin-bottom:14px"><div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:8px"><span style="font-weight:700;color:var(--navy)">Budget utilization</span><span class="u-muted">${f.budget_util||0}% of ${cdashINR(f.budget)}</span></div><div style="height:20px;border-radius:7px;background:var(--surface-2);overflow:hidden"><div style="height:100%;width:${u}%;background:${c};border-radius:7px"></div></div><div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--text-muted);margin-top:7px"><span><b style="color:var(--navy)">${cdashINR(f.spend)}</b> spent</span><span><b style="color:var(--navy)">${cdashINR(Math.max(0,(f.budget||0)-(f.spend||0)))}</b> headroom</span></div></div>`;
 }
 
 function renderCdashInventory() {
@@ -1150,23 +1150,23 @@ function renderFulfilContent() {
     <div><div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Overall Fill Rate</div>
       <div style="font-size:1.8rem;font-weight:800;color:${ovColor};line-height:1.1">${overall}%</div></div>
     <div style="height:34px;width:1px;background:var(--border)"></div>
-    <div><div style="font-size:.72rem;color:var(--text-muted)">Ordered</div><div style="font-weight:700">${Math.round(totOrd)} units</div></div>
-    <div><div style="font-size:.72rem;color:var(--text-muted)">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
-    <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'var(--danger)':'var(--success)'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
+    <div><div class="u-muted-xs">Ordered</div><div style="font-weight:700">${Math.round(totOrd)} units</div></div>
+    <div><div class="u-muted-xs">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
+    <div><div class="u-muted-xs">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'var(--danger)':'var(--success)'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
     <div style="flex:1"></div>
     <button class="btn btn-secondary btn-sm" ${dataAct('openCategoryDrill', '', 'All periods in range')}>🔍 Category Split (all)</button>
   </div>`;
 
   if (_fulfilMode === 'table') {
     el.innerHTML = header + `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
+      <thead><tr><th>Period</th><th class="u-right">Orders</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th><th class="u-right">Fill %</th><th></th></tr></thead>
       <tbody>${data.map(d=>{ const due=Math.max(0,d.ordered_qty-d.delivered_qty); const c=d.fill_pct>=90?'#16a34a':d.fill_pct>=70?'#d97706':'#dc2626';
         const periodParam = _fulfilGranularity==='month' ? d.key : '';
         return `<tr style="cursor:pointer" data-hover ${dataAct('openCategoryDrill', periodParam, d.label)}>
           <td style="font-weight:600;color:var(--blue)">${d.label}</td>
-          <td style="text-align:right">${d.order_count}</td>
-          <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
-          <td style="text-align:right">${Math.round(d.delivered_qty)}</td>
+          <td class="u-right">${d.order_count}</td>
+          <td class="u-right">${Math.round(d.ordered_qty)}</td>
+          <td class="u-right">${Math.round(d.delivered_qty)}</td>
           <td style="text-align:right;color:${due>0?'var(--danger)':'inherit'}">${Math.round(due)}</td>
           <td style="text-align:right;font-weight:700;color:${c}">${d.fill_pct}%</td>
           <td style="text-align:right;color:var(--text-muted)">Categories ›</td>
@@ -1314,7 +1314,7 @@ async function loadDrill() {
 
   // Breadcrumb
   const crumb = `<div style="display:flex;align-items:center;gap:6px;font-size:.8rem;margin-bottom:10px;flex-wrap:wrap">
-    <span style="color:var(--text-muted)">📅 ${h(win.label)}</span>
+    <span class="u-muted">📅 ${h(win.label)}</span>
     <span style="color:var(--border)">›</span>
     <button ${dataAct('drillBackToCategory')} style="background:none;border:none;cursor:pointer;padding:0;font-size:.8rem;font-weight:${category==null?'700':'400'};color:${category==null?'var(--navy)':'var(--blue)'}">Categories</button>
     ${category!=null?`<span style="color:var(--border)">›</span><span style="font-weight:700;color:var(--navy)">${h(category)}</span>`:''}
@@ -1342,8 +1342,8 @@ async function loadDrill() {
     return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`data-hover ${dataAct('drillToSubcategory', String(r.name))}`:''}>
       <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.color};margin-right:7px"></span><b style="${clickable?'color:var(--blue)':''}">${h(r.name)}</b></td>
       <td style="text-align:right;font-weight:700">${r.share}%</td>
-      <td style="text-align:right">${Math.round(r.ordered_qty)}</td>
-      <td style="text-align:right">${Math.round(r.delivered_qty)}</td>
+      <td class="u-right">${Math.round(r.ordered_qty)}</td>
+      <td class="u-right">${Math.round(r.delivered_qty)}</td>
       <td style="text-align:right;font-weight:700;color:${fc}">${r.fill}%</td>
       ${clickable?'<td style="text-align:right;color:var(--text-muted);font-size:.8rem">›</td>':'<td></td>'}
     </tr>`;
@@ -1355,7 +1355,7 @@ async function loadDrill() {
       <div style="flex:1;min-width:280px">
         <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px">Overall fill: <b style="color:${totOrdQty&&Math.round(totDelQty/totOrdQty*100)>=90?'var(--success)':'var(--warning)'}">${totOrdQty?Math.round(totDelQty/totOrdQty*100):0}%</b> · ${Math.round(totOrdQty)} ordered · ${Math.round(totDelQty)} delivered</div>
         <div class="table-wrap"><table class="table" style="margin:0">
-          <thead><tr><th>${isCat?'Category':'Sub-category'}</th><th style="text-align:right">% Split</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
+          <thead><tr><th>${isCat?'Category':'Sub-category'}</th><th class="u-right">% Split</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Fill %</th><th></th></tr></thead>
           <tbody>${listRows}</tbody>
         </table></div>
         ${isCat?'<div style="font-size:.73rem;color:var(--text-muted);margin-top:6px">💡 Click a category to see its sub-category split.</div>':''}
@@ -1392,7 +1392,7 @@ function renderConsumptionGrid(rows) {
       const bar = Math.round((r.total_qty / (sorted[0].total_qty||1)) * 100);
       return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid ${color}18">
         <div style="width:20px;text-align:center;font-weight:700;font-size:.78rem;color:${color}">${i+1}</div>
-        <div style="flex:1;min-width:0">
+        <div class="u-flex1">
           <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(r.item_name)}">${h(r.item_name)}</div>
           <div style="background:${color}22;border-radius:3px;height:4px;margin-top:3px;width:${bar}%"></div>
         </div>
@@ -1404,7 +1404,7 @@ function renderConsumptionGrid(rows) {
         <span style="font-size:1.3rem">${icon}</span>
         <div>
           <div style="font-weight:700;font-size:.88rem;color:${color}">${title}</div>
-          <div style="font-size:.72rem;color:var(--text-muted)">${label}</div>
+          <div class="u-muted-xs">${label}</div>
         </div>
       </div>
       ${rows2}
@@ -1456,12 +1456,12 @@ function renderSpendContent(tab, data) {
     if (!rows.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
     const maxSpend = Math.max(...rows.map(r => r.total_spend || 0), 1);
     el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Month</th><th style="text-align:right">Orders</th><th style="text-align:right">Spend</th><th style="min-width:120px">Trend</th></tr></thead>
+      <thead><tr><th>Month</th><th class="u-right">Orders</th><th class="u-right">Spend</th><th style="min-width:120px">Trend</th></tr></thead>
       <tbody>${rows.map(r => {
         const bar = Math.round(((r.total_spend||0)/maxSpend)*100);
         return `<tr>
-          <td style="font-weight:600">${r.month}</td>
-          <td style="text-align:right">${r.order_count}</td>
+          <td class="u-b600">${r.month}</td>
+          <td class="u-right">${r.order_count}</td>
           <td style="text-align:right;font-weight:700;color:var(--navy)">${fmt(r.total_spend)}</td>
           <td><div style="background:var(--primary);border-radius:3px;height:6px;width:${bar}%"></div></td>
         </tr>`;
@@ -1488,11 +1488,11 @@ function renderSpendContent(tab, data) {
     const years = Object.values(byYear).sort((a,b)=>a.year<b.year?-1:1);
     if (!years.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
     el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Year</th><th style="text-align:right">Months Active</th><th style="text-align:right">Orders</th><th style="text-align:right">Total Spend</th><th style="text-align:right">Avg / Month</th></tr></thead>
+      <thead><tr><th>Year</th><th class="u-right">Months Active</th><th class="u-right">Orders</th><th class="u-right">Total Spend</th><th class="u-right">Avg / Month</th></tr></thead>
       <tbody>${years.map(r => `<tr>
         <td style="font-weight:700;font-size:.95rem">${r.year}</td>
-        <td style="text-align:right">${r.months}</td>
-        <td style="text-align:right">${r.order_count}</td>
+        <td class="u-right">${r.months}</td>
+        <td class="u-right">${r.order_count}</td>
         <td style="text-align:right;font-weight:700;color:var(--navy)">${fmt(r.total_spend)}</td>
         <td style="text-align:right;color:var(--text-muted)">${fmt(r.months ? r.total_spend/r.months : 0)}</td>
       </tr>`).join('')}</tbody>
@@ -1502,11 +1502,11 @@ function renderSpendContent(tab, data) {
     const rows = data.po_wise || [];
     if (!rows.length) { el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No orders in this period.</div>'; return; }
     el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="table-wrap"><table class="table" style="margin:0">
-      <thead><tr><th>Order / PO</th><th>Date</th><th style="text-align:center">Items</th><th style="text-align:right">Amount</th><th>Status</th></tr></thead>
+      <thead><tr><th>Order / PO</th><th>Date</th><th class="u-center">Items</th><th class="u-right">Amount</th><th>Status</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td style="font-weight:700;color:var(--primary)">#${r.order_id}</td>
         <td style="font-size:.8rem;color:var(--text-muted)">${fmtDate(r.created_at)}</td>
-        <td style="text-align:center">${r.item_count}</td>
+        <td class="u-center">${r.item_count}</td>
         <td style="text-align:right;font-weight:700">${fmt(r.grand_total)}</td>
         <td>${statusBadge(r.status)}</td>
       </tr>`).join('')}</tbody>

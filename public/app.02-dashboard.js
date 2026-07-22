@@ -245,7 +245,7 @@ async function renderClientDashboard(el) {
       ${(recentOrders||[]).slice(0,5).map(o=>`
       <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" data-hover ${dataAct('viewOrder', o.id)}>
         <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">🧾</div>
-        <div style="flex:1;min-width:0">
+        <div class="u-flex1">
           <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
           <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${fmtDate(o.created_at)}</div>
         </div>
@@ -260,14 +260,14 @@ async function renderClientDashboard(el) {
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Due Items</div>
+      <div class="u-label">Due Items</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1" id="due-items-count">—</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending delivery</div>
+      <div class="u-sub">items pending delivery</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Fulfilment Rate</div>
+      <div class="u-label">Fulfilment Rate</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1" id="client-fulfilment-pct">—</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">this month</div>
+      <div class="u-sub">this month</div>
     </div>
   </div>`;
 
@@ -327,24 +327,24 @@ async function renderClientBudget(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${color}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Spent This Month</div>
+      <div class="u-label2">Spent This Month</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(spent)}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${pct}% of budget</div>
+      <div class="u-subtiny">${pct}% of budget</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Monthly Budget</div>
+      <div class="u-label2">Monthly Budget</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(budget)}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(remain)} remaining</div>
+      <div class="u-subtiny">${fmt(remain)} remaining</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Health Score</div>
+      <div class="u-label2">Health Score</div>
       <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'};margin-top:6px">${health}/100</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
+      <div class="u-subtiny">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Orders</div>
+      <div class="u-label2">Total Orders</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${(orders||[]).length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${active.length} active · ${closed.length} closed</div>
+      <div class="u-subtiny">${active.length} active · ${closed.length} closed</div>
     </div>
   </div>
 
@@ -359,7 +359,7 @@ async function renderClientBudget(el) {
     </div>
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:.78rem">
       <span style="color:${color};font-weight:600">${pct}% used</span>
-      <span style="color:var(--text-muted)">Remaining: <b>${fmt(remain)}</b></span>
+      <span class="u-muted">Remaining: <b>${fmt(remain)}</b></span>
       ${pct>80?`<span style="color:var(--danger);font-weight:600">⚠️ Budget alert</span>`:`<span style="color:var(--success);font-weight:600">✓ On track</span>`}
     </div>
   </div>
@@ -393,7 +393,7 @@ async function renderClientBudget(el) {
       <div>
         ${closed.slice(0,6).map(o=>`
         <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer" ${dataAct('viewOrder', o.id)}>
-          <div style="flex:1;min-width:0">
+          <div class="u-flex1">
             <div style="font-weight:700;font-size:.86rem">${o.id}</div>
             <div style="font-size:.74rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
           </div>
@@ -629,7 +629,7 @@ async function renderOpsDashboard(el) {
         ${pipeline.map(p=>`
         <div style="display:flex;align-items:center;gap:5px">
           <div style="width:8px;height:8px;border-radius:2px;background:${p.color};flex-shrink:0"></div>
-          <span style="font-size:.72rem;color:var(--text-muted)">${p.label}</span>
+          <span class="u-muted-xs">${p.label}</span>
           <span style="font-size:.72rem;font-weight:800;color:var(--navy)">${byStatus[p.key]||0}</span>
         </div>`).join('')}
       </div>
@@ -657,7 +657,7 @@ async function renderOpsDashboard(el) {
                  data-hover
                  ${dataAct('openClientDetail', c.id)} title="View ${h(c.name)} details">
               <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
-              <div style="flex:1;min-width:0">
+              <div class="u-flex1">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
                   <span style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;color:var(--blue)">${h(c.name)}</span>
                   <span style="font-size:.82rem;font-weight:800;color:var(--navy);flex-shrink:0;margin-left:8px">${fmt(c.total)}</span>
@@ -706,7 +706,7 @@ async function renderOpsDashboard(el) {
           const hot = a.val > 0;
           return `<div class="ct-action${hot?' hot':''}" ${a.click?dataAct(a.click):dataAct('navigate',a.page)}>
             <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'}">${a.icon}</div>
-            <div style="flex:1;min-width:0">
+            <div class="u-flex1">
               <div style="font-size:.82rem;font-weight:${hot?'600':'500'};color:${hot?'var(--text)':'var(--text-muted)'}">${a.label}</div>
             </div>
             <div class="ct-action-val" style="color:${hot?a.color:'#c4c9d4'}">${a.val}</div>
@@ -729,7 +729,7 @@ async function renderOpsDashboard(el) {
     ${(recentOrders||[]).map(o=>`
     <div class="ct-order-row" ${dataAct('viewOrder', o.id)}>
       <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0">🧾</div>
-      <div style="flex:1;min-width:0">
+      <div class="u-flex1">
         <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
         <div style="font-size:.74rem;color:var(--text-muted);margin-top:1px">${o.client_name||'—'}</div>
       </div>
@@ -1028,22 +1028,22 @@ async function renderVendorDashboard(el) {
       const leadColor   = leadDays<=3?'var(--success)':leadDays<=7?'#d97706':'var(--danger)';
       return `
       <div class="card" style="padding:16px 18px;border-top:3px solid ${onTimeColor};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">On-time Rate</div>
+        <div class="u-label">On-time Rate</div>
         <div style="font-size:1.9rem;font-weight:700;color:${onTimeColor};line-height:1">${pct(onTime)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">last 90 days</div>
+        <div class="u-sub">last 90 days</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${fillColor};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Fill Rate</div>
+        <div class="u-label">Fill Rate</div>
         <div style="font-size:1.9rem;font-weight:700;color:${fillColor};line-height:1">${pct(fillRate)}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">order completeness</div>
+        <div class="u-sub">order completeness</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${leadColor};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Lead Time</div>
+        <div class="u-label">Avg Lead Time</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${leadDays}d</div>
         <div style="font-size:.75rem;color:${leadColor};margin-top:6px">${leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement'}</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'var(--warning)':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'vendor_pos')}>
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending POs</div>
+        <div class="u-label">Pending POs</div>
         <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'var(--warning)':'var(--navy)'};line-height:1">${pendingCount}</div>
         <div style="font-size:.75rem;color:${pendingCount>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
       </div>`;
@@ -1062,7 +1062,7 @@ async function renderVendorDashboard(el) {
           <td>${fmtDate(po.expected_delivery)}</td>
           <td>${statusBadge(po.status)}</td>
           <td>${poActions(po)}</td>
-        </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No pending POs</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="5" class="u-empty">No pending POs</td></tr>'}
         </tbody>
       </table>
     </div>

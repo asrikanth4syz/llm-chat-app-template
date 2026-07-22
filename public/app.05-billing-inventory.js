@@ -28,22 +28,22 @@ async function renderDCBilling(el) {
       return `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
         <div class="card" style="padding:16px 18px;border-top:3px solid ${unbilled.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending Billing</div>
+          <div class="u-label">Pending Billing</div>
           <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${unbilled.length}</div>
           <div style="font-size:.75rem;color:${unbilled.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${fmt(pendingValue)} outstanding</div>
         </div>
         <div class="card" style="padding:16px 18px;border-top:3px solid ${critical.length>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (16+ days)</div>
+          <div class="u-label">Critical (16+ days)</div>
           <div style="font-size:1.9rem;font-weight:700;color:${critical.length>0?'var(--danger)':'var(--navy)'};line-height:1">${critical.length}</div>
           <div style="font-size:.75rem;color:${critical.length>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical.length>0?fmt(criticalValue)+' at risk':'All within 15 days'}</div>
         </div>
         <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Billed Today</div>
+          <div class="u-label">Billed Today</div>
           <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedToday.length}</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
+          <div class="u-sub">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
         </div>
         <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-          <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Billed This Month</div>
+          <div class="u-label">Billed This Month</div>
           <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedThisMonth.length}</div>
           <div style="font-size:.75rem;color:var(--success);margin-top:6px">${fmt(billedMonthValue)}</div>
         </div>
@@ -65,7 +65,7 @@ async function renderDCBilling(el) {
               <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
               <td>${agingBadge(dc)}</td>
               <td><button class="btn btn-gold btn-sm" ${dataAct('billDC', dc.id)}>Bill DC</button></td>
-            </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">All DCs are billed</td></tr>'}
+            </tr>`).join('')||'<tr><td colspan="7" class="u-empty">All DCs are billed</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -84,7 +84,7 @@ async function renderDCBilling(el) {
               <td>${fmt(dc.order_value)}</td>
               <td>${fmtDate(dc.billed_at)}</td>
               <td>${agingBadge(dc)}</td>
-            </tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">None yet</td></tr>'}
+            </tr>`).join('')||'<tr><td colspan="6" class="u-empty">None yet</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -123,7 +123,7 @@ async function renderDCBilling(el) {
           const bColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--border)';
           const valColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--text-muted)';
           return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bColor};margin-bottom:0">
-            <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${b.label}</div>
+            <div class="u-label">${b.label}</div>
             <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
             <div style="font-size:.75rem;color:${valColor};margin-top:6px">${fmt(items.reduce((s,d)=>s+(d.order_value||0),0))}</div>
           </div>`;
@@ -157,7 +157,7 @@ async function renderDCBilling(el) {
               <td><b>${fmt(total)}</b></td>
               <td><span class="badge badge-${riskCls}">${risk}</span></td>
             </tr>`;
-          }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No billed invoices</td></tr>'}
+          }).join('') || '<tr><td colspan="8" class="u-empty">No billed invoices</td></tr>'}
           </tbody>
         </table></div>
       </div>
@@ -176,7 +176,7 @@ async function renderDCBilling(el) {
               <td>${age}d</td>
               <td><span class="badge badge-${b.cls}">${b.label}</span></td>
             </tr>`;
-          }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No billed DCs</td></tr>'}
+          }).join('') || '<tr><td colspan="7" class="u-empty">No billed DCs</td></tr>'}
           </tbody>
         </table></div>
       </div>`;
@@ -253,7 +253,7 @@ function renderAPAging(pos) {
       const items=open.filter(p=>{const a=ageDays(p);return a>=b.min&&a<=b.max;});
       const bc=items.length?BCLR[b.cls]:'var(--border)';
       return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bc};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">${b.label}</div>
+        <div class="u-label">${b.label}</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
         <div style="font-size:.75rem;color:${items.length?bc:'var(--text-muted)'};margin-top:6px">${fmt(items.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
       </div>`;
@@ -287,7 +287,7 @@ function renderAPAging(pos) {
           <td><b>${fmt(total)}</b></td>
           <td><span class="badge badge-${riskCls}">${risk}</span></td>
         </tr>`;
-      }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No open POs</td></tr>'}
+      }).join('') || '<tr><td colspan="8" class="u-empty">No open POs</td></tr>'}
       </tbody>
     </table></div>
   </div>
@@ -306,7 +306,7 @@ function renderAPAging(pos) {
           <td>${p.expected_delivery?fmtDate(p.expected_delivery):'—'}</td>
           <td><span class="badge badge-${ageCls}">${age}d</span></td>
         </tr>`;
-      }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No open POs</td></tr>'}
+      }).join('') || '<tr><td colspan="6" class="u-empty">No open POs</td></tr>'}
       </tbody>
     </table></div>
   </div>`;
@@ -338,22 +338,22 @@ function renderMarginAnalysis(inv) {
   return `
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
     <div class="card" style="padding:16px 18px;border-top:3px solid ${marginColor(overallMargin)};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Margin</div>
+      <div class="u-label">Avg Margin</div>
       <div style="font-size:1.9rem;font-weight:700;color:${marginColor(overallMargin)};line-height:1">${overallMargin}%</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${priced.length} priced SKUs</div>
+      <div class="u-sub">${priced.length} priced SKUs</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">High Margin (≥30%)</div>
+      <div class="u-label">High Margin (≥30%)</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${highMargin}</div>
       <div style="font-size:.75rem;color:var(--success);margin-top:6px">SKUs</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${lowMargin>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Margin (&lt;15%)</div>
+      <div class="u-label">Low Margin (&lt;15%)</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${lowMargin}</div>
       <div style="font-size:.75rem;color:${lowMargin>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">SKUs</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${negative>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-      <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Below Cost</div>
+      <div class="u-label">Below Cost</div>
       <div style="font-size:1.9rem;font-weight:700;color:${negative>0?'var(--danger)':'var(--navy)'};line-height:1">${negative}</div>
       <div style="font-size:.75rem;color:${negative>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${negative>0?'selling at a loss':'none'}</div>
     </div>
@@ -388,7 +388,7 @@ function renderMarginAnalysis(inv) {
           <td style="color:${gp>=0?'#10b981':'var(--red)'};font-weight:700">${fmt(gp)}</td>
           <td><span class="badge badge-${hCls}">${health}</span></td>
         </tr>`;
-      }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No priced items</td></tr>'}
+      }).join('') || '<tr><td colspan="7" class="u-empty">No priced items</td></tr>'}
       </tbody>
     </table></div>
   </div>
@@ -518,7 +518,7 @@ async function renderInventory(el) {
           <input type="checkbox" ${checked?'checked':''} ${dataChangeEl('invToggleSelect', item.sku)} style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:var(--danger);color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
-        <td><b>${h(item.name)}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${h(item.brand)}</div>`:''}</td>
+        <td><b>${h(item.name)}</b>${item.brand?`<div class="u-muted-xs">${h(item.brand)}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'var(--success-strong)':'var(--gray)'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
         <td style="font-weight:700">${fmt(item.unit_price)}</td>
@@ -753,7 +753,7 @@ async function renderInventory(el) {
 
 function invDetailRow(label, value) {
   return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:.78rem">
-    <span style="color:var(--text-muted)">${label}</span>
+    <span class="u-muted">${label}</span>
     <span style="font-weight:600;text-align:right;max-width:60%">${value}</span>
   </div>`;
 }
@@ -838,7 +838,7 @@ async function viewStockHistory(sku, itemName) {
     <td>${m.reference_id||'—'}</td>
     <td>${m.note||'—'}</td>
     <td>${m.actor||'—'}</td>
-  </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No movements recorded</td></tr>';
+  </tr>`).join('') : '<tr><td colspan="6" class="u-empty">No movements recorded</td></tr>';
   openModal(`Stock History — ${itemName}`,
     `<div class="table-wrap" style="max-height:50vh;overflow-y:auto">
       <table class="table">

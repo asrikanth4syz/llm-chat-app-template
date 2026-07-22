@@ -123,13 +123,13 @@ function execDCCard(dc, today) {
     <!-- Card body -->
     <div style="padding:14px 16px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;font-size:.82rem">
-        <div><span style="color:var(--text-muted)">Client</span><br><b>${dc.client_name||'—'}</b></div>
-        <div><span style="color:var(--text-muted)">Order</span><br><b>${dc.order_id}</b></div>
-        <div><span style="color:var(--text-muted)">Vehicle</span><br><b>${dc.vehicle_no||'—'}</b></div>
-        <div><span style="color:var(--text-muted)">ETA</span><br><b style="color:${overdue?'var(--danger)':'inherit'}">${eta}</b></div>
+        <div><span class="u-muted">Client</span><br><b>${dc.client_name||'—'}</b></div>
+        <div><span class="u-muted">Order</span><br><b>${dc.order_id}</b></div>
+        <div><span class="u-muted">Vehicle</span><br><b>${dc.vehicle_no||'—'}</b></div>
+        <div><span class="u-muted">ETA</span><br><b style="color:${overdue?'var(--danger)':'inherit'}">${eta}</b></div>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--border-light,#f1f5f9);border-radius:8px;margin-bottom:12px;font-size:.82rem">
-        <span style="color:var(--text-muted)">Items to deliver</span>
+        <span class="u-muted">Items to deliver</span>
         <span style="font-weight:700;font-size:1rem;color:var(--navy)">${dc.total_qty||'?'}</span>
       </div>
       <!-- Action buttons -->
@@ -155,14 +155,14 @@ async function execMarkDelivered(dcId) {
   openModal('Confirm Delivery — ' + dcId, `
     <p style="color:var(--text-muted);margin-bottom:12px">Enter actual qty delivered. You cannot deliver more than what is still outstanding on the order — if less, a follow-up DC is created for the balance.</p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>Item</th><th style="text-align:center">Dispatched</th><th style="text-align:center">Outstanding</th><th style="text-align:center">Delivered</th></tr></thead>
+      <thead><tr><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Outstanding</th><th class="u-center">Delivered</th></tr></thead>
       <tbody>${items.map(it => {
         const maxDeliver = it.order_remaining != null ? it.order_remaining : it.qty_ordered;
         return `<tr>
         <td>${it.item_name||it.sku}</td>
-        <td style="text-align:center;color:var(--text-muted)">${it.qty_ordered}</td>
+        <td class="u-empty">${it.qty_ordered}</td>
         <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
-        <td style="text-align:center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+        <td class="u-center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       </tr>`;}).join('')}
       </tbody>
     </table>
@@ -278,7 +278,7 @@ async function renderClients(el) {
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div>
+          <div class="u-muted-xs">Monthly Budget</div>
           <div style="font-weight:700;font-size:.9rem">${fmt(c.monthly_budget)}</div>
         </div>
       </div>
@@ -334,23 +334,23 @@ async function renderClients(el) {
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Clients</div>
+      <div class="u-label2">Total Clients</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${clients.length}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Budget</div>
+      <div class="u-label2">Total Budget</div>
       <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalBudget)}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalSpent)} spent this month</div>
+      <div class="u-subtiny">${fmt(totalSpent)} spent this month</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Near Budget Limit</div>
+      <div class="u-label2">Near Budget Limit</div>
       <div style="font-size:2rem;font-weight:800;color:${overBudget?'var(--warning)':'var(--navy)'};margin-top:6px">${overBudget}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">&gt;90% budget used</div>
+      <div class="u-subtiny">&gt;90% budget used</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
+      <div class="u-label2">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">health score &lt;70</div>
+      <div class="u-subtiny">health score &lt;70</div>
     </div>
   </div>
 
@@ -448,15 +448,15 @@ function ccAssignedRow(item) {
   return `<div id="cc-row-${item.sku}" style="background:var(--bg,var(--surface-2));border-radius:8px;border:1px solid var(--border);padding:8px 10px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:1.1rem;flex-shrink:0">${item.emoji||'📦'}</span>
-      <div style="flex:1;min-width:0">
+      <div class="u-flex1">
         <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''}</div>
+        <div class="u-muted-xs">${item.sku} · ${item.category||''}</div>
       </div>
       <button class="btn btn-sm" style="background:var(--danger-soft-bg);color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
       <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Global ₹${globalPrice}</span>
-      <span style="font-size:.72rem;color:var(--text-muted)">→</span>
+      <span class="u-muted-xs">→</span>
       <label style="font-size:.72rem;font-weight:600;color:var(--navy);white-space:nowrap">Client Price ₹</label>
       <input type="number" min="0" step="0.01" placeholder="${globalPrice}"
         value="${clientPrice}"
@@ -523,9 +523,9 @@ function renderCCSearchResults() {
       data-hover
       ${dataAct('addCCItem', i.sku)}>
       <span>${i.emoji||'📦'}</span>
-      <div style="flex:1;min-width:0">
+      <div class="u-flex1">
         <div style="font-weight:600;font-size:.84rem">${h(i.name)}</div>
-        <div style="font-size:.72rem;color:var(--text-muted)">${i.sku} · ${i.category||''} · ₹${i.unit_price}</div>
+        <div class="u-muted-xs">${i.sku} · ${i.category||''} · ₹${i.unit_price}</div>
       </div>
       <span style="font-size:.72rem;color:var(--blue);font-weight:700;flex-shrink:0">+ Add</span>
     </div>`).join('');
@@ -680,7 +680,7 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
           <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
             <span>${i.emoji||'📦'}</span>
             <span style="font-weight:600;flex:1">${h(i.name)}</span>
-            <span style="color:var(--text-muted)">${i.sku}</span>
+            <span class="u-muted">${i.sku}</span>
             <span style="color:var(--success);font-weight:700">✓</span>
           </div>`).join('')}
       </div>` : ''}
@@ -878,18 +878,18 @@ function viewClientModal(c) {
   const mapUrl = mapsLink(c.map_pin, c.address);
   openModal(`Client: ${c.name}`, `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Company Name</div><div style="font-weight:600">${h(c.name)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Zone</div><div style="font-weight:600">${c.zone||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Name</div><div style="font-weight:600">${c.contact_name||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Email</div><div style="font-weight:600">${c.contact_email?`<a href="mailto:${h(c.contact_email)}" style="color:var(--blue)">${h(c.contact_email)}</a>`:'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Contact Phone</div><div style="font-weight:600">${c.contact_phone||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">PAN</div><div style="font-weight:600;letter-spacing:.03em">${c.pan||'—'}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Health Score</div><div style="font-weight:700;color:${hColor}">★ ${c.health_score||0}/100</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Monthly Budget</div><div style="font-weight:600">${fmt(c.monthly_budget)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Approval Threshold</div><div style="font-weight:600">${fmt(c.approval_threshold)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Spent This Month</div><div style="font-weight:600">${fmt(c.spent_this_month)}</div></div>
-      <div><div style="font-size:.72rem;color:var(--text-muted)">Status</div><div style="font-weight:600">${c.active===0?'<span style="color:var(--danger)">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
+      <div><div class="u-muted-xs">Company Name</div><div class="u-b600">${h(c.name)}</div></div>
+      <div><div class="u-muted-xs">Zone</div><div class="u-b600">${c.zone||'—'}</div></div>
+      <div><div class="u-muted-xs">Contact Name</div><div class="u-b600">${c.contact_name||'—'}</div></div>
+      <div><div class="u-muted-xs">Contact Email</div><div class="u-b600">${c.contact_email?`<a href="mailto:${h(c.contact_email)}" style="color:var(--blue)">${h(c.contact_email)}</a>`:'—'}</div></div>
+      <div><div class="u-muted-xs">Contact Phone</div><div class="u-b600">${c.contact_phone||'—'}</div></div>
+      <div><div class="u-muted-xs">GST Number</div><div style="font-weight:600;letter-spacing:.03em">${c.gstin||'—'}</div></div>
+      <div><div class="u-muted-xs">PAN</div><div style="font-weight:600;letter-spacing:.03em">${c.pan||'—'}</div></div>
+      <div><div class="u-muted-xs">Health Score</div><div style="font-weight:700;color:${hColor}">★ ${c.health_score||0}/100</div></div>
+      <div><div class="u-muted-xs">Monthly Budget</div><div class="u-b600">${fmt(c.monthly_budget)}</div></div>
+      <div><div class="u-muted-xs">Approval Threshold</div><div class="u-b600">${fmt(c.approval_threshold)}</div></div>
+      <div><div class="u-muted-xs">Spent This Month</div><div class="u-b600">${fmt(c.spent_this_month)}</div></div>
+      <div><div class="u-muted-xs">Status</div><div class="u-b600">${c.active===0?'<span class="u-danger">Disabled</span>':'<span style="color:var(--success)">Active</span>'}</div></div>
     </div>
     ${c.address?`<div style="margin-top:14px"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px">Address</div><div style="font-size:.85rem">📍 ${c.address}</div></div>`:''}
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
@@ -1041,22 +1041,22 @@ async function renderServiceDesk(el) {
       const resolveRate = tickets.length ? Math.round(resolvedT.length/tickets.length*100) : 0;
       return `
       <div class="card" style="padding:16px 18px;border-top:3px solid ${openT.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Open</div>
+        <div class="u-label">Open</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${openT.length}</div>
         <div style="font-size:.75rem;color:${openHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${openHigh} high priority</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue-bright);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Progress</div>
+        <div class="u-label">In Progress</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inProgT.length}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">being handled</div>
+        <div class="u-sub">being handled</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Resolved</div>
+        <div class="u-label">Resolved</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${resolvedT.length}</div>
         <div style="font-size:.75rem;color:var(--success);margin-top:6px">${resolveRate}% resolution rate</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${activeHigh>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">High Priority</div>
+        <div class="u-label">High Priority</div>
         <div style="font-size:1.9rem;font-weight:700;color:${activeHigh>0?'var(--danger)':'var(--navy)'};line-height:1">${activeHigh}</div>
         <div style="font-size:.75rem;color:${activeHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${activeHigh>0?'needs immediate attention':'all clear'}</div>
       </div>`;
@@ -1276,19 +1276,19 @@ async function renderApprovals(el) {
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Approval</div>
+      <div class="u-label2">Pending Approval</div>
       <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting decision</div>
+      <div class="u-subtiny">awaiting decision</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Progress</div>
+      <div class="u-label2">In Progress</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${approved.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">approved & processing</div>
+      <div class="u-subtiny">approved & processing</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Value</div>
+      <div class="u-label2">Pending Value</div>
       <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(pending.reduce((s,o)=>s+(o.grand_total||0),0))}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">total value pending</div>
+      <div class="u-subtiny">total value pending</div>
     </div>
   </div>
 
@@ -1310,7 +1310,7 @@ async function renderApprovals(el) {
           ${!isApprover&&o.client_name?' · '+o.client_name:''}
         </div>
       </div>
-      <div style="text-align:right">
+      <div class="u-right">
         <div style="font-weight:800;font-size:1.2rem;color:var(--navy)">${fmt(o.grand_total)}</div>
         ${o.grand_total>100000?`<div style="font-size:.72rem;color:var(--warning);background:var(--amber-bg);border-radius:4px;padding:2px 6px;margin-top:4px">⚠️ High value — review carefully</div>`:''}
       </div>
@@ -1331,7 +1331,7 @@ async function renderApprovals(el) {
     <div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" ${dataAct('viewOrder', o.id)}>
       <div>
         <div style="font-weight:700;font-size:.88rem">${o.id}</div>
-        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)}</div>
+        <div class="u-subtiny">${fmtDate(o.created_at)}</div>
       </div>
       <div style="display:flex;align-items:center;gap:12px">
         <div style="font-weight:700">${fmt(o.grand_total)}</div>
@@ -1351,7 +1351,7 @@ function rejectOrder(id) {
   openModal(`Reject Order ${id}`,
     `<div style="margin-bottom:16px;color:var(--text-muted);font-size:.88rem">This will cancel the order and notify the requester.</div>
      <div class="form-group">
-       <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
+       <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span class="u-danger">*</span></label>
        <textarea id="reject-reason" rows="4" placeholder="Explain why this order is being rejected…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>

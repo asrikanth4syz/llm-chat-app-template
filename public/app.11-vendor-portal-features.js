@@ -74,24 +74,24 @@ async function renderVendorPOs(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Action Required</div>
+      <div class="u-label2">Action Required</div>
       <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)} pending</div>
+      <div class="u-subtiny">${fmt(totalValue)} pending</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Accepted</div>
+      <div class="u-label2">Accepted</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">preparing to dispatch</div>
+      <div class="u-subtiny">preparing to dispatch</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--violet)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Dispatched</div>
+      <div class="u-label2">Dispatched</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${dispatchedPOs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting invoice</div>
+      <div class="u-subtiny">awaiting invoice</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Invoiced</div>
+      <div class="u-label2">Invoiced</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoicedPOs.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">payment pending</div>
+      <div class="u-subtiny">payment pending</div>
     </div>
   </div>
 
@@ -127,7 +127,7 @@ async function acceptPO(id, vendorTotal) {
       ${amountLabel}
     </div>
     <div class="form-group" style="margin-bottom:12px">
-      <label style="font-weight:600;display:block;margin-bottom:6px">Confirm Delivery Date <span style="color:var(--danger)">*</span></label>
+      <label style="font-weight:600;display:block;margin-bottom:6px">Confirm Delivery Date <span class="u-danger">*</span></label>
       <input type="date" id="po-delivery-date" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
         min="${new Date().toISOString().slice(0,10)}">
     </div>
@@ -154,7 +154,7 @@ async function confirmAcceptPO(id) {
 async function rejectPO(id) {
   openModal(`Reject PO ${id}`,
     `<div class="form-group">
-      <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span style="color:var(--danger)">*</span></label>
+      <label style="font-weight:600;display:block;margin-bottom:6px">Reason for Rejection <span class="u-danger">*</span></label>
       <textarea id="rej-reason" rows="4" placeholder="Explain why you are rejecting this PO…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical"></textarea>
     </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
@@ -217,19 +217,19 @@ async function renderVendorInvoices(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Invoices Submitted</div>
+      <div class="u-label2">Invoices Submitted</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoiced.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalInv)} total</div>
+      <div class="u-subtiny">${fmt(totalInv)} total</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Awaiting Upload</div>
+      <div class="u-label2">Awaiting Upload</div>
       <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">dispatched, no invoice yet</div>
+      <div class="u-subtiny">dispatched, no invoice yet</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Net-30 Terms</div>
+      <div class="u-label2">Net-30 Terms</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">30d</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">avg payment cycle</div>
+      <div class="u-subtiny">avg payment cycle</div>
     </div>
   </div>
 
@@ -298,24 +298,24 @@ async function renderVendorPayments(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--warning)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Receivable</div>
+      <div class="u-label2">Pending Receivable</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalPending)}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
+      <div class="u-subtiny">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Overdue</div>
+      <div class="u-label2">Overdue</div>
       <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};margin-top:6px">${overdue.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+      <div class="u-subtiny">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'var(--amber)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Due This Week</div>
+      <div class="u-label2">Due This Week</div>
       <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'var(--warning)':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
+      <div class="u-subtiny">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Payment Terms</div>
+      <div class="u-label2">Payment Terms</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">Net-30</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">from invoice date</div>
+      <div class="u-subtiny">from invoice date</div>
     </div>
   </div>
 
@@ -546,7 +546,7 @@ async function renderDunning(el) {
           const ac = ACTION_COLOR[r.action] || '#6b7280';
           return `<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
             <div style="width:48px;height:48px;border-radius:10px;background:${ac}1a;color:${ac};display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:800;flex-shrink:0">${r.days_overdue}d</div>
-            <div style="flex:1;min-width:0">
+            <div class="u-flex1">
               <div style="display:flex;align-items:center;gap:6px">
                 <span style="font-size:.68rem;font-weight:700;background:${ac}1a;color:${ac};border-radius:4px;padding:2px 7px">${r.action}</span>
               </div>
@@ -657,7 +657,7 @@ function showImportTab(tab, jobs) {
         <td><span class="badge badge-success">${j.success_count}</span></td>
         <td>${j.failed_count > 0 ? '<span class="badge badge-danger">'+j.failed_count+'</span>' : '0'}</td>
         <td>${fmtDate(j.created_at)}</td>
-      </tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No imports yet</td></tr>'}
+      </tr>`).join('')||'<tr><td colspan="5" class="u-empty">No imports yet</td></tr>'}
       </tbody></table></div></div>`;
     return;
   }
@@ -680,7 +680,7 @@ function showImportTab(tab, jobs) {
           <b>Duplicate handling:</b> If a vendor with the same name already exists, you can choose to skip it or overwrite it with the CSV data.
         </div>
         <div class="form-group" style="margin-bottom:0">
-          <label style="font-weight:600">Choose CSV file</label>
+          <label class="u-b600">Choose CSV file</label>
           <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" ${dataChangeEl('previewVendorCSV')}>
         </div>
         <div id="csv-preview" style="margin-top:12px"></div>
@@ -723,7 +723,7 @@ function showImportTab(tab, jobs) {
         <code style="color:var(--blue);word-break:break-all">${cols}</code>
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label style="font-weight:600">Choose CSV file</label>
+        <label class="u-b600">Choose CSV file</label>
         <input type="file" id="csv-file" accept=".csv,.txt" style="margin-top:6px;display:block" ${dataChangeEl('previewCSVEl', tab)}>
       </div>
       <div id="csv-preview" style="margin-top:12px"></div>
@@ -1199,24 +1199,24 @@ async function renderSLADashboard(el) {
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">SLA Rules</div>
+      <div class="u-label2">SLA Rules</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">active monitoring rules</div>
+      <div class="u-subtiny">active monitoring rules</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${activeBreaches.length?'var(--danger)':'var(--success)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active Breaches</div>
+      <div class="u-label2">Active Breaches</div>
       <div style="font-size:2rem;font-weight:800;color:${activeBreaches.length?'var(--danger)':'var(--success)'};margin-top:6px">${activeBreaches.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${activeBreaches.length?'require action':'all clear'}</div>
+      <div class="u-subtiny">${activeBreaches.length?'require action':'all clear'}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'var(--danger)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Critical (24h+)</div>
+      <div class="u-label2">Critical (24h+)</div>
       <div style="font-size:2rem;font-weight:800;color:${criticalBreaches.length?'var(--danger)':'var(--navy)'};margin-top:6px">${criticalBreaches.length}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">breached over 24h ago</div>
+      <div class="u-subtiny">breached over 24h ago</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--navy)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Max SLA Hours</div>
+      <div class="u-label2">Max SLA Hours</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length ? Math.max(...rules.map(r=>r.max_hours||0)) : '—'}</div>
-      <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">longest configured rule</div>
+      <div class="u-subtiny">longest configured rule</div>
     </div>
   </div>
 
@@ -1230,7 +1230,7 @@ async function renderSLADashboard(el) {
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<activeBreaches.length-1?'border-bottom:1px solid var(--border)':''}${isCrit?';background:#fff5f5':''}">
         <div>
           <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${b.rule_name||b.rule_id}</div>
-          <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Entity: <b>${b.entity_id}</b></div>
+          <div class="u-subtiny">Entity: <b>${b.entity_id}</b></div>
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:.78rem;font-weight:600;color:${isCrit?'var(--danger)':'var(--warning)'}">${hoursAgo}h ago</div>
@@ -1250,12 +1250,12 @@ async function renderSLADashboard(el) {
   <!-- SLA Rules -->
   <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Configured Rules</div>
   <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
-    ${rules.length===0 ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">No SLA rules configured</div>` :
+    ${rules.length===0 ? `<div class="u-empty-lg">No SLA rules configured</div>` :
     rules.map((r,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
       <div>
         <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${h(r.name)}</div>
-        <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Trigger: ${r.trigger_status?.replace(/_/g,' ')||'—'} → Action: ${r.action||'—'}</div>
+        <div class="u-subtiny">Trigger: ${r.trigger_status?.replace(/_/g,' ')||'—'} → Action: ${r.action||'—'}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-size:1.1rem;font-weight:800;color:${r.max_hours<=4?'var(--danger)':r.max_hours<=24?'var(--warning)':'var(--navy)'}">⏱ ${r.max_hours}h</div>

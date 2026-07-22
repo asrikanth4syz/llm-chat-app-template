@@ -43,7 +43,7 @@ async function renderPlaceOrder(el) {
         <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
           <div style="min-width:0">
             <div style="font-size:.82rem;font-weight:700;color:var(--navy)">${o.id}</div>
-            <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
+            <div class="u-subtiny">${fmtDate(o.created_at)} · ${fmt(o.grand_total)}</div>
             <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(o.items||[]).slice(0,3).map(i=>i.name).join(', ')||'—'}${(o.items||[]).length>3?` +${o.items.length-3} more`:''}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
@@ -188,7 +188,7 @@ function renderCartReview(container) {
         <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>← Back to Catalogue</button>
       </div>
       <div style="display:flex;align-items:center;gap:10px;font-size:.84rem">
-        <span style="color:var(--text-muted)">① Browse</span>
+        <span class="u-muted">① Browse</span>
         <div style="width:48px;height:2px;background:var(--navy);border-radius:1px"></div>
         <span style="font-weight:700;color:var(--navy)">② Review & Place</span>
       </div>
@@ -232,7 +232,7 @@ function renderCartReview(container) {
             <input type="month" id="cart-order-period" value="${today.slice(0,7)}"
               style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
               data-focus />
-            <span style="font-size:.72rem;color:var(--text-muted)">Defaults to this month — change only if ordering ahead</span>
+            <span class="u-muted-xs">Defaults to this month — change only if ordering ahead</span>
           </div>
         </div>
 
@@ -290,12 +290,12 @@ function refreshCartReviewUI() {
   const itemsEl = document.getElementById('review-cart-items');
   if (itemsEl) {
     itemsEl.innerHTML = APP.cart.length === 0
-      ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">Cart is empty — <a href="#" ${dataAct('switchOrderStep', 'catalogue')} data-prevent>browse catalogue</a></div>`
+      ? `<div class="u-empty-lg">Cart is empty — <a href="#" ${dataAct('switchOrderStep', 'catalogue')} data-prevent>browse catalogue</a></div>`
       : APP.cart.map(item => `
         <div style="padding:12px 18px;border-bottom:1px solid var(--border)">
           <div style="display:flex;align-items:center;gap:12px">
             <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
-            <div style="flex:1;min-width:0">
+            <div class="u-flex1">
               <div style="font-weight:600;font-size:.88rem;color:var(--navy)">${h(item.name)}</div>
               <div style="font-size:.73rem;color:var(--text-muted);margin-top:1px">${item.sku} · ${fmt(item.unit_price)}/unit</div>
             </div>
@@ -324,8 +324,8 @@ function refreshCartReviewUI() {
   const summaryEl = document.getElementById('review-summary');
   if (summaryEl) {
     summaryEl.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span style="color:var(--text-muted)">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span style="color:var(--text-muted)">GST (18%)</span><span>${fmt(gst)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span class="u-muted">GST (18%)</span><span>${fmt(gst)}</span></div>
       <div style="display:flex;justify-content:space-between;padding-top:12px;border-top:2px solid var(--border);font-weight:800;font-size:1.05rem"><span>Total</span><span style="color:var(--navy)">${fmt(grand)}</span></div>
       ${grand > 100000 ? `<div class="alert alert-warning" style="margin-top:12px;font-size:.8rem">⚠️ Amount exceeds ₹1L — approval required</div>` : ''}
       <div id="budget-bar-wrap" style="margin-top:12px;display:none">
@@ -508,7 +508,7 @@ async function loadQuickReorder() {
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
         <div><b>${o.id}</b> &nbsp;${statusBadge(o.status)} &nbsp;<span style="color:var(--text-muted);font-size:.84rem">${fmtDate(o.created_at)}</span></div>
         <div style="display:flex;gap:8px;align-items:center">
-          <span style="font-weight:600">${fmt(o.grand_total)}</span>
+          <span class="u-b600">${fmt(o.grand_total)}</span>
           <button class="btn btn-secondary btn-sm" ${dataAct('previewReorder', o.id)}>👁 Preview</button>
           <button class="btn btn-gold btn-sm" ${dataAct('reorderFromHistory', o.id)}>Reorder all</button>
         </div>
@@ -545,11 +545,11 @@ async function previewReorder(orderId) {
   });
   const rows = APP._reorderPreview.map((r, idx) => `
     <tr>
-      <td style="text-align:center"><input type="checkbox" class="pr-chk" data-idx="${idx}" checked
+      <td class="u-center"><input type="checkbox" class="pr-chk" data-idx="${idx}" checked
         ${dataChange('updateReorderPreview')} style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></td>
       <td><span style="font-size:1.05rem">${r.emoji}</span> <b style="font-size:.85rem">${h(r.name)}</b>
-        <div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)} · ${fmt(r.price)}/unit</div></td>
-      <td style="text-align:center">
+        <div class="u-muted-xs">${h(r.sku)} · ${fmt(r.price)}/unit</div></td>
+      <td class="u-center">
         <input type="number" class="pr-qty" data-idx="${idx}" value="${r.qty}" min="1" step="1" inputmode="numeric"
           ${dataInputEl('maskDigits', 0)} ${dataChange('updateReorderPreview')}
           style="width:56px;text-align:center;border:1.5px solid var(--border-mid);border-radius:7px;padding:4px 2px;font-weight:700"></td>
@@ -561,7 +561,7 @@ async function previewReorder(orderId) {
       <table class="table" style="margin:0">
         <thead><tr>
           <th style="width:34px;text-align:center"><input type="checkbox" id="pr-all" checked ${dataChangeEl('toggleReorderAll')} style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary)"></th>
-          <th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Line total</th>
+          <th>Item</th><th class="u-center">Qty</th><th class="u-right">Line total</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -644,7 +644,7 @@ function renderCatalogItems(items) {
   if (view === 'list') {
     return `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
       <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
-        <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div style="text-align:center">Quantity</div>
+        <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div class="u-center">Quantity</div>
       </div>
       ${items.map(item => {
         const inCart = APP.cart.find(c => c.sku === item.sku);
@@ -655,7 +655,7 @@ function renderCatalogItems(items) {
             <div style="font-size:1.4rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="min-width:0">
               <div style="font-weight:600;font-size:.88rem;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
-              <div style="font-size:.72rem;color:var(--text-muted)">${item.sku}${item.brand?' · '+item.brand:''}</div>
+              <div class="u-muted-xs">${item.sku}${item.brand?' · '+item.brand:''}</div>
             </div>
           </div>
           <div style="font-size:.8rem;color:var(--text-muted)">${item.category}${item.sub_category&&item.sub_category!=='Normal'?'<br><span style="font-size:.7rem;color:#10b981;font-weight:600">'+item.sub_category+'</span>':''}</div>
@@ -912,7 +912,7 @@ async function saveDraft() {
 function h(v) { return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 async function renderMyInventory(el) {
-  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:40px"><span style="color:var(--text-muted)">Loading inventory…</span></div>`;
+  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:40px"><span class="u-muted">Loading inventory…</span></div>`;
   const [items, consumption] = await Promise.all([
     api('/client-inventory'),
     api('/client-inventory/consumption').catch(()=>[]),
@@ -1009,8 +1009,8 @@ async function renderMyInventory(el) {
             <th>Item</th>
             <th>Category</th>
             <th>UOM</th>
-            <th style="text-align:right">In Store</th>
-            <th style="text-align:right">Reorder At</th>
+            <th class="u-right">In Store</th>
+            <th class="u-right">Reorder At</th>
             <th>Status</th>
             <th>Last Received</th>
             <th>Last Used</th>
@@ -1035,7 +1035,7 @@ async function renderMyInventory(el) {
     <div class="card" style="padding:0;overflow:hidden">
       <table class="table" style="margin:0">
         <thead>
-          <tr><th>Date & Time</th><th>Item</th><th style="text-align:right">Qty Used</th><th>Notes</th><th>Recorded By</th></tr>
+          <tr><th>Date & Time</th><th>Item</th><th class="u-right">Qty Used</th><th>Notes</th><th>Recorded By</th></tr>
         </thead>
         <tbody id="cons-log-tbody">
           ${renderConsumptionRows(consumption||[])}
@@ -1053,7 +1053,7 @@ function myInvRow(i) {
   return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" data-critical="${i.is_critical?1:0}" style="${rowBg}">
     <td class="card-title-cell">
       <div class="inv-name" style="font-weight:600;font-size:.87rem;color:var(--navy)">${i.is_critical?'<span class="inv-star" title="Critical for you" style="color:var(--amber)">★</span> ':''}${h(i.item_name||i.sku)}</div>
-      <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
+      <div class="u-muted-xs">${h(i.sku)}</div>
     </td>
     <td data-label="Category" style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
     <td data-label="UOM" style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
@@ -1077,7 +1077,7 @@ function renderConsumptionRows(rows) {
   if (!rows.length) return `<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted)">No consumption recorded in this period.</td></tr>`;
   return rows.map(r => `<tr>
     <td style="font-size:.8rem;color:var(--text-muted);white-space:nowrap">${fmtDate(r.consumed_at)}</td>
-    <td><div style="font-weight:600;font-size:.85rem">${h(r.item_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${h(r.sku)}</div></td>
+    <td><div style="font-weight:600;font-size:.85rem">${h(r.item_name)}</div><div class="u-muted-xs">${h(r.sku)}</div></td>
     <td style="text-align:right;font-weight:700">${Math.round(r.qty)}</td>
     <td style="font-size:.8rem;color:var(--text-muted)">${r.notes ? h(r.notes) : '—'}</td>
     <td style="font-size:.8rem;color:var(--text-muted)">${h(r.recorded_by||'—')}</td>
@@ -1224,7 +1224,7 @@ function logConsumptionModal(sku, name, qty, uom) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:4px">Currently in store: <strong>${onHand} ${uom}</strong></div>
     </div>
     <div class="form-group">
-      <label class="form-label">Quantity Used <span style="color:var(--danger)">*</span></label>
+      <label class="form-label">Quantity Used <span class="u-danger">*</span></label>
       <input id="cons-qty" type="number" min="1" step="1" max="${onHand}" class="form-control" placeholder="e.g. 5" style="max-width:160px"
         ${dataInput('validateConsQty', onHand)}>
       <div id="cons-qty-warn" style="display:none;font-size:.76rem;color:var(--danger);margin-top:5px"></div>
