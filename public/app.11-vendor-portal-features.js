@@ -75,7 +75,7 @@ async function renderVendorPOs(el) {
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Action Required</div>
-      <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'#d97706':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)} pending</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
@@ -83,7 +83,7 @@ async function renderVendorPOs(el) {
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">preparing to dispatch</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #8b5cf6">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--violet)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Dispatched</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${dispatchedPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting invoice</div>
@@ -221,9 +221,9 @@ async function renderVendorInvoices(el) {
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoiced.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalInv)} total</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'#f59e0b':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Awaiting Upload</div>
-      <div style="font-size:2rem;font-weight:800;color:${pending.length?'#d97706':'var(--navy)'};margin-top:6px">${pending.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">dispatched, no invoice yet</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
@@ -302,14 +302,14 @@ async function renderVendorPayments(el) {
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalPending)}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Overdue</div>
       <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};margin-top:6px">${overdue.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'#f59e0b':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'var(--amber)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Due This Week</div>
-      <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'#d97706':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'var(--warning)':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
@@ -358,7 +358,7 @@ async function renderVendorPayments(el) {
             <div style="height:100%;width:${barPct}%;background:${barColor};border-radius:3px;transition:width .5s"></div>
           </div>
           <div style="font-size:.7rem;color:var(--text-muted);white-space:nowrap">Due ${dueDate.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</div>
-          <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;background:${isOv?'#fef2f2':isSoon?'#fef3c7':'#d1fae5'};color:${barColor}">${isOv?'OVERDUE':isSoon?'DUE SOON':'ON TRACK'}</span>
+          <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;background:${isOv?'var(--danger-bg)':isSoon?'var(--amber-bg)':'var(--success-soft-bg)'};color:${barColor}">${isOv?'OVERDUE':isSoon?'DUE SOON':'ON TRACK'}</span>
         </div>
       </div>`;
     }).join('')}
@@ -863,7 +863,7 @@ async function previewVendorCSV(input) {
     const rowCount = document.getElementById('csv-row-count');
 
     const statusBadge = function(s) {
-      if (s === 'new') return '<span style="background:#d1fae5;color:#065f46;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">New</span>';
+      if (s === 'new') return '<span style="background:var(--success-soft-bg);color:#065f46;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">New</span>';
       if (s === 'duplicate') return '<span style="background:var(--amber-bg);color:var(--amber-text);border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Duplicate</span>';
       return '<span style="background:var(--danger-soft-bg);color:#991b1b;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Invalid</span>';
     };
@@ -871,7 +871,7 @@ async function previewVendorCSV(input) {
     const dispCols = ['name','category','contact_email','contact_phone','location','avg_lead_days','rating'];
     if (preview) preview.innerHTML =
       '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">' +
-        '<span style="background:#d1fae5;color:#065f46;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + newCount + ' New</span>' +
+        '<span style="background:var(--success-soft-bg);color:#065f46;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + newCount + ' New</span>' +
         '<span style="background:var(--amber-bg);color:var(--amber-text);border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + dupCount + ' Duplicate</span>' +
         (invalidCount ? '<span style="background:var(--danger-soft-bg);color:#991b1b;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + invalidCount + ' Invalid</span>' : '') +
       '</div>' +
@@ -1208,7 +1208,7 @@ async function renderSLADashboard(el) {
       <div style="font-size:2rem;font-weight:800;color:${activeBreaches.length?'var(--danger)':'var(--success)'};margin-top:6px">${activeBreaches.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${activeBreaches.length?'require action':'all clear'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'#dc2626':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Critical (24h+)</div>
       <div style="font-size:2rem;font-weight:800;color:${criticalBreaches.length?'var(--danger)':'var(--navy)'};margin-top:6px">${criticalBreaches.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">breached over 24h ago</div>
@@ -1233,13 +1233,13 @@ async function renderSLADashboard(el) {
           <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Entity: <b>${b.entity_id}</b></div>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:.78rem;font-weight:600;color:${isCrit?'var(--danger)':'#d97706'}">${hoursAgo}h ago</div>
+          <div style="font-size:.78rem;font-weight:600;color:${isCrit?'var(--danger)':'var(--warning)'}">${hoursAgo}h ago</div>
           <div style="font-size:.68rem;color:var(--text-muted)">${fmtDate(b.breached_at)}</div>
         </div>
       </div>`;
     }).join('')}
   </div>` : `
-  <div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:12px;padding:16px 20px;margin-bottom:18px;display:flex;align-items:center;gap:12px">
+  <div style="background:var(--success-soft-bg);border:1px solid #6ee7b7;border-radius:12px;padding:16px 20px;margin-bottom:18px;display:flex;align-items:center;gap:12px">
     <span style="font-size:1.5rem">✅</span>
     <div>
       <div style="font-weight:700;color:#065f46">All SLAs within bounds</div>
@@ -1258,7 +1258,7 @@ async function renderSLADashboard(el) {
         <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">Trigger: ${r.trigger_status?.replace(/_/g,' ')||'—'} → Action: ${r.action||'—'}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:1.1rem;font-weight:800;color:${r.max_hours<=4?'var(--danger)':r.max_hours<=24?'#d97706':'var(--navy)'}">⏱ ${r.max_hours}h</div>
+        <div style="font-size:1.1rem;font-weight:800;color:${r.max_hours<=4?'var(--danger)':r.max_hours<=24?'var(--warning)':'var(--navy)'}">⏱ ${r.max_hours}h</div>
         <div style="font-size:.68rem;color:var(--text-muted)">max hours</div>
       </div>
     </div>`).join('')}

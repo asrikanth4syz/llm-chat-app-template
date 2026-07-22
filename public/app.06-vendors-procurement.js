@@ -38,7 +38,7 @@ async function renderVendors(el) {
   function starRating(rating) {
     const r = Math.round(+rating * 2) / 2;
     return Array.from({length:5}, (_,i) =>
-      `<span style="color:${i < r ? '#f59e0b' : '#d1d5db'};font-size:.8rem">★</span>`
+      `<span style="color:${i < r ? 'var(--amber)' : 'var(--gray-light)'};font-size:.8rem">★</span>`
     ).join('');
   }
 
@@ -104,7 +104,7 @@ async function renderVendors(el) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
         <button class="btn btn-gold btn-sm" ${dataAct('editVendorById', _regVendor(v))}>Edit</button>
-        <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'#fee2e2'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
+        <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
         <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>New PO</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('openVendorFeedbackModal', v.id, v.name)}>Rate</button>
       </div>
@@ -126,8 +126,8 @@ async function renderVendors(el) {
       <span><b>${h(v.name)}</b> · <span style="color:${expd?'var(--danger)':'#b45309'};font-weight:700">${expd?'expired':'expires'} ${fmtDate(v.fssai_expiry)}</span></span>${btn}</span>`;
   };
   const fssaiBanner = fssaiFlagged.length ? `
-    <div style="background:${anyExpired?'#fef2f2':'#fffbeb'};border:1.5px solid ${anyExpired?'#fca5a5':'#fde68a'};border-radius:12px;padding:13px 16px;margin-bottom:16px">
-      <div style="font-weight:800;color:${anyExpired?'#dc2626':'#b45309'};font-size:.9rem;margin-bottom:8px">🍽 FSSAI licence attention — ${fssaiFlagged.length} food vendor${fssaiFlagged.length>1?'s':''}${anyExpired?` · ${fssaiExpired.length} expired`:''}</div>
+    <div style="background:${anyExpired?'var(--danger-bg)':'var(--warning-bg)'};border:1.5px solid ${anyExpired?'#fca5a5':'#fde68a'};border-radius:12px;padding:13px 16px;margin-bottom:16px">
+      <div style="font-weight:800;color:${anyExpired?'var(--danger)':'#b45309'};font-size:.9rem;margin-bottom:8px">🍽 FSSAI licence attention — ${fssaiFlagged.length} food vendor${fssaiFlagged.length>1?'s':''}${anyExpired?` · ${fssaiExpired.length} expired`:''}</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">${[...fssaiExpired, ...fssaiSoon].map(fssaiChip).join('')}</div>
     </div>` : '';
 
@@ -178,7 +178,7 @@ async function renderVendors(el) {
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Avg Fill Rate</div>
       <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgFill)};margin-top:6px">${avgFill}%</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">below performance threshold</div>
@@ -920,7 +920,7 @@ async function renderProcurement(el) {
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
       <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${t.color};margin-bottom:4px">${t.label}</div>
       <div style="font-size:1.8rem;font-weight:800;color:#1f2937;line-height:1">${byStatus(t.key).length}</div>
-      <div style="font-size:.72rem;color:#6b7280;margin-top:4px">${fmt(valByStatus(t.key))}</div>
+      <div style="font-size:.72rem;color:var(--gray);margin-top:4px">${fmt(valByStatus(t.key))}</div>
     </div>`).join('')}
   </div>
 
@@ -935,7 +935,7 @@ async function renderProcurement(el) {
     <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div style="font-weight:700;color:var(--navy);font-size:.9rem">GRN Pending Receipt</div>
-        <span style="background:#f5f3ff;color:#8b5cf6;border-radius:20px;padding:2px 10px;font-size:.75rem;font-weight:700">${pendingGRN.length} DCs</span>
+        <span style="background:#f5f3ff;color:var(--violet);border-radius:20px;padding:2px 10px;font-size:.75rem;font-weight:700">${pendingGRN.length} DCs</span>
       </div>
       ${pendingGRN.length === 0
         ? '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:.84rem">No pending GRNs</div>'

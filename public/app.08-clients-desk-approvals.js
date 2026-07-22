@@ -34,7 +34,7 @@ async function renderDeliveryExecDashboard(el) {
       <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${inTransit.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${totalItems} items to deliver</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Overdue</div>
       <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};line-height:1.2;margin-top:6px">${overdue.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${overdue.length?'requires attention':'on track'}</div>
@@ -80,7 +80,7 @@ async function renderDeliveryExecDashboard(el) {
     <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:32px;height:32px;border-radius:50%;background:#d1fae5;display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--success-soft-bg);display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
           <div>
             <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
             <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id} · ${fmtDate(dc.delivered_at)}</div>
@@ -113,7 +113,7 @@ function execDCCard(dc, today) {
   const eta = dc.expected_delivery_date ? new Date(dc.expected_delivery_date).toLocaleDateString('en-IN',{day:'numeric',month:'short'}) : '—';
   return `<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);border:1px solid ${overdue?'var(--danger)':'var(--border)'};overflow:hidden">
     <!-- Card header -->
-    <div style="padding:14px 16px;background:${overdue?'#fef2f2':'#f8fafc'};border-bottom:1px solid ${overdue?'#fecaca':'var(--border)'};display:flex;justify-content:space-between;align-items:center">
+    <div style="padding:14px 16px;background:${overdue?'var(--danger-bg)':'var(--surface-2)'};border-bottom:1px solid ${overdue?'var(--red-soft-bg)':'var(--border)'};display:flex;justify-content:space-between;align-items:center">
       <div>
         <span style="font-weight:800;font-size:.92rem;color:var(--navy)">DC #${dc.id}</span>
         ${overdue ? '<span style="margin-left:8px;background:var(--danger);color:#fff;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase">Overdue</span>' : ''}
@@ -298,10 +298,10 @@ async function renderClients(el) {
       <div style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-bottom:4px">
           <span>Credit Used</span>
-          <span style="font-weight:600;color:${creditPct>80?'var(--danger)':creditPct>60?'#d97706':'var(--text-muted)'}">${creditPct}% · ${fmt(c.credit_used||0)} / ${fmt(c.credit_limit)}</span>
+          <span style="font-weight:600;color:${creditPct>80?'var(--danger)':creditPct>60?'var(--warning)':'var(--text-muted)'}">${creditPct}% · ${fmt(c.credit_used||0)} / ${fmt(c.credit_limit)}</span>
         </div>
         <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden">
-          <div style="height:100%;width:${creditPct}%;background:${creditPct>80?'var(--danger)':creditPct>60?'#f59e0b':'#94a3b8'};border-radius:2px"></div>
+          <div style="height:100%;width:${creditPct}%;background:${creditPct>80?'var(--danger)':creditPct>60?'var(--amber)':'#94a3b8'};border-radius:2px"></div>
         </div>
       </div>` : ''}
 
@@ -317,7 +317,7 @@ async function renderClients(el) {
         <button class="btn btn-secondary btn-sm" ${dataAct('viewClientById', _regClient(c))}>View</button>
         <button class="btn btn-gold btn-sm" ${dataAct('editClientById', _regClient(c))}>Edit</button>
         <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" ${dataAct('manageClientCatalog', c.id, c.name)}>📦 Products</button>
-        <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'#fee2e2'};color:${c.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleClientActive', c.id, c.name, c.active===0?0:1)}>${c.active===0?'Enable':'Disable'}</button>
+        <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${c.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleClientActive', c.id, c.name, c.active===0?0:1)}>${c.active===0?'Enable':'Disable'}</button>
       </div>
     </div>`;
   }
@@ -342,12 +342,12 @@ async function renderClients(el) {
       <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalBudget)}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalSpent)} spent this month</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Near Budget Limit</div>
-      <div style="font-size:2rem;font-weight:800;color:${overBudget?'#d97706':'var(--navy)'};margin-top:6px">${overBudget}</div>
+      <div style="font-size:2rem;font-weight:800;color:${overBudget?'var(--warning)':'var(--navy)'};margin-top:6px">${overBudget}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">&gt;90% budget used</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">health score &lt;70</div>
@@ -1040,7 +1040,7 @@ async function renderServiceDesk(el) {
       const activeHigh = tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length;
       const resolveRate = tickets.length ? Math.round(resolvedT.length/tickets.length*100) : 0;
       return `
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${openT.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${openT.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Open</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${openT.length}</div>
         <div style="font-size:.75rem;color:${openHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${openHigh} high priority</div>
@@ -1275,9 +1275,9 @@ async function renderApprovals(el) {
 
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'#f59e0b':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Pending Approval</div>
-      <div style="font-size:2rem;font-weight:800;color:${pending.length?'#d97706':'var(--navy)'};margin-top:6px">${pending.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">awaiting decision</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">

@@ -220,7 +220,7 @@ function renderCartReview(container) {
                 font-size:.82rem;font-weight:700;cursor:pointer;transition:all .15s">${t}</button>`;
             }).join('')}
           </div>
-          <div id="need-by-wrap" style="display:${isUrgent?'block':'none'};margin-top:12px;padding:10px 12px;background:#fff8f8;border-radius:8px;border:1px solid #fecaca">
+          <div id="need-by-wrap" style="display:${isUrgent?'block':'none'};margin-top:12px;padding:10px 12px;background:#fff8f8;border-radius:8px;border:1px solid var(--red-soft-bg)">
             <label style="font-size:.78rem;font-weight:700;color:var(--danger);display:block;margin-bottom:4px">🚨 Need By Date <span style="color:var(--text-muted);font-weight:400">(required)</span></label>
             <input type="date" id="cart-need-by" min="${today}"
               style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
@@ -487,7 +487,7 @@ async function processCSVUpload() {
     imported++;
   }
   const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
-  if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'#d1fae5':'#fef3c7'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'#92400e'}">
+  if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'var(--success-soft-bg)':'var(--amber-bg)'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'var(--amber-text)'}">
     <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
     ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
   </div>`;
@@ -960,16 +960,16 @@ async function renderMyInventory(el) {
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Tracked</div>
       <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${totalItems}</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowStock?'#f59e0b':'var(--border)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'low')}>
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowStock?'var(--amber)':'var(--border)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'low')}>
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Stock</div>
-      <div style="font-size:1.8rem;font-weight:700;color:${lowStock?'#d97706':'var(--navy)'};line-height:1">${lowStock}</div>
+      <div style="font-size:1.8rem;font-weight:700;color:${lowStock?'var(--warning)':'var(--navy)'};line-height:1">${lowStock}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">at or below reorder level</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${outOfStock?'var(--danger)':'var(--border)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'out')}>
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Out of Stock</div>
       <div style="font-size:1.8rem;font-weight:700;color:${outOfStock?'var(--danger)':'var(--navy)'};line-height:1">${outOfStock}</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'#7c3aed'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'critical', 'stock')} title="Items you've marked critical">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'var(--purple)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'critical', 'stock')} title="Items you've marked critical">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">★ Critical Items</div>
       <div id="inv-kpi-critical" style="font-size:1.8rem;font-weight:700;color:var(--purple);line-height:1">${criticalItems.length}</div>
       <div id="inv-kpi-critical-sub" style="font-size:.72rem;color:${criticalNeed?'var(--danger)':'var(--text-muted)'};margin-top:4px">${criticalNeed?`${criticalNeed} need restock`:'tracked for availability'}</div>
@@ -1057,7 +1057,7 @@ function myInvRow(i) {
     </td>
     <td data-label="Category" style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
     <td data-label="UOM" style="font-size:.82rem;color:var(--text-muted)">${h(i.uom||'unit')}</td>
-    <td data-label="Qty on Hand" style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'#d97706':'var(--navy)'}">${Math.round(i.qty_on_hand||0)}</td>
+    <td data-label="Qty on Hand" style="text-align:right;font-weight:700;font-size:.95rem;color:${i.qty_on_hand===0?'var(--danger)':i.qty_on_hand<=i.reorder_level&&i.reorder_level>0?'var(--warning)':'var(--navy)'}">${Math.round(i.qty_on_hand||0)}</td>
     <td data-label="Reorder Level" style="text-align:right;font-size:.82rem;color:var(--text-muted)">${i.reorder_level>0?Math.round(i.reorder_level):'—'}</td>
     <td data-label="Status"><span style="font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:20px;background:${statusBg};color:${statusColor}">${statusLabel}</span></td>
     <td data-label="Last Received" style="font-size:.78rem;color:var(--text-muted)">${i.last_received_at ? fmtDate(i.last_received_at) : '—'}</td>

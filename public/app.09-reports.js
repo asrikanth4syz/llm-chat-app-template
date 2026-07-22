@@ -182,7 +182,7 @@ async function xbiRender() {
 function xbiKpi(lab,val,sub,cls,act){
   return `<div class="card xbi-kpi ${act?'clk':''}" style="padding:11px 13px;margin-bottom:0;position:relative" ${act||''}>
     <div style="font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)">${lab}</div>
-    <div style="font-size:1.28rem;font-weight:800;line-height:1.15;margin-top:3px;color:${cls==='g'?'var(--success)':cls==='w'?'#d97706':cls==='b'?'var(--danger)':'var(--navy)'}">${val}</div>
+    <div style="font-size:1.28rem;font-weight:800;line-height:1.15;margin-top:3px;color:${cls==='g'?'var(--success)':cls==='w'?'var(--warning)':cls==='b'?'var(--danger)':'var(--navy)'}">${val}</div>
     ${sub?`<div style="font-size:.68rem;color:var(--text-muted);margin-top:1px">${sub}</div>`:''}
     ${onclick?'<span style="position:absolute;top:9px;right:11px;color:var(--text-muted);font-size:.72rem;font-weight:700">↘</span>':''}
   </div>`;
@@ -580,7 +580,7 @@ async function loadReportsOverview() {
         <circle cx="100" cy="100" r="6" fill="var(--navy)"/>
         <text x="100" y="82" text-anchor="middle" font-size="26" font-weight="800" fill="var(--navy)">${pct}%</text>
       </svg>
-      <div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">On Target <span style="color:${pct>=80?'#16a34a':pct>=60?'#d97706':'#dc2626'};font-weight:700">· 30-day fulfilment</span></div>`;
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">On Target <span style="color:${pct>=80?'var(--success)':pct>=60?'var(--warning)':'var(--danger)'};font-weight:700">· 30-day fulfilment</span></div>`;
   }
 
   // ── Fulfilment efficiency bars: past week ──
@@ -661,7 +661,7 @@ async function viewReport(key, from, to) {
       if (c==='on_time_rate'||c==='fill_rate') return '<td>' + pct(v) + '</td>';
       if (c==='order_status'||c==='status') return '<td>' + statusBadge(v) + '</td>';
       if (c==='delivery_status') return '<td><span class="badge ' + (v==='DELIVERED'?'badge-success':v==='IN_TRANSIT'?'badge-warning':'badge-secondary') + '">' + (v||'—') + '</span></td>';
-      if (c==='qty_due') return '<td><strong style="color:' + (Number(v)>0?'#dc2626':'#16a34a') + '">' + (v!=null?v:'—') + '</strong></td>';
+      if (c==='qty_due') return '<td><strong style="color:' + (Number(v)>0?'var(--danger)':'var(--success)') + '">' + (v!=null?v:'—') + '</strong></td>';
       if (c==='billed') return '<td>' + (v?'<span class="badge badge-success">Yes</span>':'<span class="badge badge-warning">No</span>') + '</td>';
       if (c.includes('_at')) return '<td>' + fmtDate(v) + '</td>';
       if (c==='items_summary') return '<td style="max-width:220px;white-space:normal;font-size:.8rem">' + (v||'—') + '</td>';
@@ -1152,7 +1152,7 @@ function renderFulfilContent() {
     <div style="height:34px;width:1px;background:var(--border)"></div>
     <div><div style="font-size:.72rem;color:var(--text-muted)">Ordered</div><div style="font-weight:700">${Math.round(totOrd)} units</div></div>
     <div><div style="font-size:.72rem;color:var(--text-muted)">Delivered</div><div style="font-weight:700">${Math.round(totDel)} units</div></div>
-    <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'#dc2626':'#16a34a'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
+    <div><div style="font-size:.72rem;color:var(--text-muted)">Still Due</div><div style="font-weight:700;color:${totOrd-totDel>0?'var(--danger)':'var(--success)'}">${Math.round(Math.max(0,totOrd-totDel))} units</div></div>
     <div style="flex:1"></div>
     <button class="btn btn-secondary btn-sm" ${dataAct('openCategoryDrill', '', 'All periods in range')}>🔍 Category Split (all)</button>
   </div>`;
@@ -1167,7 +1167,7 @@ function renderFulfilContent() {
           <td style="text-align:right">${d.order_count}</td>
           <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
           <td style="text-align:right">${Math.round(d.delivered_qty)}</td>
-          <td style="text-align:right;color:${due>0?'#dc2626':'inherit'}">${Math.round(due)}</td>
+          <td style="text-align:right;color:${due>0?'var(--danger)':'inherit'}">${Math.round(due)}</td>
           <td style="text-align:right;font-weight:700;color:${c}">${d.fill_pct}%</td>
           <td style="text-align:right;color:var(--text-muted)">Categories ›</td>
         </tr>`;}).join('')}</tbody>
@@ -1353,7 +1353,7 @@ async function loadDrill() {
     <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
       ${donut}
       <div style="flex:1;min-width:280px">
-        <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px">Overall fill: <b style="color:${totOrdQty&&Math.round(totDelQty/totOrdQty*100)>=90?'#16a34a':'#d97706'}">${totOrdQty?Math.round(totDelQty/totOrdQty*100):0}%</b> · ${Math.round(totOrdQty)} ordered · ${Math.round(totDelQty)} delivered</div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px">Overall fill: <b style="color:${totOrdQty&&Math.round(totDelQty/totOrdQty*100)>=90?'var(--success)':'var(--warning)'}">${totOrdQty?Math.round(totDelQty/totOrdQty*100):0}%</b> · ${Math.round(totOrdQty)} ordered · ${Math.round(totDelQty)} delivered</div>
         <div class="table-wrap"><table class="table" style="margin:0">
           <thead><tr><th>${isCat?'Category':'Sub-category'}</th><th style="text-align:right">% Split</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
           <tbody>${listRows}</tbody>

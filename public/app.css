@@ -47,7 +47,13 @@
   --amber-text:     #92400e;
   --danger-soft-bg: #fee2e2;
   --success-strong: #059669;
+  --success-soft-bg:#d1fae5;
   --blue-bright:    #3b82f6;
+  --red:            #ef4444;
+  --red-soft-bg:    #fecaca;
+  --violet:         #8b5cf6;
+  --gray:           #6b7280;
+  --gray-light:     #d1d5db;
 
   /* Type scale — prefer these over ad-hoc font sizes */
   --fs-2xs: .68rem;

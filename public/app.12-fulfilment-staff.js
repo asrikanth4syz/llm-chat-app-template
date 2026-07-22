@@ -135,9 +135,9 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${fmt(data.kpis.due_value)}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">at risk</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.delayed_deliveries>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Delayed Deliveries</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.delayed_deliveries>0?'#d97706':'var(--navy)'};line-height:1">${data.kpis.delayed_deliveries}</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--navy)'};line-height:1">${data.kpis.delayed_deliveries}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">past expected date</div>
       </div>
     </div>
@@ -215,12 +215,12 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill>=90?'var(--success)':avgFill>=70?'#d97706':'var(--danger)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${avgFill>=90?'var(--success)':avgFill>=70?'#d97706':'var(--danger)'};line-height:1">${avgFill}%</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};line-height:1">${avgFill}%</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all brands</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Units</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
@@ -257,9 +257,9 @@ async function switchFulfilTab(tab, btn) {
     const brandsWithShortfall = data.filter(r=>(r.shortfall_qty||0)>0).length;
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${brandsWithShortfall>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${brandsWithShortfall>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Brands w/ Shortfall</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${brandsWithShortfall>0?'#d97706':'var(--navy)'};line-height:1">${brandsWithShortfall}</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${brandsWithShortfall>0?'var(--warning)':'var(--navy)'};line-height:1">${brandsWithShortfall}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">of ${data.length} brands</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid ${totalShortfall>0?'var(--danger)':'var(--success)'};margin-bottom:0">
@@ -309,12 +309,12 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:${atRisk>0?'var(--danger)':'var(--navy)'};line-height:1">${atRisk}</div>
         <div style="font-size:.75rem;color:${atRisk>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">fulfilment &lt;70%</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill<70?'var(--danger)':avgFill<90?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Avg Fulfilment</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${avgFill<70?'var(--danger)':avgFill<90?'#d97706':'var(--success)'};line-height:1">${avgFill}%</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};line-height:1">${avgFill}%</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all clients</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDueVal>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDueVal>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Value</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueVal)}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">outstanding</div>
@@ -363,7 +363,7 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.singleDC}</div>
         <div style="font-size:.75rem;color:var(--success);margin-top:6px">one-shot delivery</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.multiDC>0?'#d97706':'var(--success)'};margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.multiDC>0?'var(--warning)':'var(--success)'};margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Multi-DC Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.multiDC}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">split deliveries</div>
@@ -403,9 +403,9 @@ async function switchFulfilTab(tab, btn) {
               <td style="text-align:right">
                 <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
                   <div style="width:60px;height:5px;background:#e5e7eb;border-radius:3px;overflow:hidden">
-                    <div style="height:100%;width:${pct}%;background:${pct===100?'#059669':pct>50?'#f59e0b':'#ef4444'};border-radius:3px"></div>
+                    <div style="height:100%;width:${pct}%;background:${pct===100?'var(--success-strong)':pct>50?'var(--amber)':'var(--red)'};border-radius:3px"></div>
                   </div>
-                  <span style="font-weight:${r.total_delivered>0?700:400};color:${r.total_delivered>=r.total_ordered?'#059669':r.total_delivered>0?'#d97706':'var(--text-muted)'}">${r.total_delivered}</span>
+                  <span style="font-weight:${r.total_delivered>0?700:400};color:${r.total_delivered>=r.total_ordered?'var(--success-strong)':r.total_delivered>0?'var(--warning)':'var(--text-muted)'}">${r.total_delivered}</span>
                   <span style="font-size:.7rem;color:var(--text-muted)">${pct}%</span>
                 </div>
               </td>
@@ -567,10 +567,10 @@ function renderOVDTable(data) {
   const totalDue = orders.reduce((s,o)=>s+o.total_due_value, 0);
 
   const statusBadgeOVD = s => ({
-    Complete: `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#d1fae5;color:var(--success-strong)">&#10003; Complete</span>`,
+    Complete: `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--success-soft-bg);color:var(--success-strong)">&#10003; Complete</span>`,
     Partial:  `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--amber-bg);color:var(--warning)">&#9651; Partial</span>`,
     Open:     `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--danger-soft-bg);color:var(--danger)">&#9679; Open</span>`,
-  }[s] || `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#f3f4f6;color:#6b7280">${s}</span>`);
+  }[s] || `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#f3f4f6;color:var(--gray)">${s}</span>`);
 
   const borderColor = s => s==='Complete'?'var(--success)':s==='Partial'?'#f59e0b':'var(--danger)';
 
@@ -592,12 +592,12 @@ function renderOVDTable(data) {
       <div style="font-size:2rem;font-weight:800;color:var(--warning);line-height:1">${partial}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">balance pending</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${open>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${open>0?'var(--danger)':'var(--gray-light)'};margin-bottom:0">
       <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Not Started</div>
       <div style="font-size:2rem;font-weight:800;color:${open>0?'var(--danger)':'var(--navy)'};line-height:1">${open}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">no delivery yet</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--danger)':'var(--gray-light)'};margin-bottom:0">
       <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Due Value</div>
       <div style="font-size:1.4rem;font-weight:800;color:${totalDue>0?'var(--danger)':'var(--navy)'};line-height:1">${fmt(totalDue)}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">undelivered</div>
@@ -639,7 +639,7 @@ function renderOVDTable(data) {
               ${o.due_lines>0?`<span style="font-size:.7rem;color:var(--danger);margin-left:4px">(${o.due_lines} due)</span>`:''}
             </td>
             <td style="text-align:right;font-weight:600">${o.total_ordered}</td>
-            <td style="text-align:right;color:${o.total_delivered>0?'#059669':'var(--text-muted)'};font-weight:${o.total_delivered>0?700:400}">${o.total_delivered}</td>
+            <td style="text-align:right;color:${o.total_delivered>0?'var(--success-strong)':'var(--text-muted)'};font-weight:${o.total_delivered>0?700:400}">${o.total_delivered}</td>
             <td style="text-align:right;font-weight:700;color:${o.total_due>0?'var(--danger)':'var(--success)'}">${o.total_due}</td>
             <td style="text-align:right;color:${o.total_due_value>0?'var(--danger)':'var(--text-muted)'}">${o.total_due_value>0?fmt(o.total_due_value):'—'}</td>
             <td style="text-align:right;color:var(--text-muted)">${o.dc_count||0}</td>
@@ -683,7 +683,7 @@ async function drillOrderDCs(orderId, label) {
       <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Challans</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${dcs.length}</div>
     </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid #8b5cf6">
+    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--violet)">
       <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Lines</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${totalLines}</div>
     </div>
@@ -719,12 +719,12 @@ async function drillOrderDCs(orderId, label) {
             <td style="color:var(--text-muted)">${i+1}</td>
             <td><b style="color:var(--navy)">${dc.dc_number}</b></td>
             <td style="white-space:nowrap">${dc.dc_date ? fmtDate(dc.dc_date) : '—'}</td>
-            <td style="white-space:nowrap;color:${dc.delivered_at?'#059669':'var(--text-muted)'};font-weight:${dc.delivered_at?600:400}">${dc.delivered_at ? fmtDate(dc.delivered_at) : '—'}</td>
+            <td style="white-space:nowrap;color:${dc.delivered_at?'var(--success-strong)':'var(--text-muted)'};font-weight:${dc.delivered_at?600:400}">${dc.delivered_at ? fmtDate(dc.delivered_at) : '—'}</td>
             <td><span style="font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(dc.status)}</span></td>
             <td style="text-align:right;font-weight:700">${dc.line_count||0}</td>
             <td style="text-align:right;font-weight:600">${dc.total_qty_ordered||0}</td>
             <td style="text-align:right">
-              <span style="font-weight:700;color:${pct===100?'#059669':pct>0?'#d97706':'var(--text-muted)'}">${dc.total_qty_delivered||0}</span>
+              <span style="font-weight:700;color:${pct===100?'var(--success-strong)':pct>0?'var(--warning)':'var(--text-muted)'}">${dc.total_qty_delivered||0}</span>
               ${dc.total_qty_ordered>0?`<span style="font-size:.7rem;color:var(--text-muted);margin-left:4px">${pct}%</span>`:''}
             </td>
             <td style="font-size:.78rem;color:var(--text-muted)">${[dc.driver_name,dc.vehicle_no].filter(Boolean).join(' · ')||'—'}</td>
@@ -1047,10 +1047,10 @@ async function renderTodaysSchedule(el) {
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${pending}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">not yet started</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${unassigned.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${unassigned.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
       <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Unassigned</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${unassigned.length>0?'#d97706':'var(--navy)'};line-height:1">${unassigned.length}</div>
-      <div style="font-size:.75rem;color:${unassigned.length>0?'#d97706':'var(--text-muted)'};margin-top:6px">${unassigned.length?'needs staff':'all assigned'}</div>
+      <div style="font-size:1.9rem;font-weight:700;color:${unassigned.length>0?'var(--warning)':'var(--navy)'};line-height:1">${unassigned.length}</div>
+      <div style="font-size:.75rem;color:${unassigned.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${unassigned.length?'needs staff':'all assigned'}</div>
     </div>
   </div>
 
@@ -1266,7 +1266,7 @@ async function renderConsolidatedDue(el) {
             <td style="color:var(--text-muted)">${r.ordered_qty}</td>
             <td style="color:var(--success)">${r.delivered_qty}</td>
             <td style="color:var(--danger);font-weight:700">${r.due_qty}</td>
-            <td><span style="display:inline-block;min-width:36px;text-align:center;padding:2px 8px;border-radius:10px;font-size:.78rem;font-weight:700;background:${r.days_overdue>7?'#fef2f2':r.days_overdue>3?'#fef3c7':'#f0fdf4'};color:${daysColor}">${r.days_overdue}d</span></td>
+            <td><span style="display:inline-block;min-width:36px;text-align:center;padding:2px 8px;border-radius:10px;font-size:.78rem;font-weight:700;background:${r.days_overdue>7?'var(--danger-bg)':r.days_overdue>3?'var(--amber-bg)':'var(--success-bg)'};color:${daysColor}">${r.days_overdue}d</span></td>
           </tr>`;
         }).join('') : '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--success)">✓ No pending due items</td></tr>'}
         </tbody>

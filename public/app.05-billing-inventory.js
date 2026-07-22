@@ -27,10 +27,10 @@ async function renderDCBilling(el) {
       const criticalValue = critical.reduce((s,d)=>s+(d.order_value||0),0);
       return `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
-        <div class="card" style="padding:16px 18px;border-top:3px solid ${unbilled.length>0?'#d97706':'var(--success)'};margin-bottom:0">
+        <div class="card" style="padding:16px 18px;border-top:3px solid ${unbilled.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
           <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending Billing</div>
           <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${unbilled.length}</div>
-          <div style="font-size:.75rem;color:${unbilled.length>0?'#d97706':'var(--text-muted)'};margin-top:6px">${fmt(pendingValue)} outstanding</div>
+          <div style="font-size:.75rem;color:${unbilled.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${fmt(pendingValue)} outstanding</div>
         </div>
         <div class="card" style="padding:16px 18px;border-top:3px solid ${critical.length>0?'var(--danger)':'var(--success)'};margin-bottom:0">
           <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Critical (16+ days)</div>
@@ -347,10 +347,10 @@ function renderMarginAnalysis(inv) {
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${highMargin}</div>
       <div style="font-size:.75rem;color:var(--success);margin-top:6px">SKUs</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowMargin>0?'#d97706':'var(--success)'};margin-bottom:0">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowMargin>0?'var(--warning)':'var(--success)'};margin-bottom:0">
       <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Margin (&lt;15%)</div>
       <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${lowMargin}</div>
-      <div style="font-size:.75rem;color:${lowMargin>0?'#d97706':'var(--text-muted)'};margin-top:6px">SKUs</div>
+      <div style="font-size:.75rem;color:${lowMargin>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">SKUs</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${negative>0?'var(--danger)':'var(--success)'};margin-bottom:0">
       <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Below Cost</div>
@@ -385,7 +385,7 @@ function renderMarginAnalysis(inv) {
           </td>
           <td>${fmt(data.revenue)}</td>
           <td>${fmt(data.cost)}</td>
-          <td style="color:${gp>=0?'#10b981':'#ef4444'};font-weight:700">${fmt(gp)}</td>
+          <td style="color:${gp>=0?'#10b981':'var(--red)'};font-weight:700">${fmt(gp)}</td>
           <td><span class="badge badge-${hCls}">${health}</span></td>
         </tr>`;
       }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No priced items</td></tr>'}
@@ -510,7 +510,7 @@ async function renderInventory(el) {
         ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--danger-soft-bg);color:var(--danger)">Critical</span>'
         : item.stock <= item.reorder_level
         ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--amber-bg);color:var(--warning)">Warning</span>'
-        : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:var(--success-strong)">Active</span>';
+        : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--success-soft-bg);color:var(--success-strong)">Active</span>';
       const checked   = APP._invSelected.has(item.sku);
       return `
       <tr style="cursor:pointer${item.is_critical?';border-left:3px solid var(--danger)':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
@@ -519,7 +519,7 @@ async function renderInventory(el) {
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:var(--danger);color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
         <td><b>${h(item.name)}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${h(item.brand)}</div>`:''}</td>
-        <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
+        <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'var(--success-strong)':'var(--gray)'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
         <td style="font-weight:700">${fmt(item.unit_price)}</td>
         <td style="font-size:.8rem;color:var(--text-muted)">${item.mrp?fmt(item.mrp):'—'}</td>
@@ -538,7 +538,7 @@ async function renderInventory(el) {
           <button class="btn btn-secondary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit</button>
           <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>History</button>
           <button class="btn btn-primary btn-sm" ${dataAct('reorderItem', item.sku, safeName, item.unit_price, item.vendor_id||'')}>PO</button>
-          <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" ${dataActEl('toggleCritical', item.sku)}>${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
+          <button class="btn btn-sm" style="background:${item.is_critical?'var(--danger-bg)':'#f3f4f6'};color:${item.is_critical?'var(--danger)':'var(--gray)'};border:1px solid ${item.is_critical?'#fca5a5':'var(--gray-light)'};font-size:.72rem" ${dataActEl('toggleCritical', item.sku)}>${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
       </tr>
       <tr id="inv-detail-${item.sku}" style="display:none;background:#f8faff"><td colspan="14" style="padding:0"></td></tr>`;

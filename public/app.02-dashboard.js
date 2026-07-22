@@ -68,10 +68,10 @@ async function renderClientDashboard(el) {
     </div>` : `
     <div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch">
       ${lowStock.slice(0,6).map(i => `
-      <div style="flex:0 0 240px;background:${i.stock_status==='out'?'#fef2f2':'#fffbeb'};border:1px solid ${i.stock_status==='out'?'#fecaca':'#fde68a'};border-radius:12px;padding:14px 16px">
+      <div style="flex:0 0 240px;background:${i.stock_status==='out'?'var(--danger-bg)':'var(--warning-bg)'};border:1px solid ${i.stock_status==='out'?'var(--red-soft-bg)':'#fde68a'};border-radius:12px;padding:14px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:${i.stock_status==='out'?'#fee2e2':'#fef3c7'};color:${i.stock_status==='out'?'#dc2626':'#d97706'}">${i.stock_status==='out'?'OUT OF STOCK':'LOW STOCK'}</span>
-          <span style="font-size:.78rem;font-weight:700;color:${i.stock_status==='out'?'#dc2626':'#d97706'}">${Math.round(i.qty_on_hand||0)} left</span>
+          <span style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:${i.stock_status==='out'?'var(--danger-soft-bg)':'var(--amber-bg)'};color:${i.stock_status==='out'?'var(--danger)':'var(--warning)'}">${i.stock_status==='out'?'OUT OF STOCK':'LOW STOCK'}</span>
+          <span style="font-size:.78rem;font-weight:700;color:${i.stock_status==='out'?'var(--danger)':'var(--warning)'}">${Math.round(i.qty_on_hand||0)} left</span>
         </div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(i.item_name||i.sku)}">${h(i.item_name||i.sku)}</div>
         ${(APP.cart||[]).some(c => c.sku === i.sku)
@@ -119,14 +119,14 @@ async function renderClientDashboard(el) {
     <button ${dataAct('navigate', 'my_orders')} style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
       <b style="color:var(--navy)">${activeOrders}</b> active orders
     </button>
-    <button ${dataAct('navigate', 'track_delivery')} style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'#fef3c7':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
-      <b style="color:${inTransitDCs.length?'#d97706':'var(--navy)'}">${inTransitDCs.length}</b> in transit
+    <button ${dataAct('navigate', 'track_delivery')} style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'var(--amber-bg)':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+      <b style="color:${inTransitDCs.length?'var(--warning)':'var(--navy)'}">${inTransitDCs.length}</b> in transit
     </button>
     <span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:.78rem">
       <b style="color:var(--success)">${deliveredThisMonth.length}</b> delivered this month
     </span>
-    <span style="display:inline-flex;align-items:center;gap:6px;background:${pctSpent>90?'#fee2e2':'#fff'};border:1px solid ${pctSpent>90?'#fecaca':'var(--border)'};border-radius:20px;padding:6px 14px;font-size:.78rem">
-      budget <b style="color:${pctSpent>90?'var(--danger)':pctSpent>70?'#d97706':'var(--success)'}">${pctSpent}% used</b> · ${fmt(remaining)} left
+    <span style="display:inline-flex;align-items:center;gap:6px;background:${pctSpent>90?'var(--danger-soft-bg)':'#fff'};border:1px solid ${pctSpent>90?'var(--red-soft-bg)':'var(--border)'};border-radius:20px;padding:6px 14px;font-size:.78rem">
+      budget <b style="color:${pctSpent>90?'var(--danger)':pctSpent>70?'var(--warning)':'var(--success)'}">${pctSpent}% used</b> · ${fmt(remaining)} left
     </span>
   </div>
 
@@ -171,7 +171,7 @@ async function renderClientDashboard(el) {
         <div style="display:flex;align-items:center;gap:8px">
           <div style="width:10px;height:10px;border-radius:50%;background:#10b981;flex-shrink:0"></div>
           <span style="font-size:.76rem;font-weight:700;color:var(--success-strong);text-transform:uppercase;letter-spacing:.06em">Delivered</span>
-          <span style="margin-left:auto;background:#d1fae5;color:var(--success-strong);border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${deliveredThisMonth.length}</span>
+          <span style="margin-left:auto;background:var(--success-soft-bg);color:var(--success-strong);border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${deliveredThisMonth.length}</span>
         </div>
       </div>
     </div>
@@ -222,7 +222,7 @@ async function renderClientDashboard(el) {
           <div style="border:1.5px solid #a7f3d0;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--success-bg)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
-              <span style="font-size:.68rem;font-weight:700;background:#d1fae5;color:var(--success-strong);border-radius:4px;padding:2px 6px">DELIVERED</span>
+              <span style="font-size:.68rem;font-weight:700;background:var(--success-soft-bg);color:var(--success-strong);border-radius:4px;padding:2px 6px">DELIVERED</span>
             </div>
             <div style="font-size:.75rem;color:var(--text-muted);line-height:1.5">
               <div>📦 Order: <b>${dc.order_id}</b></div>
@@ -338,7 +338,7 @@ async function renderClientBudget(el) {
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Health Score</div>
-      <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'#d97706':'var(--danger)'};margin-top:6px">${health}/100</div>
+      <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'};margin-top:6px">${health}/100</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
     </div>
     <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
@@ -691,7 +691,7 @@ async function renderOpsDashboard(el) {
           <div class="ct-card-title">Action Required</div>
           <div class="ct-card-sub">Items needing your attention</div>
         </div>
-        ${[pendingApproval,dueCount,toPickCount,lowStock,delayedDel].some(v=>v>0)?`<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;box-shadow:0 0 0 3px rgba(239,68,68,.2)"></span>`:''}
+        ${[pendingApproval,dueCount,toPickCount,lowStock,delayedDel].some(v=>v>0)?`<span style="width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0;box-shadow:0 0 0 3px rgba(239,68,68,.2)"></span>`:''}
       </div>
       <div style="padding:12px 14px">
         ${[
@@ -1042,10 +1042,10 @@ async function renderVendorDashboard(el) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${leadDays}d</div>
         <div style="font-size:.75rem;color:${leadColor};margin-top:6px">${leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement'}</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'vendor_pos')}>
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'var(--warning)':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'vendor_pos')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Pending POs</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'#d97706':'var(--navy)'};line-height:1">${pendingCount}</div>
-        <div style="font-size:.75rem;color:${pendingCount>0?'#d97706':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
+        <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'var(--warning)':'var(--navy)'};line-height:1">${pendingCount}</div>
+        <div style="font-size:.75rem;color:${pendingCount>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
       </div>`;
     })()}
   </div>

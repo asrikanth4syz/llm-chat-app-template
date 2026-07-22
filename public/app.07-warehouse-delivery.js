@@ -198,9 +198,9 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
               <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Units</div>
               <div style="font-weight:700;font-size:.9rem;margin-top:2px">${wUnits.toLocaleString('en-IN')}</div>
             </div>
-            <div style="text-align:center;background:${wOOS>0?'#fee2e2':wLow>0?'#fef3cd':'var(--light)'};border-radius:6px;padding:8px 4px">
+            <div style="text-align:center;background:${wOOS>0?'var(--danger-soft-bg)':wLow>0?'#fef3cd':'var(--light)'};border-radius:6px;padding:8px 4px">
               <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Alerts</div>
-              <div style="font-weight:700;font-size:.9rem;margin-top:2px;color:${wOOS>0?'var(--danger)':wLow>0?'#d97706':'var(--success)'}">${wOOS+wLow||'—'}</div>
+              <div style="font-weight:700;font-size:.9rem;margin-top:2px;color:${wOOS>0?'var(--danger)':wLow>0?'var(--warning)':'var(--success)'}">${wOOS+wLow||'—'}</div>
             </div>
           </div>
           <div style="margin-bottom:12px">
@@ -214,7 +214,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
             <div style="font-size:.7rem;color:var(--text-muted);margin-top:3px">${occupied} of ${cap} capacity used</div>
           </div>
           ${wOOS>0||wLow>0 ? `
-          <div style="font-size:.75rem;color:${wOOS>0?'var(--danger)':'#d97706'};background:${wOOS>0?'#fee2e2':'#fef3cd'};padding:5px 8px;border-radius:4px;margin-bottom:10px">
+          <div style="font-size:.75rem;color:${wOOS>0?'var(--danger)':'var(--warning)'};background:${wOOS>0?'var(--danger-soft-bg)':'#fef3cd'};padding:5px 8px;border-radius:4px;margin-bottom:10px">
             ${wOOS>0?`${wOOS} SKU${wOOS>1?'s':''} out of stock`:''}${wOOS>0&&wLow>0?' · ':''}${wLow>0?`${wLow} below reorder level`:''}
           </div>` : ''}
           <div style="display:flex;gap:6px">
@@ -1098,7 +1098,7 @@ function podScanRow(dc) {
   const podCell = podOk
     ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
     : scanOk
-      ? `<span class="badge badge-success" style="background:#d1fae5;color:#065f46">✓ via Scan</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
+      ? `<span class="badge badge-success" style="background:var(--success-soft-bg);color:#065f46">✓ via Scan</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
       : `<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`;
 
   const scanCell = scanOk

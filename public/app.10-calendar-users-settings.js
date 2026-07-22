@@ -279,7 +279,7 @@ function dcalAgItem(dc, k) {
   const bell = dc.status !== 'DELIVERED'
     ? `<button class="btn btn-secondary btn-sm" title="Reminder for this delivery — Auto follows the global policy, then On, then Muted" ${dataActEl('dcalCycleBell', String(dc.id))}>${bellState}</button>`
     : '';
-  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid ${risk?'#fecaca':'var(--border)'};background:${risk?'#fff5f5':'var(--surface)'};border-radius:10px;padding:10px 13px">
+  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid ${risk?'var(--red-soft-bg)':'var(--border)'};background:${risk?'#fff5f5':'var(--surface)'};border-radius:10px;padding:10px 13px">
     <span style="font-family:monospace;font-size:.78rem;font-weight:700;width:52px">${dc.scheduled_time||'—'}</span>
     <div style="flex:1;min-width:170px">
       <div style="font-weight:700;font-size:.85rem;color:var(--navy)">${h(dc.dc_number||dc.id)} · ${h(dc.client_name||'—')} ${pill}</div>
@@ -515,7 +515,7 @@ async function renderUsers(el) {
         <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
           <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${roleName}</span>
           <span style="font-size:.68rem;color:var(--text-muted)">${h(u.org)}</span>
-          ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:#d1fae5;color:var(--success-strong);border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
+          ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:var(--success-soft-bg);color:var(--success-strong);border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
         </div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
@@ -552,7 +552,7 @@ async function renderUsers(el) {
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeUsers.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'#d1d5db':'#d1d5db'}">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'var(--gray-light)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inactive</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inactiveUsers.length}</div>
     </div>
