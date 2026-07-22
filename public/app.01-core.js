@@ -777,9 +777,9 @@ function ensureClientFAB() {
   fab.style.cssText = 'position:fixed;bottom:22px;right:22px;z-index:500;display:flex;flex-direction:column;align-items:flex-end;gap:10px';
   fab.innerHTML = `
     <div id="fab-menu" style="display:none;flex-direction:column;gap:8px;align-items:flex-end">
-      <button onclick="toggleFAB();navigate('place_order')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">🛒 New Order</button>
-      <button onclick="toggleFAB();navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📋 Upload Order Sheet</button>
-      <button onclick="toggleFAB();navigate('my_inventory')" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📉 Log Use</button>
+      <button ${dataAct('fabNav', 'place_order')} style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">🛒 New Order</button>
+      <button ${dataAct('fabNavCSV')} style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📋 Upload Order Sheet</button>
+      <button ${dataAct('fabNav', 'my_inventory')} style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:24px;padding:9px 16px;cursor:pointer;font-size:.82rem;font-weight:700;color:var(--navy);box-shadow:0 4px 14px rgba(0,0,0,.15)">📉 Log Use</button>
     </div>
     <button id="fab-main" ${dataAct('toggleFAB')} title="Quick actions"
       style="width:54px;height:54px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.7rem;font-weight:400;cursor:pointer;box-shadow:0 6px 18px rgba(13,148,136,.45);display:flex;align-items:center;justify-content:center;line-height:1;transition:transform .2s">+</button>`;
@@ -995,6 +995,26 @@ function _dispatchAct(e) {
   else fn(...args);
 }
 document.addEventListener('click', _dispatchAct);
+
+// Named handlers extracted from former multi-statement inline onclick bodies, so
+// they can be invoked through the delegation dispatcher like any other action.
+function _noop() {}
+function oqGoto(status) { switchOQMainTab('orders'); switchOQTab(status); }
+function moGoTab(t) { APP._moTab = t; moRender(); }
+function fabNav(page) { toggleFAB(); navigate(page); }
+function fabNavCSV() { toggleFAB(); navigate('place_order'); setTimeout(() => showCSVUploadModal(), 400); }
+function invFilterStatus(v, tab) {
+  const el = document.getElementById('inv-filter-status');
+  if (el) el.value = v;
+  filterMyInventoryTable();
+  if (tab) switchMyInvTab(tab);
+}
+function reviewPlaceOrder() { APP._postNavStep = 'review'; navigate('place_order'); }
+function sdClearClientFilter() { APP._sdClientFilter = ''; navigate('service_desk'); }
+function clearCartToCatalogue() { APP.cart = []; switchOrderStep('catalogue'); showToast('Cart cleared'); }
+function stopVoiceAndClose() { stopVoiceIfRecording(); closeModal(); }
+function goCriticalStockReport() { navigate('reports'); setTimeout(() => viewReport('critical-stock'), 300); }
+function goProcureForOrder(orderId) { closeModal(); navigate('procurement'); showToast('Raise a PO and link it to order ' + orderId, 'info'); }
 
 function notImplemented(page) {
   return `<div class="empty-state">

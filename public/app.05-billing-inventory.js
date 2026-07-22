@@ -514,7 +514,7 @@ async function renderInventory(el) {
       const checked   = APP._invSelected.has(item.sku);
       return `
       <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
-        <td onclick="event.stopPropagation()" style="width:34px;text-align:center">
+        <td ${dataAct('_noop')} data-stop style="width:34px;text-align:center">
           <input type="checkbox" ${checked?'checked':''} onchange="invToggleSelect('${item.sku}',this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
@@ -534,7 +534,7 @@ async function renderInventory(el) {
         </td>
         <td>${stPill}</td>
         <td style="font-size:.8rem">${item.vendor_name||'—'}</td>
-        <td onclick="event.stopPropagation()">
+        <td ${dataAct('_noop')} data-stop>
           <button class="btn btn-secondary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit</button>
           <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>History</button>
           <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
@@ -564,7 +564,7 @@ async function renderInventory(el) {
       <div style="font-size:.8rem;color:#991b1b">${criticalLow.slice(0,4).map(i=>`<b>${h(i.name)}</b> (${i.stock} left)`).join(' · ')}${criticalLow.length>4?` +${criticalLow.length-4} more`:''}</div>
     </div>
     <div style="display:flex;gap:8px;flex-shrink:0">
-      <button class="btn btn-secondary btn-sm" onclick="navigate('reports');setTimeout(()=>viewReport('critical-stock'),300)">View Report</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('goCriticalStockReport')}>View Report</button>
       <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" ${dataActEl('sendCriticalAlerts')}>📧 Send Alert Email</button>
     </div>
   </div>` : ''}

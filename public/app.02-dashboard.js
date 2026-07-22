@@ -55,7 +55,7 @@ async function renderClientDashboard(el) {
       ${attentionCount ? `<span style="background:#fee2e2;color:#dc2626;border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
       ${lowStock.length ? `<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gold btn-sm" ${dataAct('orderAllAttention')} title="Add every low & out-of-stock item to your order">🛒 Order all (${lowStock.length})</button>
-        <button id="attn-review-btn" class="btn btn-primary btn-sm" style="display:${cartCount>0?'inline-flex':'none'}" onclick="APP._postNavStep='review';navigate('place_order')">Review order (<span id="attn-review-count">${cartCount}</span>) →</button>
+        <button id="attn-review-btn" class="btn btn-primary btn-sm" style="display:${cartCount>0?'inline-flex':'none'}" ${dataAct('reviewPlaceOrder')}>Review order (<span id="attn-review-count">${cartCount}</span>) →</button>
       </div>` : ''}
     </div>
     ${attentionCount === 0 ? `
@@ -75,7 +75,7 @@ async function renderClientDashboard(el) {
         </div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${h(i.item_name||i.sku)}">${h(i.item_name||i.sku)}</div>
         ${(APP.cart||[]).some(c => c.sku === i.sku)
-          ? `<button class="btn btn-secondary btn-sm" style="width:100%;background:#dcfce7;color:#15803d;border-color:#86efac" onclick="APP._postNavStep='review';navigate('place_order')">✓ Added — Review</button>`
+          ? `<button class="btn btn-secondary btn-sm" style="width:100%;background:#dcfce7;color:#15803d;border-color:#86efac" ${dataAct('reviewPlaceOrder')}>✓ Added — Review</button>`
           : `<button class="btn btn-primary btn-sm" style="width:100%" ${dataActEl('addAttentionItem', i.sku, i.item_name||i.sku)}>Order Now</button>`}
       </div>`).join('')}
       ${pendingApproval > 0 ? `
@@ -148,7 +148,7 @@ async function renderClientDashboard(el) {
         <div style="font-weight:800;font-size:.95rem;color:var(--navy)">🚚 Track Delivery <span style="font-weight:400;font-size:.76rem;color:var(--text-muted)">— tap to expand</span></div>
         <div style="font-size:.76rem;color:var(--text-muted);margin-top:1px">${inTransitDCs.length} in transit · ${scheduledDCs.length} scheduled · ${deliveredThisMonth.length} delivered this month</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="event.preventDefault();navigate('my_orders')">View All Orders</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_orders')} data-prevent>View All Orders</button>
     </summary>
 
     <!-- Pipeline header -->

@@ -644,7 +644,7 @@ function renderOVDTable(data) {
             <td style="text-align:right;color:${o.total_due_value>0?'var(--danger)':'var(--text-muted)'}">${o.total_due_value>0?fmt(o.total_due_value):'—'}</td>
             <td style="text-align:right;color:var(--text-muted)">${o.dc_count||0}</td>
             <td style="font-size:.8rem;color:var(--text-muted)">${o.last_delivery?fmtDate(o.last_delivery):'—'}</td>
-            <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();viewOrderDrilldown('${o.id}')">Details ›</button></td>
+            <td><button class="btn btn-secondary btn-sm" ${dataAct('viewOrderDrilldown', o.id)} data-stop>Details ›</button></td>
           </tr>`).join('')}
         </tbody>
       </table>

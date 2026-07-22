@@ -694,7 +694,7 @@ async function viewReport(key, from, to) {
       </table>
     </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
-     <button class="btn btn-primary" onclick="downloadReportCSV('${key}');closeModal()">Download CSV</button>`);
+     <button class="btn btn-primary" ${dataActClose('downloadReportCSV', key)}>Download CSV</button>`);
 }
 
 async function downloadReportCSV(key) {

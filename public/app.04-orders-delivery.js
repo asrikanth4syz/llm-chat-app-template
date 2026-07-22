@@ -121,7 +121,7 @@ async function renderMyOrders(el) {
               ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', o.id)}>Submit Order</button>`:''}
               ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" ${dataAct('viewOrderDrilldown', o.id)}>📦 Delivery Breakdown</button>`:''}
               ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', o.id)}>🔄 Reorder</button>`:''}
-              ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="event.stopPropagation();cancelOrder('${o.id}')">Cancel</button>`:''}
+              ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" ${dataAct('cancelOrder', o.id)} data-stop>Cancel</button>`:''}
             </div>
           </div>
         </div>`;
@@ -152,12 +152,12 @@ async function renderMyOrders(el) {
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${active}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">in progress</div>
       </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid #06b6d4;margin-bottom:0;cursor:pointer" onclick="APP._moTab='IN_SHIPMENT';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid #06b6d4;margin-bottom:0;cursor:pointer" ${dataAct('moGoTab', 'IN_SHIPMENT')}>
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Transit</div>
         <div style="font-size:1.8rem;font-weight:800;color:${inShipment?'#0891b2':'var(--navy)'};line-height:1.2;margin-top:4px">${inShipment}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">on the way</div>
       </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid ${partial>0?'#f59e0b':'#d1d5db'};margin-bottom:0;cursor:pointer" onclick="APP._moTab='PARTIALLY_CLOSED';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid ${partial>0?'#f59e0b':'#d1d5db'};margin-bottom:0;cursor:pointer" ${dataAct('moGoTab', 'PARTIALLY_CLOSED')}>
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Partial</div>
         <div style="font-size:1.8rem;font-weight:800;color:${partial>0?'#d97706':'var(--navy)'};line-height:1.2;margin-top:4px">${partial}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">balance pending</div>
@@ -803,17 +803,17 @@ async function renderOrderQueue(el) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${fmt(totalValue)}</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('PENDING_APPROVAL')">
+      <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'#d97706':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'PENDING_APPROVAL')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Needs Attention</div>
         <div style="font-size:1.9rem;font-weight:700;color:${needsAction?'#d97706':'var(--navy)'};line-height:1">${needsAction}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">${needsBreakdown}</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #8b5cf6;margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('IN_SHIPMENT')">
+      <div class="card" style="padding:16px 18px;border-top:3px solid #8b5cf6;margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'IN_SHIPMENT')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Shipment</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inShipment}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">en route to client</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" onclick="switchOQMainTab('orders');switchOQTab('ACKNOWLEDGED')">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'ACKNOWLEDGED')}>
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">To Pick</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${toPick}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in warehouse queue</div>
@@ -1291,7 +1291,7 @@ function inventoryShortageModal(orderId) {
        ⚠ Once you raise a PO linked to this order, it will automatically move to <b>VENDOR PO RAISED</b> status.
      </p>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-gold" onclick="closeModal();navigate('procurement');showToast('Raise a PO and link it to order ${orderId}','info')">→ Go to Procurement</button>`);
+     <button class="btn btn-gold" ${dataAct('goProcureForOrder', orderId)}>→ Go to Procurement</button>`);
 }
 
 async function dispatchRemainingModal(orderId) {

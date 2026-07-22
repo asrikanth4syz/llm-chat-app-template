@@ -263,7 +263,7 @@ function renderCartReview(container) {
               ${iconCheck(14)} Place Order
             </button>
             <button class="btn btn-secondary" style="width:100%;font-size:.83rem" ${dataAct('saveDraft')}>Save as Draft</button>
-            <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" onclick="APP.cart=[];switchOrderStep('catalogue');showToast('Cart cleared')">Clear Cart</button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" ${dataAct('clearCartToCatalogue')}>Clear Cart</button>
           </div>
         </div>
       </div>
@@ -290,7 +290,7 @@ function refreshCartReviewUI() {
   const itemsEl = document.getElementById('review-cart-items');
   if (itemsEl) {
     itemsEl.innerHTML = APP.cart.length === 0
-      ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">Cart is empty — <a href="#" onclick="switchOrderStep('catalogue');return false">browse catalogue</a></div>`
+      ? `<div style="padding:40px;text-align:center;color:var(--text-muted)">Cart is empty — <a href="#" ${dataAct('switchOrderStep', 'catalogue')} data-prevent>browse catalogue</a></div>`
       : APP.cart.map(item => `
         <div style="padding:12px 18px;border-bottom:1px solid var(--border)">
           <div style="display:flex;align-items:center;gap:12px">
@@ -961,16 +961,16 @@ async function renderMyInventory(el) {
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Tracked</div>
       <div style="font-size:1.8rem;font-weight:700;color:var(--navy);line-height:1">${totalItems}</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowStock?'#f59e0b':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='low';filterMyInventoryTable()">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowStock?'#f59e0b':'var(--border)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'low')}>
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Low Stock</div>
       <div style="font-size:1.8rem;font-weight:700;color:${lowStock?'#d97706':'var(--navy)'};line-height:1">${lowStock}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">at or below reorder level</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${outOfStock?'var(--danger)':'var(--border)'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='out';filterMyInventoryTable()">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${outOfStock?'var(--danger)':'var(--border)'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'out')}>
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Out of Stock</div>
       <div style="font-size:1.8rem;font-weight:700;color:${outOfStock?'var(--danger)':'var(--navy)'};line-height:1">${outOfStock}</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'#7c3aed'};margin-bottom:0;cursor:pointer" onclick="document.getElementById('inv-filter-status').value='critical';filterMyInventoryTable();switchMyInvTab('stock')" title="Items you've marked critical">
+    <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'#7c3aed'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'critical', 'stock')} title="Items you've marked critical">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">★ Critical Items</div>
       <div id="inv-kpi-critical" style="font-size:1.8rem;font-weight:700;color:#7c3aed;line-height:1">${criticalItems.length}</div>
       <div id="inv-kpi-critical-sub" style="font-size:.72rem;color:${criticalNeed?'var(--danger)':'var(--text-muted)'};margin-top:4px">${criticalNeed?`${criticalNeed} need restock`:'tracked for availability'}</div>

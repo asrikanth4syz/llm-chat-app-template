@@ -176,7 +176,7 @@ async function execMarkDelivered(dcId) {
         <button type="button" id="voice-del-btn" class="btn btn-secondary btn-sm" style="display:none;color:var(--danger)" ${dataAct('discardVoiceNote')}>✕</button>
       </div>
     </div>`,
-    `<button class="btn btn-secondary" onclick="stopVoiceIfRecording();closeModal()">Cancel</button>
+    `<button class="btn btn-secondary" ${dataAct('stopVoiceAndClose')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmExecDelivery', dcId)}>Confirm Delivery</button>`
   );
 }
@@ -1029,7 +1029,7 @@ async function renderServiceDesk(el) {
           return `<option value="${c.id}" ${cf===c.id?'selected':''}>${h(c.name)} (${n})</option>`;
         }).join('')}
       </select>
-      ${cf?`<button class="btn btn-secondary btn-sm" onclick="APP._sdClientFilter='';navigate('service_desk')">✕ Clear</button>`:''}` : ''}
+      ${cf?`<button class="btn btn-secondary btn-sm" ${dataAct('sdClearClientFilter')}>✕ Clear</button>`:''}` : ''}
       <button class="btn btn-gold" ${dataAct('newTicketModal')}>${iconPlus(14)} New Ticket</button>
     </div>
   </div>
