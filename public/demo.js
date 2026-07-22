@@ -71,14 +71,14 @@
   // Keyboard nav
   document.addEventListener('keydown', function(e) {
     var overlay = document.getElementById('demo-overlay');
-    if (!overlay.classList.contains('open')) return;
+    if (!overlay || !overlay.classList.contains('open')) return;
     if (e.key === 'Escape') closeDemo();
     if (e.key === 'ArrowRight') nextSlide();
     if (e.key === 'ArrowLeft')  prevSlide();
   });
 })();
 
-// Backdrop click closes the demo (was inline onclick="handleDemoOverlayClick(event)").
+// Backdrop click closes the demo (formerly wired via an inline handler).
 document.addEventListener('DOMContentLoaded', function () {
   var ov = document.getElementById('demo-overlay');
   if (ov) ov.addEventListener('click', function (e) { if (e.target === ov) window.closeDemo(); });

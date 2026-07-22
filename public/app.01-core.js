@@ -455,7 +455,7 @@ async function runSearch(q) {
   const typeNav = { order:'orders', vendor:'vendors', client:'clients', ticket:'service_desk' };
   el.style.display = '';
   el.innerHTML = all.slice(0,10).map(r => `
-    <div ${dataAct('handleSearchResult', r._type, r.id||r.sku||'')} style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+    <div ${dataAct('handleSearchResult', r._type, r.id||r.sku||'')} style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" data-hover>
       <span style="font-size:1.2rem">${typeIcon[r._type]||'🔍'}</span>
       <div style="min-width:0">
         <div style="font-weight:600;font-size:.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(r.title||r.name||r.subject||r.id||r.sku||'')}</div>
@@ -1021,6 +1021,14 @@ function dataChangeVal(fn, ...args) { return `${dataChange(fn, ...args)} data-va
 function dataInputVal(fn, ...args)  { return `${dataInput(fn, ...args)} data-val`; }
 function dataInputEl(fn, ...args)   { return `${dataInput(fn, ...args)} data-el`; }
 function dataEnter(fn, ...args)  { return `data-enter="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`; }
+function dataBlur(fn, ...args)   { return `data-blur="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`; }
+// focusin/focusout bubble (focus/blur don't), so they can be delegated.
+document.addEventListener('focusin', e => {
+  const el = e.target;
+  if (el.matches && el.matches('[data-selectall]')) el.select();
+  const f = el.closest && el.closest('[data-focusact]'); if (f) _runData(f, 'data-focusact');
+});
+document.addEventListener('focusout', e => { const el = e.target.closest && e.target.closest('[data-blur]'); if (el) _runData(el, 'data-blur'); });
 function dataChangeEl(fn, ...args) { return `${dataChange(fn, ...args)} data-el`; }
 function dataEnterEl(fn, ...args)  { return `${dataEnter(fn, ...args)} data-el`; }
 // data-el appends the element as the LAST argument, so these take (…args, el).

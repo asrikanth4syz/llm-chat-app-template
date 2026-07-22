@@ -195,7 +195,7 @@ function xbiFillPill(p){ const c=p>=90?['#e7f6ec','var(--success)']:p>=70?['#fdf
 function xbiRow(name, meta, val, opts={}){
   const share = opts.share!=null?`<div style="display:flex;align-items:center;gap:8px;min-width:130px"><div style="flex:1;height:8px;border-radius:5px;background:var(--border);overflow:hidden"><i style="display:block;height:100%;width:${opts.share}%;background:var(--primary)"></i></div><span style="font-size:.74rem;font-weight:700;color:var(--text-muted);width:34px;text-align:right">${opts.share}%</span></div>`:'';
   const pill = opts.fill!=null?`<div style="margin-top:4px">${xbiFillPill(opts.fill)}</div>`:'';
-  return `<button class="xbi-row" data-k="${h(opts.key||name)}" style="display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface,#fff);cursor:pointer;text-align:left;font-family:inherit;width:100%;transition:border-color .12s,transform .12s" onmouseover="this.style.borderColor='var(--primary)';this.style.transform='translateX(2px)'" onmouseout="this.style.borderColor='var(--border)';this.style.transform=''">
+  return `<button class="xbi-row" data-k="${h(opts.key||name)}" style="display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface,#fff);cursor:pointer;text-align:left;font-family:inherit;width:100%;transition:border-color .12s,transform .12s" data-hoverslide>
     <div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:.87rem">${h(name)}</div><div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${meta}</div></div>
     ${share}
     <div style="text-align:right;flex-shrink:0"><div style="font-weight:800;font-size:.9rem">${val}</div>${pill}</div>
@@ -1162,7 +1162,7 @@ function renderFulfilContent() {
       <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
       <tbody>${data.map(d=>{ const due=Math.max(0,d.ordered_qty-d.delivered_qty); const c=d.fill_pct>=90?'#16a34a':d.fill_pct>=70?'#d97706':'#dc2626';
         const periodParam = _fulfilGranularity==='month' ? d.key : '';
-        return `<tr style="cursor:pointer" onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" ${dataAct('openCategoryDrill', periodParam, d.label)}>
+        return `<tr style="cursor:pointer" data-hover ${dataAct('openCategoryDrill', periodParam, d.label)}>
           <td style="font-weight:600;color:var(--blue)">${d.label}</td>
           <td style="text-align:right">${d.order_count}</td>
           <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
@@ -1339,7 +1339,7 @@ async function loadDrill() {
   const listRows = enriched.map(r=>{
     const fc = r.fill>=90?'#16a34a':r.fill>=70?'#d97706':'#dc2626';
     const clickable = isCat;
-    return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" ${dataAct('drillToSubcategory', String(r.name))}`:''}>
+    return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`data-hover ${dataAct('drillToSubcategory', String(r.name))}`:''}>
       <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.color};margin-right:7px"></span><b style="${clickable?'color:var(--blue)':''}">${h(r.name)}</b></td>
       <td style="text-align:right;font-weight:700">${r.share}%</td>
       <td style="text-align:right">${Math.round(r.ordered_qty)}</td>

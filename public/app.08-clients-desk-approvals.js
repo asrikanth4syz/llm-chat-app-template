@@ -391,7 +391,7 @@ async function manageClientCatalog(clientId, clientName) {
      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
        <input id="cc-search" type="search" placeholder="Search by name or SKU…"
          style="flex:1;min-width:140px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem"
-         ${dataInput('renderCCSearchResults')} onfocus="renderCCSearchResults()">
+         ${dataInput('renderCCSearchResults')} data-focusact="renderCCSearchResults">
        <select id="cc-cat-filter" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;color:var(--navy);background:#fff"
          ${dataChange('renderCCSearchResults')}>
          <option value="">All Categories</option>${catOpts}
@@ -462,7 +462,7 @@ function ccAssignedRow(item) {
         value="${clientPrice}"
         style="flex:1;min-width:70px;padding:4px 8px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.85rem;background:#fff"
         id="cc-price-${item.sku}"
-        onblur="saveCCPrice('${item.sku}',this)"
+        ${dataBlur('saveCCPrice', item.sku)} data-el
         ${dataEnterEl('_blurEl')}
         title="Leave blank to use global price ₹${globalPrice}">
       ${hasCustom
@@ -520,7 +520,7 @@ function renderCCSearchResults() {
   }
   container.innerHTML = matches.map(i => `
     <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#edf0f4)"
-      onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background=''"
+      data-hover
       ${dataAct('addCCItem', i.sku)}>
       <span>${i.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">

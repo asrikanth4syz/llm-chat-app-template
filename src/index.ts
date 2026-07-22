@@ -58,13 +58,14 @@ function cors(): Response {
 }
 
 // Defense-in-depth response headers applied to every response (API + static assets).
-// The CSP allowlists the two CDNs the shell actually loads (Google Fonts, Chart.js)
-// and still keeps 'unsafe-inline' for scripts because the UI relies on inline event
-// handlers today — removing those (and tightening script-src to 'self') is the
-// tracked next step. frame-ancestors/object-src/base-uri harden what we can now.
+// The CSP allowlists the two CDNs the shell actually loads (Google Fonts, Chart.js).
+// script-src is now strict — no 'unsafe-inline' — because every inline event handler
+// and inline <script> has been removed in favour of event delegation, so injected
+// markup cannot execute script. style-src keeps 'unsafe-inline' (the UI relies on
+// inline style attributes, which cannot run JS).
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  "script-src 'self' https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",

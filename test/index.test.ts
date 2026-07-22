@@ -126,6 +126,21 @@ beforeAll(async () => {
 });
 
 // ════════════════════════════════════════════════════════════════════
+// SECURITY HEADERS
+// ════════════════════════════════════════════════════════════════════
+describe("Security headers", () => {
+  it("responses carry a strict CSP (no 'unsafe-inline' in script-src) + XFO/nosniff", async () => {
+    const res = await post("/api/auth/login", { email: "admin@sp.test", password: "admin123" });
+    const csp = res.headers.get("content-security-policy") || "";
+    expect(csp).toContain("script-src 'self'");
+    const scriptSrc = csp.split(";").find(d => d.trim().startsWith("script-src")) || "";
+    expect(scriptSrc).not.toContain("unsafe-inline"); // inline handlers removed → strict
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
 // AUTH
 // ════════════════════════════════════════════════════════════════════
 describe("Auth", () => {

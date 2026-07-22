@@ -883,3 +883,15 @@ button { font-family: var(--font); cursor: pointer; }
 /* details/summary used for progressive disclosure */
 details.card > summary::-webkit-details-marker { display: none; }
 details.card > summary { user-select: none; }
+
+/* Delegated hover/focus styling — replaces former inline onmouseover/onfocus JS
+   (removed so a strict CSP can drop 'unsafe-inline'). Existing inline transitions
+   on the elements animate these. */
+[data-hover]:hover       { background: var(--surface-2) !important; }
+[data-hoverlift]:hover   { box-shadow: 0 4px 12px rgba(0,0,0,.08) !important; transform: translateY(-1px); }
+[data-hoverslide]:hover  { border-color: var(--primary) !important; transform: translateX(2px); }
+[data-hoverdanger]:hover { background: #fef2f2 !important; border-color: #fca5a5 !important; color: var(--danger) !important; }
+[data-focus]:focus       { border-color: var(--blue) !important; }
+[data-focusdanger]:focus { border-color: var(--danger) !important; }
+[data-focussolid]:focus  { border-color: var(--blue) !important; border-style: solid !important; }
+[data-blurdashed]:not(:focus) { border-style: dashed; }

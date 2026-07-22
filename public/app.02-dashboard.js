@@ -107,7 +107,7 @@ async function renderClientDashboard(el) {
       { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', act:'quickNav', arg:'track_delivery' },
       { icon:'📊', label:'Reports',       sub:'spend & usage',    act:'quickNav', arg:'client_reports' },
     ].map(a=>`
-    <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.08)';this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='';this.style.transform=''">
+    <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" data-hoverlift>
       <div style="font-size:1.5rem;margin-bottom:5px">${a.icon}</div>
       <div style="font-weight:700;font-size:.8rem;color:var(--navy)">${a.label}</div>
       <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${a.sub}</div>
@@ -243,7 +243,7 @@ async function renderClientDashboard(el) {
     </div>
     <div style="padding:0">
       ${(recentOrders||[]).slice(0,5).map(o=>`
-      <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''" ${dataAct('viewOrder', o.id)}>
+      <div style="display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s" data-hover ${dataAct('viewOrder', o.id)}>
         <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">🧾</div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
@@ -654,7 +654,7 @@ async function renderOpsDashboard(el) {
             const pct  = Math.round((c.total/(topClients[0]?.total||1))*100);
             return `
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:13px;cursor:pointer;border-radius:8px;padding:4px 6px;margin-left:-6px;margin-right:-6px;transition:background .15s"
-                 onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''"
+                 data-hover
                  ${dataAct('openClientDetail', c.id)} title="View ${h(c.name)} details">
               <div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;font-size:.65rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>
               <div style="flex:1;min-width:0">

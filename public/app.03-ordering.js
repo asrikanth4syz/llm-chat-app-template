@@ -57,7 +57,7 @@ async function renderPlaceOrder(el) {
     <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
       <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
         style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
-        ${dataInputVal('searchCatalog')} onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
+        ${dataInputVal('searchCatalog')} data-focus>
       <div class="tab-pills" style="margin-top:12px;margin-bottom:0;flex-wrap:wrap">
         ${['All',...cats].map(c=>`<button class="tab-pill${c==='All'?' active':''}" ${dataActEl('filterCatalog', c)}>${c}</button>`).join('')}
       </div>
@@ -224,14 +224,14 @@ function renderCartReview(container) {
             <label style="font-size:.78rem;font-weight:700;color:var(--danger);display:block;margin-bottom:4px">🚨 Need By Date <span style="color:var(--text-muted);font-weight:400">(required)</span></label>
             <input type="date" id="cart-need-by" min="${today}"
               style="width:100%;padding:7px 10px;border:1.5px solid #fca5a5;border-radius:8px;font-size:.85rem;outline:none;box-sizing:border-box"
-              onfocus="this.style.borderColor='var(--danger)'" onblur="this.style.borderColor='#fca5a5'" />
+              data-focusdanger />
           </div>
 
           <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <label style="font-size:.82rem;font-weight:700;color:var(--navy)">📅 Order for month</label>
             <input type="month" id="cart-order-period" value="${today.slice(0,7)}"
               style="padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
-              onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'" />
+              data-focus />
             <span style="font-size:.72rem;color:var(--text-muted)">Defaults to this month — change only if ordering ahead</span>
           </div>
         </div>
@@ -241,7 +241,7 @@ function renderCartReview(container) {
           <label style="font-weight:700;font-size:.88rem;display:block;margin-bottom:8px;color:var(--navy)">Delivery Notes <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
           <textarea id="cart-notes" rows="3" placeholder="Special instructions, delivery address, contact person…"
             style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
-            onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+            data-focus></textarea>
 
           <label style="font-weight:700;font-size:.88rem;display:block;margin:14px 0 6px;color:var(--navy)">📷 Attach Photo <span style="font-weight:400;color:var(--text-muted)">(optional — reference image, handwritten list, product photo)</span></label>
           <input type="file" id="cart-image" accept="image/*" ${dataChangeEl('attachOrderImage')}
@@ -305,20 +305,19 @@ function refreshCartReviewUI() {
                 <input type="number" class="qty-input" min="1" step="1" value="${item.qty}" inputmode="numeric"
                   data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
                   ${dataChangeVal('setQty', item.sku)}
-                  ${dataEnterEl('_blurEl')} onfocus="this.select()">
+                  ${dataEnterEl('_blurEl')} data-selectall>
                 <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
               <button ${dataAct('removeCartItem', item.sku)}
                 style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
-                onmouseover="this.style.background='#fef2f2';this.style.borderColor='#fca5a5';this.style.color='var(--danger)'"
-                onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">✕</button>
+                data-hoverdanger>✕</button>
             </div>
           </div>
           <input type="text" maxlength="200" value="${h(item.note||'')}" placeholder="💬 Remark for this item — brand preference, size, urgency… (optional)"
             ${dataInputVal('setCartItemNote', item.sku)}
             style="width:100%;margin-top:8px;padding:6px 10px;border:1px dashed var(--border);border-radius:7px;font-size:.76rem;box-sizing:border-box;outline:none;background:#fafbfc;transition:border .15s"
-            onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid'" onblur="this.style.borderColor='var(--border)';this.style.borderStyle='dashed'">
+            data-focussolid data-blurdashed>
         </div>`).join('');
   }
 
@@ -651,7 +650,7 @@ function renderCatalogItems(items) {
         const inCart = APP.cart.find(c => c.sku === item.sku);
         const qty = inCart ? inCart.qty : 0;
         const lowStock = item.stock <= item.reorder_level;
-        return `<div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+        return `<div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" data-hover>
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <div style="font-size:1.4rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="min-width:0">

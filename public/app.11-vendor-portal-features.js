@@ -443,7 +443,7 @@ async function renderDeliveryRoutes(el) {
       <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Select challans to bundle into a route:</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">
         ${undelivered.map(dc=>`
-          <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s" data-hover>
             <input type="checkbox" class="dc-select" data-id="${dc.id}" value="${dc.id}" style="width:16px;height:16px;flex-shrink:0">
             <div>
               <div style="font-weight:600;font-size:.85rem">DC #${dc.id}</div>

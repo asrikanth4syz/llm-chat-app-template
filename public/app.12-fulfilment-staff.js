@@ -628,7 +628,7 @@ function renderOVDTable(data) {
           <th></th>
         </tr></thead>
         <tbody>
-          ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" ${dataAct('viewOrderDrilldown', o.id)} onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background=''">
+          ${orders.map(o=>`<tr style="cursor:pointer;border-left:3px solid ${borderColor(o.status)}" ${dataAct('viewOrderDrilldown', o.id)} data-hover>
             <td><b style="color:var(--navy)">${o.id}</b></td>
             <td style="white-space:nowrap">${fmtDate(o.date)}</td>
             <td style="font-weight:600">${o.client}</td>
