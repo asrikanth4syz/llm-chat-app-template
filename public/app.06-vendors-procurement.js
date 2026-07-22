@@ -140,7 +140,7 @@ async function renderVendors(el) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary" ${dataAct('navigate', 'procurement')}>View POs</button>
-      ${!['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user?.role) ? '<button class="btn btn-secondary" onclick="APP._importDefaultTab=\'vendors\';navigate(\'import_data\')">⬆ Import CSV</button>' : ''}
+      ${!['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user?.role) ? '<button class="btn btn-secondary" '+dataAct('goImportVendors')+'>⬆ Import CSV</button>' : ''}
       <button class="btn btn-gold" ${dataAct('addVendorModal')}>${iconPlus(14)} Add Vendor</button>
     </div>
   </div>
@@ -161,7 +161,7 @@ async function renderVendors(el) {
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} onchange="APP._vendorShowInactive=this.checked;renderVendors(document.getElementById('main-content'))"> Show inactive
     </label>
-    <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" onclick="APP._vendorSearch='';APP._vendorCat='';APP._vendorLoc='';document.getElementById('vendor-search-q').value='';document.getElementById('vendor-search-loc').value='';document.getElementById('vendor-search-cat').value='';filterVendorCards()">Clear</button>
+    <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" ${dataAct('clearVendorSearch')}>Clear</button>
   </div>
 
   <!-- Summary tiles -->
@@ -452,7 +452,7 @@ function vendorWizardHtml(v) {
           <tbody id="vw-products"></tbody>
         </table>
       </div>
-      <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="vwAddProductRow({})">+ Add product</button>
+      <button class="btn btn-secondary btn-sm" style="margin-top:10px" ${dataAct('vwAddProductRow', {})}>+ Add product</button>
     </div>
 
     <div class="vw-panel" id="vwp-4">
@@ -522,7 +522,7 @@ function vwAddProductRow(p) {
     <td><input class="vwp-rate" type="number" min="0" style="${cs};text-align:right" value="${p.rate!=null?p.rate:''}"></td>
     <td><input class="vwp-lead" type="number" min="0" style="${cs};text-align:right" value="${p.lead_days!=null?p.lead_days:3}"></td>
     <td><input class="vwp-sku" style="${cs}" value="${h(p.sku||'')}" placeholder="optional"></td>
-    <td><button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="this.closest('tr').remove()">✕</button></td>`;
+    <td><button class="btn btn-secondary btn-sm" style="padding:3px 8px" ${dataActEl('removeClosestRow')}>✕</button></td>`;
   tb.appendChild(tr);
 }
 function vwCollectProducts() {

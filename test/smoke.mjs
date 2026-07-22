@@ -86,7 +86,7 @@ for (const src of localScripts) {
 //    they exist whenever their buttons are on-screen but not at page load.
 const DEAD_TARGETS = new Set([
   "openNewRouteModal",
-  "invBulkModal", "invClearSelection", "invSortBy", "invBulkApply",
+  "invBulkModal", "invClearSelection", "invSortBy", "invBulkApply", "invFilterCat",
 ]);
 const allSource = localScripts.map((s) => readFileSync(path.join(PUBLIC, s), "utf8")).join("\n");
 const actTargets = [...new Set([...allSource.matchAll(/dataAct(?:El|Close)?\('([A-Za-z_$][\w$]*)'/g)].map((m) => m[1]))]

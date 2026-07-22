@@ -147,7 +147,7 @@ async function renderMyOrders(el) {
 
     <!-- KPI tiles -->
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" onclick="APP._moTab='All';moRender();document.querySelectorAll('.mo-pill').forEach(b=>b.classList.remove('active'));document.querySelector('.mo-pill[data-s=\\'All\\']')?.classList.add('active')">
+      <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" ${dataAct('moGoTabByStatus', 'All')}>
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${active}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">in progress</div>
@@ -162,7 +162,7 @@ async function renderMyOrders(el) {
         <div style="font-size:1.8rem;font-weight:800;color:${partial>0?'#d97706':'var(--navy)'};line-height:1.2;margin-top:4px">${partial}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">balance pending</div>
       </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" onclick="APP._moTab='CLOSED';moRender()">
+      <div class="card" style="padding:14px 16px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" ${dataAct('moGoTabByStatus', 'CLOSED')}>
         <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered</div>
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${closed}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">complete</div>
@@ -180,7 +180,7 @@ async function renderMyOrders(el) {
         style="flex:1;min-width:180px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
         oninput="APP._moSearch=this.value;moRender()" onfocus="this.style.borderColor='var(--blue)'" onblur="this.style.borderColor='var(--border)'">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${statuses.map(s=>`<button onclick="APP._moTab='${s}';document.querySelectorAll('.mo-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active');moRender()" data-s="${s}" class="tab-pill mo-pill${APP._moTab===s?' active':''}" style="font-size:.78rem;padding:5px 12px">${s==='All'?'All orders':STATUS_LABEL[s]||s.replace(/_/g,' ')}</button>`).join('')}
+        ${statuses.map(s=>`<button ${dataActEl('moGoTabPill', s)} data-s="${s}" class="tab-pill mo-pill${APP._moTab===s?' active':''}" style="font-size:.78rem;padding:5px 12px">${s==='All'?'All orders':STATUS_LABEL[s]||s.replace(/_/g,' ')}</button>`).join('')}
       </div>
     </div>
 
@@ -221,7 +221,7 @@ async function renderMyOrders(el) {
 // Collapsible section for the order detail (Option B — progressive disclosure).
 function orderSection(title, badge, body, open) {
   return `<div class="ord-sec${open ? ' open' : ''}">
-    <div class="ord-sec-head" onclick="this.parentElement.classList.toggle('open')">
+    <div class="ord-sec-head" ${dataActEl('toggleParentOpen')}>
       <svg class="ord-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       <span class="ord-sec-title">${title}</span>
       ${badge ? `<span class="ord-sec-badge">${badge}</span>` : ''}
@@ -363,13 +363,13 @@ async function viewOrder(id) {
             : `<span style="font-size:.8rem;font-weight:600;color:var(--text-muted)">📅 Est. Delivery:</span>
           ${isOpsRole
             ? `<span id="pdd-display">${pddLabel}</span>
-               <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:.72rem;margin-left:6px" onclick="document.getElementById('pdd-edit').style.display='flex';this.style.display='none'">
+               <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:.72rem;margin-left:6px" ${dataActEl('pddEditShow')}>
                  ${pdd ? 'Edit' : 'Set date'}
                </button>
                <span id="pdd-edit" style="display:none;align-items:center;gap:4px">
                  <input type="date" id="pdd-input" value="${pdd||''}" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:.82rem">
                  <button class="btn btn-primary btn-sm" style="padding:3px 10px" ${dataAct('savePredictedDelivery', id)}>Save</button>
-                 <button class="btn btn-secondary btn-sm" style="padding:3px 8px" onclick="document.getElementById('pdd-edit').style.display='none';document.querySelector('[onclick*=pdd-edit]').style.display=''">✕</button>
+                 <button class="btn btn-secondary btn-sm" style="padding:3px 8px" ${dataAct('pddEditHide')}>✕</button>
                </span>`
             : pddLabel
           }`

@@ -289,7 +289,7 @@ async function switchFulfilTab(tab, btn) {
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
           <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
           <td>${r.primary_vendor||'—'}</td>
-          <td>${r.suggested_po_qty>0?`<button class="btn btn-primary btn-sm" onclick="initiateBrandPO('${String(r.brand_name).replace(/'/g,"")}','${r.vendor_id||''}','${from30}','${today}')">🛒 Initiate PO</button>`:'<span style="color:var(--success);font-size:.8rem">✓ Fulfilled</span>'}</td>
+          <td>${r.suggested_po_qty>0?`<button class="btn btn-primary btn-sm" ${dataAct('initiateBrandPO', String(r.brand_name), r.vendor_id||'', from30, today)}>🛒 Initiate PO</button>`:'<span style="color:var(--success);font-size:.8rem">✓ Fulfilled</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No data</td></tr>'}
         </tbody>
       </table></div>
@@ -519,7 +519,7 @@ async function switchFulfilTab(tab, btn) {
           <td><b style="color:var(--blue)">${r.suggested_procurement_qty}</b></td>
           <td>${r.vendor_name||'—'}</td>
           <td>
-            <button class="btn btn-primary btn-sm" onclick="raisePOFromForecast('${r.sku}','${r.item_name}',${r.suggested_procurement_qty},'${r.vendor_id||''}')">Raise PO</button>
+            <button class="btn btn-primary btn-sm" ${dataAct('raisePOFromForecast', r.sku, r.item_name, r.suggested_procurement_qty, r.vendor_id||'')}>Raise PO</button>
           </td>
         </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No procurement required</td></tr>'}
         </tbody>
@@ -884,7 +884,7 @@ async function renderStaff(el) {
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-        <button class="btn btn-secondary btn-sm" onclick="editStaffModal('${s.id}','${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.role}')" style="font-size:.7rem;padding:3px 8px">Edit</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('editStaffModal', s.id, s.name, s.phone||'', s.role)} style="font-size:.7rem;padding:3px 8px">Edit</button>
         <button class="btn btn-${s.active?'danger':'success'} btn-sm" ${dataAct('toggleStaff', s.id, s.active?0:1)} style="font-size:.7rem;padding:3px 8px">${s.active?'Disable':'Enable'}</button>
       </div>
     </div>`;
@@ -1104,7 +1104,7 @@ async function renderTodaysSchedule(el) {
           <td style="display:flex;gap:4px;flex-wrap:wrap">
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Deliver</button>`:''}
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" ${dataAct('logReturnModal', dc.id)}>Return</button>`:''}
-            <button class="btn btn-secondary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Edit</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('assignDCModal', dc.id, dc.dc_number||'', dc.scheduled_time||'')}>Edit</button>
           </td>
         </tr>`).join('')}
         </tbody>
@@ -1127,7 +1127,7 @@ async function renderTodaysSchedule(el) {
           <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
           <td>${dc.total_qty||'—'}</td>
           <td>${statusBadge(dc.status)}</td>
-          <td><button class="btn btn-primary btn-sm" onclick="assignDCModal('${dc.id}','${dc.dc_number||''}','${dc.scheduled_time||''}')">Assign Staff</button></td>
+          <td><button class="btn btn-primary btn-sm" ${dataAct('assignDCModal', dc.id, dc.dc_number||'', dc.scheduled_time||'')}>Assign Staff</button></td>
         </tr>`).join('')}
         </tbody>
       </table>

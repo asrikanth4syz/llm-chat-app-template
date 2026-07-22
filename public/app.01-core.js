@@ -402,7 +402,7 @@ function toggleQuickActions(e) {
   closeTbMenus();
   if (!open) return;
   m.innerHTML = quickActionItems().map(a =>
-    `<button class="tb-menu-item" onclick="closeTbMenus();${a.action}">
+    `<button class="tb-menu-item" ${a.arg !== undefined ? dataAct(a.act, a.arg) : dataAct(a.act)}>
       <span class="tb-qa-ic">${a.icon}</span><span><span class="tb-qa-t">${a.label}</span><span class="tb-qa-s">${a.sub}</span></span></button>`).join('')
     || '<div class="tb-menu-empty">No quick actions for your role.</div>';
   m.classList.remove('hidden');
@@ -410,22 +410,22 @@ function toggleQuickActions(e) {
 function quickActionItems() {
   const nav = APP.user?.nav;
   if (['client','client_user','approver'].includes(nav)) return [
-    { icon:'🛒', label:'Place order', sub:'browse the catalogue', action:"navigate('place_order')" },
-    { icon:'📋', label:'Upload order sheet', sub:'export &amp; import quantities', action:"navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" },
-    { icon:'📉', label:'Log use', sub:'record consumption', action:"navigate('my_inventory')" },
+    { icon:'🛒', label:'Place order', sub:'browse the catalogue', act:'quickNav', arg:'place_order' },
+    { icon:'📋', label:'Upload order sheet', sub:'export &amp; import quantities', act:'quickNavCSV' },
+    { icon:'📉', label:'Log use', sub:'record consumption', act:'quickNav', arg:'my_inventory' },
   ];
   if (nav === 'vendor' || nav === 'vendor_user') return [
-    { icon:'📦', label:'View purchase orders', sub:'respond to POs', action:"navigate('vendor_pos')" },
-    { icon:'🧾', label:'Invoices', sub:'raise &amp; track', action:"navigate('vendor_invoices')" },
+    { icon:'📦', label:'View purchase orders', sub:'respond to POs', act:'quickNav', arg:'vendor_pos' },
+    { icon:'🧾', label:'Invoices', sub:'raise &amp; track', act:'quickNav', arg:'vendor_invoices' },
   ];
   // admin / ops / procurement / warehouse / finance
   const items = [
-    { icon:'📅', label:'Delivery calendar', sub:'plan &amp; reschedule', action:"navigate('delivery_calendar')" },
-    { icon:'📦', label:'Add product', sub:'to the catalogue', action:"navigate('inventory')" },
-    { icon:'🏢', label:'Onboard client', sub:'new organisation', action:"navigate('clients')" },
-    { icon:'🎫', label:'New ticket', sub:'service desk', action:"navigate('service_desk')" },
+    { icon:'📅', label:'Delivery calendar', sub:'plan &amp; reschedule', act:'quickNav', arg:'delivery_calendar' },
+    { icon:'📦', label:'Add product', sub:'to the catalogue', act:'quickNav', arg:'inventory' },
+    { icon:'🏢', label:'Onboard client', sub:'new organisation', act:'quickNav', arg:'clients' },
+    { icon:'🎫', label:'New ticket', sub:'service desk', act:'quickNav', arg:'service_desk' },
   ];
-  return items.filter(a => { const id = (a.action.match(/navigate\('([^']+)'\)/)||[])[1]; return !id || PAGE_MAP[id]; });
+  return items.filter(a => a.arg === undefined || PAGE_MAP[a.arg]);
 }
 
 // ── Global Search (Gap 10) ─────────────────────────────────
@@ -455,7 +455,7 @@ async function runSearch(q) {
   const typeNav = { order:'orders', vendor:'vendors', client:'clients', ticket:'service_desk' };
   el.style.display = '';
   el.innerHTML = all.slice(0,10).map(r => `
-    <div onclick="handleSearchResult('${r._type}','${r.id||r.sku||''}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+    <div ${dataAct('handleSearchResult', r._type, r.id||r.sku||'')} style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
       <span style="font-size:1.2rem">${typeIcon[r._type]||'🔍'}</span>
       <div style="min-width:0">
         <div style="font-weight:600;font-size:.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(r.title||r.name||r.subject||r.id||r.sku||'')}</div>
@@ -546,7 +546,7 @@ function buildNav() {
 
     const headerHtml = isFirst
       ? `<div class="nav-section"><span class="nav-section-label">${sec.label}</span></div>`
-      : `<div class="nav-section-toggle${collapsed ? ' collapsed' : ''}" onclick="toggleNavSection('${sec.label.replace(/'/g,"\\'")}')">
+      : `<div class="nav-section-toggle${collapsed ? ' collapsed' : ''}" ${dataAct('toggleNavSection', sec.label)}>
            <span class="nav-section-label">${sec.label}</span>
            <span class="nav-toggle-arrow">▶</span>
          </div>`;
@@ -977,7 +977,7 @@ function dataAct(fn, ...args) {
 function dataActEl(fn, ...args) {
   return `${dataAct(fn, ...args)} data-el`;
 }
-// Variant for the common onclick="closeModal();fn(...)" pattern.
+// Variant for the common "close the modal, then run fn" pattern.
 function dataActClose(fn, ...args) {
   return `${dataAct(fn, ...args)} data-close`;
 }
@@ -1015,6 +1015,29 @@ function clearCartToCatalogue() { APP.cart = []; switchOrderStep('catalogue'); s
 function stopVoiceAndClose() { stopVoiceIfRecording(); closeModal(); }
 function goCriticalStockReport() { navigate('reports'); setTimeout(() => viewReport('critical-stock'), 300); }
 function goProcureForOrder(orderId) { closeModal(); navigate('procurement'); showToast('Raise a PO and link it to order ' + orderId, 'info'); }
+function hideEl(id) { const e = document.getElementById(id); if (e) e.style.display = 'none'; }
+function clickEl(id) { const e = document.getElementById(id); if (e) e.click(); }
+function scrollToEl(id) { const e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth' }); }
+function toggleParentOpen(el) { el.parentElement.classList.toggle('open'); }
+function removeClosestRow(el) { const tr = el.closest('tr'); if (tr) tr.remove(); }
+function printPage() { window.print(); }
+function invShowAll() { APP._invShowAll = true; refreshInvTable(); }
+function goImportVendors() { APP._importDefaultTab = 'vendors'; navigate('import_data'); }
+function copyText(text) { navigator.clipboard.writeText(text).then(() => showToast('Copied')); }
+function moGoTabPill(s, el) { APP._moTab = s; document.querySelectorAll('.mo-pill').forEach(b => b.classList.remove('active')); if (el) el.classList.add('active'); moRender(); }
+function moGoTabByStatus(s) { APP._moTab = s; document.querySelectorAll('.mo-pill').forEach(b => b.classList.remove('active')); const pill = document.querySelector('.mo-pill[data-s="' + s + '"]'); if (pill) pill.classList.add('active'); moRender(); }
+function whGoTab(tab) { const btns = document.querySelectorAll('#wh-tabs .tab-btn'); const idx = ['overview', 'grn', 'bins', 'picklist', 'transfers'].indexOf(tab); switchWHTab(tab, btns[idx]); }
+function quickNav(page) { closeTbMenus(); navigate(page); }
+function quickNavCSV() { closeTbMenus(); navigate('place_order'); setTimeout(() => showCSVUploadModal(), 400); }
+function clearVendorSearch() {
+  APP._vendorSearch = ''; APP._vendorCat = ''; APP._vendorLoc = '';
+  ['vendor-search-q', 'vendor-search-loc', 'vendor-search-cat'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+  filterVendorCards();
+}
+function viewReportModalRange(key) { viewReport(key, document.getElementById('rpt-modal-from').value, document.getElementById('rpt-modal-to').value); }
+function hideCSVThenReview() { hideEl('csv-upload-modal'); switchOrderStep('review'); }
+function pddEditShow(el) { const p = document.getElementById('pdd-edit'); if (p) p.style.display = 'flex'; if (el) el.style.display = 'none'; }
+function pddEditHide() { hideEl('pdd-edit'); const t = document.querySelector('[data-act="pddEditShow"]'); if (t) t.style.display = ''; }
 
 function notImplemented(page) {
   return `<div class="empty-state">
@@ -1035,8 +1058,8 @@ function pageHeader(title, sub, actions = '') {
 }
 
 /* Icon-chip stat card (Stitch reference style) */
-function statCard(icon, color, bg, value, label, onclick = '') {
-  return `<div class="card" style="padding:14px 16px;margin-bottom:0;display:flex;align-items:center;gap:12px${onclick?';cursor:pointer':''}" ${onclick?`onclick="${onclick}"`:''}>
+function statCard(icon, color, bg, value, label, act = '') {
+  return `<div class="card" style="padding:14px 16px;margin-bottom:0;display:flex;align-items:center;gap:12px${act?';cursor:pointer':''}" ${act||''}>
     <div style="width:42px;height:42px;border-radius:10px;background:${bg};color:${color};display:flex;align-items:center;justify-content:center;font-size:1.25rem;font-weight:800;flex-shrink:0">${icon}</div>
     <div style="min-width:0">
       <div style="font-size:1.35rem;font-weight:800;color:var(--navy);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${value}</div>

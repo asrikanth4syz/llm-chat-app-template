@@ -101,13 +101,13 @@ async function renderClientDashboard(el) {
   <!-- ═══ QUICK ACTIONS ═══ -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px">
     ${[
-      { icon:'🛒', label:'Place Order',   sub:'browse catalogue', action:"navigate('place_order')" },
-      { icon:'📋', label:'Order Sheet',   sub:'export & upload',  action:"navigate('place_order');setTimeout(()=>showCSVUploadModal(),400)" },
-      { icon:'📉', label:'Log Use',       sub:'record consumption', action:"navigate('my_inventory')" },
-      { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', action:"navigate('track_delivery')" },
-      { icon:'📊', label:'Reports',       sub:'spend & usage',    action:"navigate('client_reports')" },
+      { icon:'🛒', label:'Place Order',   sub:'browse catalogue', act:'quickNav', arg:'place_order' },
+      { icon:'📋', label:'Order Sheet',   sub:'export & upload',  act:'quickNavCSV' },
+      { icon:'📉', label:'Log Use',       sub:'record consumption', act:'quickNav', arg:'my_inventory' },
+      { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', act:'quickNav', arg:'track_delivery' },
+      { icon:'📊', label:'Reports',       sub:'spend & usage',    act:'quickNav', arg:'client_reports' },
     ].map(a=>`
-    <button onclick="${a.action}" style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.08)';this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='';this.style.transform=''">
+    <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.08)';this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='';this.style.transform=''">
       <div style="font-size:1.5rem;margin-bottom:5px">${a.icon}</div>
       <div style="font-weight:700;font-size:.8rem;color:var(--navy)">${a.label}</div>
       <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${a.sub}</div>
@@ -567,14 +567,14 @@ async function renderOpsDashboard(el) {
       const trends = data.kpiTrends || null;
       const tiles = [
         { icon:CT_ICON.box,     label:'Total Orders',    value:totalOrders||0,     meta:`${pendingOrders||0} active`,                     state:'calm',                       nav:'orders',       trend:'totalOrders',    good:'up' },
-        { icon:CT_ICON.clock,   label:'Pending Approval', value:pendingApproval||0, meta:`${pickedPending} picked · ${inShipment} transit`, state:pendingApproval>0?'warn':'calm', nav:'orders', click:'openPendingApprovals()', pill:pendingApproval>0?'Action':null, trend:'pendingApproval', good:'down' },
+        { icon:CT_ICON.clock,   label:'Pending Approval', value:pendingApproval||0, meta:`${pickedPending} picked · ${inShipment} transit`, state:pendingApproval>0?'warn':'calm', nav:'orders', click:'openPendingApprovals', pill:pendingApproval>0?'Action':null, trend:'pendingApproval', good:'down' },
         { icon:CT_ICON.alert,   label:'Due Line Items',   value:dueCount||0,        meta:`${pendingSupply?.kpis?.due_qty||0} units overdue`, state:dueCount>0?'crit':'calm', nav:'fulfilment', pill:dueCount>0?'Overdue':null,  trend:'dueItems',       good:'down' },
         { icon:CT_ICON.receipt, label:'Pending Billing',  value:pendingDCBilling||0,meta:'DCs awaiting invoice',                          state:pendingDCBilling>0?'warn':'calm', nav:'dc_billing', pill:pendingDCBilling>0?'To bill':null, trend:'pendingBilling', good:'down' },
         { icon:CT_ICON.bars,    label:'Low Stock SKUs',   value:lowStock||0,        meta:'reorder required',                              state:lowStock>0?'warn':'calm', nav:'inventory',  pill:lowStock>0?'Reorder':null,  trend:'lowStock',       good:'down' },
         { icon:CT_ICON.life,    label:'Open Tickets',     value:openTickets||0,     meta:'support queue',                                 state:'info',                       nav:'service_desk', trend:'openTickets',    good:'down' },
       ];
       return tiles.map(t => { const c = TONE[t.state]; const flag = t.state==='warn'||t.state==='crit';
-        return `<button class="ct-kpi${flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" onclick="${t.click||`navigate('${t.nav}')`}">
+        return `<button class="ct-kpi${flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" ${t.click?dataAct(t.click):dataAct('navigate',t.nav)}>
           <div class="ct-kpi-top">
             <span class="ct-kpi-icon"><svg viewBox="0 0 24 24">${t.icon}</svg></span>
             ${t.pill ? `<span class="ct-kpi-chip">${t.pill}</span>` : ''}
@@ -695,7 +695,7 @@ async function renderOpsDashboard(el) {
       </div>
       <div style="padding:12px 14px">
         ${[
-          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', click:'openPendingApprovals()' },
+          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', click:'openPendingApprovals' },
           { label:'Due Line Items',     val:dueCount,          color:'var(--danger)', bg:'#fee2e2', icon:'🚨', page:'fulfilment' },
           { label:'Overdue Deliveries', val:delayedDel,        color:'var(--danger)', bg:'#fee2e2', icon:'🚚', page:'delivery'   },
           { label:'Orders to Pick',     val:toPickCount,       color:'#8b5cf6', bg:'#f3e8ff', icon:'🏭', page:'warehouse'   },
@@ -704,7 +704,7 @@ async function renderOpsDashboard(el) {
           { label:'Open Tickets',       val:openTickets||0,    color:'#7c3aed', bg:'#f3e8ff', icon:'🎫', page:'service_desk' },
         ].map(a => {
           const hot = a.val > 0;
-          return `<div class="ct-action${hot?' hot':''}" onclick="${a.click||`navigate('${a.page}')`}">
+          return `<div class="ct-action${hot?' hot':''}" ${a.click?dataAct(a.click):dataAct('navigate',a.page)}>
             <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'}">${a.icon}</div>
             <div style="flex:1;min-width:0">
               <div style="font-size:.82rem;font-weight:${hot?'600':'500'};color:${hot?'var(--text)':'var(--text-muted)'}">${a.label}</div>

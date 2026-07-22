@@ -73,7 +73,7 @@ async function renderVendorPOs(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #f59e0b;cursor:pointer" onclick="document.getElementById('vpo-sent').scrollIntoView({behavior:'smooth'})">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #f59e0b;cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Action Required</div>
       <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'#d97706':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)} pending</div>
@@ -631,7 +631,7 @@ async function renderImportData(el) {
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
     <button class="tab-pill${startTab==='inventory'?' active':''}" ${dataActEl('importTab', 'inventory')}>Inventory</button>
     <button class="tab-pill${startTab==='orders'?' active':''}" ${dataActEl('importTab', 'orders')}>Orders</button>
-    ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" onclick="importTab(\'vendors\',this)">Vendors</button>' : ''}
+    ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" '+dataActEl('importTab','vendors')+'>Vendors</button>' : ''}
     <button class="tab-pill${startTab==='jobs'?' active':''}" ${dataActEl('importTab', 'jobs')}>Import History</button>
   </div>
   <div id="import-content"></div>`;
@@ -1018,8 +1018,8 @@ async function renderTemplates(el) {
         </div>
       </div>` : ''}
       <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn btn-danger btn-sm" onclick="${deleteFn}('${type}','${t.id}')">Delete</button>
-        <button class="btn btn-primary btn-sm" onclick="${loadFn}('${t.id}')">Load Template →</button>
+        <button class="btn btn-danger btn-sm" ${dataAct(deleteFn, type, t.id)}>Delete</button>
+        <button class="btn btn-primary btn-sm" ${dataAct(loadFn, t.id)}>Load Template →</button>
       </div>
     </div>`;
   }
@@ -1082,8 +1082,8 @@ function tplTab(tab, btn) {
         </div>
       </div>` : ''}
       <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn btn-danger btn-sm" onclick="${deleteFn}('${type}','${t.id}')">Delete</button>
-        <button class="btn btn-primary btn-sm" onclick="${loadFn}('${t.id}')">Load Template →</button>
+        <button class="btn btn-danger btn-sm" ${dataAct(deleteFn, type, t.id)}>Delete</button>
+        <button class="btn btn-primary btn-sm" ${dataAct(loadFn, t.id)}>Load Template →</button>
       </div>
     </div>`;
   }

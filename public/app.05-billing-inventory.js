@@ -493,7 +493,7 @@ async function renderInventory(el) {
     } else if (capped) {
       html += `<tr><td colspan="14" style="padding:12px 16px;text-align:center;background:#f8fafc;color:var(--text-muted);font-size:.82rem">
         Showing first <b>${INV_ROW_CAP}</b> of <b>${filtered.length}</b> items — refine your search or category to narrow down,
-        or <button class="btn btn-secondary btn-sm" style="margin-left:6px" onclick="APP._invShowAll=true;refreshInvTable()">Show all ${filtered.length}</button>
+        or <button class="btn btn-secondary btn-sm" style="margin-left:6px" ${dataAct('invShowAll')}>Show all ${filtered.length}</button>
       </td></tr>`;
     }
     document.getElementById('inv-tbody').innerHTML = html;
@@ -505,7 +505,7 @@ async function renderInventory(el) {
       const available = Math.max(0, item.stock - reserved);
       const pctStock  = Math.round((item.stock / (item.max_stock||1)) * 100);
       const color     = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
-      const safeName  = item.name.replace(/'/g,"\\'");
+      const safeName  = item.name; // raw — dataAct() handles escaping for delegated handlers
       const stPill    = item.stock === 0
         ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fee2e2;color:#dc2626">Critical</span>'
         : item.stock <= item.reorder_level
@@ -537,7 +537,7 @@ async function renderInventory(el) {
         <td ${dataAct('_noop')} data-stop>
           <button class="btn btn-secondary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit</button>
           <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>History</button>
-          <button class="btn btn-primary btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">PO</button>
+          <button class="btn btn-primary btn-sm" ${dataAct('reorderItem', item.sku, safeName, item.unit_price, item.vendor_id||'')}>PO</button>
           <button class="btn btn-sm" style="background:${item.is_critical?'#fef2f2':'#f3f4f6'};color:${item.is_critical?'#dc2626':'#6b7280'};border:1px solid ${item.is_critical?'#fca5a5':'#d1d5db'};font-size:.72rem" ${dataActEl('toggleCritical', item.sku)}>${item.is_critical?'🔴 Critical':'⚫ Mark Critical'}</button>
         </td>
       </tr>
@@ -578,7 +578,7 @@ async function renderInventory(el) {
     <div id="inv-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
       ${cats.map(c=>{
         const active = APP._invFilter===c;
-        return '<button data-inv-cat="' + c + '" onclick="invFilterCat(\'' + c + '\')" style="padding:4px 12px;border-radius:20px;border:1.5px solid ' + (active?'var(--blue)':'var(--border)') + ';background:' + (active?'var(--blue)':'#fff') + ';color:' + (active?'#fff':'var(--navy)') + ';font-size:.8rem;cursor:pointer;font-weight:' + (active?700:400) + ';transition:all .15s">' + c + '</button>';
+        return '<button data-inv-cat="' + c + '" ' + dataAct('invFilterCat', c) + ' style="padding:4px 12px;border-radius:20px;border:1.5px solid ' + (active?'var(--blue)':'var(--border)') + ';background:' + (active?'var(--blue)':'#fff') + ';color:' + (active?'#fff':'var(--navy)') + ';font-size:.8rem;cursor:pointer;font-weight:' + (active?700:400) + ';transition:all .15s">' + c + '</button>';
       }).join('')}
       <div id="inv-subcat-pills" style="display:flex;align-items:center;gap:6px"></div>
     </div>
@@ -807,7 +807,7 @@ function invDetailHTML(item) {
     <div style="padding:8px 20px 14px;display:flex;gap:8px;border-top:1px solid var(--border)">
       <button class="btn btn-primary btn-sm" ${dataAct('editInventoryItem', item.sku)}>Edit All Fields</button>
       <button class="btn btn-secondary btn-sm" ${dataAct('viewStockHistory', item.sku, safeName)}>Stock History</button>
-      <button class="btn btn-gold btn-sm" onclick="reorderItem('${item.sku}','${safeName}',${item.unit_price},'${item.vendor_id||''}')">Raise PO</button>
+      <button class="btn btn-gold btn-sm" ${dataAct('reorderItem', item.sku, safeName, item.unit_price, item.vendor_id||'')}>Raise PO</button>
     </div>`;
 }
 
@@ -1125,7 +1125,7 @@ async function reorderItem(sku, name, price, vendorId) {
      <div class="form-group"><label>Unit Price</label><input type="number" id="po-price" value="${price}" min="0" step="0.01"></div>
      <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-delivery" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-primary" onclick="confirmReorder('${sku}','${name.replace(/'/g,"\\'")}')">Raise PO</button>`);
+     <button class="btn btn-primary" ${dataAct('confirmReorder', sku, name)}>Raise PO</button>`);
 }
 
 async function confirmReorder(sku, name) {

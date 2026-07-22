@@ -107,7 +107,7 @@ async function renderPlaceOrder(el) {
           <div style="font-weight:800;font-size:1rem;color:var(--navy)">Order via Spreadsheet</div>
           <div style="font-size:.8rem;color:var(--text-muted);margin-top:2px">Export your item list → fill quantities → upload</div>
         </div>
-        <button onclick="document.getElementById('csv-upload-modal').style.display='none'" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--text-muted);line-height:1">×</button>
+        <button ${dataAct('hideEl', 'csv-upload-modal')} style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--text-muted);line-height:1">×</button>
       </div>
 
       <!-- Steps -->
@@ -147,7 +147,7 @@ async function renderPlaceOrder(el) {
 
       <div style="display:flex;gap:8px">
         <button class="btn btn-primary" ${dataAct('processCSVUpload')} style="flex:1">Import to Cart</button>
-        <button class="btn btn-secondary" onclick="document.getElementById('csv-upload-modal').style.display='none'">Cancel</button>
+        <button class="btn btn-secondary" ${dataAct('hideEl', 'csv-upload-modal')}>Cancel</button>
       </div>
     </div>
   </div>`;
@@ -490,7 +490,7 @@ async function processCSVUpload() {
   const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
   if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'#d1fae5':'#fef3c7'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'#92400e'}">
     <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
-    ${imported?'<div style="margin-top:10px"><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'csv-upload-modal\').style.display=\'none\';switchOrderStep(\'review\')">Review &amp; Place Order →</button></div>':''}
+    ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
   </div>`;
   if (imported) refreshCartUI();
 }
@@ -1066,9 +1066,9 @@ function myInvRow(i) {
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm inv-crit-btn" ${dataActEl('toggleClientCritical', i.sku)} title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
-        <button class="btn btn-secondary btn-sm" onclick="logConsumptionModal('${h(i.sku)}','${h(i.item_name||i.sku)}',${i.qty_on_hand||0},'${h(i.uom||'unit')}')">Log Use</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('logConsumptionModal', i.sku, i.item_name||i.sku, i.qty_on_hand||0, i.uom||'unit')}>Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" ${dataAct('orderMoreItem', h(i.sku), h(i.item_name||i.sku))}>Order More</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="editInvItemModal('${h(i.sku)}','${h(i.item_name||'')}',${i.reorder_level||0})" title="Edit name / reorder level">✏️</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('editInvItemModal', i.sku, i.item_name||'', i.reorder_level||0)} title="Edit name / reorder level">✏️</button>
       </div>
     </td>
   </tr>`;

@@ -179,8 +179,8 @@ async function xbiRender() {
   try { await fn(node, body); } catch(e) { body.innerHTML = `<div class="alert alert-danger">Failed to load: ${h(String(e))}</div>`; }
 }
 
-function xbiKpi(lab,val,sub,cls,onclick){
-  return `<div class="card xbi-kpi ${onclick?'clk':''}" style="padding:11px 13px;margin-bottom:0;position:relative" ${onclick?`onclick="${onclick}"`:''}>
+function xbiKpi(lab,val,sub,cls,act){
+  return `<div class="card xbi-kpi ${act?'clk':''}" style="padding:11px 13px;margin-bottom:0;position:relative" ${act||''}>
     <div style="font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)">${lab}</div>
     <div style="font-size:1.28rem;font-weight:800;line-height:1.15;margin-top:3px;color:${cls==='g'?'var(--success)':cls==='w'?'#d97706':cls==='b'?'var(--danger)':'var(--navy)'}">${val}</div>
     ${sub?`<div style="font-size:.68rem;color:var(--text-muted);margin-top:1px">${sub}</div>`:''}
@@ -675,13 +675,13 @@ async function viewReport(key, from, to) {
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--surface-alt,#f8f9fb);border-radius:8px">
       <span style="font-size:.76rem;font-weight:700;color:var(--navy)">📅 Period: ${fmtD(from)} → ${fmtD(to)}</span>
       <div style="flex:1"></div>
-      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('last30'))" style="font-size:.72rem">Last 30 Days</button>
-      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('thismonth'))" style="font-size:.72rem">This Month</button>
-      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('lastmonth'))" style="font-size:.72rem">Last Month</button>
-      <button class="btn btn-secondary btn-sm" onclick="viewReport('${key}',...rptPresetDates('thisyear'))" style="font-size:.72rem">This Year</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('viewReport', key, ...rptPresetDates('last30'))} style="font-size:.72rem">Last 30 Days</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('viewReport', key, ...rptPresetDates('thismonth'))} style="font-size:.72rem">This Month</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('viewReport', key, ...rptPresetDates('lastmonth'))} style="font-size:.72rem">Last Month</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('viewReport', key, ...rptPresetDates('thisyear'))} style="font-size:.72rem">This Year</button>
       <input type="date" id="rpt-modal-from" class="form-control" style="max-width:135px;font-size:.76rem" value="${from}">
       <input type="date" id="rpt-modal-to" class="form-control" style="max-width:135px;font-size:.76rem" value="${to}">
-      <button class="btn btn-primary btn-sm" onclick="viewReport('${key}',document.getElementById('rpt-modal-from').value,document.getElementById('rpt-modal-to').value)" style="font-size:.72rem">Apply</button>
+      <button class="btn btn-primary btn-sm" ${dataAct('viewReportModalRange', key)} style="font-size:.72rem">Apply</button>
     </div>`
   : `<div style="margin-bottom:12px;padding:8px 12px;background:var(--surface-alt,#f8f9fb);border-radius:8px;font-size:.76rem;font-weight:700;color:var(--navy)">📅 Period: ${def.period||'All time'}</div>`;
 
@@ -852,7 +852,7 @@ function renderClientReports(el) {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
         <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" ${dataAct('downloadClientSpendCSV')}><div style="font-size:1.3rem">💰</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Spend CSV</div><div style="font-size:.7rem;color:var(--text-muted)">monthly / PO-wise</div></button>
         <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" ${dataAct('downloadClientConsumptionCSV')}><div style="font-size:1.3rem">🍽️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Consumption CSV</div><div style="font-size:.7rem;color:var(--text-muted)">items used</div></button>
-        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" onclick="window.print()"><div style="font-size:1.3rem">🖨️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Print / PDF</div><div style="font-size:.7rem;color:var(--text-muted)">current view</div></button>
+        <button class="card" style="padding:16px;text-align:center;cursor:pointer;border:1px solid var(--border)" ${dataAct('printPage')}><div style="font-size:1.3rem">🖨️</div><div style="font-weight:700;font-size:.85rem;color:var(--navy);margin-top:6px">Print / PDF</div><div style="font-size:.7rem;color:var(--text-muted)">current view</div></button>
       </div>
       <div class="card" style="padding:12px 15px;margin-top:14px;font-size:.78rem;color:var(--text-muted);background:var(--surface-2)">Scheduled email delivery (monthly executive summary) is planned — exports today are on-demand.</div>
     </div>
@@ -1162,7 +1162,7 @@ function renderFulfilContent() {
       <thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Ordered</th><th style="text-align:right">Delivered</th><th style="text-align:right">Due</th><th style="text-align:right">Fill %</th><th></th></tr></thead>
       <tbody>${data.map(d=>{ const due=Math.max(0,d.ordered_qty-d.delivered_qty); const c=d.fill_pct>=90?'#16a34a':d.fill_pct>=70?'#d97706':'#dc2626';
         const periodParam = _fulfilGranularity==='month' ? d.key : '';
-        return `<tr style="cursor:pointer" onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" onclick="openCategoryDrill('${periodParam}','${d.label.replace(/'/g,"")}')">
+        return `<tr style="cursor:pointer" onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" ${dataAct('openCategoryDrill', periodParam, d.label)}>
           <td style="font-weight:600;color:var(--blue)">${d.label}</td>
           <td style="text-align:right">${d.order_count}</td>
           <td style="text-align:right">${Math.round(d.ordered_qty)}</td>
@@ -1339,7 +1339,7 @@ async function loadDrill() {
   const listRows = enriched.map(r=>{
     const fc = r.fill>=90?'#16a34a':r.fill>=70?'#d97706':'#dc2626';
     const clickable = isCat;
-    return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" onclick="drillToSubcategory('${String(r.name).replace(/'/g,"")}')"`:''}>
+    return `<tr style="${clickable?'cursor:pointer':''}" ${clickable?`onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background=''" ${dataAct('drillToSubcategory', String(r.name))}`:''}>
       <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.color};margin-right:7px"></span><b style="${clickable?'color:var(--blue)':''}">${h(r.name)}</b></td>
       <td style="text-align:right;font-weight:700">${r.share}%</td>
       <td style="text-align:right">${Math.round(r.ordered_qty)}</td>

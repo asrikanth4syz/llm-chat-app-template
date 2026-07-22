@@ -108,7 +108,7 @@ async function switchWHTab(tab, btn) {
     }
   } catch(e) {
     content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
-      Error loading data. <button class="btn btn-secondary btn-sm" onclick="switchWHTab('${tab}',document.querySelectorAll('#wh-tabs .tab-btn')[['overview','grn','bins','picklist','transfers'].indexOf('${tab}')])">Retry</button>
+      Error loading data. <button class="btn btn-secondary btn-sm" ${dataAct('whGoTab', tab)}>Retry</button>
     </div>`;
   }
 }
@@ -218,8 +218,8 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
             ${wOOS>0?`${wOOS} SKU${wOOS>1?'s':''} out of stock`:''}${wOOS>0&&wLow>0?' · ':''}${wLow>0?`${wLow} below reorder level`:''}
           </div>` : ''}
           <div style="display:flex;gap:6px">
-            <button class="btn btn-secondary btn-sm" onclick="editWarehouseModal('${w.id}','${(w.name||'').replace(/'/g,"\\'")}',${w.capacity||1000})">Edit</button>
-            <button class="btn btn-secondary btn-sm" onclick="switchWHTab('bins',document.querySelectorAll('#wh-tabs .tab-btn')[2])">View Bins</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('editWarehouseModal', w.id, w.name||'', w.capacity||1000)}>Edit</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('whGoTab', 'bins')}>View Bins</button>
             <button class="btn btn-primary btn-sm" ${dataAct('addBinModal', w.id)}>${iconPlus(12)} Bin</button>
           </div>
         </div>
@@ -295,7 +295,7 @@ function renderWHBins(el, bins, warehouses) {
                 </div>
               </td>
               <td style="display:flex;gap:4px">
-                <button class="btn btn-secondary btn-sm" onclick="editBinModal('${b.id}','${(b.code||'').replace(/'/g,"\\'")}','${(b.zone||'').replace(/'/g,"\\'")}',${b.capacity||0},'${b.sku||''}')">Edit</button>
+                <button class="btn btn-secondary btn-sm" ${dataAct('editBinModal', b.id, b.code||'', b.zone||'', b.capacity||0, b.sku||'')}>Edit</button>
               </td>
             </tr>`;
           }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">No bins yet</td></tr>'}
@@ -341,7 +341,7 @@ function renderWHPickList(el, picklist) {
                 ? `<button class="btn btn-success btn-sm" ${dataAct('createDCFromPicklist', order.order_id)}>✓ Pass &rarr; Dispatch</button>
                    <button class="btn btn-warning btn-sm" style="margin-left:4px" ${dataAct('advanceOrder', order.order_id, 'READY_TO_PICK', 'Quality check failed — returned for re-pick')}>↩ Re-Pick</button>`
                 : order.status==='PICKED'
-                  ? `<button class="btn btn-info btn-sm" onclick="advanceOrder('${order.order_id}','QUALITY_CHECK','Items picked — quality check &amp; packing')">Quality Check</button>`
+                  ? `<button class="btn btn-info btn-sm" ${dataAct('advanceOrder', order.order_id, 'QUALITY_CHECK', 'Items picked — quality check & packing')}>Quality Check</button>`
                   : `<button class="btn btn-primary btn-sm" ${dataAct('pickOrderModal', order.order_id)}>Pick Items</button>`
               }
             </div>
@@ -1334,7 +1334,7 @@ function scanDCDocModal(dcId) {
        <div style="font-size:3rem;margin-bottom:10px">📷</div>
        <div style="font-weight:700;font-size:.95rem;color:var(--navy);margin-bottom:4px">Scan the POD document</div>
        <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:18px">Point your camera at the signed delivery challan.<br>You can scan multiple pages one at a time.</div>
-       <button class="btn btn-primary" style="padding:10px 28px" onclick="document.getElementById('dc-scan-file').click()">
+       <button class="btn btn-primary" style="padding:10px 28px" ${dataAct('clickEl', 'dc-scan-file')}>
          📷 Open Camera
        </button>
        <div style="margin-top:10px;font-size:.75rem;color:var(--text-muted)">On desktop this opens a file picker</div>

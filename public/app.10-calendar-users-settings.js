@@ -526,7 +526,7 @@ async function renderUsers(el) {
         <div style="display:flex;gap:5px">
           <button class="btn btn-secondary btn-sm" ${dataAct('editUserModal', u.id)} style="font-size:.7rem;padding:3px 8px">✏️ Edit</button>
           ${u.active
-            ? `<button class="btn btn-danger btn-sm" onclick="deactivateUser('${u.id}','${u.name.replace(/'/g,"\\'")}')" style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
+            ? `<button class="btn btn-danger btn-sm" ${dataAct('deactivateUser', u.id, u.name)} style="font-size:.7rem;padding:3px 8px">Deactivate</button>`
             : `<button class="btn btn-primary btn-sm" ${dataAct('activateUser', u.id)} style="font-size:.7rem;padding:3px 8px">Activate</button>`}
         </div>
       </div>
@@ -905,7 +905,7 @@ async function settingsTab(tab, btn) {
           <div style="font-size:.82rem;font-weight:600;margin-bottom:6px">Webhook URL</div>
           <div style="display:flex;align-items:center;gap:8px">
             <code style="font-size:.8rem;background:#f1f5f9;padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho/webhook</code>
-            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${origin}/api/integrations/zoho/webhook').then(()=>showToast('Copied'))">Copy</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho/webhook')}>Copy</button>
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Configure this URL in Zoho Books → Settings → Webhooks</div>
         </div>

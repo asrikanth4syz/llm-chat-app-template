@@ -412,8 +412,8 @@ async function manageClientCatalog(clientId, clientName) {
        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
          <span style="font-size:.76rem;font-weight:700;color:#166534;white-space:nowrap">By CSV:</span>
          <input type="file" id="cc-csv-input" accept=".csv,text/csv" style="display:none" onchange="handleCCCsvUpload(this)">
-         <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" onclick="document.getElementById('cc-csv-input').click()">Upload CSV</button>
-         <a id="cc-csv-template" href="#" style="font-size:.72rem;color:#16a34a;text-decoration:underline;white-space:nowrap" onclick="downloadCCTemplate(event)">Download template</a>
+         <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('clickEl', 'cc-csv-input')}>Upload CSV</button>
+         <a id="cc-csv-template" href="#" style="font-size:.72rem;color:#16a34a;text-decoration:underline;white-space:nowrap" ${dataAct('downloadCCTemplate')} data-prevent>Download template</a>
        </div>
      </div>
      <!-- CSV preview panel -->
@@ -612,7 +612,7 @@ function updateCCCount(delta) {
 }
 
 function downloadCCTemplate(e) {
-  e.preventDefault();
+  if (e) e.preventDefault();
   const csv = 'sku\n' + _ccAllInventory.slice(0,3).map(i=>i.sku).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
@@ -694,9 +694,9 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
       </div>` : ''}
     <div style="display:flex;gap:8px">
       ${matched.length ? `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 14px;font-size:.8rem"
-        onclick="confirmCCCsvImport(${JSON.stringify(matched.map(i=>i.sku)).replace(/"/g,'&quot;')})">
+        ${dataAct('confirmCCCsvImport', matched.map(i=>i.sku))}>
         Add ${matched.length} Item${matched.length!==1?'s':''}</button>` : ''}
-      <button class="btn btn-sm btn-secondary" style="font-size:.8rem" onclick="document.getElementById('cc-csv-preview').style.display='none'">Dismiss</button>
+      <button class="btn btn-sm btn-secondary" style="font-size:.8rem" ${dataAct('hideEl', 'cc-csv-preview')}>Dismiss</button>
     </div>`;
 }
 
@@ -998,7 +998,7 @@ async function renderServiceDesk(el) {
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-primary btn-sm" ${dataAct('resolveTicket', t.id)}>✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" ${dataAct('startTicket', t.id)}>▶ Start</button>`:''}
-          ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" onclick="editTicketModal('${t.id}','${(t.subject||'').replace(/'/g,"\\'")}','${t.priority||'MEDIUM'}','${t.status||'OPEN'}','${(t.description||'').replace(/'/g,"\\'").replace(/\n/g,' ')}')">✎ Edit</button>`:''}
+          ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('editTicketModal', t.id, t.subject||'', t.priority||'MEDIUM', t.status||'OPEN', (t.description||'').replace(/\n/g,' '))}>✎ Edit</button>`:''}
         </div>` : t.status==='RESOLVED' ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           <button class="btn btn-primary btn-sm" ${dataAct('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
