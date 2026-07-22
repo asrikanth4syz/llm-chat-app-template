@@ -365,6 +365,10 @@ function initApp() {
   // Settings lives under the profile menu; only roles with the page see it
   const settingsItem = document.getElementById('pm-settings');
   if (settingsItem) settingsItem.style.display = (PAGE_MAP.settings && ['super_admin','ops_admin'].includes(u.role)) ? '' : 'none';
+  // Hide the quick-action (+) menu entirely for roles that have no quick actions
+  // (e.g. delivery executives).
+  const quickWrap = document.getElementById('tb-quick-wrap');
+  if (quickWrap) quickWrap.style.display = quickActionItems().length ? '' : 'none';
   buildNav();
   navigate(getDefaultPage());
   loadNotifications();
@@ -418,14 +422,18 @@ function quickActionItems() {
     { icon:'📦', label:'View purchase orders', sub:'respond to POs', act:'quickNav', arg:'vendor_pos' },
     { icon:'🧾', label:'Invoices', sub:'raise &amp; track', act:'quickNav', arg:'vendor_invoices' },
   ];
-  // admin / ops / procurement / warehouse / finance
+  // admin / ops / procurement / warehouse / finance / delivery — scope each action
+  // to pages actually in the user's own navigation (not the global PAGE_MAP), so a
+  // delivery executive whose nav is only Dashboard + My Deliveries sees none of
+  // these admin shortcuts.
   const items = [
     { icon:'📅', label:'Delivery calendar', sub:'plan &amp; reschedule', act:'quickNav', arg:'delivery_calendar' },
     { icon:'📦', label:'Add product', sub:'to the catalogue', act:'quickNav', arg:'inventory' },
     { icon:'🏢', label:'Onboard client', sub:'new organisation', act:'quickNav', arg:'clients' },
     { icon:'🎫', label:'New ticket', sub:'service desk', act:'quickNav', arg:'service_desk' },
   ];
-  return items.filter(a => a.arg === undefined || PAGE_MAP[a.arg]);
+  const navIds = new Set((NAV[nav] || []).filter(i => i.id).map(i => i.id));
+  return items.filter(a => a.arg === undefined || navIds.has(a.arg));
 }
 
 // ── Global Search (Gap 10) ─────────────────────────────────
