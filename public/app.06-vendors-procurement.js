@@ -57,7 +57,7 @@ async function renderVendors(el) {
             ${v.vendor_code?`<div style="font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;letter-spacing:.03em;color:var(--text-muted);margin-top:1px">${v.vendor_code}</div>`:''}
             <div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
               ${(v.category||'—').split(',').filter(Boolean).map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.trim()}</span>`).join('')}
-              ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
+              ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:var(--danger-bg);color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
             </div>
           </div>
         </div>
@@ -580,10 +580,10 @@ function vwRenderReview() {
   const row = x => `<div class="vw-ci"><span class="b ${x.ok?'y':'n'}">${x.ok?'✓':'!'}</span>
     <span style="cursor:pointer" ${dataAct('vwGo', x.step)}>${x.label}${x.ok?'':` <span style="color:var(--danger)">— fill this</span>`}</span></div>`;
   document.getElementById('vw-review').innerHTML = `
-    ${missing.length ? `<div style="background:var(--red-wash,#fef2f2);border:1.5px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:14px">
+    ${missing.length ? `<div style="background:var(--red-wash,var(--danger-bg));border:1.5px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:14px">
       <div style="font-weight:800;color:var(--danger);font-size:.86rem">${missing.length} required item${missing.length>1?'s':''} still needed to submit</div>
       <div style="font-size:.78rem;color:#991b1b;margin-top:3px">${missing.map(m=>`<b>${m.label}</b>`).join(' · ')} — click any item below to jump to it.</div>
-    </div>` : `<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-weight:700;color:var(--success);font-size:.86rem">✓ All required information is in — ready to submit for verification.</div>`}
+    </div>` : `<div style="background:var(--success-bg);border:1.5px solid #86efac;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-weight:700;color:var(--success);font-size:.86rem">✓ All required information is in — ready to submit for verification.</div>`}
     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:220px">
         <div style="font-size:.66rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">Required</div>
@@ -731,9 +731,9 @@ function vendorViewHTML(v, docs, products) {
     }
     const up = docsByKind[d.kind];
     const chip = up
-      ? `<span style="font-size:.68rem;font-weight:700;color:var(--success);background:#f0fdf4;border-radius:100px;padding:3px 10px">✓ Uploaded</span>`
+      ? `<span style="font-size:.68rem;font-weight:700;color:var(--success);background:var(--success-bg);border-radius:100px;padding:3px 10px">✓ Uploaded</span>`
       : required
-        ? `<span style="font-size:.68rem;font-weight:700;color:#b45309;background:#fffbeb;border-radius:100px;padding:3px 10px">⚠ Pending</span>`
+        ? `<span style="font-size:.68rem;font-weight:700;color:#b45309;background:var(--warning-bg);border-radius:100px;padding:3px 10px">⚠ Pending</span>`
         : `<span style="font-size:.68rem;font-weight:700;color:var(--text-muted);background:var(--surface-2);border-radius:100px;padding:3px 10px">Optional</span>`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--surface-2)">
       <span style="font-size:1rem">📄</span>
@@ -774,7 +774,7 @@ function vendorViewHTML(v, docs, products) {
       </div>
     </div>
 
-    ${missing.length ? `<div style="display:flex;gap:10px;align-items:center;background:#fffbeb;border:1px solid #fcd9a5;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:.8rem;color:#92400e">
+    ${missing.length ? `<div style="display:flex;gap:10px;align-items:center;background:var(--warning-bg);border:1px solid #fcd9a5;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:.8rem;color:var(--amber-text)">
       <span style="font-size:1.1rem">🛡️</span><div><b>${missing.length} item${missing.length>1?'s':''} still needed to activate:</b> ${missing.map(m=>m.label).join(' · ')}. Use <b>Edit vendor</b> to fill and submit for verification.</div></div>` : ''}
 
     <!-- two-column: details + rail -->

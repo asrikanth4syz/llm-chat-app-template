@@ -124,7 +124,7 @@ async function renderPlaceOrder(el) {
         </div>
 
         <!-- Step 2 -->
-        <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">
+        <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:var(--success-bg);border-radius:10px;border:1px solid #bbf7d0">
           <div style="min-width:28px;height:28px;border-radius:50%;background:#15803d;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">2</div>
           <div>
             <div style="font-weight:700;font-size:.88rem;color:#15803d;margin-bottom:4px">Fill in quantities</div>
@@ -134,9 +134,9 @@ async function renderPlaceOrder(el) {
 
         <!-- Step 3 -->
         <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;background:#fefce8;border-radius:10px;border:1px solid #fde68a">
-          <div style="min-width:28px;height:28px;border-radius:50%;background:#d97706;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">3</div>
+          <div style="min-width:28px;height:28px;border-radius:50%;background:var(--warning);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">3</div>
           <div style="flex:1">
-            <div style="font-weight:700;font-size:.88rem;color:#92400e;margin-bottom:4px">Upload the filled CSV</div>
+            <div style="font-weight:700;font-size:.88rem;color:var(--amber-text);margin-bottom:4px">Upload the filled CSV</div>
             <div style="font-size:.78rem;color:#78350f;margin-bottom:10px">Items with a quantity will be added to your cart. Review and place the order.</div>
             <input type="file" id="csv-upload-input" accept=".csv" style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:#fff">
           </div>
@@ -643,7 +643,7 @@ function renderCatalogItems(items) {
 
   if (view === 'list') {
     return `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
-      <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
+      <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
         <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div style="text-align:center">Quantity</div>
       </div>
       ${items.map(item => {
@@ -662,7 +662,7 @@ function renderCatalogItems(items) {
           ${isClient?'':`<div style="font-size:.82rem;font-weight:600;color:${lowStock?'var(--danger)':'var(--text-muted)'}">
             ${item.stock}${item.uom?' '+item.uom:''}${lowStock?' ⚠️':''}
           </div>`}
-          <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
+          <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:var(--blue-light);color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
           <div style="display:flex;align-items:center;justify-content:center;gap:6px">
             <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">−</button>
             <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}" style="min-width:20px;text-align:center;font-weight:700;font-size:.9rem;color:${qty>0?'var(--navy)':'var(--text-muted)'}">${qty}</span>
@@ -689,7 +689,7 @@ function renderCatalogItems(items) {
         <div class="catalog-price">${fmt(item.unit_price)}</div>
         ${item.uom?`<span style="font-size:.7rem;color:var(--text-muted)">/${item.uom}</span>`:''}
       </div>
-      ${item.client_price!=null?`<div style="font-size:.67rem;background:#dbeafe;color:#1d4ed8;padding:1px 7px;border-radius:10px;display:inline-block;margin-bottom:6px">Your Price</div>`:'<div style="margin-bottom:6px"></div>'}
+      ${item.client_price!=null?`<div style="font-size:.67rem;background:var(--blue-light);color:#1d4ed8;padding:1px 7px;border-radius:10px;display:inline-block;margin-bottom:6px">Your Price</div>`:'<div style="margin-bottom:6px"></div>'}
       ${isClient?'':`<div class="catalog-stock ${lowStock?'text-danger':''}" style="margin-bottom:10px">
         ${lowStock?'⚠️ ':''}Stock: ${item.stock}
       </div>`}
@@ -971,7 +971,7 @@ async function renderMyInventory(el) {
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${criticalNeed?'var(--danger)':'#7c3aed'};margin-bottom:0;cursor:pointer" ${dataAct('invFilterStatus', 'critical', 'stock')} title="Items you've marked critical">
       <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">★ Critical Items</div>
-      <div id="inv-kpi-critical" style="font-size:1.8rem;font-weight:700;color:#7c3aed;line-height:1">${criticalItems.length}</div>
+      <div id="inv-kpi-critical" style="font-size:1.8rem;font-weight:700;color:var(--purple);line-height:1">${criticalItems.length}</div>
       <div id="inv-kpi-critical-sub" style="font-size:.72rem;color:${criticalNeed?'var(--danger)':'var(--text-muted)'};margin-top:4px">${criticalNeed?`${criticalNeed} need restock`:'tracked for availability'}</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
@@ -1052,7 +1052,7 @@ function myInvRow(i) {
   const rowBg       = i.stock_status==='out' ? 'background:#fff5f5' : i.stock_status==='low' ? 'background:#fffdf0' : '';
   return `<tr data-sku="${h(i.sku)}" data-cat="${h(i.category||'')}" data-status="${i.stock_status}" data-critical="${i.is_critical?1:0}" style="${rowBg}">
     <td class="card-title-cell">
-      <div class="inv-name" style="font-weight:600;font-size:.87rem;color:var(--navy)">${i.is_critical?'<span class="inv-star" title="Critical for you" style="color:#f59e0b">★</span> ':''}${h(i.item_name||i.sku)}</div>
+      <div class="inv-name" style="font-weight:600;font-size:.87rem;color:var(--navy)">${i.is_critical?'<span class="inv-star" title="Critical for you" style="color:var(--amber)">★</span> ':''}${h(i.item_name||i.sku)}</div>
       <div style="font-size:.72rem;color:var(--text-muted)">${h(i.sku)}</div>
     </td>
     <td data-label="Category" style="font-size:.82rem;color:var(--text-muted)">${h(i.category||'—')}</td>
@@ -1064,7 +1064,7 @@ function myInvRow(i) {
     <td data-label="Last Used" style="font-size:.78rem;color:var(--text-muted)">${i.last_consumed_at ? fmtDate(i.last_consumed_at) : '—'}</td>
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm inv-crit-btn" ${dataActEl('toggleClientCritical', i.sku)} title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:#fffbeb':''}">${i.is_critical?'★':'☆'}</button>
+        <button class="btn btn-secondary btn-sm inv-crit-btn" ${dataActEl('toggleClientCritical', i.sku)} title="${i.is_critical?'Unmark critical':'Mark as critical'}" style="${i.is_critical?'color:#b45309;border-color:#fcd34d;background:var(--warning-bg)':''}">${i.is_critical?'★':'☆'}</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('logConsumptionModal', i.sku, i.item_name||i.sku, i.qty_on_hand||0, i.uom||'unit')}>Log Use</button>
         ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-gold btn-sm" ${dataAct('orderMoreItem', h(i.sku), h(i.item_name||i.sku))}>Order More</button>` : ''}
         <button class="btn btn-secondary btn-sm" ${dataAct('editInvItemModal', i.sku, i.item_name||'', i.reorder_level||0)} title="Edit name / reorder level">✏️</button>
@@ -1120,11 +1120,11 @@ async function toggleClientCritical(sku, btn) {
     row.dataset.critical = next ? '1' : '0';
     btn.textContent = next ? '★' : '☆';
     btn.title = next ? 'Unmark critical' : 'Mark as critical';
-    btn.style.cssText = next ? 'color:#b45309;border-color:#fcd34d;background:#fffbeb' : '';
+    btn.style.cssText = next ? 'color:#b45309;border-color:#fcd34d;background:var(--warning-bg)' : '';
     const nameEl = row.querySelector('.inv-name');
     if (nameEl) {
       const nm = nameEl.textContent.replace(/^★\s*/, '');
-      nameEl.innerHTML = (next ? '<span class="inv-star" title="Critical for you" style="color:#f59e0b">★</span> ' : '') + h(nm);
+      nameEl.innerHTML = (next ? '<span class="inv-star" title="Critical for you" style="color:var(--amber)">★</span> ' : '') + h(nm);
     }
   }
   const it = (APP._clientInvItems||[]).find(x => x.sku === sku);

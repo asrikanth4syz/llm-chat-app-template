@@ -65,10 +65,10 @@ async function renderDeliveryCalendar(el) {
     .dcal-riskbadge{font-size:.52rem;font-weight:800;background:var(--danger);color:#fff;border-radius:20px;padding:1px 6px}
     .dcal-chip{display:block;width:100%;margin-top:4px;font-size:.63rem;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
     .dcal-chip.sch{background:#e9eef4;color:#25384d;border:1px solid #c6d2e0}
-    .dcal-chip.tra{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
+    .dcal-chip.tra{background:var(--amber-bg);color:#b45309;border:1px solid #fde68a}
     .dcal-chip.del{background:#d1fae5;color:#047857;border:1px solid #a7f3d0}
-    .dcal-chip.ris{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
-    .dcal-chip.gho{background:var(--primary-light);color:#0f766e;border:1.5px dashed var(--primary-border)}
+    .dcal-chip.ris{background:var(--danger-soft-bg);color:var(--danger);border:1px solid #fecaca}
+    .dcal-chip.gho{background:var(--primary-light);color:var(--primary-hover);border:1.5px dashed var(--primary-border)}
     .dcal-more{margin-top:3px;font-size:.6rem;color:var(--text-muted);font-weight:700}
     .dcal-rail-card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:11px 13px;margin-bottom:12px}
     .dcal-rc-h{font-size:.63rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between;gap:8px}
@@ -80,7 +80,7 @@ async function renderDeliveryCalendar(el) {
     .dcal-rl .t{font-size:.76rem;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
     .dcal-rl .s{font-size:.65rem;color:var(--text-muted);display:block}
     .dcal-pill{font-size:.58rem;font-weight:800;padding:2px 7px;border-radius:20px;white-space:nowrap}
-    .dcal-pill.red{background:#fee2e2;color:#dc2626}.dcal-pill.amb{background:#fef3c7;color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}.dcal-pill.org{background:#ccfbf1;color:#0f766e}
+    .dcal-pill.red{background:var(--danger-soft-bg);color:var(--danger)}.dcal-pill.amb{background:var(--amber-bg);color:#b45309}.dcal-pill.blu{background:#e9eef4;color:#25384d}.dcal-pill.grn{background:#d1fae5;color:#047857}.dcal-pill.org{background:#ccfbf1;color:var(--primary-hover)}
     .dcal-vbtn{padding:6px 13px;font-size:.76rem;font-weight:700;border:1px solid var(--border);background:var(--surface);border-radius:20px;cursor:pointer;color:var(--text-muted)}
     .dcal-vbtn.on{background:var(--primary);border-color:var(--primary);color:#fff}
   </style>
@@ -106,7 +106,7 @@ async function renderDeliveryCalendar(el) {
       <option value="gho">Recurring (projected)</option>
     </select>
     <div style="margin-left:auto;display:flex;gap:12px;font-size:.72rem;color:var(--text-muted);flex-wrap:wrap">
-      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span><span style="color:#0f766e">◌ Projected</span>
+      <span>🟦 Scheduled</span><span>🟨 In transit</span><span>🟩 Delivered</span><span>🟥 At risk</span><span style="color:var(--primary-hover)">◌ Projected</span>
     </div>
   </div>
   <div id="dcal-body">
@@ -509,13 +509,13 @@ async function renderUsers(el) {
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(u.name)}</span>
-          ${u.active?'':'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 6px">INACTIVE</span>'}
+          ${u.active?'':'<span style="font-size:.66rem;font-weight:700;background:var(--danger-soft-bg);color:var(--danger);border-radius:4px;padding:1px 6px">INACTIVE</span>'}
         </div>
         <div style="font-size:.76rem;color:var(--text-muted);margin-top:2px">${h(u.email)}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
           <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${roleName}</span>
           <span style="font-size:.68rem;color:var(--text-muted)">${h(u.org)}</span>
-          ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:#d1fae5;color:#059669;border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
+          ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:#d1fae5;color:var(--success-strong);border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
         </div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
@@ -556,7 +556,7 @@ async function renderUsers(el) {
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Inactive</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inactiveUsers.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #7c3aed">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--purple)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">2FA Enabled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${with2FA}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${users.length?Math.round(with2FA/users.length*100):0}% of users</div>

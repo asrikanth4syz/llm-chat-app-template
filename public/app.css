@@ -41,6 +41,24 @@
   --purple:     #7c3aed;
   --purple-bg:  #f5f3ff;
 
+  /* Extended accents — consolidated from inline hexes (values unchanged) */
+  --amber:          #f59e0b;
+  --amber-bg:       #fef3c7;
+  --amber-text:     #92400e;
+  --danger-soft-bg: #fee2e2;
+  --success-strong: #059669;
+  --blue-bright:    #3b82f6;
+
+  /* Type scale — prefer these over ad-hoc font sizes */
+  --fs-2xs: .68rem;
+  --fs-xs:  .72rem;
+  --fs-sm:  .8rem;
+  --fs-md:  .875rem;   /* base body */
+  --fs-lg:  1rem;
+  --fs-xl:  1.25rem;
+  --fs-2xl: 1.5rem;
+  --fs-3xl: 1.9rem;
+
   /* Surfaces */
   --bg:           #f1f5f9;
   --surface:      #ffffff;

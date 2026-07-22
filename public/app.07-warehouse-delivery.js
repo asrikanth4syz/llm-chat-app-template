@@ -34,9 +34,9 @@ async function loadWarehouseReturnsQueue() {
   if (!pending.length) { wrap.innerHTML = ''; return; }
   wrap.innerHTML = `
   <div class="card" style="border:1.5px solid #fcd34d;margin-bottom:16px;overflow:hidden;padding:0">
-    <div style="padding:12px 18px;background:#fffbeb;border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:8px">
+    <div style="padding:12px 18px;background:var(--warning-bg);border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:8px">
       <span style="font-size:1.1rem">↩</span>
-      <b style="font-size:.9rem;color:#92400e">Returns Awaiting Check & Approval (${pending.length})</b>
+      <b style="font-size:.9rem;color:var(--amber-text)">Returns Awaiting Check & Approval (${pending.length})</b>
       <span style="font-size:.74rem;color:#b45309">— verify returned goods, then approve to restock</span>
     </div>
     ${pending.map(r => `
@@ -46,7 +46,7 @@ async function loadWarehouseReturnsQueue() {
           <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${r.id} · DC ${r.dc_id}${r.client_name?` · ${h(r.client_name)}`:''}</div>
           <div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">By ${h(r.created_by_name||'—')} · ${fmtDate(r.created_at)}${r.reason?` · Reason: <i>${h(r.reason)}</i>`:''}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-            ${(r.items||[]).map(i=>`<span style="font-size:.72rem;font-weight:600;background:#fef3c7;color:#92400e;border-radius:6px;padding:3px 9px">${h(i.name||i.sku)} × ${i.qty}</span>`).join('')}
+            ${(r.items||[]).map(i=>`<span style="font-size:.72rem;font-weight:600;background:var(--amber-bg);color:var(--amber-text);border-radius:6px;padding:3px 9px">${h(i.name||i.sku)} × ${i.qty}</span>`).join('')}
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0">
@@ -152,7 +152,7 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
   </div>
 
   ${binFillPct>=85 || outOfStock>0 ? `
-  <div style="background:#fef3cd;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:#92400e;display:flex;gap:10px;align-items:center">
+  <div style="background:#fef3cd;border:1px solid var(--amber);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:var(--amber-text);display:flex;gap:10px;align-items:center">
     <span style="font-size:1.1rem">⚠️</span>
     <span>
       ${binFillPct>=85 ? `Bin capacity critical at <strong>${binFillPct}%</strong> utilisation. ` : ''}
@@ -1108,8 +1108,8 @@ function podScanRow(dc) {
   const statusCell = complete
     ? '<span class="badge badge-success">Complete</span>'
     : !podOk && !scanOk
-      ? '<span class="badge" style="background:#fef9c3;color:#92400e">Both pending</span>'
-      : '<span class="badge" style="background:#fef9c3;color:#92400e">Scan missing</span>';
+      ? '<span class="badge" style="background:#fef9c3;color:var(--amber-text)">Both pending</span>'
+      : '<span class="badge" style="background:#fef9c3;color:var(--amber-text)">Scan missing</span>';
 
   const docsCell = docCount > 0
     ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewDCDocuments', dc.id)}>📂 ${docCount} page${docCount>1?'s':''}</button>`
@@ -1267,7 +1267,7 @@ async function markDelivered(dcId) {
           <td><b>${i.sku}</b></td>
           <td>${h(i.name)}</td>
           <td style="text-align:center;color:var(--text-muted)">${i.qty_ordered}</td>
-          <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
+          <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
           <td style="text-align:center"><input type="number" class="form-control form-control-sm deliver-qty"
             data-sku="${i.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}"
             style="width:80px;text-align:center"
@@ -1275,7 +1275,7 @@ async function markDelivered(dcId) {
         </tr>`;}).join('')}
       </tbody>
     </table>
-    ${capped?'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Deliverable qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
+    ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Deliverable qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
       <button class="btn btn-success" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
@@ -1531,7 +1531,7 @@ async function viewDCDocuments(dcId) {
     const isAudio = d.doc_type==='voice' || (d.mime_type||'').startsWith('audio/');
     const typeLabel = d.doc_type==='pod'?'📄 POD':d.doc_type==='voice'?'🎙 Voice Note':'🔍 DC Scan';
     return `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-      <div style="padding:10px 14px;background:#f8fafc;display:flex;align-items:center;justify-content:space-between">
+      <div style="padding:10px 14px;background:var(--surface-2);display:flex;align-items:center;justify-content:space-between">
         <div>
           <span style="font-weight:700;font-size:.88rem">${isAudio?'':'Page '+(i+1)+' — '}${typeLabel}</span>
           <span style="font-size:.78rem;color:var(--text-muted);margin-left:8px">${d.filename||'document'} ${fmt(d.file_size)?'· '+fmt(d.file_size):''}</span>

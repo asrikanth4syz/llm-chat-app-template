@@ -81,7 +81,7 @@ async function renderExecBI(el) {
       <span style="font-size:.8rem;color:var(--text-muted)">to</span>
       <input type="date" id="xbi-to" class="form-control" style="max-width:150px;font-size:.8rem" value="${_xbi.to}">
       <button class="btn btn-primary btn-sm" ${dataAct('xbiApplyCustom')}>Apply</button>
-      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,#0f766e)">${_xbi.timeLabel}</b></span>
+      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">Period: <b id="xbi-period-lbl" style="color:var(--primary-ink,var(--primary-hover))">${_xbi.timeLabel}</b></span>
     </div>
   </div>
   <style>
@@ -399,7 +399,7 @@ async function xbiInvoice(node, body) {
       <div style="display:flex;justify-content:space-between;padding:9px 16px;font-size:.84rem;border-bottom:1px solid var(--border)"><span>GST @ 18%</span><span class="tnum">${fmt(gst)}</span></div>
       <div style="display:flex;justify-content:space-between;padding:12px 16px;font-weight:800;color:var(--navy);background:var(--panel,#faf8f4)"><span>Total</span><span class="tnum">${fmt(val+gst)}</span></div>
     </div>
-    <div style="margin-top:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;font-size:.8rem;color:#166534">
+    <div style="margin-top:14px;background:var(--success-bg);border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;font-size:.8rem;color:#166534">
       🏁 <b>Bottom of the drill.</b> From a portfolio KPI to a single billed line — every hop auditable. This invoice is derived from the DC's billing record; a full invoice ledger (multi-DC invoices, payment dates) can follow once client invoicing is modelled.
     </div>`;
 }
@@ -770,7 +770,7 @@ function renderClientReports(el) {
     .cdash-kpi:hover::after{color:var(--primary)}
     .cdash-kpi .kl{font-size:.63rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)}
     .cdash-kpi .kv{font-size:1.4rem;font-weight:800;color:var(--navy);line-height:1.1;margin-top:5px}
-    .cdash-kpi .kv.g{color:var(--success)}.cdash-kpi .kv.w{color:#d97706}.cdash-kpi .kv.b{color:var(--danger)}
+    .cdash-kpi .kv.g{color:var(--success)}.cdash-kpi .kv.w{color:var(--warning)}.cdash-kpi .kv.b{color:var(--danger)}
     .cdash-kpi .ks{font-size:.67rem;color:var(--text-muted);margin-top:3px}
     .cdash-delta{display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:.67rem;font-weight:700}
     .cdash-delta.up{color:var(--success)}.cdash-delta.down{color:var(--danger)}.cdash-delta.neu{color:var(--text-muted)}
@@ -785,7 +785,7 @@ function renderClientReports(el) {
     .cdash-qgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
     @media(max-width:680px){.cdash-qgrid{grid-template-columns:1fr}}
     .cdash-q{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--navy);border-radius:10px;padding:14px 15px}
-    .cdash-q.ok{border-left-color:var(--success)}.cdash-q.warn{border-left-color:#d97706}.cdash-q.bad{border-left-color:var(--danger)}
+    .cdash-q.ok{border-left-color:var(--success)}.cdash-q.warn{border-left-color:var(--warning)}.cdash-q.bad{border-left-color:var(--danger)}
     .cdash-q .qq{font-size:.77rem;color:var(--text-muted);font-weight:600}
     .cdash-q .qa{font-size:1rem;color:var(--navy);font-weight:700;margin-top:6px;line-height:1.35}
     .cdash-q .qa b{color:var(--primary)}
@@ -1184,9 +1184,9 @@ function renderFulfilContent() {
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div style="font-weight:700;font-size:.9rem;color:var(--navy)">Fill Rate by ${_fulfilGranularity==='month'?'Month':_fulfilGranularity==='quarter'?'Quarter':'Fiscal Year'}</div>
       <div style="display:flex;gap:14px;font-size:.72rem;color:var(--text-muted)">
-        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#16a34a"></span>≥90%</span>
-        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#d97706"></span>70–89%</span>
-        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:#dc2626"></span>&lt;70%</span>
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:var(--success)"></span>≥90%</span>
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:var(--warning)"></span>70–89%</span>
+        <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:var(--danger)"></span>&lt;70%</span>
       </div>
     </div>
     <div style="position:relative;height:${Math.max(280, Math.min(420, data.length*46+120))}px"><canvas id="fulfil-chart"></canvas></div>

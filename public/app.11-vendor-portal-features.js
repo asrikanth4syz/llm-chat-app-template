@@ -30,7 +30,7 @@ async function renderVendorPOs(el) {
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-weight:800;font-size:1rem;color:var(--navy)">${po.id}</span>
             <span style="font-size:.68rem;font-weight:700;background:${m.bg};color:${m.color};border-radius:4px;padding:2px 8px">${m.icon} ${m.label}</span>
-            ${isOverdue?`<span style="font-size:.68rem;font-weight:700;background:#fef2f2;color:var(--danger);border-radius:4px;padding:2px 8px">⚠ Overdue</span>`:''}
+            ${isOverdue?`<span style="font-size:.68rem;font-weight:700;background:var(--danger-bg);color:var(--danger);border-radius:4px;padding:2px 8px">⚠ Overdue</span>`:''}
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:4px">
             Created ${fmtDate(po.created_at)}${po.expected_delivery?' · Expected '+fmtDate(po.expected_delivery):''}
@@ -73,12 +73,12 @@ async function renderVendorPOs(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #f59e0b;cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Action Required</div>
       <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'#d97706':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${fmt(totalValue)} pending</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Accepted</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">preparing to dispatch</div>
@@ -96,19 +96,19 @@ async function renderVendorPOs(el) {
   </div>
 
   ${sentPOs.length ? `
-  <div id="vpo-sent" style="font-size:.84rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Action Required</div>
+  <div id="vpo-sent" style="font-size:.84rem;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Action Required</div>
   ${sentPOs.map(po=>poCard(po)).join('')}` : ''}
 
   ${acceptedPOs.length ? `
-  <div style="font-size:.84rem;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length?20:0}px">✓ Accepted — Prepare Dispatch</div>
+  <div style="font-size:.84rem;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length?20:0}px">✓ Accepted — Prepare Dispatch</div>
   ${acceptedPOs.map(po=>poCard(po)).join('')}` : ''}
 
   ${dispatchedPOs.length ? `
-  <div style="font-size:.84rem;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length?20:0}px">🚚 Dispatched — Upload Invoice</div>
+  <div style="font-size:.84rem;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length?20:0}px">🚚 Dispatched — Upload Invoice</div>
   ${dispatchedPOs.map(po=>poCard(po)).join('')}` : ''}
 
   ${invoicedPOs.length ? `
-  <div style="font-size:.84rem;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length||dispatchedPOs.length?20:0}px">📄 Invoiced — Awaiting Payment</div>
+  <div style="font-size:.84rem;font-weight:700;color:var(--success-strong);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length||dispatchedPOs.length?20:0}px">📄 Invoiced — Awaiting Payment</div>
   ${invoicedPOs.map(po=>poCard(po)).join('')}` : ''}
 
   ${pos.length===0?`<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
@@ -234,9 +234,9 @@ async function renderVendorInvoices(el) {
   </div>
 
   ${pending.length ? `
-  <div style="font-size:.84rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Awaiting Invoice Upload</div>
+  <div style="font-size:.84rem;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Awaiting Invoice Upload</div>
   ${pending.map(po=>`
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;gap:12px">
+  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid var(--amber);display:flex;justify-content:space-between;align-items:center;gap:12px">
     <div>
       <div style="font-weight:700;font-size:.92rem;color:var(--navy)">${po.id}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">Dispatched ${fmtDate(po.updated_at)} · ${fmt(po.grand_total)}</div>
@@ -672,11 +672,11 @@ function showImportTab(tab, jobs) {
         <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', 'vendors')}>⬇ Download Sample Template</button>
       </div>
       <div style="padding:16px 20px">
-        <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
           <div style="font-weight:700;color:var(--navy);margin-bottom:4px">Columns <span style="font-weight:400;color:var(--text-muted)">(* required)</span></div>
           <code style="color:var(--blue);word-break:break-all">name*, category*, contact_email, contact_phone, location, address, avg_lead_days, rating</code>
         </div>
-        <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:#92400e">
+        <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:var(--amber-text)">
           <b>Duplicate handling:</b> If a vendor with the same name already exists, you can choose to skip it or overwrite it with the CSV data.
         </div>
         <div class="form-group" style="margin-bottom:0">
@@ -685,7 +685,7 @@ function showImportTab(tab, jobs) {
         </div>
         <div id="csv-preview" style="margin-top:12px"></div>
         <div id="csv-actions" style="display:none;margin-top:12px">
-          <div style="margin-bottom:12px;padding:10px 14px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:.84rem">
+          <div style="margin-bottom:12px;padding:10px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.84rem">
             <div style="font-weight:600;color:var(--navy);margin-bottom:8px">For duplicate vendors:</div>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px">
               <input type="radio" name="vendor-dup" value="skip" checked> Skip — keep existing vendor data unchanged
@@ -718,7 +718,7 @@ function showImportTab(tab, jobs) {
       <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', tab)}>⬇ Download Sample Template</button>
     </div>
     <div style="padding:16px 20px">
-      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
         <div style="font-weight:700;color:var(--navy);margin-bottom:6px">Required columns</div>
         <code style="color:var(--blue);word-break:break-all">${cols}</code>
       </div>
@@ -818,7 +818,7 @@ async function submitCSVImport(tab) {
   const label = allFailed ? 'Import failed' : 'Import complete';
   const summaryMsg = '<div style="background:'+bg+';border:1px solid '+bdr+';border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:'+color+'"><b>'+icon+' '+label+'</b> — ' + res.success + ' row(s) imported' + (res.failed ? ', <b>' + res.failed + ' failed</b>' : '') + '.</div>';
   const errorsHtml = res.errors && res.errors.length
-    ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Row errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
+    ? '<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Row errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
       res.errors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul>' +
       (allFailed ? '<div style="margin-top:8px;font-size:.78rem">Tip: run <code>npx wrangler d1 migrations apply smart-pantry-db --local</code> if columns are missing.</div>' : '') +
       '</div>'
@@ -864,16 +864,16 @@ async function previewVendorCSV(input) {
 
     const statusBadge = function(s) {
       if (s === 'new') return '<span style="background:#d1fae5;color:#065f46;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">New</span>';
-      if (s === 'duplicate') return '<span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Duplicate</span>';
-      return '<span style="background:#fee2e2;color:#991b1b;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Invalid</span>';
+      if (s === 'duplicate') return '<span style="background:var(--amber-bg);color:var(--amber-text);border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Duplicate</span>';
+      return '<span style="background:var(--danger-soft-bg);color:#991b1b;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Invalid</span>';
     };
 
     const dispCols = ['name','category','contact_email','contact_phone','location','avg_lead_days','rating'];
     if (preview) preview.innerHTML =
       '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">' +
         '<span style="background:#d1fae5;color:#065f46;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + newCount + ' New</span>' +
-        '<span style="background:#fef3c7;color:#92400e;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + dupCount + ' Duplicate</span>' +
-        (invalidCount ? '<span style="background:#fee2e2;color:#991b1b;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + invalidCount + ' Invalid</span>' : '') +
+        '<span style="background:var(--amber-bg);color:var(--amber-text);border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + dupCount + ' Duplicate</span>' +
+        (invalidCount ? '<span style="background:var(--danger-soft-bg);color:#991b1b;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + invalidCount + ' Invalid</span>' : '') +
       '</div>' +
       '<div style="font-size:.8rem;font-weight:600;color:var(--navy);margin-bottom:6px">Preview (all ' + classified.length + ' rows)</div>' +
       '<div class="table-wrap" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">' +
@@ -881,7 +881,7 @@ async function previewVendorCSV(input) {
       dispCols.map(function(c){ return '<th style="font-size:.73rem">'+c+'</th>'; }).join('') +
       '</tr></thead><tbody>' +
       classified.map(function(row){
-        const bg = row._status === 'invalid' ? 'background:#fef2f2' : row._status === 'duplicate' ? 'background:#fefce8' : '';
+        const bg = row._status === 'invalid' ? 'background:var(--danger-bg)' : row._status === 'duplicate' ? 'background:#fefce8' : '';
         return '<tr style="'+bg+'">' +
           '<td>' + statusBadge(row._status) + '</td>' +
           dispCols.map(function(c){ return '<td style="font-size:.76rem">'+(row[c]||'')+'</td>'; }).join('') +
@@ -921,7 +921,7 @@ async function submitVendorImport() {
   const skipMsg = res.skipped ? ', ' + res.skipped + ' duplicate(s) skipped' : '';
   const summaryMsg = '<div style="background:'+bg+';border:1px solid '+bdr+';border-radius:8px;padding:12px 16px;margin-bottom:10px;font-size:.85rem;color:'+color+'"><b>'+icon+(allFailed?' Import failed':' Import complete')+'</b> — ' + res.success + ' vendor(s) imported' + skipMsg + (res.failed ? ', <b>' + res.failed + ' failed</b>' : '') + '.</div>';
   const errorsHtml = res.errors && res.errors.length
-    ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
+    ? '<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
       res.errors.map(function(err){return '<li>'+err+'</li>';}).join('') + '</ul></div>'
     : '';
   if (preview) preview.innerHTML = summaryMsg + errorsHtml;
@@ -1311,7 +1311,7 @@ async function renderApprovalChains(el) {
       <div style="padding:14px 16px 10px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
           <span style="font-weight:700">Entity #${inst.entity_id}</span>
-          <span style="font-size:.72rem;padding:2px 8px;background:#fff8e6;color:#d97706;border-radius:10px">Step ${inst.current_step}</span>
+          <span style="font-size:.72rem;padding:2px 8px;background:#fff8e6;color:var(--warning);border-radius:10px">Step ${inst.current_step}</span>
         </div>
         <div style="font-size:.82rem;color:var(--text-muted)">${inst.chain_name||'Chain #'+inst.chain_id}</div>
       </div>

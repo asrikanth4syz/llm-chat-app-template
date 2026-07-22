@@ -52,14 +52,14 @@ async function renderClientDashboard(el) {
   <div style="margin-bottom:18px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-size:.85rem;font-weight:800;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">⚡ Needs attention today</span>
-      ${attentionCount ? `<span style="background:#fee2e2;color:#dc2626;border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
+      ${attentionCount ? `<span style="background:var(--danger-soft-bg);color:var(--danger);border-radius:20px;padding:1px 9px;font-size:.74rem;font-weight:700">${attentionCount}</span>` : ''}
       ${lowStock.length ? `<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-gold btn-sm" ${dataAct('orderAllAttention')} title="Add every low & out-of-stock item to your order">🛒 Order all (${lowStock.length})</button>
         <button id="attn-review-btn" class="btn btn-primary btn-sm" style="display:${cartCount>0?'inline-flex':'none'}" ${dataAct('reviewPlaceOrder')}>Review order (<span id="attn-review-count">${cartCount}</span>) →</button>
       </div>` : ''}
     </div>
     ${attentionCount === 0 ? `
-    <div class="card" style="padding:18px 20px;margin-bottom:0;display:flex;align-items:center;gap:12px;background:#f0fdf4;border:1px solid #bbf7d0">
+    <div class="card" style="padding:18px 20px;margin-bottom:0;display:flex;align-items:center;gap:12px;background:var(--success-bg);border:1px solid #bbf7d0">
       <span style="font-size:1.5rem">✅</span>
       <div>
         <div style="font-weight:700;font-size:.9rem;color:#15803d">All clear!</div>
@@ -80,13 +80,13 @@ async function renderClientDashboard(el) {
       </div>`).join('')}
       ${pendingApproval > 0 ? `
       <div style="flex:0 0 240px;background:#f0fdfa;border:1px solid #99f6e4;border-radius:12px;padding:14px 16px">
-        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ccfbf1;color:#0f766e;display:inline-block;margin-bottom:6px">APPROVAL</div>
+        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#ccfbf1;color:var(--primary-hover);display:inline-block;margin-bottom:6px">APPROVAL</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:10px">${pendingApproval} order${pendingApproval>1?'s':''} awaiting sign-off</div>
         <button class="btn btn-secondary btn-sm" style="width:100%" ${dataAct('navigate', 'approvals')}>Review Now</button>
       </div>` : ''}
       ${inTransitDCs.slice(0,2).map(dc => `
       <div style="flex:0 0 240px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 16px">
-        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:#dbeafe;color:#1d4ed8;display:inline-block;margin-bottom:6px">ARRIVING</div>
+        <div style="font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:var(--blue-light);color:#1d4ed8;display:inline-block;margin-bottom:6px">ARRIVING</div>
         <div style="font-weight:700;font-size:.86rem;color:var(--navy);margin-bottom:2px">${dc.dc_number||dc.id}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px">${dc.driver_name?`🧑‍✈️ ${h(dc.driver_name)}`:'🚚 En route'}${dc.scheduled_time?` · ETA ${dc.scheduled_time}`:''}</div>
         ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" class="btn btn-secondary btn-sm" style="width:100%;text-decoration:none;display:block;text-align:center;box-sizing:border-box">📞 Call Driver</a>`:`<button class="btn btn-secondary btn-sm" style="width:100%" ${dataAct('navigate', 'track_delivery')}>Track</button>`}
@@ -155,23 +155,23 @@ async function renderClientDashboard(el) {
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:#f8f9fa;border-bottom:1px solid var(--border)">
       <div style="padding:10px 20px;border-right:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="width:10px;height:10px;border-radius:50%;background:#3b82f6;flex-shrink:0"></div>
-          <span style="font-size:.76rem;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:.06em">Scheduled</span>
-          <span style="margin-left:auto;background:#e0e7ff;color:#3b82f6;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${scheduledDCs.length}</span>
+          <div style="width:10px;height:10px;border-radius:50%;background:var(--blue-bright);flex-shrink:0"></div>
+          <span style="font-size:.76rem;font-weight:700;color:var(--blue-bright);text-transform:uppercase;letter-spacing:.06em">Scheduled</span>
+          <span style="margin-left:auto;background:#e0e7ff;color:var(--blue-bright);border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${scheduledDCs.length}</span>
         </div>
       </div>
       <div style="padding:10px 20px;border-right:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="width:10px;height:10px;border-radius:50%;background:#f59e0b;flex-shrink:0"></div>
-          <span style="font-size:.76rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em">In Transit</span>
-          <span style="margin-left:auto;background:#fef3c7;color:#d97706;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${inTransitDCs.length}</span>
+          <div style="width:10px;height:10px;border-radius:50%;background:var(--amber);flex-shrink:0"></div>
+          <span style="font-size:.76rem;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.06em">In Transit</span>
+          <span style="margin-left:auto;background:var(--amber-bg);color:var(--warning);border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${inTransitDCs.length}</span>
         </div>
       </div>
       <div style="padding:10px 20px">
         <div style="display:flex;align-items:center;gap:8px">
           <div style="width:10px;height:10px;border-radius:50%;background:#10b981;flex-shrink:0"></div>
-          <span style="font-size:.76rem;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.06em">Delivered</span>
-          <span style="margin-left:auto;background:#d1fae5;color:#059669;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${deliveredThisMonth.length}</span>
+          <span style="font-size:.76rem;font-weight:700;color:var(--success-strong);text-transform:uppercase;letter-spacing:.06em">Delivered</span>
+          <span style="margin-left:auto;background:#d1fae5;color:var(--success-strong);border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700">${deliveredThisMonth.length}</span>
         </div>
       </div>
     </div>
@@ -183,10 +183,10 @@ async function renderClientDashboard(el) {
       <div style="padding:14px 16px;border-right:1px solid var(--border)">
         ${scheduledDCs.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No upcoming deliveries</div>` :
           scheduledDCs.map(dc=>`
-          <div style="border:1.5px solid #dbeafe;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f8fbff">
+          <div style="border:1.5px solid var(--blue-light);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f8fbff">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
-              <span style="font-size:.68rem;font-weight:700;background:#e0e7ff;color:#3b82f6;border-radius:4px;padding:2px 6px">SCHEDULED</span>
+              <span style="font-size:.68rem;font-weight:700;background:#e0e7ff;color:var(--blue-bright);border-radius:4px;padding:2px 6px">SCHEDULED</span>
             </div>
             <div style="font-size:.75rem;color:var(--text-muted);line-height:1.5">
               <div>📦 Order: <b>${dc.order_id}</b></div>
@@ -200,18 +200,18 @@ async function renderClientDashboard(el) {
       <div style="padding:14px 16px;border-right:1px solid var(--border)">
         ${inTransitDCs.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No deliveries in transit</div>` :
           inTransitDCs.map(dc=>`
-          <div style="border:1.5px solid #fde68a;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#fffbeb">
+          <div style="border:1.5px solid #fde68a;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--warning-bg)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
-              <span style="font-size:.68rem;font-weight:700;background:#fef3c7;color:#d97706;border-radius:4px;padding:2px 6px">IN TRANSIT</span>
+              <span style="font-size:.68rem;font-weight:700;background:var(--amber-bg);color:var(--warning);border-radius:4px;padding:2px 6px">IN TRANSIT</span>
             </div>
             <div style="font-size:.75rem;color:var(--text-muted);line-height:1.6">
               <div>📦 Order: <b>${dc.order_id}</b></div>
               ${dc.driver_name?`<div>🧑‍✈️ ${dc.driver_name}</div>`:''}
-              ${dc.vehicle_no?`<div>🚚 ${dc.vehicle_no}</div>`:`<div style="color:#d97706">🚚 En route</div>`}
+              ${dc.vehicle_no?`<div>🚚 ${dc.vehicle_no}</div>`:`<div style="color:var(--warning)">🚚 En route</div>`}
               ${dc.scheduled_time?`<div>⏱ ETA: <b>${dc.scheduled_time}</b></div>`:''}
             </div>
-            ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:.74rem;font-weight:600;color:#d97706;text-decoration:none;background:#fef3c7;border-radius:6px;padding:3px 8px">📞 Call Driver</a>`:''}
+            ${dc.driver_phone?`<a href="tel:${h(dc.driver_phone)}" style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:.74rem;font-weight:600;color:var(--warning);text-decoration:none;background:var(--amber-bg);border-radius:6px;padding:3px 8px">📞 Call Driver</a>`:''}
           </div>`).join('')}
       </div>
 
@@ -219,10 +219,10 @@ async function renderClientDashboard(el) {
       <div style="padding:14px 16px">
         ${deliveredThisMonth.length === 0 ? `<div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:.8rem">No deliveries yet this month</div>` :
           deliveredThisMonth.slice(0,4).map(dc=>`
-          <div style="border:1.5px solid #a7f3d0;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f0fdf4">
+          <div style="border:1.5px solid #a7f3d0;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--success-bg)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${dc.dc_number||dc.id}</div>
-              <span style="font-size:.68rem;font-weight:700;background:#d1fae5;color:#059669;border-radius:4px;padding:2px 6px">DELIVERED</span>
+              <span style="font-size:.68rem;font-weight:700;background:#d1fae5;color:var(--success-strong);border-radius:4px;padding:2px 6px">DELIVERED</span>
             </div>
             <div style="font-size:.75rem;color:var(--text-muted);line-height:1.5">
               <div>📦 Order: <b>${dc.order_id}</b></div>
@@ -442,7 +442,7 @@ async function renderOpsDashboard(el) {
     .ct-kpi:hover{transform:translateY(-3px);box-shadow:0 12px 26px -14px rgba(20,26,36,.28);border-color:var(--border-mid)}
     .ct-kpi:hover::before{opacity:.95}
     .ct-kpi:focus-visible{outline:2px solid var(--ac,var(--primary));outline-offset:2px}
-    .ct-kpi.ct-flag{background:linear-gradient(180deg,var(--acbg,#f8fafc),var(--surface) 62%)}
+    .ct-kpi.ct-flag{background:linear-gradient(180deg,var(--acbg,var(--surface-2)),var(--surface) 62%)}
     .ct-kpi.ct-flag::before{opacity:1}
     .ct-kpi-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;min-height:40px}
     .ct-kpi-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;background:var(--acbg,#eef2f7);color:var(--acic,var(--navy))}
@@ -481,7 +481,7 @@ async function renderOpsDashboard(el) {
     .tw-pk:hover{border-color:var(--primary);transform:translateY(-1px)}
     .tw-pk .l{font-size:.62rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
     .tw-pk .v{font-size:1.4rem;font-weight:900;color:var(--navy);margin-top:3px;line-height:1.1}
-    .tw-pk .v.g{color:var(--success)}.tw-pk .v.w{color:#d97706}.tw-pk .v.b{color:var(--danger)}
+    .tw-pk .v.g{color:var(--success)}.tw-pk .v.w{color:var(--warning)}.tw-pk .v.b{color:var(--danger)}
     .tw-pk .t{font-size:.64rem;font-weight:800;margin-top:2px}
     .tw-pk .t.up{color:var(--success)}.tw-pk .t.dn{color:var(--danger)}.tw-pk .t.fl{color:var(--text-muted)}
     .tw-pk .f{font-size:.68rem;color:var(--navy);margin-top:7px;background:var(--primary-light);border-radius:7px;padding:5px 8px;line-height:1.45}
@@ -490,23 +490,23 @@ async function renderOpsDashboard(el) {
     .tw-fc:hover{border-color:var(--primary);transform:translateX(3px)}
     .tw-fc:last-child{margin-bottom:0}
     .tw-fc .ic{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
-    .tw-fc .ic.b{background:#fee2e2;color:#dc2626}.tw-fc .ic.w{background:#fef3c7;color:#b45309}
+    .tw-fc .ic.b{background:var(--danger-soft-bg);color:var(--danger)}.tw-fc .ic.w{background:var(--amber-bg);color:#b45309}
     .tw-fc .m{flex:1;min-width:0}
     .tw-fc .h4{font-size:.84rem;font-weight:700;color:var(--navy);display:block}
     .tw-fc .p{font-size:.72rem;color:var(--text-muted);display:block;margin-top:1px;line-height:1.45}
     .tw-fc .eta{font-size:.62rem;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0}
-    .tw-fc .eta.b{background:#fee2e2;color:#dc2626}.tw-fc .eta.w{background:#fef3c7;color:#b45309}
+    .tw-fc .eta.b{background:var(--danger-soft-bg);color:var(--danger)}.tw-fc .eta.w{background:var(--amber-bg);color:#b45309}
     .tw-load{border:1px solid var(--border);border-radius:10px;background:var(--surface-2);padding:11px 13px;margin-bottom:10px}
     .tw-load .lt{font-size:.7rem;font-weight:700;color:var(--navy);margin-bottom:8px}
     .tw-bars{display:flex;align-items:flex-end;gap:6px;height:78px;position:relative;padding-top:6px}
     .tw-bars .capline{position:absolute;left:0;right:0;border-top:2px dashed #fca5a5}
     .tw-bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;height:100%}
     .tw-bar i{display:block;width:100%;border-radius:4px 4px 2px 2px;background:#33475f}
-    .tw-bar i.gho{background:repeating-linear-gradient(45deg,#0d9488,#0d9488 3px,transparent 3px,transparent 6px)}
-    .tw-bar i.over{background:#dc2626}
+    .tw-bar i.gho{background:repeating-linear-gradient(45deg,var(--primary),var(--primary) 3px,transparent 3px,transparent 6px)}
+    .tw-bar i.over{background:var(--danger)}
     .tw-bar .d{font-size:.58rem;font-weight:700;color:var(--text-muted)}
     .tw-bar .n{font-size:.6rem;font-weight:800;color:var(--text-muted)}
-    .tw-bar .n.over{color:#dc2626}
+    .tw-bar .n.over{color:var(--danger)}
     .tw-hz{border:1px solid var(--border);background:#fff;color:var(--text-muted);font-size:.74rem;font-weight:700;padding:5px 13px;border-radius:20px;cursor:pointer;font-family:inherit;transition:.14s}
     .tw-hz:hover{border-color:var(--primary);color:var(--navy)}
     .tw-hz.on{background:var(--primary);border-color:var(--primary);color:#fff}
@@ -516,15 +516,15 @@ async function renderOpsDashboard(el) {
     .tw-aq:hover{border-color:var(--primary);transform:translateX(3px)}
     .tw-aq:last-child{margin-bottom:0}
     .tw-aq .sev{width:5px;align-self:stretch;border-radius:4px;flex-shrink:0}
-    .tw-aq .sev.s1{background:#dc2626}.tw-aq .sev.s2{background:#d97706}.tw-aq .sev.s3{background:#33475f}
+    .tw-aq .sev.s1{background:var(--danger)}.tw-aq .sev.s2{background:var(--warning)}.tw-aq .sev.s3{background:#33475f}
     .tw-aq .m{flex:1;min-width:0}
     .tw-aq .h4{font-size:.8rem;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
     .tw-aq .p{font-size:.68rem;color:var(--text-muted);display:block}
     .tw-aq .r{font-size:.6rem;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0}
-    .tw-aq .r.s1{background:#fee2e2;color:#dc2626}.tw-aq .r.s2{background:#fef3c7;color:#b45309}.tw-aq .r.s3{background:#e9eef4;color:#25384d}
+    .tw-aq .r.s1{background:var(--danger-soft-bg);color:var(--danger)}.tw-aq .r.s2{background:var(--amber-bg);color:#b45309}.tw-aq .r.s3{background:#e9eef4;color:#25384d}
     .tw-chg{font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fff;border:1px solid var(--border);color:var(--navy);white-space:nowrap}
     .tw-chg.g{background:#d1fae5;color:#047857;border-color:transparent}
-    .tw-chg.b{background:#fee2e2;color:#dc2626;border-color:transparent}
+    .tw-chg.b{background:var(--danger-soft-bg);color:var(--danger);border-color:transparent}
     .tw-chg.lead{background:var(--surface-2);color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:.6rem}
     .tw-h{display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--border-light);font-size:.8rem}
     .tw-h:last-child{border-bottom:none}
@@ -543,7 +543,7 @@ async function renderOpsDashboard(el) {
     <div>
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
         <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
-        <span style="background:#e8f0fb;color:#2563eb;border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
+        <span style="background:#e8f0fb;color:var(--blue);border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
       </div>
       <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
     </div>
@@ -633,7 +633,7 @@ async function renderOpsDashboard(el) {
           <span style="font-size:.72rem;font-weight:800;color:var(--navy)">${byStatus[p.key]||0}</span>
         </div>`).join('')}
       </div>
-      <div id="tower-bneck" style="display:none;margin-top:10px;font-size:.74rem;color:#b45309;background:#fef3c7;border:1px dashed #fcd34d;border-radius:8px;padding:7px 11px"></div>
+      <div id="tower-bneck" style="display:none;margin-top:10px;font-size:.74rem;color:#b45309;background:var(--amber-bg);border:1px dashed #fcd34d;border-radius:8px;padding:7px 11px"></div>
     </div>
   </div>
 

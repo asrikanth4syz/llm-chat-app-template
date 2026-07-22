@@ -72,7 +72,7 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
         <div style="font-size:.75rem;color:${critical>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical>0?'immediate action needed':'none critical'}</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Items</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">items pending</div>
@@ -120,9 +120,9 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.open_orders}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">in progress</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Partial Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:#d97706;line-height:1">${data.kpis.partial_orders}</div>
+        <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${data.kpis.partial_orders}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">partly delivered</div>
       </div>
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
@@ -175,7 +175,7 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalOrders}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">across all buckets</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Total Due Qty</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDueQty}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">units outstanding</div>
@@ -484,7 +484,7 @@ async function switchFulfilTab(tab, btn) {
         <div style="font-size:1.9rem;font-weight:700;color:${stockout>0?'var(--danger)':'var(--navy)'};line-height:1">${stockout}</div>
         <div style="font-size:.75rem;color:${stockout>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">stock &lt; due qty</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #d97706;margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items Needing PO</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">to be procured</div>
@@ -567,9 +567,9 @@ function renderOVDTable(data) {
   const totalDue = orders.reduce((s,o)=>s+o.total_due_value, 0);
 
   const statusBadgeOVD = s => ({
-    Complete: `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#d1fae5;color:#059669">&#10003; Complete</span>`,
-    Partial:  `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#fef3c7;color:#d97706">&#9651; Partial</span>`,
-    Open:     `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#fee2e2;color:#dc2626">&#9679; Open</span>`,
+    Complete: `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#d1fae5;color:var(--success-strong)">&#10003; Complete</span>`,
+    Partial:  `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--amber-bg);color:var(--warning)">&#9651; Partial</span>`,
+    Open:     `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--danger-soft-bg);color:var(--danger)">&#9679; Open</span>`,
   }[s] || `<span style="font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:#f3f4f6;color:#6b7280">${s}</span>`);
 
   const borderColor = s => s==='Complete'?'var(--success)':s==='Partial'?'#f59e0b':'var(--danger)';
@@ -587,9 +587,9 @@ function renderOVDTable(data) {
       <div style="font-size:2rem;font-weight:800;color:var(--success);line-height:1">${complete}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">${total?Math.round(complete/total*100):0}% of orders</div>
     </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid #f59e0b;margin-bottom:0">
+    <div class="card" style="padding:16px 18px;border-top:3px solid var(--amber);margin-bottom:0">
       <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Partially Delivered</div>
-      <div style="font-size:2rem;font-weight:800;color:#d97706;line-height:1">${partial}</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--warning);line-height:1">${partial}</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">balance pending</div>
     </div>
     <div class="card" style="padding:16px 18px;border-top:3px solid ${open>0?'var(--danger)':'#d1d5db'};margin-bottom:0">
@@ -876,7 +876,7 @@ async function renderStaff(el) {
       <div style="width:44px;height:44px;border-radius:50%;background:${s.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(s.name)}
-          ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:#fee2e2;color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
+          ${!s.active?'<span style="font-size:.66rem;font-weight:700;background:var(--danger-soft-bg);color:var(--danger);border-radius:4px;padding:1px 5px;margin-left:5px">INACTIVE</span>':''}
         </div>
         ${s.phone?`<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px"><a href="tel:${h(s.phone)}" style="color:inherit">📞 ${s.phone}</a></div>`:''}
         <div style="margin-top:5px">

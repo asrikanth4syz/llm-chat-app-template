@@ -107,13 +107,13 @@ async function renderMyOrders(el) {
 
             <!-- Item preview chips -->
             ${itemNames.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-              ${itemNames.map(n=>`<span style="background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">${n}</span>`).join('')}
-              ${(o.items||[]).length>4?`<span style="background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
-            </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:8px">📝 ${o.notes}</div>` : ''}
+              ${itemNames.map(n=>`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">${n}</span>`).join('')}
+              ${(o.items||[]).length>4?`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
+            </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--surface-2);border-radius:8px">📝 ${o.notes}</div>` : ''}
 
             ${o.need_by_date ? `<div style="padding:6px 12px;background:#fff8f8;border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid #fecaca">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
             ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'#f0fdf4'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'#fecaca':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
-            ${isPartial?`<div style="padding:8px 12px;background:#fef3c7;border-radius:8px;font-size:.78rem;color:#92400e;font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
+            ${isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
 
             <!-- Action buttons -->
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -291,7 +291,7 @@ async function viewOrder(id) {
     : `<tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>`;
 
   const itemsTableRows = (order.items||[]).map(i => {
-    const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
+    const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:#b45309;background:var(--warning-bg);border:1px solid #fde68a;border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
     if (qtyMode === 'delivered') {
       const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
       const short = d.due > 0;
@@ -352,7 +352,7 @@ async function viewOrder(id) {
         ${order.order_period ? `<div><b>For:</b> ${new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'})}</div>` : ''}
       </div>
       <!-- Row 2: dates -->
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border)">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,var(--surface-2));border-radius:8px;border:1px solid var(--border)">
         ${order.need_by_date ? `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;font-weight:600;color:var(--danger)">🚨 Need By:</span><span style="font-weight:700;color:var(--danger)">${fmtDate(order.need_by_date)}</span></div>` : ''}
         <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px">
           ${['CLOSED','DELIVERED','CANCELLED'].includes(order.status)
@@ -696,7 +696,7 @@ async function renderTrackDelivery(el) {
   el.innerHTML = `
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #3b82f6">
+    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Scheduled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${scheduledDCs.length}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">upcoming deliveries</div>
@@ -868,7 +868,7 @@ async function renderOrderQueue(el) {
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
       const todayStr = new Date().toISOString().slice(0,10);
-      return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:#fffbeb':''}">
+      return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
         <td>
           <b>${o.id}</b>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'#d97706'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
@@ -1084,7 +1084,7 @@ async function oqLoadItems() {
               return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
             }).map(r=>{
               const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
-              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
               return `<tr style="${rowBg}">
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
                 <td><b>${h(r.item_name)}</b></td>
@@ -1134,7 +1134,7 @@ async function oqLoadItems() {
           </div>
         </div>
         ${needPO.length>0?`
-        <div style="padding:10px 16px;background:#fef3cd;border-bottom:1px solid #f59e0b;font-size:.8rem;color:#92400e">
+        <div style="padding:10px 16px;background:#fef3cd;border-bottom:1px solid var(--amber);font-size:.8rem;color:var(--amber-text)">
           <b>Consolidated PO needed:</b> ${needPO.map(r=>`${r.item_name} × ${r.ordered_qty-r.stock}`).join(' · ')}
         </div>`:''}
         <div class="table-wrap">
@@ -1145,7 +1145,7 @@ async function oqLoadItems() {
               return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
             }).map(r=>{
               const ss=stockStatus(r); const gap=Math.max(0,r.ordered_qty-r.stock);
-              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
               return `<tr style="${rowBg}">
                 <td style="font-size:.8rem">${r.brand||'—'}</td>
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
@@ -1176,7 +1176,7 @@ async function oqLoadItems() {
           <thead><tr><th>Brand</th><th>SKU</th><th>Item</th><th>Order</th><th>Client</th><th>Qty</th><th>Stock</th><th>Gap</th><th>Vendor</th><th>Status</th></tr></thead>
           <tbody>${sorted.map(r=>{
             const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
-            const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:#fffbeb':'';
+            const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
             return `<tr style="${rowBg}">
               <td style="font-size:.8rem">${r.brand||'—'}</td>
               <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
@@ -1207,9 +1207,9 @@ async function oqLoadItems() {
           <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Out of Stock</div>
           <div style="font-size:1.5rem;font-weight:700;color:var(--danger)">${oosCount}</div>
         </div>
-        <div class="card" style="padding:10px 16px;border-top:3px solid #d97706;margin-bottom:0;min-width:100px">
+        <div class="card" style="padding:10px 16px;border-top:3px solid var(--warning);margin-bottom:0;min-width:100px">
           <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Short Stock</div>
-          <div style="font-size:1.5rem;font-weight:700;color:#d97706">${shortCount}</div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--warning)">${shortCount}</div>
         </div>
         <div class="card" style="padding:10px 16px;border-top:3px solid var(--success);margin-bottom:0;min-width:100px">
           <div style="font-size:.68rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Total Lines</div>

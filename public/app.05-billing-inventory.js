@@ -48,7 +48,7 @@ async function renderDCBilling(el) {
           <div style="font-size:.75rem;color:var(--success);margin-top:6px">${fmt(billedMonthValue)}</div>
         </div>
       </div>
-      ${critical.length>0?`<div style="background:#fef3cd;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:#92400e;display:flex;gap:10px;align-items:center"><span style="font-size:1.1rem">⚠️</span><span><strong>${critical.length}</strong> DC${critical.length>1?'s':''} unbilled for over 16 days — <strong>${fmt(criticalValue)}</strong> at risk of delayed payment.</span></div>`:''}
+      ${critical.length>0?`<div style="background:#fef3cd;border:1px solid var(--amber);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:var(--amber-text);display:flex;gap:10px;align-items:center"><span style="font-size:1.1rem">⚠️</span><span><strong>${critical.length}</strong> DC${critical.length>1?'s':''} unbilled for over 16 days — <strong>${fmt(criticalValue)}</strong> at risk of delayed payment.</span></div>`:''}
       <div class="card">
         <div class="card-header">
           <span>Delivered — Pending Billing (${unbilled.length})</span>
@@ -129,7 +129,7 @@ async function renderDCBilling(el) {
           </div>`;
         }).join('')}
       </div>
-      ${overdue.length ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
+      ${overdue.length ? `<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
         <b>⚠ ${overdue.length} invoices past 30 days</b> — ${fmt(overdue.reduce((s,d)=>s+(d.order_value||0),0))} overdue
       </div>` : ''}
       <div class="card">
@@ -259,7 +259,7 @@ function renderAPAging(pos) {
       </div>`;
     }).join(''); })()}
   </div>
-  ${overdue.length ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
+  ${overdue.length ? `<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
     <b>⚠ ${overdue.length} POs outstanding 15+ days</b> — ${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))} payable
   </div>` : ''}
   <div class="card">
@@ -491,7 +491,7 @@ async function renderInventory(el) {
     if (filtered.length === 0) {
       html = `<tr><td colspan="14" style="padding:28px;text-align:center;color:var(--text-muted)">No items match your filters.</td></tr>`;
     } else if (capped) {
-      html += `<tr><td colspan="14" style="padding:12px 16px;text-align:center;background:#f8fafc;color:var(--text-muted);font-size:.82rem">
+      html += `<tr><td colspan="14" style="padding:12px 16px;text-align:center;background:var(--surface-2);color:var(--text-muted);font-size:.82rem">
         Showing first <b>${INV_ROW_CAP}</b> of <b>${filtered.length}</b> items — refine your search or category to narrow down,
         or <button class="btn btn-secondary btn-sm" style="margin-left:6px" ${dataAct('invShowAll')}>Show all ${filtered.length}</button>
       </td></tr>`;
@@ -507,17 +507,17 @@ async function renderInventory(el) {
       const color     = item.stock <= item.reorder_level ? 'var(--danger)' : item.stock <= item.reorder_level*1.5 ? 'var(--warning)' : 'var(--success)';
       const safeName  = item.name; // raw — dataAct() handles escaping for delegated handlers
       const stPill    = item.stock === 0
-        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fee2e2;color:#dc2626">Critical</span>'
+        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--danger-soft-bg);color:var(--danger)">Critical</span>'
         : item.stock <= item.reorder_level
-        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fef3c7;color:#d97706">Warning</span>'
-        : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:#059669">Active</span>';
+        ? '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--amber-bg);color:var(--warning)">Warning</span>'
+        : '<span style="font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#d1fae5;color:var(--success-strong)">Active</span>';
       const checked   = APP._invSelected.has(item.sku);
       return `
-      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid #dc2626':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
+      <tr style="cursor:pointer${item.is_critical?';border-left:3px solid var(--danger)':''}${checked?';background:#f0fdfa':''}" ${dataActEl('toggleInvDetail', item.sku)}>
         <td ${dataAct('_noop')} data-stop style="width:34px;text-align:center">
           <input type="checkbox" ${checked?'checked':''} ${dataChangeEl('invToggleSelect', item.sku)} style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
-        <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:#dc2626;color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
+        <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:var(--danger);color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
         <td><b>${h(item.name)}</b>${item.brand?`<div style="font-size:.72rem;color:var(--text-muted)">${h(item.brand)}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'#059669':'#6b7280'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
@@ -558,14 +558,14 @@ async function renderInventory(el) {
   </div>
 
   ${criticalLow.length ? `
-  <div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+  <div style="background:var(--danger-bg);border:1.5px solid #fca5a5;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
     <div>
-      <div style="font-weight:800;color:#dc2626;font-size:.92rem;margin-bottom:4px">🔴 ${criticalLow.length} Critical Item${criticalLow.length>1?'s':''} Need Reorder</div>
+      <div style="font-weight:800;color:var(--danger);font-size:.92rem;margin-bottom:4px">🔴 ${criticalLow.length} Critical Item${criticalLow.length>1?'s':''} Need Reorder</div>
       <div style="font-size:.8rem;color:#991b1b">${criticalLow.slice(0,4).map(i=>`<b>${h(i.name)}</b> (${i.stock} left)`).join(' · ')}${criticalLow.length>4?` +${criticalLow.length-4} more`:''}</div>
     </div>
     <div style="display:flex;gap:8px;flex-shrink:0">
       <button class="btn btn-secondary btn-sm" ${dataAct('goCriticalStockReport')}>View Report</button>
-      <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" ${dataActEl('sendCriticalAlerts')}>📧 Send Alert Email</button>
+      <button class="btn btn-sm" style="background:var(--danger);color:#fff;border:none" ${dataActEl('sendCriticalAlerts')}>📧 Send Alert Email</button>
     </div>
   </div>` : ''}
   ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${h(i.name)}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
@@ -630,7 +630,7 @@ async function renderInventory(el) {
       btn.dataset.invSub = s;
       btn.style.cssText = 'padding:4px 12px;border-radius:20px;font-size:.8rem;cursor:pointer;transition:all .15s;border:1.5px solid;' +
         (active
-          ? (s === 'Healthy' ? 'background:#d1fae5;color:#059669;border-color:#059669;font-weight:700'
+          ? (s === 'Healthy' ? 'background:#d1fae5;color:var(--success-strong);border-color:var(--success-strong);font-weight:700'
                               : 'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700')
           : 'background:#fff;color:#374151;border-color:#d1d5db;font-weight:400');
       btn.onclick = function() { invFilterSubCat(s); };
@@ -773,7 +773,7 @@ function invDetailHTML(item) {
         ${invDetailRow('Barcode', item.barcode||'—')}
       </div>
       <div>
-        <div style="font-size:.72rem;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Packing Details</div>
+        <div style="font-size:.72rem;font-weight:800;color:var(--purple);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Packing Details</div>
         ${invDetailRow('UOM', item.uom||'unit')}
         ${invDetailRow('Pack Size', item.pack_size||1)}
         ${invDetailRow('Units / Case', item.units_per_case||1)}
@@ -783,7 +783,7 @@ function invDetailHTML(item) {
         ${invDetailRow('Location', item.inv_location||'instock')}
       </div>
       <div>
-        <div style="font-size:.72rem;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Pricing</div>
+        <div style="font-size:.72rem;font-weight:800;color:var(--success-strong);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Pricing</div>
         ${invDetailRow('Unit Price (Selling)', fmt(item.unit_price))}
         ${invDetailRow('MRP', item.mrp?fmt(item.mrp):'—')}
         ${invDetailRow('Cost Excl GST', item.cost_excl_gst?fmt(item.cost_excl_gst):'—')}
@@ -793,7 +793,7 @@ function invDetailHTML(item) {
         ${invDetailRow('Flipkart URL', item.flipkart_url?`<a href="${item.flipkart_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
       </div>
       <div>
-        <div style="font-size:.72rem;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
+        <div style="font-size:.72rem;font-weight:800;color:var(--warning);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
         ${invDetailRow('Primary Vendor', item.vendor_name||'—')}
         ${invDetailRow('Secondary Vendor', item.secondary_vendor_name||'—')}
         ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
@@ -927,8 +927,8 @@ async function editInventoryItem(sku) {
           </label>
           <select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select>
           <!-- Inline new-vendor form -->
-          <div id="ei-new-vendor-form" style="display:none;margin-top:12px;background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:8px;padding:14px">
-            <div style="font-size:.76rem;font-weight:700;color:#d97706;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Vendor Details</div>
+          <div id="ei-new-vendor-form" style="display:none;margin-top:12px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:8px;padding:14px">
+            <div style="font-size:.76rem;font-weight:700;color:var(--warning);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Vendor Details</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Vendor Name *</label><input type="text" id="nv-name" placeholder="e.g. Fresh Farms Pvt Ltd"></div>
               <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Category</label>
@@ -959,8 +959,8 @@ async function editInventoryItem(sku) {
           </label>
           <select id="ei-vendor2"><option value="">— None —</option>${vendor2Opts}</select>
           <!-- Inline new-vendor form for secondary -->
-          <div id="ei-new-vendor-form-2" style="display:none;margin-top:12px;background:var(--bg,#f8fafc);border:1px solid var(--border);border-radius:8px;padding:14px">
-            <div style="font-size:.76rem;font-weight:700;color:#7c3aed;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Secondary Vendor</div>
+          <div id="ei-new-vendor-form-2" style="display:none;margin-top:12px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:8px;padding:14px">
+            <div style="font-size:.76rem;font-weight:700;color:var(--purple);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">New Secondary Vendor</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div class="form-group" style="grid-column:1/-1;margin-bottom:0"><label style="font-size:.76rem">Vendor Name *</label><input type="text" id="nv2-name" placeholder="e.g. Backup Supplies Co"></div>
               <div class="form-group" style="margin-bottom:0"><label style="font-size:.76rem">Category</label>

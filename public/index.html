@@ -98,11 +98,11 @@
       margin-bottom: 22px;
     }
     .live-dot {
-      width: 7px; height: 7px; background: #0d9488; border-radius: 50%;
+      width: 7px; height: 7px; background: var(--primary); border-radius: 50%;
       animation: livePulse 2s ease-in-out infinite;
-      box-shadow: 0 0 6px #0d9488;
+      box-shadow: 0 0 6px var(--primary);
     }
-    @keyframes livePulse { 0%,100%{opacity:1;box-shadow:0 0 6px #0d9488} 50%{opacity:.4;box-shadow:0 0 2px #0d9488} }
+    @keyframes livePulse { 0%,100%{opacity:1;box-shadow:0 0 6px var(--primary)} 50%{opacity:.4;box-shadow:0 0 2px var(--primary)} }
 
     /* Headline */
     .login-hero h2 {
@@ -111,7 +111,7 @@
       margin-bottom: 14px; color: #fff;
     }
     .login-hero h2 .grad {
-      background: linear-gradient(135deg, #0d9488 0%, #2dd4bf 40%, #fbbf24 100%);
+      background: linear-gradient(135deg, var(--primary) 0%, #2dd4bf 40%, #fbbf24 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
       background-clip: text;
     }
@@ -129,7 +129,7 @@
       border: 1px solid rgba(13,148,136,.3);
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; font-size: .65rem; color: #0d9488; font-weight: 800;
+      flex-shrink: 0; font-size: .65rem; color: var(--primary); font-weight: 800;
     }
 
     /* Demo CTA */
@@ -149,7 +149,7 @@
     .btn-watch-demo:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); }
     .play-circle {
       width: 30px; height: 30px;
-      background: #0d9488;
+      background: var(--primary);
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
@@ -160,7 +160,7 @@
     .login-stats { display: flex; gap: 0; border-top: 1px solid rgba(255,255,255,.08); padding-top: 28px; }
     .ls-stat { flex: 1; text-align: center; padding: 0 8px; border-right: 1px solid rgba(255,255,255,.07); }
     .ls-stat:last-child { border-right: none; }
-    .ls-num { font-size: 1.7rem; font-weight: 900; color: #0d9488; letter-spacing: -.03em; }
+    .ls-num { font-size: 1.7rem; font-weight: 900; color: var(--primary); letter-spacing: -.03em; }
     .ls-label { font-size: .66rem; color: rgba(255,255,255,.38); margin-top: 2px; text-transform: uppercase; letter-spacing: .08em; }
 
     /* ── MOCK UI PREVIEW (inside left panel) ─────────── */
@@ -202,10 +202,10 @@
       display: flex; align-items: center; gap: 5px;
       padding: 0 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); margin-bottom: 6px;
     }
-    .pf-sb-icon { width: 16px; height: 16px; background: #0d9488; border-radius: 4px; flex-shrink: 0; }
+    .pf-sb-icon { width: 16px; height: 16px; background: var(--primary); border-radius: 4px; flex-shrink: 0; }
     .pf-sb-name { font-size: .55rem; font-weight: 800; color: #fff; }
     .pf-nav { padding: 4px 8px; font-size: .55rem; color: rgba(255,255,255,.35); display: flex; align-items: center; gap: 4px; }
-    .pf-nav.active { color: #2dd4bf; background: rgba(13,148,136,.1); border-left: 2px solid #0d9488; font-weight: 700; }
+    .pf-nav.active { color: #2dd4bf; background: rgba(13,148,136,.1); border-left: 2px solid var(--primary); font-weight: 700; }
     .pf-main { flex: 1; background: #eef2fa; overflow: hidden; }
     .pf-topbar {
       background: #fff; padding: 6px 8px;
@@ -217,7 +217,7 @@
       padding: 2px 6px; border-radius: 10px;
       font-size: .52rem; font-weight: 700;
     }
-    .pf-tag-o { background: #f0fdfa; color: #0f766e; }
+    .pf-tag-o { background: #f0fdfa; color: var(--primary-hover); }
     .pf-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; padding: 6px; }
     .pf-kpi { background: #fff; border-radius: 6px; padding: 5px 6px; border: 1px solid #e8edf7; }
     .pf-kpi-v { font-size: .75rem; font-weight: 900; color: #0f2040; }
@@ -232,7 +232,7 @@
     .pf-pill { display: inline-block; padding: 1px 5px; border-radius: 10px; font-size: .46rem; font-weight: 700; }
     .pill-ok  { background: #dcfce7; color: #15803d; }
     .pill-low { background: #fef9c3; color: #a16207; }
-    .pill-out { background: #fee2e2; color: #b91c1c; }
+    .pill-out { background: var(--danger-soft-bg); color: #b91c1c; }
 
     /* Floating stat chips */
     .preview-chip {
@@ -252,7 +252,7 @@
     .chip-num  { font-size: .95rem; font-weight: 900; color: #0f2040; }
     .chip-lbl  { font-size: .56rem; color: #8896b0; margin-top: 1px; }
     .chip-pill {
-      background: linear-gradient(135deg, #0d9488, #2dd4bf);
+      background: linear-gradient(135deg, var(--primary), #2dd4bf);
       color: #fff;
       border-radius: 10px;
       padding: 8px 12px;
@@ -295,7 +295,7 @@
       content: '';
       position: absolute; top: 0; left: 50%; transform: translateX(-50%);
       width: 60px; height: 3px;
-      background: linear-gradient(90deg, #0d9488, #2dd4bf);
+      background: linear-gradient(90deg, var(--primary), #2dd4bf);
       border-radius: 0 0 4px 4px;
     }
     .login-card h3 { font-size: 1.35rem; font-weight: 800; color: #0f2040; margin-bottom: 3px; letter-spacing: -.02em; }
@@ -305,7 +305,7 @@
       display: flex; align-items: center; gap: 8px;
       background: #f0fdfa; border: 1px solid #99f6e4;
       border-radius: 8px; padding: 9px 12px; margin-bottom: 18px;
-      font-size: .78rem; color: #0f766e; font-weight: 500;
+      font-size: .78rem; color: var(--primary-hover); font-weight: 500;
     }
     .form-group { margin-bottom: 13px; }
     .form-group label { display: block; font-size: .78rem; font-weight: 600; color: #374151; margin-bottom: 5px; }
@@ -317,7 +317,7 @@
       background: #fff; outline: none; transition: border-color .2s, box-shadow .2s;
     }
     .form-group input:focus, .form-group select:focus {
-      border-color: #0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,.12);
+      border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,.12);
     }
     .input-wrap { position: relative; }
     .input-wrap input { padding-right: 40px; }
@@ -333,11 +333,11 @@
       border: 1.5px solid #e2e8f0; border-radius: 9px; outline: none;
       font-family: 'Inter', system-ui, sans-serif;
     }
-    .otp-input:focus { border-color: #0d9488; }
+    .otp-input:focus { border-color: var(--primary); }
     .otp-hint { font-size: .75rem; color: #94a3b8; margin-top: 6px; }
     .btn-login {
       width: 100%; padding: 12px;
-      background: linear-gradient(135deg, #0d9488, #0f766e);
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
       color: white; border: none;
       border-radius: 10px; font-size: .9rem; font-weight: 700;
       cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -352,7 +352,7 @@
       margin-top: 16px; font-size: .76rem;
     }
     .login-footer-links a { color: #64748b; text-decoration: none; }
-    .login-footer-links a:hover { color: #0d9488; }
+    .login-footer-links a:hover { color: var(--primary); }
     .login-footer-links span { color: #cbd5e1; }
     .login-clients { margin-top: 20px; padding-top: 18px; border-top: 1px solid #f1f5f9; }
     .login-clients p { font-size: .72rem; color: #94a3b8; margin-bottom: 10px; text-align: center; font-weight: 500; }
@@ -423,12 +423,12 @@
       white-space: nowrap;
       transition: all .2s;
     }
-    .demo-tab.active { color: #2dd4bf; border-bottom-color: #0d9488; }
+    .demo-tab.active { color: #2dd4bf; border-bottom-color: var(--primary); }
 
     /* Progress bar */
     .demo-progress { height: 2px; background: rgba(255,255,255,.06); position: relative; }
     .demo-progress-fill {
-      height: 100%; background: linear-gradient(90deg, #0d9488, #fbbf24);
+      height: 100%; background: linear-gradient(90deg, var(--primary), #fbbf24);
       border-radius: 2px; transition: width 6s linear;
       width: 0%;
     }
@@ -472,9 +472,9 @@
     .ss-title { font-size: .75rem; font-weight: 800; color: #0f2040; }
     .ss-tags  { display: flex; gap: 5px; }
     .ss-tag   { padding: 2px 8px; border-radius: 10px; font-size: .62rem; font-weight: 700; }
-    .ss-tag-o { background: #f0fdfa; color: #0f766e; }
-    .ss-tag-g { background: #f0fdf4; color: #15803d; }
-    .ss-tag-b { background: #eff6ff; color: #2563eb; }
+    .ss-tag-o { background: #f0fdfa; color: var(--primary-hover); }
+    .ss-tag-g { background: var(--success-bg); color: #15803d; }
+    .ss-tag-b { background: #eff6ff; color: var(--blue); }
     .ss-body  { padding: 12px; }
 
     /* KPI mini tiles */
@@ -486,9 +486,9 @@
     .ss-kpi-v { font-size: 1.1rem; font-weight: 900; color: #0f2040; }
     .ss-kpi-l { font-size: .58rem; color: #8896b0; text-transform: uppercase; }
     .ss-kpi-d { font-size: .6rem; margin-top: 2px; }
-    .up   { color: #16a34a; }
-    .warn { color: #d97706; }
-    .down { color: #dc2626; }
+    .up   { color: var(--success); }
+    .warn { color: var(--warning); }
+    .down { color: var(--danger); }
 
     /* Mini table */
     .ss-table  { background: #fff; border-radius: 8px; border: 1px solid #e8edf7; overflow: hidden; }
@@ -501,8 +501,8 @@
     .ss-pill   { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: .6rem; font-weight: 700; }
     .pl-g { background: #dcfce7; color: #15803d; }
     .pl-a { background: #fef9c3; color: #a16207; }
-    .pl-r { background: #fee2e2; color: #b91c1c; }
-    .pl-b { background: #dbeafe; color: #1d4ed8; }
+    .pl-r { background: var(--danger-soft-bg); color: #b91c1c; }
+    .pl-b { background: var(--blue-light); color: #1d4ed8; }
 
     /* Bars */
     .ss-bars { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
@@ -548,7 +548,7 @@
       color: rgba(255,255,255,.6);
     }
     .btn-next {
-      background: linear-gradient(135deg, #0d9488, #0f766e);
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
       color: #fff;
       box-shadow: 0 4px 14px rgba(13,148,136,.35);
     }
@@ -557,7 +557,7 @@
 
     /* Animated typing cursor */
     @keyframes typing { 0%,100%{opacity:1} 50%{opacity:0} }
-    .cursor { display: inline-block; width: 2px; height: 1em; background: #0d9488; margin-left: 2px; animation: typing 1s infinite; vertical-align: text-bottom; }
+    .cursor { display: inline-block; width: 2px; height: 1em; background: var(--primary); margin-left: 2px; animation: typing 1s infinite; vertical-align: text-bottom; }
 
     /* ── RESPONSIVE BREAKPOINTS ──────────────────────── */
 
@@ -718,7 +718,7 @@
         <div class="preview-frame">
           <div class="pf-titlebar">
             <div class="pf-dot" style="background:#ef4444"></div>
-            <div class="pf-dot" style="background:#f59e0b"></div>
+            <div class="pf-dot" style="background:var(--amber)"></div>
             <div class="pf-dot" style="background:#22c55e"></div>
           </div>
           <div class="pf-body">
@@ -741,8 +741,8 @@
               </div>
               <div class="pf-kpis">
                 <div class="pf-kpi"><div class="pf-kpi-v">1,248</div><div class="pf-kpi-l">Total SKUs</div></div>
-                <div class="pf-kpi"><div class="pf-kpi-v" style="color:#d97706">34</div><div class="pf-kpi-l">Low Stock</div></div>
-                <div class="pf-kpi"><div class="pf-kpi-v" style="color:#dc2626">8</div><div class="pf-kpi-l">Critical</div></div>
+                <div class="pf-kpi"><div class="pf-kpi-v" style="color:var(--warning)">34</div><div class="pf-kpi-l">Low Stock</div></div>
+                <div class="pf-kpi"><div class="pf-kpi-v" style="color:var(--danger)">8</div><div class="pf-kpi-l">Critical</div></div>
               </div>
               <div class="pf-table">
                 <div class="pf-th" style="grid-template-columns:2fr 1fr 1fr">
@@ -750,17 +750,17 @@
                 </div>
                 <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
                   <div><div class="pf-row-name">Amul ButterMilk</div><div class="pf-row-sub">SKU-100045</div></div>
-                  <div class="pf-row-val" style="color:#16a34a">11,193</div>
+                  <div class="pf-row-val" style="color:var(--success)">11,193</div>
                   <div><span class="pf-pill pill-ok">OK</span></div>
                 </div>
                 <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
                   <div><div class="pf-row-name">A4 Paper Ream</div><div class="pf-row-sub">SKU-007 🔴</div></div>
-                  <div class="pf-row-val" style="color:#d97706">156</div>
+                  <div class="pf-row-val" style="color:var(--warning)">156</div>
                   <div><span class="pf-pill pill-low">LOW</span></div>
                 </div>
                 <div class="pf-row" style="grid-template-columns:2fr 1fr 1fr">
                   <div><div class="pf-row-name">Hand Sanitizer</div><div class="pf-row-sub">SKU-004</div></div>
-                  <div class="pf-row-val" style="color:#dc2626">0</div>
+                  <div class="pf-row-val" style="color:var(--danger)">0</div>
                   <div><span class="pf-pill pill-out">OUT</span></div>
                 </div>
               </div>
@@ -873,27 +873,27 @@
           <div class="ss-body">
             <div class="ss-kpis">
               <div class="ss-kpi"><div class="ss-kpi-v">1,248</div><div class="ss-kpi-l">Total SKUs</div><div class="ss-kpi-d up">▲ 12 this week</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">34</div><div class="ss-kpi-l">Low Stock</div><div class="ss-kpi-d warn">⚠ needs action</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#dc2626">8</div><div class="ss-kpi-l">Critical</div><div class="ss-kpi-d down">▼ reorder now</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--warning)">34</div><div class="ss-kpi-l">Low Stock</div><div class="ss-kpi-d warn">⚠ needs action</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--danger)">8</div><div class="ss-kpi-l">Critical</div><div class="ss-kpi-d down">▼ reorder now</div></div>
               <div class="ss-kpi"><div class="ss-kpi-v">₹84L</div><div class="ss-kpi-l">Stock Value</div><div class="ss-kpi-d up">▲ 4.2% MoM</div></div>
             </div>
             <div class="ss-table">
               <div class="ss-thead" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr"><span>Item</span><span>Stock</span><span>Reorder</span><span>Status</span></div>
               <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
                 <div><div class="ss-name">Amul Masti ButterMilk 200ml</div><div class="ss-sub">SKU-100045 · Beverage</div></div>
-                <div class="ss-val" style="color:#16a34a">11,193</div><div class="ss-val">5,000</div><div><span class="ss-pill pl-g">OK</span></div>
+                <div class="ss-val" style="color:var(--success)">11,193</div><div class="ss-val">5,000</div><div><span class="ss-pill pl-g">OK</span></div>
               </div>
               <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
-                <div><div class="ss-name">A4 Paper Ream 500 sheets <span style="color:#dc2626;font-size:.6rem">🔴 CRITICAL</span></div><div class="ss-sub">SKU-007 · Stationery</div></div>
-                <div class="ss-val" style="color:#d97706">156</div><div class="ss-val">500</div><div><span class="ss-pill pl-a">LOW</span></div>
+                <div><div class="ss-name">A4 Paper Ream 500 sheets <span style="color:var(--danger);font-size:.6rem">🔴 CRITICAL</span></div><div class="ss-sub">SKU-007 · Stationery</div></div>
+                <div class="ss-val" style="color:var(--warning)">156</div><div class="ss-val">500</div><div><span class="ss-pill pl-a">LOW</span></div>
               </div>
               <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
                 <div><div class="ss-name">Hand Sanitizer 500ml</div><div class="ss-sub">SKU-004 · Hygiene</div></div>
-                <div class="ss-val" style="color:#dc2626">0</div><div class="ss-val">200</div><div><span class="ss-pill pl-r">OUT</span></div>
+                <div class="ss-val" style="color:var(--danger)">0</div><div class="ss-val">200</div><div><span class="ss-pill pl-r">OUT</span></div>
               </div>
               <div class="ss-row" style="grid-template-columns:2.5fr 1fr 1fr 1.2fr">
                 <div><div class="ss-name">Premium Coffee Beans 1kg</div><div class="ss-sub">SKU-001 · Beverage</div></div>
-                <div class="ss-val" style="color:#16a34a">842</div><div class="ss-val">100</div><div><span class="ss-pill pl-g">OK</span></div>
+                <div class="ss-val" style="color:var(--success)">842</div><div class="ss-val">100</div><div><span class="ss-pill pl-g">OK</span></div>
               </div>
             </div>
           </div>
@@ -913,8 +913,8 @@
           <div class="ss-body">
             <div class="ss-kpis">
               <div class="ss-kpi"><div class="ss-kpi-v">142</div><div class="ss-kpi-l">Active Orders</div><div class="ss-kpi-d up">▲ 18 today</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:#2563eb">● Live tracking</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">12</div><div class="ss-kpi-l">Pending Approval</div><div class="ss-kpi-d warn">⚠ needs review</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--blue)">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:var(--blue)">● Live tracking</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--warning)">12</div><div class="ss-kpi-l">Pending Approval</div><div class="ss-kpi-d warn">⚠ needs review</div></div>
               <div class="ss-kpi"><div class="ss-kpi-v">₹2.4Cr</div><div class="ss-kpi-l">Month GMV</div><div class="ss-kpi-d up">▲ 22% MoM</div></div>
             </div>
             <div class="ss-table">
@@ -949,26 +949,26 @@
           <div class="ss-body">
             <div class="ss-kpis">
               <div class="ss-kpi"><div class="ss-kpi-v">₹12.8Cr</div><div class="ss-kpi-l">Total Spend</div><div class="ss-kpi-d up">▲ 18% YoY</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">96.2%</div><div class="ss-kpi-l">Fill Rate</div><div class="ss-kpi-d up">▲ vs 91% target</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ improved</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">₹2.1L</div><div class="ss-kpi-l">Budget Left</div><div class="ss-kpi-d warn">⚠ 8% remaining</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--success)">96.2%</div><div class="ss-kpi-l">Fill Rate</div><div class="ss-kpi-d up">▲ vs 91% target</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--blue)">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ improved</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--warning)">₹2.1L</div><div class="ss-kpi-l">Budget Left</div><div class="ss-kpi-d warn">⚠ 8% remaining</div></div>
             </div>
             <div class="ss-bars" style="background:#fff;border-radius:8px;border:1px solid #e8edf7">
               <div style="padding:8px 10px 0;font-size:.68rem;font-weight:800;color:#0f2040">Vendor Performance — Fill Rate</div>
               <div class="ss-bar-row" style="padding:4px 10px">
-                <div class="ss-bar-meta"><span><b>Amul Beverages</b></span><span style="color:#16a34a">98.4%</span></div>
+                <div class="ss-bar-meta"><span><b>Amul Beverages</b></span><span style="color:var(--success)">98.4%</span></div>
                 <div class="ss-bar-track"><div class="ss-bar-fill" style="width:98%;background:#22c55e"></div></div>
               </div>
               <div class="ss-bar-row" style="padding:4px 10px">
-                <div class="ss-bar-meta"><span><b>ITC Stationery</b></span><span style="color:#16a34a">94.1%</span></div>
+                <div class="ss-bar-meta"><span><b>ITC Stationery</b></span><span style="color:var(--success)">94.1%</span></div>
                 <div class="ss-bar-track"><div class="ss-bar-fill" style="width:94%;background:#22c55e"></div></div>
               </div>
               <div class="ss-bar-row" style="padding:4px 10px">
-                <div class="ss-bar-meta"><span><b>Dettol Hygiene</b></span><span style="color:#d97706">72.3%</span></div>
-                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:72%;background:#0d9488"></div></div>
+                <div class="ss-bar-meta"><span><b>Dettol Hygiene</b></span><span style="color:var(--warning)">72.3%</span></div>
+                <div class="ss-bar-track"><div class="ss-bar-fill" style="width:72%;background:var(--primary)"></div></div>
               </div>
               <div class="ss-bar-row" style="padding:4px 10px 8px">
-                <div class="ss-bar-meta"><span><b>Generic Office</b></span><span style="color:#dc2626">58.0%</span></div>
+                <div class="ss-bar-meta"><span><b>Generic Office</b></span><span style="color:var(--danger)">58.0%</span></div>
                 <div class="ss-bar-track"><div class="ss-bar-fill" style="width:58%;background:#ef4444"></div></div>
               </div>
             </div>
@@ -988,15 +988,15 @@
           </div>
           <div class="ss-body">
             <div class="ss-kpis">
-              <div class="ss-kpi"><div class="ss-kpi-v">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:#2563eb">● Live</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">284</div><div class="ss-kpi-l">Delivered Today</div><div class="ss-kpi-d up">▲ vs 210 yesterday</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">8</div><div class="ss-kpi-l">POD Pending</div><div class="ss-kpi-d warn">⚠ awaiting scan</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v">37</div><div class="ss-kpi-l">In Transit</div><div class="ss-kpi-d" style="color:var(--blue)">● Live</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--success)">284</div><div class="ss-kpi-l">Delivered Today</div><div class="ss-kpi-d up">▲ vs 210 yesterday</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--warning)">8</div><div class="ss-kpi-l">POD Pending</div><div class="ss-kpi-d warn">⚠ awaiting scan</div></div>
               <div class="ss-kpi"><div class="ss-kpi-v">99.1%</div><div class="ss-kpi-l">On-Time Rate</div><div class="ss-kpi-d up">▲ above SLA</div></div>
             </div>
             <div class="route-visual">
               <div class="route-list">
                 <div class="route-card">
-                  <div class="route-num" style="background:#dbeafe;color:#1d4ed8">1</div>
+                  <div class="route-num" style="background:var(--blue-light);color:#1d4ed8">1</div>
                   <div class="route-info"><div class="rn">DC-4421 · Meta India, BKC</div><div class="rs">12 items · ₹84,200 · Driver: Rajan K.</div></div>
                   <span class="ss-pill pl-g" style="margin-left:auto;white-space:nowrap">DELIVERED</span>
                 </div>
@@ -1006,14 +1006,14 @@
                   <span class="ss-pill pl-b" style="margin-left:auto;white-space:nowrap">IN TRANSIT</span>
                 </div>
                 <div class="route-card">
-                  <div class="route-num" style="background:#f0fdf4;color:#15803d">3</div>
+                  <div class="route-num" style="background:var(--success-bg);color:#15803d">3</div>
                   <div class="route-info"><div class="rn">DC-4423 · ServiceNow, Pune</div><div class="rs">5 items · ₹31,100 · Driver: Amit P.</div></div>
                   <span class="ss-pill pl-a" style="margin-left:auto;white-space:nowrap">DISPATCHED</span>
                 </div>
               </div>
               <div class="route-stat-col">
-                <div class="route-stat"><div class="rv" style="color:#16a34a">2.1h</div><div class="rl">Avg Delivery</div></div>
-                <div class="route-stat"><div class="rv" style="color:#0d9488">8</div><div class="rl">Routes Today</div></div>
+                <div class="route-stat"><div class="rv" style="color:var(--success)">2.1h</div><div class="rl">Avg Delivery</div></div>
+                <div class="route-stat"><div class="rv" style="color:var(--primary)">8</div><div class="rl">Routes Today</div></div>
                 <div class="route-stat"><div class="rv">₹5.8L</div><div class="rl">GMV Delivered</div></div>
               </div>
             </div>
@@ -1034,27 +1034,27 @@
           <div class="ss-body">
             <div class="ss-kpis">
               <div class="ss-kpi"><div class="ss-kpi-v">48</div><div class="ss-kpi-l">Active Vendors</div><div class="ss-kpi-d up">▲ 3 this month</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#16a34a">94.1%</div><div class="ss-kpi-l">Avg Fill Rate</div><div class="ss-kpi-d up">▲ industry avg 78%</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#2563eb">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ target 3d</div></div>
-              <div class="ss-kpi"><div class="ss-kpi-v" style="color:#d97706">6</div><div class="ss-kpi-l">POs Overdue</div><div class="ss-kpi-d warn">⚠ follow up</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--success)">94.1%</div><div class="ss-kpi-l">Avg Fill Rate</div><div class="ss-kpi-d up">▲ industry avg 78%</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--blue)">2.4d</div><div class="ss-kpi-l">Avg Lead Time</div><div class="ss-kpi-d up">▲ target 3d</div></div>
+              <div class="ss-kpi"><div class="ss-kpi-v" style="color:var(--warning)">6</div><div class="ss-kpi-l">POs Overdue</div><div class="ss-kpi-d warn">⚠ follow up</div></div>
             </div>
             <div class="ss-table">
               <div class="ss-thead" style="grid-template-columns:2fr 1fr 1fr 1fr"><span>Vendor</span><span>Fill Rate</span><span>Lead Days</span><span>Rating</span></div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Amul Beverages Ltd</div><div class="ss-sub">Beverage · Mumbai</div></div>
-                <div class="ss-val" style="color:#16a34a">98.4%</div><div class="ss-val">1.5d</div><div class="ss-val" style="color:#0d9488">★ 4.9</div>
+                <div class="ss-val" style="color:var(--success)">98.4%</div><div class="ss-val">1.5d</div><div class="ss-val" style="color:var(--primary)">★ 4.9</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">ITC Stationery</div><div class="ss-sub">Stationery · Delhi</div></div>
-                <div class="ss-val" style="color:#16a34a">94.1%</div><div class="ss-val">2.0d</div><div class="ss-val" style="color:#0d9488">★ 4.6</div>
+                <div class="ss-val" style="color:var(--success)">94.1%</div><div class="ss-val">2.0d</div><div class="ss-val" style="color:var(--primary)">★ 4.6</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Dettol Hygiene Products</div><div class="ss-sub">Hygiene · Pune</div></div>
-                <div class="ss-val" style="color:#d97706">72.3%</div><div class="ss-val">3.5d</div><div class="ss-val" style="color:#0d9488">★ 3.8</div>
+                <div class="ss-val" style="color:var(--warning)">72.3%</div><div class="ss-val">3.5d</div><div class="ss-val" style="color:var(--primary)">★ 3.8</div>
               </div>
               <div class="ss-row" style="grid-template-columns:2fr 1fr 1fr 1fr">
                 <div><div class="ss-name">Generic Office Supplies</div><div class="ss-sub">Stationery · Chennai</div></div>
-                <div class="ss-val" style="color:#dc2626">58.0%</div><div class="ss-val">4.2d</div><div class="ss-val" style="color:#0d9488">★ 3.2</div>
+                <div class="ss-val" style="color:var(--danger)">58.0%</div><div class="ss-val">4.2d</div><div class="ss-val" style="color:var(--primary)">★ 3.2</div>
               </div>
             </div>
           </div>

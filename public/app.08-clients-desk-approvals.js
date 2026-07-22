@@ -54,7 +54,7 @@ async function renderDeliveryExecDashboard(el) {
   <!-- In-transit delivery cards -->
   <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
     <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Active Deliveries${inTransit.length?' ('+inTransit.length+')':''}</div>
-    ${overdue.length ? '<span style="background:#fef2f2;color:var(--danger);font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:20px">'+overdue.length+' overdue</span>' : ''}
+    ${overdue.length ? '<span style="background:var(--danger-bg);color:var(--danger);font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:20px">'+overdue.length+' overdue</span>' : ''}
   </div>
 
   ${inTransit.length === 0 ? `
@@ -73,7 +73,7 @@ async function renderDeliveryExecDashboard(el) {
   ${pendingPOD.length > 0 ? `
   <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
     <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Pending POD / Scan (${pendingPOD.length})</div>
-    <span style="background:#fef9c3;color:#92400e;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:10px">Action needed</span>
+    <span style="background:#fef9c3;color:var(--amber-text);font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:10px">Action needed</span>
   </div>
   <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
     ${pendingPOD.map(dc => `
@@ -102,7 +102,7 @@ async function renderDeliveryExecDashboard(el) {
     </div>`).join('')}
   </div>` : `
   ${delivToday.length > 0 ? `
-  <div style="background:#f0fdf4;border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+  <div style="background:var(--success-bg);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
     <span style="font-size:1.5rem">🎉</span>
     <div><div style="font-weight:700;color:var(--success)">All POD &amp; scans complete!</div><div style="font-size:.82rem;color:var(--text-muted)">${delivToday.length} delivery(ies) fully processed today.</div></div>
   </div>` : ''}`}`;
@@ -161,13 +161,13 @@ async function execMarkDelivered(dcId) {
         return `<tr>
         <td>${it.item_name||it.sku}</td>
         <td style="text-align:center;color:var(--text-muted)">${it.qty_ordered}</td>
-        <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:#d97706':''}">${maxDeliver}</td>
+        <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
         <td style="text-align:center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       </tr>`;}).join('')}
       </tbody>
     </table>
-    ${capped?'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Some items already had quantity delivered on earlier DCs — the deliverable amount is capped to the order balance.</div>':''}
-    <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Some items already had quantity delivered on earlier DCs — the deliverable amount is capped to the order balance.</div>':''}
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
       <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" id="voice-rec-btn" class="btn btn-secondary btn-sm" ${dataAct('toggleVoiceRecording')}>● Record</button>
@@ -409,15 +409,15 @@ async function manageClientCatalog(clientId, clientName) {
          <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('importCCByCategory')}>Import</button>
        </div>
        <!-- By CSV -->
-       <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
+       <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--success-bg);border-radius:8px;border:1px solid #bbf7d0;flex-wrap:wrap">
          <span style="font-size:.76rem;font-weight:700;color:#166534;white-space:nowrap">By CSV:</span>
          <input type="file" id="cc-csv-input" accept=".csv,text/csv" style="display:none" ${dataChangeEl('handleCCCsvUpload')}>
-         <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('clickEl', 'cc-csv-input')}>Upload CSV</button>
-         <a id="cc-csv-template" href="#" style="font-size:.72rem;color:#16a34a;text-decoration:underline;white-space:nowrap" ${dataAct('downloadCCTemplate')} data-prevent>Download template</a>
+         <button class="btn btn-sm" style="background:var(--success);color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('clickEl', 'cc-csv-input')}>Upload CSV</button>
+         <a id="cc-csv-template" href="#" style="font-size:.72rem;color:var(--success);text-decoration:underline;white-space:nowrap" ${dataAct('downloadCCTemplate')} data-prevent>Download template</a>
        </div>
      </div>
      <!-- CSV preview panel -->
-     <div id="cc-csv-preview" style="display:none;margin-bottom:14px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;padding:12px"></div>
+     <div id="cc-csv-preview" style="display:none;margin-bottom:14px;border:1px solid #bbf7d0;border-radius:8px;background:var(--success-bg);padding:12px"></div>
 
      <!-- Search results (add) -->
      <div id="cc-search-results" style="display:none;max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:#fff"></div>
@@ -429,7 +429,7 @@ async function manageClientCatalog(clientId, clientName) {
        </div>
        <div style="display:flex;gap:6px">
          ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#e0f2fe;color:#0369a1;border:none" ${dataAct('downloadCCAssigned')}>↓ Download CSV</button>` : ''}
-         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:#fee2e2;color:var(--danger);border:none" ${dataAct('removeAllCCItems')}>Remove All</button>` : ''}
+         ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:var(--danger-soft-bg);color:var(--danger);border:none" ${dataAct('removeAllCCItems')}>Remove All</button>` : ''}
        </div>
      </div>
      <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
@@ -445,14 +445,14 @@ function ccAssignedRow(item) {
   const globalPrice = item.unit_price ?? 0;
   const clientPrice = item.client_price != null ? item.client_price : '';
   const hasCustom = item.client_price != null;
-  return `<div id="cc-row-${item.sku}" style="background:var(--bg,#f8fafc);border-radius:8px;border:1px solid var(--border);padding:8px 10px">
+  return `<div id="cc-row-${item.sku}" style="background:var(--bg,var(--surface-2));border-radius:8px;border:1px solid var(--border);padding:8px 10px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:1.1rem;flex-shrink:0">${item.emoji||'📦'}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
         <div style="font-size:.72rem;color:var(--text-muted)">${item.sku} · ${item.category||''}</div>
       </div>
-      <button class="btn btn-sm" style="background:#fee2e2;color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
+      <button class="btn btn-sm" style="background:var(--danger-soft-bg);color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
       <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Global ₹${globalPrice}</span>
@@ -466,7 +466,7 @@ function ccAssignedRow(item) {
         ${dataEnterEl('_blurEl')}
         title="Leave blank to use global price ₹${globalPrice}">
       ${hasCustom
-        ? `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:4px;white-space:nowrap;font-weight:600">Custom</span>`
+        ? `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;background:var(--blue-light);color:#1d4ed8;padding:2px 7px;border-radius:4px;white-space:nowrap;font-weight:600">Custom</span>`
         : `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;color:var(--text-muted);white-space:nowrap">Global</span>`}
     </div>
   </div>`;
@@ -484,7 +484,7 @@ async function saveCCPrice(sku, input) {
   const badge = document.getElementById(`cc-price-badge-${sku}`);
   if (badge) {
     if (price != null) {
-      badge.textContent = 'Custom'; badge.style.cssText = 'font-size:.68rem;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:4px;white-space:nowrap';
+      badge.textContent = 'Custom'; badge.style.cssText = 'font-size:.68rem;background:var(--blue-light);color:#1d4ed8;padding:1px 6px;border-radius:4px;white-space:nowrap';
       input.style.borderColor = 'var(--navy)';
     } else {
       badge.textContent = 'Global'; badge.style.cssText = 'font-size:.68rem;color:var(--text-muted);white-space:nowrap';
@@ -681,7 +681,7 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
             <span>${i.emoji||'📦'}</span>
             <span style="font-weight:600;flex:1">${h(i.name)}</span>
             <span style="color:var(--text-muted)">${i.sku}</span>
-            <span style="color:#16a34a;font-weight:700">✓</span>
+            <span style="color:var(--success);font-weight:700">✓</span>
           </div>`).join('')}
       </div>` : ''}
     ${unmatched.length ? `
@@ -693,7 +693,7 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
         Already assigned (skipped): ${alreadyIn.join(', ')}
       </div>` : ''}
     <div style="display:flex;gap:8px">
-      ${matched.length ? `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;padding:5px 14px;font-size:.8rem"
+      ${matched.length ? `<button class="btn btn-sm" style="background:var(--success);color:#fff;border:none;padding:5px 14px;font-size:.8rem"
         ${dataAct('confirmCCCsvImport', matched.map(i=>i.sku))}>
         Add ${matched.length} Item${matched.length!==1?'s':''}</button>` : ''}
       <button class="btn btn-sm btn-secondary" style="font-size:.8rem" ${dataAct('hideEl', 'cc-csv-preview')}>Dismiss</button>
@@ -1045,7 +1045,7 @@ async function renderServiceDesk(el) {
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${openT.length}</div>
         <div style="font-size:.75rem;color:${openHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${openHigh} high priority</div>
       </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid #3b82f6;margin-bottom:0">
+      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue-bright);margin-bottom:0">
         <div style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">In Progress</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inProgT.length}</div>
         <div style="font-size:.75rem;color:var(--text-muted);margin-top:6px">being handled</div>
@@ -1300,7 +1300,7 @@ async function renderApprovals(el) {
       <div style="font-size:.84rem;margin-top:6px">No orders are waiting for your approval.</div>
     </div>` :
   pending.map(o=>`
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid #f59e0b">
+  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid var(--amber)">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
       <div>
         <div style="font-weight:800;font-size:1rem;color:var(--navy)">${o.id}</div>
@@ -1312,7 +1312,7 @@ async function renderApprovals(el) {
       </div>
       <div style="text-align:right">
         <div style="font-weight:800;font-size:1.2rem;color:var(--navy)">${fmt(o.grand_total)}</div>
-        ${o.grand_total>100000?`<div style="font-size:.72rem;color:#d97706;background:#fef3c7;border-radius:4px;padding:2px 6px;margin-top:4px">⚠️ High value — review carefully</div>`:''}
+        ${o.grand_total>100000?`<div style="font-size:.72rem;color:var(--warning);background:var(--amber-bg);border-radius:4px;padding:2px 6px;margin-top:4px">⚠️ High value — review carefully</div>`:''}
       </div>
     </div>
     ${o.notes?`<div style="font-size:.78rem;color:var(--text-muted);background:#f8f9fa;padding:10px 12px;border-radius:8px;margin-bottom:14px">📝 ${o.notes}</div>`:''}
