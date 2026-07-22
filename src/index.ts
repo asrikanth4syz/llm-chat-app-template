@@ -209,9 +209,48 @@ const ORDER_FSM: Record<string, string[]> = {
 // MAIN HANDLER
 // ════════════════════════════════════════════════════════════════════
 let _categoryFixApplied = false;
+// Feature-table schema, kept in sync with migrations 0002+ so the runtime is
+// self-sufficient even when those migrations were never applied (the import_jobs
+// bug was exactly this). All idempotent CREATE TABLE IF NOT EXISTS.
+async function ensureFeatureTables(env: Env): Promise<void> {
+  const stmts: string[] = [
+    `CREATE TABLE IF NOT EXISTS approval_chain_actions ( id TEXT PRIMARY KEY, instance_id TEXT NOT NULL, step_order INTEGER NOT NULL, actor_id TEXT, actor_name TEXT, action TEXT NOT NULL, comments TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS approval_chain_instances ( id TEXT PRIMARY KEY, chain_id TEXT NOT NULL, entity_id TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT 'order', current_step INTEGER DEFAULT 1, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS approval_chain_steps ( id TEXT PRIMARY KEY, chain_id TEXT NOT NULL, step_order INTEGER NOT NULL, role TEXT NOT NULL, label TEXT );`,
+    `CREATE TABLE IF NOT EXISTS approval_chains ( id TEXT PRIMARY KEY, name TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT 'order', min_amount REAL DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS approval_rules ( id TEXT PRIMARY KEY, client_id TEXT, category TEXT, min_amount REAL DEFAULT 0, max_amount REAL, approver_role TEXT DEFAULT 'client_approver', auto_approve INTEGER DEFAULT 0, active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS audit_logs ( id TEXT PRIMARY KEY, actor_id TEXT, actor_name TEXT, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, old_value TEXT, new_value TEXT, ip TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS bin_locations ( id TEXT PRIMARY KEY, warehouse_id TEXT NOT NULL, code TEXT NOT NULL, zone TEXT, sku TEXT, capacity INTEGER DEFAULT 100, occupied INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS client_catalog ( client_id TEXT NOT NULL, sku TEXT NOT NULL, added_by TEXT, added_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (client_id, sku) );`,
+    `CREATE TABLE IF NOT EXISTS client_consumption ( id INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT NOT NULL, qty REAL NOT NULL, consumed_at TEXT DEFAULT (datetime('now')), notes TEXT, recorded_by TEXT );`,
+    `CREATE TABLE IF NOT EXISTS client_inventory ( id INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT NOT NULL, category TEXT DEFAULT '', uom TEXT DEFAULT 'unit', qty_on_hand REAL DEFAULT 0, reorder_level REAL DEFAULT 0, last_received_qty REAL DEFAULT 0, last_received_at TEXT, last_consumed_at TEXT, updated_at TEXT DEFAULT (datetime('now')), UNIQUE(client_id, sku) );`,
+    `CREATE TABLE IF NOT EXISTS dc_documents ( id INTEGER PRIMARY KEY AUTOINCREMENT, dc_id TEXT NOT NULL, doc_type TEXT NOT NULL, filename TEXT, mime_type TEXT, content_b64 TEXT NOT NULL, file_size INTEGER, uploaded_at TEXT DEFAULT (datetime('now')), uploaded_by TEXT );`,
+    `CREATE TABLE IF NOT EXISTS dc_items ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, name TEXT NOT NULL, qty_ordered INTEGER NOT NULL DEFAULT 0, qty_delivered INTEGER NOT NULL DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS delivery_returns ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT, qty_returned INTEGER NOT NULL DEFAULT 0, reason TEXT, staff_id TEXT, returned_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS delivery_routes ( id TEXT PRIMARY KEY, name TEXT NOT NULL, route_date TEXT NOT NULL, stops TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'PLANNED', created_by TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS dunning_events ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, client_id TEXT NOT NULL, order_id TEXT, action_taken TEXT NOT NULL, notes TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS dunning_rules ( id TEXT PRIMARY KEY, days_overdue INTEGER NOT NULL, action TEXT NOT NULL, message_template TEXT, active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS order_allocations ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT, qty INTEGER NOT NULL, bin_code TEXT, picked_by TEXT, picked_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS order_comments ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, author_id TEXT NOT NULL, author_name TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS order_templates ( id TEXT PRIMARY KEY, name TEXT NOT NULL, client_id TEXT, items TEXT NOT NULL DEFAULT '[]', notes TEXT, created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS otp_store ( email TEXT PRIMARY KEY, code TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS po_templates ( id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor_id TEXT, items TEXT NOT NULL DEFAULT '[]', notes TEXT, created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS porter_expenses ( id TEXT PRIMARY KEY, trip_date TEXT NOT NULL, route TEXT, amount REAL NOT NULL, client_id TEXT, staff_id TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS sla_breaches ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, entity_id TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT 'order', breached_at TEXT DEFAULT (datetime('now')), resolved_at TEXT, status TEXT NOT NULL DEFAULT 'OPEN' );`,
+    `CREATE TABLE IF NOT EXISTS sla_rules ( id TEXT PRIMARY KEY, name TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT 'order', trigger_status TEXT NOT NULL, max_hours INTEGER NOT NULL, action TEXT NOT NULL DEFAULT 'NOTIFY', active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS staff ( id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, role TEXT NOT NULL DEFAULT 'delivery_staff', active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS standing_orders ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, name TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT 'MONTHLY', next_run_date TEXT, last_run_date TEXT, items TEXT NOT NULL, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS stock_movements ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, type TEXT NOT NULL, qty_change INTEGER NOT NULL, reference_id TEXT, reference_type TEXT, note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS vendor_feedback ( id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, po_id TEXT, grn_id TEXT, quality_rating INTEGER NOT NULL DEFAULT 3, delivery_rating INTEGER NOT NULL DEFAULT 3, service_rating INTEGER NOT NULL DEFAULT 3, comments TEXT, submitted_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
+  ];
+  for (const sql of stmts) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
+  await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
   try {
     const renames: [string, string][] = [
       ['Beverage',   'Beverages'],

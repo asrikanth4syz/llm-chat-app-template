@@ -175,6 +175,15 @@ describe("Auth", () => {
     expect(Array.isArray(await res.json())).toBe(true);
   });
 
+  it("feature-table endpoints all respond 200 (self-healed schema, no 500 on missing table)", async () => {
+    const paths = ["/api/audit-logs", "/api/delivery-routes", "/api/order-templates",
+      "/api/sla-rules", "/api/approval-chains", "/api/staff"];
+    for (const p of paths) {
+      const res = await get(p, adminToken);
+      expect(res.status, `${p} should not 500`).toBe(200);
+    }
+  });
+
   it("POST /api/auth/login — locks out after repeated failures", async () => {
     const email = "bruteforce@sp.test"; // unique email so it can't affect other tests
     for (let i = 0; i < 5; i++) {
