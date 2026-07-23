@@ -191,6 +191,7 @@ async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<voi
 // ── ORDER FSM ─────────────────────────────────────────────────────────
 const ORDER_FSM: Record<string, string[]> = {
   DRAFT:            ["SUBMITTED","CANCELLED"],
+  PENDING_PRICING:  ["SUBMITTED","PENDING_APPROVAL","APPROVED","CANCELLED"],
   SUBMITTED:        ["PENDING_APPROVAL","APPROVED","CANCELLED"],
   PENDING_APPROVAL: ["APPROVED","CANCELLED"],
   APPROVED:         ["ACKNOWLEDGED","CANCELLED"],
@@ -499,6 +500,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/allocations$/)  && method==="GET")  return handleGetAllocations(request,env,path);
@@ -1071,29 +1073,91 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     AND min_amount<=? AND (max_amount IS NULL OR max_amount>?) ORDER BY min_amount DESC LIMIT 1`)
     .bind(body.client_id, grand_total, grand_total).first() as Record<string,unknown>|null;
 
-  let status = "SUBMITTED";
-  if (rule?.auto_approve) status = "APPROVED";
-  else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
-
   const validTypes = ['Regular','Urgent','Ad-Hoc'];
   const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
   const needByDate = body.need_by_date || null;
+
+  // Ad-hoc requests placed without catalogue prices (subtotal 0) go to Ops for
+  // pricing first; only then do they enter the normal approval flow. This keeps
+  // ad-hoc orders in the same pipeline as catalogue orders — just with an extra
+  // "awaiting pricing" gate at the front.
+  const awaitingPricing = orderType === 'Ad-Hoc' && subtotal === 0;
+
+  let status = "SUBMITTED";
+  if (awaitingPricing) status = "PENDING_PRICING";
+  else if (rule?.auto_approve) status = "APPROVED";
+  else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
+
   await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
       .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
-    // Gap 9: reserve stock
-    await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(item.qty, item.sku).run();
+    // Gap 9: reserve stock — skipped for un-priced ad-hoc lines (placeholder SKUs
+    // aren't real inventory yet; reservation happens when Ops prices the order).
+    if (!awaitingPricing)
+      await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(item.qty, item.sku).run();
   }
 
+  const histNote = awaitingPricing ? "Ad-hoc request — awaiting pricing by 4SYZ"
+    : status==="PENDING_APPROVAL" ? "Approval required — amount exceeds threshold" : null;
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`)
-    .bind(uid(), id, status, user!.sub, user!.name, status==="PENDING_APPROVAL"?"Approval required — amount exceeds threshold":null).run();
+    .bind(uid(), id, status, user!.sub, user!.name, histNote).run();
 
-  await pushNotification(env, "ops_admin", `New order ${id} submitted — ${status}`);
+  await pushNotification(env, "ops_admin", awaitingPricing ? `New ad-hoc order ${id} needs pricing` : `New order ${id} submitted — ${status}`);
   await audit(env, user, "CREATE", "order", id, undefined, `status:${status},total:${grand_total}`);
   return json({id, status, grand_total}, 201);
+}
+
+// POST /api/orders/:id/reprice — Ops sets unit prices on an ad-hoc order that
+// was submitted without catalogue prices, then releases it into the normal flow.
+async function handleRepriceOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user);
+  if (denied) return denied;
+  // Pricing is an internal task — only 4SYZ ops/procurement roles may set prices.
+  if (!["super_admin","ops_admin","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json() as { prices: Array<{id:string; unit_price:number}> };
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!order) return json({error:"Not found"}, 404);
+  if (order.status !== "PENDING_PRICING") return json({error:"Order is not awaiting pricing"}, 400);
+  if (!body.prices?.length) return json({error:"prices required"}, 400);
+
+  const priceMap = new Map(body.prices.map(p => [p.id, Math.max(0, Number(p.unit_price) || 0)]));
+  const {results: items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+  let subtotal = 0;
+  for (const it of items) {
+    const price = priceMap.has(it.id as string) ? priceMap.get(it.id as string)! : (it.unit_price as number);
+    const total = (it.qty as number) * price;
+    subtotal += total;
+    await env.DB.prepare("UPDATE order_items SET unit_price=?, total=? WHERE id=?").bind(price, total, it.id).run();
+  }
+  if (subtotal <= 0) return json({error:"Enter a price greater than zero for at least one line"}, 400);
+  const gst = Math.round(subtotal * 0.18);
+  const grand_total = subtotal + gst;
+
+  // Now that the order has a value, run the same approval rules a catalogue order sees.
+  const rule = await env.DB.prepare(`SELECT * FROM approval_rules WHERE active=1 AND (client_id=? OR client_id IS NULL)
+    AND min_amount<=? AND (max_amount IS NULL OR max_amount>?) ORDER BY min_amount DESC LIMIT 1`)
+    .bind(order.client_id, grand_total, grand_total).first() as Record<string,unknown>|null;
+  let status = "SUBMITTED";
+  if (rule?.auto_approve) status = "APPROVED";
+  else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
+
+  await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status=?, updated_at=datetime('now') WHERE id=?")
+    .bind(subtotal, gst, grand_total, status, id).run();
+  // Reserve stock for any priced lines that map to real inventory SKUs (no-op for placeholders).
+  for (const it of items) {
+    await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(it.qty, it.sku).run();
+  }
+  await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
+    .bind(uid(), id, "PENDING_PRICING", status, user!.sub, user!.name, `Priced by 4SYZ — grand total ${grand_total}`).run();
+  await pushNotification(env, null, `Ad-hoc order ${id} priced → ${status.replace(/_/g," ")}`);
+  await audit(env, user, "REPRICE", "order", id, "PENDING_PRICING", `status:${status},total:${grand_total}`);
+  return json({id, status, grand_total});
 }
 
 async function handleTransitionOrder(request: Request, env: Env, path: string): Promise<Response> {

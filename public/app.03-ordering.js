@@ -27,6 +27,7 @@ async function renderPlaceOrder(el) {
         <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Browse the catalogue and add items to your cart</div>
       </div>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-gold btn-sm" ${dataAct('showAdhocOrderModal')}>⚡ Quick / Ad-hoc Request</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('showCSVUploadModal')}>📋 Order via Spreadsheet</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_orders')}>My Orders</button>
       </div>
@@ -379,6 +380,182 @@ function removeOrderImage() {
   APP._orderImage = null;
   const inp = document.getElementById('cart-image'); if (inp) inp.value = '';
   const prev = document.getElementById('cart-image-preview'); if (prev) prev.style.display = 'none';
+}
+
+/* ============================================================
+   AD-HOC / QUICK REQUEST — order without catalogue selection.
+   The client types free-text lines (description + qty + unit); 4SYZ
+   Ops prices them before the order enters the normal approval flow.
+   ============================================================ */
+function adhocRowInput(cls, ph, val, extra) {
+  return `<input type="${cls==='adhoc-qty'?'number':'text'}" class="${cls}"${cls==='adhoc-qty'?' min="1"':''} placeholder="${ph}" value="${h(val==null?'':String(val))}"
+    style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;box-sizing:border-box;width:100%" ${extra||''}>`;
+}
+
+function adhocRowsHTML() {
+  return (APP._adhocLines||[]).map((ln,idx)=>`
+    <div class="adhoc-row" data-idx="${idx}" style="display:grid;grid-template-columns:1fr 72px 84px 34px;gap:8px;margin-bottom:8px;align-items:center">
+      ${adhocRowInput('adhoc-desc','What do you need? e.g. 24 × 1L cold-pressed juice', ln.desc)}
+      ${adhocRowInput('adhoc-qty','Qty', ln.qty)}
+      ${adhocRowInput('adhoc-uom','unit / box', ln.uom)}
+      <button class="btn btn-secondary btn-sm" style="padding:6px 0" ${dataAct('adhocRemoveLine', idx)} ${(APP._adhocLines||[]).length<=1?'disabled':''} title="Remove line">✕</button>
+    </div>`).join('');
+}
+
+function syncAdhocFromDOM() {
+  const rows = [...document.querySelectorAll('.adhoc-row')];
+  if (!rows.length) return;
+  APP._adhocLines = rows.map(r => ({
+    desc: r.querySelector('.adhoc-desc')?.value || '',
+    qty:  r.querySelector('.adhoc-qty')?.value || '',
+    uom:  r.querySelector('.adhoc-uom')?.value || '',
+  }));
+}
+
+function redrawAdhocRows() {
+  const c = document.getElementById('adhoc-rows');
+  if (c) c.innerHTML = adhocRowsHTML();
+}
+
+function adhocAddLine() {
+  syncAdhocFromDOM();
+  (APP._adhocLines = APP._adhocLines || []).push({ desc:'', qty:1, uom:'' });
+  redrawAdhocRows();
+}
+
+function adhocRemoveLine(idx) {
+  syncAdhocFromDOM();
+  APP._adhocLines.splice(idx, 1);
+  if (!APP._adhocLines.length) APP._adhocLines.push({ desc:'', qty:1, uom:'' });
+  redrawAdhocRows();
+}
+
+function attachAdhocImage(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { showToast('Please select an image file', 'error'); input.value=''; return; }
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, 900 / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width*scale); canvas.height = Math.round(img.height*scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    let dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+    if (dataUrl.length > 1_400_000) dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+    if (dataUrl.length > 1_400_000) { showToast('Image too large even after compression — try a smaller photo', 'error'); input.value=''; return; }
+    APP._adhocImage = dataUrl;
+    const prev = document.getElementById('adhoc-image-preview');
+    const thumb = document.getElementById('adhoc-image-thumb');
+    if (thumb) thumb.src = dataUrl;
+    if (prev) prev.style.display = 'flex';
+    URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => { showToast('Could not read image', 'error'); input.value=''; };
+  img.src = URL.createObjectURL(file);
+}
+
+function removeAdhocImage() {
+  APP._adhocImage = null;
+  const inp = document.getElementById('adhoc-image'); if (inp) inp.value = '';
+  const prev = document.getElementById('adhoc-image-preview'); if (prev) prev.style.display = 'none';
+}
+
+async function showAdhocOrderModal() {
+  APP._adhocLines = [{ desc:'', qty:1, uom:'' }];
+  APP._adhocImage = null;
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+
+  // Ops roles pick which client the request is for; client roles order for themselves.
+  let clientPicker = '';
+  if (!isClientRole) {
+    const clients = await api('/clients');
+    const opts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
+    clientPicker = `
+      <div style="margin-bottom:14px">
+        <label style="display:block;margin-bottom:6px;font-weight:600;font-size:.85rem">Client</label>
+        <select id="adhoc-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+          <option value="">— Select a client —</option>${opts}
+        </select>
+      </div>`;
+  }
+
+  openModal('⚡ Quick / Ad-hoc Request',
+    `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:14px;line-height:1.5">
+       Need something that isn't in the catalogue? Describe it here — no product selection needed.
+       4SYZ will confirm pricing, then the request follows the usual approval &amp; delivery flow.
+     </div>
+     ${clientPicker}
+     <div style="display:grid;grid-template-columns:1fr 72px 84px 34px;gap:8px;margin-bottom:6px;font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">
+       <div>Item / description</div><div>Qty</div><div>Unit</div><div></div>
+     </div>
+     <div id="adhoc-rows">${adhocRowsHTML()}</div>
+     <button class="btn btn-secondary btn-sm" style="margin-top:2px" ${dataAct('adhocAddLine')}>+ Add another item</button>
+
+     <div style="margin-top:16px">
+       <label style="display:block;margin-bottom:6px;font-weight:600;font-size:.85rem">Notes for 4SYZ <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
+       <textarea id="adhoc-notes" rows="2" placeholder="Brand preference, specs, delivery address, contact person…"
+         style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;box-sizing:border-box;resize:vertical"></textarea>
+     </div>
+
+     <div style="margin-top:12px">
+       <label class="btn btn-secondary btn-sm" style="cursor:pointer">📷 Attach photo
+         <input type="file" id="adhoc-image" accept="image/*" ${dataChangeEl('attachAdhocImage')} style="display:none">
+       </label>
+       <div id="adhoc-image-preview" style="margin-top:8px;display:none;align-items:center;gap:10px">
+         <img id="adhoc-image-thumb" style="max-height:70px;border-radius:8px;border:1px solid var(--border)">
+         <button class="btn btn-secondary btn-sm" ${dataAct('removeAdhocImage')}>Remove</button>
+       </div>
+     </div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('submitAdhocOrder')}>Submit Request</button>`
+  );
+}
+
+async function submitAdhocOrder() {
+  syncAdhocFromDOM();
+  const lines = (APP._adhocLines||[]).filter(l => (l.desc||'').trim() && Number(l.qty) > 0);
+  if (!lines.length) { showToast('Add at least one item with a description and quantity', 'error'); return; }
+
+  const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
+  let clientId = APP.user?.client_id || '__self__';
+  if (!isClientRole) {
+    clientId = document.getElementById('adhoc-client')?.value || '';
+    if (!clientId) { showToast('Select a client', 'error'); return; }
+  }
+
+  const notes = document.getElementById('adhoc-notes')?.value?.trim() || '';
+  const items = lines.map(l => {
+    const desc = l.desc.trim();
+    const uom = (l.uom||'').trim();
+    return {
+      sku: 'ADHOC-' + Math.random().toString(36).slice(2,8).toUpperCase(),
+      name: uom ? `${desc} (${uom})` : desc,
+      qty: Number(l.qty),
+      unit_price: 0,
+    };
+  });
+
+  const btn = document.querySelector('#modal-footer .btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+
+  const result = await api('/orders', {
+    method: 'POST',
+    body: JSON.stringify({
+      client_id: clientId,
+      items,
+      order_type: 'Ad-Hoc',
+      ...(notes ? { notes } : {}),
+      ...(APP._adhocImage ? { image: APP._adhocImage } : {}),
+    }),
+  });
+
+  closeModal();
+  if (result) {
+    APP._adhocLines = null;
+    APP._adhocImage = null;
+    showToast(`Ad-hoc request ${result.id} submitted — 4SYZ will confirm pricing`);
+    navigate('my_orders');
+  }
 }
 
 function showCSVUploadModal() {

@@ -20,9 +20,9 @@ async function renderMyOrders(el) {
     if (!APP._moTab) APP._moTab = 'All';
     if (!APP._moSearch) APP._moSearch = '';
 
-    const STATUS_LABEL = { DRAFT:'Draft', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
+    const STATUS_LABEL = { DRAFT:'Draft', PENDING_PRICING:'Awaiting Pricing', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
     const ORDER_STEPS = ['SUBMITTED','APPROVED','READY_TO_PICK','IN_SHIPMENT','CLOSED'];
-    const STATUS_COLOR = { DRAFT:'#6b7280', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
+    const STATUS_COLOR = { DRAFT:'#6b7280', PENDING_PRICING:'#d97706', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
       let list;
@@ -88,7 +88,7 @@ async function renderMyOrders(el) {
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
               <div style="display:flex;align-items:center;gap:10px">
                 <div style="width:40px;height:40px;border-radius:10px;background:${sc}18;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
-                  ${isDone?'✅':isPartial?'🔶':isCancelled?'❌':o.status==='IN_SHIPMENT'?'🚚':o.status==='PENDING_APPROVAL'?'⏳':o.status==='DRAFT'?'✏️':'📄'}
+                  ${isDone?'✅':isPartial?'🔶':isCancelled?'❌':o.status==='IN_SHIPMENT'?'🚚':o.status==='PENDING_PRICING'?'💰':o.status==='PENDING_APPROVAL'?'⏳':o.status==='DRAFT'?'✏️':'📄'}
                 </div>
                 <div>
                   <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${o.id}</div>
@@ -341,8 +341,37 @@ async function viewOrder(id) {
     ? `<span style="font-weight:700;color:${pddIsLate?'var(--danger)':'var(--success)'}">${fmtDate(pdd)}${pddIsLate?' ⚠ Overdue':''}</span>`
     : `<span style="color:var(--text-muted);font-style:italic">Not set</span>`;
 
+  // Client-facing delivery tracker: collapse the 12-stage FSM into the four
+  // milestones a client cares about — Submitted → Approved → In Shipment → Delivered.
+  const MILESTONES = [
+    { label:'Submitted',   statuses:['DRAFT','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL'] },
+    { label:'Approved',    statuses:['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'] },
+    { label:'In Shipment', statuses:['IN_SHIPMENT','PARTIALLY_CLOSED'] },
+    { label:'Delivered',   statuses:['CLOSED','DELIVERED'] },
+  ];
+  const activeIdx = MILESTONES.findIndex(m => m.statuses.includes(order.status));
+  const milestoneDate = (statuses) => {
+    const ev = (order.history||[]).find(h => statuses.includes(h.to_status));
+    return ev ? fmtDate(ev.created_at) : '';
+  };
+  const trackerHtml = order.status === 'CANCELLED'
+    ? `<div style="margin-bottom:16px;padding:12px 14px;background:var(--danger-soft-bg,#fef2f2);border:1px solid #fecaca;border-radius:10px;color:var(--danger);font-weight:600;font-size:.88rem">❌ This order was cancelled.</div>`
+    : `<div class="timeline" style="margin:2px 0 18px">
+        ${MILESTONES.map((m,i)=>{
+          const reached = activeIdx >= i;
+          const isCurrent = activeIdx === i;
+          const dt = reached ? milestoneDate(m.statuses) : '';
+          return `<div class="timeline-step ${reached?'done':''}">
+            <div class="timeline-dot">${reached && !isCurrent ? '✓' : ''}</div>
+            <div class="timeline-label" style="${isCurrent?'font-weight:700':''}">${m.label}</div>
+            ${dt?`<div style="font-size:.66rem;color:var(--text-muted);margin-top:2px">${dt}</div>`:''}
+          </div>`;
+        }).join('')}
+      </div>`;
+
   openModal(`Order ${id}`,
     `<div style="margin-bottom:16px">
+      ${trackerHtml}
       <!-- Row 1: status / type / client / date -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
@@ -403,6 +432,8 @@ async function viewOrder(id) {
       const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
       const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
       if (opsRole) {
+        if (s==='PENDING_PRICING')
+          footer.push(`<button class="btn btn-gold" ${dataActClose('repriceOrderModal', id)}>💰 Set Prices</button>`);
         if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
           footer.push(`<button class="btn btn-success" ${dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail')}>✓ Approve</button>`);
         if (s==='APPROVED')
@@ -497,6 +528,59 @@ async function confirmSubmitDraft(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'SUBMITTED', note:'Draft submitted by client' }) });
   closeModal();
   if (res) { showToast(`Order ${id} submitted to 4SYZ`); navigate('my_orders'); }
+}
+
+/* ── Ad-hoc pricing (Ops): set unit prices on a PENDING_PRICING order ── */
+async function repriceOrderModal(id) {
+  const order = await api('/orders/' + id);
+  if (!order) return;
+  const rows = (order.items||[]).map(it => `
+    <tr>
+      <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${it.sku}</div></td>
+      <td style="text-align:center">${it.qty}</td>
+      <td style="text-align:right">
+        <input type="number" min="0" step="0.01" class="reprice-input" data-item="${it.id}" value="${it.unit_price>0?it.unit_price:''}"
+          placeholder="0.00" ${dataInput('updateRepriceTotal')}
+          style="width:120px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem">
+      </td>
+    </tr>`).join('');
+  openModal(`💰 Price Ad-hoc Order ${id}`,
+    `<p class="u-muted" style="margin-top:0;font-size:.85rem">Enter the unit price (₹, ex-GST) for each requested item. On save, 18% GST is added and the order enters the normal approval &amp; delivery flow.</p>
+     ${order.notes ? `<div style="margin-bottom:12px;padding:8px 10px;background:#fefce8;border:1px solid #fef08a;border-radius:8px;font-size:.82rem"><b>Client note:</b> ${h(order.notes)}</div>` : ''}
+     <table class="table" style="margin:0">
+       <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price (₹)</th></tr></thead>
+       <tbody>${rows}</tbody>
+     </table>
+     <div class="cart-row cart-total" style="margin-top:12px"><span>Estimated total (incl. 18% GST)</span><span id="reprice-total">${fmt(0)}</span></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('submitReprice', id)}>Save Prices &amp; Release</button>`);
+  updateRepriceTotal();
+}
+
+function updateRepriceTotal() {
+  const inputs = [...document.querySelectorAll('.reprice-input')];
+  let subtotal = 0;
+  inputs.forEach(i => {
+    const row = i.closest('tr');
+    const qty = Number(row?.querySelector('td:nth-child(2)')?.textContent) || 0;
+    subtotal += qty * (parseFloat(i.value) || 0);
+  });
+  const el = document.getElementById('reprice-total');
+  if (el) el.textContent = fmt(Math.round(subtotal * 1.18));
+}
+
+async function submitReprice(id) {
+  const inputs = [...document.querySelectorAll('.reprice-input')];
+  const prices = inputs.map(i => ({ id: i.dataset.item, unit_price: parseFloat(i.value) || 0 }));
+  if (!prices.some(p => p.unit_price > 0)) { showToast('Enter a price greater than zero for at least one item', 'error'); return; }
+  const btn = document.querySelector('#modal-footer .btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const res = await api(`/orders/${id}/reprice`, { method:'POST', body: JSON.stringify({ prices }) });
+  closeModal();
+  if (res) {
+    showToast(`Order ${id} priced — ${res.status==='PENDING_APPROVAL'?'sent for approval':res.status==='APPROVED'?'auto-approved':'released to 4SYZ'}`);
+    navigate('orders');
+  }
 }
 
 /* ============================================================
@@ -774,7 +858,7 @@ async function renderOrderQueue(el) {
     return res;
   }
 
-  const STATUS_TABS = ['All','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED'];
+  const STATUS_TABS = ['All','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED'];
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;

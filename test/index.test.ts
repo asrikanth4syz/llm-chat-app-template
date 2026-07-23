@@ -594,6 +594,63 @@ describe("Orders", () => {
   });
 });
 
+describe("Ad-hoc orders (no catalogue selection)", () => {
+  // NB: vitest-pool-workers isolates D1 per test, so each test creates its own order.
+  const adhocBody = {
+    client_id: "__self__",                // overridden server-side to the client's own id
+    order_type: "Ad-Hoc",
+    notes: "Need 2 crates of imported sparkling water for an event",
+    items: [
+      { sku: "ADHOC-AAA111", name: "Imported sparkling water 750ml (crate)", qty: 2, unit_price: 0 },
+      { sku: "ADHOC-BBB222", name: "Compostable serving cups", qty: 500, unit_price: 0 },
+    ],
+  };
+
+  it("client places an ad-hoc order without prices → status PENDING_PRICING, total 0", async () => {
+    const res = await post("/api/orders", adhocBody, clientToken);
+    expect(res.status).toBe(201);
+    const body = await res.json() as { id: string; status: string; grand_total: number };
+    expect(body.status).toBe("PENDING_PRICING");
+    expect(body.grand_total).toBe(0);
+  });
+
+  it("a client role cannot price an ad-hoc order (403)", async () => {
+    const id = await post("/api/orders", adhocBody, clientToken).then(r => r.json()).then((b: { id:string }) => b.id);
+    const items = await get(`/api/orders/${id}`, clientToken).then(r => r.json()) as { items: Array<{id:string}> };
+    const res = await post(`/api/orders/${id}/reprice`, {
+      prices: items.items.map(i => ({ id: i.id, unit_price: 100 })),
+    }, clientToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("Ops prices the ad-hoc order → it enters the normal flow with a real total", async () => {
+    const id = await post("/api/orders", adhocBody, clientToken).then(r => r.json()).then((b: { id:string }) => b.id);
+    const detail = await get(`/api/orders/${id}`, adminToken).then(r => r.json()) as { items: Array<{id:string; qty:number}> };
+    const prices = detail.items.map(i => ({ id: i.id, unit_price: 120 }));
+    const res = await post(`/api/orders/${id}/reprice`, { prices }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { status: string; grand_total: number };
+    // 2*120 + 500*120 = 60240 subtotal; below the 100000 default threshold → SUBMITTED
+    expect(["SUBMITTED", "APPROVED", "PENDING_APPROVAL"]).toContain(body.status);
+    expect(body.grand_total).toBeGreaterThan(0);
+
+    // Persisted: no longer awaiting pricing, prices written to line items
+    const after = await get(`/api/orders/${id}`, adminToken).then(r => r.json()) as { status: string; items: Array<{unit_price:number}> };
+    expect(after.status).not.toBe("PENDING_PRICING");
+    expect(after.items.every(i => i.unit_price > 0)).toBe(true);
+  });
+
+  it("re-pricing an order that is no longer PENDING_PRICING returns 400", async () => {
+    const id = await post("/api/orders", adhocBody, clientToken).then(r => r.json()).then((b: { id:string }) => b.id);
+    const detail = await get(`/api/orders/${id}`, adminToken).then(r => r.json()) as { items: Array<{id:string}> };
+    // First pricing moves it out of PENDING_PRICING …
+    await post(`/api/orders/${id}/reprice`, { prices: detail.items.map(i => ({ id: i.id, unit_price: 120 })) }, adminToken);
+    // … so a second attempt is rejected.
+    const res = await post(`/api/orders/${id}/reprice`, { prices: detail.items.map(i => ({ id: i.id, unit_price: 130 })) }, adminToken);
+    expect(res.status).toBe(400);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENT CATALOG
 // ════════════════════════════════════════════════════════════════════

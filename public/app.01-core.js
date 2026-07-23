@@ -894,7 +894,7 @@ function statusBadge(s) {
   const map = {
     CLOSED:'success', DELIVERED:'success', RESOLVED:'success', INVOICED:'success', RECEIVED:'success',
     IN_SHIPMENT:'info', IN_TRANSIT:'info', IN_PROGRESS:'info', DISPATCHED:'info', ACCEPTED:'info', QUALITY_CHECK:'info',
-    PENDING_APPROVAL:'warning', SENT:'warning', SCHEDULED:'warning', OPEN:'warning', READY_TO_PICK:'warning', PICKED:'warning',
+    PENDING_APPROVAL:'warning', PENDING_PRICING:'warning', SENT:'warning', SCHEDULED:'warning', OPEN:'warning', READY_TO_PICK:'warning', PICKED:'warning',
     CANCELLED:'danger', REJECTED:'danger',
     SUBMITTED:'primary', APPROVED:'primary', ACKNOWLEDGED:'primary',
     VENDOR_PO_RAISED:'purple', INVENTORY_CHECK:'purple',
