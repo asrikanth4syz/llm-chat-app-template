@@ -138,7 +138,9 @@ const result = await page.evaluate(async (actTargets) => {
   try {
     out.aclLeaks = [];        // quick actions whose target page isn't in the role's nav
     out.navGuardFails = [];   // canAccessPage lets a role reach an off-nav page it shouldn't
-    const ORPHAN_OK = { settings: ["super_admin", "ops_admin"] };
+    // Off-nav action pages some roles reach via buttons/menus — read the app's own
+    // ACTION_PAGES so this check never drifts from canAccessPage's real allowlist.
+    const ORPHAN_OK = (typeof ACTION_PAGES !== "undefined" && ACTION_PAGES) || {};
     for (const [role, meta] of Object.entries(ROLES)) {
       APP.user = { role, nav: meta.nav };
       const navIds = new Set((NAV[meta.nav] || []).filter((i) => i.id).map((i) => i.id));

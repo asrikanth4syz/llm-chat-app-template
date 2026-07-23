@@ -148,7 +148,10 @@ const NAV = {
     { section:'Approvals' },
     { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
     { id:'approvals',   label:'Pending Approvals',icon:iconApprove,badge:'!' },
-    { id:'my_orders',   label:'All Orders',    icon:iconOrders,    badge:null },
+    { section:'Ordering' },
+    { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
+    { id:'my_orders',     label:'All Orders',     icon:iconOrders,   badge:null },
+    { id:'track_delivery',label:'Track Delivery', icon:iconDelivery, badge:null },
   ],
   client_user: [
     { section:'Overview' },
@@ -524,12 +527,18 @@ function startNotificationPolling() {
 function canAccessPage(page) {
   if (!APP.user) return true;
   if (page === 'dashboard') return true;
-  // Orphan pages: reachable via profile/menu deep-links rather than the sidebar
-  // nav, so they aren't in any NAV[] array. Gate them by role explicitly to
-  // match the surface that exposes them (e.g. the profile menu Settings link).
-  if (page === 'settings') return ['super_admin', 'ops_admin'].includes(APP.user.role);
-  return (NAV[APP.user.nav] || []).some(i => i.id === page);
+  // Allowed if the page is in the role's own sidebar nav …
+  if ((NAV[APP.user.nav] || []).some(i => i.id === page)) return true;
+  // … or it's an off-nav action page this role may reach via a button/menu —
+  // e.g. the profile-menu Settings link, or ops/procurement placing an order on
+  // a client's behalf from the order queue.
+  return (ACTION_PAGES[page] || []).includes(APP.user.role);
 }
+// Pages not in any sidebar nav that specific roles may still reach via buttons/menus.
+const ACTION_PAGES = {
+  settings:    ['super_admin', 'ops_admin'],
+  place_order: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'],
+};
 
 function getDefaultPage() {
   const nav = APP.user.nav;

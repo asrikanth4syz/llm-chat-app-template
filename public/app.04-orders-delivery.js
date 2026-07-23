@@ -51,7 +51,7 @@ async function renderMyOrders(el) {
           <div style="font-size:3rem;margin-bottom:12px">📋</div>
           <div style="font-weight:700;font-size:1rem;color:var(--navy)">No orders found</div>
           <div style="font-size:.83rem;color:var(--text-muted);margin-top:6px">Try "All" or clear the search filter</div>
-          <button class="btn btn-gold" style="margin-top:16px" ${dataAct('navigate', 'place_order')}>${iconPlus(13)} Place New Order</button>
+          ${canAccessPage('place_order') ? `<button class="btn btn-gold" style="margin-top:16px" ${dataAct('navigate', 'place_order')}>${iconPlus(13)} Place New Order</button>` : ''}
         </div>`;
         return;
       }
@@ -142,7 +142,7 @@ async function renderMyOrders(el) {
         <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Orders</div>
         <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count">${orders.length} orders</div>
       </div>
-      <button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>
+      ${canAccessPage('place_order') ? `<button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>` : ''}
     </div>
 
     <!-- KPI tiles -->
