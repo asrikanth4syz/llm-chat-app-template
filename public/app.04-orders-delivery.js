@@ -1401,7 +1401,10 @@ async function inventoryShortageModal(orderId) {
      <table class="table" style="margin:0">
        <thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost (₹)</th></tr></thead>
        <tbody>${itemRows || '<tr><td colspan="3" class="u-empty">No line items on this order</td></tr>'}</tbody>
-     </table>`,
+     </table>
+     <div style="margin-top:10px;padding:9px 12px;background:var(--warning-bg,#fffbeb);border:1px solid #fde68a;border-radius:8px;color:#92400e;font-size:.8rem">
+       ⚠ Unit costs are pre-filled from the order's list price. Set each line to the <b>vendor's quoted cost</b> before raising the PO.
+     </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-gold" ${dataAct('submitLinkedPO', orderId)} ${activeVendors.length?'':'disabled'}>Raise PO &amp; Link Order</button>`);
 }
@@ -1412,13 +1415,32 @@ async function submitLinkedPO(orderId) {
   const expected = document.getElementById('po-expected')?.value || '';
   const qtyInputs   = [...document.querySelectorAll('.po-line-qty')];
   const priceInputs = [...document.querySelectorAll('.po-line-price')];
+
+  // Every ordered line needs a vendor cost — a PO with a ₹0 line is meaningless.
+  // Flag the missing-price inputs (for lines that are actually being ordered) in red.
+  let hasQty = false, missingPrice = false;
+  qtyInputs.forEach((q, i) => {
+    const qty = Number(q.value) || 0;
+    const priceEl = priceInputs[i];
+    const price = Number(priceEl?.value) || 0;
+    if (qty > 0) {
+      hasQty = true;
+      const bad = price <= 0;
+      if (priceEl) priceEl.style.borderColor = bad ? 'var(--danger)' : 'var(--border)';
+      if (bad) missingPrice = true;
+    } else if (priceEl) {
+      priceEl.style.borderColor = 'var(--border)';
+    }
+  });
+  if (!hasQty) { showToast('Enter a quantity for at least one item', 'error'); return; }
+  if (missingPrice) { showToast('Set a vendor unit cost for every ordered item before raising the PO', 'error'); return; }
+
   const items = qtyInputs.map((q, i) => ({
     sku: q.dataset.sku,
     name: q.dataset.name,
     qty: Number(q.value) || 0,
     unit_price: Number(priceInputs[i]?.value) || 0,
   })).filter(it => it.qty > 0);
-  if (!items.length) { showToast('Enter a quantity for at least one item', 'error'); return; }
 
   const btn = document.querySelector('#modal-footer .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Raising PO…'; }
