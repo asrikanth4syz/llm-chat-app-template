@@ -1117,7 +1117,7 @@ async function handleRepriceOrder(request: Request, env: Env, path: string): Pro
   const denied = requireUser(user);
   if (denied) return denied;
   // Pricing is an internal task — only 4SYZ ops/procurement roles may set prices.
-  if (!["super_admin","ops_admin","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  if (!["super_admin","ops_admin","ops_manager","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
 
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as { prices: Array<{id:string; unit_price:number}> };

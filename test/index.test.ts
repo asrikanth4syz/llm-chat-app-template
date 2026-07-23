@@ -625,9 +625,10 @@ describe("Ad-hoc orders (no catalogue selection)", () => {
 
   it("Ops prices the ad-hoc order → it enters the normal flow with a real total", async () => {
     const id = await post("/api/orders", adhocBody, clientToken).then(r => r.json()).then((b: { id:string }) => b.id);
-    const detail = await get(`/api/orders/${id}`, adminToken).then(r => r.json()) as { items: Array<{id:string; qty:number}> };
+    const detail = await get(`/api/orders/${id}`, opsToken).then(r => r.json()) as { items: Array<{id:string; qty:number}> };
     const prices = detail.items.map(i => ({ id: i.id, unit_price: 120 }));
-    const res = await post(`/api/orders/${id}/reprice`, { prices }, adminToken);
+    // Priced by an ops_manager — proves the role is authorised to set prices.
+    const res = await post(`/api/orders/${id}/reprice`, { prices }, opsToken);
     expect(res.status).toBe(200);
     const body = await res.json() as { status: string; grand_total: number };
     // 2*120 + 500*120 = 60240 subtotal; below the 100000 default threshold → SUBMITTED
