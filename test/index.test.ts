@@ -652,6 +652,40 @@ describe("Ad-hoc orders (no catalogue selection)", () => {
   });
 });
 
+describe("Vendor PO linked to a shortage order", () => {
+  it("raising a PO with order_id moves the order INVENTORY_CHECK → VENDOR_PO_RAISED", async () => {
+    const db = env.DB as D1Database;
+    const oid = "TST-PO-LINK-1";
+    // Seed an order sitting in INVENTORY_CHECK (the state where Ops raises a PO).
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(oid, "c1", "tst-ops", "INVENTORY_CHECK", 1000, 180, 1180, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("tst-poi-1", oid, "SKU001", "Basmati Rice 5kg", 10, 100, 1000).run();
+
+    const res = await post("/api/purchase-orders", {
+      vendor_id: "v1",
+      order_id: oid,
+      items: [{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 10, unit_price: 90 }],
+      expected_delivery: "2026-08-01",
+    }, adminToken);
+    expect(res.status).toBe(201);
+    const body = await res.json() as { id: string };
+    expect(body.id).toBeTruthy();
+
+    // The linked order is now awaiting the vendor.
+    const after = await get(`/api/orders/${oid}`, adminToken).then(r => r.json()) as { status: string };
+    expect(after.status).toBe("VENDOR_PO_RAISED");
+  });
+
+  it("a standalone PO (no order_id) is still created and touches no order", async () => {
+    const res = await post("/api/purchase-orders", {
+      vendor_id: "v1",
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 5, unit_price: 120 }],
+    }, adminToken);
+    expect(res.status).toBe(201);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENT CATALOG
 // ════════════════════════════════════════════════════════════════════

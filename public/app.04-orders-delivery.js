@@ -1366,16 +1366,71 @@ function orderQueueActions(o) {
   return `<div style="display:flex;gap:4px;flex-wrap:wrap">${btns.join('')}</div>`;
 }
 
-function inventoryShortageModal(orderId) {
-  openModal('Stock Shortage — Raise Vendor PO',
-    `<p style="color:var(--text-muted);margin-bottom:12px;font-size:.9rem">
-       Stock is insufficient for order <b>${orderId}</b>. This will mark the order as <b>Vendor PO Required</b> and redirect you to Procurement to raise a PO.
+// Guided "Raise Vendor PO" — pre-fills the shortage order's line items, lets Ops
+// pick a vendor and set quantities/costs, and posts a PO LINKED to the order so
+// the backend moves it INVENTORY_CHECK → VENDOR_PO_RAISED in one step.
+async function inventoryShortageModal(orderId) {
+  const [order, vendors] = await Promise.all([api('/orders/' + orderId), api('/vendors')]);
+  if (!order || !vendors) return;
+  const activeVendors = (vendors||[]).filter(v => v.active !== 0);
+  const vendorOpts = activeVendors.map(v => `<option value="${v.id}">${h(v.name)}${v.category?` · ${h(v.category)}`:''}</option>`).join('');
+  const cell = 'padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;box-sizing:border-box';
+  const itemRows = (order.items||[]).map(it => `
+    <tr>
+      <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${it.sku}</div></td>
+      <td style="text-align:right"><input type="number" class="po-line-qty" data-sku="${h(it.sku)}" data-name="${h(it.name)}" min="0" value="${it.qty}" style="${cell};width:80px;text-align:right"></td>
+      <td style="text-align:right"><input type="number" class="po-line-price" min="0" step="0.01" value="${it.unit_price>0?it.unit_price:''}" placeholder="0.00" style="${cell};width:110px;text-align:right"></td>
+    </tr>`).join('');
+
+  openModal(`⚠ Raise Vendor PO — Order ${orderId}`,
+    `<p style="color:var(--text-muted);margin:0 0 14px;font-size:.87rem">
+       Stock is short for this order. Raise a purchase order to a vendor for the items below — the order will move to
+       <b>VENDOR PO RAISED</b> automatically, and revert to picking once the vendor accepts.
      </p>
-     <p style="font-size:.85rem;color:var(--warning)">
-       ⚠ Once you raise a PO linked to this order, it will automatically move to <b>VENDOR PO RAISED</b> status.
-     </p>`,
+     ${activeVendors.length ? '' : `<div style="padding:10px 12px;background:var(--danger-soft-bg,#fef2f2);border:1px solid #fecaca;border-radius:8px;color:var(--danger);font-size:.84rem;margin-bottom:12px">No active vendors found. Add a vendor first, then raise the PO.</div>`}
+     <div style="display:grid;grid-template-columns:1fr 160px;gap:12px;margin-bottom:14px">
+       <div>
+         <label style="display:block;margin-bottom:6px;font-weight:600;font-size:.85rem">Vendor</label>
+         <select id="po-vendor" style="width:100%;${cell}">${vendorOpts || '<option value="">— none —</option>'}</select>
+       </div>
+       <div>
+         <label style="display:block;margin-bottom:6px;font-weight:600;font-size:.85rem">Expected delivery</label>
+         <input type="date" id="po-expected" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}" style="width:100%;${cell}">
+       </div>
+     </div>
+     <table class="table" style="margin:0">
+       <thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost (₹)</th></tr></thead>
+       <tbody>${itemRows || '<tr><td colspan="3" class="u-empty">No line items on this order</td></tr>'}</tbody>
+     </table>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-gold" ${dataAct('goProcureForOrder', orderId)}>→ Go to Procurement</button>`);
+     <button class="btn btn-gold" ${dataAct('submitLinkedPO', orderId)} ${activeVendors.length?'':'disabled'}>Raise PO &amp; Link Order</button>`);
+}
+
+async function submitLinkedPO(orderId) {
+  const vendorId = document.getElementById('po-vendor')?.value;
+  if (!vendorId) { showToast('Select a vendor', 'error'); return; }
+  const expected = document.getElementById('po-expected')?.value || '';
+  const qtyInputs   = [...document.querySelectorAll('.po-line-qty')];
+  const priceInputs = [...document.querySelectorAll('.po-line-price')];
+  const items = qtyInputs.map((q, i) => ({
+    sku: q.dataset.sku,
+    name: q.dataset.name,
+    qty: Number(q.value) || 0,
+    unit_price: Number(priceInputs[i]?.value) || 0,
+  })).filter(it => it.qty > 0);
+  if (!items.length) { showToast('Enter a quantity for at least one item', 'error'); return; }
+
+  const btn = document.querySelector('#modal-footer .btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = 'Raising PO…'; }
+  const res = await api('/purchase-orders', {
+    method: 'POST',
+    body: JSON.stringify({ vendor_id: vendorId, order_id: orderId, items, ...(expected ? { expected_delivery: expected } : {}) }),
+  });
+  closeModal();
+  if (res) {
+    showToast(`PO ${res.id} raised & linked — order ${orderId} moved to Vendor PO Raised`);
+    navigate('procurement');
+  }
 }
 
 async function dispatchRemainingModal(orderId) {

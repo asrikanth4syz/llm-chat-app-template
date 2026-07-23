@@ -1099,7 +1099,6 @@ function sdClearClientFilter() { APP._sdClientFilter = ''; navigate('service_des
 function clearCartToCatalogue() { APP.cart = []; switchOrderStep('catalogue'); showToast('Cart cleared'); }
 function stopVoiceAndClose() { stopVoiceIfRecording(); closeModal(); }
 function goCriticalStockReport() { navigate('reports'); setTimeout(() => viewReport('critical-stock'), 300); }
-function goProcureForOrder(orderId) { closeModal(); navigate('procurement'); showToast('Raise a PO and link it to order ' + orderId, 'info'); }
 function hideEl(id) { const e = document.getElementById(id); if (e) e.style.display = 'none'; }
 function clickEl(id) { const e = document.getElementById(id); if (e) e.click(); }
 function scrollToEl(id) { const e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth' }); }
