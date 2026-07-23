@@ -131,6 +131,35 @@ const result = await page.evaluate(async (actTargets) => {
   // Every delegated (data-act) target resolves to a callable function:
   out.unresolvedActs = actTargets.filter((n) => typeof window[n] !== "function");
   out.actCount = actTargets.length;
+
+  // ── ACL: no role may be offered a quick action, dashboard tile, or navigate()
+  // target that lands on a page outside its own sidebar navigation. Orphan pages
+  // (reachable only via a role-gated menu link) are allowed through canAccessPage.
+  try {
+    out.aclLeaks = [];        // quick actions whose target page isn't in the role's nav
+    out.navGuardFails = [];   // canAccessPage lets a role reach an off-nav page it shouldn't
+    const ORPHAN_OK = { settings: ["super_admin", "ops_admin"] };
+    for (const [role, meta] of Object.entries(ROLES)) {
+      APP.user = { role, nav: meta.nav };
+      const navIds = new Set((NAV[meta.nav] || []).filter((i) => i.id).map((i) => i.id));
+      // 1. Quick actions must all target a page in this role's nav.
+      for (const a of quickActionItems()) {
+        const pg = a.arg ?? a.need;
+        if (pg !== undefined && !navIds.has(pg)) out.aclLeaks.push(`${role}: quick '${a.label}' -> ${pg}`);
+      }
+      // 2. canAccessPage must reject every PAGE_MAP page not in nav, unless it's a
+      //    sanctioned orphan for this role.
+      for (const pg of Object.keys(PAGE_MAP)) {
+        if (pg === "dashboard") continue;
+        const inNav = navIds.has(pg);
+        const orphanAllowed = (ORPHAN_OK[pg] || []).includes(role);
+        const allowed = canAccessPage(pg);
+        if (allowed && !inNav && !orphanAllowed) out.navGuardFails.push(`${role}: canAccessPage('${pg}')=true off-nav`);
+        if (!allowed && (inNav || orphanAllowed)) out.navGuardFails.push(`${role}: canAccessPage('${pg}')=false but permitted`);
+      }
+    }
+    APP.user = null;
+  } catch (e) { out.aclErr = String(e.message); }
   return out;
 }, actTargets);
 
@@ -141,6 +170,9 @@ check("closeModal hides the dialog", result.modalCloses === true);
 check("vendorViewHTML returns markup", result.rendersHtml === true);
 check("vendorViewHTML escapes user text", result.escapesUserText === true);
 check(`all ${result.actCount || 0} delegated targets resolve`, Array.isArray(result.unresolvedActs) && result.unresolvedActs.length === 0 || (console.log("    unresolved:", result.unresolvedActs), false));
+check("no role has an off-nav quick action", Array.isArray(result.aclLeaks) && result.aclLeaks.length === 0 || (console.log("    leaks:", result.aclLeaks), false));
+check("canAccessPage gates every role correctly", Array.isArray(result.navGuardFails) && result.navGuardFails.length === 0 || (console.log("    guard fails:", result.navGuardFails), false));
+if (result.aclErr) console.log("    acl error:", result.aclErr);
 if (result.modalErr) console.log("    modal error:", result.modalErr);
 if (result.renderErr) console.log("    render error:", result.renderErr);
 

@@ -45,7 +45,7 @@ async function renderClientDashboard(el) {
       <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Welcome back, ${(APP.user?.name||'').split(' ')[0]} 👋</div>
       <div style="font-size:.85rem;color:var(--text-muted);margin-top:2px">${client?.name||'My Organization'} · ${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'})}</div>
     </div>
-    <button class="btn btn-primary" ${dataAct('navigate', 'place_order')} style="padding:10px 22px;font-weight:700">${iconPlus(15)} Place Order</button>
+    ${canAccessPage('place_order') ? `<button class="btn btn-primary" ${dataAct('navigate', 'place_order')} style="padding:10px 22px;font-weight:700">${iconPlus(15)} Place Order</button>` : ''}
   </div>
 
   <!-- ═══ WHAT NEEDS ATTENTION TODAY ═══ -->
@@ -106,7 +106,7 @@ async function renderClientDashboard(el) {
       { icon:'📉', label:'Log Use',       sub:'record consumption', act:'quickNav', arg:'my_inventory' },
       { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', act:'quickNav', arg:'track_delivery' },
       { icon:'📊', label:'Reports',       sub:'spend & usage',    act:'quickNav', arg:'client_reports' },
-    ].map(a=>`
+    ].filter(a=>{ const pg = a.arg ?? (a.act==='quickNavCSV' ? 'place_order' : undefined); return pg===undefined || canAccessPage(pg); }).map(a=>`
     <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" data-hoverlift>
       <div style="font-size:1.5rem;margin-bottom:5px">${a.icon}</div>
       <div style="font-weight:700;font-size:.8rem;color:var(--navy)">${a.label}</div>

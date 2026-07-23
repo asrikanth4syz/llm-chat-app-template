@@ -413,27 +413,28 @@ function toggleQuickActions(e) {
 }
 function quickActionItems() {
   const nav = APP.user?.nav;
-  if (['client','client_user','approver'].includes(nav)) return [
+  let items;
+  if (['client','client_user','approver'].includes(nav)) items = [
     { icon:'🛒', label:'Place order', sub:'browse the catalogue', act:'quickNav', arg:'place_order' },
-    { icon:'📋', label:'Upload order sheet', sub:'export &amp; import quantities', act:'quickNavCSV' },
+    { icon:'📋', label:'Upload order sheet', sub:'export &amp; import quantities', act:'quickNavCSV', need:'place_order' },
     { icon:'📉', label:'Log use', sub:'record consumption', act:'quickNav', arg:'my_inventory' },
   ];
-  if (nav === 'vendor' || nav === 'vendor_user') return [
+  else if (nav === 'vendor' || nav === 'vendor_user') items = [
     { icon:'📦', label:'View purchase orders', sub:'respond to POs', act:'quickNav', arg:'vendor_pos' },
     { icon:'🧾', label:'Invoices', sub:'raise &amp; track', act:'quickNav', arg:'vendor_invoices' },
   ];
-  // admin / ops / procurement / warehouse / finance / delivery — scope each action
-  // to pages actually in the user's own navigation (not the global PAGE_MAP), so a
-  // delivery executive whose nav is only Dashboard + My Deliveries sees none of
-  // these admin shortcuts.
-  const items = [
+  else items = [
     { icon:'📅', label:'Delivery calendar', sub:'plan &amp; reschedule', act:'quickNav', arg:'delivery_calendar' },
     { icon:'📦', label:'Add product', sub:'to the catalogue', act:'quickNav', arg:'inventory' },
     { icon:'🏢', label:'Onboard client', sub:'new organisation', act:'quickNav', arg:'clients' },
     { icon:'🎫', label:'New ticket', sub:'service desk', act:'quickNav', arg:'service_desk' },
   ];
+  // Every quick action must point at a page in the user's own navigation — so a
+  // Client Approver (Approvals + My Orders only) never gets "Log use" or "Place
+  // order", and a Vendor User never gets "Invoices". `need` covers actions whose
+  // page target isn't a plain arg (e.g. the CSV upload shortcut → place_order).
   const navIds = new Set((NAV[nav] || []).filter(i => i.id).map(i => i.id));
-  return items.filter(a => a.arg === undefined || navIds.has(a.arg));
+  return items.filter(a => { const pg = a.arg ?? a.need; return pg === undefined || navIds.has(pg); });
 }
 
 // ── Global Search (Gap 10) ─────────────────────────────────
@@ -515,6 +516,19 @@ function startNotificationPolling() {
     if (firstPoll) { APP._lastToastedNotifId = newestId; firstPoll = false; }
     APP._prevUnread = unreadCount;
   }, 30000);
+}
+
+// Single source of truth for page-level access: a role may open a page only if it
+// is in that role's navigation (dashboard is always allowed). Used to guard
+// navigate() and to hide shortcuts that would lead somewhere off-menu.
+function canAccessPage(page) {
+  if (!APP.user) return true;
+  if (page === 'dashboard') return true;
+  // Orphan pages: reachable via profile/menu deep-links rather than the sidebar
+  // nav, so they aren't in any NAV[] array. Gate them by role explicitly to
+  // match the surface that exposes them (e.g. the profile menu Settings link).
+  if (page === 'settings') return ['super_admin', 'ops_admin'].includes(APP.user.role);
+  return (NAV[APP.user.nav] || []).some(i => i.id === page);
 }
 
 function getDefaultPage() {
@@ -747,6 +761,8 @@ const PAGE_MAP = {
 };
 
 function navigate(page) {
+  // ACL guard: never render a page outside the current role's navigation.
+  if (!canAccessPage(page)) { showToast('That section is not available for your role', 'info'); page = getDefaultPage(); }
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
   APP.page = page;
