@@ -614,6 +614,8 @@ export default {
       if (path==="/api/reports/client-fulfilment"    && method==="GET") return handleRptClientFulfilment(request,env);
       if (path==="/api/reports/procurement-forecast" && method==="GET") return handleRptProcurementForecast(request,env);
       if (path==="/api/reports/consolidated-orders"  && method==="GET") return handleRptConsolidatedOrders(request,env);
+      if (path==="/api/reports/order-consolidation"       && method==="GET") return handleRptOrderConsolidation(request,env);
+      if (path==="/api/reports/order-consolidation/drill" && method==="GET") return handleRptOrderConsolidationDrill(request,env);
       if (path==="/api/reports/consolidated-due"     && method==="GET") return handleRptConsolidatedDue(request,env);
       if (path==="/api/reports/client-summary"       && method==="GET") return handleRptClientSummary(request,env);
       if (path==="/api/reports/client-consumption"  && method==="GET") return handleRptClientConsumption(request,env);
@@ -4847,6 +4849,81 @@ async function handleRptConsolidatedOrders(request: Request, env: Env): Promise<
     HAVING total_due_qty > 0
     ORDER BY total_due_qty DESC
   `).all();
+  return json(results);
+}
+
+// Shared filter for the consolidated order report: date range (from/to on the
+// order's created date) and/or an explicit set of order ids. Cancelled & draft
+// orders are always excluded. Returns a WHERE clause fragment + ordered binds.
+function orderConsolidationFilters(url: URL): { clause: string; binds: string[] } {
+  const parts: string[] = ["o.status NOT IN ('CANCELLED','DRAFT')"];
+  const binds: string[] = [];
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const orderIds = url.searchParams.get("order_ids");
+  if (from) { parts.push("date(o.created_at) >= date(?)"); binds.push(from); }
+  if (to)   { parts.push("date(o.created_at) <= date(?)"); binds.push(to); }
+  if (orderIds) {
+    const ids = orderIds.split(",").map(s => s.trim()).filter(Boolean).slice(0, 500);
+    if (ids.length) { parts.push(`o.id IN (${ids.map(() => "?").join(",")})`); binds.push(...ids); }
+  }
+  return { clause: parts.join(" AND "), binds };
+}
+
+const OC_DELIVERED_SUBQUERY =
+  "COALESCE((SELECT SUM(dci.qty_delivered) FROM dc_items dci JOIN delivery_challans dc ON dci.dc_id=dc.id WHERE dc.order_id=o.id AND dci.sku=oi.sku),0)";
+
+// GET /api/reports/order-consolidation — per-product roll-up across every order
+// in the selected period / order set: total ordered, delivered, and due, with
+// the number of distinct orders and clients contributing (e.g. two clients each
+// ordering 10 Coke → Coke: 20 ordered, 2 clients).
+async function handleRptOrderConsolidation(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  // Cross-client consolidation is an internal (4SYZ) view.
+  if (["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const url = new URL(request.url);
+  const { clause, binds } = orderConsolidationFilters(url);
+  const { results } = await env.DB.prepare(`
+    SELECT oi.sku, oi.name as item_name,
+      SUM(oi.qty) as ordered_qty,
+      COALESCE(SUM(${OC_DELIVERED_SUBQUERY}),0) as delivered_qty,
+      SUM(oi.qty) - COALESCE(SUM(${OC_DELIVERED_SUBQUERY}),0) as due_qty,
+      COUNT(DISTINCT o.id) as order_count,
+      COUNT(DISTINCT o.client_id) as client_count,
+      GROUP_CONCAT(DISTINCT c.name) as clients
+    FROM order_items oi
+    JOIN orders o ON oi.order_id=o.id
+    JOIN clients c ON o.client_id=c.id
+    WHERE ${clause}
+    GROUP BY oi.sku, oi.name
+    ORDER BY ordered_qty DESC, item_name ASC
+  `).bind(...binds).all();
+  return json(results);
+}
+
+// GET /api/reports/order-consolidation/drill?sku=… — the per-order / per-client
+// breakdown behind one product row in the consolidated report.
+async function handleRptOrderConsolidationDrill(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const url = new URL(request.url);
+  const sku = url.searchParams.get("sku");
+  if (!sku) return json({error:"sku required"}, 400);
+  const { clause, binds } = orderConsolidationFilters(url);
+  const { results } = await env.DB.prepare(`
+    SELECT o.id as order_id, o.created_at as order_date, o.status,
+      c.name as client_name,
+      oi.qty as ordered_qty,
+      ${OC_DELIVERED_SUBQUERY} as delivered_qty,
+      oi.qty - ${OC_DELIVERED_SUBQUERY} as due_qty
+    FROM order_items oi
+    JOIN orders o ON oi.order_id=o.id
+    JOIN clients c ON o.client_id=c.id
+    WHERE ${clause} AND oi.sku=?
+    ORDER BY o.created_at DESC, c.name ASC
+  `).bind(...binds, sku).all();
   return json(results);
 }
 

@@ -686,6 +686,61 @@ describe("Vendor PO linked to a shortage order", () => {
   });
 });
 
+describe("Consolidated order report (by product)", () => {
+  // Two clients each ordering 10 Coke in May → Coke: 20 ordered, 2 clients.
+  async function seedCoke(db: D1Database) {
+    await db.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,?)").bind("c2", "Emerald Global", 1).run();
+    for (const [oid, cid] of [["OC-1", "c1"], ["OC-2", "c2"]] as const) {
+      await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+        .bind(oid, cid, "tst-ops", "SUBMITTED", 150, 27, 177, "Regular", "2026-05-15 10:00:00").run();
+      await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+        .bind("oi-" + oid, oid, "COKE", "Coca-Cola 300ml", 10, 15, 150).run();
+    }
+  }
+
+  it("rolls up one product across two clients (10 + 10 = 20 ordered, 2 clients, 2 orders)", async () => {
+    await seedCoke(env.DB as D1Database);
+    const res = await get("/api/reports/order-consolidation?from=2026-05-01&to=2026-05-31", adminToken);
+    expect(res.status).toBe(200);
+    const rows = await res.json() as Array<{ sku: string; ordered_qty: number; client_count: number; order_count: number }>;
+    const coke = rows.find(r => r.sku === "COKE");
+    expect(coke).toBeTruthy();
+    expect(coke!.ordered_qty).toBe(20);
+    expect(coke!.client_count).toBe(2);
+    expect(coke!.order_count).toBe(2);
+  });
+
+  it("the date filter excludes orders outside the range", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind("OC-APR", "c1", "tst-ops", "SUBMITTED", 100, 18, 118, "Regular", "2026-04-10 10:00:00").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("oi-apr", "OC-APR", "APRILONLY", "April Item", 7, 10, 70).run();
+    const rows = await get("/api/reports/order-consolidation?from=2026-05-01&to=2026-05-31", adminToken).then(r => r.json()) as Array<{ sku: string }>;
+    expect(rows.find(r => r.sku === "APRILONLY")).toBeFalsy();
+  });
+
+  it("drill returns the per-order / per-client breakdown for a product", async () => {
+    await seedCoke(env.DB as D1Database);
+    const res = await get("/api/reports/order-consolidation/drill?sku=COKE&from=2026-05-01&to=2026-05-31", adminToken);
+    expect(res.status).toBe(200);
+    const rows = await res.json() as Array<{ order_id: string; client_name: string; ordered_qty: number }>;
+    expect(rows.length).toBe(2);
+    expect(rows.every(r => r.ordered_qty === 10)).toBe(true);
+    expect(new Set(rows.map(r => r.client_name)).size).toBe(2);
+  });
+
+  it("drill without sku returns 400", async () => {
+    const res = await get("/api/reports/order-consolidation/drill?from=2026-05-01&to=2026-05-31", adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("client roles cannot see the cross-client consolidation (403)", async () => {
+    const res = await get("/api/reports/order-consolidation", clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENT CATALOG
 // ════════════════════════════════════════════════════════════════════

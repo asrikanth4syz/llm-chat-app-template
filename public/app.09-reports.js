@@ -1551,3 +1551,220 @@ function _downloadCSV(name, csv) {
   a.click(); URL.revokeObjectURL(url);
   showToast('CSV downloaded');
 }
+
+/* ============================================================
+   CONSOLIDATED ORDER REPORT — quantities rolled up by product
+   across clients & orders. Filter by month / custom range / a
+   hand-picked set of orders; drill any product to its per-order,
+   per-client breakdown (ordered · delivered · due).
+   ============================================================ */
+function ocMonthBounds(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, '0')}` };
+}
+
+function ocParams() {
+  const p = new URLSearchParams();
+  if (APP._ocMode === 'month') {
+    const { from, to } = ocMonthBounds(APP._ocMonth);
+    p.set('from', from); p.set('to', to);
+  } else if (APP._ocMode === 'range') {
+    if (APP._ocFrom) p.set('from', APP._ocFrom);
+    if (APP._ocTo)   p.set('to', APP._ocTo);
+  } else if (APP._ocMode === 'orders') {
+    const ids = [...(APP._ocSelected || [])];
+    if (ids.length) p.set('order_ids', ids.join(','));
+  }
+  return p;
+}
+
+function ocPeriodLabel() {
+  if (APP._ocMode === 'month') {
+    const [y, m] = APP._ocMonth.split('-');
+    return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  }
+  if (APP._ocMode === 'range') {
+    if (!APP._ocFrom && !APP._ocTo) return 'All dates';
+    return `${APP._ocFrom ? fmtDate(APP._ocFrom) : '…'} → ${APP._ocTo ? fmtDate(APP._ocTo) : '…'}`;
+  }
+  return `${(APP._ocSelected || new Set()).size} selected order(s)`;
+}
+
+async function renderConsolidatedReport(el) {
+  if (!APP._ocMode)  APP._ocMode = 'month';
+  if (!APP._ocMonth) APP._ocMonth = new Date().toISOString().slice(0, 7);
+  if (!APP._ocSelected) APP._ocSelected = new Set();
+  APP._ocOrders = (await api('/orders').catch(() => [])) || [];
+
+  el.innerHTML = `
+  ${pageHeader('Consolidated Order Report', 'Roll up quantities by product across clients & orders',
+    `<button class="btn btn-secondary" ${dataAct('ocExport')}>Export CSV</button>`)}
+  <div class="card" style="padding:16px 18px;margin-bottom:16px"><div id="oc-controls"></div></div>
+  <div id="oc-summary"></div>
+  <div id="oc-results"></div>`;
+  ocRenderControls();
+  ocGenerate();
+}
+
+function ocModeBtn(mode, label) {
+  const active = APP._ocMode === mode;
+  return `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}" ${dataAct('ocSetMode', mode)}>${label}</button>`;
+}
+
+function ocRenderControls() {
+  const wrap = document.getElementById('oc-controls');
+  if (!wrap) return;
+  const inp = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:.88rem';
+  let modeUI = '';
+  if (APP._ocMode === 'month') {
+    modeUI = `<label style="font-size:.82rem;font-weight:600;color:var(--text-muted)">Month
+      <input type="month" value="${APP._ocMonth}" ${dataChangeEl('ocSetMonth')} style="${inp};margin-left:8px"></label>`;
+  } else if (APP._ocMode === 'range') {
+    modeUI = `<label style="font-size:.82rem;font-weight:600;color:var(--text-muted)">From
+        <input type="date" value="${APP._ocFrom || ''}" ${dataChangeEl('ocSetFrom')} style="${inp};margin-left:6px"></label>
+      <label style="font-size:.82rem;font-weight:600;color:var(--text-muted);margin-left:10px">To
+        <input type="date" value="${APP._ocTo || ''}" ${dataChangeEl('ocSetTo')} style="${inp};margin-left:6px"></label>
+      <button class="btn btn-primary btn-sm" style="margin-left:10px" ${dataAct('ocGenerate')}>Generate</button>`;
+  } else {
+    const rows = (APP._ocOrders || []).slice(0, 300).map(o => `
+      <label class="oc-order-row" data-search="${h((o.id + ' ' + (o.client_name || '')).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);font-size:.83rem;cursor:pointer">
+        <input type="checkbox" data-oid="${o.id}" ${APP._ocSelected.has(o.id) ? 'checked' : ''} ${dataChangeEl('ocToggleOrder')}>
+        <span style="font-weight:600">${o.id}</span>
+        <span style="color:var(--text-muted)">${h(o.client_name || '—')}</span>
+        <span style="margin-left:auto;color:var(--text-muted)">${fmtDate(o.created_at)}</span>
+      </label>`).join('');
+    modeUI = `
+      <div style="width:100%">
+        <input type="search" placeholder="🔍 Filter orders by id or client…" ${dataInputEl('ocFilterOrderList')} style="${inp};width:100%;box-sizing:border-box;margin-bottom:8px">
+        <div style="max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">${rows || '<div class="u-empty" style="padding:16px">No orders available</div>'}</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px" ${dataAct('ocGenerate')}>Generate (<span id="oc-sel-count">${APP._ocSelected.size}</span>)</button>
+      </div>`;
+  }
+  wrap.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+      ${ocModeBtn('month', '📅 Month')}${ocModeBtn('range', '🗓 Custom range')}${ocModeBtn('orders', '✓ Select orders')}
+    </div>
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">${modeUI}</div>`;
+}
+
+function ocSetMode(mode) { APP._ocMode = mode; ocRenderControls(); if (mode !== 'orders') ocGenerate(); }
+function ocSetMonth(el) { APP._ocMonth = el.value; ocGenerate(); }
+function ocSetFrom(el) { APP._ocFrom = el.value; }
+function ocSetTo(el)   { APP._ocTo = el.value; }
+function ocToggleOrder(el) {
+  const id = el.dataset.oid;
+  if (el.checked) APP._ocSelected.add(id); else APP._ocSelected.delete(id);
+  const c = document.getElementById('oc-sel-count'); if (c) c.textContent = APP._ocSelected.size;
+}
+function ocFilterOrderList(el) {
+  const q = el.value.toLowerCase().trim();
+  document.querySelectorAll('.oc-order-row').forEach(r => {
+    r.style.display = (!q || r.dataset.search.includes(q)) ? '' : 'none';
+  });
+}
+
+async function ocGenerate() {
+  const res = document.getElementById('oc-results');
+  const sum = document.getElementById('oc-summary');
+  if (APP._ocMode === 'orders' && !APP._ocSelected.size) {
+    if (res) res.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">Select one or more orders, then Generate.</div>';
+    if (sum) sum.innerHTML = '';
+    return;
+  }
+  if (res) res.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">Loading…</div>';
+  const data = await api('/reports/order-consolidation?' + ocParams().toString());
+  if (!data) return;
+  APP._ocData = data;
+  ocRenderSummary(data);
+  ocRenderTable(data);
+}
+
+function ocRenderSummary(data) {
+  const el = document.getElementById('oc-summary'); if (!el) return;
+  const ordered   = data.reduce((s, r) => s + (r.ordered_qty || 0), 0);
+  const delivered = data.reduce((s, r) => s + (r.delivered_qty || 0), 0);
+  const due       = data.reduce((s, r) => s + (r.due_qty || 0), 0);
+  el.innerHTML = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+    ${[
+      { label: 'Products',        val: data.length, sub: 'distinct products', color: 'var(--navy)' },
+      { label: 'Total Ordered',   val: ordered,     sub: ocPeriodLabel(), color: 'var(--primary)' },
+      { label: 'Total Delivered', val: delivered,   sub: `${ordered ? Math.round(delivered / ordered * 100) : 0}% fulfilled`, color: 'var(--success)' },
+      { label: 'Total Due',       val: due,         sub: 'pending delivery', color: due ? 'var(--warning)' : 'var(--success)' },
+    ].map(k => `<div class="card" style="padding:16px 18px;border-top:3px solid ${k.color};margin:0">
+      <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
+      <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function ocRenderTable(data) {
+  const el = document.getElementById('oc-results'); if (!el) return;
+  if (!data.length) {
+    el.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)">No orders match this filter.</div>';
+    return;
+  }
+  el.innerHTML = `
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th></th><th>Product</th><th>SKU</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th><th class="u-center">Orders</th><th class="u-center">Clients</th></tr></thead>
+        <tbody>
+        ${data.map((r, i) => `
+          <tr class="oc-row" ${dataAct('ocDrill', i, r.sku)} style="cursor:pointer">
+            <td style="color:var(--text-muted)"><span id="oc-caret-${i}">▸</span></td>
+            <td><b>${h(r.item_name)}</b></td>
+            <td style="font-size:.8rem;color:var(--text-muted)">${r.sku}</td>
+            <td class="u-right"><b>${r.ordered_qty}</b></td>
+            <td class="u-right" style="color:var(--success)">${r.delivered_qty}</td>
+            <td class="u-right" style="color:${r.due_qty > 0 ? 'var(--danger)' : 'var(--success)'};font-weight:700">${r.due_qty}</td>
+            <td class="u-center">${r.order_count}</td>
+            <td class="u-center" title="${h(r.clients || '')}">${r.client_count}</td>
+          </tr>
+          <tr id="oc-drill-${i}" style="display:none"><td colspan="8" style="padding:0;background:var(--surface-2,#f8fafc)"><div id="oc-drill-body-${i}" style="padding:12px 18px"></div></td></tr>
+        `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function ocDrill(i, sku) {
+  const row = document.getElementById('oc-drill-' + i);
+  const caret = document.getElementById('oc-caret-' + i);
+  if (!row) return;
+  if (row.style.display !== 'none') { row.style.display = 'none'; if (caret) caret.textContent = '▸'; return; }
+  row.style.display = ''; if (caret) caret.textContent = '▾';
+  const body = document.getElementById('oc-drill-body-' + i);
+  if (body && !body.dataset.loaded) {
+    body.innerHTML = '<div style="color:var(--text-muted);font-size:.83rem">Loading breakdown…</div>';
+    const p = ocParams(); p.set('sku', sku);
+    const rows = await api('/reports/order-consolidation/drill?' + p.toString());
+    if (!rows) { body.innerHTML = '<div style="color:var(--danger)">Failed to load breakdown</div>'; return; }
+    body.dataset.loaded = '1';
+    body.innerHTML = `
+      <table class="table" style="margin:0;background:#fff;border-radius:8px">
+        <thead><tr><th>Client</th><th>Order</th><th>Date</th><th>Status</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th></tr></thead>
+        <tbody>${rows.map(d => `<tr ${dataAct('viewOrder', d.order_id)} style="cursor:pointer">
+          <td><b>${h(d.client_name)}</b></td>
+          <td style="font-size:.82rem">${d.order_id}</td>
+          <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(d.order_date)}</td>
+          <td>${statusBadge(d.status)}</td>
+          <td class="u-right">${d.ordered_qty}</td>
+          <td class="u-right" style="color:var(--success)">${d.delivered_qty}</td>
+          <td class="u-right" style="color:${d.due_qty > 0 ? 'var(--danger)' : 'var(--success)'};font-weight:${d.due_qty > 0 ? 700 : 400}">${d.due_qty}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="u-empty">No lines</td></tr>'}</tbody>
+      </table>`;
+  }
+}
+
+function ocExport() {
+  const data = APP._ocData;
+  if (!data || !data.length) { showToast('Generate a report first', 'error'); return; }
+  const q = s => `"${String(s == null ? '' : s).replace(/"/g, '""')}"`;
+  const header = 'Product,SKU,Ordered,Delivered,Due,Orders,Clients,Client Names';
+  const body = data.map(r => [q(r.item_name), r.sku, r.ordered_qty, r.delivered_qty, r.due_qty, r.order_count, r.client_count, q(r.clients)].join(',')).join('\n');
+  _downloadCSV('consolidated-order-report', header + '\n' + body);
+}
