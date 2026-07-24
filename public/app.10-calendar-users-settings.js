@@ -774,7 +774,7 @@ async function activateUser(id) {
 const SETTINGS_NAV = [
   { id:'auth',          icon:'🔐', label:'Auth & OTP',       desc:'OTP, MFA, JWT session' },
   { id:'notifications', icon:'🔔', label:'Notifications',    desc:'Email & SMS config' },
-  { id:'integrations',  icon:'🔗', label:'Integrations',     desc:'Zoho Books, webhooks' },
+  { id:'integrations',  icon:'🔗', label:'Integrations',     desc:'Zoho Books & Inventory' },
   { id:'budgets',       icon:'💰', label:'Client Budgets',   desc:'Monthly budgets & approval thresholds' },
   { id:'approval',      icon:'✅', label:'Approval Rules',   desc:'Order approval thresholds' },
   { id:'warehouses',    icon:'🏭', label:'Warehouses',       desc:'Manage warehouse config' },
@@ -885,7 +885,8 @@ async function settingsTab(tab, btn) {
   }
 
   else if (tab === 'integrations') {
-    const s = await api('/settings') || {};
+    const [s, zi] = await Promise.all([api('/settings'), api('/integrations/zoho-inventory/status')]);
+    const st = s || {}, z = zi || {};
     const origin = window.location.origin;
     el.innerHTML = `
     <div class="card">
@@ -898,7 +899,7 @@ async function settingsTab(tab, btn) {
               <div style="font-weight:600;font-size:.9rem">Zoho Books API</div>
               <div style="font-size:.78rem;color:var(--text-muted)">Org ID + Client ID configured</div>
             </div>
-            ${statusPill(s.zoho_configured, 'Configured', 'Not configured')}
+            ${statusPill(st.zoho_configured, 'Configured', 'Not configured')}
           </div>
         </div>
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px">
@@ -908,6 +909,58 @@ async function settingsTab(tab, btn) {
             <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho/webhook')}>Copy</button>
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Configure this URL in Zoho Books → Settings → Webhooks</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span>Zoho Inventory Sync</span>${z.enabled ? '<span class="badge badge-success">On</span>' : '<span class="badge badge-warning">Off</span>'}</div>
+      <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+            <div>
+              <div style="font-weight:600;font-size:.9rem">Stock sync with Zoho Inventory</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Push our stock levels to Zoho and accept stock updates back via webhook</div>
+            </div>
+            <button class="btn btn-sm ${z.enabled ? 'btn-danger' : 'btn-success'}" ${dataAct('zohoInvToggle', !z.enabled)}>
+              ${z.enabled ? 'Disable' : 'Enable'} Sync
+            </button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.8rem">
+            ${statusPill(z.configured, 'API configured', 'API not configured')}
+            ${z.simulated_mode ? '<span class="badge badge-warning">Simulated mode</span>' : ''}
+            <span style="color:var(--text-muted)">${z.item_count ?? 0} active items</span>
+          </div>
+          ${z.simulated_mode ? `<div style="font-size:.76rem;color:var(--text-muted)">Set <code>ZOHO_ACCESS_TOKEN</code> and <code>ZOHO_INVENTORY_ORG_ID</code> in wrangler.jsonc to push to the live Zoho org. Until then, syncs run in simulated mode so you can validate the flow.</div>` : ''}
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync Now</button>
+          <div style="font-size:.8rem;color:var(--text-muted)">
+            ${z.last_sync_at ? `Last sync: <b>${fmtDate(z.last_sync_at)}</b>${z.last_result ? ` · ${h(z.last_result)}` : ''}` : 'Never synced'}
+          </div>
+        </div>
+
+        ${(z.recent_log||[]).length ? `
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:6px">
+          <table class="table" style="margin:0">
+            <thead><tr><th>When</th><th>Direction</th><th>Items</th><th>Result</th></tr></thead>
+            <tbody>${z.recent_log.map(l=>`<tr>
+              <td style="font-size:.8rem;color:var(--text-muted)">${fmtDate(l.created_at)}</td>
+              <td>${l.direction==='pull'?'⬇ Pull':'⬆ Push'}</td>
+              <td>${l.items}</td>
+              <td style="font-size:.8rem">${l.direction==='pull'?`${l.pushed} updated`:`${l.pushed} pushed · ${l.simulated} simulated`}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>` : ''}
+
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="font-size:.82rem;font-weight:600;margin-bottom:6px">Inbound Webhook URL (Zoho → us)</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <code style="font-size:.8rem;background:#f1f5f9;padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho-inventory/webhook</code>
+            <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho-inventory/webhook')}>Copy</button>
+          </div>
+          <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Point Zoho Inventory stock-update webhooks here to keep our stock in sync. Payload: <code>{ items: [{ sku, stock }] }</code></div>
         </div>
       </div>
     </div>`;
@@ -1085,6 +1138,22 @@ async function saveClientBudgets() {
 
 async function testEmail() {
   showToast('Test email queued — check server logs for delivery status');
+}
+
+async function zohoInvToggle(enable) {
+  const res = await api('/integrations/zoho-inventory/toggle', { method:'POST', body: JSON.stringify({ enabled: !!enable }) });
+  if (!res) return;
+  showToast(res.enabled ? 'Zoho Inventory sync enabled' : 'Zoho Inventory sync disabled');
+  settingsTab('integrations', document.querySelector('.settings-nav-btn.active'));
+}
+
+async function zohoInvSyncNow() {
+  const btn = document.querySelector('#settings-content .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  const res = await api('/integrations/zoho-inventory/sync', { method:'POST' });
+  if (!res) { if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Now'; } return; }
+  showToast(`Synced ${res.items} item${res.items!==1?'s':''} to Zoho${res.simulated_mode ? ' (simulated)' : ` · ${res.pushed} pushed`}`);
+  settingsTab('integrations', document.querySelector('.settings-nav-btn.active'));
 }
 
 function addApprovalRuleModal() {

@@ -8,6 +8,9 @@ export interface Env {
   ZOHO_BOOKS_ORG_ID: string;
   ZOHO_BOOKS_CLIENT_ID: string;
   ZOHO_BOOKS_WEBHOOK_SECRET: string;
+  ZOHO_INVENTORY_ORG_ID?: string;
+  ZOHO_ACCESS_TOKEN?: string;
+  ZOHO_INVENTORY_WEBHOOK_SECRET?: string;
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_FROM_NUMBER: string;

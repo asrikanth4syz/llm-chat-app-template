@@ -741,6 +741,59 @@ describe("Consolidated order report (by product)", () => {
   });
 });
 
+describe("Zoho Inventory sync", () => {
+  it("status reports configured/enabled flags and an item count", async () => {
+    const res = await get("/api/integrations/zoho-inventory/status", adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { configured: boolean; enabled: boolean; item_count: number };
+    expect(typeof body.configured).toBe("boolean");
+    expect(typeof body.enabled).toBe("boolean");
+    expect(body.item_count).toBeGreaterThanOrEqual(0);
+  });
+
+  it("sync is blocked until enabled, then runs and logs (simulated mode)", async () => {
+    // Disabled by default → 400
+    const off = await post("/api/integrations/zoho-inventory/sync", {}, adminToken);
+    expect(off.status).toBe(400);
+
+    // Enable, then sync succeeds
+    const en = await post("/api/integrations/zoho-inventory/toggle", { enabled: true }, adminToken);
+    expect(en.status).toBe(200);
+    expect((await en.json() as { enabled: boolean }).enabled).toBe(true);
+
+    const run = await post("/api/integrations/zoho-inventory/sync", {}, adminToken);
+    expect(run.status).toBe(200);
+    const body = await run.json() as { ok: boolean; items: number; simulated: number; simulated_mode: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.items).toBeGreaterThanOrEqual(1);       // seeded inventory
+    expect(body.simulated_mode).toBe(true);             // no ZOHO_ACCESS_TOKEN in tests
+    expect(body.simulated).toBe(body.items);
+
+    // Status now reflects enabled + a last sync + a log row
+    const st = await get("/api/integrations/zoho-inventory/status", adminToken).then(r => r.json()) as { enabled: boolean; last_sync_at: string | null; recent_log: unknown[] };
+    expect(st.enabled).toBe(true);
+    expect(st.last_sync_at).toBeTruthy();
+    expect(st.recent_log.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("only ops/admin can toggle or sync (client 403)", async () => {
+    expect((await post("/api/integrations/zoho-inventory/toggle", { enabled: true }, clientToken)).status).toBe(403);
+    expect((await post("/api/integrations/zoho-inventory/sync", {}, clientToken)).status).toBe(403);
+  });
+
+  it("inbound webhook updates our stock from Zoho", async () => {
+    const res = await post("/api/integrations/zoho-inventory/webhook", {
+      items: [{ sku: "SKU001", stock: 777 }, { sku: "NON_EXISTENT", stock: 5 }],
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; updated: number };
+    expect(body.updated).toBe(1); // only the real SKU is updated
+
+    const inv = await get("/api/inventory", adminToken).then(r => r.json()) as Array<{ sku: string; stock: number }>;
+    expect(inv.find(i => i.sku === "SKU001")?.stock).toBe(777);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENT CATALOG
 // ════════════════════════════════════════════════════════════════════

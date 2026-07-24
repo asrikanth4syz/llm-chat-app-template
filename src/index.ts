@@ -151,6 +151,130 @@ async function syncToZohoBooks(env: Env, invoice: {id:string, clientName:string,
   console.log(`[Zoho] Would POST to Zoho Books org ${env.ZOHO_BOOKS_ORG_ID}: invoice ${invoice.id}`);
 }
 
+// ── App config (DB key/value — toggles that must not require a redeploy) ──
+async function getConfig(env: Env, key: string, dflt = ""): Promise<string> {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM app_config WHERE key=?").bind(key).first() as {value:string}|null;
+    return row?.value ?? dflt;
+  } catch { return dflt; }
+}
+async function setConfig(env: Env, key: string, value: string, actor?: string): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO app_config (key,value,updated_by) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now'), updated_by=excluded.updated_by"
+  ).bind(key, value, actor ?? null).run();
+}
+
+// ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
+// Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
+// stock updates back via a webhook. Real API calls fire when an OAuth access
+// token is configured; otherwise the push is simulated so the whole flow —
+// toggle, sync, log, webhook — is exercisable before credentials are wired in.
+function zohoInvConfigured(env: Env): boolean {
+  return !!((env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID) && env.ZOHO_ACCESS_TOKEN);
+}
+
+async function pushItemToZoho(env: Env, item: {sku:string; name:string; stock:number}): Promise<"pushed"|"simulated"> {
+  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID;
+  if (!env.ZOHO_ACCESS_TOKEN || !orgId) {
+    console.log(`[ZohoInv] (simulated) ${item.sku} → stock ${item.stock}`);
+    return "simulated";
+  }
+  try {
+    await fetch(`https://www.zohoapis.in/inventory/v1/items?organization_id=${orgId}`, {
+      method: "POST",
+      headers: { "Authorization": `Zoho-oauthtoken ${env.ZOHO_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sku: item.sku, name: item.name, initial_stock: item.stock }),
+    });
+    return "pushed";
+  } catch (e) {
+    console.log(`[ZohoInv] push failed for ${item.sku}: ${String(e)}`);
+    return "simulated";
+  }
+}
+
+async function runZohoInventorySync(env: Env, actor?: string): Promise<{items:number; pushed:number; simulated:number; at:string}> {
+  const { results } = await env.DB.prepare(
+    "SELECT sku, name, COALESCE(stock,0) as stock FROM inventory WHERE active=1"
+  ).all() as {results: Array<{sku:string;name:string;stock:number}>};
+  let pushed = 0, simulated = 0;
+  for (const it of results) {
+    const r = await pushItemToZoho(env, it);
+    if (r === "pushed") pushed++; else simulated++;
+  }
+  const at = new Date().toISOString();
+  await setConfig(env, "zoho_inv_last_sync_at", at, actor);
+  await setConfig(env, "zoho_inv_last_result", `${pushed} pushed · ${simulated} simulated · ${results.length} items`);
+  try {
+    await env.DB.prepare("INSERT INTO zoho_sync_log (id,direction,items,pushed,simulated,status,actor) VALUES (?,?,?,?,?,?,?)")
+      .bind(uid(), "push", results.length, pushed, simulated, "OK", actor ?? null).run();
+  } catch { /* non-fatal */ }
+  return { items: results.length, pushed, simulated, at };
+}
+
+async function handleZohoInvStatus(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const enabled = (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true";
+  const lastSync = await getConfig(env, "zoho_inv_last_sync_at", "");
+  const lastResult = await getConfig(env, "zoho_inv_last_result", "");
+  const itemCount = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=1").first() as {n:number}|null;
+  let log: unknown[] = [];
+  try { const { results } = await env.DB.prepare("SELECT * FROM zoho_sync_log ORDER BY created_at DESC LIMIT 5").all(); log = results; } catch { /* table pending */ }
+  return json({
+    configured: zohoInvConfigured(env),
+    enabled,
+    simulated_mode: !zohoInvConfigured(env),
+    last_sync_at: lastSync || null,
+    last_result: lastResult || null,
+    item_count: itemCount?.n || 0,
+    recent_log: log,
+  });
+}
+
+async function handleZohoInvToggle(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as { enabled?: boolean };
+  const enabled = !!body.enabled;
+  await setConfig(env, "zoho_inv_sync_enabled", enabled ? "true" : "false", user!.sub);
+  await audit(env, user, "UPDATE", "integration", "zoho_inventory", undefined, `enabled:${enabled}`);
+  return json({ enabled });
+}
+
+async function handleZohoInvSync(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const enabled = (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true";
+  if (!enabled) return json({error:"Zoho Inventory sync is disabled — enable it first"}, 400);
+  const result = await runZohoInventorySync(env, user!.sub);
+  await audit(env, user, "SYNC", "integration", "zoho_inventory", undefined, `${result.pushed} pushed, ${result.simulated} simulated`);
+  return json({ ok: true, ...result, simulated_mode: !zohoInvConfigured(env) });
+}
+
+// Inbound: Zoho pushes stock changes → update our inventory stock levels.
+async function handleZohoInvWebhook(request: Request, env: Env): Promise<Response> {
+  const secret = request.headers.get("X-Zoho-Webhook-Secret");
+  if (env.ZOHO_INVENTORY_WEBHOOK_SECRET && secret !== env.ZOHO_INVENTORY_WEBHOOK_SECRET) {
+    return json({error:"Invalid webhook secret"}, 401);
+  }
+  const body = await request.json() as { items?: Array<{sku:string; stock:number}> };
+  const items = Array.isArray(body.items) ? body.items : [];
+  let updated = 0;
+  for (const it of items) {
+    if (!it || !it.sku || typeof it.stock !== "number") continue;
+    const res = await env.DB.prepare("UPDATE inventory SET stock=? WHERE sku=?")
+      .bind(Math.max(0, Math.round(it.stock)), it.sku).run();
+    updated += (res.meta?.changes as number) || 0;
+  }
+  try {
+    await env.DB.prepare("INSERT INTO zoho_sync_log (id,direction,items,pushed,status,note) VALUES (?,?,?,?,?,?)")
+      .bind(uid(), "pull", items.length, updated, "OK", "webhook stock update").run();
+  } catch { /* non-fatal */ }
+  return json({ ok: true, updated });
+}
+
 // ── Notification helper ───────────────────────────────────────────────
 async function pushNotification(env: Env, userRole: string | null, message: string): Promise<void> {
   await env.DB.prepare("INSERT INTO notifications (id,user_role,message) VALUES (?,?,?)")
@@ -244,6 +368,8 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS stock_movements ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, type TEXT NOT NULL, qty_change INTEGER NOT NULL, reference_id TEXT, reference_type TEXT, note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS vendor_feedback ( id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, po_id TEXT, grn_id TEXT, quality_rating INTEGER NOT NULL DEFAULT 3, delivery_rating INTEGER NOT NULL DEFAULT 3, service_rating INTEGER NOT NULL DEFAULT 3, comments TEXT, submitted_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
+    `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   for (const sql of stmts) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
 }
@@ -599,6 +725,11 @@ export default {
 
       // Gap 4: Zoho Books webhook
       if (path==="/api/integrations/zoho/webhook" && method==="POST") return handleZohoWebhook(request,env);
+      // Gap 4b: Zoho Inventory sync
+      if (path==="/api/integrations/zoho-inventory/status"  && method==="GET")  return handleZohoInvStatus(request,env);
+      if (path==="/api/integrations/zoho-inventory/toggle"  && method==="POST") return handleZohoInvToggle(request,env);
+      if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env);
+      if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
       if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
@@ -3213,6 +3344,8 @@ async function handleGetSettings(request: Request, env: Env): Promise<Response> 
     otp_enabled: env.OTP_ENABLED === "true",
     mailchannels_enabled: env.MAILCHANNELS_ENABLED === "true",
     zoho_configured: !!(env.ZOHO_BOOKS_ORG_ID && env.ZOHO_BOOKS_CLIENT_ID),
+    zoho_inventory_configured: zohoInvConfigured(env),
+    zoho_inventory_enabled: (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true",
     twilio_configured: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN),
     msg91_configured: !!env.MSG91_AUTH_KEY,
     clients: clients.results,
