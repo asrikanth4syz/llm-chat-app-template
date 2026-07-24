@@ -649,8 +649,10 @@ function downloadCCAssigned() {
   a.click();
 }
 
-// Minimal RFC-4180 CSV row parser (handles quoted fields with commas / "").
-function ccParseCsvLine(line) {
+// Minimal RFC-4180 row parser (handles quoted fields). Delimiter is passed in so
+// we can support comma, tab (spreadsheet exports) and semicolon files.
+function ccParseCsvLine(line, delim) {
+  const d = delim || ',';
   const out = [];
   let cur = '', inQ = false;
   for (let i = 0; i < line.length; i++) {
@@ -659,11 +661,19 @@ function ccParseCsvLine(line) {
       if (ch === '"') { if (line[i+1] === '"') { cur += '"'; i++; } else inQ = false; }
       else cur += ch;
     } else if (ch === '"') inQ = true;
-    else if (ch === ',') { out.push(cur); cur = ''; }
+    else if (ch === d) { out.push(cur); cur = ''; }
     else cur += ch;
   }
   out.push(cur);
   return out.map(s => s.trim());
+}
+
+function ccNormName(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+function ccParsePrice(raw) {
+  const s = String(raw ?? '').replace(/[₹,\s]/g, '').trim();
+  if (s === '') return null;
+  const n = parseFloat(s);
+  return (isNaN(n) || n < 0) ? null : n;
 }
 
 function handleCCCsvUpload(input) {
@@ -671,36 +681,53 @@ function handleCCCsvUpload(input) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const rows = String(e.target.result).split(/\r?\n/).filter(l => l.trim());
-    if (!rows.length) { showToast('Empty file', 'error'); return; }
+    const rawRows = String(e.target.result).split(/\r?\n/).filter(l => l.trim());
+    if (!rawRows.length) { showToast('Empty file', 'error'); return; }
 
-    // Locate the sku and client_price columns from the header row (if present).
-    const header = ccParseCsvLine(rows[0]).map(c => c.toLowerCase());
-    const hasHeader = header.some(c => c === 'sku' || c.includes('sku'));
-    let skuIdx = 0, priceIdx = -1;
-    if (hasHeader) {
-      skuIdx = header.findIndex(c => c === 'sku');
-      if (skuIdx < 0) skuIdx = header.findIndex(c => c.includes('sku'));
-      priceIdx = header.findIndex(c => c === 'client_price' || c === 'client price');
-      if (priceIdx < 0) priceIdx = header.findIndex(c => c.includes('client') && c.includes('price'));
-    }
-    const dataRows = rows.slice(hasHeader ? 1 : 0);
+    // Auto-detect the delimiter from the first line (comma / tab / semicolon).
+    const first = rawRows[0];
+    const delim = [['\t', (first.match(/\t/g) || []).length], [';', (first.match(/;/g) || []).length], [',', (first.match(/,/g) || []).length]]
+      .sort((a, b) => b[1] - a[1])[0][0];
+
+    // Column detection from the header row (if present).
+    const header = ccParseCsvLine(rawRows[0], delim).map(c => c.toLowerCase());
+    const findCol = (...preds) => { for (const pred of preds) { const i = header.findIndex(pred); if (i >= 0) return i; } return -1; };
+    const skuIdx   = findCol(c => c === 'sku', c => c.includes('sku') || c.includes('item id') || c.includes('code'));
+    const nameIdx  = findCol(c => c === 'name', c => c.includes('name') || c.includes('product') || c.includes('item'));
+    const cpIdx    = findCol(c => c === 'client_price' || c === 'client price', c => c.includes('client') && c.includes('price'));
+    const gpIdx    = header.findIndex((c, i) => i !== cpIdx && (c === 'global_price' || c === 'price' || c === 'mrp' || c.includes('price') || c === 'rate' || c === 'amount'));
+    const hasHeader = skuIdx >= 0 || nameIdx >= 0 || cpIdx >= 0;
+    const dataRows = rawRows.slice(hasHeader ? 1 : 0);
 
     const assignedSkus = ccGetAssignedSkus();
-    const skuMap = new Map(_ccAllInventory.map(i => [i.sku, i]));
+    const skuMap  = new Map(_ccAllInventory.map(i => [i.sku, i]));
+    const nameMap = new Map(_ccAllInventory.map(i => [ccNormName(i.name), i]));
     const matched = [], unmatched = [], alreadyIn = [];
     const seen = new Set();
+
     for (const line of dataRows) {
-      const cols = ccParseCsvLine(line);
-      const sku = (cols[skuIdx < 0 ? 0 : skuIdx] || '').trim();
-      if (!sku || seen.has(sku)) continue;
-      seen.add(sku);
-      const rawPrice = priceIdx >= 0 ? (cols[priceIdx] || '').trim() : '';
-      const price = rawPrice === '' ? null : parseFloat(rawPrice);
-      const clientPrice = (price != null && !isNaN(price) && price >= 0) ? price : null;
-      if (assignedSkus.has(sku)) alreadyIn.push(sku);
-      else if (skuMap.has(sku)) matched.push({ item: skuMap.get(sku), clientPrice });
-      else unmatched.push(sku);
+      const cols = ccParseCsvLine(line, delim);
+      const skuVal  = (cols[skuIdx  >= 0 ? skuIdx  : 0] || '').trim();
+      const nameVal = (cols[nameIdx >= 0 ? nameIdx : (skuIdx >= 0 ? 1 : -1)] || '').trim();
+      if (!skuVal && !nameVal) continue; // blank row
+
+      // Match by SKU first, then fall back to product name.
+      const item = skuMap.get(skuVal) || nameMap.get(ccNormName(nameVal)) || (skuVal ? nameMap.get(ccNormName(skuVal)) : null);
+      const label = skuVal || nameVal;
+      if (!item) { unmatched.push(label); continue; }
+      if (seen.has(item.sku)) continue;
+      seen.add(item.sku);
+
+      // Client price: explicit client_price column, else a price the user typed
+      // in the price/global column that differs from the catalogue's own price.
+      let clientPrice = cpIdx >= 0 ? ccParsePrice(cols[cpIdx]) : null;
+      if (clientPrice == null && gpIdx >= 0) {
+        const gp = ccParsePrice(cols[gpIdx]);
+        if (gp != null && gp !== (item.unit_price ?? null)) clientPrice = gp;
+      }
+
+      if (assignedSkus.has(item.sku)) alreadyIn.push(item.sku);
+      else matched.push({ item, clientPrice });
     }
     showCCCsvPreview(matched, unmatched, alreadyIn);
   };
