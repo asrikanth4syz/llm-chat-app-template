@@ -372,6 +372,7 @@ function mapsLink(pin, address) {
 // ── Client Catalog Management ─────────────────────────────────────
 let _ccClientId = null;
 let _ccAllInventory = [];
+let _ccCsvMatched = null;
 
 async function manageClientCatalog(clientId, clientName) {
   _ccClientId = clientId;
@@ -613,12 +614,20 @@ function updateCCCount(delta) {
 
 function downloadCCTemplate(e) {
   if (e) e.preventDefault();
-  const csv = 'sku\n' + _ccAllInventory.slice(0,3).map(i=>i.sku).join('\n');
+  // Template lists every product the app has, with name + global price for
+  // reference and a blank client_price column for Ops to fill. Rows left blank
+  // are added at the global price; delete the rows you don't want before upload.
+  const esc = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const header = 'sku,name,category,global_price,client_price';
+  const rows = (_ccAllInventory || []).map(i =>
+    [esc(i.sku), esc(i.name), esc(i.category), esc(i.unit_price ?? ''), ''].join(','));
+  const csv = [header, ...rows].join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'client_catalog_template.csv';
+  a.download = `client_catalog_template_${_ccClientId || 'client'}.csv`;
   a.click();
+  showToast('Template downloaded — fill client_price and upload');
 }
 
 function downloadCCAssigned() {
@@ -640,24 +649,57 @@ function downloadCCAssigned() {
   a.click();
 }
 
+// Minimal RFC-4180 CSV row parser (handles quoted fields with commas / "").
+function ccParseCsvLine(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') { if (line[i+1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
 function handleCCCsvUpload(input) {
   const file = input.files?.[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const text = e.target.result;
-    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    // Detect header row — skip if first cell is 'sku' (case-insensitive)
-    const startIdx = lines[0]?.toLowerCase().startsWith('sku') ? 1 : 0;
-    // Support CSV with multiple columns — take first column as SKU
-    const parsedSkus = lines.slice(startIdx).map(l => l.split(',')[0].trim().replace(/^"|"$/g,''));
+    const rows = String(e.target.result).split(/\r?\n/).filter(l => l.trim());
+    if (!rows.length) { showToast('Empty file', 'error'); return; }
+
+    // Locate the sku and client_price columns from the header row (if present).
+    const header = ccParseCsvLine(rows[0]).map(c => c.toLowerCase());
+    const hasHeader = header.some(c => c === 'sku' || c.includes('sku'));
+    let skuIdx = 0, priceIdx = -1;
+    if (hasHeader) {
+      skuIdx = header.findIndex(c => c === 'sku');
+      if (skuIdx < 0) skuIdx = header.findIndex(c => c.includes('sku'));
+      priceIdx = header.findIndex(c => c === 'client_price' || c === 'client price');
+      if (priceIdx < 0) priceIdx = header.findIndex(c => c.includes('client') && c.includes('price'));
+    }
+    const dataRows = rows.slice(hasHeader ? 1 : 0);
+
     const assignedSkus = ccGetAssignedSkus();
-    const skuMap = new Map(_ccAllInventory.map(i=>[i.sku, i]));
+    const skuMap = new Map(_ccAllInventory.map(i => [i.sku, i]));
     const matched = [], unmatched = [], alreadyIn = [];
-    for (const sku of parsedSkus) {
-      if (!sku) continue;
+    const seen = new Set();
+    for (const line of dataRows) {
+      const cols = ccParseCsvLine(line);
+      const sku = (cols[skuIdx < 0 ? 0 : skuIdx] || '').trim();
+      if (!sku || seen.has(sku)) continue;
+      seen.add(sku);
+      const rawPrice = priceIdx >= 0 ? (cols[priceIdx] || '').trim() : '';
+      const price = rawPrice === '' ? null : parseFloat(rawPrice);
+      const clientPrice = (price != null && !isNaN(price) && price >= 0) ? price : null;
       if (assignedSkus.has(sku)) alreadyIn.push(sku);
-      else if (skuMap.has(sku)) matched.push(skuMap.get(sku));
+      else if (skuMap.has(sku)) matched.push({ item: skuMap.get(sku), clientPrice });
       else unmatched.push(sku);
     }
     showCCCsvPreview(matched, unmatched, alreadyIn);
@@ -669,58 +711,68 @@ function handleCCCsvUpload(input) {
 function showCCCsvPreview(matched, unmatched, alreadyIn) {
   const panel = document.getElementById('cc-csv-preview');
   if (!panel) return;
+  // Stash the matched rows (item + parsed client price) for the approve step.
+  _ccCsvMatched = matched;
   panel.style.display = '';
   panel.innerHTML = `
-    <div style="font-size:.78rem;font-weight:800;color:#166534;margin-bottom:10px">
-      CSV Preview — ${matched.length} to add · ${alreadyIn.length} already assigned · ${unmatched.length} not found
+    <div style="font-size:.78rem;font-weight:800;color:#166534;margin-bottom:4px">
+      Preview — ${matched.length} to add · ${alreadyIn.length} already assigned · ${unmatched.length} not found
     </div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Review the products and client prices below, then approve. Only products that match this app's catalogue are imported.</div>
     ${matched.length ? `
-      <div style="max-height:130px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:4px">
-        ${matched.map(i=>`
-          <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
-            <span>${i.emoji||'📦'}</span>
-            <span style="font-weight:600;flex:1">${h(i.name)}</span>
-            <span class="u-muted">${i.sku}</span>
-            <span style="color:var(--success);font-weight:700">✓</span>
-          </div>`).join('')}
+      <div style="max-height:150px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:4px">
+        ${matched.map(m=>{
+          const gp = m.item.unit_price ?? 0;
+          const custom = m.clientPrice != null;
+          return `<div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
+            <span>${m.item.emoji||'📦'}</span>
+            <span style="font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(m.item.name)}</span>
+            <span class="u-muted" style="flex-shrink:0">${m.item.sku}</span>
+            <span style="flex-shrink:0;font-weight:700;color:${custom?'#1d4ed8':'var(--text-muted)'}">
+              ₹${custom ? m.clientPrice : gp}${custom ? '' : ' <span style="font-weight:400">(global)</span>'}
+            </span>
+          </div>`;
+        }).join('')}
       </div>` : ''}
     ${unmatched.length ? `
       <div style="font-size:.74rem;color:var(--danger);margin-bottom:10px">
-        SKUs not found in inventory: <strong>${unmatched.join(', ')}</strong>
+        ⚠ Not in this app's catalogue (skipped): <strong>${unmatched.map(h).join(', ')}</strong>
       </div>` : ''}
     ${alreadyIn.length ? `
       <div style="font-size:.74rem;color:var(--text-muted);margin-bottom:10px">
-        Already assigned (skipped): ${alreadyIn.join(', ')}
+        Already assigned (skipped): ${alreadyIn.map(h).join(', ')}
       </div>` : ''}
     <div style="display:flex;gap:8px">
       ${matched.length ? `<button class="btn btn-sm" style="background:var(--success);color:#fff;border:none;padding:5px 14px;font-size:.8rem"
-        ${dataAct('confirmCCCsvImport', matched.map(i=>i.sku))}>
-        Add ${matched.length} Item${matched.length!==1?'s':''}</button>` : ''}
-      <button class="btn btn-sm btn-secondary" style="font-size:.8rem" ${dataAct('hideEl', 'cc-csv-preview')}>Dismiss</button>
+        ${dataAct('confirmCCCsvImport')}>
+        ✓ Approve &amp; Add ${matched.length} Item${matched.length!==1?'s':''}</button>` : ''}
+      <button class="btn btn-sm btn-secondary" style="font-size:.8rem" ${dataAct('hideEl', 'cc-csv-preview')}>Cancel</button>
     </div>`;
 }
 
-async function confirmCCCsvImport(skus) {
-  if (!skus.length || !_ccClientId) return;
+async function confirmCCCsvImport() {
+  const matched = _ccCsvMatched || [];
+  if (!matched.length || !_ccClientId) return;
   const btn = document.querySelector('#cc-csv-preview .btn-sm');
   if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  const items = matched.map(m => ({ sku: m.item.sku, client_price: m.clientPrice }));
   const res = await api(`/clients/${_ccClientId}/catalog`, {
-    method:'POST', body: JSON.stringify({skus})
+    method:'POST', body: JSON.stringify({ items })
   });
-  if (!res) { if (btn) { btn.disabled=false; btn.textContent=`Add ${skus.length} Items`; } return; }
-  const skuMap = new Map(_ccAllInventory.map(i=>[i.sku, i]));
+  if (!res) { if (btn) { btn.disabled=false; btn.textContent=`✓ Approve & Add ${matched.length} Items`; } return; }
   const list = document.getElementById('cc-assigned-list');
   if (list) {
     list.querySelector('.cc-empty')?.remove();
-    skus.forEach(sku => {
-      const item = skuMap.get(sku);
-      if (item) list.insertAdjacentHTML('afterbegin', ccAssignedRow(item));
+    matched.forEach(m => {
+      // Insert the assigned row carrying the imported client price.
+      list.insertAdjacentHTML('afterbegin', ccAssignedRow({ ...m.item, client_price: m.clientPrice }));
     });
   }
-  updateCCCount(skus.length);
+  updateCCCount(matched.length);
   document.getElementById('cc-csv-preview').style.display = 'none';
+  _ccCsvMatched = null;
   renderCCSearchResults();
-  showToast(`${skus.length} item${skus.length!==1?'s':''} imported from CSV`);
+  showToast(`${matched.length} item${matched.length!==1?'s':''} imported${res.priced?` · ${res.priced} priced`:''}`);
 }
 
 const ZONE_OPTIONS = ['EGL','BTP','BTM','PV','FW','Other'];

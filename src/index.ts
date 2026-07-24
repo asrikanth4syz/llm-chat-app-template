@@ -2532,15 +2532,41 @@ async function handleAddClientCatalogItems(request: Request, env: Env, path: str
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
   const clientId = path.split("/")[3];
-  const body = await request.json() as { skus: string[] };
-  if (!Array.isArray(body.skus) || !body.skus.length) return json({error:"skus array required"}, 400);
-  const stmts = body.skus.map(sku =>
+  const body = await request.json() as { skus?: string[]; items?: Array<{sku:string; client_price?:number|null}> };
+  // Accept either a plain list of SKUs (add at global price) or items carrying a
+  // per-client price (used by the CSV import, which lets Ops set client pricing).
+  let entries: Array<{sku:string; client_price:number|null}>;
+  if (Array.isArray(body.items) && body.items.length) {
+    entries = body.items
+      .filter(i => i && i.sku)
+      .map(i => {
+        const p = i.client_price;
+        const price = (p == null || p === undefined || isNaN(Number(p)) || Number(p) < 0) ? null : Number(p);
+        return { sku: String(i.sku), client_price: price };
+      });
+  } else if (Array.isArray(body.skus) && body.skus.length) {
+    entries = body.skus.map(sku => ({ sku, client_price: null }));
+  } else {
+    return json({error:"skus or items array required"}, 400);
+  }
+  if (!entries.length) return json({error:"no valid items"}, 400);
+
+  await env.DB.batch(entries.map(e =>
     env.DB.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)")
-      .bind(clientId, sku, user!.sub)
-  );
-  await env.DB.batch(stmts);
-  await audit(env, user, "UPDATE", "client_catalog", clientId, undefined, `added ${body.skus.length} items`);
-  return json({added: body.skus.length});
+      .bind(clientId, e.sku, user!.sub)
+  ));
+  // Apply any per-item client prices (best-effort — ignore if column not migrated).
+  const priced = entries.filter(e => e.client_price != null);
+  if (priced.length) {
+    try {
+      await env.DB.batch(priced.map(e =>
+        env.DB.prepare("UPDATE client_catalog SET client_price=? WHERE client_id=? AND sku=?")
+          .bind(e.client_price, clientId, e.sku)
+      ));
+    } catch { /* client_price column not yet migrated */ }
+  }
+  await audit(env, user, "UPDATE", "client_catalog", clientId, undefined, `added ${entries.length} items (${priced.length} priced)`);
+  return json({added: entries.length, priced: priced.length});
 }
 
 async function handleRemoveClientCatalogItem(request: Request, env: Env, path: string): Promise<Response> {

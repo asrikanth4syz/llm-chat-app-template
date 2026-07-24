@@ -766,6 +766,27 @@ describe("Client Catalog", () => {
     expect(body.added).toBe(1);
   });
 
+  it("POST /api/clients/c1/catalog — items with client_price are stored", async () => {
+    const res = await post("/api/clients/c1/catalog", {
+      items: [{ sku: "SKU003", client_price: 399 }],
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { added: number; priced: number };
+    expect(body.added).toBe(1);
+    expect(body.priced).toBe(1);
+
+    // The per-client price is persisted and returned on the catalog.
+    const cat = await get("/api/clients/c1/catalog", adminToken).then(r => r.json()) as Array<{ sku: string; client_price: number | null }>;
+    const row = cat.find(r => r.sku === "SKU003");
+    expect(row).toBeTruthy();
+    expect(row!.client_price).toBe(399);
+  });
+
+  it("POST /api/clients/c1/catalog — empty body is rejected (400)", async () => {
+    const res = await post("/api/clients/c1/catalog", {}, adminToken);
+    expect(res.status).toBe(400);
+  });
+
   it("GET /api/inventory — client user sees only assigned catalog items", async () => {
     const res = await get("/api/inventory", clientToken);
     expect(res.status).toBe(200);
