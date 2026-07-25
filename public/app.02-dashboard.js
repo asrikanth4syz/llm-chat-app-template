@@ -542,7 +542,7 @@ async function renderOpsDashboard(el) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
-        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
+        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">${(NAV[APP.user?.nav]||[]).find(i=>i.id==='dashboard')?.label || 'Control Tower'}</span>
         <span style="background:#e8f0fb;color:var(--blue);border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
       </div>
       <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
