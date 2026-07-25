@@ -937,3 +937,9 @@ details.card > summary { user-select: none; }
 .u-subtiny    { font-size: .74rem !important; color: var(--text-muted) !important; margin-top: 2px !important; }
 .u-empty      { text-align: center !important; color: var(--text-muted) !important; }
 .u-empty-lg   { padding: 40px !important; text-align: center !important; color: var(--text-muted) !important; }
+
+/* Orders & Inventory hub (app.13) — responsive 2-col: content + order rail */
+@media (min-width: 860px) {
+  .oi-grid { grid-template-columns: 1fr 320px !important; align-items: start; }
+  .oi-inv-grid { grid-template-columns: 1fr 1fr !important; }
+}

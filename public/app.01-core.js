@@ -132,7 +132,8 @@ const NAV = {
   ],
   client: [
     { section:'Overview' },
-    { id:'dashboard',      label:'Dashboard',      icon:iconDashboard, badge:null },
+    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { section:'Ordering' },
     { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
     { id:'my_orders',      label:'My Orders',      icon:iconOrders,    badge:null },
@@ -148,7 +149,8 @@ const NAV = {
   ],
   approver: [
     { section:'Approvals' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
+    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { id:'approvals',   label:'Pending Approvals',icon:iconApprove,badge:'!' },
     { section:'Ordering' },
     { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
@@ -157,7 +159,8 @@ const NAV = {
   ],
   client_user: [
     { section:'Overview' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
+    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { section:'Ordering' },
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
@@ -770,6 +773,7 @@ const PAGE_MAP = {
   consolidated_due: 'renderConsolidatedDue',
   client_budget: 'renderClientBudget',
   my_inventory: 'renderMyInventory',
+  orders_inventory: 'renderOrdersInventory',
 };
 
 function navigate(page) {
