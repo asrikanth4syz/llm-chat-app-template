@@ -5,6 +5,12 @@
 // ── State ──────────────────────────────────────────────────
 const APP = { user: null, page: 'dashboard', cart: [], charts: {}, token: null };
 
+// Persist the cart across reloads. Called explicitly after cart changes, and as
+// a backstop when the tab is hidden/closed (pagehide fires on reload too).
+function persistCart() { try { localStorage.setItem('sp_cart', JSON.stringify(APP.cart || [])); } catch (_) {} }
+window.addEventListener('pagehide', persistCart);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') persistCart(); });
+
 // ── Role Config ────────────────────────────────────────────
 const ROLES = {
   super_admin:         { label:'Super Admin',          org:'4SYZ Platform',    initials:'SA', nav:'platform' },
@@ -279,6 +285,8 @@ function doLogout() {
   APP.user = null;
   APP.cart = [];
   localStorage.removeItem('sp_token');
+  localStorage.removeItem('sp_cart');
+  localStorage.removeItem('sp_page');
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
   document.getElementById('otp-group').classList.add('hidden');
@@ -378,7 +386,13 @@ function initApp() {
   const quickWrap = document.getElementById('tb-quick-wrap');
   if (quickWrap) quickWrap.style.display = quickActionItems().length ? '' : 'none';
   buildNav();
-  navigate(getDefaultPage());
+  // Restore the cart so it survives a page reload.
+  try { const c = JSON.parse(localStorage.getItem('sp_cart') || '[]'); if (Array.isArray(c)) APP.cart = c; } catch (_) {}
+  // Return to the last page on reload (falls back to the role's default; the
+  // navigate() ACL guard redirects if the saved page isn't allowed for this role).
+  let startPage = getDefaultPage();
+  try { const p = localStorage.getItem('sp_page'); if (p && canAccessPage(p)) startPage = p; } catch (_) {}
+  navigate(startPage);
   loadNotifications();
   startNotificationPolling();
 
@@ -782,6 +796,8 @@ function navigate(page) {
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
   APP.page = page;
+  // Remember the current page so a browser reload returns here, not the dashboard.
+  try { localStorage.setItem('sp_page', page); } catch (_) {}
 
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const navEl = document.getElementById('nav-' + page);
@@ -1103,7 +1119,7 @@ function invFilterStatus(v, tab) {
 }
 function reviewPlaceOrder() { APP._postNavStep = 'review'; navigate('place_order'); }
 function sdClearClientFilter() { APP._sdClientFilter = ''; navigate('service_desk'); }
-function clearCartToCatalogue() { APP.cart = []; switchOrderStep('catalogue'); showToast('Cart cleared'); }
+function clearCartToCatalogue() { APP.cart = []; persistCart(); switchOrderStep('catalogue'); showToast('Cart cleared'); }
 function stopVoiceAndClose() { stopVoiceIfRecording(); closeModal(); }
 function goCriticalStockReport() { navigate('reports'); setTimeout(() => viewReport('critical-stock'), 300); }
 function hideEl(id) { const e = document.getElementById(id); if (e) e.style.display = 'none'; }

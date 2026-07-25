@@ -940,6 +940,7 @@ async function orderMoreItem(sku, name) {
 }
 
 function refreshCartUI() {
+  persistCart();
   const total = APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0);
   const gst   = Math.round(total * 0.18);
   const grand = total + gst;
@@ -1044,6 +1045,7 @@ async function confirmOrder(saveAsDraft) {
   closeModal();
   if (result) {
     APP.cart = [];
+    persistCart();
     APP._orderImage = null;
     if (saveAsDraft) {
       showToast(`Draft ${result.id} saved — submit it from My Orders`);

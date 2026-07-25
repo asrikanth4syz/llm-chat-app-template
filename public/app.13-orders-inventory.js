@@ -203,6 +203,7 @@ function oiRailHTML() {
 }
 
 function oiRefreshRail() {
+  persistCart();
   const rail = document.getElementById('oi-rail');
   if (rail) rail.innerHTML = oiRailHTML();
 }
@@ -263,7 +264,9 @@ function oiInventoryView() {
   const skuCard = i => {
     const onHand = i.qty_on_hand || 0;
     const reorder = i.reorder_level || 0;
-    const par = Math.max(reorder * 2, onHand, reorder + 1, 1);
+    // Target stock level ("par") derived from the reorder point so the bar stays
+    // meaningful and doesn't just equal on-hand for well-stocked items.
+    const par = Math.max(reorder * 3, reorder + 10, 1);
     const pct = Math.max(3, Math.min(100, Math.round(onHand / par * 100)));
     const fill = i.stock_status === 'out' ? 'var(--danger)' : i.stock_status === 'low' ? 'var(--warning)' : 'var(--success)';
     const pill = i.stock_status === 'out' ? 'badge-danger' : i.stock_status === 'low' ? 'badge-warning' : 'badge-success';
@@ -275,10 +278,13 @@ function oiInventoryView() {
         <div class="oi-sku-onhand"><b class="tnum">${onHand}</b><small style="display:block;font-size:.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">on hand</small></div>
       </div>
       <div style="height:8px;border-radius:99px;background:var(--surface-3,#e6edeb);overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:${fill}"></i></div>
-      <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-top:6px"><span>Reorder at ${reorder}</span><span>${i.last_received_at?`Received ${fmtDate(i.last_received_at)}`:''}</span></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+      <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-top:6px"><span>Reorder at ${reorder}</span><span>Par ${par}</span></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:11px;font-size:.76rem;flex-wrap:wrap">
         <span class="badge ${pill}">${pillTxt}</span>
-        ${(i.stock_status==='low'||i.stock_status==='out') ? `<button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('oiAddUsual', i.sku)}>Reorder</button>` : ''}
+        ${i.last_received_at ? `<span style="color:var(--text-muted)">Last received ${fmtDate(i.last_received_at)}</span>` : ''}
+        ${(i.stock_status==='low'||i.stock_status==='out')
+          ? `<a role="button" tabindex="0" style="margin-left:auto;color:var(--primary);font-weight:700;cursor:pointer" ${dataAct('oiAddUsual', i.sku)}>Reorder now →</a>`
+          : (i.last_consumed_at ? `<span style="margin-left:auto;color:var(--text-muted)">Last used ${fmtDate(i.last_consumed_at)}</span>` : '')}
       </div>
     </div>`;
   };
