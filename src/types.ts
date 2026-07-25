@@ -1,23 +1,32 @@
-/**
- * Type definitions for the LLM chat application.
- */
-
 export interface Env {
-	/**
-	 * Binding for the Workers AI API.
-	 */
-	AI: Ai;
-
-	/**
-	 * Binding for static assets.
-	 */
-	ASSETS: { fetch: (request: Request) => Promise<Response> };
+  DB: D1Database;
+  ASSETS: { fetch: (request: Request) => Promise<Response> };
+  JWT_SECRET: string;
+  APP_ENV: string;
+  EMAIL_FROM: string;
+  MAILCHANNELS_ENABLED: string;
+  ZOHO_BOOKS_ORG_ID: string;
+  ZOHO_BOOKS_CLIENT_ID: string;
+  ZOHO_BOOKS_WEBHOOK_SECRET: string;
+  ZOHO_INVENTORY_ORG_ID?: string;
+  ZOHO_ACCESS_TOKEN?: string;
+  ZOHO_INVENTORY_WEBHOOK_SECRET?: string;
+  TWILIO_ACCOUNT_SID: string;
+  TWILIO_AUTH_TOKEN: string;
+  TWILIO_FROM_NUMBER: string;
+  MSG91_AUTH_KEY: string;
+  OTP_EXPIRY_MINUTES: string;
+  OTP_ENABLED: string;
 }
 
-/**
- * Represents a chat message.
- */
-export interface ChatMessage {
-	role: "system" | "user" | "assistant";
-	content: string;
+export interface JWTPayload {
+  sub: string;
+  email: string;
+  role: string;
+  name: string;
+  org: string;
+  initials: string;
+  client_id?: string;
+  iat: number;
+  exp: number;
 }

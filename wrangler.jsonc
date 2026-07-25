@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "llm-chat-app-template",
+	"name": "smart-pantry",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -15,8 +15,42 @@
 	"observability": {
 		"enabled": true
 	},
-	"ai": {
-		"binding": "AI"
+	"triggers": {
+		// Daily delivery reminders: 03:30 UTC = 09:00 IST
+		"crons": ["30 3 * * *"]
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "smart-pantry-db",
+			"database_id": "6cd22d64-eaf3-4711-9df9-edca9eb732cd",
+			"migrations_dir": "./migrations"
+		}
+	],
+	// Document storage (#9): create the bucket, then uncomment to move vendor/DC
+	// document blobs out of D1 into R2. Unbound is safe — the app falls back to
+	// base64-in-D1 automatically (see docPut/docGet in src/index.ts).
+	//   wrangler r2 bucket create smart-pantry-docs
+	// "r2_buckets": [
+	//   { "binding": "DOCS", "bucket_name": "smart-pantry-docs" }
+	// ],
+	"vars": {
+		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod",
+		"APP_ENV": "development",
+		"EMAIL_FROM": "noreply@smartpantry.4syz.com",
+		"MAILCHANNELS_ENABLED": "false",
+		"ZOHO_BOOKS_ORG_ID": "",
+		"ZOHO_BOOKS_CLIENT_ID": "",
+		"ZOHO_BOOKS_WEBHOOK_SECRET": "",
+		"ZOHO_INVENTORY_ORG_ID": "",
+		"ZOHO_ACCESS_TOKEN": "",
+		"ZOHO_INVENTORY_WEBHOOK_SECRET": "",
+		"TWILIO_ACCOUNT_SID": "",
+		"TWILIO_AUTH_TOKEN": "",
+		"TWILIO_FROM_NUMBER": "",
+		"MSG91_AUTH_KEY": "",
+		"OTP_EXPIRY_MINUTES": "5",
+		"OTP_ENABLED": "false"
+	}
 }
