@@ -640,10 +640,30 @@ function getDefaultPage() {
 }
 
 // ── Sidebar nav ────────────────────────────────────────────
+// Accordion state: at most one collapsible section is open at a time. We persist
+// the single open section's label (empty = all collapsed) rather than a set.
 function navPrefLoad() {
-  if (!APP._navCollapsed) { try { APP._navCollapsed = JSON.parse(localStorage.getItem('sp_nav_sections')||'{}') || {}; } catch { APP._navCollapsed = {}; } }
+  if (APP._navOpen === undefined) { try { APP._navOpen = localStorage.getItem('sp_nav_open') || null; } catch { APP._navOpen = null; } }
 }
-function navPrefSave() { try { localStorage.setItem('sp_nav_sections', JSON.stringify(APP._navCollapsed||{})); } catch {} }
+function navPrefSave() { try { APP._navOpen ? localStorage.setItem('sp_nav_open', APP._navOpen) : localStorage.removeItem('sp_nav_open'); } catch {} }
+
+// Apply accordion state to the DOM: open the one section whose label matches
+// `openLabel`, collapse every other collapsible section, and persist the choice.
+function applyAccordion(openLabel) {
+  const wrap = document.getElementById('sidebar-nav'); if (!wrap) return;
+  wrap.querySelectorAll('.nav-section-toggle').forEach(tog => {
+    const lbl = (tog.querySelector('.nav-section-label')?.textContent || '').trim();
+    const body = document.getElementById('nav-sec-' + lbl.replace(/\s+/g,'_'));
+    const collapsed = lbl !== openLabel;
+    tog.classList.toggle('collapsed', collapsed);
+    if (body) {
+      body.classList.toggle('collapsed', collapsed);
+      body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
+    }
+  });
+  APP._navOpen = openLabel || null;
+  navPrefSave();
+}
 
 function buildNav() {
   const nav = APP.user.nav;
@@ -662,9 +682,20 @@ function buildNav() {
     }
   });
 
+  // Resolve the single section that should be open (accordion). Prefer the
+  // persisted choice; otherwise open the section holding the current page, and
+  // fall back to the first collapsible section so exactly one group is open.
+  const collapsibleLabels = sections.slice(1).map(s => s.label);
+  let openLabel = collapsibleLabels.includes(APP._navOpen) ? APP._navOpen : null;
+  if (!openLabel) {
+    const secOfCur = APP.page ? sections.find((s, i) => i > 0 && s.items.some(it => it.id === APP.page))?.label : null;
+    openLabel = secOfCur || collapsibleLabels[0] || null;
+  }
+  APP._navOpen = openLabel; navPrefSave();
+
   const html = sections.map((sec, idx) => {
     const isFirst = idx === 0;
-    const collapsed = !isFirst && APP._navCollapsed[sec.label];
+    const collapsed = !isFirst && sec.label !== openLabel;
     const bodyMaxH = sec.items.length * 44 + 'px';
 
     const headerHtml = isFirst
@@ -719,16 +750,11 @@ function filterNav(q) {
 
   if (!q) {
     items.forEach(el => { el.style.display = ''; });
-    // restore each collapsible section to its saved state
-    wrap.querySelectorAll('.nav-section-body').forEach(body => {
-      const hdr = body.previousElementSibling;
-      const label = (hdr?.querySelector('.nav-section-label')?.textContent || '').trim();
-      const collapsed = !!(APP._navCollapsed && APP._navCollapsed[label]);
-      body.classList.toggle('collapsed', collapsed);
-      body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
-      if (hdr) { hdr.classList.toggle('collapsed', collapsed); hdr.style.display = ''; }
-    });
-    wrap.querySelectorAll('.nav-section').forEach(h => { h.style.display = ''; });
+    // headers may have been hidden while searching — reveal them, then restore
+    // the single-open accordion state.
+    wrap.querySelectorAll('.nav-section-toggle, .nav-section').forEach(h => { h.style.display = ''; });
+    navPrefLoad();
+    applyAccordion(APP._navOpen);
     if (nores) nores.style.display = 'none';
     return;
   }
@@ -768,29 +794,19 @@ function navSearchKey(e) {
 
 function toggleNavSection(label) {
   navPrefLoad();
-  APP._navCollapsed[label] = !APP._navCollapsed[label];
-  navPrefSave();
-  const key = label.replace(/\s+/g,'_');
-  const body = document.getElementById('nav-sec-' + key);
-  const toggle = body?.previousElementSibling;
-  if (!body || !toggle) return;
-  const collapsed = APP._navCollapsed[label];
-  body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
-  body.classList.toggle('collapsed', collapsed);
-  toggle.classList.toggle('collapsed', collapsed);
+  // Clicking the open section closes it; clicking any other opens it and
+  // collapses the rest (accordion — one group open at a time).
+  applyAccordion(APP._navOpen === label ? null : label);
 }
 
-// Ensure the section holding the active page is open, and reveal it
+// Ensure the section holding the active page is the open one, and reveal it
 function revealActiveNavItem(page) {
   const navEl = document.getElementById('nav-' + page);
   if (!navEl) return;
   const body = navEl.closest('.nav-section-body');
-  if (body && body.classList.contains('collapsed')) {
+  if (body) {
     const label = (body.previousElementSibling?.querySelector('.nav-section-label')?.textContent || '').trim();
-    if (label) { navPrefLoad(); APP._navCollapsed[label] = false; navPrefSave(); }
-    body.classList.remove('collapsed');
-    body.style.maxHeight = (body.children.length * 44 + 'px');
-    body.previousElementSibling?.classList.remove('collapsed');
+    if (label && label !== APP._navOpen) applyAccordion(label);
   }
   if (!document.getElementById('sidebar')?.classList.contains('collapsed'))
     navEl.scrollIntoView({ block: 'nearest' });
