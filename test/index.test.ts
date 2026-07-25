@@ -997,3 +997,26 @@ describe("CORS & Routing", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("Alerts & Exceptions hub", () => {
+  it("returns the six exception categories for an internal-ops admin", async () => {
+    const res = await get("/api/alerts", adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { total: number; categories: { key: string; count: number; items: unknown[] }[] };
+    expect(typeof data.total).toBe("number");
+    expect(Array.isArray(data.categories)).toBe(true);
+    const keys = data.categories.map(c => c.key);
+    expect(keys).toEqual([
+      "overdue_deliveries", "pending_approvals", "sla_breaches",
+      "low_stock", "overdue_billing", "failed_syncs",
+    ]);
+    // Every count is a non-negative number and total is their sum.
+    for (const c of data.categories) expect(c.count).toBeGreaterThanOrEqual(0);
+    expect(data.total).toBe(data.categories.reduce((s, c) => s + c.count, 0));
+  });
+
+  it("is forbidden for client-side roles", async () => {
+    const res = await get("/api/alerts", clientToken);
+    expect(res.status).toBe(403);
+  });
+});

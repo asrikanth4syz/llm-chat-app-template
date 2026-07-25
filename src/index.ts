@@ -700,6 +700,7 @@ export default {
 
       // Dashboard
       if (path==="/api/dashboard"  && method==="GET") return handleDashboard(request,env);
+      if (path==="/api/alerts"     && method==="GET") return handleAlerts(request,env);
 
       // GRN
       if (path==="/api/grn"  && method==="GET")  return handleListGRN(request,env);
@@ -3171,6 +3172,120 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     openTickets: kpis.openTickets, dueItems: kpis.dueItems,
     recentOrders, ordersByStatus, topClients, kpiTrends,
   });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Alerts & Exceptions hub — every "needs action" signal in one place.
+// Each category returns a live count plus a few representative rows and the
+// page a staff user should jump to. Internal-ops roles only.
+// ════════════════════════════════════════════════════════════════════
+
+async function handleAlerts(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  // Aggregation is org-wide; only internal-ops roles reach this page (nav-gated).
+  if (["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role))
+    return json({ error: "Not available for your role" }, 403);
+
+  const cnt = (r: unknown) => Number((r as Record<string, number> | null)?.cnt || 0);
+  const rows = (r: unknown) => ((r as { results?: Record<string, unknown>[] })?.results || []);
+
+  const [
+    overdueCnt, overdueRows,
+    approvalCnt, approvalRows,
+    ticketCnt, ticketRows,
+    stockCnt, stockRows,
+    billingCnt, billingRows,
+  ] = await Promise.all([
+    // Overdue deliveries — dispatched/pending challans past their expected date
+    env.DB.prepare(`SELECT COUNT(*) as cnt FROM delivery_challans
+      WHERE status NOT IN ('DELIVERED','CANCELLED') AND expected_delivery_date IS NOT NULL
+        AND expected_delivery_date < date('now')`).first(),
+    env.DB.prepare(`SELECT dc.id, dc.order_id, dc.expected_delivery_date, c.name as client_name
+      FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
+      WHERE dc.status NOT IN ('DELIVERED','CANCELLED') AND dc.expected_delivery_date IS NOT NULL
+        AND dc.expected_delivery_date < date('now')
+      ORDER BY dc.expected_delivery_date ASC LIMIT 5`).all(),
+    // Pending approvals — orders awaiting a client/finance approver
+    env.DB.prepare("SELECT COUNT(*) as cnt FROM orders WHERE status='PENDING_APPROVAL'").first(),
+    env.DB.prepare(`SELECT o.id, o.grand_total, o.created_at, c.name as client_name
+      FROM orders o LEFT JOIN clients c ON o.client_id=c.id
+      WHERE o.status='PENDING_APPROVAL' ORDER BY o.created_at ASC LIMIT 5`).all(),
+    // SLA — open tickets, oldest first (longest-waiting are the breaches)
+    env.DB.prepare("SELECT COUNT(*) as cnt FROM tickets WHERE status!='RESOLVED'").first(),
+    env.DB.prepare(`SELECT t.id, t.subject, t.priority, t.created_at, c.name as client_name
+      FROM tickets t LEFT JOIN clients c ON t.client_id=c.id
+      WHERE t.status!='RESOLVED' ORDER BY t.created_at ASC LIMIT 5`).all(),
+    // Low / out of stock — in-use SKUs at or below reorder level
+    env.DB.prepare(`SELECT COUNT(*) as cnt FROM inventory i WHERE i.stock<=i.reorder_level AND i.active=1
+      AND (EXISTS(SELECT 1 FROM order_items oi WHERE oi.sku=i.sku)
+        OR EXISTS(SELECT 1 FROM client_consumption cc WHERE cc.sku=i.sku))`).first(),
+    env.DB.prepare(`SELECT i.sku, i.name, i.stock, i.reorder_level FROM inventory i
+      WHERE i.stock<=i.reorder_level AND i.active=1
+        AND (EXISTS(SELECT 1 FROM order_items oi WHERE oi.sku=i.sku)
+          OR EXISTS(SELECT 1 FROM client_consumption cc WHERE cc.sku=i.sku))
+      ORDER BY (i.stock*1.0/NULLIF(i.reorder_level,0)) ASC LIMIT 5`).all(),
+    // Overdue billing — delivered challans not yet billed
+    env.DB.prepare("SELECT COUNT(*) as cnt FROM delivery_challans WHERE status='DELIVERED' AND billed=0").first(),
+    env.DB.prepare(`SELECT dc.id, dc.order_id, dc.delivered_at, c.name as client_name
+      FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
+      WHERE dc.status='DELIVERED' AND dc.billed=0 ORDER BY dc.delivered_at ASC LIMIT 5`).all(),
+  ]);
+
+  // Failed integrations — zoho_sync_log may not exist until the integration runs.
+  let syncCnt = 0; let syncRows: Record<string, unknown>[] = [];
+  try {
+    const [c, r] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) as cnt FROM zoho_sync_log WHERE status!='OK' AND created_at >= datetime('now','-7 days')").first(),
+      env.DB.prepare(`SELECT id, direction, note, created_at FROM zoho_sync_log
+        WHERE status!='OK' AND created_at >= datetime('now','-7 days') ORDER BY created_at DESC LIMIT 5`).all(),
+    ]);
+    syncCnt = cnt(c); syncRows = rows(r);
+  } catch { /* table absent — treat as no failures */ }
+
+  const money = (n: unknown) => "₹" + Number(n || 0).toLocaleString("en-IN");
+
+  const categories = [
+    {
+      key: "overdue_deliveries", label: "Overdue deliveries", icon: "🚚", tone: "crit", page: "delivery",
+      action: "Chase", count: cnt(overdueCnt),
+      items: rows(overdueRows).map(r => ({
+        title: `${r.id} · ${r.client_name || "—"}`, meta: `Expected ${r.expected_delivery_date}` })),
+    },
+    {
+      key: "pending_approvals", label: "Pending approvals", icon: "⏳", tone: "warn", page: "orders",
+      action: "Review", count: cnt(approvalCnt),
+      items: rows(approvalRows).map(r => ({
+        title: `${money(r.grand_total)} · ${r.client_name || "—"}`, meta: `Order ${r.id}` })),
+    },
+    {
+      key: "sla_breaches", label: "SLA — open tickets", icon: "⏱️", tone: "crit", page: "service_desk",
+      action: "Open", count: cnt(ticketCnt),
+      items: rows(ticketRows).map(r => ({
+        title: String(r.subject || "Ticket"), meta: `${r.priority || "—"} · ${r.client_name || "—"}` })),
+    },
+    {
+      key: "low_stock", label: "Low / out of stock", icon: "📦", tone: "warn", page: "inventory",
+      action: "Reorder", count: cnt(stockCnt),
+      items: rows(stockRows).map(r => ({
+        title: `${r.name} (${r.sku})`, meta: Number(r.stock) <= 0 ? "Out of stock" : `${r.stock} left · reorder at ${r.reorder_level}` })),
+    },
+    {
+      key: "overdue_billing", label: "Overdue billing", icon: "💳", tone: "brand", page: "dc_billing",
+      action: "Bill", count: cnt(billingCnt),
+      items: rows(billingRows).map(r => ({
+        title: `${r.id} · ${r.client_name || "—"}`, meta: r.delivered_at ? `Delivered ${String(r.delivered_at).slice(0,10)}` : "Delivered" })),
+    },
+    {
+      key: "failed_syncs", label: "Failed integrations", icon: "🔌", tone: "crit", page: "settings",
+      action: "Fix", count: syncCnt,
+      items: syncRows.map(r => ({
+        title: `Zoho ${r.direction || "sync"}`, meta: String(r.note || "Sync error") })),
+    },
+  ];
+
+  const total = categories.reduce((s, c) => s + c.count, 0);
+  return json({ generated_at: new Date().toISOString(), total, categories });
 }
 
 // ════════════════════════════════════════════════════════════════════

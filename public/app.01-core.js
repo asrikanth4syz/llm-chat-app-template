@@ -99,6 +99,7 @@ const iconTruck    = s => svg('<rect x="1" y="3" width="15" height="13"/><polygo
 const iconUpload   = s => svg('<polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>',s);
 const iconEye      = s => svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',s);
 const iconRefresh  = s => svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/>',s);
+const iconBell     = s => svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',s);
 
 // ── Nav surfaces ───────────────────────────────────────────
 const NAV = {
@@ -138,6 +139,8 @@ const NAV = {
     { id:'consolidated_report',  label:'Consolidated Report', icon:iconReports,   badge:null },
     { id:'reports',              label:'Reports & BI',        icon:iconReports,   badge:null },
     { id:'sla_dashboard',        label:'SLA Dashboard',       icon:iconDashboard, badge:'!' },
+    { section:'Alerts & Exceptions' },
+    { id:'alerts',      label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
     { section:'Admin & Settings' },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconUsers,  badge:null },
@@ -159,6 +162,8 @@ const NAV = {
     { id:'dc_billing',          label:'DC Billing',       icon:iconBilling,   badge:'!' },
     { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconDesk,      badge:null },
+    { section:'Alerts & Exceptions' },
+    { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
   ],
   procurement: [
     { section:'Home' },
@@ -877,6 +882,7 @@ const PAGE_MAP = {
   client_budget: 'renderClientBudget',
   my_inventory: 'renderMyInventory',
   orders_inventory: 'renderOrdersInventory',
+  alerts: 'renderAlerts',
 };
 
 function navigate(page) {
