@@ -5,9 +5,57 @@
 // ── State ──────────────────────────────────────────────────
 const APP = { user: null, page: 'dashboard', cart: [], charts: {}, token: null };
 
-// Persist the cart across reloads. Called explicitly after cart changes, and as
-// a backstop when the tab is hidden/closed (pagehide fires on reload too).
-function persistCart() { try { localStorage.setItem('sp_cart', JSON.stringify(APP.cart || [])); } catch (_) {} }
+// Persist the cart across reloads (localStorage) AND across devices (server).
+// Called after every cart change, plus a backstop on tab hide/close.
+function persistCart() {
+  try {
+    localStorage.setItem('sp_cart', JSON.stringify(APP.cart || []));
+    localStorage.setItem('sp_cart_ts', String(Date.now()));
+  } catch (_) {}
+  scheduleCartSync();
+}
+let _cartSyncTimer = null;
+function scheduleCartSync() {
+  if (!APP.token) return;
+  clearTimeout(_cartSyncTimer);
+  _cartSyncTimer = setTimeout(saveCartToServer, 700);
+}
+// Silent (toast-free) server save of the current cart.
+async function saveCartToServer() {
+  if (!APP.token) return;
+  try {
+    await fetch('/api/cart', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + APP.token },
+      body: JSON.stringify({ items: APP.cart || [] }),
+    });
+  } catch (_) {}
+}
+// On load, reconcile the local cart with the server's saved draft cart. The most
+// recently changed side wins (timestamp compare) so the cart follows the user to
+// another device without clobbering a newer local cart.
+async function loadServerCart() {
+  if (!APP.token) return;
+  try {
+    const res = await fetch('/api/cart', { headers: { 'Authorization': 'Bearer ' + APP.token } });
+    if (!res.ok) return;
+    const data = await res.json();
+    const serverItems = Array.isArray(data.items) ? data.items : [];
+    const serverTs = data.updated_at ? Date.parse(data.updated_at + 'Z') : 0;
+    const localTs = Number(localStorage.getItem('sp_cart_ts') || 0);
+    if (serverItems.length && serverTs >= localTs) {
+      APP.cart = serverItems;
+      try { localStorage.setItem('sp_cart', JSON.stringify(APP.cart)); localStorage.setItem('sp_cart_ts', String(serverTs || Date.now())); } catch (_) {}
+    } else if ((APP.cart || []).length && localTs > serverTs) {
+      saveCartToServer(); // local is newer — push it up
+    } else if (serverItems.length) {
+      APP.cart = serverItems;
+      try { localStorage.setItem('sp_cart', JSON.stringify(APP.cart)); } catch (_) {}
+    }
+    if (APP.page === 'place_order' && typeof refreshCartUI === 'function') refreshCartUI();
+    if (APP.page === 'orders_inventory' && typeof oiRefreshRail === 'function') oiRefreshRail();
+  } catch (_) {}
+}
 window.addEventListener('pagehide', persistCart);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') persistCart(); });
 
@@ -281,11 +329,15 @@ async function doVerifyOTP() {
 
 function doLogout() {
   if (APP._notifInterval) clearInterval(APP._notifInterval);
+  // Clear the server-side draft cart for this user (fire-and-forget, before the token is dropped).
+  clearTimeout(_cartSyncTimer);
+  if (APP.token) { try { fetch('/api/cart', { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + APP.token } }); } catch (_) {} }
   APP.token = null;
   APP.user = null;
   APP.cart = [];
   localStorage.removeItem('sp_token');
   localStorage.removeItem('sp_cart');
+  localStorage.removeItem('sp_cart_ts');
   localStorage.removeItem('sp_page');
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
@@ -393,6 +445,7 @@ function initApp() {
   let startPage = getDefaultPage();
   try { const p = localStorage.getItem('sp_page'); if (p && canAccessPage(p)) startPage = p; } catch (_) {}
   navigate(startPage);
+  loadServerCart();        // reconcile with the server-saved draft cart (cross-device)
   loadNotifications();
   startNotificationPolling();
 

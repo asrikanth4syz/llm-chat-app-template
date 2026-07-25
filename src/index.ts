@@ -370,6 +370,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS draft_carts ( user_id TEXT PRIMARY KEY, items TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
   ];
   for (const sql of stmts) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
 }
@@ -619,6 +620,9 @@ export default {
       if (path==="/api/auth/otp/verify" && method==="POST") return handleOTPVerify(request,env);
 
       // Orders — specific paths must come before the wildcard /:id routes
+      if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
+      if (path==="/api/cart"                   && method==="PUT")    return handleSaveCart(request,env);
+      if (path==="/api/cart"                   && method==="DELETE") return handleClearCart(request,env);
       if (path==="/api/orders"                 && method==="GET")  return handleListOrders(request,env);
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);
       if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
@@ -1151,6 +1155,50 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
       total_due_value:       lines.reduce((s,l)=>s+l.value_due,0),
     },
   });
+}
+
+// ── Server-side draft cart (per user, follows them across devices) ──────
+type CartItem = { sku: string; name: string; qty: number; unit_price: number; emoji?: string };
+
+function sanitizeCartItems(raw: unknown): CartItem[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr.slice(0, 300).map((r) => {
+    const i = (r || {}) as Record<string, unknown>;
+    return {
+      sku: String(i.sku ?? "").slice(0, 80),
+      name: String(i.name ?? "").slice(0, 200),
+      qty: Math.max(0, Math.min(100000, Number(i.qty) || 0)),
+      unit_price: Math.max(0, Number(i.unit_price) || 0),
+      emoji: String(i.emoji ?? "").slice(0, 8) || undefined,
+    };
+  }).filter((i) => i.sku && i.qty > 0);
+}
+
+async function handleGetCart(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const row = await env.DB.prepare("SELECT items, updated_at FROM draft_carts WHERE user_id=?").bind(user!.sub).first() as { items?: string; updated_at?: string } | null;
+  let items: CartItem[] = [];
+  try { items = row?.items ? sanitizeCartItems(JSON.parse(row.items)) : []; } catch { items = []; }
+  return json({ items, updated_at: row?.updated_at ?? null });
+}
+
+async function handleSaveCart(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json() as { items?: unknown };
+  const items = sanitizeCartItems(body.items);
+  await env.DB.prepare(
+    "INSERT INTO draft_carts (user_id, items, updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET items=excluded.items, updated_at=datetime('now')"
+  ).bind(user!.sub, JSON.stringify(items)).run();
+  return json({ ok: true, count: items.length });
+}
+
+async function handleClearCart(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await env.DB.prepare("DELETE FROM draft_carts WHERE user_id=?").bind(user!.sub).run();
+  return json({ ok: true });
 }
 
 async function handleCreateOrder(request: Request, env: Env): Promise<Response> {

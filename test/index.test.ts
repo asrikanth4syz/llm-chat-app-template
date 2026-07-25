@@ -45,6 +45,14 @@ async function del(path: string, token?: string) {
   });
 }
 
+async function put(path: string, body: unknown, token?: string) {
+  return SELF.fetch(`${BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+}
+
 async function login(email: string, password: string): Promise<string> {
   const res = await post("/api/auth/login", { email, password });
   const data = await res.json() as { token: string };
@@ -791,6 +799,44 @@ describe("Zoho Inventory sync", () => {
 
     const inv = await get("/api/inventory", adminToken).then(r => r.json()) as Array<{ sku: string; stock: number }>;
     expect(inv.find(i => i.sku === "SKU001")?.stock).toBe(777);
+  });
+});
+
+describe("Server-side draft cart", () => {
+  it("GET /api/cart — unauthenticated returns 401", async () => {
+    const res = await get("/api/cart");
+    expect(res.status).toBe(401);
+  });
+
+  it("PUT then GET round-trips the cart, and items are sanitized", async () => {
+    const res = await put("/api/cart", {
+      items: [
+        { sku: "SKU001", name: "Basmati Rice 5kg", qty: 2, unit_price: 450, emoji: "🍚" },
+        { sku: "", name: "junk", qty: 5, unit_price: 10 },   // no sku → dropped
+        { sku: "SKU002", name: "Oil", qty: 0, unit_price: 150 }, // qty 0 → dropped
+      ],
+    }, clientToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { count: number }).count).toBe(1);
+
+    const cart = await get("/api/cart", clientToken).then(r => r.json()) as { items: Array<{ sku: string; qty: number }> };
+    expect(cart.items.length).toBe(1);
+    expect(cart.items[0].sku).toBe("SKU001");
+    expect(cart.items[0].qty).toBe(2);
+  });
+
+  it("carts are per-user — one user cannot see another's", async () => {
+    await put("/api/cart", { items: [{ sku: "SKU001", name: "Rice", qty: 3, unit_price: 450 }] }, clientToken);
+    const otherCart = await get("/api/cart", adminToken).then(r => r.json()) as { items: unknown[] };
+    expect(otherCart.items.length).toBe(0);
+  });
+
+  it("DELETE clears the saved cart", async () => {
+    await put("/api/cart", { items: [{ sku: "SKU001", name: "Rice", qty: 1, unit_price: 450 }] }, clientToken);
+    const del1 = await del("/api/cart", clientToken);
+    expect(del1.status).toBe(200);
+    const cart = await get("/api/cart", clientToken).then(r => r.json()) as { items: unknown[] };
+    expect(cart.items.length).toBe(0);
   });
 });
 
