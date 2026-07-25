@@ -943,8 +943,13 @@ details.card > summary { user-select: none; }
 .oi-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
 .oi-head .oi-seg { margin: 0 auto; }
 
-/* Segmented control — matches the mock: clear, obvious active state */
-.oi-seg { display: inline-flex; background: var(--surface-2, #eef3f2); border: 1px solid var(--border); border-radius: 11px; padding: 3px; gap: 2px; flex-shrink: 0; }
+/* Hub cards use the bare .card (which has no padding of its own) — inset their
+   content so titles/rows don't hug the card edges. Cards with inline padding
+   (KPIs, empty states) keep it, since inline styles win. */
+#oi-content .card { padding: 16px; }
+
+/* Segmented control — matches the mock: clear, obvious active state, bold border */
+.oi-seg { display: inline-flex; background: var(--surface-2, #eef3f2); border: 2px solid #94a3b8; border-radius: 11px; padding: 3px; gap: 2px; flex-shrink: 0; box-shadow: 0 1px 3px rgba(16,40,50,.10); }
 
 /* Quantity stepper on the "Your usuals" tiles */
 .oi-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-2, #cdd9d6); border-radius: 8px; overflow: hidden; }
