@@ -194,7 +194,7 @@ function oiRailHTML() {
         <div style="display:flex;justify-content:space-between;color:var(--text-muted)"><span>GST (18%)</span><span class="tnum">${fmt(gst)}</span></div>
         <div style="display:flex;justify-content:space-between;font-weight:850;font-size:1.05rem;border-top:1px solid var(--border);padding-top:10px;margin-top:4px"><span>Total</span><span class="tnum">${fmt(subtotal+gst)}</span></div>
       </div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" ${dataAct('navigate','place_order')}>Review &amp; place order</button>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" ${dataAct('reviewPlaceOrder')}>Review &amp; place order</button>
       <div style="font-size:.72rem;color:var(--text-muted);text-align:center;margin-top:9px">We'll notify you at each step.</div>`
     : `<div style="text-align:center;padding:20px 8px;color:var(--text-muted);font-size:.84rem">
         Your order is empty. Add your usuals or reorder your last order to get started.
