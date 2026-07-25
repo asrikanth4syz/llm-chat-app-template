@@ -938,8 +938,23 @@ details.card > summary { user-select: none; }
 .u-empty      { text-align: center !important; color: var(--text-muted) !important; }
 .u-empty-lg   { padding: 40px !important; text-align: center !important; color: var(--text-muted) !important; }
 
-/* Orders & Inventory hub (app.13) — responsive 2-col: content + order rail */
-@media (min-width: 860px) {
+/* ═══ Orders & Inventory hub (app.13) ═══ */
+/* Segmented control — matches the mock: clear, obvious active state */
+.oi-seg { display: inline-flex; background: var(--surface-2, #eef3f2); border: 1px solid var(--border); border-radius: 11px; padding: 3px; gap: 2px; }
+.oi-seg button { font: inherit; font-weight: 650; font-size: .9rem; color: var(--text-muted); background: transparent; border: 0; padding: 8px 22px; border-radius: 8px; cursor: pointer; transition: background .12s, color .12s; }
+.oi-seg button:hover { color: var(--navy); }
+.oi-seg button.active { background: #fff; color: var(--primary); box-shadow: 0 1px 3px rgba(16,40,50,.14); font-weight: 750; }
+
+/* KPI + inventory grids: auto-fit so cards size to the real content width and wrap cleanly */
+.oi-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.oi-inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+/* SKU card guardrails — long names truncate, the on-hand number never gets pushed off-card */
+.oi-sku-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oi-sku-onhand { flex: 0 0 auto; text-align: right; padding-left: 10px; }
+.oi-sku-onhand b { font-size: 1.35rem; font-weight: 850; color: var(--navy); line-height: 1; font-variant-numeric: tabular-nums; }
+
+/* Content + order rail: 2-col on wide screens */
+@media (min-width: 900px) {
   .oi-grid { grid-template-columns: 1fr 320px !important; align-items: start; }
-  .oi-inv-grid { grid-template-columns: 1fr 1fr !important; }
 }

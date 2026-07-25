@@ -41,9 +41,9 @@ async function renderOrdersInventory(el) {
     </div>
     ${canAccessPage('place_order') ? `<button class="btn btn-primary" ${dataAct('navigate','place_order')} style="font-weight:700">${iconPlus(15)} Place order</button>` : ''}
   </div>
-  <div class="tab-pills" style="margin-bottom:16px">
-    <button class="tab-pill${APP._oiTab==='order'?' active':''}" ${dataAct('oiSetTab','order')}>Order</button>
-    <button class="tab-pill${APP._oiTab==='inventory'?' active':''}" ${dataAct('oiSetTab','inventory')}>Inventory</button>
+  <div class="oi-seg" role="tablist" style="margin-bottom:18px">
+    <button role="tab" class="${APP._oiTab==='order'?'active':''}" ${dataAct('oiSetTab','order')}>Order</button>
+    <button role="tab" class="${APP._oiTab==='inventory'?'active':''}" ${dataAct('oiSetTab','inventory')}>Inventory</button>
   </div>
   <div id="oi-content"></div>`;
   oiRenderContent();
@@ -51,9 +51,9 @@ async function renderOrdersInventory(el) {
 
 function oiSetTab(tab) {
   APP._oiTab = tab;
-  document.querySelectorAll('.tab-pills .tab-pill').forEach(b => b.classList.remove('active'));
-  const idx = tab === 'inventory' ? 1 : 0;
-  document.querySelectorAll('.tab-pills .tab-pill')[idx]?.classList.add('active');
+  const btns = document.querySelectorAll('.oi-seg button');
+  btns.forEach(b => b.classList.remove('active'));
+  btns[tab === 'inventory' ? 1 : 0]?.classList.add('active');
   oiRenderContent();
 }
 
@@ -270,9 +270,9 @@ function oiInventoryView() {
     const pillTxt = i.stock_status === 'out' ? 'Out' : i.stock_status === 'low' ? 'Low' : 'In stock';
     return `<div class="card" style="margin:0">
       <div style="display:flex;align-items:center;gap:11px;margin-bottom:11px">
-        <div style="width:42px;height:42px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;font-size:1.2rem">${i.emoji||'📦'}</div>
-        <div style="min-width:0"><div style="font-weight:750;font-size:.9rem">${h(i.item_name)}</div><div class="u-subtiny">${h(i.category||'—')}${i.uom?` · ${h(i.uom)}`:''}</div></div>
-        <div style="margin-left:auto;text-align:right"><b style="font-size:1.4rem;font-weight:850;color:var(--navy);line-height:1" class="tnum">${onHand}</b><small style="display:block;font-size:.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">on hand</small></div>
+        <div style="width:42px;height:42px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;font-size:1.2rem;flex-shrink:0">${i.emoji||'📦'}</div>
+        <div style="min-width:0;flex:1"><div class="oi-sku-name" style="font-weight:750;font-size:.9rem" title="${h(i.item_name)}">${h(i.item_name)}</div><div class="u-subtiny oi-sku-name">${h(i.category||'—')}${i.uom?` · ${h(i.uom)}`:''}</div></div>
+        <div class="oi-sku-onhand"><b class="tnum">${onHand}</b><small style="display:block;font-size:.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">on hand</small></div>
       </div>
       <div style="height:8px;border-radius:99px;background:var(--surface-3,#e6edeb);overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:${fill}"></i></div>
       <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-top:6px"><span>Reorder at ${reorder}</span><span>${i.last_received_at?`Received ${fmtDate(i.last_received_at)}`:''}</span></div>
@@ -298,13 +298,13 @@ function oiInventoryView() {
     </div>` : '';
 
   return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+    <div class="oi-kpis">
       ${kpi('In stock', inStock, 'healthy levels', 'var(--success)')}
       ${kpi('Running low', low, 'below reorder point', low?'var(--warning)':'var(--border)')}
       ${kpi('Out', out, 'needs ordering', out?'var(--danger)':'var(--border)')}
       ${kpi('On the way', onTheWay, `${dueOrders.length} deliveries`, 'var(--primary)')}
     </div>
-    <div style="display:grid;grid-template-columns:1fr;gap:12px" class="oi-inv-grid">
+    <div class="oi-inv-grid">
       ${inv.slice(0,12).map(skuCard).join('')}
     </div>
     ${dueHTML}`;
