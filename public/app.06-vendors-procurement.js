@@ -969,6 +969,30 @@ async function rejectPO(poId) {
   if (res) { showToast(`PO ${poId} rejected`); navigate('procurement'); }
 }
 
+// Raise a debit note for rejected / short / damaged goods on a received PO (G11).
+async function debitNote(poId) {
+  const data = await api(`/purchase-orders/${poId}/receivable`);
+  if (!data) return;
+  const opts = (data.lines || []).map(l => `<option value="${l.sku}">${h(l.name)} (${h(l.sku)})</option>`).join('');
+  openModal('Raise Debit Note — PO ' + poId, `
+    <div class="form-group"><label>Item</label><select id="dn-sku" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${opts || '<option value="">—</option>'}</select></div>
+    <div class="form-group"><label>Qty (rejected / short)</label><input type="number" id="dn-qty" value="1" min="1" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Reason</label><input type="text" id="dn-reason" placeholder="e.g. damaged in transit" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="u-subtiny" style="color:var(--text-muted)">Amount is calculated from the PO line price × qty and sent to the vendor.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmDebitNote', poId)}>Raise Debit Note</button>`);
+}
+
+async function confirmDebitNote(poId) {
+  const sku = document.getElementById('dn-sku')?.value || '';
+  const qty = +document.getElementById('dn-qty')?.value || 0;
+  const reason = document.getElementById('dn-reason')?.value?.trim() || '';
+  if (!qty) { showToast('Enter a quantity', 'error'); return; }
+  const res = await api(`/purchase-orders/${poId}/debit-note`, { method:'POST', body: JSON.stringify({ sku, qty, reason }) });
+  closeModal();
+  if (res) showToast(`Debit note raised — ${fmt(res.amount)}`);
+}
+
 
 /* ============================================================
    PROCUREMENT
@@ -1063,8 +1087,10 @@ async function renderProcurement(el) {
             : ['DISPATCHED','PARTIALLY_RECEIVED'].includes(po.status)
               ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
               : po.status==='RECEIVED'
-                ? `<button class="btn btn-secondary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button>`
-                : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+                ? `<button class="btn btn-primary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button> <button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
+                : po.status==='INVOICED'
+                  ? `<button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
+                  : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>

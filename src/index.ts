@@ -189,6 +189,16 @@ async function setConfig(env: Env, key: string, value: string, actor?: string): 
   ).bind(key, value, actor ?? null).run();
 }
 
+// G12: gap-free, sequential PO numbers (e.g. PO-00042) from an app_config
+// counter — replaces the old collision-prone PO-<random> ids.
+async function nextPONumber(env: Env): Promise<string> {
+  await env.DB.prepare("INSERT INTO app_config (key,value) VALUES ('po_seq','0') ON CONFLICT(key) DO NOTHING").run();
+  await env.DB.prepare("UPDATE app_config SET value = CAST(value AS INTEGER)+1, updated_at=datetime('now') WHERE key='po_seq'").run();
+  const row = await env.DB.prepare("SELECT value FROM app_config WHERE key='po_seq'").first() as {value:string}|null;
+  const n = Number(row?.value) || 1;
+  return `PO-${String(n).padStart(5, "0")}`;
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -308,33 +318,48 @@ async function pushNotification(env: Env, userRole: string | null, message: stri
 
 // ── Auto-reorder (Gap 8) ──────────────────────────────────────────────
 async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<void> {
+  // Items at/below reorder level that have at least one vendor to source from.
   const { results } = await env.DB.prepare(`
-    SELECT * FROM inventory WHERE stock <= reorder_level AND vendor_id IS NOT NULL AND active = 1
+    SELECT sku, name, stock, max_stock FROM inventory
+    WHERE stock <= reorder_level AND (vendor_id IS NOT NULL OR secondary_vendor_id IS NOT NULL) AND active = 1
   `).all();
 
+  // Skip SKUs that already have an outstanding PO, then build the reorder demand.
+  const demand: Array<{sku:string; qty:number}> = [];
   for (const item of results as Record<string,unknown>[]) {
     const existing = await env.DB.prepare(`
-      SELECT id FROM purchase_orders WHERE status IN ('SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED')
+      SELECT id FROM purchase_orders WHERE status IN ('PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED')
       AND id IN (SELECT po_id FROM po_items WHERE sku = ?)
     `).bind(item.sku).first();
-    if (existing) continue; // PO already outstanding (raised, in-transit, or partially received)
+    if (existing) continue; // PO already outstanding
+    const toMax = (Number(item.max_stock) || 200) - (Number(item.stock) || 0);
+    demand.push({ sku: String(item.sku), qty: Math.max(1, toMax) });
+  }
+  if (!demand.length) return;
 
-    const reorderQty = Math.max(50, (item.max_stock as number) - (item.stock as number));
-    const poId = `PO-AUTO-${Math.floor(Math.random()*9000+1000)}`;
-    const total = reorderQty * (item.unit_price as number);
-    const gstRate = item.gst_rate != null ? Number(item.gst_rate) : 18;
-    const gst = Math.round(total * gstRate / 100);
+  // resolveSourcing gives compliant vendor selection (primary→secondary failover),
+  // vendor-specific price, MOQ-lifted qty, and per-line GST for free (G10).
+  const { groups } = await resolveSourcing(env, demand);
+  const threshold = await poApprovalThreshold(env);
 
-    await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,notes)
-      VALUES (?,?,'SENT',?,?,?,'Auto-reorder: stock below reorder level')`)
-      .bind(poId, item.vendor_id, total, gst, total+gst).run();
-    await env.DB.prepare(`INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total)
-      VALUES (?,?,?,?,?,?,?)`)
-      .bind(uid(), poId, item.sku, item.name, reorderQty, item.unit_price, total).run();
+  for (const g of groups) {
+    const poId = await nextPONumber(env);
+    const needsApproval = threshold > 0 && g.grand_total >= threshold;
+    const status = needsApproval ? "PENDING_APPROVAL" : "SENT";
+    const v = await env.DB.prepare("SELECT avg_lead_days FROM vendors WHERE id=?").bind(g.vendor_id).first() as Record<string,number>|null;
+    const lead = Number(v?.avg_lead_days) || 3;
+    const expected = new Date(Date.now() + lead * 86400000).toISOString().slice(0,10);
 
+    await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,expected_delivery,notes)
+      VALUES (?,?,?,?,?,?,?,'Auto-reorder: stock below reorder level')`)
+      .bind(poId, g.vendor_id, status, g.subtotal, g.gst, g.grand_total, expected).run();
+    for (const ln of g.lines) {
+      await env.DB.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), poId, ln.sku, ln.name, ln.qty, ln.rate, ln.total).run();
+    }
     await pushNotification(env, "procurement_manager",
-      `Auto-reorder PO ${poId} raised for ${item.name} — stock critical (${item.stock} units remaining)`);
-    await audit(env, actor, "AUTO_REORDER", "purchase_order", poId, undefined, `sku:${item.sku},qty:${reorderQty}`);
+      `Auto-reorder ${poId} raised for ${g.vendor_name} — ${g.lines.length} item(s)${needsApproval ? " (needs approval)" : ""}`);
+    await audit(env, actor, "AUTO_REORDER", "purchase_order", poId, undefined, `vendor:${g.vendor_id},lines:${g.lines.length},status:${status}`);
   }
 }
 
@@ -401,6 +426,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS grn_lines ( id TEXT PRIMARY KEY, grn_id TEXT NOT NULL, sku TEXT NOT NULL, name TEXT NOT NULL, qty_received INTEGER NOT NULL DEFAULT 0, qty_rejected INTEGER NOT NULL DEFAULT 0, batch_no TEXT, mfg_date TEXT, expiry_date TEXT, qc_status TEXT DEFAULT 'ACCEPTED', note TEXT );`,
     `CREATE TABLE IF NOT EXISTS inventory_batches ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, batch_no TEXT, mfg_date TEXT, expiry_date TEXT, qty REAL NOT NULL DEFAULT 0, grn_line_id TEXT, received_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS po_invoices ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_invoice_no TEXT, invoice_amount REAL DEFAULT 0, invoice_date TEXT, match_status TEXT DEFAULT 'PENDING', qty_variance REAL DEFAULT 0, amount_variance REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -696,8 +722,10 @@ export default {
       if (path==="/api/po-approval-threshold"         && method==="GET")   return handlePOApprovalThreshold(request,env,"GET");
       if (path==="/api/po-approval-threshold"         && method==="PATCH") return handlePOApprovalThreshold(request,env,"PATCH");
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
-      if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/) && method==="GET")  return handleReceivablePO(request,env,path);
-      if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)    && method==="POST") return handleInvoicePO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/)   && method==="GET")  return handleReceivablePO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)      && method==="POST") return handleInvoicePO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/debit-note$/)   && method==="POST") return handleCreateDebitNote(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/debit-notes$/)  && method==="GET")  return handleListDebitNotes(request,env,path);
 
       // Delivery Challans
       if (path==="/api/delivery-calendar/settings"                   && method==="GET")  return handleGetDcalSettings(request,env);
@@ -1986,7 +2014,7 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   const issue = await vendorComplianceIssue(env, body.vendor_id);
   if (issue) return json({error:`Cannot raise PO — ${issue}`}, 422);
 
-  const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
+  const id = await nextPONumber(env);
   // Per-line GST from each item's slab (inventory.gst_rate) — supports mixed-slab POs.
   let subtotal = 0, gst = 0;
   for (const it of body.items) {
@@ -2115,7 +2143,7 @@ async function handlePOFromDemand(request: Request, env: Env): Promise<Response>
   const pos: Array<{id:string; vendor_id:string; vendor_name:string; grand_total:number; line_count:number; status:string}> = [];
 
   for (const g of groups) {
-    const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
+    const id = await nextPONumber(env);
     const needsApproval = threshold > 0 && g.grand_total >= threshold;
     const status = needsApproval ? "PENDING_APPROVAL" : "SENT";
     await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,notes)
@@ -3692,6 +3720,38 @@ async function handleInvoicePO(request: Request, env: Env, path: string): Promis
   }
   await audit(env, user, "INVOICE", "purchase_order", id, String(po.status), matchStatus);
   return json({id, match_status: matchStatus, qty_variance: qtyVariance, amount_variance: amountVariance});
+}
+
+// ── Vendor debit notes (G11) — claim value back for rejected/short/damaged goods ──
+// POST /api/purchase-orders/:id/debit-note
+async function handleCreateDebitNote(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const poId = path.split("/")[3];
+  const po = await env.DB.prepare("SELECT id,vendor_id FROM purchase_orders WHERE id=?").bind(poId).first() as Record<string,string>|null;
+  if (!po) return json({error:"PO not found"}, 404);
+  const body = await request.json() as {sku?:string; qty:number; amount?:number; reason?:string};
+  if (!body.qty || body.qty <= 0) return json({error:"qty required"}, 400);
+
+  const line = body.sku ? await env.DB.prepare("SELECT name,unit_price FROM po_items WHERE po_id=? AND sku=?").bind(poId, body.sku).first() as Record<string,unknown>|null : null;
+  const amount = body.amount != null ? Number(body.amount) : Number(body.qty) * Number(line?.unit_price || 0);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO vendor_debit_notes (id,po_id,vendor_id,sku,name,qty,amount,reason,created_by) VALUES (?,?,?,?,?,?,?,?,?)")
+    .bind(id, poId, po.vendor_id, body.sku || null, line ? String(line.name) : null, body.qty, amount, body.reason || null, user!.sub).run();
+  await pushNotification(env, "vendor_admin", `Debit note raised on PO ${poId} — ₹${amount.toLocaleString("en-IN")} (${body.reason || "goods rejected"})`);
+  await audit(env, user, "DEBIT_NOTE", "purchase_order", poId, undefined, `sku:${body.sku||"-"},qty:${body.qty},amount:${amount}`);
+  return json({id, amount}, 201);
+}
+
+// GET /api/purchase-orders/:id/debit-notes
+async function handleListDebitNotes(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const poId = path.split("/")[3];
+  const {results} = await env.DB.prepare("SELECT * FROM vendor_debit_notes WHERE po_id=? ORDER BY created_at DESC").bind(poId).all();
+  return json(results);
 }
 
 // ════════════════════════════════════════════════════════════════════

@@ -1195,3 +1195,51 @@ describe("PO approval + compliance gate (G8/G9)", () => {
     expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL"); // 2360 ≥ 1000
   });
 });
+
+describe("Auto-reorder, debit notes, PO numbering (G10/G11/G12)", () => {
+  const zdb = env.DB as D1Database;
+  beforeAll(async () => {
+    // Below-reorder item with a vendor price list carrying an MOQ
+    await zdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .bind("AUTO-SKU", "Auto Item", "Grocery", 100, 5, 1, 18, "v1", 20, 50).run();
+    await zdb.prepare("INSERT OR IGNORE INTO vendor_products (id,vendor_id,sku,name,rate,moq) VALUES (?,?,?,?,?,?)")
+      .bind("vp-auto", "v1", "AUTO-SKU", "Auto Item", 80, 100).run();
+    await zdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("DNSKU", "DN Item", "Grocery", 100, 500, 1, 18, "v1").run();
+  });
+
+  it("G10: auto-reorder raises a PO with MOQ-lifted qty and vendor price", async () => {
+    const patched = await patch("/api/inventory/AUTO-SKU", { stock: 5 }, adminToken); // triggers checkAutoReorder
+    expect(patched.status).toBe(200);
+    const row = await zdb.prepare(
+      "SELECT pi.qty, pi.unit_price FROM po_items pi JOIN purchase_orders p ON pi.po_id=p.id WHERE pi.sku='AUTO-SKU' ORDER BY p.created_at DESC LIMIT 1"
+    ).first() as Record<string, number> | null;
+    expect(row).toBeTruthy();
+    expect(Number(row!.qty)).toBe(100);        // base 45 lifted to MOQ 100
+    expect(Number(row!.unit_price)).toBe(80);   // vendor_products rate
+  });
+
+  it("G12: PO numbers are sequential and gap-free", async () => {
+    const r1 = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 1, unit_price: 100 }] }, adminToken);
+    const r2 = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 1, unit_price: 100 }] }, adminToken);
+    const id1 = (await r1.json() as { id: string }).id;
+    const id2 = (await r2.json() as { id: string }).id;
+    expect(id1).toMatch(/^PO-\d{5}$/);
+    expect(Number(id2.slice(3))).toBe(Number(id1.slice(3)) + 1);
+  });
+
+  it("G11: a debit note is raised against a PO with amount from the line price", async () => {
+    const created = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 5, unit_price: 100 }] }, adminToken);
+    const { id } = await created.json() as { id: string };
+    const dn = await post(`/api/purchase-orders/${id}/debit-note`, { sku: "DNSKU", qty: 2, reason: "damaged" }, adminToken);
+    expect(dn.status).toBe(201);
+    expect((await dn.json() as { amount: number }).amount).toBe(200); // 2 × ₹100
+    const list = await get(`/api/purchase-orders/${id}/debit-notes`, adminToken);
+    expect((await list.json() as unknown[]).length).toBe(1);
+  });
+
+  it("G11: debit notes are gated to internal-ops roles", async () => {
+    const res = await post("/api/purchase-orders/PO-00001/debit-note", { sku: "DNSKU", qty: 1 }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
