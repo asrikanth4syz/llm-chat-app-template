@@ -102,6 +102,27 @@ function requireUser(u: JWTPayload | null): Response | null {
 const EXTERNAL_ROLES = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"];
 function isExternalRole(role: string): boolean { return EXTERNAL_ROLES.includes(role); }
 
+// Roles that may approve/reject a purchase order held for approval (G8).
+const PO_APPROVER_ROLES = ["super_admin","ops_admin","procurement_manager","finance_admin"];
+
+// G9: return a reason a PO must not be raised to this vendor, or null if clear.
+async function vendorComplianceIssue(env: Env, vendorId: string): Promise<string | null> {
+  const v = await env.DB.prepare("SELECT active,onboarding_status,fssai_expiry,fssai_licence,vendor_type FROM vendors WHERE id=?").bind(vendorId).first() as Record<string,unknown> | null;
+  if (!v) return "Vendor not found";
+  if (Number(v.active) === 0) return "vendor is inactive";
+  if (v.onboarding_status && v.onboarding_status !== "active") return `vendor onboarding is ${v.onboarding_status}`;
+  const today = new Date().toISOString().slice(0,10);
+  if (v.fssai_expiry && String(v.fssai_expiry) < today) return `FSSAI licence expired on ${v.fssai_expiry}`;
+  if (v.vendor_type === "food" && !v.fssai_licence) return "food vendor has no FSSAI licence on file";
+  return null;
+}
+
+// G8: POs at or above this value are held in PENDING_APPROVAL before going to
+// the vendor. Configurable via app_config; 0 disables the gate.
+async function poApprovalThreshold(env: Env): Promise<number> {
+  return Number(await getConfig(env, "po_approval_threshold", "50000")) || 0;
+}
+
 // ── Audit logger ─────────────────────────────────────────────────────
 async function audit(env: Env, actor: JWTPayload | null, action: string,
     entityType: string, entityId: string, oldVal?: string, newVal?: string): Promise<void> {
@@ -672,6 +693,8 @@ export default {
       if (path==="/api/purchase-orders"               && method==="POST")  return handleCreatePO(request,env);
       if (path==="/api/purchase-orders/from-demand"   && method==="POST")  return handlePOFromDemand(request,env);
       if (path==="/api/sourcing/preview"              && method==="GET")   return handleSourcingPreview(request,env);
+      if (path==="/api/po-approval-threshold"         && method==="GET")   return handlePOApprovalThreshold(request,env,"GET");
+      if (path==="/api/po-approval-threshold"         && method==="PATCH") return handlePOApprovalThreshold(request,env,"PATCH");
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/) && method==="GET")  return handleReceivablePO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)    && method==="POST") return handleInvoicePO(request,env,path);
@@ -1959,6 +1982,10 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {vendor_id:string;order_id?:string;items:Array<{sku:string;name:string;qty:number;unit_price:number}>;expected_delivery?:string;notes?:string};
   if (!body.vendor_id || !body.items?.length) return json({error:"vendor_id and items required"}, 400);
 
+  // G9: don't raise a PO to a non-compliant vendor.
+  const issue = await vendorComplianceIssue(env, body.vendor_id);
+  if (issue) return json({error:`Cannot raise PO — ${issue}`}, 422);
+
   const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
   // Per-line GST from each item's slab (inventory.gst_rate) — supports mixed-slab POs.
   let subtotal = 0, gst = 0;
@@ -1971,9 +1998,14 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   }
   const grand_total = subtotal + gst;
 
+  // G8: hold high-value POs for approval before they reach the vendor.
+  const threshold = await poApprovalThreshold(env);
+  const needsApproval = threshold > 0 && grand_total >= threshold;
+  const status = needsApproval ? "PENDING_APPROVAL" : "SENT";
+
   await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,order_id,status,subtotal,gst,grand_total,expected_delivery,notes)
-    VALUES (?,?,?,'SENT',?,?,?,?,?)`)
-    .bind(id,body.vendor_id,body.order_id||null,subtotal,gst,grand_total,body.expected_delivery||null,body.notes||null).run();
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .bind(id,body.vendor_id,body.order_id||null,status,subtotal,gst,grand_total,body.expected_delivery||null,body.notes||null).run();
 
   for (const item of body.items) {
     await env.DB.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
@@ -1984,14 +2016,18 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare("UPDATE orders SET status='VENDOR_PO_RAISED',updated_at=datetime('now') WHERE id=? AND status='INVENTORY_CHECK'").bind(body.order_id).run();
   }
 
-  const vendor = await env.DB.prepare("SELECT * FROM vendors WHERE id=?").bind(body.vendor_id).first() as Record<string,string>|null;
-  if (vendor?.contact_email) {
-    await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
-      `Dear ${vendor.name},\n\nPO ${id} has been raised for ₹${grand_total.toLocaleString("en-IN")}.\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+  if (needsApproval) {
+    await pushNotification(env, "procurement_manager", `PO ${id} needs approval — ₹${grand_total.toLocaleString("en-IN")}`);
+  } else {
+    const vendor = await env.DB.prepare("SELECT * FROM vendors WHERE id=?").bind(body.vendor_id).first() as Record<string,string>|null;
+    if (vendor?.contact_email) {
+      await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
+        `Dear ${vendor.name},\n\nPO ${id} has been raised for ₹${grand_total.toLocaleString("en-IN")}.\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+    }
+    await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${grand_total.toLocaleString("en-IN")}`);
   }
-  await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${grand_total.toLocaleString("en-IN")}`);
-  await audit(env, user, "CREATE", "purchase_order", id, undefined, `vendor:${body.vendor_id},total:${grand_total}`);
-  return json({id, grand_total}, 201);
+  await audit(env, user, "CREATE", "purchase_order", id, undefined, `vendor:${body.vendor_id},total:${grand_total},status:${status}`);
+  return json({id, grand_total, status}, 201);
 }
 
 // ── Sourcing (G4): resolve each SKU to a usable vendor + price, group by vendor ──
@@ -2073,29 +2109,50 @@ async function handlePOFromDemand(request: Request, env: Env): Promise<Response>
   const body = await request.json() as {items:Array<{sku:string;qty:number}>; source?:string; notes?:string};
   if (!body.items?.length) return json({error:"items required"}, 400);
 
-  const {groups, unsourced} = await resolveSourcing(env, body.items);
+  const {groups, unsourced} = await resolveSourcing(env, body.items);  // non-compliant vendors already excluded (G9)
   const label = body.source === "brand" ? "brand consolidation" : "consolidated demand";
-  const pos: Array<{id:string; vendor_id:string; vendor_name:string; grand_total:number; line_count:number}> = [];
+  const threshold = await poApprovalThreshold(env);
+  const pos: Array<{id:string; vendor_id:string; vendor_name:string; grand_total:number; line_count:number; status:string}> = [];
 
   for (const g of groups) {
     const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
+    const needsApproval = threshold > 0 && g.grand_total >= threshold;
+    const status = needsApproval ? "PENDING_APPROVAL" : "SENT";
     await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,notes)
-      VALUES (?,?,'SENT',?,?,?,?)`)
-      .bind(id, g.vendor_id, g.subtotal, g.gst, g.grand_total, body.notes || `Auto-split from ${label}`).run();
+      VALUES (?,?,?,?,?,?,?)`)
+      .bind(id, g.vendor_id, status, g.subtotal, g.gst, g.grand_total, body.notes || `Auto-split from ${label}`).run();
     for (const ln of g.lines) {
       await env.DB.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
         .bind(uid(), id, ln.sku, ln.name, ln.qty, ln.rate, ln.total).run();
     }
-    const vendor = await env.DB.prepare("SELECT contact_email,name FROM vendors WHERE id=?").bind(g.vendor_id).first() as Record<string,string>|null;
-    if (vendor?.contact_email) {
-      await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
-        `Dear ${vendor.name},\n\nPO ${id} has been raised for ₹${g.grand_total.toLocaleString("en-IN")} (${g.lines.length} items).\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+    if (needsApproval) {
+      await pushNotification(env, "procurement_manager", `PO ${id} needs approval — ₹${g.grand_total.toLocaleString("en-IN")}`);
+    } else {
+      const vendor = await env.DB.prepare("SELECT contact_email,name FROM vendors WHERE id=?").bind(g.vendor_id).first() as Record<string,string>|null;
+      if (vendor?.contact_email) {
+        await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
+          `Dear ${vendor.name},\n\nPO ${id} has been raised for ₹${g.grand_total.toLocaleString("en-IN")} (${g.lines.length} items).\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+      }
+      await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${g.grand_total.toLocaleString("en-IN")}`);
     }
-    await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${g.grand_total.toLocaleString("en-IN")}`);
-    await audit(env, user, "CREATE", "purchase_order", id, undefined, `from_demand vendor:${g.vendor_id} total:${g.grand_total}`);
-    pos.push({id, vendor_id:g.vendor_id, vendor_name:g.vendor_name, grand_total:g.grand_total, line_count:g.lines.length});
+    await audit(env, user, "CREATE", "purchase_order", id, undefined, `from_demand vendor:${g.vendor_id} total:${g.grand_total} status:${status}`);
+    pos.push({id, vendor_id:g.vendor_id, vendor_name:g.vendor_name, grand_total:g.grand_total, line_count:g.lines.length, status});
   }
   return json({pos, unsourced}, 201);
+}
+
+// GET/PATCH /api/po-approval-threshold — the value (₹) above which POs are held.
+async function handlePOApprovalThreshold(request: Request, env: Env, method: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  if (method === "GET") return json({threshold: await poApprovalThreshold(env)});
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as {threshold:number};
+  const t = Math.max(0, Number(body.threshold) || 0);
+  await setConfig(env, "po_approval_threshold", String(t), user!.sub);
+  await audit(env, user, "UPDATE", "config", "po_approval_threshold", undefined, String(t));
+  return json({threshold: t});
 }
 
 async function handlePatchPO(request: Request, env: Env, path: string): Promise<Response> {
@@ -2105,6 +2162,24 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
   const body = await request.json() as {status?:string;invoice_url?:string};
   const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!po) return json({error:"Not found"}, 404);
+
+  // G8: approving/rejecting a held PO is restricted to procurement/finance leads.
+  if (po.status === "PENDING_APPROVAL") {
+    if (!PO_APPROVER_ROLES.includes(user!.role))
+      return json({error:"Only procurement or finance leads can approve or reject a PO"}, 403);
+    if (!["SENT","REJECTED","CANCELLED"].includes(body.status || ""))
+      return json({error:"A held PO can only be approved (SENT) or rejected"}, 400);
+    if (body.status === "SENT") {
+      // Approved — the PO now goes to the vendor.
+      const vendor = await env.DB.prepare("SELECT contact_email,name FROM vendors WHERE id=?").bind(po.vendor_id).first() as Record<string,string>|null;
+      if (vendor?.contact_email) {
+        await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
+          `Dear ${vendor.name},\n\nPO ${id} has been approved and raised for ₹${Number(po.grand_total).toLocaleString("en-IN")}.\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+      }
+      await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${Number(po.grand_total).toLocaleString("en-IN")}`);
+    }
+    await audit(env, user, body.status === "SENT" ? "APPROVE" : "REJECT", "purchase_order", id, po.status, body.status || po.status);
+  }
 
   const updates = ["updated_at=datetime('now')"];
   const vals: unknown[] = [];
@@ -3395,6 +3470,13 @@ async function handleAlerts(request: Request, env: Env): Promise<Response> {
     flagCnt = cnt(c); flagRows = rows(r);
   } catch { /* table new — none */ }
 
+  // POs awaiting approval (G8) — high-value POs held before reaching the vendor.
+  const [poApprCnt, poApprRows] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) as cnt FROM purchase_orders WHERE status='PENDING_APPROVAL'").first(),
+    env.DB.prepare(`SELECT p.id, p.grand_total, v.name as vendor_name FROM purchase_orders p
+      LEFT JOIN vendors v ON p.vendor_id=v.id WHERE p.status='PENDING_APPROVAL' ORDER BY p.grand_total DESC LIMIT 5`).all(),
+  ]);
+
   const money = (n: unknown) => "₹" + Number(n || 0).toLocaleString("en-IN");
 
   const categories = [
@@ -3434,6 +3516,12 @@ async function handleAlerts(request: Request, env: Env): Promise<Response> {
       items: flagRows.map(r => ({
         title: `PO ${r.po_id}${r.vendor_invoice_no ? ` · ${r.vendor_invoice_no}` : ""}`,
         meta: `qty Δ ${r.qty_variance} · amount Δ ${money(r.amount_variance)}` })),
+    },
+    {
+      key: "po_approvals", label: "POs awaiting approval", icon: "🖋️", tone: "warn", page: "procurement",
+      action: "Approve", count: cnt(poApprCnt),
+      items: rows(poApprRows).map(r => ({
+        title: `PO ${r.id} · ${r.vendor_name || "—"}`, meta: money(r.grand_total) })),
     },
     {
       key: "overdue_billing", label: "Overdue billing", icon: "💳", tone: "brand", page: "dc_billing",

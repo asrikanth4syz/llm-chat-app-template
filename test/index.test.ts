@@ -1008,7 +1008,7 @@ describe("Alerts & Exceptions hub", () => {
     const keys = data.categories.map(c => c.key);
     expect(keys).toEqual([
       "overdue_deliveries", "pending_approvals", "sla_breaches",
-      "low_stock", "near_expiry", "flagged_invoices", "overdue_billing", "failed_syncs",
+      "low_stock", "near_expiry", "flagged_invoices", "po_approvals", "overdue_billing", "failed_syncs",
     ]);
     // Every count is a non-negative number and total is their sum.
     for (const c of data.categories) expect(c.count).toBeGreaterThanOrEqual(0);
@@ -1152,5 +1152,46 @@ describe("PO commercials — multi-line + per-line GST slab (G6/G7)", () => {
     expect(data.grand_total).toBe(2230);
     const items = await gdb.prepare("SELECT COUNT(*) as n FROM po_items WHERE po_id=?").bind(data.id).all() as { results: Record<string, number>[] };
     expect(Number(items.results[0].n)).toBe(2);
+  });
+});
+
+describe("PO approval + compliance gate (G8/G9)", () => {
+  const adb = env.DB as D1Database;
+  beforeAll(async () => {
+    await adb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,?)").bind("v-bad", "Lapsed Traders", "Grocery", 0).run();
+    await adb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("BIGSKU", "Big Item", "Grocery", 1000, 0, 1, 18).run();
+  });
+
+  it("G9: blocks a PO to a non-compliant (inactive) vendor", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v-bad", items: [{ sku: "BIGSKU", name: "Big Item", qty: 1, unit_price: 1000 }] }, adminToken);
+    expect(res.status).toBe(422);
+  });
+
+  it("G8: a high-value PO is held for approval, not sent", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 60, unit_price: 1000 }] }, adminToken);
+    expect(res.status).toBe(201);
+    expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL");
+  });
+
+  it("G8: a small PO goes straight to the vendor (SENT)", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken);
+    expect((await res.json() as { status: string }).status).toBe("SENT");
+  });
+
+  it("G8: only approver roles can approve a held PO", async () => {
+    const created = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 60, unit_price: 1000 }] }, adminToken);
+    const { id } = await created.json() as { id: string };
+    const denied = await patch(`/api/purchase-orders/${id}`, { status: "SENT" }, opsToken); // ops_manager ≠ approver
+    expect(denied.status).toBe(403);
+    const okd = await patch(`/api/purchase-orders/${id}`, { status: "SENT" }, adminToken);
+    expect(okd.status).toBe(200);
+    const st = await adb.prepare("SELECT status FROM purchase_orders WHERE id=?").bind(id).first() as Record<string, string>;
+    expect(st.status).toBe("SENT");
+  });
+
+  it("threshold is configurable and enforced", async () => {
+    await patch("/api/po-approval-threshold", { threshold: 1000 }, adminToken);
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken);
+    expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL"); // 2360 ≥ 1000
   });
 });

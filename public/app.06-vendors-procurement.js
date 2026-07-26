@@ -951,7 +951,22 @@ async function sendPOToVendor() {
     notes: document.getElementById('po-notes')?.value?.trim() || '',
   })});
   closeModal();
-  if (res) { showToast(`PO ${res.id} sent — ${fmt(res.grand_total)}`); navigate('procurement'); }
+  if (res) {
+    showToast(res.status === 'PENDING_APPROVAL'
+      ? `PO ${res.id} created — awaiting approval (${fmt(res.grand_total)})`
+      : `PO ${res.id} sent — ${fmt(res.grand_total)}`);
+    navigate('procurement');
+  }
+}
+
+async function approvePO(poId) {
+  const res = await api(`/purchase-orders/${poId}`, { method:'PATCH', body: JSON.stringify({ status:'SENT' }) });
+  if (res) { showToast(`PO ${poId} approved — sent to vendor`); navigate('procurement'); }
+}
+
+async function rejectPO(poId) {
+  const res = await api(`/purchase-orders/${poId}`, { method:'PATCH', body: JSON.stringify({ status:'REJECTED' }) });
+  if (res) { showToast(`PO ${poId} rejected`); navigate('procurement'); }
 }
 
 
@@ -966,9 +981,11 @@ async function renderProcurement(el) {
   const valByStatus = s => byStatus(s).reduce((sum,p)=>sum+(p.grand_total||0),0);
   // Receivable = still inbound or part-received; both can accept a GRN.
   const pendingGRN = [...byStatus('DISPATCHED'), ...byStatus('PARTIALLY_RECEIVED')];
-  const totalOpen = ['SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED'].reduce((s,st)=>s+byStatus(st).length,0);
+  const totalOpen = ['PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED'].reduce((s,st)=>s+byStatus(st).length,0);
+  const canApprovePO = ['super_admin','ops_admin','procurement_manager','finance_admin'].includes(APP.user.role);
 
   const statusTiles = [
+    { key:'PENDING_APPROVAL',  label:'Awaiting Approval', icon:'🖋️', color:'#b45309', bg:'#fffbeb', urgent: byStatus('PENDING_APPROVAL').length>0 },
     { key:'SENT',              label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
     { key:'ACCEPTED',          label:'Accepted',      icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
     { key:'DISPATCHED',        label:'In Transit',    icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: byStatus('DISPATCHED').length>0 },
@@ -1026,7 +1043,7 @@ async function renderProcurement(el) {
       <div style="display:flex;gap:8px;align-items:center">
         <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" ${dataChange('filterPOTable')}>
           <option value="">All Status</option>
-          ${['SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s.replace(/_/g,' ')}</option>`).join('')}
+          ${['PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s.replace(/_/g,' ')}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -1039,11 +1056,15 @@ async function renderProcurement(el) {
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
           <td>${fmtDate(po.expected_delivery)||'—'}</td>
-          <td>${['DISPATCHED','PARTIALLY_RECEIVED'].includes(po.status)
-            ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
-            : po.status==='RECEIVED'
-              ? `<button class="btn btn-secondary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button>`
-              : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+          <td>${po.status==='PENDING_APPROVAL'
+            ? (canApprovePO
+                ? `<button class="btn btn-primary btn-sm" ${dataAct('approvePO', po.id)}>Approve</button> <button class="btn btn-secondary btn-sm" ${dataAct('rejectPO', po.id)}>Reject</button>`
+                : '<span style="color:var(--warning);font-size:.8rem">Awaiting approval</span>')
+            : ['DISPATCHED','PARTIALLY_RECEIVED'].includes(po.status)
+              ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
+              : po.status==='RECEIVED'
+                ? `<button class="btn btn-secondary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button>`
+                : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>

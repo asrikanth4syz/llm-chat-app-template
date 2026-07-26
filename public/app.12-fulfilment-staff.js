@@ -823,8 +823,9 @@ async function confirmDemandPO(source) {
   const res = await api('/purchase-orders/from-demand', { method:'POST', body: JSON.stringify({ items: _demandItems, source }) });
   closeModal();
   if (!res) return;
-  const n = (res.pos || []).length, u = (res.unsourced || []).length;
-  showToast(`Created ${n} PO${n === 1 ? '' : 's'}${u ? ` · ${u} unsourced` : ''}`);
+  const pos = res.pos || [], u = (res.unsourced || []).length;
+  const held = pos.filter(p => p.status === 'PENDING_APPROVAL').length;
+  showToast(`Created ${pos.length} PO${pos.length === 1 ? '' : 's'}${held ? ` · ${held} awaiting approval` : ''}${u ? ` · ${u} unsourced` : ''}`);
   navigate('procurement');
 }
 
