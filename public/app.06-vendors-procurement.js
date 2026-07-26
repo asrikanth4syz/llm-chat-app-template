@@ -856,36 +856,102 @@ async function toggleVendorActive(id, name, active) {
   if (res) { showToast(`Vendor ${newState?'enabled':'disabled'}`); navigate('vendors'); }
 }
 
+// Multi-line PO builder. Each line's default price comes from the vendor's own
+// price list (vendor_products), falling back to the last price paid to this
+// vendor, then the catalogue cost — all three surfaced as hints. GST is shown
+// and totalled per line from each item's slab (gst_rate); the server recomputes.
+let _poVendor = null, _poPriceMap = {}, _poLines = [];
 async function newPOForVendor(vendorId, vendorName) {
-  const inv = await api('/inventory');
-  const itemOpts = (inv||[]).map(i=>`<option value="${i.sku}" data-price="${i.unit_price}">${h(i.name)} (${fmt(i.unit_price)})</option>`).join('');
-  openModal(`New PO — ${vendorName}`,
-    `<div class="form-group"><label>Item</label><select id="po-item" ${dataChangeEl('updatePOPrice')}>${itemOpts}</select></div>
-     <div class="form-group"><label>Quantity</label><input type="number" id="po-qty2" value="50" min="1"></div>
-     <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="po-price2" value="${inv?.[0]?.unit_price||0}"></div>
-     <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-del2" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
+  const [inv, vprods, vpos] = await Promise.all([
+    api('/inventory'),
+    api(`/vendors/${vendorId}/products`).catch(() => []),
+    api(`/purchase-orders?vendor_id=${vendorId}`).catch(() => []),
+  ]);
+  if (!inv) return;
+  const vrate = {}; (vprods || []).forEach(p => { if (p.sku) vrate[p.sku] = p.rate; });
+  const last = {}; (vpos || []).forEach(po => (po.items || []).forEach(it => { if (last[it.sku] == null) last[it.sku] = it.unit_price; }));
+  _poVendor = { id: vendorId, name: vendorName };
+  _poPriceMap = {};
+  inv.forEach(i => { _poPriceMap[i.sku] = { name: i.name, list: i.unit_price || 0, gst: (i.gst_rate != null ? i.gst_rate : 18), vendor: vrate[i.sku], last: last[i.sku] }; });
+  _poLines = [];
+  const itemOpts = inv.map(i => `<option value="${i.sku}">${h(i.name)}</option>`).join('');
+  openModal(`New PO — ${vendorName}`, `
+    <div class="form-group"><label>Add item</label>
+      <select id="po-add" ${dataChangeEl('addPOLine')}><option value="">Select an item…</option>${itemOpts}</select>
+    </div>
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-center">Qty</th><th class="u-right">Unit ₹</th><th class="u-center">GST</th><th class="u-right">Total</th><th></th></tr></thead>
+      <tbody id="po-lines"></tbody>
+    </table></div>
+    <div id="po-grand" style="text-align:right;font-weight:700;margin-top:10px;color:var(--navy)"></div>
+    <div class="form-group" style="margin-top:10px"><label>Expected Delivery</label><input type="date" id="po-del" value="${new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10)}"></div>
+    <div class="form-group"><label>Notes</label><input type="text" id="po-notes" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-gold" ${dataAct('sendPOToVendor', vendorId)}>Send PO</button>`);
+     <button class="btn btn-gold" ${dataAct('sendPOToVendor')}>Send PO</button>`);
+  renderPOLines();
 }
 
-function updatePOPrice(sel) {
-  const opt = sel.options[sel.selectedIndex];
-  const price = document.getElementById('po-price2');
-  if (price) price.value = opt.dataset.price || '';
+function addPOLine(sel) {
+  const sku = sel.value; if (!sku) return;
+  sel.value = '';
+  const p = _poPriceMap[sku]; if (!p) return;
+  if (_poLines.some(l => l.sku === sku)) { showToast('Item already added', 'info'); return; }
+  const unit = p.vendor != null ? p.vendor : (p.last != null ? p.last : p.list);
+  _poLines.push({ sku, name: p.name, qty: 50, unit_price: unit, gst: p.gst });
+  renderPOLines();
 }
 
-async function sendPOToVendor(vendorId) {
-  const sku = document.getElementById('po-item').value;
-  const name = document.getElementById('po-item').options[document.getElementById('po-item').selectedIndex].text.split(' (')[0];
-  const qty = +document.getElementById('po-qty2').value;
-  const price = +document.getElementById('po-price2').value;
-  const delivery = document.getElementById('po-del2').value;
-  const res = await api('/purchase-orders', {
-    method:'POST',
-    body: JSON.stringify({ vendor_id: vendorId, items:[{sku,name,qty,unit_price:price}], expected_delivery: delivery })
+function removePOLine(sku) { _poLines = _poLines.filter(l => l.sku !== sku); renderPOLines(); }
+
+function renderPOLines() {
+  const tb = document.getElementById('po-lines'); if (!tb) return;
+  if (!_poLines.length) {
+    tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:16px">Add items above to build this PO</td></tr>`;
+  } else {
+    tb.innerHTML = _poLines.map(l => {
+      const p = _poPriceMap[l.sku] || {};
+      const hints = [];
+      if (p.vendor != null) hints.push(`vendor ${fmt(p.vendor)}`);
+      hints.push(`list ${fmt(p.list)}`);
+      if (p.last != null) hints.push(`last ${fmt(p.last)}`);
+      return `<tr>
+        <td style="font-size:.83rem"><b>${h(l.name)}</b><div class="u-subtiny">${hints.join(' · ')}</div></td>
+        <td class="u-center"><input type="number" data-po-qty="${l.sku}" value="${l.qty}" min="1" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('recalcPO')}></td>
+        <td class="u-right"><input type="number" data-po-price="${l.sku}" value="${l.unit_price}" min="0" style="width:78px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:right" ${dataInput('recalcPO')}></td>
+        <td class="u-center u-subtiny">${l.gst}%</td>
+        <td class="u-right" data-po-total="${l.sku}">${fmt(l.qty * l.unit_price)}</td>
+        <td class="u-center"><button class="btn btn-secondary btn-sm" ${dataAct('removePOLine', l.sku)}>✕</button></td>
+      </tr>`;
+    }).join('');
+  }
+  recalcPO();
+}
+
+function recalcPO() {
+  let sub = 0, gst = 0;
+  _poLines.forEach(l => {
+    const qty = +document.querySelector(`[data-po-qty="${l.sku}"]`)?.value || l.qty;
+    const price = +document.querySelector(`[data-po-price="${l.sku}"]`)?.value || 0;
+    l.qty = qty; l.unit_price = price;
+    const lt = qty * price; sub += lt; gst += Math.round(lt * (l.gst || 18) / 100);
+    const tc = document.querySelector(`[data-po-total="${l.sku}"]`); if (tc) tc.textContent = fmt(lt);
   });
+  const g = document.getElementById('po-grand');
+  if (g) g.textContent = `Subtotal ${fmt(sub)} · GST ${fmt(gst)} · Total ${fmt(sub + gst)}`;
+}
+
+async function sendPOToVendor() {
+  if (!_poLines.length) { showToast('Add at least one item', 'error'); return; }
+  recalcPO();
+  const items = _poLines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, unit_price: l.unit_price })).filter(i => i.qty > 0);
+  if (!items.length) { showToast('Enter quantities', 'error'); return; }
+  const res = await api('/purchase-orders', { method: 'POST', body: JSON.stringify({
+    vendor_id: _poVendor.id, items,
+    expected_delivery: document.getElementById('po-del')?.value || null,
+    notes: document.getElementById('po-notes')?.value?.trim() || '',
+  })});
   closeModal();
-  if (res) { showToast(`PO ${res.id} sent to vendor`); navigate('procurement'); }
+  if (res) { showToast(`PO ${res.id} sent — ${fmt(res.grand_total)}`); navigate('procurement'); }
 }
 
 

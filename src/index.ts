@@ -301,7 +301,8 @@ async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<voi
     const reorderQty = Math.max(50, (item.max_stock as number) - (item.stock as number));
     const poId = `PO-AUTO-${Math.floor(Math.random()*9000+1000)}`;
     const total = reorderQty * (item.unit_price as number);
-    const gst = Math.round(total * 0.18);
+    const gstRate = item.gst_rate != null ? Number(item.gst_rate) : 18;
+    const gst = Math.round(total * gstRate / 100);
 
     await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,notes)
       VALUES (?,?,'SENT',?,?,?,'Auto-reorder: stock below reorder level')`)
@@ -1959,9 +1960,16 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   if (!body.vendor_id || !body.items?.length) return json({error:"vendor_id and items required"}, 400);
 
   const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
-  const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price,0);
-  const gst = Math.round(subtotal*0.18);
-  const grand_total = subtotal+gst;
+  // Per-line GST from each item's slab (inventory.gst_rate) — supports mixed-slab POs.
+  let subtotal = 0, gst = 0;
+  for (const it of body.items) {
+    const lt = it.qty * it.unit_price;
+    const inv = await env.DB.prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(it.sku).first() as Record<string,number>|null;
+    const rate = inv && inv.gst_rate != null ? Number(inv.gst_rate) : 18;
+    subtotal += lt;
+    gst += Math.round(lt * rate / 100);
+  }
+  const grand_total = subtotal + gst;
 
   await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,order_id,status,subtotal,gst,grand_total,expected_delivery,notes)
     VALUES (?,?,?,'SENT',?,?,?,?,?)`)

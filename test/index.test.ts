@@ -1133,3 +1133,24 @@ describe("Demand → PO vendor-split (G4 sourcing)", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("PO commercials — multi-line + per-line GST slab (G6/G7)", () => {
+  const gdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await gdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("GST5", "Five Percent", "Grocery", 100, 0, 1, 5).run();
+    await gdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("GST18", "Eighteen Percent", "Grocery", 100, 0, 1, 18).run();
+  });
+
+  it("multi-line PO totals GST per slab, not a flat 18%", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [
+      { sku: "GST5",  name: "Five Percent",      qty: 10, unit_price: 100 },
+      { sku: "GST18", name: "Eighteen Percent",  qty: 10, unit_price: 100 },
+    ] }, adminToken);
+    expect(res.status).toBe(201);
+    const data = await res.json() as { id: string; grand_total: number };
+    // subtotal 2000; GST = 50 (5% of 1000) + 180 (18% of 1000) = 230 → 2230, not a flat 360
+    expect(data.grand_total).toBe(2230);
+    const items = await gdb.prepare("SELECT COUNT(*) as n FROM po_items WHERE po_id=?").bind(data.id).all() as { results: Record<string, number>[] };
+    expect(Number(items.results[0].n)).toBe(2);
+  });
+});
