@@ -669,6 +669,8 @@ export default {
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
       if (path==="/api/purchase-orders"               && method==="POST")  return handleCreatePO(request,env);
+      if (path==="/api/purchase-orders/from-demand"   && method==="POST")  return handlePOFromDemand(request,env);
+      if (path==="/api/sourcing/preview"              && method==="GET")   return handleSourcingPreview(request,env);
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/) && method==="GET")  return handleReceivablePO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)    && method==="POST") return handleInvoicePO(request,env,path);
@@ -1982,6 +1984,110 @@ async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${grand_total.toLocaleString("en-IN")}`);
   await audit(env, user, "CREATE", "purchase_order", id, undefined, `vendor:${body.vendor_id},total:${grand_total}`);
   return json({id, grand_total}, 201);
+}
+
+// ── Sourcing (G4): resolve each SKU to a usable vendor + price, group by vendor ──
+// Vendor selection = primary (inventory.vendor_id) then secondary, skipping any
+// vendor that is inactive, not fully onboarded, or with an expired FSSAI licence.
+// Price = vendor-specific rate (vendor_products) else the inventory cost; qty is
+// lifted to the vendor MOQ; GST is per-line from the item's gst_rate.
+type SourceLine = { sku:string; name:string; qty:number; rate:number; gst_rate:number; total:number };
+type SourceGroup = { vendor_id:string; vendor_name:string; lines:SourceLine[]; subtotal:number; gst:number; grand_total:number };
+async function resolveSourcing(env: Env, items: Array<{sku:string; qty:number}>): Promise<{groups:SourceGroup[]; unsourced:Array<{sku:string;name:string;qty:number;reason:string}>}> {
+  const today = new Date().toISOString().slice(0,10);
+  const groups = new Map<string, SourceGroup>();
+  const unsourced: Array<{sku:string;name:string;qty:number;reason:string}> = [];
+
+  for (const it of items) {
+    const qtyReq = Number(it.qty) || 0;
+    if (qtyReq <= 0) continue;
+    const inv = await env.DB.prepare("SELECT sku,name,unit_price,gst_rate,vendor_id,secondary_vendor_id FROM inventory WHERE sku=?").bind(it.sku).first() as Record<string,unknown>|null;
+    if (!inv) { unsourced.push({sku:it.sku, name:it.sku, qty:qtyReq, reason:"Unknown SKU"}); continue; }
+
+    let chosen: Record<string,unknown>|null = null;
+    for (const vid of [inv.vendor_id, inv.secondary_vendor_id]) {
+      if (!vid) continue;
+      const v = await env.DB.prepare("SELECT id,name,active,onboarding_status,fssai_expiry FROM vendors WHERE id=?").bind(vid).first() as Record<string,unknown>|null;
+      if (!v) continue;
+      if (Number(v.active) === 0) continue;
+      if (v.onboarding_status && v.onboarding_status !== "active") continue;
+      if (v.fssai_expiry && String(v.fssai_expiry) < today) continue;
+      chosen = v; break;
+    }
+    if (!chosen) {
+      unsourced.push({sku:it.sku, name:String(inv.name), qty:qtyReq,
+        reason: inv.vendor_id ? "No usable vendor (inactive / not onboarded / FSSAI expired)" : "No vendor mapped"});
+      continue;
+    }
+
+    const vp = await env.DB.prepare("SELECT rate,moq FROM vendor_products WHERE vendor_id=? AND sku=?").bind(chosen.id, it.sku).first() as Record<string,number>|null;
+    const rate = vp && Number(vp.rate) > 0 ? Number(vp.rate) : Number(inv.unit_price || 0);
+    const moq  = vp && Number(vp.moq)  > 0 ? Number(vp.moq)  : 1;
+    const qty  = Math.max(qtyReq, moq);
+    const gstRate = inv.gst_rate != null ? Number(inv.gst_rate) : 18;
+    const total = qty * rate;
+
+    const vid = String(chosen.id);
+    if (!groups.has(vid)) groups.set(vid, {vendor_id:vid, vendor_name:String(chosen.name), lines:[], subtotal:0, gst:0, grand_total:0});
+    const g = groups.get(vid)!;
+    g.lines.push({sku:it.sku, name:String(inv.name), qty, rate, gst_rate:gstRate, total});
+    g.subtotal += total;
+    g.gst += Math.round(total * gstRate / 100);
+  }
+  const groupArr = [...groups.values()].map(g => ({...g, grand_total: g.subtotal + g.gst}));
+  return {groups: groupArr, unsourced};
+}
+
+function parseItemsParam(raw: string | null): Array<{sku:string; qty:number}> {
+  if (!raw) return [];
+  return raw.split(",").map(pair => {
+    const [sku, qty] = pair.split(":");
+    return {sku: (sku||"").trim(), qty: Number(qty)||0};
+  }).filter(x => x.sku && x.qty > 0).slice(0, 200);
+}
+
+// GET /api/sourcing/preview?items=sku:qty,sku:qty — the vendor-split preview.
+async function handleSourcingPreview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const url = new URL(request.url);
+  const items = parseItemsParam(url.searchParams.get("items"));
+  if (!items.length) return json({error:"items required (sku:qty,sku:qty)"}, 400);
+  return json(await resolveSourcing(env, items));
+}
+
+// POST /api/purchase-orders/from-demand — one PO per resolved vendor.
+async function handlePOFromDemand(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as {items:Array<{sku:string;qty:number}>; source?:string; notes?:string};
+  if (!body.items?.length) return json({error:"items required"}, 400);
+
+  const {groups, unsourced} = await resolveSourcing(env, body.items);
+  const label = body.source === "brand" ? "brand consolidation" : "consolidated demand";
+  const pos: Array<{id:string; vendor_id:string; vendor_name:string; grand_total:number; line_count:number}> = [];
+
+  for (const g of groups) {
+    const id = `PO-${Math.floor(Math.random()*9000+1000)}`;
+    await env.DB.prepare(`INSERT INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,notes)
+      VALUES (?,?,'SENT',?,?,?,?)`)
+      .bind(id, g.vendor_id, g.subtotal, g.gst, g.grand_total, body.notes || `Auto-split from ${label}`).run();
+    for (const ln of g.lines) {
+      await env.DB.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), id, ln.sku, ln.name, ln.qty, ln.rate, ln.total).run();
+    }
+    const vendor = await env.DB.prepare("SELECT contact_email,name FROM vendors WHERE id=?").bind(g.vendor_id).first() as Record<string,string>|null;
+    if (vendor?.contact_email) {
+      await sendEmail(env, vendor.contact_email, `New Purchase Order ${id}`,
+        `Dear ${vendor.name},\n\nPO ${id} has been raised for ₹${g.grand_total.toLocaleString("en-IN")} (${g.lines.length} items).\nPlease log in to the vendor portal to accept or reject.\n\nRegards,\n4SYZ Smart Pantry`);
+    }
+    await pushNotification(env, "vendor_admin", `New PO ${id} received — ₹${g.grand_total.toLocaleString("en-IN")}`);
+    await audit(env, user, "CREATE", "purchase_order", id, undefined, `from_demand vendor:${g.vendor_id} total:${g.grand_total}`);
+    pos.push({id, vendor_id:g.vendor_id, vendor_name:g.vendor_name, grand_total:g.grand_total, line_count:g.lines.length});
+  }
+  return json({pos, unsourced}, 201);
 }
 
 async function handlePatchPO(request: Request, env: Env, path: string): Promise<Response> {

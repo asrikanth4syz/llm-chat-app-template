@@ -776,83 +776,63 @@ function exportFulfilCSV(tab) {
   showToast('CSV export initiated — data will download shortly', 'info');
 }
 
-/* ── Initiate PO from Brand Procurement shortfall ── */
-let _brandPOItems = [];
-async function initiateBrandPO(brand, vendorId, from, to) {
-  const [items, vendors] = await Promise.all([
-    api(`/reports/brand-procurement-items?brand=${encodeURIComponent(brand)}&from=${from}&to=${to}`),
-    api('/vendors').catch(()=>[]),
-  ]);
-  if (!items || !items.length) { showToast('No shortfall items for this brand', 'error'); return; }
-  _brandPOItems = items;
-  const activeVendors = (vendors||[]).filter(v=>v.active!==0);
-  const vendorOpts = activeVendors.map(v=>`<option value="${v.id}" ${v.id===vendorId?'selected':''}>${h(v.name)}</option>`).join('');
+/* ── Demand → PO with automatic vendor-split (G4) ──
+   Consolidated demand is grouped by each item's sourcing vendor (primary →
+   secondary, skipping inactive / un-onboarded / FSSAI-expired), and one PO is
+   raised per vendor. Unsourceable items are surfaced, never silently lumped in. */
+let _demandItems = [];
+async function openDemandPO(items, source, title) {
+  items = (items || []).filter(i => i.sku && i.qty > 0);
+  if (!items.length) { showToast('No items with demand to procure', 'info'); return; }
+  _demandItems = items;
+  const q = items.map(i => `${i.sku}:${Math.round(i.qty)}`).join(',');
+  const prev = await api(`/sourcing/preview?items=${encodeURIComponent(q)}`);
+  if (!prev) return;
+  const groups = prev.groups || [], unsourced = prev.unsourced || [];
 
-  openModal(`Initiate PO — ${brand}`, `
-    <div class="form-group">
-      <label>Vendor <span class="u-danger">*</span></label>
-      <select id="bpo-vendor">${vendorOpts||'<option value="">No vendors — add one first</option>'}</select>
-    </div>
-    <div class="form-group">
-      <label>Items & Quantities <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(pre-filled with shortfall; edit as needed)</span></label>
-      <div class="table-wrap"><table class="table" style="margin:0">
-        <thead><tr><th>Item</th><th>SKU</th><th class="u-right">Unit ₹</th><th class="u-center">Qty</th></tr></thead>
-        <tbody>${items.map((it,i)=>`<tr>
-          <td style="font-size:.84rem"><b>${h(it.name||it.sku)}</b></td>
-          <td style="font-size:.76rem;color:var(--text-muted)">${h(it.sku)}</td>
-          <td class="u-right">${fmt(it.unit_price||0)}</td>
-          <td class="u-center"><input type="number" data-bpo-i="${i}" value="${Math.round(it.shortfall_qty)}" min="0" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('updateBrandPOTotal')}></td>
-        </tr>`).join('')}</tbody>
-      </table></div>
-      <div id="bpo-total" style="text-align:right;font-weight:700;margin-top:8px;color:var(--navy)"></div>
-    </div>
-    <div class="form-group">
-      <label>Notes (optional)</label>
-      <input type="text" id="bpo-notes" placeholder="e.g. Consolidated procurement for shortfall">
-    </div>`,
+  const groupsHtml = groups.map(g => `
+    <div style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface-2)">
+        <b style="font-size:.86rem">🏭 ${h(g.vendor_name)}</b>
+        <span style="font-size:.82rem;font-weight:700">${fmt(g.grand_total)} <span style="color:var(--text-muted);font-weight:400;font-size:.72rem">incl GST</span></span>
+      </div>
+      <table class="table" style="margin:0"><tbody>
+        ${g.lines.map(l => `<tr>
+          <td style="font-size:.82rem">${h(l.name)} <span class="u-subtiny">${h(l.sku)}</span></td>
+          <td class="u-center" style="font-size:.82rem">${l.qty} × ${fmt(l.rate)}</td>
+          <td class="u-right" style="font-size:.82rem">${fmt(l.total)}</td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>`).join('');
+
+  const unsourcedHtml = unsourced.length ? `
+    <div style="border:1px dashed var(--danger);border-radius:10px;padding:10px 12px;margin-top:4px">
+      <b style="font-size:.82rem;color:var(--danger)">⚠ ${unsourced.length} item(s) can't be sourced</b>
+      ${unsourced.map(u => `<div class="u-subtiny">${h(u.name)} (${h(u.sku)}) — ${h(u.reason)}</div>`).join('')}
+    </div>` : '';
+
+  openModal(title, `
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px">Grouped by each item's sourcing vendor — one PO per vendor, GST per line.</div>
+    ${groupsHtml || '<div class="u-subtiny" style="color:var(--text-muted)">No sourceable lines.</div>'}
+    ${unsourcedHtml}`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-secondary" ${dataAct('submitBrandPO', 'whatsapp')}>📱 WhatsApp</button>
-     <button class="btn btn-primary" ${dataAct('submitBrandPO', 'email')}>📧 Create &amp; Email PO</button>`);
-  updateBrandPOTotal();
+     ${groups.length ? `<button class="btn btn-primary" ${dataAct('confirmDemandPO', source)}>Create ${groups.length} PO${groups.length > 1 ? 's' : ''}</button>` : ''}`);
 }
 
-function collectBrandPO() {
-  const items = _brandPOItems.map((it,i)=>{
-    const qty = parseInt(document.querySelector(`input[data-bpo-i="${i}"]`)?.value,10)||0;
-    return { sku: it.sku, name: it.name||it.sku, qty, unit_price: it.unit_price||0 };
-  }).filter(x=>x.qty>0);
-  return items;
-}
-
-function updateBrandPOTotal() {
-  const items = collectBrandPO();
-  const sub = items.reduce((s,i)=>s+i.qty*i.unit_price,0);
-  const el = document.getElementById('bpo-total');
-  if (el) el.textContent = `Subtotal: ${fmt(sub)} · +18% GST = ${fmt(Math.round(sub*1.18))}`;
-}
-
-async function submitBrandPO(mode) {
-  const vendorId = document.getElementById('bpo-vendor')?.value;
-  if (!vendorId) { showToast('Select a vendor', 'error'); return; }
-  const items = collectBrandPO();
-  if (!items.length) { showToast('Enter at least one quantity', 'error'); return; }
-  const notes = document.getElementById('bpo-notes')?.value?.trim() || '';
-
-  const res = await api('/purchase-orders', { method:'POST', body: JSON.stringify({ vendor_id: vendorId, items, notes }) });
-  if (!res) return;
-
-  if (mode === 'whatsapp') {
-    const vSel = document.getElementById('bpo-vendor');
-    const vendorName = vSel?.options[vSel.selectedIndex]?.text || 'Vendor';
-    const lines = items.map(i=>`• ${i.name} × ${i.qty}`).join('\n');
-    const msg = `Hello ${vendorName},\n\nNew Purchase Order ${res.id} from 4SYZ Smart Pantry:\n\n${lines}\n\nTotal (incl. GST): ₹${(res.grand_total||0).toLocaleString('en-IN')}\n\nPlease confirm. Thank you.`;
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-    showToast(`PO ${res.id} created — WhatsApp opened`);
-  } else {
-    showToast(`PO ${res.id} created & emailed to vendor`);
-  }
+async function confirmDemandPO(source) {
+  const res = await api('/purchase-orders/from-demand', { method:'POST', body: JSON.stringify({ items: _demandItems, source }) });
   closeModal();
-  navigate('fulfilment');
+  if (!res) return;
+  const n = (res.pos || []).length, u = (res.unsourced || []).length;
+  showToast(`Created ${n} PO${n === 1 ? '' : 's'}${u ? ` · ${u} unsourced` : ''}`);
+  navigate('procurement');
+}
+
+// Brand Procurement → PO (Operations › Fulfilment › Brand Procurement tab)
+async function initiateBrandPO(brand, _vendorId, from, to) {
+  const items = await api(`/reports/brand-procurement-items?brand=${encodeURIComponent(brand)}&from=${from}&to=${to}`);
+  if (!items || !items.length) { showToast('No shortfall items for this brand', 'error'); return; }
+  openDemandPO(items.map(it => ({ sku: it.sku, qty: Math.round(it.shortfall_qty) })), 'brand', `Initiate PO — ${brand}`);
 }
 
 /* ============================================================
@@ -1175,7 +1155,8 @@ async function renderConsolidatedOrders(el) {
 
   el.innerHTML = `
   ${pageHeader('Procurement View', 'Consolidated view of items needed across all orders',
-    `<button class="btn btn-secondary" ${dataAct('exportConsolidated')}>Export CSV</button>`)}
+    `${totalDue > 0 ? `<button class="btn btn-gold" ${dataAct('raisePOFromConsolidated')}>${iconPlus(14)} Raise PO from demand</button>` : ''}
+     <button class="btn btn-secondary" ${dataAct('exportConsolidated')}>Export CSV</button>`)}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
     ${[
       {label:'Items with Due Qty',val:data.filter(r=>r.total_due_qty>0).length,sub:`of ${data.length} items`,color:'var(--danger)'},
@@ -1207,6 +1188,13 @@ async function renderConsolidatedOrders(el) {
       </table>
     </div>
   </div>`;
+}
+
+async function raisePOFromConsolidated() {
+  const data = await api('/reports/consolidated-orders');
+  if (!data) return;
+  const items = data.filter(r => (r.total_due_qty || 0) > 0).map(r => ({ sku: r.sku, qty: r.total_due_qty }));
+  openDemandPO(items, 'consolidated', 'Raise PO from consolidated demand');
 }
 
 function exportConsolidated() {

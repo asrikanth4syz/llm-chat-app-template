@@ -1089,3 +1089,47 @@ describe("Receiving spine (line-level GRN + 3-way match)", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Demand → PO vendor-split (G4 sourcing)", () => {
+  const sdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await sdb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,?)").bind("v2", "Nimble Foods", "Grocery", 1).run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)").bind("SRC-A", "Src A", "Grocery", 100, 0, 1, 5, "v1").run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)").bind("SRC-B", "Src B", "Grocery", 100, 0, 1, 18, "v2").run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("SRC-NONE", "Src None", "Grocery", 100, 0, 1, 5).run();
+    // Vendor-specific price + MOQ for SRC-A from v1
+    await sdb.prepare("INSERT OR IGNORE INTO vendor_products (id,vendor_id,sku,name,rate,moq) VALUES (?,?,?,?,?,?)").bind("vp1", "v1", "SRC-A", "Src A", 90, 10).run();
+  });
+
+  it("splits demand into one PO per resolved vendor, using vendor price + MOQ", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-A", qty: 5 }, { sku: "SRC-B", qty: 20 }], source: "consolidated" }, adminToken);
+    expect(res.status).toBe(201);
+    const data = await res.json() as { pos: Array<{ id: string; vendor_id: string }>; unsourced: Array<{ sku: string }> };
+    expect(data.pos.length).toBe(2);
+    expect(data.unsourced.length).toBe(0);
+    const v1po = data.pos.find(p => p.vendor_id === "v1")!;
+    const items = await sdb.prepare("SELECT qty,unit_price FROM po_items WHERE po_id=?").bind(v1po.id).all() as { results: Record<string, number>[] };
+    expect(Number(items.results[0].qty)).toBe(10);        // lifted to MOQ 10
+    expect(Number(items.results[0].unit_price)).toBe(90);  // vendor_products rate, not inventory 100
+  });
+
+  it("flags items with no usable vendor as unsourced (no PO)", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-NONE", qty: 5 }] }, adminToken);
+    const data = await res.json() as { pos: unknown[]; unsourced: Array<{ sku: string }> };
+    expect(data.pos.length).toBe(0);
+    expect(data.unsourced.map(u => u.sku)).toContain("SRC-NONE");
+  });
+
+  it("preview groups by vendor without creating POs", async () => {
+    const res = await get("/api/sourcing/preview?items=SRC-A:5,SRC-B:20,SRC-NONE:3", adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { groups: unknown[]; unsourced: unknown[] };
+    expect(data.groups.length).toBe(2);
+    expect(data.unsourced.length).toBe(1);
+  });
+
+  it("is forbidden for client roles", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-A", qty: 5 }] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
