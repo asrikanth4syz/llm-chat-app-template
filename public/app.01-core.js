@@ -100,6 +100,61 @@ const iconUpload   = s => svg('<polyline points="16 16 12 12 8 16"/><line x1="12
 const iconEye      = s => svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',s);
 const iconRefresh  = s => svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/>',s);
 const iconBell     = s => svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',s);
+// ── Extended FMCG-ERP icon set: one distinct, semantic glyph per function ──
+const iconHome     = s => svg('<path d="m3 10.5 9-7 9 7"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/><path d="M9.5 21v-6h5v6"/>',s);
+const iconClock    = s => svg('<circle cx="12" cy="12" r="9"/><polyline points="12 7.5 12 12 15 13.5"/>',s);
+const iconFulfil   = s => svg('<path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/><path d="m14.5 18.5 2 2 4-4"/>',s);
+const iconCalendar = s => svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/>',s);
+const iconCalCheck = s => svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/><polyline points="9 14.5 11 16.5 15 12.5"/>',s);
+const iconMap      = s => svg('<polygon points="2.5 6.5 9 3.5 15 6.5 21.5 3.5 21.5 17.5 15 20.5 9 17.5 2.5 20.5"/><line x1="9" y1="3.5" x2="9" y2="17.5"/><line x1="15" y1="6.5" x2="15" y2="20.5"/>',s);
+const iconLayers   = s => svg('<polygon points="12 2.5 2 7 12 11.5 22 7"/><polyline points="2 12 12 16.5 22 12"/><polyline points="2 17 12 21.5 22 17"/>',s);
+const iconPie      = s => svg('<path d="M21.2 15.9A10 10 0 1 1 8 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',s);
+const iconGauge    = s => svg('<path d="M3.5 18a10 10 0 1 1 17 0"/><line x1="12" y1="14" x2="15.5" y2="10.5"/><circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none"/>',s);
+const iconReceipt  = s => svg('<path d="M4 2.5v19l2.2-1.3 2.3 1.3 2.3-1.3 2.4 1.3 2.3-1.3 2.2 1.3v-19l-2.2 1.3-2.3-1.3-2.4 1.3-2.3-1.3-2.3 1.3z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/>',s);
+const iconMail     = s => svg('<rect x="2.5" y="4.5" width="19" height="15" rx="2"/><path d="m3 6 9 6.5L21 6"/>',s);
+const iconBadge    = s => svg('<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10.5" r="2"/><path d="M5.6 16c.5-1.6 5.3-1.6 5.8 0"/><line x1="14.5" y1="9.5" x2="18.5" y2="9.5"/><line x1="14.5" y1="13" x2="18.5" y2="13"/>',s);
+const iconLayout   = s => svg('<rect x="3" y="3.5" width="18" height="6" rx="1"/><rect x="3" y="12.5" width="7.5" height="8" rx="1"/><rect x="13.5" y="12.5" width="7.5" height="8" rx="1"/>',s);
+const iconFlow     = s => svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="7" r="2.5"/><path d="M6 8.5v7"/><path d="M18 9.5a6 6 0 0 1-6 6H8.5"/>',s);
+const iconPin      = s => svg('<path d="M20 10.5c0 6-8 11.5-8 11.5s-8-5.5-8-11.5a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10.5" r="2.8"/>',s);
+const iconWallet   = s => svg('<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H19a1 1 0 0 1 1 1v2"/><path d="M3 7.5V18a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3"/><path d="M20 11h-4a2 2 0 0 0 0 4h4a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1Z"/>',s);
+const iconSupplier = s => svg('<path d="M3 21h18"/><path d="M5 21V8l7-3.5V21"/><path d="M12 21V9l7 3.5V21"/><line x1="8.5" y1="11" x2="8.5" y2="11.01"/><line x1="8.5" y1="15" x2="8.5" y2="15.01"/>',s);
+const iconHeadset  = s => svg('<path d="M4 13a8 8 0 0 1 16 0"/><path d="M4 13.5v3a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 .5Z"/><path d="M20 13.5v3a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 .5Z"/><path d="M18 18.5a4 4 0 0 1-4 3h-2"/>',s);
+const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2.5 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="16.5" x2="15" y2="16.5"/>',s);
+
+// Single source of truth for a page's sidebar icon — keyed by page id so every
+// role that surfaces a page gets the same, semantically-correct glyph. buildNav
+// resolves through this first, falling back to the item's own icon.
+const PAGE_ICON = {
+  dashboard: iconHome,
+  // Orders & fulfilment
+  orders: iconOrders, consolidated_due: iconClock, fulfilment: iconFulfil,
+  todays_schedule: iconCalCheck,
+  // Deliveries
+  delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
+  track_delivery: iconPin,
+  // Clients & support
+  clients: iconClients, service_desk: iconHeadset, approval_chains: iconFlow,
+  approvals: iconApprove,
+  // Procurement & supply
+  procurement: iconProcure, consolidated_orders: iconLayers, vendors: iconSupplier,
+  inventory: iconInventory, warehouse: iconWarehouse, my_inventory: iconInventory,
+  // Billing & finance
+  dc_billing: iconBilling, dunning: iconMail, porter_expenses: iconReceipt,
+  client_budget: iconWallet,
+  // Reports & insight
+  exec_bi: iconPie, consolidated_report: iconFile, reports: iconReports,
+  sla_dashboard: iconGauge, client_reports: iconPie,
+  // Alerts
+  alerts: iconBell,
+  // Admin & settings
+  users: iconUsers, staff: iconBadge, templates: iconLayout, import_data: iconUpload,
+  settings: iconSettings,
+  // Client / ordering
+  place_order: iconCart, my_orders: iconOrders, orders_inventory: iconLayers,
+  // Vendor portal
+  vendor_pos: iconProcure, vendor_invoices: iconReceipt, vendor_payments: iconWallet,
+};
+const navIcon = (item, s = 18) => (PAGE_ICON[item.id] || item.icon || iconHome)(s);
 
 // ── Nav surfaces ───────────────────────────────────────────
 const NAV = {
@@ -712,7 +767,7 @@ function buildNav() {
 
     const itemsHtml = sec.items.map(item => `
       <div class="nav-item" id="nav-${item.id}" ${dataAct('navigate', item.id)} title="${item.label}">
-        <span class="nav-item-icon">${item.icon(18)}</span>
+        <span class="nav-item-icon">${navIcon(item)}</span>
         <span class="nav-item-label">${item.label}</span>
         ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
       </div>`).join('');
