@@ -98,6 +98,10 @@ function requireUser(u: JWTPayload | null): Response | null {
   return u ? null : json({error:"Unauthorized"}, 401);
 }
 
+// Client- and vendor-side roles — never the internal 4SYZ ops surfaces.
+const EXTERNAL_ROLES = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"];
+function isExternalRole(role: string): boolean { return EXTERNAL_ROLES.includes(role); }
+
 // ── Audit logger ─────────────────────────────────────────────────────
 async function audit(env: Env, actor: JWTPayload | null, action: string,
     entityType: string, entityId: string, oldVal?: string, newVal?: string): Promise<void> {
@@ -289,10 +293,10 @@ async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<voi
 
   for (const item of results as Record<string,unknown>[]) {
     const existing = await env.DB.prepare(`
-      SELECT id FROM purchase_orders WHERE status IN ('SENT','ACCEPTED')
+      SELECT id FROM purchase_orders WHERE status IN ('SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED')
       AND id IN (SELECT po_id FROM po_items WHERE sku = ?)
     `).bind(item.sku).first();
-    if (existing) continue; // PO already outstanding
+    if (existing) continue; // PO already outstanding (raised, in-transit, or partially received)
 
     const reorderQty = Math.max(50, (item.max_stock as number) - (item.stock as number));
     const poId = `PO-AUTO-${Math.floor(Math.random()*9000+1000)}`;
@@ -371,8 +375,19 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS draft_carts ( user_id TEXT PRIMARY KEY, items TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
+    // PR-1: receiving spine (G1–G3)
+    `CREATE TABLE IF NOT EXISTS grn_lines ( id TEXT PRIMARY KEY, grn_id TEXT NOT NULL, sku TEXT NOT NULL, name TEXT NOT NULL, qty_received INTEGER NOT NULL DEFAULT 0, qty_rejected INTEGER NOT NULL DEFAULT 0, batch_no TEXT, mfg_date TEXT, expiry_date TEXT, qc_status TEXT DEFAULT 'ACCEPTED', note TEXT );`,
+    `CREATE TABLE IF NOT EXISTS inventory_batches ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, batch_no TEXT, mfg_date TEXT, expiry_date TEXT, qty REAL NOT NULL DEFAULT 0, grn_line_id TEXT, received_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS po_invoices ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_invoice_no TEXT, invoice_amount REAL DEFAULT 0, invoice_date TEXT, match_status TEXT DEFAULT 'PENDING', qty_variance REAL DEFAULT 0, amount_variance REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
-  for (const sql of stmts) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  // Column adds for the receiving spine — idempotent (errors swallowed if present).
+  const alters: string[] = [
+    `ALTER TABLE po_items ADD COLUMN qty_received INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE grn_records ADD COLUMN status TEXT DEFAULT 'POSTED'`,
+    `ALTER TABLE grn_records ADD COLUMN received_by_name TEXT`,
+    `ALTER TABLE inventory ADD COLUMN track_batch INTEGER DEFAULT 0`,
+  ];
+  for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
 }
 
 // One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
@@ -655,6 +670,8 @@ export default {
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
       if (path==="/api/purchase-orders"               && method==="POST")  return handleCreatePO(request,env);
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/) && method==="GET")  return handleReceivablePO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)    && method==="POST") return handleInvoicePO(request,env,path);
 
       // Delivery Challans
       if (path==="/api/delivery-calendar/settings"                   && method==="GET")  return handleGetDcalSettings(request,env);
@@ -1994,11 +2011,8 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
     await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status IN ('READY_TO_PICK','VENDOR_PO_RAISED')").bind(po.order_id).run();
     await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',dispatched_at=datetime('now') WHERE order_id=?").bind(po.order_id).run();
   }
-  if (body.status === "INVOICED" && po.order_id) {
-    // Gap 4: sync to Zoho Books
-    const order = await env.DB.prepare("SELECT o.*,c.name as client_name FROM orders o JOIN clients c ON o.client_id=c.id WHERE o.id=?").bind(po.order_id).first() as Record<string,unknown>|null;
-    if (order) await syncToZohoBooks(env, {id: id, clientName: order.client_name as string, amount: po.grand_total as unknown as number, date: new Date().toISOString().slice(0,10)});
-  }
+  // Note: INVOICED is now reached via POST /purchase-orders/:id/invoice (3-way
+  // match + Zoho sync), not by a raw status PATCH — see handleInvoicePO.
 
   await audit(env, user, "UPDATE", "purchase_order", id, po.status, body.status||po.status);
   return json({id, status: body.status});
@@ -3243,6 +3257,30 @@ async function handleAlerts(request: Request, env: Env): Promise<Response> {
     syncCnt = cnt(c); syncRows = rows(r);
   } catch { /* table absent — treat as no failures */ }
 
+  // Near-expiry batches (G3 payoff) — batches expiring within 30 days with stock left.
+  let expCnt = 0; let expRows: Record<string, unknown>[] = [];
+  try {
+    const [c, r] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) as cnt FROM inventory_batches WHERE qty>0 AND expiry_date IS NOT NULL AND expiry_date <= date('now','+30 days')").first(),
+      env.DB.prepare(`SELECT b.sku, i.name, b.batch_no, b.expiry_date, b.qty
+        FROM inventory_batches b LEFT JOIN inventory i ON i.sku=b.sku
+        WHERE b.qty>0 AND b.expiry_date IS NOT NULL AND b.expiry_date <= date('now','+30 days')
+        ORDER BY b.expiry_date ASC LIMIT 5`).all(),
+    ]);
+    expCnt = cnt(c); expRows = rows(r);
+  } catch { /* table new — none */ }
+
+  // Flagged invoices (G1 payoff) — 3-way match variances awaiting resolution.
+  let flagCnt = 0; let flagRows: Record<string, unknown>[] = [];
+  try {
+    const [c, r] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) as cnt FROM po_invoices WHERE match_status='FLAGGED'").first(),
+      env.DB.prepare(`SELECT po_id, vendor_invoice_no, qty_variance, amount_variance FROM po_invoices
+        WHERE match_status='FLAGGED' ORDER BY created_at DESC LIMIT 5`).all(),
+    ]);
+    flagCnt = cnt(c); flagRows = rows(r);
+  } catch { /* table new — none */ }
+
   const money = (n: unknown) => "₹" + Number(n || 0).toLocaleString("en-IN");
 
   const categories = [
@@ -3269,6 +3307,19 @@ async function handleAlerts(request: Request, env: Env): Promise<Response> {
       action: "Reorder", count: cnt(stockCnt),
       items: rows(stockRows).map(r => ({
         title: `${r.name} (${r.sku})`, meta: Number(r.stock) <= 0 ? "Out of stock" : `${r.stock} left · reorder at ${r.reorder_level}` })),
+    },
+    {
+      key: "near_expiry", label: "Near-expiry stock", icon: "⌛", tone: "warn", page: "inventory",
+      action: "View", count: expCnt,
+      items: expRows.map(r => ({
+        title: `${r.name || r.sku}${r.batch_no ? ` · ${r.batch_no}` : ""}`, meta: `${r.qty} left · expires ${r.expiry_date}` })),
+    },
+    {
+      key: "flagged_invoices", label: "Flagged invoices", icon: "🧾", tone: "crit", page: "procurement",
+      action: "Resolve", count: flagCnt,
+      items: flagRows.map(r => ({
+        title: `PO ${r.po_id}${r.vendor_invoice_no ? ` · ${r.vendor_invoice_no}` : ""}`,
+        meta: `qty Δ ${r.qty_variance} · amount Δ ${money(r.amount_variance)}` })),
     },
     {
       key: "overdue_billing", label: "Overdue billing", icon: "💳", tone: "brand", page: "dc_billing",
@@ -3301,48 +3352,144 @@ async function handleListGRN(request: Request, env: Env): Promise<Response> {
   return json(results);
 }
 
+// GET /api/purchase-orders/:id/receivable — per-line ordered / received / remaining,
+// for the line-level GRN grid.
+async function handleReceivablePO(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const id = path.split("/")[3];
+  const po = await env.DB.prepare("SELECT p.*,v.name as vendor_name FROM purchase_orders p LEFT JOIN vendors v ON p.vendor_id=v.id WHERE p.id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!po) return json({error:"Not found"}, 404);
+  const {results} = await env.DB.prepare(
+    "SELECT pi.id, pi.sku, pi.name, pi.qty, COALESCE(pi.qty_received,0) as qty_received, i.track_batch FROM po_items pi LEFT JOIN inventory i ON i.sku=pi.sku WHERE pi.po_id=?"
+  ).bind(id).all();
+  const lines = results.map(r => ({
+    ...r, remaining: Math.max(0, Number(r.qty) - Number(r.qty_received || 0)),
+  }));
+  return json({ po, lines });
+}
+
+// POST /api/grn — line-level goods receipt. Validates against remaining ordered
+// qty, routes only QC-accepted qty into stock (+ a batch row when tracked), and
+// derives the PO status (PARTIALLY_RECEIVED / RECEIVED) from the lines.
 async function handleCreateGRN(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const body = await request.json() as {po_id:string;sku:string;qty_received:number;notes?:string};
-  const {po_id, sku, qty_received, notes} = body;
-  if (!po_id || !qty_received) return json({error:"po_id and qty_received required"}, 400);
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as {
+    po_id:string; notes?:string;
+    // Legacy single-line shape is still accepted and normalised into `lines`.
+    sku?:string; qty_received?:number;
+    lines?: Array<{sku:string; qty_received:number; qty_rejected?:number; batch_no?:string; mfg_date?:string; expiry_date?:string; qc_status?:string; note?:string}>;
+  };
+  const po_id = body.po_id;
+  const lines = body.lines?.length ? body.lines
+    : (body.sku && body.qty_received ? [{sku:body.sku, qty_received:body.qty_received}] : []);
+  if (!po_id || !lines.length) return json({error:"po_id and at least one line required"}, 400);
 
-  const id = uid();
-  await env.DB.prepare("INSERT INTO grn_records (id,po_id,received_at,received_by,qty_received,notes) VALUES (?,?,datetime('now'),?,?,?)")
-    .bind(id, po_id, user!.sub, qty_received, notes||null).run();
-
-  // Update inventory stock
-  if (sku) {
-    await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(qty_received, sku).run();
-    await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uid(), sku, 'GRN', qty_received, id, 'grn', `Received via GRN for PO ${po_id}`, user!.name).run();
-  }
-
-  // Update PO status to INVOICED and vendor metrics
   const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(po_id).first() as Record<string,unknown>|null;
-  if (po) {
-    await env.DB.prepare("UPDATE purchase_orders SET status='INVOICED',updated_at=datetime('now') WHERE id=?").bind(po_id).run();
-    // Vendor metrics: on_time = delivered before expected_delivery
-    const expectedDate = po.expected_delivery ? new Date(po.expected_delivery as string) : null;
-    const isOnTime = expectedDate ? new Date() <= expectedDate : true;
-    const leadDays = Math.max(1, Math.round((Date.now() - new Date(po.created_at as string).getTime()) / 86400000));
-    // Recalculate vendor averages using recent POs
-    const {results: recentGRNs} = await env.DB.prepare(`
-      SELECT p.expected_delivery, g.received_at, julianday(g.received_at)-julianday(p.created_at) as lead
-      FROM grn_records g JOIN purchase_orders p ON g.po_id=p.id
-      WHERE p.vendor_id=? ORDER BY g.received_at DESC LIMIT 10`).bind(po.vendor_id).all() as {results: Record<string,unknown>[]};
-    const onTimeCount = recentGRNs.filter(g => !g.expected_delivery || new Date(g.received_at as string) <= new Date(g.expected_delivery as string)).length;
-    const avgLead = recentGRNs.reduce((s, g) => s + (g.lead as number || 3), 0) / (recentGRNs.length || 1);
-    const onTimeRate = Math.round((onTimeCount / (recentGRNs.length || 1)) * 100);
-    await env.DB.prepare("UPDATE vendors SET on_time_rate=?,avg_lead_days=? WHERE id=?")
-      .bind(onTimeRate, Math.round(avgLead), po.vendor_id).run();
+  if (!po) return json({error:"PO not found"}, 404);
+
+  // Load ordered/received per sku to validate against over-receipt.
+  const {results: poItems} = await env.DB.prepare("SELECT sku,name,qty,COALESCE(qty_received,0) as qty_received FROM po_items WHERE po_id=?").bind(po_id).all();
+  const bySku = new Map(poItems.map(r => [String(r.sku), r]));
+  for (const ln of lines) {
+    const it = bySku.get(ln.sku);
+    if (!it) return json({error:`SKU ${ln.sku} is not on PO ${po_id}`}, 400);
+    const movement = Number(ln.qty_received||0) + Number(ln.qty_rejected||0);
+    const remaining = Number(it.qty) - Number(it.qty_received);
+    if (movement <= 0) return json({error:`Line ${ln.sku}: quantity must be positive`}, 400);
+    if (movement > remaining) return json({error:`Line ${ln.sku}: receiving ${movement} exceeds remaining ${remaining}`}, 400);
   }
 
-  // Check auto-reorder after stock increase
+  const grnId = uid();
+  const totalReceived = lines.reduce((s,l)=>s+Number(l.qty_received||0),0);
+  await env.DB.prepare("INSERT INTO grn_records (id,po_id,received_at,received_by,received_by_name,qty_received,notes,status) VALUES (?,?,datetime('now'),?,?,?,?, 'POSTED')")
+    .bind(grnId, po_id, user!.sub, user!.name, totalReceived, body.notes||null).run();
+
+  for (const ln of lines) {
+    const it = bySku.get(ln.sku)!;
+    const accepted = Number(ln.qty_received||0);
+    const rejected = Number(ln.qty_rejected||0);
+    const qc = ln.qc_status || (rejected > 0 ? 'HOLD' : 'ACCEPTED');
+    const lineId = uid();
+    await env.DB.prepare("INSERT INTO grn_lines (id,grn_id,sku,name,qty_received,qty_rejected,batch_no,mfg_date,expiry_date,qc_status,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(lineId, grnId, ln.sku, String(it.name), accepted, rejected, ln.batch_no||null, ln.mfg_date||null, ln.expiry_date||null, qc, ln.note||null).run();
+
+    if (accepted > 0) {
+      await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(accepted, ln.sku).run();
+      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+        .bind(uid(), ln.sku, 'GRN', accepted, grnId, 'grn', `Received via GRN for PO ${po_id}`, user!.name).run();
+      // Record a batch row whenever a batch or expiry was captured (FEFO foundation).
+      if (ln.batch_no || ln.expiry_date) {
+        await env.DB.prepare("INSERT INTO inventory_batches (id,sku,batch_no,mfg_date,expiry_date,qty,grn_line_id) VALUES (?,?,?,?,?,?,?)")
+          .bind(uid(), ln.sku, ln.batch_no||null, ln.mfg_date||null, ln.expiry_date||null, accepted, lineId).run();
+      }
+    }
+    // Advance the per-line running receipt (accepted qty only counts toward fulfilment).
+    await env.DB.prepare("UPDATE po_items SET qty_received=COALESCE(qty_received,0)+? WHERE po_id=? AND sku=?")
+      .bind(accepted, po_id, ln.sku).run();
+  }
+
+  // Derive PO status from the lines: fully received on every line → RECEIVED.
+  const {results: afterItems} = await env.DB.prepare("SELECT qty, COALESCE(qty_received,0) as qty_received FROM po_items WHERE po_id=?").bind(po_id).all();
+  const allReceived = afterItems.every(r => Number(r.qty_received) >= Number(r.qty));
+  const anyReceived = afterItems.some(r => Number(r.qty_received) > 0);
+  const newStatus = allReceived ? 'RECEIVED' : (anyReceived ? 'PARTIALLY_RECEIVED' : String(po.status));
+  await env.DB.prepare("UPDATE purchase_orders SET status=?,updated_at=datetime('now') WHERE id=?").bind(newStatus, po_id).run();
+
+  // Vendor performance from recent receipts (on-time vs expected, avg lead).
+  const {results: recentGRNs} = await env.DB.prepare(`
+    SELECT p.expected_delivery, g.received_at, julianday(g.received_at)-julianday(p.created_at) as lead
+    FROM grn_records g JOIN purchase_orders p ON g.po_id=p.id
+    WHERE p.vendor_id=? ORDER BY g.received_at DESC LIMIT 10`).bind(po.vendor_id).all() as {results: Record<string,unknown>[]};
+  const onTimeCount = recentGRNs.filter(g => !g.expected_delivery || new Date(g.received_at as string) <= new Date(g.expected_delivery as string)).length;
+  const avgLead = recentGRNs.reduce((s, g) => s + (Number(g.lead) || 3), 0) / (recentGRNs.length || 1);
+  const onTimeRate = Math.round((onTimeCount / (recentGRNs.length || 1)) * 100);
+  await env.DB.prepare("UPDATE vendors SET on_time_rate=?,avg_lead_days=? WHERE id=?")
+    .bind(onTimeRate, Math.round(avgLead), po.vendor_id).run();
+
   await checkAutoReorder(env, user);
-  await audit(env, user, "GRN", "inventory", sku||po_id, undefined, `qty_received:${qty_received}`);
-  return json({id, qty_received}, 201);
+  await audit(env, user, "GRN", "purchase_order", po_id, String(po.status), newStatus);
+  return json({id: grnId, po_status: newStatus, received: totalReceived}, 201);
+}
+
+// POST /api/purchase-orders/:id/invoice — record the vendor invoice and run a
+// 3-way match (ordered vs received vs invoiced). Matched → PO INVOICED + Zoho
+// sync; otherwise the PO stays RECEIVED and the invoice is FLAGGED.
+async function handleInvoicePO(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+  const id = path.split("/")[3];
+  const body = await request.json() as {vendor_invoice_no?:string; invoice_amount:number; invoice_date?:string};
+  const po = await env.DB.prepare("SELECT p.*,c.name as client_name FROM purchase_orders p LEFT JOIN orders o ON p.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id WHERE p.id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!po) return json({error:"Not found"}, 404);
+  if (!body.invoice_amount) return json({error:"invoice_amount required"}, 400);
+
+  const received = await env.DB.prepare("SELECT COALESCE(SUM(qty_received),0) as r FROM po_items WHERE po_id=?").bind(id).first() as Record<string,number>|null;
+  const ordered = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) as q FROM po_items WHERE po_id=?").bind(id).first() as Record<string,number>|null;
+  const receivedQty = Number(received?.r || 0);
+  const orderedQty = Number(ordered?.q || 0);
+  const grand = Number(po.grand_total || 0);
+  const qtyVariance = receivedQty - orderedQty;                 // 0 = full receipt
+  const amountVariance = Number(body.invoice_amount) - grand;   // 0 = billed as ordered
+  // Matched when goods are fully received and the invoice equals the PO (₹1 tolerance).
+  const matched = qtyVariance === 0 && Math.abs(amountVariance) <= 1;
+  const matchStatus = matched ? 'MATCHED' : 'FLAGGED';
+
+  await env.DB.prepare("INSERT INTO po_invoices (id,po_id,vendor_invoice_no,invoice_amount,invoice_date,match_status,qty_variance,amount_variance) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(uid(), id, body.vendor_invoice_no||null, body.invoice_amount, body.invoice_date||new Date().toISOString().slice(0,10), matchStatus, qtyVariance, amountVariance).run();
+
+  if (matched) {
+    await env.DB.prepare("UPDATE purchase_orders SET status='INVOICED',updated_at=datetime('now') WHERE id=?").bind(id).run();
+    await syncToZohoBooks(env, {id, clientName: String(po.client_name || 'Vendor PO'), amount: grand, date: new Date().toISOString().slice(0,10)});
+  } else {
+    await pushNotification(env, "procurement_manager", `Invoice for PO ${id} FLAGGED — qty Δ ${qtyVariance}, amount Δ ₹${amountVariance.toLocaleString("en-IN")}`);
+  }
+  await audit(env, user, "INVOICE", "purchase_order", id, String(po.status), matchStatus);
+  return json({id, match_status: matchStatus, qty_variance: qtyVariance, amount_variance: amountVariance});
 }
 
 // ════════════════════════════════════════════════════════════════════

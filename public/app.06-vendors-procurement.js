@@ -898,15 +898,17 @@ async function renderProcurement(el) {
 
   const byStatus = s => pos.filter(p=>p.status===s);
   const valByStatus = s => byStatus(s).reduce((sum,p)=>sum+(p.grand_total||0),0);
-  const pendingGRN = byStatus('DISPATCHED');
-  const totalOpen = ['SENT','ACCEPTED','DISPATCHED'].reduce((s,st)=>s+byStatus(st).length,0);
+  // Receivable = still inbound or part-received; both can accept a GRN.
+  const pendingGRN = [...byStatus('DISPATCHED'), ...byStatus('PARTIALLY_RECEIVED')];
+  const totalOpen = ['SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED'].reduce((s,st)=>s+byStatus(st).length,0);
 
   const statusTiles = [
-    { key:'SENT',      label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
-    { key:'ACCEPTED',  label:'Accepted',       icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
-    { key:'DISPATCHED',label:'In Transit',     icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: pendingGRN.length>0 },
-    { key:'RECEIVED',  label:'GRN Pending',    icon:'📦', color:'#1f8a5b', bg:'#f0fdf4', urgent: false },
-    { key:'INVOICED',  label:'Invoiced',       icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
+    { key:'SENT',              label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
+    { key:'ACCEPTED',          label:'Accepted',      icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
+    { key:'DISPATCHED',        label:'In Transit',    icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: byStatus('DISPATCHED').length>0 },
+    { key:'PARTIALLY_RECEIVED',label:'Part-Received', icon:'📥', color:'#0891b2', bg:'#ecfeff', urgent: byStatus('PARTIALLY_RECEIVED').length>0 },
+    { key:'RECEIVED',          label:'Received',      icon:'📦', color:'#1f8a5b', bg:'#f0fdf4', urgent: byStatus('RECEIVED').length>0 },
+    { key:'INVOICED',          label:'Invoiced',      icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
   ];
 
   el.innerHTML = `
@@ -914,7 +916,7 @@ async function renderProcurement(el) {
     `<button class="btn btn-gold" ${dataAct('navigate', 'vendors')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px">
     ${statusTiles.map(t=>`
     <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" ${dataAct('filterPO', t.key)}>
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
@@ -958,7 +960,7 @@ async function renderProcurement(el) {
       <div style="display:flex;gap:8px;align-items:center">
         <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" ${dataChange('filterPOTable')}>
           <option value="">All Status</option>
-          ${['SENT','ACCEPTED','DISPATCHED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s}</option>`).join('')}
+          ${['SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s.replace(/_/g,' ')}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -971,9 +973,11 @@ async function renderProcurement(el) {
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
           <td>${fmtDate(po.expected_delivery)||'—'}</td>
-          <td>${po.status==='DISPATCHED'
+          <td>${['DISPATCHED','PARTIALLY_RECEIVED'].includes(po.status)
             ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
-            : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+            : po.status==='RECEIVED'
+              ? `<button class="btn btn-secondary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button>`
+              : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>
@@ -1011,18 +1015,72 @@ function filterPOTable() {
   });
 }
 
+// Line-level goods receipt: each outstanding PO line gets its own received /
+// rejected / batch / expiry inputs. Only accepted qty reaches stock; the PO
+// status is derived server-side (PARTIALLY_RECEIVED / RECEIVED).
+let _grnLines = [];
 async function receiveGRN(poId) {
-  openModal('Receive GRN — PO ' + poId,
-    `<div class="form-group"><label>Quantity Received</label><input type="number" id="grn-qty" value="100" min="0"></div>
-     <div class="form-group"><label>Notes</label><textarea id="grn-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+  const data = await api(`/purchase-orders/${poId}/receivable`);
+  if (!data) return;
+  _grnLines = (data.lines || []).filter(l => l.remaining > 0);
+  if (!_grnLines.length) { showToast('Nothing left to receive on this PO', 'info'); return; }
+  const rows = _grnLines.map((l, i) => `
+    <tr>
+      <td style="font-size:.82rem"><b>${h(l.name)}</b><div class="u-subtiny">${h(l.sku)}</div></td>
+      <td class="u-center">${l.qty} / <b>${l.remaining}</b></td>
+      <td class="u-center"><input type="number" data-grn-recv="${i}" value="${l.remaining}" min="0" max="${l.remaining}" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      <td class="u-center"><input type="number" data-grn-rej="${i}" value="0" min="0" style="width:54px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      <td><input type="text" data-grn-batch="${i}" placeholder="batch" style="width:76px;padding:4px;border:1px solid var(--border);border-radius:6px"></td>
+      <td><input type="date" data-grn-exp="${i}" style="padding:4px;border:1px solid var(--border);border-radius:6px"></td>
+    </tr>`).join('');
+  openModal('Receive GRN — PO ' + poId, `
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-center">Ord / Rem</th><th class="u-center">Receive</th><th class="u-center">Reject</th><th>Batch</th><th>Expiry</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="u-subtiny" style="color:var(--text-muted);margin-top:8px">Rejected qty is logged for QC and never added to stock. Batch &amp; expiry drive near-expiry alerts.</div>
+    <div class="form-group" style="margin-top:10px"><label>Notes</label><input type="text" id="grn-notes" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmGRN', poId)}>Confirm Receipt</button>`);
 }
 
 async function confirmGRN(poId) {
-  const qty = +document.getElementById('grn-qty').value;
-  const notes = document.getElementById('grn-notes').value;
-  const res = await api('/grn', { method:'POST', body: JSON.stringify({ po_id: poId, qty_received: qty, notes }) });
+  const lines = _grnLines.map((l, i) => ({
+    sku: l.sku,
+    qty_received: +document.querySelector(`[data-grn-recv="${i}"]`)?.value || 0,
+    qty_rejected: +document.querySelector(`[data-grn-rej="${i}"]`)?.value || 0,
+    batch_no: document.querySelector(`[data-grn-batch="${i}"]`)?.value?.trim() || undefined,
+    expiry_date: document.querySelector(`[data-grn-exp="${i}"]`)?.value || undefined,
+  })).filter(l => l.qty_received > 0 || l.qty_rejected > 0);
+  if (!lines.length) { showToast('Enter a received or rejected quantity', 'error'); return; }
+  const notes = document.getElementById('grn-notes')?.value || '';
+  const res = await api('/grn', { method:'POST', body: JSON.stringify({ po_id: poId, lines, notes }) });
   closeModal();
-  if (res) { showToast(`GRN ${res.id} created — stock updated`); navigate('procurement'); }
+  if (res) { showToast(`GRN posted — PO now ${res.po_status.replace(/_/g,' ')}`); navigate('procurement'); }
+}
+
+// Record the vendor invoice and run the 3-way match (ordered/received/invoiced).
+async function recordInvoice(poId) {
+  const pos = await api('/purchase-orders');
+  const po = (pos || []).find(p => p.id === poId);
+  openModal('Record Invoice — PO ' + poId, `
+    <div class="form-group"><label>Vendor Invoice No.</label><input type="text" id="inv-no" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Invoice Amount (₹)</label><input type="number" id="inv-amt" value="${po?.grand_total || 0}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Invoice Date</label><input type="date" id="inv-date" value="${new Date().toISOString().slice(0,10)}" style="padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="u-subtiny" style="color:var(--text-muted)">Matched against goods received and PO value; any mismatch is flagged for review instead of paying blind.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmInvoice', poId)}>Match &amp; Record</button>`);
+}
+
+async function confirmInvoice(poId) {
+  const res = await api(`/purchase-orders/${poId}/invoice`, { method:'POST', body: JSON.stringify({
+    vendor_invoice_no: document.getElementById('inv-no')?.value?.trim() || '',
+    invoice_amount: +document.getElementById('inv-amt')?.value || 0,
+    invoice_date: document.getElementById('inv-date')?.value || '',
+  })});
+  closeModal();
+  if (!res) return;
+  if (res.match_status === 'MATCHED') showToast('Invoice matched — PO marked Invoiced');
+  else showToast(`Invoice flagged — qty Δ ${res.qty_variance}, amount Δ ₹${res.amount_variance}`, 'error');
+  navigate('procurement');
 }

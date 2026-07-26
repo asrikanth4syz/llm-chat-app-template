@@ -1008,7 +1008,7 @@ describe("Alerts & Exceptions hub", () => {
     const keys = data.categories.map(c => c.key);
     expect(keys).toEqual([
       "overdue_deliveries", "pending_approvals", "sla_breaches",
-      "low_stock", "overdue_billing", "failed_syncs",
+      "low_stock", "near_expiry", "flagged_invoices", "overdue_billing", "failed_syncs",
     ]);
     // Every count is a non-negative number and total is their sum.
     for (const c of data.categories) expect(c.count).toBeGreaterThanOrEqual(0);
@@ -1017,6 +1017,75 @@ describe("Alerts & Exceptions hub", () => {
 
   it("is forbidden for client-side roles", async () => {
     const res = await get("/api/alerts", clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("Receiving spine (line-level GRN + 3-way match)", () => {
+  const rdb = env.DB as D1Database;
+  const stockOf = async (sku: string) =>
+    Number(((await rdb.prepare("SELECT stock FROM inventory WHERE sku=?").bind(sku).first()) as Record<string, number>)?.stock || 0);
+  const poStatus = async (id: string) =>
+    String(((await rdb.prepare("SELECT status FROM purchase_orders WHERE id=?").bind(id).first()) as Record<string, string>)?.status);
+
+  beforeAll(async () => {
+    await rdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,track_batch) VALUES (?,?,?,?,?,?,?)")
+      .bind("GRN-SKU", "GRN Test Item", "Grocery", 100, 0, 1, 1).run();
+    // PO-A: 100 @ ₹100 (₹11,800 incl GST), DISPATCHED — partial then full receipt + invoice
+    await rdb.prepare("INSERT OR IGNORE INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,expected_delivery) VALUES (?,?,?,?,?,?,?)")
+      .bind("PO-TST-A", "v1", "DISPATCHED", 10000, 1800, 11800, "2999-01-01").run();
+    await rdb.prepare("INSERT OR IGNORE INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("poi-a", "PO-TST-A", "GRN-SKU", "GRN Test Item", 100, 100, 10000).run();
+    // PO-B: 50, DISPATCHED — over-receipt + QC reject
+    await rdb.prepare("INSERT OR IGNORE INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,expected_delivery) VALUES (?,?,?,?,?,?,?)")
+      .bind("PO-TST-B", "v1", "DISPATCHED", 5000, 900, 5900, "2999-01-01").run();
+    await rdb.prepare("INSERT OR IGNORE INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("poi-b", "PO-TST-B", "GRN-SKU", "GRN Test Item", 50, 100, 5000).run();
+  });
+
+  // Note: vitest-pool-workers resets storage to the post-beforeAll snapshot between
+  // tests, so each test drives the full sequence it needs from the seeded baseline.
+  it("partial then full receipt: 60 then 40 → PARTIALLY_RECEIVED → RECEIVED, stock +100", async () => {
+    const before = await stockOf("GRN-SKU");
+    const r1 = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 60 }] }, adminToken);
+    expect(r1.status).toBe(201);
+    expect((await r1.json() as { po_status: string }).po_status).toBe("PARTIALLY_RECEIVED");
+    const r2 = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 40 }] }, adminToken);
+    expect((await r2.json() as { po_status: string }).po_status).toBe("RECEIVED");
+    expect(await stockOf("GRN-SKU")).toBe(before + 100);
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+  });
+
+  it("over-receipt is rejected (400)", async () => {
+    const res = await post("/api/grn", { po_id: "PO-TST-B", lines: [{ sku: "GRN-SKU", qty_received: 110 }] }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("QC reject + batch: receive 40, reject 10 → stock +40, batch captured", async () => {
+    const before = await stockOf("GRN-SKU");
+    const res = await post("/api/grn",
+      { po_id: "PO-TST-B", lines: [{ sku: "GRN-SKU", qty_received: 40, qty_rejected: 10, batch_no: "B-01", expiry_date: "2999-06-01" }] }, adminToken);
+    expect(res.status).toBe(201);
+    expect(await stockOf("GRN-SKU")).toBe(before + 40); // rejected 10 excluded from stock
+    const rej = await rdb.prepare("SELECT qty_rejected FROM grn_lines WHERE batch_no='B-01'").first() as Record<string, number>;
+    expect(Number(rej.qty_rejected)).toBe(10);
+    const batch = await rdb.prepare("SELECT qty FROM inventory_batches WHERE batch_no='B-01'").first() as Record<string, number>;
+    expect(Number(batch.qty)).toBe(40);
+  });
+
+  it("3-way match: wrong amount flags, correct invoice sets INVOICED", async () => {
+    await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 100 }] }, adminToken);
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+    const bad = await post("/api/purchase-orders/PO-TST-A/invoice", { vendor_invoice_no: "INV-9", invoice_amount: 99999 }, adminToken);
+    expect((await bad.json() as { match_status: string }).match_status).toBe("FLAGGED");
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+    const good = await post("/api/purchase-orders/PO-TST-A/invoice", { vendor_invoice_no: "INV-10", invoice_amount: 11800 }, adminToken);
+    expect((await good.json() as { match_status: string }).match_status).toBe("MATCHED");
+    expect(await poStatus("PO-TST-A")).toBe("INVOICED");
+  });
+
+  it("client role is forbidden from receiving (403)", async () => {
+    const res = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 1 }] }, clientToken);
     expect(res.status).toBe(403);
   });
 });
