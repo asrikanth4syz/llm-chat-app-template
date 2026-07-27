@@ -950,7 +950,11 @@ async function loadClientReports() {
     prevProm
   ]);
 
-  _clientRptData = { consumption: cData, spend: sData, fulfil: fData?.rows || [] };
+  // The consumption endpoint now also returns received/in-stock-only items;
+  // the Executive Reports "most consumed" views only want actually-consumed
+  // rows, so filter to total_qty > 0 (also avoids a NaN when total_qty is 0).
+  const consFiltered = cData ? { ...cData, rows: (cData.rows || []).filter(r => (r.total_qty || 0) > 0) } : cData;
+  _clientRptData = { consumption: consFiltered, spend: sData, fulfil: fData?.rows || [] };
   _cdashExec = exec; _cdashPrev = prev;
 
   renderCdashKpis();

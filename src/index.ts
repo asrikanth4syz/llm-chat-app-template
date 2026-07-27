@@ -5927,7 +5927,11 @@ async function handleRptClientConsumption(request: Request, env: Env): Promise<R
       x.low_stock = x.reorder_level > 0 && x.in_stock <= x.reorder_level;
     }
 
-    const rows = [...map.values()].sort((a, b) => b.consumed - a.consumed || b.received - a.received);
+    // total_qty is kept as an alias of `consumed` for older consumers
+    // (Executive Reports "most consumed" list) that predate this enrichment.
+    const rows = [...map.values()]
+      .sort((a, b) => b.consumed - a.consumed || b.received - a.received)
+      .map(r => ({ ...r, total_qty: r.consumed }));
     const totals = rows.reduce((t, r) => ({
       received: t.received + r.received, consumed: t.consumed + r.consumed,
       in_stock: t.in_stock + r.in_stock, low_stock: t.low_stock + (r.low_stock ? 1 : 0),
