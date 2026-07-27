@@ -332,7 +332,21 @@ async function api(path, opts = {}) {
 }
 
 // ── Auth ───────────────────────────────────────────────────
+// Inline error shown right on the credentials card (not a toast).
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  if (!el) { showToast(msg, 'error'); return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; // retrigger shake
+}
+function clearLoginError() {
+  const el = document.getElementById('login-error');
+  if (el) { el.textContent = ''; el.classList.add('hidden'); }
+}
+
 async function doLogin() {
+  clearLoginError();
   const otpGroup = document.getElementById('otp-group');
   const otpVisible = !otpGroup.classList.contains('hidden');
 
@@ -340,7 +354,7 @@ async function doLogin() {
 
   const email    = document.getElementById('login-email')?.value?.trim().toLowerCase();
   const password = document.getElementById('login-password')?.value;
-  if (!email || !password) { showToast('Enter your email and password', 'error'); return; }
+  if (!email || !password) { showLoginError('Please enter your email and password.'); return; }
 
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
@@ -358,7 +372,7 @@ async function doLogin() {
     data = await res.json().catch(() => ({}));
   } catch {
     btn.disabled = false; btn.querySelector('span').textContent = 'Sign In';
-    showToast('Network error — check your connection and try again', 'error');
+    showLoginError('Network error — check your connection and try again.');
     return;
   }
 
@@ -366,7 +380,7 @@ async function doLogin() {
   btn.querySelector('span').textContent = 'Sign In';
 
   if (!res.ok) {
-    showToast(data.error || (res.status === 401 ? 'Invalid email or password' : 'Sign in failed — please try again'), 'error');
+    showLoginError(data.error || (res.status === 401 ? 'Invalid email or password.' : 'Sign in failed — please try again.'));
     const pw = document.getElementById('login-password'); if (pw) { pw.value = ''; pw.focus(); }
     return;
   }
@@ -401,8 +415,9 @@ function setupOTPInputs() {
 }
 
 async function doVerifyOTP() {
+  clearLoginError();
   const code = [...document.querySelectorAll('.otp-input')].map(i => i.value).join('');
-  if (code.length < 6) { showToast('Enter all 6 OTP digits', 'error'); return; }
+  if (code.length < 6) { showLoginError('Enter all 6 digits of the OTP.'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Verifying…';
@@ -419,14 +434,14 @@ async function doVerifyOTP() {
     data = await res.json().catch(() => ({}));
   } catch {
     btn.disabled = false; btn.querySelector('span').textContent = 'Verify OTP';
-    showToast('Network error — check your connection and try again', 'error');
+    showLoginError('Network error — check your connection and try again.');
     return;
   }
 
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Verify OTP';
 
-  if (!res.ok || !data.token) { showToast(data.error || 'Invalid or expired OTP', 'error'); return; }
+  if (!res.ok || !data.token) { showLoginError(data.error || 'Invalid or expired OTP.'); return; }
 
   APP.token = data.token;
   APP.user = { ...data.user, nav: ROLES[data.user.role]?.nav || 'platform' };

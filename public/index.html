@@ -335,6 +335,17 @@
     }
     .otp-input:focus { border-color: var(--primary); }
     .otp-hint { font-size: .75rem; color: #94a3b8; margin-top: 6px; }
+    .login-error {
+      display: flex; align-items: center; gap: 8px;
+      background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+      border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;
+      font-size: .84rem; font-weight: 600; line-height: 1.35;
+      animation: loginErrShake .28s ease;
+    }
+    .login-error::before { content: "⚠"; font-size: .95rem; flex-shrink: 0; }
+    .login-error.hidden { display: none; }
+    @keyframes loginErrShake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+    @media (prefers-reduced-motion: reduce) { .login-error { animation: none; } }
     .btn-login {
       width: 100%; padding: 12px;
       background: linear-gradient(135deg, var(--primary), var(--primary-hover));
@@ -803,6 +814,8 @@
           </div>
           <p class="otp-hint">OTP sent to your registered email. <a href="#">Resend</a></p>
         </div>
+
+        <div id="login-error" class="login-error hidden" role="alert" aria-live="assertive"></div>
 
         <button class="btn-login" id="login-btn" data-act="doLogin">
           <span>Sign In</span>
