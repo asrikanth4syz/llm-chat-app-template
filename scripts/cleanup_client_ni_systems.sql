@@ -12,8 +12,9 @@
 --
 -- NOT a migration — lives in scripts/ so it never auto-runs on deploy.
 -- Scoped entirely by the client name; the client row itself is KEPT (only its
--- orders and their transactions are removed). Orders are deleted LAST so every
--- subquery below stays valid throughout.
+-- orders, their transactions, and any orphaned store rows are removed). Orders
+-- are deleted LAST so every subquery below stays valid throughout, then the
+-- now-orphaned client_inventory / client_consumption rows are cleared.
 --
 -- Vendor POs raised from these orders are also removed, including their newer
 -- children (grn_lines, inventory_batches, po_invoices, vendor_debit_notes) —
@@ -49,3 +50,13 @@ DELETE FROM standing_order_events WHERE order_id IN (SELECT id FROM orders WHERE
 
 -- 4) The orders themselves (last) --------------------------------------------
 DELETE FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd');
+
+-- 5) Orphaned client store rows (the "product trail") ------------------------
+-- Deliveries create client_inventory / client_consumption rows that outlive the
+-- order they came from. With the orders now gone, remove any store row for this
+-- client whose SKU is no longer referenced by a surviving order for them. (The
+-- NOT IN guard makes this safe to run standalone — it only removes true orphans.)
+DELETE FROM client_consumption WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd')
+  AND sku NOT IN (SELECT DISTINCT oi.sku FROM order_items oi JOIN orders o ON oi.order_id=o.id WHERE o.client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'));
+DELETE FROM client_inventory   WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd')
+  AND sku NOT IN (SELECT DISTINCT oi.sku FROM order_items oi JOIN orders o ON oi.order_id=o.id WHERE o.client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'));

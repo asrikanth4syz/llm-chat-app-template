@@ -1250,6 +1250,8 @@ describe("Client consumption report (received / consumed / stock / low-stock)", 
     // client_inventory carries a STALE category; the master (inventory) is the fresh one.
     await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "CONS1", "Coffee", "StaleCat", 3, 5).run();
     await cdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,?)").bind("CONS1", "Coffee", "Beverages", 100, 100, 1).run();
+    // Orphan: stock-only leftover, not in the client's catalogue, no orders/consumption.
+    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "ORPHAN1", "Ghost Register", "Misc", 1, 0).run();
     await cdb.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,consumed_at) VALUES (?,?,?,?,?)").bind("c1", "CONS1", "Coffee", 10, "2026-07-15 10:00:00").run();
     await cdb.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total) VALUES (?,?,?,?,?)").bind("O-C1", "c1", "tst-ops", "CLOSED", 1000).run();
     await cdb.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,delivered_at) VALUES (?,?,?,?)").bind("DC-C1", "O-C1", "DELIVERED", "2026-07-15 09:00:00").run();
@@ -1268,6 +1270,13 @@ describe("Client consumption report (received / consumed / stock / low-stock)", 
     expect(row.low_stock).toBe(true);   // 3 ≤ reorder 5
     expect(row.category).toBe("Beverages"); // live from master, not the stale client copy
     expect(data.totals.low_stock).toBeGreaterThanOrEqual(1);
+  });
+
+  it("hides orphan stock-only rows not in the client's catalogue", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-07-01&to=2026-07-31", clientToken);
+    const data = await res.json() as { rows: Record<string, unknown>[] };
+    expect(data.rows.find(r => r.sku === "ORPHAN1")).toBeFalsy();  // orphan trail hidden
+    expect(data.rows.find(r => r.sku === "CONS1")).toBeTruthy();   // real activity still shown
   });
 
   it("period filter excludes out-of-range received/consumed (stock stays point-in-time)", async () => {

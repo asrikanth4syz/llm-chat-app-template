@@ -5932,9 +5932,22 @@ async function handleRptClientConsumption(request: Request, env: Env): Promise<R
       x.low_stock = x.reorder_level > 0 && x.in_stock <= x.reorder_level;
     }
 
+    // Hide orphan rows — stock-only leftovers from deleted test orders. Keep an
+    // item only if it had activity in the period OR is in the client's assigned
+    // catalogue. If the client has no catalogue assigned, show everything they
+    // hold (matches handleListClientInventory's fallback). Aggregate view (no
+    // client) keeps everything with activity.
+    let catalogSet: Set<string> | null = null;
+    if (clientId) {
+      const { results: cat } = await env.DB.prepare("SELECT sku FROM client_catalog WHERE client_id=?").bind(clientId).all();
+      catalogSet = new Set(cat.map(r => String((r as Record<string, unknown>).sku)));
+    }
+    const hasCatalog = !!(catalogSet && catalogSet.size);
+
     // total_qty is kept as an alias of `consumed` for older consumers
     // (Executive Reports "most consumed" list) that predate this enrichment.
     const rows = [...map.values()]
+      .filter(r => r.received > 0 || r.consumed > 0 || !hasCatalog || catalogSet!.has(r.sku))
       .sort((a, b) => b.consumed - a.consumed || b.received - a.received)
       .map(r => ({ ...r, total_qty: r.consumed }));
     const totals = rows.reduce((t, r) => ({

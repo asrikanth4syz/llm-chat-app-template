@@ -19,9 +19,12 @@ FROM orders o
 WHERE o.client_id IN (SELECT id FROM clients WHERE name = 'NI Systems (India) Pvt Ltd')
 ORDER BY o.created_at DESC;
 
--- 2) Totals — a one-line summary of the blast radius.
+-- 2) Totals — a one-line summary of the blast radius (incl. the store trail
+--    that step 5 of the cleanup removes).
 SELECT
   (SELECT COUNT(*) FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd')) AS orders,
   (SELECT COUNT(*) FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'))) AS order_items,
   (SELECT COUNT(*) FROM delivery_challans WHERE order_id IN (SELECT id FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'))) AS challans,
-  (SELECT COUNT(*) FROM purchase_orders WHERE order_id IN (SELECT id FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'))) AS linked_pos;
+  (SELECT COUNT(*) FROM purchase_orders WHERE order_id IN (SELECT id FROM orders WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd'))) AS linked_pos,
+  (SELECT COUNT(*) FROM client_inventory WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd')) AS store_rows,
+  (SELECT COUNT(*) FROM client_consumption WHERE client_id IN (SELECT id FROM clients WHERE name='NI Systems (India) Pvt Ltd')) AS consumption_rows;
