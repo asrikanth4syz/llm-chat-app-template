@@ -5902,10 +5902,15 @@ async function handleRptClientConsumption(request: Request, env: Env): Promise<R
       GROUP BY cc.sku`).bind(from, to, ...cb).all();
 
     // Current stock on hand + reorder level (point-in-time, not period-bound).
+    // Category is sourced live from the master catalogue (inventory) so a
+    // per-product category edit shows immediately; ci.category is only a
+    // fallback — matching handleListClientInventory.
     const { results: stock } = await env.DB.prepare(`
-      SELECT ci.sku AS sku, MAX(ci.item_name) AS name, MAX(ci.category) AS category,
+      SELECT ci.sku AS sku, MAX(ci.item_name) AS name,
+             COALESCE(NULLIF(MAX(i.category),''), NULLIF(MAX(ci.category),''), '') AS category,
              SUM(ci.qty_on_hand) AS in_stock, MAX(ci.reorder_level) AS reorder_level
       FROM client_inventory ci
+      LEFT JOIN inventory i ON i.sku = ci.sku
       WHERE 1=1${cf('ci.client_id')}
       GROUP BY ci.sku`).bind(...cb).all();
 

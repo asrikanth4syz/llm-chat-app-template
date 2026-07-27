@@ -1247,7 +1247,9 @@ describe("Auto-reorder, debit notes, PO numbering (G10/G11/G12)", () => {
 describe("Client consumption report (received / consumed / stock / low-stock)", () => {
   const cdb = env.DB as D1Database;
   beforeAll(async () => {
-    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "CONS1", "Coffee", "Beverages", 3, 5).run();
+    // client_inventory carries a STALE category; the master (inventory) is the fresh one.
+    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "CONS1", "Coffee", "StaleCat", 3, 5).run();
+    await cdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,?)").bind("CONS1", "Coffee", "Beverages", 100, 100, 1).run();
     await cdb.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,consumed_at) VALUES (?,?,?,?,?)").bind("c1", "CONS1", "Coffee", 10, "2026-07-15 10:00:00").run();
     await cdb.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total) VALUES (?,?,?,?,?)").bind("O-C1", "c1", "tst-ops", "CLOSED", 1000).run();
     await cdb.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,delivered_at) VALUES (?,?,?,?)").bind("DC-C1", "O-C1", "DELIVERED", "2026-07-15 09:00:00").run();
@@ -1264,6 +1266,7 @@ describe("Client consumption report (received / consumed / stock / low-stock)", 
     expect(row.consumed).toBe(10);
     expect(row.in_stock).toBe(3);
     expect(row.low_stock).toBe(true);   // 3 ≤ reorder 5
+    expect(row.category).toBe("Beverages"); // live from master, not the stale client copy
     expect(data.totals.low_stock).toBeGreaterThanOrEqual(1);
   });
 
