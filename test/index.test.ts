@@ -1243,3 +1243,35 @@ describe("Auto-reorder, debit notes, PO numbering (G10/G11/G12)", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Client consumption report (received / consumed / stock / low-stock)", () => {
+  const cdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "CONS1", "Coffee", "Beverages", 3, 5).run();
+    await cdb.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,consumed_at) VALUES (?,?,?,?,?)").bind("c1", "CONS1", "Coffee", 10, "2026-07-15 10:00:00").run();
+    await cdb.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total) VALUES (?,?,?,?,?)").bind("O-C1", "c1", "tst-ops", "CLOSED", 1000).run();
+    await cdb.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,delivered_at) VALUES (?,?,?,?)").bind("DC-C1", "O-C1", "DELIVERED", "2026-07-15 09:00:00").run();
+    await cdb.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("dci-c1", "DC-C1", "CONS1", "Coffee", 20, 20).run();
+  });
+
+  it("returns received, consumed, in-stock and low-stock per item, scoped to the client", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-07-01&to=2026-07-31", clientToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { rows: Record<string, unknown>[]; totals: Record<string, number> };
+    const row = data.rows.find(r => r.sku === "CONS1")!;
+    expect(row).toBeTruthy();
+    expect(row.received).toBe(20);
+    expect(row.consumed).toBe(10);
+    expect(row.in_stock).toBe(3);
+    expect(row.low_stock).toBe(true);   // 3 ≤ reorder 5
+    expect(data.totals.low_stock).toBeGreaterThanOrEqual(1);
+  });
+
+  it("period filter excludes out-of-range received/consumed (stock stays point-in-time)", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-01-01&to=2026-01-31", clientToken);
+    const data = await res.json() as { rows: Record<string, number>[] };
+    const row = data.rows.find(r => r.sku === "CONS1");
+    expect(row ? row.consumed : 0).toBe(0);
+    expect(row ? row.received : 0).toBe(0);
+  });
+});

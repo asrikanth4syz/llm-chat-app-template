@@ -5869,36 +5869,72 @@ async function handleSyncClientInventory(request: Request, env: Env): Promise<Re
 // CLIENT REPORTS — Consumption & Spend
 // ═══════════════════════════════════════════════════════════════════
 
+// Client consumption report — per item: received & consumed in the period, plus
+// current in-stock and a low-stock flag. Client roles are scoped to their own
+// client; internal roles may pass ?client_id= to view one, else it aggregates.
 async function handleRptClientConsumption(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const url = new URL(request.url);
   const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const to   = url.searchParams.get('to')   || new Date().toISOString().slice(0,10);
-  const clientId = (user as any).client_id || null;
   const isClientRole = ['client_admin','client_approver','client_user'].includes((user as any).role);
+  const clientId = isClientRole ? ((user as any).client_id || null) : (url.searchParams.get('client_id') || null);
 
   try {
-    let whereParts = [`cc.consumed_at >= ?`, `cc.consumed_at < date(?,'+1 day')`];
-    const binds: (string|number)[] = [from, to];
-    if (isClientRole && clientId) { whereParts.push(`cc.client_id = ?`); binds.push(clientId); }
+    const cf = (col: string) => clientId ? ` AND ${col} = ?` : '';
+    const cb = clientId ? [clientId] : [];
 
-    const {results} = await env.DB.prepare(`
-      SELECT
-        cc.sku,
-        cc.item_name,
-        COALESCE(NULLIF(inv.category,''), NULLIF(ci.category,''), '') AS category,
-        SUM(cc.qty) AS total_qty,
-        COUNT(cc.id) AS log_count
+    // Received in period — delivered challan lines for this client's orders.
+    const { results: recv } = await env.DB.prepare(`
+      SELECT dci.sku AS sku, MAX(dci.name) AS name, SUM(dci.qty_delivered) AS received
+      FROM dc_items dci
+      JOIN delivery_challans dc ON dci.dc_id = dc.id
+      JOIN orders o ON dc.order_id = o.id
+      WHERE dc.delivered_at IS NOT NULL AND dc.delivered_at >= ? AND dc.delivered_at < date(?, '+1 day')${cf('o.client_id')}
+      GROUP BY dci.sku`).bind(from, to, ...cb).all();
+
+    // Consumed in period.
+    const { results: cons } = await env.DB.prepare(`
+      SELECT cc.sku AS sku, MAX(cc.item_name) AS name, SUM(cc.qty) AS consumed
       FROM client_consumption cc
-      LEFT JOIN client_inventory ci ON ci.sku = cc.sku AND ci.client_id = cc.client_id
-      LEFT JOIN inventory inv ON inv.sku = cc.sku
-      WHERE ${whereParts.join(' AND ')}
-      GROUP BY cc.sku, cc.item_name
-      ORDER BY total_qty DESC
-    `).bind(...binds).all();
-    return json({ from, to, rows: results as Record<string,unknown>[] });
-  } catch(e) { return json({error: String(e)}, 500); }
+      WHERE cc.consumed_at >= ? AND cc.consumed_at < date(?, '+1 day')${cf('cc.client_id')}
+      GROUP BY cc.sku`).bind(from, to, ...cb).all();
+
+    // Current stock on hand + reorder level (point-in-time, not period-bound).
+    const { results: stock } = await env.DB.prepare(`
+      SELECT ci.sku AS sku, MAX(ci.item_name) AS name, MAX(ci.category) AS category,
+             SUM(ci.qty_on_hand) AS in_stock, MAX(ci.reorder_level) AS reorder_level
+      FROM client_inventory ci
+      WHERE 1=1${cf('ci.client_id')}
+      GROUP BY ci.sku`).bind(...cb).all();
+
+    type Row = { sku:string; item_name:string; category:string; received:number; consumed:number; in_stock:number; reorder_level:number; low_stock:boolean };
+    const map = new Map<string, Row>();
+    const get = (sku: string, name?: unknown): Row => {
+      let r = map.get(sku);
+      if (!r) { r = { sku, item_name: String(name || sku), category: '', received: 0, consumed: 0, in_stock: 0, reorder_level: 0, low_stock: false }; map.set(sku, r); }
+      else if (name && (r.item_name === sku || !r.item_name)) r.item_name = String(name);
+      return r;
+    };
+    for (const r of recv  as Record<string,unknown>[]) { const x = get(String(r.sku), r.name); x.received = Number(r.received) || 0; }
+    for (const r of cons  as Record<string,unknown>[]) { const x = get(String(r.sku), r.name); x.consumed = Number(r.consumed) || 0; }
+    for (const r of stock as Record<string,unknown>[]) {
+      const x = get(String(r.sku), r.name);
+      x.category = String(r.category || '');
+      x.in_stock = Number(r.in_stock) || 0;
+      x.reorder_level = Number(r.reorder_level) || 0;
+      x.low_stock = x.reorder_level > 0 && x.in_stock <= x.reorder_level;
+    }
+
+    const rows = [...map.values()].sort((a, b) => b.consumed - a.consumed || b.received - a.received);
+    const totals = rows.reduce((t, r) => ({
+      received: t.received + r.received, consumed: t.consumed + r.consumed,
+      in_stock: t.in_stock + r.in_stock, low_stock: t.low_stock + (r.low_stock ? 1 : 0),
+    }), { received: 0, consumed: 0, in_stock: 0, low_stock: 0 });
+
+    return json({ from, to, rows, totals: { ...totals, items: rows.length } });
+  } catch (e) { return json({ error: String(e) }, 500); }
 }
 
 async function handleRptClientSpend(request: Request, env: Env): Promise<Response> {

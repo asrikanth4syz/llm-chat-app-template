@@ -143,7 +143,7 @@ const PAGE_ICON = {
   client_budget: iconWallet,
   // Reports & insight
   exec_bi: iconPie, consolidated_report: iconFile, reports: iconReports,
-  sla_dashboard: iconGauge, client_reports: iconPie,
+  sla_dashboard: iconGauge, client_reports: iconPie, client_consumption: iconReports,
   // Alerts
   alerts: iconBell,
   // Admin & settings
@@ -274,6 +274,7 @@ const NAV = {
     { section:'My Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
     { section:'Reports & Insights' },
+    { id:'client_consumption', label:'Consumption Report', icon:iconReports, badge:null },
     { id:'client_budget',  label:'Budget & Spend',    icon:iconReports, badge:null },
     { id:'client_reports', label:'Executive Reports', icon:iconReports, badge:null },
     { section:'Support' },
@@ -935,6 +936,7 @@ const PAGE_MAP = {
   consolidated_report: 'renderConsolidatedReport',
   consolidated_due: 'renderConsolidatedDue',
   client_budget: 'renderClientBudget',
+  client_consumption: 'renderClientConsumption',
   my_inventory: 'renderMyInventory',
   orders_inventory: 'renderOrdersInventory',
   alerts: 'renderAlerts',

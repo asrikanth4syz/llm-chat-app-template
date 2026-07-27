@@ -1768,3 +1768,127 @@ function ocExport() {
   const body = data.map(r => [q(r.item_name), r.sku, r.ordered_qty, r.delivered_qty, r.due_qty, r.order_count, r.client_count, q(r.clients)].join(',')).join('\n');
   _downloadCSV('consolidated-order-report', header + '\n' + body);
 }
+
+/* ============================================================
+   CLIENT CONSUMPTION REPORT (client · Reports & Insights)
+   Received / consumed / in-stock / low-stock, by month, quarter
+   or a custom date range.
+   ============================================================ */
+let _cons = { mode: 'month', month: '', qy: 0, q: 1, from: '', to: '', _rows: [] };
+
+function consRange() {
+  const s = _cons;
+  const fmtd = d => d.toISOString().slice(0, 10);
+  if (s.mode === 'quarter') {
+    const startM = (s.q - 1) * 3;
+    return { from: fmtd(new Date(s.qy, startM, 1)), to: fmtd(new Date(s.qy, startM + 3, 0)) };
+  }
+  if (s.mode === 'custom') return { from: s.from, to: s.to };
+  // month
+  const [y, m] = (s.month || '').split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return { from: `${s.month}-01`, to: `${s.month}-${String(last).padStart(2, '0')}` };
+}
+
+async function renderClientConsumption(el) {
+  if (!_cons.month) {
+    const now = new Date();
+    _cons.month = now.toISOString().slice(0, 7);
+    _cons.qy = now.getFullYear();
+    _cons.q = Math.floor(now.getMonth() / 3) + 1;
+    _cons.from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    _cons.to = now.toISOString().slice(0, 10);
+  }
+  const { from, to } = consRange();
+  const seg = (m, label) => `<button class="dcal-vbtn ${_cons.mode === m ? 'on' : ''}" ${dataAct('consMode', m)}>${label}</button>`;
+  const years = []; for (let y = new Date().getFullYear(); y >= new Date().getFullYear() - 3; y--) years.push(y);
+
+  let picker = '';
+  if (_cons.mode === 'month') {
+    picker = `<input type="month" id="cons-month" class="form-control" style="max-width:180px;font-size:.82rem" value="${_cons.month}" ${dataChangeEl('consSetMonth')}>`;
+  } else if (_cons.mode === 'quarter') {
+    picker = `<select id="cons-q" class="form-control" style="max-width:130px;font-size:.82rem" ${dataChangeEl('consSetQ')}>
+        ${[1,2,3,4].map(q => `<option value="${q}" ${_cons.q===q?'selected':''}>Q${q} (${['Jan–Mar','Apr–Jun','Jul–Sep','Oct–Dec'][q-1]})</option>`).join('')}
+      </select>
+      <select id="cons-qy" class="form-control" style="max-width:110px;font-size:.82rem" ${dataChangeEl('consSetQY')}>
+        ${years.map(y => `<option value="${y}" ${_cons.qy===y?'selected':''}>${y}</option>`).join('')}
+      </select>`;
+  } else {
+    picker = `<input type="date" id="cons-from" class="form-control" style="max-width:150px;font-size:.82rem" value="${_cons.from}">
+      <span style="color:var(--text-muted)">to</span>
+      <input type="date" id="cons-to" class="form-control" style="max-width:150px;font-size:.82rem" value="${_cons.to}">
+      <button class="btn btn-primary btn-sm" ${dataAct('consApplyCustom')}>Apply</button>`;
+  }
+
+  el.innerHTML = `
+  ${pageHeader('Consumption Report', 'What you received, consumed and have in stock',
+    `<button class="btn btn-secondary" ${dataAct('consExportCSV')}>&#8595; Export CSV</button>`)}
+  <div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <div style="display:inline-flex;gap:6px">${seg('month','Month')}${seg('quarter','Quarter')}${seg('custom','Date range')}</div>
+    ${picker}
+    <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">${from} → ${to}</span>
+  </div>
+  <div id="cons-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
+
+  const data = await api(`/reports/client-consumption?from=${from}&to=${to}`);
+  const body = document.getElementById('cons-body');
+  if (!data || !body) return;
+  const rows = data.rows || [];
+  _cons._rows = rows;
+  const t = data.totals || { received: 0, consumed: 0, in_stock: 0, low_stock: 0, items: 0 };
+
+  const tile = (label, val, color, sub) => `
+    <div class="card" style="padding:14px 16px;border-top:3px solid ${color};margin-bottom:0">
+      <div class="u-label">${label}</div>
+      <div style="font-size:1.7rem;font-weight:800;color:${color};line-height:1.1">${val}</div>
+      ${sub ? `<div class="u-sub">${sub}</div>` : ''}
+    </div>`;
+
+  body.innerHTML = `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+    ${tile('Items', t.items, 'var(--navy)', 'in this period')}
+    ${tile('Received', t.received, 'var(--primary)', 'units delivered')}
+    ${tile('Consumed', t.consumed, 'var(--warning)', 'units used')}
+    ${tile('In Stock', t.in_stock, 'var(--success)', 'on hand now')}
+    ${tile('Low Stock', t.low_stock, t.low_stock > 0 ? 'var(--danger)' : 'var(--success)', t.low_stock > 0 ? 'need reorder' : 'all healthy')}
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table class="table table-cards">
+        <thead><tr><th>Item</th><th>Category</th><th class="u-right">Received</th><th class="u-right">Consumed</th><th class="u-right">In Stock</th><th class="u-right">Reorder</th><th>Status</th></tr></thead>
+        <tbody>${rows.length ? rows.map(r => `<tr${r.low_stock ? ' style="background:var(--danger-soft-bg)"' : ''}>
+          <td class="card-title-cell" data-label="Item"><b>${h(r.item_name)}</b><div class="u-muted-xs">${r.sku}</div></td>
+          <td data-label="Category">${h(r.category || '—')}</td>
+          <td class="u-right" data-label="Received">${r.received}</td>
+          <td class="u-right" data-label="Consumed">${r.consumed}</td>
+          <td class="u-right" data-label="In Stock"><b>${r.in_stock}</b></td>
+          <td class="u-right" data-label="Reorder">${r.reorder_level || '—'}</td>
+          <td data-label="Status">${r.low_stock ? '<span class="badge badge-danger">Low stock</span>' : '<span class="badge badge-secondary">OK</span>'}</td>
+        </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted)">No activity in this period.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function consMode(m) { _cons.mode = m; renderClientConsumption(document.getElementById('main-content')); }
+function consSetMonth(elm) { _cons.month = elm.value; renderClientConsumption(document.getElementById('main-content')); }
+function consSetQ(elm) { _cons.q = +elm.value; renderClientConsumption(document.getElementById('main-content')); }
+function consSetQY(elm) { _cons.qy = +elm.value; renderClientConsumption(document.getElementById('main-content')); }
+function consApplyCustom() {
+  const f = document.getElementById('cons-from')?.value, t = document.getElementById('cons-to')?.value;
+  if (!f || !t) { showToast('Pick both dates', 'error'); return; }
+  if (f > t) { showToast('From date is after To date', 'error'); return; }
+  _cons.from = f; _cons.to = t;
+  renderClientConsumption(document.getElementById('main-content'));
+}
+function consExportCSV() {
+  const rows = _cons._rows || [];
+  if (!rows.length) { showToast('Nothing to export', 'error'); return; }
+  const head = 'Item,SKU,Category,Received,Consumed,In Stock,Reorder,Low Stock';
+  const csv = head + '\n' + rows.map(r => `"${String(r.item_name||'').replace(/"/g,'""')}",${r.sku},"${r.category||''}",${r.received},${r.consumed},${r.in_stock},${r.reorder_level},${r.low_stock?'Yes':'No'}`).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `consumption-report-${consRange().from}_to_${consRange().to}.csv`;
+  a.click();
+}
