@@ -346,15 +346,30 @@ async function doLogin() {
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Signing in…';
 
-  const data = await api('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  }).catch(() => null);
+  // Use a direct fetch — the shared api() helper treats every 401 as a session
+  // logout and returns null silently, so wrong credentials would show no error.
+  let res, data;
+  try {
+    res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch {
+    btn.disabled = false; btn.querySelector('span').textContent = 'Sign In';
+    showToast('Network error — check your connection and try again', 'error');
+    return;
+  }
 
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Sign In';
 
-  if (!data) return; // api() already showed "Invalid credentials"
+  if (!res.ok) {
+    showToast(data.error || (res.status === 401 ? 'Invalid email or password' : 'Sign in failed — please try again'), 'error');
+    const pw = document.getElementById('login-password'); if (pw) { pw.value = ''; pw.focus(); }
+    return;
+  }
 
   if (data.otp_required) {
     APP._pendingEmail = email;
@@ -392,15 +407,26 @@ async function doVerifyOTP() {
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Verifying…';
 
-  const data = await api('/auth/otp/verify', {
-    method: 'POST',
-    body: JSON.stringify({ email: APP._pendingEmail, code }),
-  }).catch(() => null);
+  // Direct fetch (see doLogin) so a wrong OTP shows an error without api()'s
+  // 401-triggered logout wiping the OTP form.
+  let res, data;
+  try {
+    res = await fetch('/api/auth/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: APP._pendingEmail, code }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch {
+    btn.disabled = false; btn.querySelector('span').textContent = 'Verify OTP';
+    showToast('Network error — check your connection and try again', 'error');
+    return;
+  }
 
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Verify OTP';
 
-  if (!data?.token) { showToast('Invalid or expired OTP', 'error'); return; }
+  if (!res.ok || !data.token) { showToast(data.error || 'Invalid or expired OTP', 'error'); return; }
 
   APP.token = data.token;
   APP.user = { ...data.user, nav: ROLES[data.user.role]?.nav || 'platform' };
