@@ -119,7 +119,9 @@ async function renderDeliveryCalendar(el) {
     </div>
     <aside id="dcal-rail"></aside>
   </div>`;
-  dcalRefresh();
+  // On phones the 7-column month grid is a forced horizontal scroll — default to
+  // the agenda ("Next 14 days") list instead; Month stays available via the toggle.
+  if (window.innerWidth <= 700) dcalSetView('agenda'); else dcalRefresh();
 }
 
 function dcalFiltered() {

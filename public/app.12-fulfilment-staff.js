@@ -1043,7 +1043,7 @@ async function renderTodaysSchedule(el) {
     <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden">
       <div style="height:100%;width:${donePct}%;background:${donePct===100?'var(--success)':donePct>60?'var(--warning)':'var(--primary)'};border-radius:5px;transition:width .4s"></div>
     </div>
-    <div style="display:flex;gap:16px;margin-top:8px;font-size:.76rem;color:var(--text-muted)">
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:.76rem;color:var(--text-muted);flex-wrap:wrap">
       <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--success);border-radius:50%"></span>Delivered ${delivered}</span>
       <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--warning);border-radius:50%"></span>In Transit ${inTransit}</span>
       <span style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:8px;height:8px;background:var(--border);border-radius:50%"></span>Pending ${pending}</span>
@@ -1073,15 +1073,15 @@ async function renderTodaysSchedule(el) {
       </div>
     </div>
     <div class="table-wrap">
-      <table class="table">
+      <table class="table table-cards">
         <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Time</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${dcs.sort((a,b)=>(a.scheduled_time||'').localeCompare(b.scheduled_time||'')).map(dc=>`<tr ${dc.status==='DELIVERED'?'style="opacity:.7"':''}>
-          <td><b>${dc.dc_number||dc.id}</b></td>
-          <td><b>${dc.client_name||'—'}</b></td>
-          <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
-          <td class="u-b600">${dc.scheduled_time||'—'}</td>
-          <td>${dc.total_qty||'—'}</td>
-          <td>${statusBadge(dc.status)}</td>
+          <td class="card-title-cell" data-label="DC #"><b>${dc.dc_number||dc.id}</b></td>
+          <td data-label="Client"><b>${dc.client_name||'—'}</b></td>
+          <td data-label="Zone"><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
+          <td class="u-b600" data-label="Time">${dc.scheduled_time||'—'}</td>
+          <td data-label="Items">${dc.total_qty||'—'}</td>
+          <td data-label="Status">${statusBadge(dc.status)}</td>
           <td style="display:flex;gap:4px;flex-wrap:wrap">
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Deliver</button>`:''}
             ${dc.status==='IN_TRANSIT'?`<button class="btn btn-danger btn-sm" ${dataAct('logReturnModal', dc.id)}>Return</button>`:''}
@@ -1100,14 +1100,14 @@ async function renderTodaysSchedule(el) {
       <span style="font-size:.8rem;color:var(--text-muted)">Assign staff before dispatching</span>
     </div>
     <div class="table-wrap">
-      <table class="table">
+      <table class="table table-cards">
         <thead><tr><th>DC #</th><th>Client</th><th>Zone</th><th>Items</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${unassigned.map(dc=>`<tr>
-          <td><b>${dc.dc_number||dc.id}</b></td>
-          <td><b>${dc.client_name||'—'}</b></td>
-          <td><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
-          <td>${dc.total_qty||'—'}</td>
-          <td>${statusBadge(dc.status)}</td>
+          <td class="card-title-cell" data-label="DC #"><b>${dc.dc_number||dc.id}</b></td>
+          <td data-label="Client"><b>${dc.client_name||'—'}</b></td>
+          <td data-label="Zone"><span class="badge badge-secondary">${dc.zone||'—'}</span></td>
+          <td data-label="Items">${dc.total_qty||'—'}</td>
+          <td data-label="Status">${statusBadge(dc.status)}</td>
           <td><button class="btn btn-primary btn-sm" ${dataAct('assignDCModal', dc.id, dc.dc_number||'', dc.scheduled_time||'')}>Assign Staff</button></td>
         </tr>`).join('')}
         </tbody>
