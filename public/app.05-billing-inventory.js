@@ -1,4 +1,35 @@
 /* ============================================================
+   HSN → GST helpers
+   GST is a fixed slab (0/5/12/18/28%) driven by the item's HSN
+   code, never a free-typed number. The dropdown is read-only to
+   the user; typing an HSN auto-selects the matching slab.
+   ============================================================ */
+const GST_SLABS = [0, 5, 12, 18, 28];
+function gstSlabSelect(id, current) {
+  const cur = current != null ? Number(current) : null;
+  const opts = ['<option value="">— (no HSN match)</option>']
+    .concat(GST_SLABS.map(r => `<option value="${r}"${cur===r?' selected':''}>${r}%</option>`))
+    .join('');
+  return `<select id="${id}">${opts}</select>`;
+}
+async function hsnAutoGst(hsnId, gstId) {
+  const hsn = (document.getElementById(hsnId)?.value || '').trim();
+  const hint = document.getElementById(hsnId + '-hint');
+  const gstSel = document.getElementById(gstId);
+  if (!hsn) { if (hint) hint.textContent=''; return; }
+  try {
+    const res = await api('/hsn-gst?hsn=' + encodeURIComponent(hsn));
+    if (res && res.matched && gstSel) {
+      gstSel.value = String(res.gst_rate);
+      if (hint) { hint.textContent = `GST set to ${res.gst_rate}% for HSN ${hsn}.`; hint.style.color = 'var(--success-strong)'; }
+    } else if (hint) {
+      hint.textContent = `No GST slab mapped for HSN ${hsn} — pick the correct slab manually.`;
+      hint.style.color = 'var(--warning-strong, #b45309)';
+    }
+  } catch { /* offline / non-fatal */ }
+}
+
+/* ============================================================
    DC BILLING
    ============================================================ */
 async function renderDCBilling(el) {
@@ -547,7 +578,9 @@ async function renderInventory(el) {
 
   el.innerHTML = `
   ${pageHeader('Inventory', `${inv.length} SKUs`,
-    `<button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
+    `${['super_admin','ops_admin','finance_admin','procurement_manager'].includes(APP.user?.role)
+        ? `<button class="btn btn-secondary" ${dataAct('recalcGstFromHsn')} title="Recompute every item's GST slab from its HSN code">↻ Recalc GST from HSN</button>` : ''}
+     <button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
 
   <!-- KPI tiles — icon-chip style, responsive -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-bottom:16px">
@@ -787,7 +820,7 @@ function invDetailHTML(item) {
         ${invDetailRow('Unit Price (Selling)', fmt(item.unit_price))}
         ${invDetailRow('MRP', item.mrp?fmt(item.mrp):'—')}
         ${invDetailRow('Cost Excl GST', item.cost_excl_gst?fmt(item.cost_excl_gst):'—')}
-        ${invDetailRow('GST Rate', (item.gst_rate||18)+'%')}
+        ${invDetailRow('GST Rate', (item.gst_rate!=null?item.gst_rate:'—')+'%')}
         ${invDetailRow('Margin %', item.margin_pct?item.margin_pct+'%':'—')}
         ${invDetailRow('Amazon URL', item.amazon_url?`<a href="${item.amazon_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
         ${invDetailRow('Flipkart URL', item.flipkart_url?`<a href="${item.flipkart_url}" target="_blank" style="color:var(--blue);font-size:.74rem">View</a>`:'—')}
@@ -899,7 +932,7 @@ async function editInventoryItem(sku) {
         <div class="form-group"><label>Pack Size</label><input type="number" id="ei-packsize" value="${item.pack_size||1}" min="1"></div>
         <div class="form-group"><label>Units per Case</label><input type="number" id="ei-upc" value="${item.units_per_case||1}" min="1"></div>
         <div class="form-group"><label>Weight (grams)</label><input type="number" id="ei-weight" value="${item.weight_grams||0}" min="0" step="0.1"></div>
-        <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}"></div>
+        <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}" oninput="hsnAutoGst('ei-hsn','ei-gst')"><small id="ei-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
         <div class="form-group"><label>Storage Location</label><input type="text" id="ei-location" value="${item.inv_location||'instock'}"></div>
       </div>
     </div>
@@ -910,7 +943,7 @@ async function editInventoryItem(sku) {
         <div class="form-group"><label>Unit Price / Selling Price (₹)</label><input type="number" id="ei-price" value="${item.unit_price}" min="0" step="0.01"></div>
         <div class="form-group"><label>MRP (₹)</label><input type="number" id="ei-mrp" value="${item.mrp||0}" min="0" step="0.01"></div>
         <div class="form-group"><label>Cost Excl GST (₹)</label><input type="number" id="ei-cost" value="${item.cost_excl_gst||0}" min="0" step="0.01"></div>
-        <div class="form-group"><label>GST Rate (%)</label><input type="number" id="ei-gst" value="${item.gst_rate||18}" min="0" max="28"></div>
+        <div class="form-group"><label>GST Rate (%) <span style="color:var(--muted);font-weight:400">— set by HSN</span></label>${gstSlabSelect('ei-gst', item.gst_rate)}</div>
         <div class="form-group"><label>Margin %</label><input type="number" id="ei-margin" value="${item.margin_pct||0}" min="0" max="100" step="0.1"></div>
         <div class="form-group"><label>Amazon URL</label><input type="url" id="ei-amazon" value="${item.amazon_url||''}" placeholder="https://www.amazon.in/…"></div>
         <div class="form-group" style="grid-column:1/-1"><label>Flipkart URL</label><input type="url" id="ei-flipkart" value="${item.flipkart_url||''}" placeholder="https://www.flipkart.com/…"></div>
@@ -1054,7 +1087,6 @@ async function saveInventoryItem(sku) {
     unit_price:     eiVal('ei-price',true),
     mrp:            eiVal('ei-mrp',true),
     cost_excl_gst:  eiVal('ei-cost',true),
-    gst_rate:       eiVal('ei-gst',true),
     margin_pct:     eiVal('ei-margin',true),
     amazon_url:     eiVal('ei-amazon'),
     flipkart_url:   eiVal('ei-flipkart'),
@@ -1068,6 +1100,10 @@ async function saveInventoryItem(sku) {
     reorder_level:  eiVal('ei-reorder',true),
     max_stock:      eiVal('ei-maxstock',true),
   };
+  // GST slab: only send when explicitly selected. The backend re-derives it
+  // from hsn_code anyway; sending an empty select would wrongly wipe the rate.
+  const gstSel = document.getElementById('ei-gst');
+  if (gstSel && gstSel.value !== '') body.gst_rate = +gstSel.value;
   if (!body.name) { showToast('Item name is required', 'error'); return; }
   const res = await api(`/inventory/${sku}`, { method:'PATCH', body: JSON.stringify(body) });
   closeModal();
@@ -1174,7 +1210,8 @@ function renderAddItem() {
      </div>
      <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="item-price" min="0" step="0.01"></div>
      <div class="form-group"><label>Opening Stock</label><input type="number" id="item-stock" value="0" min="0"></div>
-     <div class="form-group"><label>HSN Code</label><input type="text" id="item-hsn" value="2101"></div>
+     <div class="form-group"><label>HSN Code</label><input type="text" id="item-hsn" value="" placeholder="e.g. 2202" oninput="hsnAutoGst('item-hsn','item-gst')"><small id="item-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
+     <div class="form-group"><label>GST Rate (%) <span style="color:var(--muted);font-weight:400">— set by HSN</span></label>${gstSlabSelect('item-gst', null)}</div>
      <div class="form-group"><label>Emoji</label><input type="text" id="item-emoji" value="📦" maxlength="2"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveNewItem')}>Add Item</button>`);
@@ -1187,10 +1224,25 @@ async function saveNewItem() {
     unit_price: +document.getElementById('item-price').value,
     stock: +document.getElementById('item-stock').value,
     hsn_code: document.getElementById('item-hsn').value,
+    gst_rate: +document.getElementById('item-gst').value,
     emoji: document.getElementById('item-emoji').value,
   };
   if (!body.name || !body.unit_price) { showToast('Name and price required','error'); return; }
   const res = await api('/inventory', { method:'POST', body: JSON.stringify(body) });
   closeModal();
   if (res) { showToast(`Item ${res.sku} added`); navigate('inventory'); }
+}
+
+// Admin backfill: recompute every item's GST slab from its HSN code, fixing the
+// historical data where products defaulted to 18%.
+async function recalcGstFromHsn() {
+  if (!confirm("Recompute GST for every catalogue item from its HSN code?\n\nItems whose HSN maps to a different slab (0/5/12/18/28%) will be updated. Items with an unmapped HSN are left unchanged.")) return;
+  const res = await api('/inventory/recalc-gst', { method:'POST', body: '{}' });
+  if (!res) return;
+  let msg = `GST recalculated — ${res.updated} item(s) updated`;
+  if (res.unmatched) msg += `, ${res.unmatched} left unchanged (unmapped HSN)`;
+  showToast(msg, res.updated ? 'success' : 'info');
+  if (res.unmatched_hsns && res.unmatched_hsns.length)
+    console.warn('Unmapped HSN codes (left unchanged — map via /api/hsn-gst-rates):', res.unmatched_hsns);
+  navigate('inventory');
 }

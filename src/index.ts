@@ -189,6 +189,23 @@ async function setConfig(env: Env, key: string, value: string, actor?: string): 
   ).bind(key, value, actor ?? null).run();
 }
 
+// GST slab for an HSN code, from the hsn_gst_rates map. Tries the exact code
+// then falls back to shorter headings (8→6→4→2 digits), since GST is usually
+// set at chapter/heading level. Returns null when nothing matches.
+async function gstRateForHsn(env: Env, hsn: string | null | undefined): Promise<number | null> {
+  const code = String(hsn || "").replace(/\D/g, "");
+  if (!code) return null;
+  const tries = [code];
+  for (const n of [8, 6, 4, 2]) if (code.length > n) tries.push(code.slice(0, n));
+  for (const t of tries) {
+    try {
+      const row = await env.DB.prepare("SELECT gst_rate FROM hsn_gst_rates WHERE hsn=?").bind(t).first() as { gst_rate: number } | null;
+      if (row && row.gst_rate != null) return Number(row.gst_rate);
+    } catch { return null; }
+  }
+  return null;
+}
+
 // G12: gap-free, sequential PO numbers (e.g. PO-00042) from an app_config
 // counter — replaces the old collision-prone PO-<random> ids.
 async function nextPONumber(env: Env): Promise<string> {
@@ -427,6 +444,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS inventory_batches ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, batch_no TEXT, mfg_date TEXT, expiry_date TEXT, qty REAL NOT NULL DEFAULT 0, grn_line_id TEXT, received_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS po_invoices ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_invoice_no TEXT, invoice_amount REAL DEFAULT 0, invoice_date TEXT, match_status TEXT DEFAULT 'PENDING', qty_variance REAL DEFAULT 0, amount_variance REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -436,6 +454,26 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `ALTER TABLE inventory ADD COLUMN track_batch INTEGER DEFAULT 0`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  // Seed the HSN→GST slab map when empty (mirrors migration 0037 so the mapping
+  // exists even on DBs where later migrations were never applied). INSERT OR
+  // IGNORE keeps any admin-managed edits intact.
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES
+        ('0401',0,'Milk, fresh'),('0402',5,'Milk powder / concentrated milk'),
+        ('0901',5,'Coffee'),('0902',5,'Tea'),('1701',5,'Sugar'),
+        ('1704',18,'Sugar confectionery'),('1806',18,'Chocolate & cocoa preparations'),
+        ('1905',18,'Biscuits, bread, cakes'),('2009',12,'Fruit & vegetable juices'),
+        ('2106',12,'Food preparations n.e.s. (namkeen/snacks)'),
+        ('2201',18,'Water, incl. mineral (unsweetened)'),
+        ('2202',28,'Aerated / sweetened / flavoured beverages'),
+        ('3401',18,'Soap'),('3402',18,'Detergents & cleaning preparations'),
+        ('3808',18,'Disinfectants / sanitizers'),('3924',18,'Plastic tableware / kitchenware'),
+        ('4802',12,'Paper'),('4817',18,'Envelopes'),
+        ('4820',12,'Registers, notebooks, exercise books'),
+        ('4823',18,'Paper articles (napkins, tissues)'),('9608',18,'Pens')`
+    ).run();
+  } catch { /* table missing / non-fatal */ }
 }
 
 // One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
@@ -704,6 +742,10 @@ export default {
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
       if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
+      if (path==="/api/inventory/recalc-gst"    && method==="POST")  return handleRecalcGst(request,env);
+      if (path==="/api/hsn-gst"                 && method==="GET")   return handleHsnGstLookup(request,env);
+      if (path==="/api/hsn-gst-rates"           && method==="GET")   return handleListHsnGstRates(request,env);
+      if (path==="/api/hsn-gst-rates"           && method==="POST")  return handleUpsertHsnGstRate(request,env);
       if (path.match(/^\/api\/inventory\/[^/]+\/critical$/) && method==="PATCH") return handleToggleCritical(request,env,path);
       if (path.match(/^\/api\/inventory\/[^/]+$/) && method==="PATCH") return handlePatchInventory(request,env,path);
 
@@ -1646,18 +1688,90 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   if (denied) return denied;
   const body = await request.json() as Record<string,unknown>;
   const sku = `SKU${String(Math.floor(Math.random()*900+100)).padStart(3,"0")}`;
+  // GST comes from the HSN slab when the code maps; otherwise honour a supplied
+  // rate, falling back to 18 only as a last resort.
+  const hsnVal = body.hsn_code ? String(body.hsn_code) : "2101";
+  const derivedGst = await gstRateForHsn(env, hsnVal);
+  const gstVal = derivedGst != null ? derivedGst : (body.gst_rate != null ? Number(body.gst_rate) : 18);
   await env.DB.prepare(`INSERT INTO inventory
     (sku,name,category,unit_price,stock,reorder_level,max_stock,vendor_id,hsn_code,gst_rate,emoji,
      uom,pack_size,units_per_case,weight_grams,barcode,sub_category,vendor_sku,vendor_lead_days,vendor_moq,
      mrp,cost_excl_gst,margin_pct,brand)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .bind(sku,body.name,body.category,body.unit_price,body.stock||0,body.reorder_level||20,body.max_stock||200,
-      body.vendor_id||null,body.hsn_code||"2101",body.gst_rate||18,body.emoji||"📦",
+      body.vendor_id||null,hsnVal,gstVal,body.emoji||"📦",
       body.uom||"unit",body.pack_size||1,body.units_per_case||1,body.weight_grams||0,
       body.barcode||"",body.sub_category||"Normal",body.vendor_sku||"",body.vendor_lead_days||3,body.vendor_moq||1,
       body.mrp||0,body.cost_excl_gst||0,body.margin_pct||0,body.brand||"").run();
   await audit(env, user, "CREATE", "inventory", sku, undefined, JSON.stringify({name:body.name,stock:body.stock}));
   return json({sku}, 201);
+}
+
+// Look up the GST slab for a single HSN code (used by the item editor to
+// auto-fill the rate the moment an HSN is typed).
+async function handleHsnGstLookup(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const hsn = new URL(request.url).searchParams.get("hsn") || "";
+  const rate = await gstRateForHsn(env, hsn);
+  return json({ hsn, gst_rate: rate, matched: rate != null });
+}
+
+// List the HSN→GST reference table (rate management screen).
+async function handleListHsnGstRates(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  try {
+    const {results} = await env.DB.prepare(
+      "SELECT hsn, gst_rate, description, updated_at, updated_by FROM hsn_gst_rates ORDER BY hsn"
+    ).all();
+    return json(results);
+  } catch { return json([]); }
+}
+
+// Add or update a single HSN→GST mapping.
+async function handleUpsertHsnGstRate(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","finance_admin","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as Record<string,unknown>;
+  const hsn = String(body.hsn||"").replace(/\D/g,"");
+  const rate = Number(body.gst_rate);
+  if (!hsn) return json({error:"HSN code required"}, 400);
+  if (![0,5,12,18,28].includes(rate)) return json({error:"GST rate must be one of 0, 5, 12, 18, 28"}, 400);
+  await env.DB.prepare(
+    `INSERT INTO hsn_gst_rates (hsn, gst_rate, description, updated_at, updated_by)
+     VALUES (?,?,?,datetime('now'),?)
+     ON CONFLICT(hsn) DO UPDATE SET gst_rate=excluded.gst_rate, description=excluded.description,
+       updated_at=excluded.updated_at, updated_by=excluded.updated_by`
+  ).bind(hsn, rate, String(body.description||""), user!.email||user!.role).run();
+  await audit(env, user, "UPSERT", "hsn_gst_rates", hsn, undefined, `gst:${rate}`);
+  return json({ok:true, hsn, gst_rate:rate});
+}
+
+// Backfill: recompute gst_rate for every inventory item from its HSN code.
+// Fixes the historical data where every product defaulted to 18%.
+async function handleRecalcGst(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","finance_admin","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  let updated = 0, unmatched = 0;
+  const unmatchedHsns = new Set<string>();
+  try {
+    const {results} = await env.DB.prepare(
+      "SELECT sku, hsn_code, gst_rate FROM inventory WHERE hsn_code IS NOT NULL AND hsn_code != ''"
+    ).all() as { results: {sku:string; hsn_code:string; gst_rate:number}[] };
+    for (const row of results) {
+      const rate = await gstRateForHsn(env, row.hsn_code);
+      if (rate == null) { unmatched++; unmatchedHsns.add(row.hsn_code); continue; }
+      if (Number(row.gst_rate) !== rate) {
+        await env.DB.prepare("UPDATE inventory SET gst_rate=? WHERE sku=?").bind(rate, row.sku).run();
+        updated++;
+      }
+    }
+  } catch (e) { return json({error:"Recalc failed: "+String(e)}, 500); }
+  await audit(env, user, "RECALC", "inventory", "gst", undefined, `updated:${updated}`);
+  return json({ok:true, updated, unmatched, unmatched_hsns:[...unmatchedHsns]});
 }
 
 let _criticalTableReady = false;
@@ -1766,6 +1880,16 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
   ];
   for (const [col, key] of patchFields) {
     if (body[key] !== undefined) { fields.push(`${col}=?`); vals.push(body[key] === "" ? null : body[key]); }
+  }
+  // HSN drives the GST slab: when the HSN code is edited, re-derive gst_rate from
+  // the hsn_gst_rates map (0/5/12/18/28%) so it can never drift to a stale value.
+  if (body.hsn_code !== undefined) {
+    const derivedGst = await gstRateForHsn(env, body.hsn_code as string);
+    if (derivedGst != null) {
+      const gi = fields.indexOf("gst_rate=?");
+      if (gi >= 0) { vals[gi] = derivedGst; }
+      else { fields.push("gst_rate=?"); vals.push(derivedGst); }
+    }
   }
   // vendor_id allows null
   if (body.vendor_id !== undefined) { fields.push("vendor_id=?"); vals.push(body.vendor_id || null); }
