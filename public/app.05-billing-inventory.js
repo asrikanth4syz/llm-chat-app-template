@@ -23,7 +23,7 @@ async function hsnAutoGst(hsnId, gstId) {
       gstSel.value = String(res.gst_rate);
       if (hint) { hint.textContent = `GST set to ${res.gst_rate}% for HSN ${hsn}.`; hint.style.color = 'var(--success-strong)'; }
     } else if (hint) {
-      hint.textContent = `No GST slab mapped for HSN ${hsn} — pick the correct slab manually.`;
+      hint.textContent = `No GST slab mapped for HSN ${hsn} — pick one, or add the mapping in Settings → HSN → GST.`;
       hint.style.color = 'var(--warning-strong, #b45309)';
     }
   } catch { /* offline / non-fatal */ }
@@ -1243,6 +1243,6 @@ async function recalcGstFromHsn() {
   if (res.unmatched) msg += `, ${res.unmatched} left unchanged (unmapped HSN)`;
   showToast(msg, res.updated ? 'success' : 'info');
   if (res.unmatched_hsns && res.unmatched_hsns.length)
-    console.warn('Unmapped HSN codes (left unchanged — map via /api/hsn-gst-rates):', res.unmatched_hsns);
+    console.warn('Unmapped HSN codes (left unchanged — add them in Settings → HSN → GST):', res.unmatched_hsns);
   navigate('inventory');
 }
