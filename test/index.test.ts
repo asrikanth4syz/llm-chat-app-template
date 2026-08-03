@@ -997,3 +997,358 @@ describe("CORS & Routing", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("Alerts & Exceptions hub", () => {
+  it("returns the six exception categories for an internal-ops admin", async () => {
+    const res = await get("/api/alerts", adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { total: number; categories: { key: string; count: number; items: unknown[] }[] };
+    expect(typeof data.total).toBe("number");
+    expect(Array.isArray(data.categories)).toBe(true);
+    const keys = data.categories.map(c => c.key);
+    expect(keys).toEqual([
+      "overdue_deliveries", "pending_approvals", "sla_breaches",
+      "low_stock", "near_expiry", "flagged_invoices", "po_approvals", "overdue_billing", "failed_syncs",
+    ]);
+    // Every count is a non-negative number and total is their sum.
+    for (const c of data.categories) expect(c.count).toBeGreaterThanOrEqual(0);
+    expect(data.total).toBe(data.categories.reduce((s, c) => s + c.count, 0));
+  });
+
+  it("is forbidden for client-side roles", async () => {
+    const res = await get("/api/alerts", clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("Receiving spine (line-level GRN + 3-way match)", () => {
+  const rdb = env.DB as D1Database;
+  const stockOf = async (sku: string) =>
+    Number(((await rdb.prepare("SELECT stock FROM inventory WHERE sku=?").bind(sku).first()) as Record<string, number>)?.stock || 0);
+  const poStatus = async (id: string) =>
+    String(((await rdb.prepare("SELECT status FROM purchase_orders WHERE id=?").bind(id).first()) as Record<string, string>)?.status);
+
+  beforeAll(async () => {
+    await rdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,track_batch) VALUES (?,?,?,?,?,?,?)")
+      .bind("GRN-SKU", "GRN Test Item", "Grocery", 100, 0, 1, 1).run();
+    // PO-A: 100 @ ₹100 (₹11,800 incl GST), DISPATCHED — partial then full receipt + invoice
+    await rdb.prepare("INSERT OR IGNORE INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,expected_delivery) VALUES (?,?,?,?,?,?,?)")
+      .bind("PO-TST-A", "v1", "DISPATCHED", 10000, 1800, 11800, "2999-01-01").run();
+    await rdb.prepare("INSERT OR IGNORE INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("poi-a", "PO-TST-A", "GRN-SKU", "GRN Test Item", 100, 100, 10000).run();
+    // PO-B: 50, DISPATCHED — over-receipt + QC reject
+    await rdb.prepare("INSERT OR IGNORE INTO purchase_orders (id,vendor_id,status,subtotal,gst,grand_total,expected_delivery) VALUES (?,?,?,?,?,?,?)")
+      .bind("PO-TST-B", "v1", "DISPATCHED", 5000, 900, 5900, "2999-01-01").run();
+    await rdb.prepare("INSERT OR IGNORE INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("poi-b", "PO-TST-B", "GRN-SKU", "GRN Test Item", 50, 100, 5000).run();
+  });
+
+  // Note: vitest-pool-workers resets storage to the post-beforeAll snapshot between
+  // tests, so each test drives the full sequence it needs from the seeded baseline.
+  it("partial then full receipt: 60 then 40 → PARTIALLY_RECEIVED → RECEIVED, stock +100", async () => {
+    const before = await stockOf("GRN-SKU");
+    const r1 = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 60 }] }, adminToken);
+    expect(r1.status).toBe(201);
+    expect((await r1.json() as { po_status: string }).po_status).toBe("PARTIALLY_RECEIVED");
+    const r2 = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 40 }] }, adminToken);
+    expect((await r2.json() as { po_status: string }).po_status).toBe("RECEIVED");
+    expect(await stockOf("GRN-SKU")).toBe(before + 100);
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+  });
+
+  it("over-receipt is rejected (400)", async () => {
+    const res = await post("/api/grn", { po_id: "PO-TST-B", lines: [{ sku: "GRN-SKU", qty_received: 110 }] }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("QC reject + batch: receive 40, reject 10 → stock +40, batch captured", async () => {
+    const before = await stockOf("GRN-SKU");
+    const res = await post("/api/grn",
+      { po_id: "PO-TST-B", lines: [{ sku: "GRN-SKU", qty_received: 40, qty_rejected: 10, batch_no: "B-01", expiry_date: "2999-06-01" }] }, adminToken);
+    expect(res.status).toBe(201);
+    expect(await stockOf("GRN-SKU")).toBe(before + 40); // rejected 10 excluded from stock
+    const rej = await rdb.prepare("SELECT qty_rejected FROM grn_lines WHERE batch_no='B-01'").first() as Record<string, number>;
+    expect(Number(rej.qty_rejected)).toBe(10);
+    const batch = await rdb.prepare("SELECT qty FROM inventory_batches WHERE batch_no='B-01'").first() as Record<string, number>;
+    expect(Number(batch.qty)).toBe(40);
+  });
+
+  it("3-way match: wrong amount flags, correct invoice sets INVOICED", async () => {
+    await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 100 }] }, adminToken);
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+    const bad = await post("/api/purchase-orders/PO-TST-A/invoice", { vendor_invoice_no: "INV-9", invoice_amount: 99999 }, adminToken);
+    expect((await bad.json() as { match_status: string }).match_status).toBe("FLAGGED");
+    expect(await poStatus("PO-TST-A")).toBe("RECEIVED");
+    const good = await post("/api/purchase-orders/PO-TST-A/invoice", { vendor_invoice_no: "INV-10", invoice_amount: 11800 }, adminToken);
+    expect((await good.json() as { match_status: string }).match_status).toBe("MATCHED");
+    expect(await poStatus("PO-TST-A")).toBe("INVOICED");
+  });
+
+  it("client role is forbidden from receiving (403)", async () => {
+    const res = await post("/api/grn", { po_id: "PO-TST-A", lines: [{ sku: "GRN-SKU", qty_received: 1 }] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("Demand → PO vendor-split (G4 sourcing)", () => {
+  const sdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await sdb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,?)").bind("v2", "Nimble Foods", "Grocery", 1).run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)").bind("SRC-A", "Src A", "Grocery", 100, 0, 1, 5, "v1").run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)").bind("SRC-B", "Src B", "Grocery", 100, 0, 1, 18, "v2").run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("SRC-NONE", "Src None", "Grocery", 100, 0, 1, 5).run();
+    // Vendor-specific price + MOQ for SRC-A from v1
+    await sdb.prepare("INSERT OR IGNORE INTO vendor_products (id,vendor_id,sku,name,rate,moq) VALUES (?,?,?,?,?,?)").bind("vp1", "v1", "SRC-A", "Src A", 90, 10).run();
+  });
+
+  it("splits demand into one PO per resolved vendor, using vendor price + MOQ", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-A", qty: 5 }, { sku: "SRC-B", qty: 20 }], source: "consolidated" }, adminToken);
+    expect(res.status).toBe(201);
+    const data = await res.json() as { pos: Array<{ id: string; vendor_id: string }>; unsourced: Array<{ sku: string }> };
+    expect(data.pos.length).toBe(2);
+    expect(data.unsourced.length).toBe(0);
+    const v1po = data.pos.find(p => p.vendor_id === "v1")!;
+    const items = await sdb.prepare("SELECT qty,unit_price FROM po_items WHERE po_id=?").bind(v1po.id).all() as { results: Record<string, number>[] };
+    expect(Number(items.results[0].qty)).toBe(10);        // lifted to MOQ 10
+    expect(Number(items.results[0].unit_price)).toBe(90);  // vendor_products rate, not inventory 100
+  });
+
+  it("flags items with no usable vendor as unsourced (no PO)", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-NONE", qty: 5 }] }, adminToken);
+    const data = await res.json() as { pos: unknown[]; unsourced: Array<{ sku: string }> };
+    expect(data.pos.length).toBe(0);
+    expect(data.unsourced.map(u => u.sku)).toContain("SRC-NONE");
+  });
+
+  it("preview groups by vendor without creating POs", async () => {
+    const res = await get("/api/sourcing/preview?items=SRC-A:5,SRC-B:20,SRC-NONE:3", adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { groups: unknown[]; unsourced: unknown[] };
+    expect(data.groups.length).toBe(2);
+    expect(data.unsourced.length).toBe(1);
+  });
+
+  it("is forbidden for client roles", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "SRC-A", qty: 5 }] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("PO commercials — multi-line + per-line GST slab (G6/G7)", () => {
+  const gdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await gdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("GST5", "Five Percent", "Grocery", 100, 0, 1, 5).run();
+    await gdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("GST18", "Eighteen Percent", "Grocery", 100, 0, 1, 18).run();
+  });
+
+  it("multi-line PO totals GST per slab, not a flat 18%", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [
+      { sku: "GST5",  name: "Five Percent",      qty: 10, unit_price: 100 },
+      { sku: "GST18", name: "Eighteen Percent",  qty: 10, unit_price: 100 },
+    ] }, adminToken);
+    expect(res.status).toBe(201);
+    const data = await res.json() as { id: string; grand_total: number };
+    // subtotal 2000; GST = 50 (5% of 1000) + 180 (18% of 1000) = 230 → 2230, not a flat 360
+    expect(data.grand_total).toBe(2230);
+    const items = await gdb.prepare("SELECT COUNT(*) as n FROM po_items WHERE po_id=?").bind(data.id).all() as { results: Record<string, number>[] };
+    expect(Number(items.results[0].n)).toBe(2);
+  });
+});
+
+describe("PO approval + compliance gate (G8/G9)", () => {
+  const adb = env.DB as D1Database;
+  beforeAll(async () => {
+    await adb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,?)").bind("v-bad", "Lapsed Traders", "Grocery", 0).run();
+    await adb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)").bind("BIGSKU", "Big Item", "Grocery", 1000, 0, 1, 18).run();
+  });
+
+  it("G9: blocks a PO to a non-compliant (inactive) vendor", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v-bad", items: [{ sku: "BIGSKU", name: "Big Item", qty: 1, unit_price: 1000 }] }, adminToken);
+    expect(res.status).toBe(422);
+  });
+
+  it("G8: a high-value PO is held for approval, not sent", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 60, unit_price: 1000 }] }, adminToken);
+    expect(res.status).toBe(201);
+    expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL");
+  });
+
+  it("G8: a small PO goes straight to the vendor (SENT)", async () => {
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken);
+    expect((await res.json() as { status: string }).status).toBe("SENT");
+  });
+
+  it("G8: only approver roles can approve a held PO", async () => {
+    const created = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 60, unit_price: 1000 }] }, adminToken);
+    const { id } = await created.json() as { id: string };
+    const denied = await patch(`/api/purchase-orders/${id}`, { status: "SENT" }, opsToken); // ops_manager ≠ approver
+    expect(denied.status).toBe(403);
+    const okd = await patch(`/api/purchase-orders/${id}`, { status: "SENT" }, adminToken);
+    expect(okd.status).toBe(200);
+    const st = await adb.prepare("SELECT status FROM purchase_orders WHERE id=?").bind(id).first() as Record<string, string>;
+    expect(st.status).toBe("SENT");
+  });
+
+  it("threshold is configurable and enforced", async () => {
+    await patch("/api/po-approval-threshold", { threshold: 1000 }, adminToken);
+    const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken);
+    expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL"); // 2360 ≥ 1000
+  });
+});
+
+describe("Auto-reorder, debit notes, PO numbering (G10/G11/G12)", () => {
+  const zdb = env.DB as D1Database;
+  beforeAll(async () => {
+    // Below-reorder item with a vendor price list carrying an MOQ
+    await zdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .bind("AUTO-SKU", "Auto Item", "Grocery", 100, 5, 1, 18, "v1", 20, 50).run();
+    await zdb.prepare("INSERT OR IGNORE INTO vendor_products (id,vendor_id,sku,name,rate,moq) VALUES (?,?,?,?,?,?)")
+      .bind("vp-auto", "v1", "AUTO-SKU", "Auto Item", 80, 100).run();
+    await zdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate,vendor_id) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("DNSKU", "DN Item", "Grocery", 100, 500, 1, 18, "v1").run();
+  });
+
+  it("G10: auto-reorder raises a PO with MOQ-lifted qty and vendor price", async () => {
+    const patched = await patch("/api/inventory/AUTO-SKU", { stock: 5 }, adminToken); // triggers checkAutoReorder
+    expect(patched.status).toBe(200);
+    const row = await zdb.prepare(
+      "SELECT pi.qty, pi.unit_price FROM po_items pi JOIN purchase_orders p ON pi.po_id=p.id WHERE pi.sku='AUTO-SKU' ORDER BY p.created_at DESC LIMIT 1"
+    ).first() as Record<string, number> | null;
+    expect(row).toBeTruthy();
+    expect(Number(row!.qty)).toBe(100);        // base 45 lifted to MOQ 100
+    expect(Number(row!.unit_price)).toBe(80);   // vendor_products rate
+  });
+
+  it("G12: PO numbers are sequential and gap-free", async () => {
+    const r1 = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 1, unit_price: 100 }] }, adminToken);
+    const r2 = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 1, unit_price: 100 }] }, adminToken);
+    const id1 = (await r1.json() as { id: string }).id;
+    const id2 = (await r2.json() as { id: string }).id;
+    expect(id1).toMatch(/^PO-\d{5}$/);
+    expect(Number(id2.slice(3))).toBe(Number(id1.slice(3)) + 1);
+  });
+
+  it("G11: a debit note is raised against a PO with amount from the line price", async () => {
+    const created = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "DNSKU", name: "DN Item", qty: 5, unit_price: 100 }] }, adminToken);
+    const { id } = await created.json() as { id: string };
+    const dn = await post(`/api/purchase-orders/${id}/debit-note`, { sku: "DNSKU", qty: 2, reason: "damaged" }, adminToken);
+    expect(dn.status).toBe(201);
+    expect((await dn.json() as { amount: number }).amount).toBe(200); // 2 × ₹100
+    const list = await get(`/api/purchase-orders/${id}/debit-notes`, adminToken);
+    expect((await list.json() as unknown[]).length).toBe(1);
+  });
+
+  it("G11: debit notes are gated to internal-ops roles", async () => {
+    const res = await post("/api/purchase-orders/PO-00001/debit-note", { sku: "DNSKU", qty: 1 }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("Client consumption report (received / consumed / stock / low-stock)", () => {
+  const cdb = env.DB as D1Database;
+  beforeAll(async () => {
+    // client_inventory carries a STALE category; the master (inventory) is the fresh one.
+    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "CONS1", "Coffee", "StaleCat", 3, 5).run();
+    await cdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,?)").bind("CONS1", "Coffee", "Beverages", 100, 100, 1).run();
+    // Orphan: stock-only leftover, not in the client's catalogue, no orders/consumption.
+    await cdb.prepare("INSERT OR IGNORE INTO client_inventory (client_id,sku,item_name,category,qty_on_hand,reorder_level) VALUES (?,?,?,?,?,?)").bind("c1", "ORPHAN1", "Ghost Register", "Misc", 1, 0).run();
+    await cdb.prepare("INSERT INTO client_consumption (client_id,sku,item_name,qty,consumed_at) VALUES (?,?,?,?,?)").bind("c1", "CONS1", "Coffee", 10, "2026-07-15 10:00:00").run();
+    await cdb.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total) VALUES (?,?,?,?,?)").bind("O-C1", "c1", "tst-ops", "CLOSED", 1000).run();
+    await cdb.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,delivered_at) VALUES (?,?,?,?)").bind("DC-C1", "O-C1", "DELIVERED", "2026-07-15 09:00:00").run();
+    await cdb.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("dci-c1", "DC-C1", "CONS1", "Coffee", 20, 20).run();
+  });
+
+  it("returns received, consumed, in-stock and low-stock per item, scoped to the client", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-07-01&to=2026-07-31", clientToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { rows: Record<string, unknown>[]; totals: Record<string, number> };
+    const row = data.rows.find(r => r.sku === "CONS1")!;
+    expect(row).toBeTruthy();
+    expect(row.received).toBe(20);
+    expect(row.consumed).toBe(10);
+    expect(row.in_stock).toBe(3);
+    expect(row.low_stock).toBe(true);   // 3 ≤ reorder 5
+    expect(row.category).toBe("Beverages"); // live from master, not the stale client copy
+    expect(data.totals.low_stock).toBeGreaterThanOrEqual(1);
+  });
+
+  it("hides orphan stock-only rows not in the client's catalogue", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-07-01&to=2026-07-31", clientToken);
+    const data = await res.json() as { rows: Record<string, unknown>[] };
+    expect(data.rows.find(r => r.sku === "ORPHAN1")).toBeFalsy();  // orphan trail hidden
+    expect(data.rows.find(r => r.sku === "CONS1")).toBeTruthy();   // real activity still shown
+  });
+
+  it("period filter excludes out-of-range received/consumed (stock stays point-in-time)", async () => {
+    const res = await get("/api/reports/client-consumption?from=2026-01-01&to=2026-01-31", clientToken);
+    const data = await res.json() as { rows: Record<string, number>[] };
+    const row = data.rows.find(r => r.sku === "CONS1");
+    expect(row ? row.consumed : 0).toBe(0);
+    expect(row ? row.received : 0).toBe(0);
+  });
+});
+
+// ── HSN-driven GST slab ──────────────────────────────────────────────
+// A product's GST must come from its HSN code (0/5/12/18/28%), never a flat 18%.
+describe("HSN → GST slab", () => {
+  it("GET /api/hsn-gst resolves the seeded slab for a known heading", async () => {
+    const res = await get("/api/hsn-gst?hsn=2202", adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { gst_rate: number; matched: boolean };
+    expect(data.matched).toBe(true);
+    expect(data.gst_rate).toBe(28); // aerated/flavoured beverages
+  });
+
+  it("GET /api/hsn-gst falls back from an 8-digit code to its 4-digit heading", async () => {
+    const data = await (await get("/api/hsn-gst?hsn=09011100", adminToken)).json() as { gst_rate: number; matched: boolean };
+    expect(data.matched).toBe(true);
+    expect(data.gst_rate).toBe(5); // coffee, heading 0901
+  });
+
+  it("GET /api/hsn-gst reports no match for an unmapped code", async () => {
+    const data = await (await get("/api/hsn-gst?hsn=9999", adminToken)).json() as { matched: boolean };
+    expect(data.matched).toBe(false);
+  });
+
+  it("POST /api/inventory derives GST from the HSN code, ignoring a wrong supplied rate", async () => {
+    const res = await post("/api/inventory", { name: "Fizzy Cola", category: "Beverages", unit_price: 40, hsn_code: "2202", gst_rate: 18 }, adminToken);
+    expect(res.status).toBe(201);
+    const { sku } = await res.json() as { sku: string };
+    const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
+    expect(row.gst_rate).toBe(28);
+  });
+
+  it("PATCH /api/inventory re-derives GST when the HSN code changes", async () => {
+    const created = await post("/api/inventory", { name: "Mystery Item", category: "Grocery", unit_price: 10, hsn_code: "0901" }, adminToken);
+    const { sku } = await created.json() as { sku: string };
+    // starts at 5% (coffee); move it to a 12%-heading and expect GST to follow
+    await patch(`/api/inventory/${sku}`, { hsn_code: "2009" }, adminToken); // juices → 12
+    const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
+    expect(row.gst_rate).toBe(12);
+  });
+
+  it("POST /api/inventory/recalc-gst backfills a wrong stored rate from the HSN", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "2202", 18).run(); // should be 28
+    const res = await post("/api/inventory/recalc-gst", {}, adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { updated: number };
+    expect(data.updated).toBeGreaterThanOrEqual(1);
+    const row = await db.prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind("HSNFIX").first() as { gst_rate: number };
+    expect(row.gst_rate).toBe(28);
+  });
+
+  it("POST /api/hsn-gst-rates upserts a mapping that the lookup then resolves", async () => {
+    const res = await post("/api/hsn-gst-rates", { hsn: "3305", gst_rate: 18, description: "Hair preparations" }, adminToken);
+    expect(res.status).toBe(200);
+    const data = await (await get("/api/hsn-gst?hsn=3305", adminToken)).json() as { gst_rate: number; matched: boolean };
+    expect(data.matched).toBe(true);
+    expect(data.gst_rate).toBe(18);
+  });
+
+  it("POST /api/hsn-gst-rates rejects a rate outside the legal slabs", async () => {
+    const res = await post("/api/hsn-gst-rates", { hsn: "4901", gst_rate: 7 }, adminToken);
+    expect(res.status).toBe(400);
+  });
+});

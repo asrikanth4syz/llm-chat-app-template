@@ -119,7 +119,9 @@ async function renderDeliveryCalendar(el) {
     </div>
     <aside id="dcal-rail"></aside>
   </div>`;
-  dcalRefresh();
+  // On phones the 7-column month grid is a forced horizontal scroll — default to
+  // the agenda ("Next 14 days") list instead; Month stays available via the toggle.
+  if (window.innerWidth <= 700) dcalSetView('agenda'); else dcalRefresh();
 }
 
 function dcalFiltered() {
@@ -780,6 +782,7 @@ const SETTINGS_NAV = [
   { id:'warehouses',    icon:'🏭', label:'Warehouses',       desc:'Manage warehouse config' },
   { id:'audit',         icon:'📋', label:'Audit Log',        desc:'All system actions' },
   { id:'categories',    icon:'📂', label:'Categories',       desc:'Item category setup' },
+  { id:'hsngst',        icon:'🧾', label:'HSN → GST',        desc:'HSN code to GST slab map' },
 ];
 
 async function renderSettings(el) {
@@ -1110,6 +1113,72 @@ async function settingsTab(tab, btn) {
         <button class="btn btn-secondary btn-sm" style="margin-top:8px;display:block" ${dataAct('navigate', 'inventory')}>Go to Inventory</button>
       </div>
     </div>`;
+  }
+
+  else if (tab === 'hsngst') {
+    const rates = await api('/hsn-gst-rates') || [];
+    const list = Array.isArray(rates) ? rates : [];
+    const slabBadge = r => {
+      const c = { 0:'#6b7280', 5:'#0891b2', 12:'#2563eb', 18:'#d97706', 28:'#dc2626' }[r] || '#6b7280';
+      return `<span class="badge" style="background:${c};color:#fff">${r}%</span>`;
+    };
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>HSN → GST Slab Map</span>
+        <span style="font-size:.83rem;color:var(--text-muted)">A product's GST is derived from its HSN code (0/5/12/18/28%)</span>
+      </div>
+      <div class="card-body" style="padding:20px;display:grid;gap:16px">
+        <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
+          Add or edit HSN mappings below. Codes may be full (8-digit) or a heading prefix (4-digit) — the lookup falls back from 8→6→4→2 digits.
+          After changing mappings, use <b>↻ Recalc GST from HSN</b> on the Inventory page to apply them to existing items.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 120px 2fr auto;gap:10px;align-items:end">
+          <div class="form-group" style="margin:0"><label>HSN Code</label><input type="text" id="hg-hsn" placeholder="e.g. 2202"></div>
+          <div class="form-group" style="margin:0"><label>GST Slab</label>
+            <select id="hg-rate"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18" selected>18%</option><option value="28">28%</option></select>
+          </div>
+          <div class="form-group" style="margin:0"><label>Description</label><input type="text" id="hg-desc" placeholder="e.g. Aerated beverages"></div>
+          <button class="btn btn-primary" ${dataAct('saveHsnGstRate')}>Add / Update</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>HSN</th><th>GST Slab</th><th>Description</th><th>Updated</th><th></th></tr></thead>
+          <tbody>${list.map(r=>`<tr>
+            <td><b>${r.hsn}</b></td>
+            <td>${slabBadge(Number(r.gst_rate))}</td>
+            <td>${r.description||'—'}</td>
+            <td style="font-size:.76rem;color:var(--text-muted)">${(r.updated_at||'').slice(0,10)||'—'}</td>
+            <td><button class="btn btn-sm btn-secondary" ${dataAct('editHsnGstRate', r.hsn, Number(r.gst_rate), r.description||'')}>Edit</button></td>
+          </tr>`).join('')||'<tr><td colspan="5" class="u-empty">No HSN mappings yet — add one above</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+}
+
+// Prefill the HSN→GST form from an existing row for editing.
+function editHsnGstRate(hsn, rate, desc) {
+  const h = document.getElementById('hg-hsn'), r = document.getElementById('hg-rate'), d = document.getElementById('hg-desc');
+  if (h) h.value = hsn;
+  if (r) r.value = String(rate);
+  if (d) d.value = desc || '';
+  h?.scrollIntoView({ behavior:'smooth', block:'center' });
+  h?.focus();
+}
+
+async function saveHsnGstRate() {
+  const hsn = (document.getElementById('hg-hsn')?.value || '').trim();
+  const rate = +(document.getElementById('hg-rate')?.value || 0);
+  const desc = document.getElementById('hg-desc')?.value || '';
+  if (!hsn) { showToast('HSN code is required', 'error'); return; }
+  const res = await api('/hsn-gst-rates', { method:'POST', body: JSON.stringify({ hsn, gst_rate: rate, description: desc }) });
+  if (res) {
+    showToast(`HSN ${hsn} mapped to ${rate}% GST`);
+    document.getElementById('hg-hsn').value = '';
+    document.getElementById('hg-desc').value = '';
+    settingsTab('hsngst', document.querySelector('.settings-nav-btn.active'));
   }
 }
 

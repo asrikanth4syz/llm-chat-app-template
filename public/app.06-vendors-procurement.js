@@ -856,36 +856,141 @@ async function toggleVendorActive(id, name, active) {
   if (res) { showToast(`Vendor ${newState?'enabled':'disabled'}`); navigate('vendors'); }
 }
 
+// Multi-line PO builder. Each line's default price comes from the vendor's own
+// price list (vendor_products), falling back to the last price paid to this
+// vendor, then the catalogue cost — all three surfaced as hints. GST is shown
+// and totalled per line from each item's slab (gst_rate); the server recomputes.
+let _poVendor = null, _poPriceMap = {}, _poLines = [];
 async function newPOForVendor(vendorId, vendorName) {
-  const inv = await api('/inventory');
-  const itemOpts = (inv||[]).map(i=>`<option value="${i.sku}" data-price="${i.unit_price}">${h(i.name)} (${fmt(i.unit_price)})</option>`).join('');
-  openModal(`New PO — ${vendorName}`,
-    `<div class="form-group"><label>Item</label><select id="po-item" ${dataChangeEl('updatePOPrice')}>${itemOpts}</select></div>
-     <div class="form-group"><label>Quantity</label><input type="number" id="po-qty2" value="50" min="1"></div>
-     <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="po-price2" value="${inv?.[0]?.unit_price||0}"></div>
-     <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-del2" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
+  const [inv, vprods, vpos] = await Promise.all([
+    api('/inventory'),
+    api(`/vendors/${vendorId}/products`).catch(() => []),
+    api(`/purchase-orders?vendor_id=${vendorId}`).catch(() => []),
+  ]);
+  if (!inv) return;
+  const vrate = {}; (vprods || []).forEach(p => { if (p.sku) vrate[p.sku] = p.rate; });
+  const last = {}; (vpos || []).forEach(po => (po.items || []).forEach(it => { if (last[it.sku] == null) last[it.sku] = it.unit_price; }));
+  _poVendor = { id: vendorId, name: vendorName };
+  _poPriceMap = {};
+  inv.forEach(i => { _poPriceMap[i.sku] = { name: i.name, list: i.unit_price || 0, gst: (i.gst_rate != null ? i.gst_rate : 18), vendor: vrate[i.sku], last: last[i.sku] }; });
+  _poLines = [];
+  const itemOpts = inv.map(i => `<option value="${i.sku}">${h(i.name)}</option>`).join('');
+  openModal(`New PO — ${vendorName}`, `
+    <div class="form-group"><label>Add item</label>
+      <select id="po-add" ${dataChangeEl('addPOLine')}><option value="">Select an item…</option>${itemOpts}</select>
+    </div>
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-center">Qty</th><th class="u-right">Unit ₹</th><th class="u-center">GST</th><th class="u-right">Total</th><th></th></tr></thead>
+      <tbody id="po-lines"></tbody>
+    </table></div>
+    <div id="po-grand" style="text-align:right;font-weight:700;margin-top:10px;color:var(--navy)"></div>
+    <div class="form-group" style="margin-top:10px"><label>Expected Delivery</label><input type="date" id="po-del" value="${new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10)}"></div>
+    <div class="form-group"><label>Notes</label><input type="text" id="po-notes" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-gold" ${dataAct('sendPOToVendor', vendorId)}>Send PO</button>`);
+     <button class="btn btn-gold" ${dataAct('sendPOToVendor')}>Send PO</button>`);
+  renderPOLines();
 }
 
-function updatePOPrice(sel) {
-  const opt = sel.options[sel.selectedIndex];
-  const price = document.getElementById('po-price2');
-  if (price) price.value = opt.dataset.price || '';
+function addPOLine(sel) {
+  const sku = sel.value; if (!sku) return;
+  sel.value = '';
+  const p = _poPriceMap[sku]; if (!p) return;
+  if (_poLines.some(l => l.sku === sku)) { showToast('Item already added', 'info'); return; }
+  const unit = p.vendor != null ? p.vendor : (p.last != null ? p.last : p.list);
+  _poLines.push({ sku, name: p.name, qty: 50, unit_price: unit, gst: p.gst });
+  renderPOLines();
 }
 
-async function sendPOToVendor(vendorId) {
-  const sku = document.getElementById('po-item').value;
-  const name = document.getElementById('po-item').options[document.getElementById('po-item').selectedIndex].text.split(' (')[0];
-  const qty = +document.getElementById('po-qty2').value;
-  const price = +document.getElementById('po-price2').value;
-  const delivery = document.getElementById('po-del2').value;
-  const res = await api('/purchase-orders', {
-    method:'POST',
-    body: JSON.stringify({ vendor_id: vendorId, items:[{sku,name,qty,unit_price:price}], expected_delivery: delivery })
+function removePOLine(sku) { _poLines = _poLines.filter(l => l.sku !== sku); renderPOLines(); }
+
+function renderPOLines() {
+  const tb = document.getElementById('po-lines'); if (!tb) return;
+  if (!_poLines.length) {
+    tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:16px">Add items above to build this PO</td></tr>`;
+  } else {
+    tb.innerHTML = _poLines.map(l => {
+      const p = _poPriceMap[l.sku] || {};
+      const hints = [];
+      if (p.vendor != null) hints.push(`vendor ${fmt(p.vendor)}`);
+      hints.push(`list ${fmt(p.list)}`);
+      if (p.last != null) hints.push(`last ${fmt(p.last)}`);
+      return `<tr>
+        <td style="font-size:.83rem"><b>${h(l.name)}</b><div class="u-subtiny">${hints.join(' · ')}</div></td>
+        <td class="u-center"><input type="number" data-po-qty="${l.sku}" value="${l.qty}" min="1" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center" ${dataInput('recalcPO')}></td>
+        <td class="u-right"><input type="number" data-po-price="${l.sku}" value="${l.unit_price}" min="0" style="width:78px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:right" ${dataInput('recalcPO')}></td>
+        <td class="u-center u-subtiny">${l.gst}%</td>
+        <td class="u-right" data-po-total="${l.sku}">${fmt(l.qty * l.unit_price)}</td>
+        <td class="u-center"><button class="btn btn-secondary btn-sm" ${dataAct('removePOLine', l.sku)}>✕</button></td>
+      </tr>`;
+    }).join('');
+  }
+  recalcPO();
+}
+
+function recalcPO() {
+  let sub = 0, gst = 0;
+  _poLines.forEach(l => {
+    const qty = +document.querySelector(`[data-po-qty="${l.sku}"]`)?.value || l.qty;
+    const price = +document.querySelector(`[data-po-price="${l.sku}"]`)?.value || 0;
+    l.qty = qty; l.unit_price = price;
+    const lt = qty * price; sub += lt; gst += Math.round(lt * (l.gst || 18) / 100);
+    const tc = document.querySelector(`[data-po-total="${l.sku}"]`); if (tc) tc.textContent = fmt(lt);
   });
+  const g = document.getElementById('po-grand');
+  if (g) g.textContent = `Subtotal ${fmt(sub)} · GST ${fmt(gst)} · Total ${fmt(sub + gst)}`;
+}
+
+async function sendPOToVendor() {
+  if (!_poLines.length) { showToast('Add at least one item', 'error'); return; }
+  recalcPO();
+  const items = _poLines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, unit_price: l.unit_price })).filter(i => i.qty > 0);
+  if (!items.length) { showToast('Enter quantities', 'error'); return; }
+  const res = await api('/purchase-orders', { method: 'POST', body: JSON.stringify({
+    vendor_id: _poVendor.id, items,
+    expected_delivery: document.getElementById('po-del')?.value || null,
+    notes: document.getElementById('po-notes')?.value?.trim() || '',
+  })});
   closeModal();
-  if (res) { showToast(`PO ${res.id} sent to vendor`); navigate('procurement'); }
+  if (res) {
+    showToast(res.status === 'PENDING_APPROVAL'
+      ? `PO ${res.id} created — awaiting approval (${fmt(res.grand_total)})`
+      : `PO ${res.id} sent — ${fmt(res.grand_total)}`);
+    navigate('procurement');
+  }
+}
+
+async function approvePO(poId) {
+  const res = await api(`/purchase-orders/${poId}`, { method:'PATCH', body: JSON.stringify({ status:'SENT' }) });
+  if (res) { showToast(`PO ${poId} approved — sent to vendor`); navigate('procurement'); }
+}
+
+async function rejectPO(poId) {
+  const res = await api(`/purchase-orders/${poId}`, { method:'PATCH', body: JSON.stringify({ status:'REJECTED' }) });
+  if (res) { showToast(`PO ${poId} rejected`); navigate('procurement'); }
+}
+
+// Raise a debit note for rejected / short / damaged goods on a received PO (G11).
+async function debitNote(poId) {
+  const data = await api(`/purchase-orders/${poId}/receivable`);
+  if (!data) return;
+  const opts = (data.lines || []).map(l => `<option value="${l.sku}">${h(l.name)} (${h(l.sku)})</option>`).join('');
+  openModal('Raise Debit Note — PO ' + poId, `
+    <div class="form-group"><label>Item</label><select id="dn-sku" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${opts || '<option value="">—</option>'}</select></div>
+    <div class="form-group"><label>Qty (rejected / short)</label><input type="number" id="dn-qty" value="1" min="1" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Reason</label><input type="text" id="dn-reason" placeholder="e.g. damaged in transit" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="u-subtiny" style="color:var(--text-muted)">Amount is calculated from the PO line price × qty and sent to the vendor.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmDebitNote', poId)}>Raise Debit Note</button>`);
+}
+
+async function confirmDebitNote(poId) {
+  const sku = document.getElementById('dn-sku')?.value || '';
+  const qty = +document.getElementById('dn-qty')?.value || 0;
+  const reason = document.getElementById('dn-reason')?.value?.trim() || '';
+  if (!qty) { showToast('Enter a quantity', 'error'); return; }
+  const res = await api(`/purchase-orders/${poId}/debit-note`, { method:'POST', body: JSON.stringify({ sku, qty, reason }) });
+  closeModal();
+  if (res) showToast(`Debit note raised — ${fmt(res.amount)}`);
 }
 
 
@@ -898,15 +1003,19 @@ async function renderProcurement(el) {
 
   const byStatus = s => pos.filter(p=>p.status===s);
   const valByStatus = s => byStatus(s).reduce((sum,p)=>sum+(p.grand_total||0),0);
-  const pendingGRN = byStatus('DISPATCHED');
-  const totalOpen = ['SENT','ACCEPTED','DISPATCHED'].reduce((s,st)=>s+byStatus(st).length,0);
+  // Receivable = still inbound or part-received; both can accept a GRN.
+  const pendingGRN = [...byStatus('DISPATCHED'), ...byStatus('PARTIALLY_RECEIVED')];
+  const totalOpen = ['PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED'].reduce((s,st)=>s+byStatus(st).length,0);
+  const canApprovePO = ['super_admin','ops_admin','procurement_manager','finance_admin'].includes(APP.user.role);
 
   const statusTiles = [
-    { key:'SENT',      label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
-    { key:'ACCEPTED',  label:'Accepted',       icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
-    { key:'DISPATCHED',label:'In Transit',     icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: pendingGRN.length>0 },
-    { key:'RECEIVED',  label:'GRN Pending',    icon:'📦', color:'#1f8a5b', bg:'#f0fdf4', urgent: false },
-    { key:'INVOICED',  label:'Invoiced',       icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
+    { key:'PENDING_APPROVAL',  label:'Awaiting Approval', icon:'🖋️', color:'#b45309', bg:'#fffbeb', urgent: byStatus('PENDING_APPROVAL').length>0 },
+    { key:'SENT',              label:'POs Sent',      icon:'📤', color:'#f59e0b', bg:'#fffbeb', urgent: byStatus('SENT').length>0 },
+    { key:'ACCEPTED',          label:'Accepted',      icon:'✅', color:'#3b82f6', bg:'#eff6ff', urgent: false },
+    { key:'DISPATCHED',        label:'In Transit',    icon:'🚚', color:'#8b5cf6', bg:'#f5f3ff', urgent: byStatus('DISPATCHED').length>0 },
+    { key:'PARTIALLY_RECEIVED',label:'Part-Received', icon:'📥', color:'#0891b2', bg:'#ecfeff', urgent: byStatus('PARTIALLY_RECEIVED').length>0 },
+    { key:'RECEIVED',          label:'Received',      icon:'📦', color:'#1f8a5b', bg:'#f0fdf4', urgent: byStatus('RECEIVED').length>0 },
+    { key:'INVOICED',          label:'Invoiced',      icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
   ];
 
   el.innerHTML = `
@@ -914,7 +1023,7 @@ async function renderProcurement(el) {
     `<button class="btn btn-gold" ${dataAct('navigate', 'vendors')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px">
     ${statusTiles.map(t=>`
     <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" ${dataAct('filterPO', t.key)}>
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
@@ -958,7 +1067,7 @@ async function renderProcurement(el) {
       <div style="display:flex;gap:8px;align-items:center">
         <select id="po-status-filter" class="form-control form-control-sm" style="width:140px" ${dataChange('filterPOTable')}>
           <option value="">All Status</option>
-          ${['SENT','ACCEPTED','DISPATCHED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s}</option>`).join('')}
+          ${['PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED','INVOICED'].map(s=>`<option value="${s}">${s.replace(/_/g,' ')}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -971,9 +1080,17 @@ async function renderProcurement(el) {
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
           <td>${fmtDate(po.expected_delivery)||'—'}</td>
-          <td>${po.status==='DISPATCHED'
-            ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
-            : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+          <td>${po.status==='PENDING_APPROVAL'
+            ? (canApprovePO
+                ? `<button class="btn btn-primary btn-sm" ${dataAct('approvePO', po.id)}>Approve</button> <button class="btn btn-secondary btn-sm" ${dataAct('rejectPO', po.id)}>Reject</button>`
+                : '<span style="color:var(--warning);font-size:.8rem">Awaiting approval</span>')
+            : ['DISPATCHED','PARTIALLY_RECEIVED'].includes(po.status)
+              ? `<button class="btn btn-primary btn-sm" ${dataAct('receiveGRN', po.id)}>Receive GRN</button>`
+              : po.status==='RECEIVED'
+                ? `<button class="btn btn-primary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button> <button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
+                : po.status==='INVOICED'
+                  ? `<button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
+                  : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>
@@ -1011,18 +1128,72 @@ function filterPOTable() {
   });
 }
 
+// Line-level goods receipt: each outstanding PO line gets its own received /
+// rejected / batch / expiry inputs. Only accepted qty reaches stock; the PO
+// status is derived server-side (PARTIALLY_RECEIVED / RECEIVED).
+let _grnLines = [];
 async function receiveGRN(poId) {
-  openModal('Receive GRN — PO ' + poId,
-    `<div class="form-group"><label>Quantity Received</label><input type="number" id="grn-qty" value="100" min="0"></div>
-     <div class="form-group"><label>Notes</label><textarea id="grn-notes" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></textarea></div>`,
+  const data = await api(`/purchase-orders/${poId}/receivable`);
+  if (!data) return;
+  _grnLines = (data.lines || []).filter(l => l.remaining > 0);
+  if (!_grnLines.length) { showToast('Nothing left to receive on this PO', 'info'); return; }
+  const rows = _grnLines.map((l, i) => `
+    <tr>
+      <td style="font-size:.82rem"><b>${h(l.name)}</b><div class="u-subtiny">${h(l.sku)}</div></td>
+      <td class="u-center">${l.qty} / <b>${l.remaining}</b></td>
+      <td class="u-center"><input type="number" data-grn-recv="${i}" value="${l.remaining}" min="0" max="${l.remaining}" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      <td class="u-center"><input type="number" data-grn-rej="${i}" value="0" min="0" style="width:54px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      <td><input type="text" data-grn-batch="${i}" placeholder="batch" style="width:76px;padding:4px;border:1px solid var(--border);border-radius:6px"></td>
+      <td><input type="date" data-grn-exp="${i}" style="padding:4px;border:1px solid var(--border);border-radius:6px"></td>
+    </tr>`).join('');
+  openModal('Receive GRN — PO ' + poId, `
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-center">Ord / Rem</th><th class="u-center">Receive</th><th class="u-center">Reject</th><th>Batch</th><th>Expiry</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="u-subtiny" style="color:var(--text-muted);margin-top:8px">Rejected qty is logged for QC and never added to stock. Batch &amp; expiry drive near-expiry alerts.</div>
+    <div class="form-group" style="margin-top:10px"><label>Notes</label><input type="text" id="grn-notes" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmGRN', poId)}>Confirm Receipt</button>`);
 }
 
 async function confirmGRN(poId) {
-  const qty = +document.getElementById('grn-qty').value;
-  const notes = document.getElementById('grn-notes').value;
-  const res = await api('/grn', { method:'POST', body: JSON.stringify({ po_id: poId, qty_received: qty, notes }) });
+  const lines = _grnLines.map((l, i) => ({
+    sku: l.sku,
+    qty_received: +document.querySelector(`[data-grn-recv="${i}"]`)?.value || 0,
+    qty_rejected: +document.querySelector(`[data-grn-rej="${i}"]`)?.value || 0,
+    batch_no: document.querySelector(`[data-grn-batch="${i}"]`)?.value?.trim() || undefined,
+    expiry_date: document.querySelector(`[data-grn-exp="${i}"]`)?.value || undefined,
+  })).filter(l => l.qty_received > 0 || l.qty_rejected > 0);
+  if (!lines.length) { showToast('Enter a received or rejected quantity', 'error'); return; }
+  const notes = document.getElementById('grn-notes')?.value || '';
+  const res = await api('/grn', { method:'POST', body: JSON.stringify({ po_id: poId, lines, notes }) });
   closeModal();
-  if (res) { showToast(`GRN ${res.id} created — stock updated`); navigate('procurement'); }
+  if (res) { showToast(`GRN posted — PO now ${res.po_status.replace(/_/g,' ')}`); navigate('procurement'); }
+}
+
+// Record the vendor invoice and run the 3-way match (ordered/received/invoiced).
+async function recordInvoice(poId) {
+  const pos = await api('/purchase-orders');
+  const po = (pos || []).find(p => p.id === poId);
+  openModal('Record Invoice — PO ' + poId, `
+    <div class="form-group"><label>Vendor Invoice No.</label><input type="text" id="inv-no" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Invoice Amount (₹)</label><input type="number" id="inv-amt" value="${po?.grand_total || 0}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Invoice Date</label><input type="date" id="inv-date" value="${new Date().toISOString().slice(0,10)}" style="padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="u-subtiny" style="color:var(--text-muted)">Matched against goods received and PO value; any mismatch is flagged for review instead of paying blind.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('confirmInvoice', poId)}>Match &amp; Record</button>`);
+}
+
+async function confirmInvoice(poId) {
+  const res = await api(`/purchase-orders/${poId}/invoice`, { method:'POST', body: JSON.stringify({
+    vendor_invoice_no: document.getElementById('inv-no')?.value?.trim() || '',
+    invoice_amount: +document.getElementById('inv-amt')?.value || 0,
+    invoice_date: document.getElementById('inv-date')?.value || '',
+  })});
+  closeModal();
+  if (!res) return;
+  if (res.match_status === 'MATCHED') showToast('Invoice matched — PO marked Invoiced');
+  else showToast(`Invoice flagged — qty Δ ${res.qty_variance}, amount Δ ₹${res.amount_variance}`, 'error');
+  navigate('procurement');
 }

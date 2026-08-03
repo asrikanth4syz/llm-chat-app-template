@@ -542,7 +542,7 @@ async function renderOpsDashboard(el) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
-        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">Control Tower</span>
+        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">${(NAV[APP.user?.nav]||[]).find(i=>i.id==='dashboard')?.label || 'Control Tower'}</span>
         <span style="background:#e8f0fb;color:var(--blue);border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
       </div>
       <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
@@ -1080,3 +1080,78 @@ function poActions(po) {
   return `<span style="color:var(--text-muted);font-size:.8rem">${po.status}</span>`;
 }
 
+
+// ── Alerts & Exceptions hub ────────────────────────────────────────────
+// One page for every "needs action" signal — overdue deliveries, pending
+// approvals, SLA/tickets, low stock, unbilled deliveries and failed syncs.
+// Each card links to the page where the exception is resolved.
+async function renderAlerts(el) {
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading alerts…</p></div>`;
+  const data = await api('/alerts');
+  if (!data) return; // api() already surfaced the error/redirect
+  const cats = data.categories || [];
+
+  const toneColor = { crit:'var(--danger)', warn:'var(--amber)', brand:'var(--blue)' };
+  const toneBg    = { crit:'var(--danger-bg)', warn:'var(--amber-bg)', brand:'var(--info-bg)' };
+
+  const cardsHtml = cats.map(c => {
+    const color = toneColor[c.tone] || 'var(--navy)';
+    const bg    = toneBg[c.tone]    || 'var(--surface-2)';
+    const items = c.items || [];
+    const rowsHtml = items.map(it => `
+      <div class="alert-row" ${dataAct('navigate', c.page)}>
+        <div style="min-width:0">
+          <div class="ar-title">${h(it.title || '')}</div>
+          ${it.meta ? `<div class="ar-meta">${h(it.meta)}</div>` : ''}
+        </div>
+        <span class="ar-action" style="color:${color}">${h(c.action)} →</span>
+      </div>`).join('');
+    const more = c.count > items.length
+      ? `<div class="alert-more" ${dataAct('navigate', c.page)}>+${c.count - items.length} more →</div>` : '';
+    const body = c.count === 0
+      ? `<div class="alert-empty">Nothing here — all clear ✓</div>`
+      : rowsHtml + more;
+    return `
+      <div class="card alert-card">
+        <div class="alert-head">
+          <span class="alert-ic" style="background:${bg}">${c.icon}</span>
+          <span class="alert-label">${h(c.label)}</span>
+          <span class="alert-count" style="background:${bg};color:${color}">${c.count || '0'}</span>
+        </div>
+        ${body}
+      </div>`;
+  }).join('');
+
+  const updated = data.generated_at
+    ? new Date(data.generated_at).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' }) : '';
+
+  el.innerHTML = `
+    <style>
+      .alerts-head-row{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+      .alerts-title{font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em}
+      .alerts-sub{font-size:.8rem;color:var(--text-muted);margin-top:2px}
+      .alerts-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+      .alert-card{padding:0;overflow:hidden}
+      .alert-head{display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid var(--border)}
+      .alert-ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:1rem;flex:0 0 auto}
+      .alert-label{font-weight:800;font-size:.9rem;color:var(--navy)}
+      .alert-count{margin-left:auto;font-size:.78rem;font-weight:800;border-radius:99px;padding:2px 10px;min-width:26px;text-align:center}
+      .alert-row{display:flex;align-items:center;gap:10px;padding:10px 15px;border-top:1px solid var(--border-light);cursor:pointer;transition:background .12s}
+      .alert-row:first-of-type{border-top:0}
+      .alert-row:hover{background:var(--surface-2,#f7f8fa)}
+      .ar-title{font-size:.84rem;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .ar-meta{font-size:.74rem;color:var(--text-muted);margin-top:1px}
+      .ar-action{margin-left:auto;font-weight:800;font-size:.76rem;white-space:nowrap}
+      .alert-more{padding:9px 15px;font-size:.76rem;color:var(--text-muted);cursor:pointer;border-top:1px solid var(--border-light)}
+      .alert-more:hover{color:var(--navy)}
+      .alert-empty{padding:16px 15px;font-size:.82rem;color:var(--text-muted)}
+    </style>
+    <div class="alerts-head-row">
+      <div>
+        <div class="alerts-title">Alerts &amp; Exceptions</div>
+        <div class="alerts-sub">${data.total} item${data.total === 1 ? '' : 's'} need attention${updated ? ` · updated ${updated}` : ''}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'alerts')}>${iconRefresh(15)} Refresh</button>
+    </div>
+    <div class="alerts-grid">${cardsHtml}</div>`;
+}

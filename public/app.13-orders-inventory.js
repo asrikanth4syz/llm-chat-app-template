@@ -34,16 +34,16 @@ async function renderOrdersInventory(el) {
   APP._catalog = catalog || [];
 
   el.innerHTML = `
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-    <div>
+  <div class="oi-head">
+    <div style="min-width:0">
       <div style="font-size:1.25rem;font-weight:800;color:var(--navy)">${OI_COPY.title}</div>
-      <div style="font-size:.85rem;color:var(--text-muted);margin-top:3px;max-width:56ch">${OI_COPY.desc}</div>
+      <div style="font-size:.85rem;color:var(--text-muted);margin-top:3px;max-width:48ch">${OI_COPY.desc}</div>
     </div>
-    ${canAccessPage('place_order') ? `<button class="btn btn-primary" ${dataAct('navigate','place_order')} style="font-weight:700">${iconPlus(15)} Place order</button>` : ''}
-  </div>
-  <div class="oi-seg" role="tablist" style="margin-bottom:18px">
-    <button role="tab" class="${APP._oiTab==='order'?'active':''}" ${dataAct('oiSetTab','order')}>Order</button>
-    <button role="tab" class="${APP._oiTab==='inventory'?'active':''}" ${dataAct('oiSetTab','inventory')}>Inventory</button>
+    <div class="oi-seg" role="tablist">
+      <button role="tab" class="${APP._oiTab==='order'?'active':''}" ${dataAct('oiSetTab','order')}>Order</button>
+      <button role="tab" class="${APP._oiTab==='inventory'?'active':''}" ${dataAct('oiSetTab','inventory')}>Inventory</button>
+    </div>
+    ${canAccessPage('place_order') ? `<button class="btn btn-primary" ${dataAct('navigate','place_order')} style="font-weight:700;flex-shrink:0">${iconPlus(15)} Place order</button>` : ''}
   </div>
   <div id="oi-content"></div>`;
   oiRenderContent();
@@ -138,9 +138,13 @@ function oiOrderView() {
           <div style="border:1px solid var(--border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px">
             <div style="width:40px;height:40px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;font-size:1.2rem">${it.emoji||'📦'}</div>
             <div style="font-weight:700;font-size:.84rem;line-height:1.25">${h(it.name)}</div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto;gap:8px">
               <span style="font-weight:800;font-size:.88rem">${fmt(it.unit_price)}</span>
-              <button class="btn btn-secondary btn-sm" style="padding:4px 12px" ${dataAct('oiAddUsual', it.sku)}>+ Add</button>
+              <div class="oi-stepper">
+                <button ${dataAct('oiDecUsual', it.sku)} aria-label="Decrease quantity">−</button>
+                <input class="oi-qty" type="number" min="0" inputmode="numeric" value="${oiCartQty(it.sku)}" data-sku="${it.sku}" ${dataChangeEl('oiSetUsualQty')} aria-label="Quantity">
+                <button ${dataAct('oiIncUsual', it.sku)} aria-label="Increase quantity">+</button>
+              </div>
             </div>
           </div>`).join('')}
       </div>
@@ -207,6 +211,27 @@ function oiRefreshRail() {
   const rail = document.getElementById('oi-rail');
   if (rail) rail.innerHTML = oiRailHTML();
 }
+
+// Quantity for a SKU currently in the cart (0 if not added).
+function oiCartQty(sku) { const c = (APP.cart || []).find(x => x.sku === sku); return c ? c.qty : 0; }
+
+// Set the cart quantity for a usual directly (0 removes it). Updates that tile's
+// input + the order rail without a full re-render, so typing stays smooth.
+function oiSetCartQty(sku, qty) {
+  qty = Math.max(0, Math.floor(Number(qty) || 0));
+  const item = (APP._catalog || []).find(i => i.sku === sku);
+  APP.cart = APP.cart || [];
+  const idx = APP.cart.findIndex(c => c.sku === sku);
+  if (qty === 0) { if (idx >= 0) APP.cart.splice(idx, 1); }
+  else if (idx >= 0) APP.cart[idx].qty = qty;
+  else APP.cart.push({ sku, name: item ? item.name : sku, qty, unit_price: item ? item.unit_price : 0, emoji: item?.emoji || '📦' });
+  const inp = document.querySelector(`.oi-qty[data-sku="${sku}"]`);
+  if (inp) inp.value = qty;
+  oiRefreshRail();
+}
+function oiIncUsual(sku) { oiSetCartQty(sku, oiCartQty(sku) + 1); }
+function oiDecUsual(sku) { oiSetCartQty(sku, oiCartQty(sku) - 1); }
+function oiSetUsualQty(el) { oiSetCartQty(el.dataset.sku, el.value); }
 
 function oiAddUsual(sku) {
   const item = (APP._catalog || []).find(i => i.sku === sku);

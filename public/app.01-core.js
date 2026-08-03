@@ -99,94 +99,172 @@ const iconTruck    = s => svg('<rect x="1" y="3" width="15" height="13"/><polygo
 const iconUpload   = s => svg('<polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>',s);
 const iconEye      = s => svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',s);
 const iconRefresh  = s => svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/>',s);
+const iconBell     = s => svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',s);
+// ── Extended FMCG-ERP icon set: one distinct, semantic glyph per function ──
+const iconHome     = s => svg('<path d="m3 10.5 9-7 9 7"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/><path d="M9.5 21v-6h5v6"/>',s);
+const iconClock    = s => svg('<circle cx="12" cy="12" r="9"/><polyline points="12 7.5 12 12 15 13.5"/>',s);
+const iconFulfil   = s => svg('<path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/><path d="m14.5 18.5 2 2 4-4"/>',s);
+const iconCalendar = s => svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/>',s);
+const iconCalCheck = s => svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/><polyline points="9 14.5 11 16.5 15 12.5"/>',s);
+const iconMap      = s => svg('<polygon points="2.5 6.5 9 3.5 15 6.5 21.5 3.5 21.5 17.5 15 20.5 9 17.5 2.5 20.5"/><line x1="9" y1="3.5" x2="9" y2="17.5"/><line x1="15" y1="6.5" x2="15" y2="20.5"/>',s);
+const iconLayers   = s => svg('<polygon points="12 2.5 2 7 12 11.5 22 7"/><polyline points="2 12 12 16.5 22 12"/><polyline points="2 17 12 21.5 22 17"/>',s);
+const iconPie      = s => svg('<path d="M21.2 15.9A10 10 0 1 1 8 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',s);
+const iconGauge    = s => svg('<path d="M3.5 18a10 10 0 1 1 17 0"/><line x1="12" y1="14" x2="15.5" y2="10.5"/><circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none"/>',s);
+const iconReceipt  = s => svg('<path d="M4 2.5v19l2.2-1.3 2.3 1.3 2.3-1.3 2.4 1.3 2.3-1.3 2.2 1.3v-19l-2.2 1.3-2.3-1.3-2.4 1.3-2.3-1.3-2.3 1.3z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/>',s);
+const iconMail     = s => svg('<rect x="2.5" y="4.5" width="19" height="15" rx="2"/><path d="m3 6 9 6.5L21 6"/>',s);
+const iconBadge    = s => svg('<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10.5" r="2"/><path d="M5.6 16c.5-1.6 5.3-1.6 5.8 0"/><line x1="14.5" y1="9.5" x2="18.5" y2="9.5"/><line x1="14.5" y1="13" x2="18.5" y2="13"/>',s);
+const iconLayout   = s => svg('<rect x="3" y="3.5" width="18" height="6" rx="1"/><rect x="3" y="12.5" width="7.5" height="8" rx="1"/><rect x="13.5" y="12.5" width="7.5" height="8" rx="1"/>',s);
+const iconFlow     = s => svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="7" r="2.5"/><path d="M6 8.5v7"/><path d="M18 9.5a6 6 0 0 1-6 6H8.5"/>',s);
+const iconPin      = s => svg('<path d="M20 10.5c0 6-8 11.5-8 11.5s-8-5.5-8-11.5a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10.5" r="2.8"/>',s);
+const iconWallet   = s => svg('<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H19a1 1 0 0 1 1 1v2"/><path d="M3 7.5V18a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3"/><path d="M20 11h-4a2 2 0 0 0 0 4h4a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1Z"/>',s);
+const iconSupplier = s => svg('<path d="M3 21h18"/><path d="M5 21V8l7-3.5V21"/><path d="M12 21V9l7 3.5V21"/><line x1="8.5" y1="11" x2="8.5" y2="11.01"/><line x1="8.5" y1="15" x2="8.5" y2="15.01"/>',s);
+const iconHeadset  = s => svg('<path d="M4 13a8 8 0 0 1 16 0"/><path d="M4 13.5v3a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 .5Z"/><path d="M20 13.5v3a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 .5Z"/><path d="M18 18.5a4 4 0 0 1-4 3h-2"/>',s);
+const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2.5 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="16.5" x2="15" y2="16.5"/>',s);
+
+// Single source of truth for a page's sidebar icon — keyed by page id so every
+// role that surfaces a page gets the same, semantically-correct glyph. buildNav
+// resolves through this first, falling back to the item's own icon.
+const PAGE_ICON = {
+  dashboard: iconHome,
+  // Orders & fulfilment
+  orders: iconOrders, consolidated_due: iconClock, fulfilment: iconFulfil,
+  todays_schedule: iconCalCheck,
+  // Deliveries
+  delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
+  track_delivery: iconPin,
+  // Clients & support
+  clients: iconClients, service_desk: iconHeadset, approval_chains: iconFlow,
+  approvals: iconApprove,
+  // Procurement & supply
+  procurement: iconProcure, consolidated_orders: iconLayers, vendors: iconSupplier,
+  inventory: iconInventory, warehouse: iconWarehouse, my_inventory: iconInventory,
+  // Billing & finance
+  dc_billing: iconBilling, dunning: iconMail, porter_expenses: iconReceipt,
+  client_budget: iconWallet,
+  // Reports & insight
+  exec_bi: iconPie, consolidated_report: iconFile, reports: iconReports,
+  sla_dashboard: iconGauge, client_reports: iconPie, client_consumption: iconReports,
+  // Alerts
+  alerts: iconBell,
+  // Admin & settings
+  users: iconUsers, staff: iconBadge, templates: iconLayout, import_data: iconUpload,
+  settings: iconSettings,
+  // Client / ordering
+  place_order: iconCart, my_orders: iconOrders, orders_inventory: iconLayers,
+  // Vendor portal
+  vendor_pos: iconProcure, vendor_invoices: iconReceipt, vendor_payments: iconWallet,
+};
+const navIcon = (item, s = 18) => (PAGE_ICON[item.id] || item.icon || iconHome)(s);
 
 // ── Nav surfaces ───────────────────────────────────────────
 const NAV = {
   platform: [
-    { section:'Overview' },
-    { id:'dashboard',   label:'Control Tower', icon:iconDashboard, badge:null },
-    { section:'Orders & Fulfilment' },
-    { id:'orders',              label:'Orders',           icon:iconOrders,   badge:'!' },
+    // Redesigned super-admin IA (2026): Dashboard + Control Tower merged into one
+    // "Home", and the flat list regrouped into predictable, single-purpose groups.
+    // Every page id below is unchanged, so ACL, quick actions and the smoke test
+    // are unaffected — only labels, grouping and order change.
+    { section:'Home' },
+    { id:'dashboard',   label:'Home', icon:iconDashboard, badge:null },
+    { section:'Orders' },
+    { id:'orders',              label:'Orders',           icon:iconOrders, badge:'!' },
+    { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,  badge:'!' },
+    { section:'Operations' },
     { id:'fulfilment',          label:'Fulfilment',       icon:iconReports,  badge:'!' },
-    { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,    badge:'!' },
     { id:'todays_schedule',     label:"Today's Schedule", icon:iconDelivery, badge:'!' },
-    { section:'Deliveries' },
-    { id:'delivery',          label:'Deliveries',        icon:iconDelivery, badge:null },
-    { id:'delivery_calendar', label:'Delivery Calendar', icon:iconDelivery, badge:null },
-    { id:'delivery_routes',   label:'Route Planning',    icon:iconTruck,    badge:null },
-    { section:'Supply' },
-    { id:'procurement',         label:'Procurement',     icon:iconProcure,   badge:null },
-    { id:'consolidated_orders', label:'Procurement View',icon:iconProcure,   badge:null },
-    { id:'vendors',             label:'Vendors',         icon:iconVendors,   badge:null },
-    { id:'inventory',           label:'Inventory',       icon:iconInventory, badge:null },
-    { id:'warehouse',           label:'Warehouse',       icon:iconWarehouse, badge:null },
+    { id:'delivery',            label:'Deliveries',       icon:iconDelivery, badge:null },
+    { id:'delivery_calendar',   label:'Delivery Calendar',icon:iconDelivery, badge:null },
+    { id:'delivery_routes',     label:'Route Planning',   icon:iconTruck,    badge:null },
     { section:'Clients' },
     { id:'clients',         label:'Clients',          icon:iconClients,   badge:null },
     { id:'service_desk',    label:'Service Desk',     icon:iconDesk,      badge:null },
     { id:'approval_chains', label:'Approval Chains',  icon:iconApprove,   badge:null },
-    { section:'Billing' },
+    { section:'Procurement' },
+    { id:'procurement',         label:'Purchase Orders', icon:iconProcure,   badge:null },
+    { id:'consolidated_orders', label:'Procurement View',icon:iconProcure,   badge:null },
+    { id:'vendors',             label:'Vendors',         icon:iconVendors,   badge:null },
+    { section:'Inventory' },
+    { id:'inventory',           label:'Inventory',       icon:iconInventory, badge:null },
+    { id:'warehouse',           label:'Warehouse',       icon:iconWarehouse, badge:null },
+    { section:'Billing & Finance' },
     { id:'dc_billing',      label:'DC Billing',       icon:iconBilling,  badge:'!' },
     { id:'dunning',         label:'Dunning',          icon:iconBilling,  badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconBilling,  badge:null },
-    { section:'Insights' },
+    { section:'Reports & Insights' },
     { id:'exec_bi',              label:'Executive BI',        icon:iconDashboard, badge:null },
     { id:'consolidated_report',  label:'Consolidated Report', icon:iconReports,   badge:null },
     { id:'reports',              label:'Reports & BI',        icon:iconReports,   badge:null },
     { id:'sla_dashboard',        label:'SLA Dashboard',       icon:iconDashboard, badge:'!' },
-    { section:'Settings' },
+    { section:'Alerts & Exceptions' },
+    { id:'alerts',      label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { section:'Admin & Settings' },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconUsers,  badge:null },
     { id:'templates',   label:'Templates',      icon:iconOrders, badge:null },
     { id:'import_data', label:'CSV Import',     icon:iconUpload, badge:null },
   ],
   ops: [
-    { section:'Operations' },
-    { id:'dashboard',           label:'Control Tower',    icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',           label:'Home',             icon:iconDashboard, badge:null },
+    { section:'Orders' },
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
-    { id:'todays_schedule',     label:"Today's Schedule", icon:iconDelivery,  badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReports,   badge:'!' },
+    { section:'Operations' },
+    { id:'todays_schedule',     label:"Today's Schedule", icon:iconDelivery,  badge:'!' },
+    { id:'fulfilment',          label:'Fulfilment',       icon:iconReports,   badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
     { id:'delivery_calendar',   label:'Delivery Calendar',icon:iconDelivery,  badge:null },
+    { section:'Billing & Finance' },
     { id:'dc_billing',          label:'DC Billing',       icon:iconBilling,   badge:'!' },
-    { id:'fulfilment',          label:'Fulfilment',       icon:iconReports,   badge:'!' },
+    { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconDesk,      badge:null },
+    { section:'Alerts & Exceptions' },
+    { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
   ],
   procurement: [
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',           icon:iconDashboard, badge:null },
     { section:'Procurement' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
     { id:'procurement', label:'Purchase Orders',icon:iconProcure,  badge:null },
     { id:'vendors',     label:'Vendors',       icon:iconVendors,   badge:null },
+    { section:'Inventory' },
     { id:'inventory',   label:'Inventory',     icon:iconInventory, badge:null },
+    { section:'Reports & Insights' },
     { id:'consolidated_report', label:'Consolidated Report', icon:iconReports, badge:null },
   ],
   warehouse: [
-    { section:'Warehouse' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',          icon:iconDashboard, badge:null },
+    { section:'Inventory' },
     { id:'warehouse',   label:'Warehouse',     icon:iconWarehouse, badge:null },
     { id:'inventory',   label:'Inventory',     icon:iconInventory, badge:null },
   ],
   delivery: [
-    { section:'Delivery' },
-    { id:'dashboard',       label:'Dashboard',          icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',       label:'Home',               icon:iconDashboard, badge:null },
+    { section:'Operations' },
     { id:'todays_schedule', label:"Today's Schedule",   icon:iconDelivery,  badge:'!' },
     { id:'delivery',        label:'Deliveries',         icon:iconDelivery,  badge:null },
     { id:'delivery_calendar', label:'Delivery Calendar', icon:iconDelivery, badge:null },
+    { section:'Billing & Finance' },
     { id:'dc_billing',      label:'DC Billing',         icon:iconBilling,   badge:'!' },
   ],
   delivery_exec: [
-    { section:'My Deliveries' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',          icon:iconDashboard, badge:null },
+    { section:'Operations' },
     { id:'delivery',    label:'My Deliveries', icon:iconDelivery,  badge:null },
   ],
   finance: [
-    { section:'Finance' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',          icon:iconDashboard, badge:null },
+    { section:'Billing & Finance' },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
+    { section:'Reports & Insights' },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
   ],
   client: [
-    { section:'Overview' },
-    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { section:'Ordering' },
     { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
@@ -195,15 +273,16 @@ const NAV = {
     { id:'approvals',      label:'Approvals',      icon:iconApprove,   badge:null },
     { section:'My Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
-    { section:'Spend & Insights' },
+    { section:'Reports & Insights' },
+    { id:'client_consumption', label:'Consumption Report', icon:iconReports, badge:null },
     { id:'client_budget',  label:'Budget & Spend',    icon:iconReports, badge:null },
     { id:'client_reports', label:'Executive Reports', icon:iconReports, badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
   approver: [
-    { section:'Approvals' },
-    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { id:'approvals',   label:'Pending Approvals',icon:iconApprove,badge:'!' },
     { section:'Ordering' },
@@ -212,8 +291,8 @@ const NAV = {
     { id:'track_delivery',label:'Track Delivery', icon:iconDelivery, badge:null },
   ],
   client_user: [
-    { section:'Overview' },
-    { id:'dashboard',        label:'Dashboard',          icon:iconDashboard, badge:null },
+    { section:'Home' },
+    { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { id:'orders_inventory', label:'Orders & Inventory', icon:iconCart,      badge:null },
     { section:'Ordering' },
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
@@ -223,15 +302,17 @@ const NAV = {
     { id:'my_inventory', label:'My Inventory', icon:iconInventory, badge:null },
   ],
   vendor: [
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',           icon:iconDashboard, badge:null },
     { section:'Vendor Portal' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
     { id:'vendor_pos',  label:'Purchase Orders',icon:iconProcure,  badge:'!' },
     { id:'vendor_invoices',label:'Invoices',   icon:iconBilling,   badge:null },
     { id:'vendor_payments',label:'Payments',   icon:iconReports,   badge:null },
   ],
   vendor_user: [
+    { section:'Home' },
+    { id:'dashboard',   label:'Home',           icon:iconDashboard, badge:null },
     { section:'Vendor Portal' },
-    { id:'dashboard',   label:'Dashboard',     icon:iconDashboard, badge:null },
     { id:'vendor_pos',  label:'Purchase Orders',icon:iconProcure,  badge:null },
   ],
 };
@@ -251,7 +332,21 @@ async function api(path, opts = {}) {
 }
 
 // ── Auth ───────────────────────────────────────────────────
+// Inline error shown right on the credentials card (not a toast).
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  if (!el) { showToast(msg, 'error'); return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; // retrigger shake
+}
+function clearLoginError() {
+  const el = document.getElementById('login-error');
+  if (el) { el.textContent = ''; el.classList.add('hidden'); }
+}
+
 async function doLogin() {
+  clearLoginError();
   const otpGroup = document.getElementById('otp-group');
   const otpVisible = !otpGroup.classList.contains('hidden');
 
@@ -259,21 +354,36 @@ async function doLogin() {
 
   const email    = document.getElementById('login-email')?.value?.trim().toLowerCase();
   const password = document.getElementById('login-password')?.value;
-  if (!email || !password) { showToast('Enter your email and password', 'error'); return; }
+  if (!email || !password) { showLoginError('Please enter your email and password.'); return; }
 
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Signing in…';
 
-  const data = await api('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  }).catch(() => null);
+  // Use a direct fetch — the shared api() helper treats every 401 as a session
+  // logout and returns null silently, so wrong credentials would show no error.
+  let res, data;
+  try {
+    res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch {
+    btn.disabled = false; btn.querySelector('span').textContent = 'Sign In';
+    showLoginError('Network error — check your connection and try again.');
+    return;
+  }
 
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Sign In';
 
-  if (!data) return; // api() already showed "Invalid credentials"
+  if (!res.ok) {
+    showLoginError(data.error || (res.status === 401 ? 'Invalid email or password.' : 'Sign in failed — please try again.'));
+    const pw = document.getElementById('login-password'); if (pw) { pw.value = ''; pw.focus(); }
+    return;
+  }
 
   if (data.otp_required) {
     APP._pendingEmail = email;
@@ -305,21 +415,33 @@ function setupOTPInputs() {
 }
 
 async function doVerifyOTP() {
+  clearLoginError();
   const code = [...document.querySelectorAll('.otp-input')].map(i => i.value).join('');
-  if (code.length < 6) { showToast('Enter all 6 OTP digits', 'error'); return; }
+  if (code.length < 6) { showLoginError('Enter all 6 digits of the OTP.'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Verifying…';
 
-  const data = await api('/auth/otp/verify', {
-    method: 'POST',
-    body: JSON.stringify({ email: APP._pendingEmail, code }),
-  }).catch(() => null);
+  // Direct fetch (see doLogin) so a wrong OTP shows an error without api()'s
+  // 401-triggered logout wiping the OTP form.
+  let res, data;
+  try {
+    res = await fetch('/api/auth/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: APP._pendingEmail, code }),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch {
+    btn.disabled = false; btn.querySelector('span').textContent = 'Verify OTP';
+    showLoginError('Network error — check your connection and try again.');
+    return;
+  }
 
   btn.disabled = false;
   btn.querySelector('span').textContent = 'Verify OTP';
 
-  if (!data?.token) { showToast('Invalid or expired OTP', 'error'); return; }
+  if (!res.ok || !data.token) { showLoginError(data.error || 'Invalid or expired OTP.'); return; }
 
   APP.token = data.token;
   APP.user = { ...data.user, nav: ROLES[data.user.role]?.nav || 'platform' };
@@ -620,10 +742,30 @@ function getDefaultPage() {
 }
 
 // ── Sidebar nav ────────────────────────────────────────────
+// Accordion state: at most one collapsible section is open at a time. We persist
+// the single open section's label (empty = all collapsed) rather than a set.
 function navPrefLoad() {
-  if (!APP._navCollapsed) { try { APP._navCollapsed = JSON.parse(localStorage.getItem('sp_nav_sections')||'{}') || {}; } catch { APP._navCollapsed = {}; } }
+  if (APP._navOpen === undefined) { try { APP._navOpen = localStorage.getItem('sp_nav_open') || null; } catch { APP._navOpen = null; } }
 }
-function navPrefSave() { try { localStorage.setItem('sp_nav_sections', JSON.stringify(APP._navCollapsed||{})); } catch {} }
+function navPrefSave() { try { APP._navOpen ? localStorage.setItem('sp_nav_open', APP._navOpen) : localStorage.removeItem('sp_nav_open'); } catch {} }
+
+// Apply accordion state to the DOM: open the one section whose label matches
+// `openLabel`, collapse every other collapsible section, and persist the choice.
+function applyAccordion(openLabel) {
+  const wrap = document.getElementById('sidebar-nav'); if (!wrap) return;
+  wrap.querySelectorAll('.nav-section-toggle').forEach(tog => {
+    const lbl = (tog.querySelector('.nav-section-label')?.textContent || '').trim();
+    const body = document.getElementById('nav-sec-' + lbl.replace(/\s+/g,'_'));
+    const collapsed = lbl !== openLabel;
+    tog.classList.toggle('collapsed', collapsed);
+    if (body) {
+      body.classList.toggle('collapsed', collapsed);
+      body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
+    }
+  });
+  APP._navOpen = openLabel || null;
+  navPrefSave();
+}
 
 function buildNav() {
   const nav = APP.user.nav;
@@ -642,9 +784,20 @@ function buildNav() {
     }
   });
 
+  // Resolve the single section that should be open (accordion). Prefer the
+  // persisted choice; otherwise open the section holding the current page, and
+  // fall back to the first collapsible section so exactly one group is open.
+  const collapsibleLabels = sections.slice(1).map(s => s.label);
+  let openLabel = collapsibleLabels.includes(APP._navOpen) ? APP._navOpen : null;
+  if (!openLabel) {
+    const secOfCur = APP.page ? sections.find((s, i) => i > 0 && s.items.some(it => it.id === APP.page))?.label : null;
+    openLabel = secOfCur || collapsibleLabels[0] || null;
+  }
+  APP._navOpen = openLabel; navPrefSave();
+
   const html = sections.map((sec, idx) => {
     const isFirst = idx === 0;
-    const collapsed = !isFirst && APP._navCollapsed[sec.label];
+    const collapsed = !isFirst && sec.label !== openLabel;
     const bodyMaxH = sec.items.length * 44 + 'px';
 
     const headerHtml = isFirst
@@ -656,7 +809,7 @@ function buildNav() {
 
     const itemsHtml = sec.items.map(item => `
       <div class="nav-item" id="nav-${item.id}" ${dataAct('navigate', item.id)} title="${item.label}">
-        <span class="nav-item-icon">${item.icon(18)}</span>
+        <span class="nav-item-icon">${navIcon(item)}</span>
         <span class="nav-item-label">${item.label}</span>
         ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
       </div>`).join('');
@@ -699,16 +852,11 @@ function filterNav(q) {
 
   if (!q) {
     items.forEach(el => { el.style.display = ''; });
-    // restore each collapsible section to its saved state
-    wrap.querySelectorAll('.nav-section-body').forEach(body => {
-      const hdr = body.previousElementSibling;
-      const label = (hdr?.querySelector('.nav-section-label')?.textContent || '').trim();
-      const collapsed = !!(APP._navCollapsed && APP._navCollapsed[label]);
-      body.classList.toggle('collapsed', collapsed);
-      body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
-      if (hdr) { hdr.classList.toggle('collapsed', collapsed); hdr.style.display = ''; }
-    });
-    wrap.querySelectorAll('.nav-section').forEach(h => { h.style.display = ''; });
+    // headers may have been hidden while searching — reveal them, then restore
+    // the single-open accordion state.
+    wrap.querySelectorAll('.nav-section-toggle, .nav-section').forEach(h => { h.style.display = ''; });
+    navPrefLoad();
+    applyAccordion(APP._navOpen);
     if (nores) nores.style.display = 'none';
     return;
   }
@@ -748,29 +896,19 @@ function navSearchKey(e) {
 
 function toggleNavSection(label) {
   navPrefLoad();
-  APP._navCollapsed[label] = !APP._navCollapsed[label];
-  navPrefSave();
-  const key = label.replace(/\s+/g,'_');
-  const body = document.getElementById('nav-sec-' + key);
-  const toggle = body?.previousElementSibling;
-  if (!body || !toggle) return;
-  const collapsed = APP._navCollapsed[label];
-  body.style.maxHeight = collapsed ? '0' : (body.children.length * 44 + 'px');
-  body.classList.toggle('collapsed', collapsed);
-  toggle.classList.toggle('collapsed', collapsed);
+  // Clicking the open section closes it; clicking any other opens it and
+  // collapses the rest (accordion — one group open at a time).
+  applyAccordion(APP._navOpen === label ? null : label);
 }
 
-// Ensure the section holding the active page is open, and reveal it
+// Ensure the section holding the active page is the open one, and reveal it
 function revealActiveNavItem(page) {
   const navEl = document.getElementById('nav-' + page);
   if (!navEl) return;
   const body = navEl.closest('.nav-section-body');
-  if (body && body.classList.contains('collapsed')) {
+  if (body) {
     const label = (body.previousElementSibling?.querySelector('.nav-section-label')?.textContent || '').trim();
-    if (label) { navPrefLoad(); APP._navCollapsed[label] = false; navPrefSave(); }
-    body.classList.remove('collapsed');
-    body.style.maxHeight = (body.children.length * 44 + 'px');
-    body.previousElementSibling?.classList.remove('collapsed');
+    if (label && label !== APP._navOpen) applyAccordion(label);
   }
   if (!document.getElementById('sidebar')?.classList.contains('collapsed'))
     navEl.scrollIntoView({ block: 'nearest' });
@@ -839,8 +977,10 @@ const PAGE_MAP = {
   consolidated_report: 'renderConsolidatedReport',
   consolidated_due: 'renderConsolidatedDue',
   client_budget: 'renderClientBudget',
+  client_consumption: 'renderClientConsumption',
   my_inventory: 'renderMyInventory',
   orders_inventory: 'renderOrdersInventory',
+  alerts: 'renderAlerts',
 };
 
 function navigate(page) {

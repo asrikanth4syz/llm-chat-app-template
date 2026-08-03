@@ -843,6 +843,7 @@ async function renderOrderQueue(el) {
   // Build month options from orders
   const monthsSet = new Set(orders.map(o=>(o.created_at||'').slice(0,7)).filter(Boolean));
   const months = [...monthsSet].sort().reverse();
+  const clientNames = [...new Set(orders.map(o=>o.client_name).filter(Boolean))].sort();
   // Default to current month if present
   if (!APP._oqMonthInit) {
     const cur = new Date().toISOString().slice(0,7);
@@ -855,6 +856,7 @@ async function renderOrderQueue(el) {
       ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth))
       : orders;
     if (APP._oqTypeFilter) res = res.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter);
+    if (APP._oqClient) { const q = APP._oqClient.toLowerCase(); res = res.filter(o=>(o.client_name||'').toLowerCase().includes(q)); }
     return res;
   }
 
@@ -988,7 +990,13 @@ async function renderOrderQueue(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Order Queue</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="oq-subtitle">${filteredOrders().filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders</div>
     </div>
-    <div id="oq-month-picker">${monthPickerHtml()}</div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <input type="search" list="oq-client-list" id="oq-client-input" class="filter-select"
+        placeholder="🔍 Search client…" value="${h(APP._oqClient||'')}" ${dataInputVal('oqSetClient')}
+        style="font-size:.82rem;min-width:200px" aria-label="Search orders by client">
+      <datalist id="oq-client-list">${clientNames.map(n=>`<option value="${h(n)}"></option>`).join('')}</datalist>
+      <div id="oq-month-picker">${monthPickerHtml()}</div>
+    </div>
   </div>
 
   <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
@@ -1086,6 +1094,21 @@ function openPendingApprovals() {
       switchOQTab('PENDING_APPROVAL');
     } catch (_) { /* orders view not ready */ }
   }, 350);
+}
+
+// Live client search — filters the queue (table, status tabs, KPI top row and
+// count) to one client, on top of the month/type filters.
+function oqSetClient(val) {
+  APP._oqClient = (val || '').trim();
+  const base = APP._oqOrders || [];
+  const monthF = APP._oqMonth ? base.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : base;
+  const q = APP._oqClient.toLowerCase();
+  const clientF = APP._oqClient ? monthF.filter(o=>(o.client_name||'').toLowerCase().includes(q)) : monthF;
+  const forKpi = APP._oqTypeFilter ? clientF.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter) : clientF;
+  const kpiEl = document.getElementById('oq-kpi'); if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(forKpi);
+  const sub = document.getElementById('oq-subtitle'); if (sub) sub.textContent = `${forKpi.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders`;
+  const tabsEl = document.getElementById('oq-tabs'); if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
+  const tbody = document.getElementById('oq-tbody'); if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
 }
 
 function oqFilterByType(type) {

@@ -839,10 +839,15 @@ function renderCatalogItems(items) {
           ${isClient?'':`<div style="font-size:.82rem;font-weight:600;color:${lowStock?'var(--danger)':'var(--text-muted)'}">
             ${item.stock}${item.uom?' '+item.uom:''}${lowStock?' ⚠️':''}
           </div>`}
-          <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${fmt(item.unit_price)}${item.client_price!=null?`<span style="font-size:.65rem;background:var(--blue-light);color:#1d4ed8;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:600">Your Price</span>`:''}</div>
+          <div style="font-weight:700;font-size:.9rem;color:var(--navy);display:flex;flex-direction:column;align-items:flex-start;gap:2px">
+            <span>${fmt(item.unit_price)}</span>
+            ${item.client_price!=null?`<span style="font-size:.6rem;background:var(--blue-light);color:#1d4ed8;padding:1px 6px;border-radius:8px;font-weight:600;white-space:nowrap">Your Price</span>`:''}
+          </div>
           <div style="display:flex;align-items:center;justify-content:center;gap:6px">
             <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">−</button>
-            <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}" style="min-width:20px;text-align:center;font-weight:700;font-size:.9rem;color:${qty>0?'var(--navy)':'var(--text-muted)'}">${qty}</span>
+            <input type="number" class="qty-input" id="qty-${item.sku}" min="0" step="1" value="${qty}" inputmode="numeric"
+              data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
+              ${dataChangeVal('setQty', item.sku)} ${dataEnterEl('_blurEl')} data-selectall>
             <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">+</button>
           </div>
         </div>`;
@@ -872,7 +877,9 @@ function renderCatalogItems(items) {
       </div>`}
       <div class="catalog-qty">
         <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)}>−</button>
-        <span class="qty-val" id="qty-${item.sku}" data-name="${item.name.replace(/"/g,'&quot;')}">${qty}</span>
+        <input type="number" class="qty-input" id="qty-${item.sku}" min="0" step="1" value="${qty}" inputmode="numeric"
+          data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
+          ${dataChangeVal('setQty', item.sku)} ${dataEnterEl('_blurEl')} data-selectall>
         <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
       </div>
     </div>`;
@@ -905,21 +912,28 @@ function changeQty(sku, delta, price, btnOrName) {
     APP.cart.push({ sku, name, qty: 1, unit_price: price, emoji: catalogItem?.emoji || '📦' });
   }
   const qtyEl = document.getElementById('qty-' + sku);
-  if (qtyEl) qtyEl.textContent = APP.cart.find(c => c.sku === sku)?.qty || 0;
+  const newQty = APP.cart.find(c => c.sku === sku)?.qty || 0;
+  if (qtyEl) { if (qtyEl.tagName === 'INPUT') qtyEl.value = newQty; else qtyEl.textContent = newQty; }
   refreshCartUI();
 }
 
-// Set a cart line to a manually-typed quantity (review step). Integer ≥ 1;
-// clearing the field or entering 0 removes the line, matching the −/+ behaviour.
+// Set a line to a manually-typed quantity. Integer ≥ 1; clearing the field or
+// entering 0 removes the line, matching the −/+ behaviour. Works from the catalog
+// too — typing a quantity for an item not yet in the cart adds it.
 function setQty(sku, value) {
-  const existing = APP.cart.find(c => c.sku === sku);
-  if (!existing) return;
   const n = Math.floor(Number(value));
+  const existing = APP.cart.find(c => c.sku === sku);
   if (!Number.isFinite(n) || n <= 0) {
-    APP.cart = APP.cart.filter(c => c.sku !== sku);
-  } else {
+    if (existing) APP.cart = APP.cart.filter(c => c.sku !== sku);
+  } else if (existing) {
     existing.qty = Math.min(n, 100000); // guard against absurd values
+  } else {
+    const ci = (APP._catalog || []).find(c => c.sku === sku);
+    APP.cart.push({ sku, name: ci?.name || sku, qty: Math.min(n, 100000),
+      unit_price: ci?.unit_price ?? ci?.client_price ?? 0, emoji: ci?.emoji || '📦' });
   }
+  const el = document.getElementById('qty-' + sku);
+  if (el && el.tagName === 'INPUT') el.value = APP.cart.find(c => c.sku === sku)?.qty || 0;
   refreshCartUI();
 }
 
