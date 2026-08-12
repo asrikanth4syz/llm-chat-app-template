@@ -783,6 +783,7 @@ const SETTINGS_NAV = [
   { id:'audit',         icon:'📋', label:'Audit Log',        desc:'All system actions' },
   { id:'categories',    icon:'📂', label:'Categories',       desc:'Item category setup' },
   { id:'hsngst',        icon:'🧾', label:'HSN → GST',        desc:'HSN code to GST slab map' },
+  { id:'pipeline_sla',  icon:'⏱️', label:'Pipeline SLA',      desc:'Per-stage SLA targets' },
 ];
 
 async function renderSettings(el) {
@@ -1156,6 +1157,63 @@ async function settingsTab(tab, btn) {
       </div>
     </div>`;
   }
+
+  else if (tab === 'pipeline_sla') {
+    const cfg = await api('/pipeline/sla') || { targets:{}, risk_pace:0.6, defaults:{}, stages:{} };
+    const t = cfg.targets || {}, def = cfg.defaults || {};
+    const meta = cfg.stages || {};
+    const rowsOrder = ['approval','inventory','vendor_po','dispatch','delivery','pod','billing'];
+    const label = { approval:'Approval', inventory:'Inventory', vendor_po:'Vendor PO', dispatch:'Dispatch', delivery:'Delivery', pod:'POD', billing:'Billing' };
+    const sub = { approval:'submitted → approved', inventory:'stock check / reserve', vendor_po:'procurement lead time', dispatch:'pick, pack, QC', delivery:'in transit → delivered', pod:'proof of delivery', billing:'delivered → invoiced' };
+    const pacePct = Math.round((cfg.risk_pace ?? 0.6) * 100);
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Pipeline SLA thresholds</span>
+        <span style="font-size:.83rem;color:var(--text-muted)">Days an order may sit in each stage before it's flagged</span>
+      </div>
+      <div class="card-body" style="padding:20px;display:grid;gap:16px">
+        <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
+          These targets drive the Pipeline board's on-track / at-risk / overdue chips, the "overdue" KPI and SLA alerts. Leave a field blank to use the default.
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Stage</th><th style="width:150px">Target (days)</th><th>Default</th></tr></thead>
+            <tbody>${rowsOrder.map(k=>`<tr>
+              <td><b>${label[k]}</b><div style="font-size:.74rem;color:var(--text-muted)">${meta[k]?String(meta[k].no).padStart(2,'0')+' · ':''}${sub[k]}</div></td>
+              <td><input type="number" id="sla-${k}" min="0.25" max="60" step="0.25" value="${t[k] ?? def[k] ?? ''}" style="width:110px"></td>
+              <td style="font-size:.8rem;color:var(--text-muted)">${def[k] ?? '—'}d</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>
+        <div style="display:grid;gap:6px;max-width:420px">
+          <label style="font-weight:600;font-size:.86rem">At-risk warning</label>
+          <div style="font-size:.8rem;color:var(--text-muted)">Flag an order <b>at risk</b> once it has used this share of its stage target.</div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <input type="range" id="sla-pace" min="10" max="95" step="5" value="${pacePct}" style="flex:1" oninput="document.getElementById('sla-pace-val').textContent=this.value+'% of target'">
+            <b id="sla-pace-val" style="font-family:ui-monospace,monospace;color:var(--blue);white-space:nowrap">${pacePct}% of target</b>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn btn-secondary" ${dataAct('resetPipelineSla')}>Reset to defaults</button>
+          <button class="btn btn-primary" ${dataAct('savePipelineSla')}>Save thresholds</button>
+        </div>
+      </div>
+    </div>`;
+  }
+}
+
+async function savePipelineSla() {
+  const keys = ['approval','inventory','vendor_po','dispatch','delivery','pod','billing'];
+  const targets = {};
+  for (const k of keys) { const v = +(document.getElementById('sla-'+k)?.value || 0); if (v > 0) targets[k] = v; }
+  const risk_pace = (+(document.getElementById('sla-pace')?.value || 60)) / 100;
+  const res = await api('/pipeline/sla', { method:'POST', body: JSON.stringify({ targets, risk_pace }) });
+  if (res) showToast('SLA thresholds saved — cards re-flag on the next board load');
+}
+
+async function resetPipelineSla() {
+  const res = await api('/pipeline/sla', { method:'POST', body: JSON.stringify({ targets:{}, risk_pace:0.6 }) });
+  if (res) { showToast('SLA thresholds reset to defaults'); settingsTab('pipeline_sla', document.querySelector('.settings-nav-btn.active')); }
 }
 
 // Prefill the HSN→GST form from an existing row for editing.

@@ -1418,4 +1418,42 @@ describe("Order lifecycle & pipeline board", () => {
     const res = await get("/api/pipeline", clientToken);
     expect(res.status).toBe(403);
   });
+
+  it("GET /api/pipeline returns a newest-first recent list for the Home widget", async () => {
+    const d = await (await get("/api/pipeline", adminToken)).json() as { recent: Array<{id:string;stage_key:string;stage_no:number}> };
+    expect(Array.isArray(d.recent)).toBe(true);
+    const row = d.recent.find(r => r.id === "PIPE-1");
+    expect(row).toBeTruthy();
+    expect(row!.stage_key).toBe("delivery");
+    expect(row!.stage_no).toBe(8);
+  });
+
+  it("GET /api/pipeline/sla returns defaults when unset", async () => {
+    const d = await (await get("/api/pipeline/sla", adminToken)).json() as { targets: Record<string,number>; risk_pace: number };
+    expect(d.targets.vendor_po).toBe(2);
+    expect(d.risk_pace).toBe(0.6);
+  });
+
+  it("POST /api/pipeline/sla saves targets that the GET then reflects", async () => {
+    const res = await post("/api/pipeline/sla", { targets: { vendor_po: 5, delivery: 3 }, risk_pace: 0.5 }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await (await get("/api/pipeline/sla", adminToken)).json() as { targets: Record<string,number>; risk_pace: number };
+    expect(d.targets.vendor_po).toBe(5);
+    expect(d.targets.delivery).toBe(3);
+    expect(d.targets.approval).toBe(1); // untouched → default
+    expect(d.risk_pace).toBe(0.5);
+  });
+
+  it("POST /api/pipeline/sla clamps out-of-range values back to defaults", async () => {
+    await post("/api/pipeline/sla", { targets: { vendor_po: 999, dispatch: -4 }, risk_pace: 5 }, adminToken);
+    const d = await (await get("/api/pipeline/sla", adminToken)).json() as { targets: Record<string,number>; risk_pace: number };
+    expect(d.targets.vendor_po).toBe(2);   // 999 > 60 → default
+    expect(d.targets.dispatch).toBe(1);    // negative → default
+    expect(d.risk_pace).toBe(0.6);         // 5 out of (0,1) → default
+  });
+
+  it("POST /api/pipeline/sla is forbidden for external (client) roles", async () => {
+    const res = await post("/api/pipeline/sla", { targets: { vendor_po: 3 } }, clientToken);
+    expect(res.status).toBe(403);
+  });
 });

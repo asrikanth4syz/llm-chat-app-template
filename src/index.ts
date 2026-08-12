@@ -731,6 +731,8 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path==="/api/pipeline"               && method==="GET")  return handlePipeline(request,env);
+      if (path==="/api/pipeline/sla"           && method==="GET")  return handleGetSla(request,env);
+      if (path==="/api/pipeline/sla"           && method==="POST") return handleSaveSla(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/lifecycle$/)    && method==="GET")  return handleOrderLifecycle(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
@@ -1218,8 +1220,24 @@ function stageFromStatus(status: string): StageKey {
     default: return "done"; // CLOSED etc. refined by DC state
   }
 }
-// Rough per-stage SLA (days) — dwell beyond this flags the card.
-const STAGE_SLA: Record<string,number> = { approval:1, inventory:1, vendor_po:2, dispatch:1, delivery:2, pod:1, billing:2 };
+// Per-stage SLA targets (days) — dwell beyond this flags a card overdue.
+// Admin-editable via /api/pipeline/sla; these are the fallback defaults.
+const SLA_DEFAULTS: Record<string,number> = { approval:1, inventory:1, vendor_po:2, dispatch:1, delivery:2, pod:1, billing:2 };
+const SLA_RISK_PACE_DEFAULT = 0.6; // flag "at risk" once this share of target is used
+type SlaConfig = { targets: Record<string,number>; risk_pace: number };
+async function getSlaConfig(env: Env): Promise<SlaConfig> {
+  try {
+    const raw = await getConfig(env, "pipeline_sla", "");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SlaConfig>;
+      return {
+        targets: { ...SLA_DEFAULTS, ...(parsed.targets || {}) },
+        risk_pace: typeof parsed.risk_pace === "number" ? parsed.risk_pace : SLA_RISK_PACE_DEFAULT,
+      };
+    }
+  } catch { /* fall through to defaults */ }
+  return { targets: { ...SLA_DEFAULTS }, risk_pace: SLA_RISK_PACE_DEFAULT };
+}
 const hoursBetween = (a: string, b: number) => (b - new Date(String(a).replace(" ","T")+"Z").getTime()) / 3600000;
 function fmtDwell(hrs: number): string {
   if (!isFinite(hrs) || hrs < 0) return "—";
@@ -1386,9 +1404,11 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
   } catch { /* */ }
 
   const nowMs = Date.now();
+  const slaCfg = await getSlaConfig(env);
   const order: StageKey[] = ["approval","inventory","vendor_po","dispatch","delivery","pod","billing"];
   const buckets: Record<string,{ key:string; no:number; label:string; count:number; value:number; dwellSum:number; orders:Array<Record<string,unknown>> }> = {};
   for (const k of order) buckets[k] = { key:k, no:STAGE_META[k].no, label:STAGE_META[k].label, count:0, value:0, dwellSum:0, orders:[] };
+  const recent: Array<Record<string,unknown>> = []; // newest-first, for the Home widget
 
   let inflight=0, value=0, overdue=0;
   for (const o of orders as Array<Record<string,unknown>>) {
@@ -1406,17 +1426,23 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
     }
     if (key==="done" || !buckets[key]) continue; // fully complete — off the board
     const dwellH = hoursBetween(lastAt[oid] || String(o.created_at), nowMs);
-    const sla = STAGE_SLA[key] || 2;
-    const isLate = dwellH > sla*24;
+    const target = slaCfg.targets[key] ?? 2;
+    const isLate = dwellH > target*24;
+    const slaState = isLate ? "late" : (dwellH > target*24*slaCfg.risk_pace ? "risk" : "ok");
     const b = buckets[key];
     inflight++; value += Number(o.grand_total)||0; if (isLate) overdue++;
     b.count++; b.value += Number(o.grand_total)||0; b.dwellSum += dwellH;
     if (b.orders.length < 25) b.orders.push({
       id: oid, client_name: o.client_name, value: Number(o.grand_total)||0,
       dwell: fmtDwell(dwellH), dwell_h: Math.round(dwellH),
-      sla: isLate ? "late" : (dwellH > sla*24*0.6 ? "risk" : "ok"),
-      po_ref: poRef[oid] || null,
+      sla: slaState, po_ref: poRef[oid] || null,
       flag: isLate || (key==="inventory" && !!poRef[oid]),
+    });
+    // orders arrive newest-first (ORDER BY created_at DESC) — take the first few.
+    if (recent.length < 6) recent.push({
+      id: oid, client_name: o.client_name, value: Number(o.grand_total)||0,
+      stage_key: key, stage_no: STAGE_META[key].no, stage_label: STAGE_META[key].label,
+      dwell: fmtDwell(dwellH), sla: slaState,
     });
   }
 
@@ -1437,7 +1463,35 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
     kpis: { inflight, value, overdue, avg_cycle: avgCycle,
       bottleneck: busiest ? { label: busiest.label, avg_dwell: busiest.avg_dwell } : null },
     buckets: bucketList.map(({dwellSum, ...b})=>b),
+    recent,
   });
+}
+
+// GET /api/pipeline/sla — current SLA targets + at-risk pace (defaults if unset).
+async function handleGetSla(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const cfg = await getSlaConfig(env);
+  return json({ ...cfg, defaults: SLA_DEFAULTS, stages: STAGE_META });
+}
+
+// POST /api/pipeline/sla — save SLA targets. Ops/admin only; values are days.
+async function handleSaveSla(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as { targets?: Record<string,unknown>; risk_pace?: unknown };
+  const targets: Record<string,number> = {};
+  for (const k of Object.keys(SLA_DEFAULTS)) {
+    const v = Number((body.targets || {})[k]);
+    targets[k] = (isFinite(v) && v > 0 && v <= 60) ? v : SLA_DEFAULTS[k];
+  }
+  let pace = Number(body.risk_pace);
+  if (!isFinite(pace) || pace <= 0 || pace >= 1) pace = SLA_RISK_PACE_DEFAULT;
+  const cfg: SlaConfig = { targets, risk_pace: Math.round(pace * 100) / 100 };
+  await setConfig(env, "pipeline_sla", JSON.stringify(cfg), user!.sub);
+  await audit(env, user, "UPDATE", "config", "pipeline_sla", undefined, JSON.stringify(cfg));
+  return json({ ok: true, ...cfg });
 }
 
 // GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)
