@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -48,11 +48,12 @@ jobs:
           echo "--- wrangler whoami (token account + scopes) ---"
           npx wrangler whoami || echo "::warning::wrangler whoami failed — token is invalid or unauthorized"
 
-      - name: Deploy to Cloudflare Workers
+      - name: Apply D1 migrations & deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # If you later want migrations applied automatically on deploy, add:
-          #   command: d1 migrations apply smart-pantry-db --remote && deploy
-          # (the app also self-heals its tables at runtime, so this is optional)
+          # Apply any pending D1 migrations against the remote DB, then deploy.
+          # `migrations apply` is idempotent (only unapplied migrations run), and
+          # the app still self-heals its tables at runtime as a belt-and-braces.
+          command: d1 migrations apply smart-pantry-db --remote && deploy

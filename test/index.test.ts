@@ -1352,3 +1352,70 @@ describe("HSN → GST slab", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── Order lifecycle & pipeline (projection endpoints) ────────────────
+describe("Order lifecycle & pipeline board", () => {
+  const pdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await pdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("PIPE-CL", "Pipeline Co").run();
+    await pdb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,1)").bind("PIPE-V", "PipeVendor", "Grocery").run();
+    await pdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-6 day'))`).bind("PIPE-1", "PIPE-CL", "seed-user", "IN_SHIPMENT", 120000, 22360, 142360, "Regular").run();
+    // status transitions
+    const hist: [string, string, string][] = [
+      ["SUBMITTED", "Rahul", "-6 day"], ["PENDING_APPROVAL", "Rahul", "-6 day"], ["APPROVED", "Priya", "-6 day"],
+      ["INVENTORY_CHECK", "Desk", "-6 day"], ["VENDOR_PO_RAISED", "Anand", "-6 day"], ["IN_SHIPMENT", "Desk", "-4 day"],
+    ];
+    for (let i = 0; i < hist.length; i++) {
+      await pdb.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note,created_at)
+        VALUES (?,?,?,?,?,?,?,datetime('now',?))`).bind(`H-PIPE-${i}`, "PIPE-1", null, hist[i][0], "u", hist[i][1], hist[i][0]==="PENDING_APPROVAL"?"₹1.42L over ₹1.00L":null, hist[i][2]).run();
+    }
+    // shortage → vendor PO
+    await pdb.prepare(`INSERT INTO purchase_orders (id,vendor_id,order_id,status,grand_total,created_at)
+      VALUES (?,?,?,?,?,datetime('now','-6 day'))`).bind("PO-PIPE", "PIPE-V", "PIPE-1", "RECEIVED", 30000).run();
+    // partial multi-DC delivery: one delivered+POD, one still in transit
+    await pdb.prepare(`INSERT INTO delivery_challans (id,order_id,dc_number,status,dispatched_at,delivered_at,pod_uploaded,billed,total_qty,delivered_qty)
+      VALUES (?,?,?,?,datetime('now','-4 day'),datetime('now','-4 day'),1,0,9,9)`).bind("DC-PIPE-1", "PIPE-1", "DC-PIPE-1", "DELIVERED").run();
+    await pdb.prepare(`INSERT INTO delivery_challans (id,order_id,dc_number,status,dispatched_at,delivered_at,pod_uploaded,billed,total_qty,delivered_qty)
+      VALUES (?,?,?,?,datetime('now','-4 day'),NULL,0,0,3,0)`).bind("DC-PIPE-2", "PIPE-1", "DC-PIPE-2", "IN_TRANSIT").run();
+  });
+
+  it("GET /api/orders/:id/lifecycle returns all 10 stages with derived states", async () => {
+    const res = await get("/api/orders/PIPE-1/lifecycle", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { stages: Array<{key:string;state:string}>; current_key: string; progress: {total:number} };
+    expect(d.stages.length).toBe(10);
+    const st = (k: string) => d.stages.find(s => s.key === k)!.state;
+    expect(st("client")).toBe("done");
+    expect(st("vendor_po")).toBe("done");   // a PO exists (shortage branch)
+    expect(st("dispatch")).toBe("done");
+    expect(st("delivery")).toBe("current");  // 1 of 2 challans delivered
+    expect(st("pod")).toBe("current");       // 1 of 2 PODs captured
+    expect(st("billing")).toBe("pending");
+    expect(d.current_key).toBe("delivery");
+  });
+
+  it("lifecycle marks Vendor PO as skipped when the order was filled from stock", async () => {
+    await pdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-1 day'))`).bind("PIPE-2", "PIPE-CL", "seed-user", "READY_TO_PICK", 5000, 900, 5900, "Regular").run();
+    await pdb.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,created_at)
+      VALUES (?,?,?,?,?,?,datetime('now','-1 day'))`).bind("H-PIPE2-0", "PIPE-2", null, "INVENTORY_CHECK", "u", "Desk").run();
+    const d = await (await get("/api/orders/PIPE-2/lifecycle", adminToken)).json() as { stages: Array<{key:string;state:string}> };
+    expect(d.stages.find(s => s.key === "vendor_po")!.state).toBe("skipped");
+  });
+
+  it("GET /api/pipeline buckets in-flight orders by stage with KPIs", async () => {
+    const res = await get("/api/pipeline", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { kpis: {inflight:number}; buckets: Array<{key:string;count:number;orders:Array<{id:string}>}> };
+    expect(d.kpis.inflight).toBeGreaterThanOrEqual(1);
+    expect(d.buckets.length).toBe(7);
+    const delivery = d.buckets.find(b => b.key === "delivery")!;
+    expect(delivery.orders.some(o => o.id === "PIPE-1")).toBe(true);
+  });
+
+  it("GET /api/pipeline is forbidden for external (client) roles", async () => {
+    const res = await get("/api/pipeline", clientToken);
+    expect(res.status).toBe(403);
+  });
+});
