@@ -48,12 +48,14 @@ jobs:
           echo "--- wrangler whoami (token account + scopes) ---"
           npx wrangler whoami || echo "::warning::wrangler whoami failed — token is invalid or unauthorized"
 
-      - name: Apply D1 migrations & deploy to Cloudflare Workers
+      - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Apply any pending D1 migrations against the remote DB, then deploy.
-          # `migrations apply` is idempotent (only unapplied migrations run), and
-          # the app still self-heals its tables at runtime as a belt-and-braces.
-          command: d1 migrations apply smart-pantry-db --remote && deploy
+          # Deploy only. Migrations are intentionally NOT auto-applied here: this
+          # D1 was bootstrapped at runtime (ensureFeatureTables self-heals every
+          # table/column), so it has no wrangler migration history — running
+          # `d1 migrations apply` would replay 0001+ from scratch and collide
+          # with the existing tables. If you ever switch to migration-managed
+          # schema, add a separate step:  wrangler d1 migrations apply smart-pantry-db --remote
