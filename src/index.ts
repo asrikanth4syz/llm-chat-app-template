@@ -730,6 +730,8 @@ export default {
       if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
+      if (path==="/api/pipeline"               && method==="GET")  return handlePipeline(request,env);
+      if (path.match(/^\/api\/orders\/[^/]+\/lifecycle$/)    && method==="GET")  return handleOrderLifecycle(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
@@ -1193,6 +1195,249 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
     env.DB.prepare("SELECT * FROM order_comments WHERE order_id=? ORDER BY created_at").bind(id).all(),
   ]);
   return json({...order, items, history, comments});
+}
+
+// ── Order lifecycle & pipeline (single-order timeline + control-tower board) ──
+// Both are read-model PROJECTIONS assembled from timestamps that already exist
+// (orders, order_history, purchase_orders, delivery_challans) — no new writes.
+
+// Canonical stage an order's status is "sitting in" — the board buckets.
+type StageKey = "approval"|"inventory"|"vendor_po"|"dispatch"|"delivery"|"pod"|"billing"|"done";
+const STAGE_META: Record<StageKey,{no:number;label:string}> = {
+  approval:{no:3,label:"Approval"}, inventory:{no:4,label:"Inventory"}, vendor_po:{no:5,label:"Vendor PO"},
+  dispatch:{no:6,label:"Dispatch"}, delivery:{no:8,label:"Delivery"}, pod:{no:9,label:"POD"},
+  billing:{no:10,label:"Billing"}, done:{no:11,label:"Closed"},
+};
+function stageFromStatus(status: string): StageKey {
+  switch (status) {
+    case "DRAFT": case "PENDING_PRICING": case "SUBMITTED": case "PENDING_APPROVAL": return "approval";
+    case "APPROVED": case "ACKNOWLEDGED": case "INVENTORY_CHECK": return "inventory";
+    case "VENDOR_PO_RAISED": return "vendor_po";
+    case "READY_TO_PICK": case "PICKED": case "QUALITY_CHECK": return "dispatch";
+    case "IN_SHIPMENT": case "PARTIALLY_CLOSED": return "delivery";
+    default: return "done"; // CLOSED etc. refined by DC state
+  }
+}
+// Rough per-stage SLA (days) — dwell beyond this flags the card.
+const STAGE_SLA: Record<string,number> = { approval:1, inventory:1, vendor_po:2, dispatch:1, delivery:2, pod:1, billing:2 };
+const hoursBetween = (a: string, b: number) => (b - new Date(String(a).replace(" ","T")+"Z").getTime()) / 3600000;
+function fmtDwell(hrs: number): string {
+  if (!isFinite(hrs) || hrs < 0) return "—";
+  if (hrs < 24) return `${Math.max(1,Math.round(hrs))}h`;
+  const d = Math.floor(hrs/24), h = Math.round(hrs%24);
+  return h ? `${d}d ${h}h` : `${d}d`;
+}
+
+// GET /api/orders/:id/lifecycle — the 10-stage timeline for one order.
+async function handleOrderLifecycle(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+
+  const order = await env.DB.prepare(`SELECT o.*, c.name AS client_name, c.zone AS client_zone, c.gstin AS client_gstin,
+      u.name AS creator_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id
+      WHERE o.id=?`).bind(id).first() as Record<string,unknown> | null;
+  if (!order) return json({error:"Not found"}, 404);
+  // External roles only see their own client's orders.
+  if (isExternalRole(user!.role) && user!.client_id && order.client_id !== user!.client_id) return json({error:"Forbidden"}, 403);
+
+  const [{results:history},{results:pos},{results:dcs}] = await Promise.all([
+    env.DB.prepare("SELECT from_status,to_status,actor_name,note,created_at FROM order_history WHERE order_id=? ORDER BY created_at").bind(id).all(),
+    env.DB.prepare(`SELECT p.id,p.status,p.created_at,p.grand_total,v.name AS vendor_name
+      FROM purchase_orders p LEFT JOIN vendors v ON p.vendor_id=v.id WHERE p.order_id=? ORDER BY p.created_at`).bind(id).all().catch(()=>({results:[]})),
+    env.DB.prepare(`SELECT dc_number,status,dispatched_at,delivered_at,pod_uploaded,billed,billed_at,total_qty,delivered_qty,driver_name,vehicle_no
+      FROM delivery_challans WHERE order_id=? ORDER BY dispatched_at`).bind(id).all().catch(()=>({results:[]})),
+  ]);
+  const H = history as Array<Record<string,string>>;
+  const POs = pos as Array<Record<string,unknown>>;
+  const DCs = dcs as Array<Record<string,unknown>>;
+  const hasTo = (s: string) => H.some(h => h.to_status === s);
+  const histAt = (s: string) => H.find(h => h.to_status === s)?.created_at || null;
+  const nowMs = Date.now();
+  const reached = (st: string) => hasTo(st) || false;
+
+  type Sub = { text: string; at: string|null; wait?: boolean };
+  type Stage = { key: string; no: number; label: string; state: "done"|"current"|"pending"|"skipped";
+    at: string|null; actor?: string|null; note?: string; refs?: string[]; subs?: Sub[]; tag?: string };
+  const stages: Stage[] = [];
+
+  // 01 Client (context)
+  stages.push({ key:"client", no:1, label:"Client", state:"done", at:null,
+    note:`${order.client_name||"—"}${order.client_zone?` · ${order.client_zone} zone`:""}${order.client_gstin?` · GSTIN ${order.client_gstin}`:""}` });
+
+  // 02 Budget (advisory, at order time)
+  stages.push({ key:"budget", no:2, label:"Budget", state:"done", at:String(order.created_at||""), tag:"Advisory",
+    note:"Checked at order time — advisory, not enforced." });
+
+  // 03 Order
+  const orderSubs: Sub[] = H.filter(h => ["SUBMITTED","PENDING_APPROVAL","APPROVED"].includes(h.to_status)).map(h => ({
+    text: h.to_status==="PENDING_APPROVAL" ? `Held for approval${h.note?` — ${h.note}`:""}`
+        : h.to_status==="APPROVED" ? `Approved${h.actor_name?` by ${h.actor_name}`:""}`
+        : `Submitted${h.actor_name?` by ${h.actor_name}`:""}`,
+    at: h.created_at }));
+  stages.push({ key:"order", no:3, label:"Order", state:"done", at:String(order.created_at||""),
+    actor:String(order.creator_name||""), note:`${order.grand_total?`₹${Number(order.grand_total).toLocaleString("en-IN")}`:""}`.trim(),
+    subs: orderSubs.length?orderSubs:undefined });
+
+  // 04 Inventory
+  const invReached = reached("INVENTORY_CHECK") || reached("READY_TO_PICK") || reached("VENDOR_PO_RAISED") || DCs.length>0;
+  stages.push({ key:"inventory", no:4, label:"Inventory",
+    state: invReached ? (order.status==="INVENTORY_CHECK"?"current":"done") : (order.status==="INVENTORY_CHECK"?"current":"pending"),
+    at: histAt("INVENTORY_CHECK"),
+    note: POs.length ? `Shortage → ${POs.length} line(s) routed to procurement` : (invReached?"Stock checked & reserved":"Awaiting stock check"),
+    tag: POs.length?"Shortage → branch":undefined });
+
+  // 05 Vendor PO (skipped when in stock)
+  if (POs.length) {
+    const poSubs: Sub[] = POs.map(p => ({ text:`${p.po_number||p.id} → ${p.vendor_name||"vendor"} · ${p.status}`, at:String(p.created_at||"") }));
+    const poDone = POs.every(p => ["RECEIVED","INVOICED","CLOSED"].includes(String(p.status)));
+    stages.push({ key:"vendor_po", no:5, label:"Vendor PO",
+      state: order.status==="VENDOR_PO_RAISED" && !poDone ? "current" : (invReached?"done":"pending"),
+      at:String(POs[0].created_at||""), subs:poSubs, refs:POs.map(p=>String(p.po_number||p.id)) });
+  } else {
+    stages.push({ key:"vendor_po", no:5, label:"Vendor PO", state:"skipped", at:null, note:"Not required — fulfilled from stock." });
+  }
+
+  const dispatched = DCs.filter(d => d.dispatched_at);
+  const delivered  = DCs.filter(d => d.delivered_at);
+  const podDone    = DCs.filter(d => Number(d.pod_uploaded)===1);
+  const billed     = DCs.filter(d => Number(d.billed)===1);
+  const dcState = (haveAll: boolean, haveSome: boolean, activeStatuses: string[]): Stage["state"] =>
+    haveAll ? "done" : (haveSome || activeStatuses.includes(String(order.status)) ? "current" : "pending");
+
+  // 06 Dispatch
+  stages.push({ key:"dispatch", no:6, label:"Dispatch",
+    state: dcState(dispatched.length>0 && dispatched.length===Math.max(DCs.length,1) && DCs.length>0, dispatched.length>0, ["READY_TO_PICK","PICKED","QUALITY_CHECK"]),
+    at: dispatched[0]?String(dispatched[0].dispatched_at):null,
+    subs: dispatched.length?dispatched.map(d=>({text:`${d.dc_number||"DC"} dispatched — ${d.total_qty||0} units${d.vehicle_no?` · ${d.vehicle_no}`:""}${d.driver_name?` · ${d.driver_name}`:""}`, at:String(d.dispatched_at)})):undefined });
+
+  // 07 Delivery Challan
+  stages.push({ key:"dc", no:7, label:"Delivery Challan",
+    state: DCs.length ? "done" : "pending",
+    at: dispatched[0]?String(dispatched[0].dispatched_at):null,
+    tag: DCs.length>1?`${DCs.length} challans`:undefined,
+    refs: DCs.map(d=>`${d.dc_number||"DC"}${d.total_qty?` · ${d.total_qty}`:""}`) });
+
+  // 08 Delivery
+  const allDelivered = DCs.length>0 && delivered.length===DCs.length;
+  stages.push({ key:"delivery", no:8, label:"Delivery",
+    state: dcState(allDelivered, delivered.length>0, ["IN_SHIPMENT","PARTIALLY_CLOSED"]),
+    at: delivered[0]?String(delivered[0].delivered_at):null,
+    subs: DCs.length?DCs.map(d=>({ text: d.delivered_at?`${d.dc_number||"DC"} delivered — ${d.delivered_qty||d.total_qty||0} received`:`${d.dc_number||"DC"} in transit`, at: d.delivered_at?String(d.delivered_at):null, wait: !d.delivered_at })):undefined });
+
+  // 09 POD
+  const allPod = DCs.length>0 && podDone.length===DCs.length;
+  stages.push({ key:"pod", no:9, label:"POD",
+    state: allPod ? "done" : (podDone.length>0 ? "current" : "pending"),
+    at: null, tag: DCs.length>1?`${podDone.length} of ${DCs.length}`:undefined,
+    subs: DCs.length?DCs.map(d=>({ text:`${d.dc_number||"DC"} POD ${Number(d.pod_uploaded)===1?"uploaded":"pending"}`, at:null, wait: Number(d.pod_uploaded)!==1 })):undefined,
+    note: DCs.length?undefined:"Awaiting delivery." });
+
+  // 10 Billing
+  const allBilled = DCs.length>0 && billed.length===DCs.length;
+  stages.push({ key:"billing", no:10, label:"Billing",
+    state: allBilled ? "done" : "pending",
+    at: billed[0]?String(billed[0].billed_at):null,
+    note: allBilled?"Billed.":"Awaiting full delivery & POD before billing." });
+
+  // Current = first non-terminal stage that isn't done/skipped.
+  const current = stages.find(s => s.state==="current") || stages.find(s => s.state==="pending");
+  const doneCount = stages.filter(s => s.state==="done").length;
+
+  return json({
+    order: { id: order.id, client_name: order.client_name, grand_total: order.grand_total,
+      status: order.status, created_at: order.created_at, creator_name: order.creator_name },
+    stages, current_key: current?current.key:"billing",
+    progress: { done: doneCount, total: stages.length },
+    elapsed: fmtDwell(hoursBetween(String(order.created_at||new Date().toISOString()), nowMs)),
+  });
+}
+
+// GET /api/pipeline — control-tower board: in-flight orders bucketed by stage + KPIs.
+async function handlePipeline(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const { results: orders } = await env.DB.prepare(`SELECT o.id,o.status,o.grand_total,o.created_at,c.name AS client_name
+    FROM orders o LEFT JOIN clients c ON o.client_id=c.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT') ORDER BY o.created_at DESC LIMIT 400`).all();
+
+  // DC roll-up per order (delivered / POD / billed counts) to refine the tail stages.
+  const dcAgg: Record<string,{n:number;deliv:number;pod:number;billed:number;po:string|null}> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id,
+      COUNT(*) n, SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) deliv,
+      SUM(COALESCE(pod_uploaded,0)) pod, SUM(COALESCE(billed,0)) billed
+      FROM delivery_challans WHERE order_id IS NOT NULL GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) dcAgg[String(r.order_id)] = { n:Number(r.n), deliv:Number(r.deliv), pod:Number(r.pod), billed:Number(r.billed), po:null };
+  } catch { /* table pending */ }
+  // Last activity per order (for stage dwell).
+  const lastAt: Record<string,string> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id, MAX(created_at) t FROM order_history GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) lastAt[String(r.order_id)] = String(r.t);
+  } catch { /* */ }
+  // PO ref per order (first PO) for card display.
+  const poRef: Record<string,string> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id, MIN(id) p FROM purchase_orders WHERE order_id IS NOT NULL GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) if (r.p) poRef[String(r.order_id)] = String(r.p);
+  } catch { /* */ }
+
+  const nowMs = Date.now();
+  const order: StageKey[] = ["approval","inventory","vendor_po","dispatch","delivery","pod","billing"];
+  const buckets: Record<string,{ key:string; no:number; label:string; count:number; value:number; dwellSum:number; orders:Array<Record<string,unknown>> }> = {};
+  for (const k of order) buckets[k] = { key:k, no:STAGE_META[k].no, label:STAGE_META[k].label, count:0, value:0, dwellSum:0, orders:[] };
+
+  let inflight=0, value=0, overdue=0;
+  for (const o of orders as Array<Record<string,unknown>>) {
+    const oid = String(o.id); const status = String(o.status);
+    let key = stageFromStatus(status);
+    const agg = dcAgg[oid];
+    // Refine the tail: a delivered/closed order still sits in POD or Billing until those clear.
+    if (key==="done" || status==="PARTIALLY_CLOSED" || status==="CLOSED") {
+      if (agg && agg.n>0) {
+        if (agg.deliv < agg.n) key = "delivery";
+        else if (agg.pod < agg.n) key = "pod";
+        else if (agg.billed < agg.n) key = "billing";
+        else key = "done";
+      } else if (status==="CLOSED") key = "done";
+    }
+    if (key==="done" || !buckets[key]) continue; // fully complete — off the board
+    const dwellH = hoursBetween(lastAt[oid] || String(o.created_at), nowMs);
+    const sla = STAGE_SLA[key] || 2;
+    const isLate = dwellH > sla*24;
+    const b = buckets[key];
+    inflight++; value += Number(o.grand_total)||0; if (isLate) overdue++;
+    b.count++; b.value += Number(o.grand_total)||0; b.dwellSum += dwellH;
+    if (b.orders.length < 25) b.orders.push({
+      id: oid, client_name: o.client_name, value: Number(o.grand_total)||0,
+      dwell: fmtDwell(dwellH), dwell_h: Math.round(dwellH),
+      sla: isLate ? "late" : (dwellH > sla*24*0.6 ? "risk" : "ok"),
+      po_ref: poRef[oid] || null,
+      flag: isLate || (key==="inventory" && !!poRef[oid]),
+    });
+  }
+
+  const bucketList = order.map(k => ({ ...buckets[k], avg_dwell: buckets[k].count?fmtDwell(buckets[k].dwellSum/buckets[k].count):"—",
+    orders: buckets[k].orders.sort((a,b)=>Number(b.dwell_h)-Number(a.dwell_h)) }));
+  const busiest = [...bucketList].filter(b=>b.count>0).sort((a,b)=>b.dwellSum/(b.count||1) - a.dwellSum/(a.count||1))[0];
+
+  // Avg cycle time: created → last delivery, over the last 30 days.
+  let avgCycle = "—";
+  try {
+    const row = await env.DB.prepare(`SELECT ROUND(AVG(julianday(dc.delivered_at)-julianday(o.created_at)),1) d
+      FROM orders o JOIN delivery_challans dc ON dc.order_id=o.id
+      WHERE dc.delivered_at IS NOT NULL AND dc.delivered_at >= datetime('now','-30 day')`).first() as {d:number}|null;
+    if (row && row.d != null) avgCycle = `${row.d}d`;
+  } catch { /* */ }
+
+  return json({
+    kpis: { inflight, value, overdue, avg_cycle: avgCycle,
+      bottleneck: busiest ? { label: busiest.label, avg_dwell: busiest.avg_dwell } : null },
+    buckets: bucketList.map(({dwellSum, ...b})=>b),
+  });
 }
 
 // GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)

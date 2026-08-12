@@ -127,7 +127,7 @@ const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2
 const PAGE_ICON = {
   dashboard: iconHome,
   // Orders & fulfilment
-  orders: iconOrders, consolidated_due: iconClock, fulfilment: iconFulfil,
+  orders: iconOrders, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
   todays_schedule: iconCalCheck,
   // Deliveries
   delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
@@ -166,6 +166,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',   label:'Home', icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'pipeline',            label:'Pipeline',         icon:iconReports, badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders, badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,  badge:'!' },
     { section:'Operations' },
@@ -206,6 +207,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',           label:'Home',             icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'pipeline',            label:'Pipeline',         icon:iconReports,   badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReports,   badge:'!' },
     { section:'Operations' },
@@ -981,6 +983,7 @@ const PAGE_MAP = {
   my_inventory: 'renderMyInventory',
   orders_inventory: 'renderOrdersInventory',
   alerts: 'renderAlerts',
+  pipeline: 'renderPipeline',
 };
 
 function navigate(page) {
