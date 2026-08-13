@@ -1204,35 +1204,53 @@ async function settingsTab(tab, btn) {
 
   else if (tab === 'zones') {
     const zones = await api('/zones') || [];
-    const list = Array.isArray(zones) ? zones : [];
-    el.innerHTML = `
-    <div class="card">
+    el.innerHTML = `<div class="card">
       <div class="card-header"><span>Location Zones</span>
         <span style="font-size:.83rem;color:var(--text-muted)">Zones offered when adding or editing a client</span>
       </div>
-      <div class="card-body" style="padding:20px;display:grid;gap:16px">
-        <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
-          A short code (e.g. <code>EGL</code>) plus an optional friendly name. Removing a zone won't change clients already assigned to it.
-        </div>
-        <div style="display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:end">
-          <div class="form-group" style="margin:0"><label>Code</label><input type="text" id="zn-code" placeholder="e.g. WFD" maxlength="12"></div>
-          <div class="form-group" style="margin:0"><label>Name (optional)</label><input type="text" id="zn-label" placeholder="e.g. Whitefield"></div>
-          <button class="btn btn-primary" ${dataAct('saveZone')}>Add / Update</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th style="width:140px">Code</th><th>Name</th><th style="width:90px"></th></tr></thead>
-          <tbody>${list.map(z=>`<tr>
-            <td><b class="mono">${h(z.code)}</b></td>
-            <td>${h(z.label||z.code)}</td>
-            <td><button class="btn btn-sm btn-secondary" ${dataAct('deleteZone', z.code)}>Remove</button></td>
-          </tr>`).join('')||'<tr><td colspan="3" class="u-empty">No zones yet — add one above</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+      ${zonesManagerHTML(Array.isArray(zones) ? zones : [])}
     </div>`;
   }
+}
+
+// Shared zones manager (form + table) used by the standalone page and the
+// Settings tab.
+function zonesManagerHTML(list) {
+  return `
+    <div class="card-body" style="padding:20px;display:grid;gap:16px">
+      <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
+        A short code (e.g. <code>EGL</code>) plus an optional friendly name. It appears in the client's Location Zone dropdown. Removing a zone won't change clients already assigned to it.
+      </div>
+      <div style="display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:end">
+        <div class="form-group" style="margin:0"><label>Code</label><input type="text" id="zn-code" placeholder="e.g. WFD" maxlength="12"></div>
+        <div class="form-group" style="margin:0"><label>Name (optional)</label><input type="text" id="zn-label" placeholder="e.g. Whitefield"></div>
+        <button class="btn btn-primary" ${dataAct('saveZone')}>Add / Update</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th style="width:140px">Code</th><th>Name</th><th style="width:90px"></th></tr></thead>
+        <tbody>${list.map(z=>`<tr>
+          <td><b>${h(z.code)}</b></td>
+          <td>${h(z.label||z.code)}</td>
+          <td><button class="btn btn-sm btn-secondary" ${dataAct('deleteZone', z.code)}>Remove</button></td>
+        </tr>`).join('')||'<tr><td colspan="3" class="u-empty">No zones yet — add one above</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// Standalone Admin page (sidebar + search), same manager as the Settings tab.
+async function renderZonesPage(el) {
+  const zones = await api('/zones') || [];
+  el.innerHTML = pageHeader('Location Zones', 'Delivery / client zones offered when adding or editing a client') +
+    `<div class="card">${zonesManagerHTML(Array.isArray(zones) ? zones : [])}</div>`;
+}
+
+// Re-render whichever view is showing the zones manager (page or Settings tab).
+function refreshZonesView() {
+  if (APP.page === 'zones') { const el = document.getElementById('main-content'); if (el) renderZonesPage(el); }
+  else settingsTab('zones', document.querySelector('.settings-nav-btn.active'));
 }
 
 async function saveZone() {
@@ -1243,7 +1261,7 @@ async function saveZone() {
   if (res) {
     if (res.zones) APP._zones = res.zones; // refresh the cache used by client forms
     showToast(`Zone ${String(code).toUpperCase()} saved`);
-    settingsTab('zones', document.querySelector('.settings-nav-btn.active'));
+    refreshZonesView();
   }
 }
 
@@ -1253,7 +1271,7 @@ async function deleteZone(code) {
   if (res) {
     if (res.zones) APP._zones = res.zones;
     showToast(`Zone ${code} removed`);
-    settingsTab('zones', document.querySelector('.settings-nav-btn.active'));
+    refreshZonesView();
   }
 }
 
