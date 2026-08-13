@@ -148,7 +148,7 @@ const PAGE_ICON = {
   alerts: iconBell,
   // Admin & settings
   users: iconUsers, staff: iconBadge, templates: iconLayout, import_data: iconUpload,
-  settings: iconSettings,
+  zones: iconPin, settings: iconSettings,
   // Client / ordering
   place_order: iconCart, my_orders: iconOrders, orders_inventory: iconLayers,
   // Vendor portal
@@ -200,6 +200,7 @@ const NAV = {
     { section:'Admin & Settings' },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconUsers,  badge:null },
+    { id:'zones',       label:'Location Zones', icon:iconPin,    badge:null },
     { id:'templates',   label:'Templates',      icon:iconOrders, badge:null },
     { id:'import_data', label:'CSV Import',     icon:iconUpload, badge:null },
   ],
@@ -984,6 +985,7 @@ const PAGE_MAP = {
   orders_inventory: 'renderOrdersInventory',
   alerts: 'renderAlerts',
   pipeline: 'renderPipeline',
+  zones: 'renderZonesPage',
 };
 
 function navigate(page) {
