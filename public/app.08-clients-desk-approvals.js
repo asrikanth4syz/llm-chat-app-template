@@ -802,17 +802,31 @@ async function confirmCCCsvImport() {
   showToast(`${matched.length} item${matched.length!==1?'s':''} imported${res.priced?` · ${res.priced} priced`:''}`);
 }
 
-const ZONE_OPTIONS = ['EGL','BTP','BTM','PV','FW','Other'];
+const ZONE_DEFAULTS = ['EGL','BTP','BTM','PV','FW','Other'];
+// Zones are admin-managed (Settings → Zones); cache after first load so the
+// client form can render them synchronously.
+async function loadZones(force) {
+  if (APP._zones && !force) return APP._zones;
+  const z = await api('/zones').catch(() => null);
+  APP._zones = (Array.isArray(z) && z.length) ? z : ZONE_DEFAULTS.map(c => ({ code: c, label: c }));
+  return APP._zones;
+}
+function zoneOptionsHTML(selected) {
+  const list = (APP._zones && APP._zones.length) ? APP._zones : ZONE_DEFAULTS.map(c => ({ code: c, label: c }));
+  const codes = list.map(z => z.code);
+  const opts = ['<option value="">— Select Zone —</option>']
+    .concat(list.map(z => `<option value="${h(z.code)}"${selected === z.code ? ' selected' : ''}>${h(z.label || z.code)}</option>`));
+  // keep a since-removed zone visible so editing a client doesn't silently drop it
+  if (selected && !codes.includes(selected)) opts.push(`<option value="${h(selected)}" selected>${h(selected)} (removed)</option>`);
+  return opts.join('');
+}
 
 function clientFormFields(prefix, c={}) {
   return `
     <div class="grid-2">
       <div class="form-group"><label>Company Name *</label><input type="text" id="${prefix}-name" value="${c.name||''}"></div>
       <div class="form-group"><label>Location Zone</label>
-        <select id="${prefix}-zone">
-          <option value="">— Select Zone —</option>
-          ${ZONE_OPTIONS.map(z=>`<option value="${z}"${c.zone===z?' selected':''}>${z}</option>`).join('')}
-        </select>
+        <select id="${prefix}-zone">${zoneOptionsHTML(c.zone)}</select>
       </div>
     </div>
     <div class="grid-2">
@@ -916,7 +930,8 @@ function readTaxIds(prefix) {
   return { ok: true, gstin, pan: finalPan };
 }
 
-function addClientModal() {
+async function addClientModal() {
+  await loadZones();
   openModal('Add Client', clientFormFields('cl'),
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveClient')}>Add Client</button>`);
@@ -976,7 +991,8 @@ function viewClientModal(c) {
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
-function editClientModal(c) {
+async function editClientModal(c) {
+  await loadZones();
   openModal(`Edit Client: ${c.name}`, clientFormFields('ecl', c),
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveEditClient', c.id)}>Save Changes</button>`);

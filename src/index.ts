@@ -750,6 +750,9 @@ export default {
       if (path==="/api/hsn-gst"                 && method==="GET")   return handleHsnGstLookup(request,env);
       if (path==="/api/hsn-gst-rates"           && method==="GET")   return handleListHsnGstRates(request,env);
       if (path==="/api/hsn-gst-rates"           && method==="POST")  return handleUpsertHsnGstRate(request,env);
+      if (path==="/api/zones"                   && method==="GET")   return handleListZones(request,env);
+      if (path==="/api/zones"                   && method==="POST")  return handleUpsertZone(request,env);
+      if (path.match(/^\/api\/zones\/[^/]+$/)   && method==="DELETE") return handleDeleteZone(request,env,path);
       if (path.match(/^\/api\/inventory\/[^/]+\/critical$/) && method==="PATCH") return handleToggleCritical(request,env,path);
       if (path.match(/^\/api\/inventory\/[^/]+$/) && method==="PATCH") return handlePatchInventory(request,env,path);
 
@@ -1492,6 +1495,57 @@ async function handleSaveSla(request: Request, env: Env): Promise<Response> {
   await setConfig(env, "pipeline_sla", JSON.stringify(cfg), user!.sub);
   await audit(env, user, "UPDATE", "config", "pipeline_sla", undefined, JSON.stringify(cfg));
   return json({ ok: true, ...cfg });
+}
+
+// ── Location zones (admin-managed, config-backed) ────────────────────
+type Zone = { code: string; label: string };
+const ZONE_DEFAULTS: Zone[] = [
+  { code:"EGL", label:"EGL" }, { code:"BTP", label:"BTP" }, { code:"BTM", label:"BTM" },
+  { code:"PV", label:"PV" }, { code:"FW", label:"FW" }, { code:"Other", label:"Other" },
+];
+async function getZones(env: Env): Promise<Zone[]> {
+  try {
+    const raw = await getConfig(env, "location_zones", "");
+    if (raw) {
+      const arr = JSON.parse(raw) as Zone[];
+      if (Array.isArray(arr) && arr.length) return arr.filter(z => z && z.code);
+    }
+  } catch { /* fall through */ }
+  return [...ZONE_DEFAULTS];
+}
+const normZoneCode = (s: unknown) => String(s || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 12);
+
+async function handleListZones(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  return json(await getZones(env));
+}
+
+async function handleUpsertZone(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const body = await request.json() as { code?: unknown; label?: unknown };
+  const code = normZoneCode(body.code);
+  if (!code) return json({error:"Zone code required (letters/digits)"}, 400);
+  const label = String(body.label || code).trim().slice(0, 40) || code;
+  const zones = await getZones(env);
+  const i = zones.findIndex(z => z.code === code);
+  if (i >= 0) zones[i] = { code, label }; else zones.push({ code, label });
+  await setConfig(env, "location_zones", JSON.stringify(zones), user!.sub);
+  await audit(env, user, "UPSERT", "config", "location_zones", undefined, code);
+  return json({ ok: true, zones });
+}
+
+async function handleDeleteZone(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const code = normZoneCode(decodeURIComponent(path.split("/").pop()!));
+  const zones = (await getZones(env)).filter(z => z.code !== code);
+  await setConfig(env, "location_zones", JSON.stringify(zones), user!.sub);
+  await audit(env, user, "DELETE", "config", "location_zones", code, undefined);
+  return json({ ok: true, zones });
 }
 
 // GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)

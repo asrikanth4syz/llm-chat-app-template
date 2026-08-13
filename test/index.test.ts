@@ -1457,3 +1457,33 @@ describe("Order lifecycle & pipeline board", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// ── Location zones (admin-managed) ───────────────────────────────────
+describe("Location zones", () => {
+  it("GET /api/zones returns the default set when unset", async () => {
+    const z = await (await get("/api/zones", adminToken)).json() as Array<{code:string}>;
+    expect(z.map(x => x.code)).toContain("EGL");
+  });
+
+  it("POST /api/zones adds a zone that the list then includes", async () => {
+    const res = await post("/api/zones", { code: "wfd", label: "Whitefield" }, adminToken);
+    expect(res.status).toBe(200);
+    const z = await (await get("/api/zones", adminToken)).json() as Array<{code:string;label:string}>;
+    const wfd = z.find(x => x.code === "WFD");  // normalised to upper-case
+    expect(wfd).toBeTruthy();
+    expect(wfd!.label).toBe("Whitefield");
+  });
+
+  it("DELETE /api/zones/:code removes it", async () => {
+    await post("/api/zones", { code: "TMP", label: "Temp" }, adminToken);
+    const res = await del("/api/zones/TMP", adminToken);
+    expect(res.status).toBe(200);
+    const z = await (await get("/api/zones", adminToken)).json() as Array<{code:string}>;
+    expect(z.find(x => x.code === "TMP")).toBeFalsy();
+  });
+
+  it("POST /api/zones rejects an empty code and forbids client roles", async () => {
+    expect((await post("/api/zones", { code: "" }, adminToken)).status).toBe(400);
+    expect((await post("/api/zones", { code: "X" }, clientToken)).status).toBe(403);
+  });
+});
