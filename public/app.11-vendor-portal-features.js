@@ -500,6 +500,39 @@ async function createOptimizedRoute() {
   if (res) { showToast('Route created with ' + selected.length + ' stops'); navigate('delivery_routes'); }
 }
 
+// "New Route" header button — a self-contained modal to name a route, pick a
+// date and bundle unrouted delivery challans into it.
+async function openNewRouteModal() {
+  const dcs = await api('/delivery-challans') || [];
+  const undelivered = dcs.filter(d => d.status !== 'DELIVERED');
+  const today = new Date().toISOString().slice(0, 10);
+  const body = `
+    <div class="form-group"><label>Route Name</label><input type="text" id="nr-name" value="Route ${today}"></div>
+    <div class="form-group"><label>Route Date</label><input type="date" id="nr-date" value="${today}"></div>
+    <div class="form-group"><label>Stops — select delivery challans (${undelivered.length})</label>
+      ${undelivered.length ? `<div style="display:grid;gap:6px;max-height:300px;overflow:auto">
+        ${undelivered.map(dc => `<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+          <input type="checkbox" class="nr-dc" value="${dc.id}" style="width:16px;height:16px;flex-shrink:0">
+          <div><div style="font-weight:600;font-size:.85rem">DC #${dc.id}</div>
+          <div style="font-size:.74rem;color:var(--text-muted)">Order ${dc.order_id || '—'} · ${h(dc.client_name || 'Unknown')}</div></div>
+        </label>`).join('')}
+      </div>` : `<div style="color:var(--text-muted);font-size:.85rem;padding:8px 0">No unrouted delivery challans available — every DC is already routed or delivered.</div>`}
+    </div>`;
+  openModal('New Route', body,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('submitNewRoute')}>Create Route</button>`);
+}
+
+async function submitNewRoute() {
+  const name = (document.getElementById('nr-name')?.value || '').trim() || 'Route';
+  const route_date = document.getElementById('nr-date')?.value || new Date().toISOString().slice(0, 10);
+  const dc_ids = [...document.querySelectorAll('.nr-dc:checked')].map(el => el.value);
+  if (!dc_ids.length) { showToast('Select at least one delivery challan', 'error'); return; }
+  const res = await api('/delivery-routes', { method: 'POST', body: JSON.stringify({ name, dc_ids, route_date }) });
+  closeModal();
+  if (res) { showToast('Route created with ' + dc_ids.length + ' stop' + (dc_ids.length !== 1 ? 's' : '')); navigate('delivery_routes'); }
+}
+
 async function updateRouteStatus(id, status) {
   const res = await api('/delivery-routes/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
   if (res) { showToast('Route status updated'); navigate('delivery_routes'); }

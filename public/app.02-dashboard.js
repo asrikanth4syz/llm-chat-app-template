@@ -555,9 +555,6 @@ async function renderOpsDashboard(el) {
     </div>
   </div>
 
-  <!-- Recent orders → pipeline/timeline widget (filled after render) -->
-  <div id="ops-recent-pipeline" style="margin-bottom:18px"></div>
-
   <!-- ── KPI TILES ── -->
   <div class="ct-kpi-grid">
     ${(() => {
@@ -720,32 +717,8 @@ async function renderOpsDashboard(el) {
     </div>
   </div>
 
-  <!-- ── RECENT ORDERS ── -->
-  <div class="ct-card">
-    <div class="ct-card-hd">
-      <div>
-        <div class="ct-card-title">Recent Orders</div>
-        <div class="ct-card-sub">Latest activity across all clients</div>
-      </div>
-      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>View All →</button>
-    </div>
-    ${(recentOrders||[]).map(o=>`
-    <div class="ct-order-row" ${dataAct('viewOrder', o.id)}>
-      <div style="width:38px;height:38px;border-radius:10px;background:#f0f4ff;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0">🧾</div>
-      <div class="u-flex1">
-        <div style="font-weight:700;font-size:.88rem;color:var(--navy)">${o.id}</div>
-        <div style="font-size:.74rem;color:var(--text-muted);margin-top:1px">${o.client_name||'—'}</div>
-      </div>
-      <div style="flex-shrink:0;text-align:right">
-        <div style="font-weight:800;font-size:.9rem;color:var(--navy)">${fmt(o.grand_total)}</div>
-        <div style="margin-top:3px">${statusBadge(o.status)}</div>
-      </div>
-      <div style="flex-shrink:0;text-align:right;margin-left:8px">
-        <div style="font-size:.73rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
-      </div>
-      <div style="color:var(--text-muted);font-size:.85rem;margin-left:4px">›</div>
-    </div>`).join('')||'<div style="padding:32px;text-align:center;color:var(--text-muted)">No orders yet</div>'}
-  </div>`;
+  <!-- ── RECENT ORDERS → pipeline + timeline widget (filled after render) ── -->
+  <div id="ops-recent-pipeline"></div>`;
 
   // Render chart after DOM is ready
   const labels = ['SUBMITTED','ACKNOWLEDGED','PICKED','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
