@@ -5802,10 +5802,16 @@ async function handleMaterializeStandingOrder(request: Request, env: Env, path: 
   if (!items.length) return json({error:"Standing order has no items"}, 400);
   const priced: Array<{sku:string;name:string;qty:number;unit_price:number}> = [];
   for (const it of items) {
-    const inv = await env.DB.prepare("SELECT name, unit_price, client_price FROM inventory WHERE sku=?")
+    const inv = await env.DB.prepare("SELECT name, unit_price FROM inventory WHERE sku=?")
       .bind(it.sku).first() as Record<string,unknown>|null;
-    priced.push({ sku: it.sku, name: String(inv?.name || it.name || it.sku), qty: Number(it.qty)||1,
-      unit_price: Number((inv?.client_price ?? inv?.unit_price) || 0) });
+    // Client-specific price lives on client_catalog (not inventory); prefer it when set.
+    let price = Number(inv?.unit_price || 0);
+    try {
+      const cc = await env.DB.prepare("SELECT client_price FROM client_catalog WHERE client_id=? AND sku=?")
+        .bind(so.client_id, it.sku).first() as Record<string,unknown>|null;
+      if (cc && cc.client_price != null) price = Number(cc.client_price);
+    } catch { /* client_catalog / client_price not present — use catalogue price */ }
+    priced.push({ sku: it.sku, name: String(inv?.name || it.name || it.sku), qty: Number(it.qty)||1, unit_price: price });
   }
 
   // Reuse the full order pipeline — approval rules, stock reservation,

@@ -1487,3 +1487,29 @@ describe("Location zones", () => {
     expect((await post("/api/zones", { code: "X" }, clientToken)).status).toBe(403);
   });
 });
+
+// ── Standing order → materialize (Delivery Calendar "Create order") ──
+describe("Standing order materialize", () => {
+  const sdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await sdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("SO-CL", "Standing Co").run();
+    await sdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,1)")
+      .bind("SO-SKU", "Recurring Item", "Grocery", 50, 500).run();
+    await sdb.prepare(`INSERT OR IGNORE INTO standing_orders (id,client_id,name,frequency,items,active)
+      VALUES (?,?,?,?,?,1)`).bind("SO-1", "SO-CL", "Monthly pantry", "MONTHLY", JSON.stringify([{ sku: "SO-SKU", qty: 3 }])).run();
+  });
+
+  it("POST /standing-orders/:id/materialize creates a real order (regression: client_price column)", async () => {
+    const res = await post("/api/standing-orders/SO-1/materialize", { date: "2026-09-01" }, adminToken);
+    expect(res.status).toBe(201);
+    const d = await res.json() as { ok: boolean; order_id: string };
+    expect(d.ok).toBe(true);
+    expect(d.order_id).toBeTruthy();
+  });
+
+  it("materializing the same cycle twice is rejected (409)", async () => {
+    await post("/api/standing-orders/SO-1/materialize", { date: "2026-10-01" }, adminToken);
+    const dup = await post("/api/standing-orders/SO-1/materialize", { date: "2026-10-01" }, adminToken);
+    expect(dup.status).toBe(409);
+  });
+});
