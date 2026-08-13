@@ -555,6 +555,9 @@ async function renderOpsDashboard(el) {
     </div>
   </div>
 
+  <!-- Recent orders → pipeline/timeline widget (filled after render) -->
+  <div id="ops-recent-pipeline" style="margin-bottom:18px"></div>
+
   <!-- ── KPI TILES ── -->
   <div class="ct-kpi-grid">
     ${(() => {
@@ -771,6 +774,7 @@ async function renderOpsDashboard(el) {
   }
 
   loadTowerRadar(); // predictive layer — fills in when the endpoint responds
+  if (typeof mountRecentPipeline === 'function') mountRecentPipeline(); // recent orders → timeline
 }
 
 /* ── Predictive Control Tower: pulse + radar + queue (Phases 1–2) ──

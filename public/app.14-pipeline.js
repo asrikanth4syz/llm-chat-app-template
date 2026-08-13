@@ -78,7 +78,31 @@ function injectPipeCss() {
   .tl-strip b { font-weight:700; }
   .tl-prog { display:flex; gap:2px; margin-top:6px; }
   .tl-prog i { height:6px; width:14px; border-radius:2px; background:var(--pk); }
-  .tl-prog i.pend { background:var(--border,#cbd8de); }`;
+  .tl-prog i.pend { background:var(--border,#cbd8de); }
+
+  /* home widget */
+  .rpw { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:14px; overflow:hidden; }
+  .rpw-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 11px; }
+  .rpw-head h3 { margin:0; font-size:.98rem; font-weight:700; display:flex; align-items:center; gap:8px; }
+  .rpw-head .ico { width:24px; height:24px; border-radius:7px; background:var(--pk-s); color:var(--pk); display:grid; place-items:center; font-size:.85rem; }
+  .rpw-head a { font-size:.78rem; font-weight:600; color:var(--pk); text-decoration:none; cursor:pointer; }
+  .rpw-row { display:grid; grid-template-columns:1fr auto; gap:5px 12px; padding:11px 16px; border-top:1px solid var(--border,#e4eaef); cursor:pointer; text-decoration:none; color:inherit; transition:background .12s; }
+  .rpw-row:hover { background:var(--bg,#f5f8f9); }
+  .rpw-top { display:flex; align-items:center; gap:8px; min-width:0; }
+  .rpw-id { font-family:ui-monospace,monospace; font-size:.73rem; font-weight:700; flex:none; }
+  .rpw-client { font-size:.81rem; color:var(--text-muted,#5c7180); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rpw-val { font-family:ui-monospace,monospace; font-size:.77rem; font-weight:700; text-align:right; white-space:nowrap; }
+  .rpw-line { grid-column:1/-1; display:flex; align-items:center; gap:9px; }
+  .rpw-prog { display:flex; gap:2px; flex:none; }
+  .rpw-prog i { width:10px; height:5px; border-radius:2px; background:var(--pk); }
+  .rpw-prog i.cur { background:var(--pk2); } .rpw-prog i.pend { background:var(--border,#cbd8de); }
+  .rpw-stg { font-size:.72rem; color:var(--text-muted,#5c7180); } .rpw-stg b { color:var(--text,#16303f); }
+  .rpw-sla { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:.68rem; font-weight:700; }
+  .rpw-sla i { width:8px; height:8px; border-radius:50%; }
+  .rpw-sla.ok { color:var(--pk); } .rpw-sla.ok i { background:var(--pk); }
+  .rpw-sla.risk { color:var(--pw); } .rpw-sla.risk i { background:var(--pw); }
+  .rpw-sla.late { color:var(--pb); } .rpw-sla.late i { background:var(--pb); }
+  .rpw-foot { padding:10px 16px; border-top:1px solid var(--border,#e4eaef); font-size:.73rem; color:var(--text-muted,#8397a3); background:var(--bg,#f5f8f9); }`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
 
@@ -181,6 +205,38 @@ function timelineRow(s) {
       <div class="tlhead"><h5>${h(s.label)}</h5><span class="tl-st ${stateCls}">${stLabel}</span>${tag}<span class="when">${h(when)}</span></div>
       ${desc}${refs}${subs}
     </div>
+  </div>`;
+}
+
+// Home-dashboard widget: recent orders with their pipeline position; each row
+// opens the order's Timeline. Fills #ops-recent-pipeline if present (no-op else).
+async function mountRecentPipeline() {
+  const host = document.getElementById('ops-recent-pipeline');
+  if (!host) return;
+  injectPipeCss();
+  const data = await api('/pipeline').catch(() => null);
+  const recent = (data && data.recent) || [];
+  if (!recent.length) { host.innerHTML = ''; return; }
+  const rows = recent.map(o => {
+    const pips = Array.from({ length: 10 }, (_, i) => {
+      const n = i + 1;
+      return `<i class="${n < o.stage_no ? '' : (n === o.stage_no ? 'cur' : 'pend')}"></i>`;
+    }).join('');
+    const slaText = o.sla === 'late' ? 'overdue' : (o.sla === 'ok' ? 'on track' : o.dwell);
+    return `<a class="rpw-row" ${dataAct('orderTimelineModal', o.id)}>
+      <div class="rpw-top"><span class="rpw-id">${h(o.id)}</span><span class="rpw-client">${h(o.client_name || '—')}</span></div>
+      <div class="rpw-val">${fmt(o.value)}</div>
+      <div class="rpw-line">
+        <span class="rpw-prog">${pips}</span>
+        <span class="rpw-stg"><b>${h(o.stage_label)}</b> · ${o.stage_no}/10</span>
+        <span class="rpw-sla ${o.sla}"><i></i>${h(slaText)}</span>
+      </div>
+    </a>`;
+  }).join('');
+  host.innerHTML = `<div class="rpw">
+    <div class="rpw-head"><h3><span class="ico">🧭</span> Recent orders</h3><a ${dataAct('navigate', 'pipeline')}>Open Pipeline →</a></div>
+    ${rows}
+    <div class="rpw-foot">Showing ${recent.length} of ${data.kpis ? data.kpis.inflight : recent.length} in-flight · newest first</div>
   </div>`;
 }
 
