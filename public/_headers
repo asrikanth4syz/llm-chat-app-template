@@ -1,0 +1,13 @@
+# Revalidate the app shell and its scripts on every load so a redeploy is
+# picked up immediately. `no-cache` still allows cheap ETag 304s — it just
+# forbids using a cached copy without checking with the server first. This
+# fixes "I deployed but the browser still runs the old JS" (the app*.js files
+# are not content-hashed, so without this the browser reuses stale copies).
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+/*.js
+  Cache-Control: no-cache
+/*.css
+  Cache-Control: no-cache
