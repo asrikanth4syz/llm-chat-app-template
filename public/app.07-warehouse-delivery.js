@@ -1663,3 +1663,72 @@ async function confirmReturnDC(dcId) {
 
 function partialDeliveryModal(dcId) { markDelivered(dcId); }
 async function confirmPartialDelivery() {}
+
+/* ============================================================
+   PHASE 3 — DELIVERIES HUB. One predictable "Deliveries" home that
+   hosts the day's runs, the challan list, the calendar and routes as
+   TABS, instead of four separate menus. Each tab mounts its existing
+   render function into the hub body — same data, same APIs, no new
+   pages. Tabs are gated to match each role's prior access.
+   ============================================================ */
+let _delivHubCssDone = false;
+function injectDelivHubCss() {
+  if (_delivHubCssDone) return; _delivHubCssDone = true;
+  const css = `
+  .dhub-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:16px;padding-bottom:0}
+  .dhub-tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;
+    font-size:.9rem;font-weight:700;color:var(--text-muted);padding:9px 14px;border-radius:8px 8px 0 0;white-space:nowrap}
+  .dhub-tab:hover{color:var(--text,#15303d);background:var(--bg,#f4f7f9)}
+  .dhub-tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+  .dhub-tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+  `;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+const DELIV_TABS = [
+  { k:'today',    label:"Today's Runs", fn:'renderTodaysSchedule' },
+  { k:'list',     label:'Deliveries',   fn:'renderDelivery' },
+  { k:'calendar', label:'Calendar',     fn:'renderDeliveryCalendar' },
+  { k:'routes',   label:'Routes',       fn:'renderDeliveryRoutes' },
+];
+// Match each role's prior menu access so the hub never widens permissions:
+// super_admin kept all four (incl. Routes); ops/delivery managers had Today +
+// List + Calendar; delivery execs only saw the challan list.
+function delivTabsForRole(role) {
+  if (role === 'delivery_exec') return DELIV_TABS.filter(t => t.k === 'list');
+  if (role === 'super_admin')   return DELIV_TABS;
+  return DELIV_TABS.filter(t => t.k !== 'routes');
+}
+
+async function renderDeliveriesHub(el) {
+  const tabs = delivTabsForRole(APP.user?.role);
+  // A single-tab role (delivery exec) gets the plain page — no pointless tab bar.
+  if (tabs.length <= 1) { await window[(tabs[0] || DELIV_TABS[1]).fn](el); return; }
+  injectDelivHubCss();
+  if (!tabs.some(t => t.k === APP._delivTab)) APP._delivTab = tabs[0].k;
+  const active = APP._delivTab;
+  el.innerHTML = `
+    <div class="dhub-tabs" role="tablist" aria-label="Deliveries">
+      ${tabs.map(t => `<button class="dhub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('delivHubTab', t.k)}>${h(t.label)}</button>`).join('')}
+    </div>
+    <div id="dhub-body"><div class="loading-state"><div class="spinner"></div></div></div>`;
+  const body = document.getElementById('dhub-body');
+  const fn = tabs.find(t => t.k === active).fn;
+  await window[fn](body);
+}
+
+async function delivHubTab(k) {
+  const tabs = delivTabsForRole(APP.user?.role);
+  if (!tabs.some(t => t.k === k)) return;
+  APP._delivTab = k;
+  document.querySelectorAll('.dhub-tab').forEach(b => {
+    const on = b.dataset.k === k;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const body = document.getElementById('dhub-body');
+  if (!body) return;
+  body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  const fn = DELIV_TABS.find(t => t.k === k).fn;
+  if (window[fn]) await window[fn](body);
+}
