@@ -264,7 +264,7 @@ button { font-family: var(--font); cursor: pointer; }
 
 /* Nav sections */
 .nav-section { margin-top: 8px; margin-bottom: 2px; }
-.nav-section-label { display: block; font-size: .58rem; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; color: var(--text-light); padding: 6px 10px 3px; white-space: nowrap; }
+.nav-section-label { display: block; font-size: .64rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted, #64748b); padding: 9px 11px 4px; white-space: nowrap; }
 .nav-section-toggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 3px; user-select: none; }
 .nav-section-toggle .nav-section-label { padding: 0; }
 .nav-section-toggle .nav-toggle-arrow { font-size: .6rem; color: var(--text-light); transition: transform .2s; }
@@ -274,17 +274,32 @@ button { font-family: var(--font); cursor: pointer; }
 
 /* Nav items */
 .nav-item {
-  display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+  position: relative;
+  display: flex; align-items: center; gap: 9px; padding: 8px 11px;
   border-radius: var(--radius-sm); cursor: pointer; color: var(--sidebar-text);
   margin-bottom: 1px; white-space: nowrap; overflow: hidden;
-  transition: background .12s, color .12s; border-left: 2.5px solid transparent;
+  transition: background .12s, color .12s;
 }
+/* Inset accent bar that respects the row's rounded corners (replaces the old
+   bolted-on left border). Grows in on the active row. */
+.nav-item::before {
+  content: ""; position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 0; border-radius: 3px; background: var(--sidebar-active-border);
+  transition: height .15s ease;
+}
+.nav-item.active::before { height: 18px; }
 .nav-item-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.nav-item-icon svg { opacity: .6; transition: opacity .12s; }
+/* Icons stroke with currentColor, so they tint with the row's state; keep
+   inactive glyphs present (not washed out) so the distinct icons stay scannable. */
+.nav-item-icon svg { opacity: .72; transition: opacity .12s, color .12s; }
 .nav-item:hover { background: var(--sidebar-hover); color: var(--navy); }
-.nav-item:hover .nav-item-icon svg { opacity: .9; }
-.nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-text-active); font-weight: 600; border-left-color: var(--sidebar-active-border); }
+.nav-item:hover .nav-item-icon svg { opacity: 1; }
+.nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-text-active); font-weight: 600; }
 .nav-item.active .nav-item-icon svg { opacity: 1; }
+.nav-item:focus-visible { outline: 2px solid var(--sidebar-active-border); outline-offset: -2px; }
+/* Home anchors the list: its glyph carries a faint accent tint even when idle. */
+.nav-item--home:not(.active) .nav-item-icon svg { color: var(--sidebar-active-border); opacity: .8; }
+.sidebar.collapsed .nav-item::before { display: none; }
 .nav-item-label { font-size: .8rem; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .nav-item-badge { font-size: .6rem; background: var(--danger); color: white; padding: 1px 5px; border-radius: 10px; font-weight: 700; flex-shrink: 0; line-height: 1.5; }
 
