@@ -822,6 +822,7 @@ export default {
       // Dashboard
       if (path==="/api/dashboard"  && method==="GET") return handleDashboard(request,env);
       if (path==="/api/alerts"     && method==="GET") return handleAlerts(request,env);
+      if (path==="/api/nav-badges" && method==="GET") return handleNavBadges(request,env);
 
       // GRN
       if (path==="/api/grn"  && method==="GET")  return handleListGRN(request,env);
@@ -4214,6 +4215,47 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 // Each category returns a live count plus a few representative rows and the
 // page a staff user should jump to. Internal-ops roles only.
 // ════════════════════════════════════════════════════════════════════
+
+// GET /api/nav-badges — live counts for the sidebar badges, keyed by nav page
+// id. Cheap COUNT queries only; internal-ops roles only (external roles have no
+// badged menus). Lets the sidebar show real numbers instead of a generic "!".
+async function handleNavBadges(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({}, 200); // clients/vendors: no badged menus
+
+  const cnt = (r: unknown) => Number((r as { c?: number } | null)?.c || 0);
+  const [orders, dueDeliv, fulfil, unbilled, overdueDeliv, pendingAppr, openTickets, lowStock] = await Promise.all([
+    // Orders needing an ops decision: pricing / approval
+    env.DB.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('PENDING_PRICING','SUBMITTED','PENDING_APPROVAL')").first(),
+    // Deliveries still due (in shipment / partially delivered)
+    env.DB.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").first(),
+    // Warehouse: waiting to be picked / QC'd
+    env.DB.prepare("SELECT COUNT(*) c FROM orders WHERE status IN ('READY_TO_PICK','PICKED','QUALITY_CHECK')").first(),
+    // Finance: delivered but not yet billed
+    env.DB.prepare("SELECT COUNT(*) c FROM delivery_challans WHERE status='DELIVERED' AND COALESCE(billed,0)=0").first(),
+    // SLA: challans past their expected delivery date
+    env.DB.prepare("SELECT COUNT(*) c FROM delivery_challans WHERE status NOT IN ('DELIVERED','CANCELLED') AND expected_delivery_date IS NOT NULL AND expected_delivery_date < date('now')").first(),
+    env.DB.prepare("SELECT COUNT(*) c FROM orders WHERE status='PENDING_APPROVAL'").first(),
+    env.DB.prepare("SELECT COUNT(*) c FROM tickets WHERE status!='RESOLVED'").first().catch(() => null),
+    env.DB.prepare(`SELECT COUNT(*) c FROM inventory i WHERE i.stock<=i.reorder_level AND i.active=1
+      AND (EXISTS(SELECT 1 FROM order_items oi WHERE oi.sku=i.sku) OR EXISTS(SELECT 1 FROM client_consumption cc WHERE cc.sku=i.sku))`).first().catch(() => null),
+  ]);
+
+  const overdue = cnt(overdueDeliv), appr = cnt(pendingAppr);
+  const alertsTotal = overdue + appr + cnt(openTickets) + cnt(lowStock) + cnt(unbilled);
+
+  // Keyed by nav page id → the sidebar updates #nav-<id>'s badge in place.
+  return json({
+    next_actions:     overdue + appr,   // "Today" — the act-now set
+    orders:           cnt(orders),
+    consolidated_due: cnt(dueDeliv),
+    fulfilment:       cnt(fulfil),
+    dc_billing:       cnt(unbilled),
+    sla_dashboard:    overdue,
+    alerts:           alertsTotal,
+  });
+}
 
 async function handleAlerts(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
