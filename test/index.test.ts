@@ -1458,6 +1458,89 @@ describe("Order lifecycle & pipeline board", () => {
   });
 });
 
+// ── Over-delivery guard (dispatch) + Next Best Action ────────────────
+describe("Over-delivery guard & Next Best Action", () => {
+  const gdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await gdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("OD-CL", "OverDeliver Co").run();
+
+    // Order fully delivered (8/8), but a phantom SCHEDULED challan lingers.
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-3 day'))`).bind("OD-1", "OD-CL", "seed", "IN_SHIPMENT", 8000, 0, 8000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-OD-1", "OD-1", "SKU-OD", "Widget", 8, 1000, 8000).run();
+    // DC1 delivered all 8
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,dispatched_at,delivered_at)
+      VALUES (?,?,?,?,?,datetime('now','-2 day'),datetime('now','-2 day'))`).bind("OD-DC1", "OD-1", "DELIVERED", 8, 8).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-1", "OD-DC1", "SKU-OD", "Widget", 8, 8).run();
+    // Phantom DC2 still SCHEDULED — nothing left due against the order
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty)
+      VALUES (?,?,?,?,?)`).bind("OD-DC2", "OD-1", "SCHEDULED", 8, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-2", "OD-DC2", "SKU-OD", "Widget", 8, 0).run();
+
+    // A legitimately pending order: nothing delivered yet, one SCHEDULED DC.
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-1 day'))`).bind("OD-2", "OD-CL", "seed", "READY_TO_PICK", 5000, 0, 5000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-OD-2", "OD-2", "SKU-OD2", "Gadget", 5, 1000, 5000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty) VALUES (?,?,?,?,?)`)
+      .bind("OD-DC3", "OD-2", "SCHEDULED", 5, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-3", "OD-DC3", "SKU-OD2", "Gadget", 5, 0).run();
+  });
+
+  it("blocks dispatch of a phantom challan on a fully-delivered order (409 OVER_DELIVERY)", async () => {
+    const res = await post("/api/delivery-challans/OD-DC2/dispatch", { vehicle_no: "KA01AB1234", driver_name: "Ravi" }, adminToken);
+    expect(res.status).toBe(409);
+    const body = await res.json() as { code:string; dc_cancelled:boolean; order_closed:boolean };
+    expect(body.code).toBe("OVER_DELIVERY");
+    expect(body.dc_cancelled).toBe(true);
+
+    // The phantom challan is cancelled and never flips to IN_TRANSIT …
+    const dc = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("OD-DC2").first() as {status:string};
+    expect(dc.status).toBe("CANCELLED");
+    // … and the settled order is auto-closed.
+    const ord = await gdb.prepare("SELECT status FROM orders WHERE id=?").bind("OD-1").first() as {status:string};
+    expect(ord.status).toBe("CLOSED");
+  });
+
+  it("still allows dispatch when the order genuinely has units outstanding", async () => {
+    const res = await post("/api/delivery-challans/OD-DC3/dispatch", { vehicle_no: "KA02CD5678", driver_name: "Anil" }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { status:string };
+    expect(body.status).toBe("IN_TRANSIT");
+  });
+
+  it("GET /api/pipeline/next-actions returns one ranked next step per in-flight order", async () => {
+    const res = await get("/api/pipeline/next-actions", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as {
+      counts:{total:number;overdue:number;at_risk:number;on_track:number};
+      actions:Array<{id:string;action:string;owner:string;sla:string;page:string;stage_key:string}>;
+      focus:{id:string}|null;
+    };
+    expect(Array.isArray(d.actions)).toBe(true);
+    expect(d.counts.total).toBe(d.actions.length);
+    // OD-2 (ready to pick) surfaces a "Dispatch challan" step owned by the warehouse.
+    const od2 = d.actions.find(a => a.id === "OD-2");
+    expect(od2).toBeTruthy();
+    expect(od2!.stage_key).toBe("dispatch");
+    expect(od2!.action).toBe("Dispatch challan");
+    // Every open action carries an owner and a target page to act on.
+    expect(od2!.owner).toBe("Warehouse");
+    expect(od2!.page).toBe("fulfilment");
+    // Ranking: the focus is the first action and is the most urgent (late before ok).
+    if (d.focus) expect(d.focus.id).toBe(d.actions[0].id);
+  });
+
+  it("GET /api/pipeline/next-actions is forbidden for external (client) roles", async () => {
+    const res = await get("/api/pipeline/next-actions", clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
 // ── Location zones (admin-managed) ───────────────────────────────────
 describe("Location zones", () => {
   it("GET /api/zones returns the default set when unset", async () => {

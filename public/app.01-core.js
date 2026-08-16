@@ -127,7 +127,7 @@ const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2
 const PAGE_ICON = {
   dashboard: iconHome,
   // Orders & fulfilment
-  orders: iconOrders, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
+  orders: iconOrders, next_actions: iconCheck, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
   todays_schedule: iconCalCheck,
   // Deliveries
   delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
@@ -166,6 +166,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',   label:'Home', icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'next_actions',        label:'Next Actions',     icon:iconCheck,  badge:null },
     { id:'pipeline',            label:'Pipeline',         icon:iconReports, badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders, badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,  badge:'!' },
@@ -208,6 +209,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',           label:'Home',             icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'next_actions',        label:'Next Actions',     icon:iconCheck,     badge:null },
     { id:'pipeline',            label:'Pipeline',         icon:iconReports,   badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReports,   badge:'!' },
@@ -985,6 +987,7 @@ const PAGE_MAP = {
   orders_inventory: 'renderOrdersInventory',
   alerts: 'renderAlerts',
   pipeline: 'renderPipeline',
+  next_actions: 'renderNextActions',
   zones: 'renderZonesPage',
 };
 

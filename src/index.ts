@@ -731,6 +731,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path==="/api/pipeline"               && method==="GET")  return handlePipeline(request,env);
+      if (path==="/api/pipeline/next-actions"  && method==="GET")  return handleNextActions(request,env);
       if (path==="/api/pipeline/sla"           && method==="GET")  return handleGetSla(request,env);
       if (path==="/api/pipeline/sla"           && method==="POST") return handleSaveSla(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/lifecycle$/)    && method==="GET")  return handleOrderLifecycle(request,env,path);
@@ -1467,6 +1468,93 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
       bottleneck: busiest ? { label: busiest.label, avg_dwell: busiest.avg_dwell } : null },
     buckets: bucketList.map(({dwellSum, ...b})=>b),
     recent,
+  });
+}
+
+// Each pipeline stage reduces to ONE blocking next step — the verb, the owning
+// desk, why it's blocking, and where to act. Powers the "Next Best Action" queue.
+const ACTION_MAP: Record<StageKey,{verb:string;owner:string;why:string;page:string}> = {
+  approval:  { verb:"Approve order",       owner:"Approvals",   why:"Awaiting approval before fulfilment can start", page:"orders" },
+  inventory: { verb:"Confirm stock",       owner:"Ops desk",    why:"Stock not yet confirmed — allocate or raise a PO", page:"orders" },
+  vendor_po: { verb:"Progress vendor PO",  owner:"Procurement", why:"Waiting on goods from the vendor", page:"procurement" },
+  dispatch:  { verb:"Dispatch challan",    owner:"Warehouse",   why:"Picked & ready — challan not yet dispatched", page:"fulfilment" },
+  delivery:  { verb:"Confirm delivery",    owner:"Delivery",    why:"In transit — confirm delivery on arrival", page:"delivery" },
+  pod:       { verb:"Capture POD",         owner:"Delivery",    why:"Delivered — proof of delivery still pending", page:"delivery" },
+  billing:   { verb:"Raise invoice",       owner:"Finance",     why:"Delivered — invoice not yet raised", page:"dc_billing" },
+  done:      { verb:"—",                   owner:"—",           why:"", page:"orders" },
+};
+
+// GET /api/pipeline/next-actions — every in-flight order reduced to its single
+// blocking next step, ranked by SLA urgency. Reuses the /api/pipeline read-model
+// (order_history / PO / DC timestamps) — no new tables, no writes.
+async function handleNextActions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const { results: orders } = await env.DB.prepare(`SELECT o.id,o.status,o.grand_total,o.created_at,c.name AS client_name
+    FROM orders o LEFT JOIN clients c ON o.client_id=c.id
+    WHERE o.status NOT IN ('CANCELLED','DRAFT','CLOSED') ORDER BY o.created_at DESC LIMIT 400`).all();
+
+  const dcAgg: Record<string,{n:number;deliv:number;pod:number;billed:number}> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id,
+      COUNT(*) n, SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) deliv,
+      SUM(COALESCE(pod_uploaded,0)) pod, SUM(COALESCE(billed,0)) billed
+      FROM delivery_challans WHERE order_id IS NOT NULL AND status!='CANCELLED' GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) dcAgg[String(r.order_id)] = { n:Number(r.n), deliv:Number(r.deliv), pod:Number(r.pod), billed:Number(r.billed) };
+  } catch { /* table pending */ }
+  const lastAt: Record<string,string> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id, MAX(created_at) t FROM order_history GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) lastAt[String(r.order_id)] = String(r.t);
+  } catch { /* */ }
+
+  const nowMs = Date.now();
+  const slaCfg = await getSlaConfig(env);
+  const rank = { late:0, risk:1, ok:2 } as const;
+  const actions: Array<Record<string,unknown>> = [];
+  let overdue = 0, atRisk = 0;
+
+  for (const o of orders as Array<Record<string,unknown>>) {
+    const oid = String(o.id); const status = String(o.status);
+    let key = stageFromStatus(status);
+    const agg = dcAgg[oid];
+    if (key==="done" || status==="PARTIALLY_CLOSED") {
+      if (agg && agg.n>0) {
+        if (agg.deliv < agg.n) key = "delivery";
+        else if (agg.pod < agg.n) key = "pod";
+        else if (agg.billed < agg.n) key = "billing";
+        else key = "done";
+      }
+    }
+    if (key==="done" || !ACTION_MAP[key]) continue;
+    const dwellH = hoursBetween(lastAt[oid] || String(o.created_at), nowMs);
+    const target = slaCfg.targets[key] ?? 2;
+    const isLate = dwellH > target*24;
+    const sla = isLate ? "late" : (dwellH > target*24*slaCfg.risk_pace ? "risk" : "ok");
+    if (sla==="late") overdue++; else if (sla==="risk") atRisk++;
+    const a = ACTION_MAP[key];
+    actions.push({
+      id: oid, client_name: o.client_name, value: Number(o.grand_total)||0,
+      stage_key: key, stage_no: STAGE_META[key].no, stage_label: STAGE_META[key].label,
+      action: a.verb, owner: a.owner, why: a.why, page: a.page,
+      sla, dwell: fmtDwell(dwellH), dwell_h: Math.round(dwellH),
+      sla_target_h: target*24, over_h: Math.max(0, Math.round(dwellH - target*24)),
+    });
+  }
+
+  // Rank: overdue first, then most overdue by hours, then longest dwell.
+  actions.sort((a,b) =>
+    rank[a.sla as keyof typeof rank] - rank[b.sla as keyof typeof rank]
+    || Number(b.over_h) - Number(a.over_h)
+    || Number(b.dwell_h) - Number(a.dwell_h));
+
+  return json({
+    counts: { total: actions.length, overdue, at_risk: atRisk, on_track: actions.length - overdue - atRisk },
+    focus: actions[0] || null,
+    actions,
+    generated_at: new Date().toISOString(),
   });
 }
 
@@ -2764,6 +2852,47 @@ async function handleBillDC(request: Request, env: Env, path: string): Promise<R
   return json({id, billed:true});
 }
 
+// ── Over-delivery guard helpers ──────────────────────────────────────
+// Net units still due on an order = Σ ordered − Σ delivered (across ALL DCs),
+// never below zero. A value of 0 means the order is fully satisfied and nothing
+// more may be dispatched, delivered or scheduled against it.
+async function orderOutstanding(env: Env, orderId: string): Promise<number> {
+  const ord = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=?").bind(orderId).first() as {q:number}|null;
+  const del = await env.DB.prepare(
+    "SELECT COALESCE(SUM(di.qty_delivered),0) q FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=?"
+  ).bind(orderId).first() as {q:number}|null;
+  return Math.max(0, (ord?.q||0) - (del?.q||0));
+}
+
+// Units THIS challan can still legitimately deliver, each SKU capped by its
+// order-wide outstanding balance. Zero means the DC is a phantom (everything it
+// carries has already been delivered on other challans) and must never be
+// dispatched — that path over-delivers and over-bills the client.
+async function dcDispatchableQty(env: Env, dcId: string, orderId: string): Promise<number> {
+  const {results: items} = await env.DB.prepare("SELECT sku, qty_ordered FROM dc_items WHERE dc_id=?").bind(dcId).all() as {results: Record<string,unknown>[]};
+  let total = 0;
+  for (const it of items) {
+    const oi = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=? AND sku=?").bind(orderId, it.sku).first() as {q:number}|null;
+    const del = await env.DB.prepare(
+      "SELECT COALESCE(SUM(di.qty_delivered),0) q FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.sku=? AND di.dc_id!=?"
+    ).bind(orderId, it.sku, dcId).first() as {q:number}|null;
+    total += Math.max(0, Math.min(Number(it.qty_ordered)||0, (oi?.q||0) - (del?.q||0)));
+  }
+  return total;
+}
+
+// Close an order the moment its outstanding balance hits zero, so no stale
+// SCHEDULED challan lingers as "dispatchable". Idempotent; records history once.
+async function closeOrderIfSettled(env: Env, orderId: string, user: {sub:string;name:string}|null, note: string): Promise<boolean> {
+  if (await orderOutstanding(env, orderId) > 0) return false;
+  const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(orderId).first() as {status?:string}|null;
+  if (!cur || cur.status === "CLOSED" || cur.status === "CANCELLED") return false;
+  await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=?").bind(orderId).run();
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), orderId, cur.status||null, "CLOSED", user?.sub||"system", user?.name||"system", note).run().catch(()=>{});
+  return true;
+}
+
 async function handleDeliverDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -2851,6 +2980,8 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
       await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
       await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
         .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Fully delivered — DC ${id}`).run();
+      // Suppress any lingering SCHEDULED challan so it can never be dispatched again.
+      await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE order_id=? AND status='SCHEDULED'").bind(dc.order_id).run();
       orderFullyClosed = true;
     } else {
       await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
@@ -2944,10 +3075,31 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string};
+
+  const dc = await env.DB.prepare("SELECT order_id, status FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string;status?:string}|null;
+  if (!dc) return json({error:"Delivery challan not found"}, 404);
+  if (dc.status === "IN_TRANSIT" || dc.status === "DELIVERED") {
+    return json({error:`Challan already ${dc.status.toLowerCase().replace('_',' ')}`, code:"ALREADY_DISPATCHED"}, 409);
+  }
+  // Over-delivery guard: never dispatch a challan whose contents are already fully
+  // delivered against the order. Such a phantom is cancelled and the order is
+  // closed if its balance is settled — dispatching it would over-deliver/over-bill.
+  if (dc.order_id) {
+    const dispatchable = await dcDispatchableQty(env, id, dc.order_id);
+    if (dispatchable <= 0) {
+      await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=? AND status IN ('SCHEDULED','READY')").bind(id).run();
+      const closed = await closeOrderIfSettled(env, dc.order_id, user, `Order fully delivered — phantom challan ${id} cancelled on dispatch`);
+      await audit(env, user, "DISPATCH_BLOCKED", "delivery_challan", id, undefined, "nothing outstanding — challan cancelled");
+      return json({
+        error: "Order fully delivered — nothing left to dispatch. This challan has been cancelled.",
+        code: "OVER_DELIVERY", outstanding: 0, dc_cancelled: true, order_closed: closed,
+      }, 409);
+    }
+  }
+
   await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,dispatched_at=datetime('now'),expected_delivery_date=? WHERE id=?")
     .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, body.expected_delivery_date||null, id).run();
-  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
-  if (dc?.order_id) {
+  if (dc.order_id) {
     await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status IN ('READY_TO_PICK','PARTIALLY_CLOSED')")
       .bind(dc.order_id).run();
   }

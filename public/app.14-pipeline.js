@@ -250,3 +250,140 @@ function fmtWhen(v) {
     return `${mon} · ${tm}`;
   } catch (_) { return String(v).slice(0, 16); }
 }
+
+/* ============================================================
+   NEXT BEST ACTION — every in-flight order reduced to its single
+   blocking next step, ranked by SLA urgency. Reads /api/pipeline/
+   next-actions (order_history / PO / DC read-model — no new data).
+   ============================================================ */
+let _nbaCssDone = false;
+function injectNbaCss() {
+  if (_nbaCssDone) return; _nbaCssDone = true;
+  const css = `
+  .nba { --nk:#0C8E6D; --nw:#B5731A; --nb:#C6472A;
+         --nk-s:#E2F3EC; --nw-s:#FBF0DB; --nb-s:#FBE7E1; }
+  .nba-chips { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  @media (max-width:720px){ .nba-chips{ grid-template-columns:repeat(2,1fr); } }
+  .nba-chip { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:12px; padding:12px 15px; }
+  .nba-chip .n { font-size:1.5rem; font-weight:800; letter-spacing:-.03em; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .nba-chip .l { font-size:.74rem; color:var(--text-muted,#5c7180); margin-top:2px; }
+  .nba-chip.bad .n{ color:var(--nb); } .nba-chip.warn .n{ color:var(--nw); } .nba-chip.good .n{ color:var(--nk); }
+  .nba-focus { background:linear-gradient(180deg,var(--card,#fff),var(--nk-s)); border:1px solid var(--nk); border-radius:14px; padding:16px 18px; margin-bottom:20px; box-shadow:0 4px 16px rgba(12,142,109,.1); }
+  .nba-focus.late { background:linear-gradient(180deg,var(--card,#fff),var(--nb-s)); border-color:var(--nb); box-shadow:0 4px 16px rgba(198,71,42,.12); }
+  .nba-focus .eyebrow { font-size:.66rem; font-weight:800; letter-spacing:.09em; text-transform:uppercase; color:var(--nk); }
+  .nba-focus.late .eyebrow { color:var(--nb); }
+  .nba-focus .fx-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0 4px; }
+  .nba-focus .fx-verb { font-size:1.35rem; font-weight:800; letter-spacing:-.02em; color:var(--text,#16303f); }
+  .nba-focus .fx-meta { font-size:.86rem; color:var(--text-muted,#5c7180); margin-bottom:12px; }
+  .nba-focus .fx-meta b { color:var(--text,#16303f); }
+  .nba-focus .fx-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .nba-sla { font-size:.66rem; font-weight:800; padding:3px 9px; border-radius:999px; white-space:nowrap; }
+  .nba-sla.ok{ background:var(--nk-s); color:var(--nk); } .nba-sla.risk{ background:var(--nw-s); color:var(--nw); } .nba-sla.late{ background:var(--nb-s); color:var(--nb); }
+  .nba-owner { font-size:.68rem; font-weight:700; color:var(--text-muted,#5c7180); background:var(--bg,#f4f7f9); border:1px solid var(--border,#e4eaef); border-radius:6px; padding:2px 8px; }
+  .nba-list { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:14px; overflow:hidden; }
+  .nba-list-head { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border,#e4eaef); }
+  .nba-list-head h3 { margin:0; font-size:.95rem; font-weight:700; }
+  .nba-list-head .sub { font-size:.72rem; color:var(--text-muted,#8397a3); }
+  .nba-row { display:grid; grid-template-columns:34px 1.4fr 1.3fr auto auto; gap:14px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border,#eef2f4); }
+  .nba-row:last-child { border-bottom:none; }
+  .nba-row:hover { background:var(--bg,#f7fafb); }
+  .nba-rank { font-family:ui-monospace,monospace; font-size:.8rem; font-weight:800; color:var(--text-muted,#8397a3); text-align:center; }
+  .nba-order .oid { font-family:ui-monospace,monospace; font-size:.78rem; font-weight:700; color:var(--nk); cursor:pointer; text-decoration:none; }
+  .nba-order .oid:hover { text-decoration:underline; }
+  .nba-order .ocl { font-size:.84rem; font-weight:600; color:var(--text,#16303f); margin-top:1px; }
+  .nba-order .ostg { font-size:.7rem; color:var(--text-muted,#8397a3); margin-top:1px; }
+  .nba-what .verb { font-size:.86rem; font-weight:700; color:var(--text,#16303f); }
+  .nba-what .why { font-size:.72rem; color:var(--text-muted,#5c7180); margin-top:1px; }
+  .nba-meta { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+  .nba-btn { border:none; border-radius:8px; background:var(--nk); color:#fff; font-size:.78rem; font-weight:700; padding:8px 14px; cursor:pointer; white-space:nowrap; transition:filter .12s; }
+  .nba-btn:hover { filter:brightness(1.07); }
+  .nba-btn.late { background:var(--nb); }
+  .nba-empty { padding:40px 16px; text-align:center; color:var(--text-muted,#8397a3); }
+  .nba-empty .big { font-size:2rem; }
+  .nba-note { font-size:.72rem; color:var(--text-muted,#8397a3); margin-top:12px; text-align:center; }
+  @media (max-width:720px){
+    .nba-row { grid-template-columns:26px 1fr auto; }
+    .nba-what, .nba-row .nba-meta .nba-sla { display:none; }
+  }`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+async function renderNextActions(el) {
+  injectNbaCss();
+  el.innerHTML = pageHeader('Next Best Action', 'Every in-flight order → its single blocking next step, ranked by urgency') +
+    '<div class="nba"><div class="loading-state"><div class="spinner"></div></div></div>';
+  const data = await api('/pipeline/next-actions');
+  if (!data) return;
+  const c = data.counts || {};
+  const actions = data.actions || [];
+
+  const chips = `<div class="nba-chips">
+    ${nbaChip(c.overdue ?? 0, 'Overdue vs SLA', (c.overdue ? 'bad' : ''))}
+    ${nbaChip(c.at_risk ?? 0, 'At risk', (c.at_risk ? 'warn' : ''))}
+    ${nbaChip(c.on_track ?? 0, 'On track', 'good')}
+    ${nbaChip(c.total ?? 0, 'Open actions')}
+  </div>`;
+
+  const focus = data.focus ? nbaFocus(data.focus) : '';
+
+  const rest = actions.slice(data.focus ? 1 : 0);
+  const rows = rest.length
+    ? rest.map((a, i) => nbaRow(a, i + (data.focus ? 2 : 1))).join('')
+    : `<div class="nba-empty"><div class="big">✅</div><p style="margin:8px 0 0">Nothing else waiting — the pipeline is clear.</p></div>`;
+
+  const list = `<div class="nba-list">
+    <div class="nba-list-head"><h3>Action queue</h3><span class="sub">${rest.length} more · sorted by SLA urgency</span></div>
+    ${rows}
+  </div>`;
+
+  el.querySelector('.nba').innerHTML = chips + focus + list +
+    `<p class="nba-note">Fed by the live pipeline read-model (approvals, POs, delivery challans). Acting on a step moves the order forward and refreshes here.</p>`;
+}
+
+function nbaChip(n, l, cls = '') {
+  return `<div class="nba-chip ${cls}"><div class="n">${n}</div><div class="l">${h(l)}</div></div>`;
+}
+
+function nbaFocus(a) {
+  const slaTxt = a.sla === 'late' ? `Overdue by ${fmtDwell(a.over_h)}` : (a.sla === 'risk' ? `Due soon · ${h(a.dwell)} in stage` : `${h(a.dwell)} in stage`);
+  return `<div class="nba-focus ${a.sla === 'late' ? 'late' : ''}">
+    <div class="eyebrow">${a.sla === 'late' ? '⚠ Do this first' : '➜ Do this first'}</div>
+    <div class="fx-head">
+      <span class="fx-verb">${h(a.action)}</span>
+      <span class="nba-sla ${a.sla}">${slaTxt}</span>
+    </div>
+    <div class="fx-meta"><a class="nba-order" style="cursor:pointer;color:inherit" ${dataAct('orderTimelineModal', a.id)}><b>${h(a.id)}</b></a> · <b>${h(a.client_name || '—')}</b> · ${fmt(a.value)} · Stage ${a.stage_no}/10 ${h(a.stage_label)}<br>${h(a.why)}</div>
+    <div class="fx-row">
+      <button class="nba-btn ${a.sla === 'late' ? 'late' : ''}" ${dataAct('navigate', a.page)}>${h(a.action)} →</button>
+      <span class="nba-owner">Owner · ${h(a.owner)}</span>
+    </div>
+  </div>`;
+}
+
+function nbaRow(a, rank) {
+  const slaTxt = a.sla === 'late' ? `Overdue ${fmtDwell(a.over_h)}` : (a.sla === 'risk' ? 'At risk' : 'On track');
+  return `<div class="nba-row">
+    <div class="nba-rank">${rank}</div>
+    <div class="nba-order">
+      <a class="oid" ${dataAct('orderTimelineModal', a.id)}>${h(a.id)}</a>
+      <div class="ocl">${h(a.client_name || '—')}</div>
+      <div class="ostg">Stage ${a.stage_no}/10 · ${h(a.stage_label)} · ${fmt(a.value)}</div>
+    </div>
+    <div class="nba-what">
+      <div class="verb">${h(a.action)}</div>
+      <div class="why">${h(a.why)} · ${h(a.owner)}</div>
+    </div>
+    <div class="nba-meta">
+      <span class="nba-sla ${a.sla}">${slaTxt}</span>
+    </div>
+    <button class="nba-btn ${a.sla === 'late' ? 'late' : ''}" ${dataAct('navigate', a.page)}>${h(a.action)} →</button>
+  </div>`;
+}
+
+// Hours → compact "3d 4h" / "5h" for SLA overage display.
+function fmtDwell(hrs) {
+  const hh = Math.max(0, Math.round(Number(hrs) || 0));
+  if (hh < 24) return hh + 'h';
+  const d = Math.floor(hh / 24), r = hh % 24;
+  return r ? `${d}d ${r}h` : `${d}d`;
+}

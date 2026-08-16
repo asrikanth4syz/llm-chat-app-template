@@ -1482,9 +1482,25 @@ async function submitLinkedPO(orderId) {
 async function dispatchRemainingModal(orderId) {
   const dcs = await api('/delivery-challans');
   if (!dcs) return;
-  const pending = (dcs||[]).filter(d => d.order_id === orderId && d.status === 'SCHEDULED');
-  if (!pending.length) {
+  const scheduled = (dcs||[]).filter(d => d.order_id === orderId && d.status === 'SCHEDULED');
+  if (!scheduled.length) {
     showToast('No pending DCs — remaining items may already be in transit or delivered.', 'error');
+    return;
+  }
+  // Eligibility is the order's OUTSTANDING balance, not merely a SCHEDULED DC
+  // existing: a fully-delivered order can leave a zero-balance phantom challan
+  // behind, and dispatching it would over-deliver/over-bill. Keep only challans
+  // that still carry something genuinely due against the order.
+  const withRemaining = [];
+  for (const dc of scheduled) {
+    const items = await api(`/delivery-challans/${dc.id}/items`);
+    const dispatchable = (items||[]).reduce((s, it) =>
+      s + Math.max(0, Math.min(Number(it.qty_ordered)||0, it.order_remaining != null ? Number(it.order_remaining) : Number(it.qty_ordered)||0)), 0);
+    if (dispatchable > 0) withRemaining.push({ ...dc, dispatchable });
+  }
+  const pending = withRemaining;
+  if (!pending.length) {
+    showToast('Nothing left to dispatch — this order is fully delivered.', 'info');
     return;
   }
   // Single pending DC → go straight to dispatch form
@@ -1497,7 +1513,7 @@ async function dispatchRemainingModal(orderId) {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div>
         <div class="u-b600">${dc.id}</div>
-        <div style="font-size:.8rem;color:var(--text-muted)">${dc.total_qty||'?'} units — ready to dispatch</div>
+        <div style="font-size:.8rem;color:var(--text-muted)">${dc.dispatchable||dc.total_qty||'?'} units due — ready to dispatch</div>
       </div>
       <button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>
     </div>`).join('');
