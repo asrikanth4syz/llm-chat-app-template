@@ -230,6 +230,85 @@ function orderSection(title, badge, body, open) {
   </div>`;
 }
 
+// ── Phase 2: ops order stepper + single next-action ──────────────────
+// One glanceable stage bar (Placed→…→Closed) and one plain-language button
+// for the next move, so non-technical staff never hunt through menus.
+let _ostepCssDone = false;
+function injectOrderStepperCss() {
+  if (_ostepCssDone) return; _ostepCssDone = true;
+  const css = `
+  .ostepper{display:flex;overflow-x:auto;padding:6px 0 10px;margin:0 0 14px}
+  .ostep{flex:1 0 auto;min-width:64px;display:flex;flex-direction:column;align-items:center;position:relative}
+  .ostep .od{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:.7rem;font-weight:800;background:var(--bg,#eef2f4);border:2px solid var(--border);color:var(--text-muted);z-index:1}
+  .ostep.done .od{background:var(--primary);border-color:var(--primary);color:#fff}
+  .ostep.cur .od{background:var(--card,#fff);border:2px solid #1E7FB8;color:#1E7FB8;box-shadow:0 0 0 4px #E4F0F8}
+  .ostep .ol{font-size:.63rem;margin-top:5px;color:var(--text-muted);text-align:center;font-weight:600;white-space:nowrap}
+  .ostep.cur .ol{color:#1E7FB8}
+  .ostep::after{content:"";position:absolute;top:11px;left:50%;width:100%;height:2px;background:var(--border);z-index:0}
+  .ostep:last-child::after{display:none}
+  .ostep.done::after{background:var(--primary)}
+  .onext{display:flex;align-items:center;gap:12px;margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#E4F0F8;border:1px solid #1E7FB8}
+  .onext .ol2{font-size:.64rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#1E7FB8}
+  .onext .ot{font-size:.9rem;font-weight:700;color:var(--navy,#15303d)}
+  .onext .ot .m{font-weight:400;color:var(--text-muted)}
+  .onext .obtn{margin-left:auto;white-space:nowrap}
+  .odone{margin:0 0 16px;padding:11px 14px;border-radius:10px;background:var(--bg,#f4f7f9);border:1px solid var(--border);font-size:.86rem;color:var(--text-muted)}
+  @media (prefers-color-scheme:dark){ .onext{background:#122430;border-color:#57A8DC} .onext .ol2,.onext .ot{color:#cfe6f5} .ostep.cur .od{background:var(--card);border-color:#57A8DC;color:#8fc7ea;box-shadow:0 0 0 4px #122430} }
+  `;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+const ORDER_STAGES = ['Placed','Approved','Sourced','Picked','Dispatched','Delivered','Billed','Closed'];
+function orderStageIndex(status) {
+  const m = { DRAFT:0,PENDING_PRICING:0,SUBMITTED:0,PENDING_APPROVAL:0,
+    APPROVED:1,ACKNOWLEDGED:1, INVENTORY_CHECK:2,VENDOR_PO_RAISED:2,
+    READY_TO_PICK:3,PICKED:3,QUALITY_CHECK:3, IN_SHIPMENT:4,
+    DELIVERED:5, PARTIALLY_CLOSED:5, CLOSED:7 };
+  return m[status] ?? 0;
+}
+// The single most useful next action for the current status, reusing the same
+// handlers as the footer buttons. Returns null when the order is done/cancelled.
+function opsNextStep(order, orderDCs) {
+  const s = order.status, id = order.id;
+  const step = (verb, why, owner, act) => ({ verb, why, owner, act });
+  switch (s) {
+    case 'PENDING_PRICING': return step('Set prices', 'Awaiting pricing before approval', 'Ops desk', dataActClose('repriceOrderModal', id));
+    case 'SUBMITTED': case 'PENDING_APPROVAL': return step('Approve order', 'Waiting for approval before fulfilment', 'Approvals', dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail'));
+    case 'APPROVED': return step('Acknowledge', 'Approved — start processing', 'Ops desk', dataActClose('advanceOrder', id, 'ACKNOWLEDGED', 'Order acknowledged — processing started'));
+    case 'ACKNOWLEDGED': return step('Inventory check', 'Confirm stock availability', 'Ops desk', dataActClose('advanceOrder', id, 'INVENTORY_CHECK', 'Inventory check initiated'));
+    case 'INVENTORY_CHECK': return step('Confirm stock', 'Mark stock available, or raise a PO', 'Ops desk', dataActClose('advanceOrder', id, 'READY_TO_PICK', 'Stock available — ready for picking'));
+    case 'READY_TO_PICK': return step('Pick items', 'Ready for picking', 'Warehouse', dataActClose('pickOrderModal', id));
+    case 'PICKED': return step('Quality check', 'Picked — QC & pack', 'Warehouse', dataActClose('advanceOrder', id, 'QUALITY_CHECK', 'Items picked — quality check & packing'));
+    case 'QUALITY_CHECK': return step('Pass → Dispatch', 'Passed QC — create the challan', 'Warehouse', dataActClose('createDCFromPicklist', id));
+    case 'VENDOR_PO_RAISED': return step('Track purchase order', 'Awaiting goods from the vendor', 'Procurement', dataAct('navigate', 'procurement'));
+    case 'IN_SHIPMENT': {
+      const sched = (orderDCs||[]).find(d => d.status === 'SCHEDULED');
+      const transit = (orderDCs||[]).find(d => d.status === 'IN_TRANSIT');
+      if (sched)   return step('Dispatch challan', 'Ready — challan not yet dispatched', 'Warehouse', dataActClose('dispatchDCModal', sched.id));
+      if (transit) return step('Confirm delivery', 'In transit — confirm on arrival', 'Delivery', dataActClose('markDelivered', transit.id));
+      return step('Open deliveries', 'In shipment', 'Delivery', dataAct('navigate', 'delivery'));
+    }
+    case 'PARTIALLY_CLOSED': return step('Dispatch remaining', 'Part delivered — send the rest', 'Warehouse', dataActClose('dispatchRemainingModal', id));
+    default: return null; // CLOSED / CANCELLED
+  }
+}
+function orderStepperHtml(order, orderDCs) {
+  const curIdx = order.status === 'CLOSED' ? 7 : orderStageIndex(order.status);
+  const steps = ORDER_STAGES.map((lab, i) => {
+    const cls = i < curIdx ? 'done' : (i === curIdx ? 'cur' : '');
+    const mark = i < curIdx ? '✓' : String(i + 1);
+    return `<div class="ostep ${cls}"><div class="od">${mark}</div><div class="ol">${lab}</div></div>`;
+  }).join('');
+  const stepper = `<div class="ostepper">${steps}</div>`;
+  const next = opsNextStep(order, orderDCs);
+  const banner = next
+    ? `<div class="onext">
+         <div><div class="ol2">Next step</div><div class="ot">${h(next.verb)} <span class="m">· ${h(next.why)} · owner: ${h(next.owner)}</span></div></div>
+         <button class="btn btn-primary obtn" ${next.act}>${h(next.verb)} →</button>
+       </div>`
+    : (order.status === 'CLOSED' ? `<div class="odone">✓ Order complete — delivered and closed.</div>` : '');
+  return stepper + banner;
+}
+
 async function viewOrder(id) {
   const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
@@ -377,9 +456,16 @@ async function viewOrder(id) {
         }).join('')}
       </div>`;
 
+  // Ops staff get the full 8-stage stepper + one next-action; clients keep the
+  // simpler 4-milestone tracker. Cancelled orders show the cancelled note.
+  injectOrderStepperCss();
+  const topFlow = order.status === 'CANCELLED'
+    ? trackerHtml
+    : (isOpsRole ? orderStepperHtml(order, orderDCs) : trackerHtml);
+
   openModal(`Order ${id}`,
     `<div style="margin-bottom:16px">
-      ${trackerHtml}
+      ${topFlow}
       <!-- Row 1: status / type / client / date -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
