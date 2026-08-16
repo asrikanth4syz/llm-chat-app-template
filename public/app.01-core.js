@@ -127,7 +127,7 @@ const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2
 const PAGE_ICON = {
   dashboard: iconHome,
   // Orders & fulfilment
-  orders: iconOrders, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
+  orders: iconOrders, next_actions: iconCheck, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
   todays_schedule: iconCalCheck,
   // Deliveries
   delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
@@ -166,6 +166,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',   label:'Home', icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'next_actions',        label:'Next Actions',     icon:iconCheck,  badge:null },
     { id:'pipeline',            label:'Pipeline',         icon:iconReports, badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders, badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconCheck,  badge:'!' },
@@ -196,7 +197,8 @@ const NAV = {
     { id:'reports',              label:'Reports & BI',        icon:iconReports,   badge:null },
     { id:'sla_dashboard',        label:'SLA Dashboard',       icon:iconDashboard, badge:'!' },
     { section:'Alerts & Exceptions' },
-    { id:'alerts',      label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconCheck,  badge:null },
     { section:'Admin & Settings' },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconUsers,  badge:null },
@@ -208,6 +210,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',           label:'Home',             icon:iconDashboard, badge:null },
     { section:'Orders' },
+    { id:'next_actions',        label:'Next Actions',     icon:iconCheck,     badge:null },
     { id:'pipeline',            label:'Pipeline',         icon:iconReports,   badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReports,   badge:'!' },
@@ -222,6 +225,7 @@ const NAV = {
     { id:'service_desk',        label:'Service Desk',     icon:iconDesk,      badge:null },
     { section:'Alerts & Exceptions' },
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconCheck,  badge:null },
   ],
   procurement: [
     { section:'Home' },
@@ -985,6 +989,8 @@ const PAGE_MAP = {
   orders_inventory: 'renderOrdersInventory',
   alerts: 'renderAlerts',
   pipeline: 'renderPipeline',
+  next_actions: 'renderNextActions',
+  over_delivery_audit: 'renderOverDeliveryAudit',
   zones: 'renderZonesPage',
 };
 

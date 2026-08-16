@@ -250,3 +250,261 @@ function fmtWhen(v) {
     return `${mon} · ${tm}`;
   } catch (_) { return String(v).slice(0, 16); }
 }
+
+/* ============================================================
+   NEXT BEST ACTION — every in-flight order reduced to its single
+   blocking next step, ranked by SLA urgency. Reads /api/pipeline/
+   next-actions (order_history / PO / DC read-model — no new data).
+   ============================================================ */
+let _nbaCssDone = false;
+function injectNbaCss() {
+  if (_nbaCssDone) return; _nbaCssDone = true;
+  const css = `
+  .nba { --nk:#0C8E6D; --nw:#B5731A; --nb:#C6472A;
+         --nk-s:#E2F3EC; --nw-s:#FBF0DB; --nb-s:#FBE7E1; }
+  .nba-chips { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  @media (max-width:720px){ .nba-chips{ grid-template-columns:repeat(2,1fr); } }
+  .nba-chip { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:12px; padding:12px 15px; }
+  .nba-chip .n { font-size:1.5rem; font-weight:800; letter-spacing:-.03em; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .nba-chip .l { font-size:.74rem; color:var(--text-muted,#5c7180); margin-top:2px; }
+  .nba-chip.bad .n{ color:var(--nb); } .nba-chip.warn .n{ color:var(--nw); } .nba-chip.good .n{ color:var(--nk); }
+  .nba-focus { background:linear-gradient(180deg,var(--card,#fff),var(--nk-s)); border:1px solid var(--nk); border-radius:14px; padding:16px 18px; margin-bottom:20px; box-shadow:0 4px 16px rgba(12,142,109,.1); }
+  .nba-focus.late { background:linear-gradient(180deg,var(--card,#fff),var(--nb-s)); border-color:var(--nb); box-shadow:0 4px 16px rgba(198,71,42,.12); }
+  .nba-focus .eyebrow { font-size:.66rem; font-weight:800; letter-spacing:.09em; text-transform:uppercase; color:var(--nk); }
+  .nba-focus.late .eyebrow { color:var(--nb); }
+  .nba-focus .fx-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0 4px; }
+  .nba-focus .fx-verb { font-size:1.35rem; font-weight:800; letter-spacing:-.02em; color:var(--text,#16303f); }
+  .nba-focus .fx-meta { font-size:.86rem; color:var(--text-muted,#5c7180); margin-bottom:12px; }
+  .nba-focus .fx-meta b { color:var(--text,#16303f); }
+  .nba-focus .fx-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .nba-sla { font-size:.66rem; font-weight:800; padding:3px 9px; border-radius:999px; white-space:nowrap; }
+  .nba-sla.ok{ background:var(--nk-s); color:var(--nk); } .nba-sla.risk{ background:var(--nw-s); color:var(--nw); } .nba-sla.late{ background:var(--nb-s); color:var(--nb); }
+  .nba-owner { font-size:.68rem; font-weight:700; color:var(--text-muted,#5c7180); background:var(--bg,#f4f7f9); border:1px solid var(--border,#e4eaef); border-radius:6px; padding:2px 8px; }
+  .nba-list { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:14px; overflow:hidden; }
+  .nba-list-head { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border,#e4eaef); }
+  .nba-list-head h3 { margin:0; font-size:.95rem; font-weight:700; }
+  .nba-list-head .sub { font-size:.72rem; color:var(--text-muted,#8397a3); }
+  .nba-row { display:grid; grid-template-columns:34px 1.4fr 1.3fr auto auto; gap:14px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border,#eef2f4); }
+  .nba-row:last-child { border-bottom:none; }
+  .nba-row:hover { background:var(--bg,#f7fafb); }
+  .nba-rank { font-family:ui-monospace,monospace; font-size:.8rem; font-weight:800; color:var(--text-muted,#8397a3); text-align:center; }
+  .nba-order .oid { font-family:ui-monospace,monospace; font-size:.78rem; font-weight:700; color:var(--nk); cursor:pointer; text-decoration:none; }
+  .nba-order .oid:hover { text-decoration:underline; }
+  .nba-order .ocl { font-size:.84rem; font-weight:600; color:var(--text,#16303f); margin-top:1px; }
+  .nba-order .ostg { font-size:.7rem; color:var(--text-muted,#8397a3); margin-top:1px; }
+  .nba-what .verb { font-size:.86rem; font-weight:700; color:var(--text,#16303f); }
+  .nba-what .why { font-size:.72rem; color:var(--text-muted,#5c7180); margin-top:1px; }
+  .nba-meta { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+  .nba-btn { border:none; border-radius:8px; background:var(--nk); color:#fff; font-size:.78rem; font-weight:700; padding:8px 14px; cursor:pointer; white-space:nowrap; transition:filter .12s; }
+  .nba-btn:hover { filter:brightness(1.07); }
+  .nba-btn.late { background:var(--nb); }
+  .nba-empty { padding:40px 16px; text-align:center; color:var(--text-muted,#8397a3); }
+  .nba-empty .big { font-size:2rem; }
+  .nba-note { font-size:.72rem; color:var(--text-muted,#8397a3); margin-top:12px; text-align:center; }
+  @media (max-width:720px){
+    .nba-row { grid-template-columns:26px 1fr auto; }
+    .nba-what, .nba-row .nba-meta .nba-sla { display:none; }
+  }`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+async function renderNextActions(el) {
+  injectNbaCss();
+  el.innerHTML = pageHeader('Next Best Action', 'Every in-flight order → its single blocking next step, ranked by urgency') +
+    '<div class="nba"><div class="loading-state"><div class="spinner"></div></div></div>';
+  const data = await api('/pipeline/next-actions');
+  if (!data) return;
+  const c = data.counts || {};
+  const actions = data.actions || [];
+
+  const chips = `<div class="nba-chips">
+    ${nbaChip(c.overdue ?? 0, 'Overdue vs SLA', (c.overdue ? 'bad' : ''))}
+    ${nbaChip(c.at_risk ?? 0, 'At risk', (c.at_risk ? 'warn' : ''))}
+    ${nbaChip(c.on_track ?? 0, 'On track', 'good')}
+    ${nbaChip(c.total ?? 0, 'Open actions')}
+  </div>`;
+
+  const focus = data.focus ? nbaFocus(data.focus) : '';
+
+  const rest = actions.slice(data.focus ? 1 : 0);
+  const rows = rest.length
+    ? rest.map((a, i) => nbaRow(a, i + (data.focus ? 2 : 1))).join('')
+    : `<div class="nba-empty"><div class="big">✅</div><p style="margin:8px 0 0">Nothing else waiting — the pipeline is clear.</p></div>`;
+
+  const list = `<div class="nba-list">
+    <div class="nba-list-head"><h3>Action queue</h3><span class="sub">${rest.length} more · sorted by SLA urgency</span></div>
+    ${rows}
+  </div>`;
+
+  el.querySelector('.nba').innerHTML = chips + focus + list +
+    `<p class="nba-note">Fed by the live pipeline read-model (approvals, POs, delivery challans). Acting on a step moves the order forward and refreshes here.</p>`;
+}
+
+function nbaChip(n, l, cls = '') {
+  return `<div class="nba-chip ${cls}"><div class="n">${n}</div><div class="l">${h(l)}</div></div>`;
+}
+
+function nbaFocus(a) {
+  const slaTxt = a.sla === 'late' ? `Overdue by ${fmtDwell(a.over_h)}` : (a.sla === 'risk' ? `Due soon · ${h(a.dwell)} in stage` : `${h(a.dwell)} in stage`);
+  return `<div class="nba-focus ${a.sla === 'late' ? 'late' : ''}">
+    <div class="eyebrow">${a.sla === 'late' ? '⚠ Do this first' : '➜ Do this first'}</div>
+    <div class="fx-head">
+      <span class="fx-verb">${h(a.action)}</span>
+      <span class="nba-sla ${a.sla}">${slaTxt}</span>
+    </div>
+    <div class="fx-meta"><a class="nba-order" style="cursor:pointer;color:inherit" ${dataAct('orderTimelineModal', a.id)}><b>${h(a.id)}</b></a> · <b>${h(a.client_name || '—')}</b> · ${fmt(a.value)} · Stage ${a.stage_no}/10 ${h(a.stage_label)}<br>${h(a.why)}</div>
+    <div class="fx-row">
+      <button class="nba-btn ${a.sla === 'late' ? 'late' : ''}" ${dataAct('navigate', a.page)}>${h(a.action)} →</button>
+      <span class="nba-owner">Owner · ${h(a.owner)}</span>
+    </div>
+  </div>`;
+}
+
+function nbaRow(a, rank) {
+  const slaTxt = a.sla === 'late' ? `Overdue ${fmtDwell(a.over_h)}` : (a.sla === 'risk' ? 'At risk' : 'On track');
+  return `<div class="nba-row">
+    <div class="nba-rank">${rank}</div>
+    <div class="nba-order">
+      <a class="oid" ${dataAct('orderTimelineModal', a.id)}>${h(a.id)}</a>
+      <div class="ocl">${h(a.client_name || '—')}</div>
+      <div class="ostg">Stage ${a.stage_no}/10 · ${h(a.stage_label)} · ${fmt(a.value)}</div>
+    </div>
+    <div class="nba-what">
+      <div class="verb">${h(a.action)}</div>
+      <div class="why">${h(a.why)} · ${h(a.owner)}</div>
+    </div>
+    <div class="nba-meta">
+      <span class="nba-sla ${a.sla}">${slaTxt}</span>
+    </div>
+    <button class="nba-btn ${a.sla === 'late' ? 'late' : ''}" ${dataAct('navigate', a.page)}>${h(a.action)} →</button>
+  </div>`;
+}
+
+// Hours → compact "3d 4h" / "5h" for SLA overage display.
+function fmtDwell(hrs) {
+  const hh = Math.max(0, Math.round(Number(hrs) || 0));
+  if (hh < 24) return hh + 'h';
+  const d = Math.floor(hh / 24), r = hh % 24;
+  return r ? `${d}d ${r}h` : `${d}d`;
+}
+
+/* ============================================================
+   OVER-DELIVERY AUDIT — READ-ONLY. Lists orders where recorded
+   deliveries exceed the ordered qty (SP-2608-7410 class) and names
+   the challans responsible. No actions here — surfacing only.
+   ============================================================ */
+async function renderOverDeliveryAudit(el) {
+  injectNbaCss();
+  el.innerHTML = pageHeader('Over-Delivery Audit', 'Read-only — orders where recorded deliveries exceed what was ordered') +
+    '<div class="nba"><div class="loading-state"><div class="spinner"></div></div></div>';
+  const data = await api('/reports/over-delivery-audit');
+  if (!data) return;
+  const s = data.summary || {};
+  const anomalies = data.anomalies || [];
+
+  const chips = `<div class="nba-chips" style="grid-template-columns:repeat(3,1fr)">
+    ${nbaChip(s.orders_affected ?? 0, 'Orders affected', (s.orders_affected ? 'bad' : 'good'))}
+    ${nbaChip(s.lines_affected ?? 0, 'Line items affected', (s.lines_affected ? 'warn' : 'good'))}
+    ${nbaChip(s.total_over_units ?? 0, 'Units over-delivered', (s.total_over_units ? 'bad' : 'good'))}
+  </div>`;
+
+  const body = anomalies.length
+    ? anomalies.map(a => {
+        const rows = (a.challans || []).map(dc => `
+          <tr class="${dc.suspect ? 'aud-suspect' : ''}">
+            <td class="tnum">${h(dc.dc_number || dc.dc_id)}</td>
+            <td>${statusBadge ? statusBadge(dc.status) : h(dc.status)}</td>
+            <td class="u-right">${dc.qty_ordered}</td>
+            <td class="u-right">${dc.qty_delivered}</td>
+            <td class="u-right"><b>${dc.counted_as}</b></td>
+            <td>${dc.delivered_at ? fmtWhen(dc.delivered_at) : '—'}</td>
+            <td>${dc.suspect ? `<span class="aud-flag">⚠ likely phantom</span> <button class="btn btn-sm btn-danger" ${dataAct('repairPreview', dc.dc_id)} style="margin-left:6px">Cancel…</button>` : ''}</td>
+          </tr>`).join('');
+        return `<div class="aud-card">
+          <div class="aud-head">
+            <div>
+              <a class="oid" style="font-size:.9rem" ${dataAct('orderTimelineModal', a.order_id)}>${h(a.order_id)}</a>
+              <span class="aud-cl">${h(a.client_name || '—')}</span>
+              <span class="aud-sku">${h(a.item_name || a.sku)} · ${h(a.sku)}</span>
+            </div>
+            <div class="aud-nums">
+              <span>Ordered <b>${a.ordered}</b></span>
+              <span>Counted delivered <b class="over">${a.delivered_effective}</b></span>
+              <span>Recorded <b>${a.delivered_recorded}</b></span>
+              <span class="aud-over">+${a.over_units} over</span>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="aud-table">
+              <thead><tr><th>Challan</th><th>Status</th><th class="u-right">DC qty</th><th class="u-right">Recorded</th><th class="u-right">Counted as</th><th>Delivered</th><th></th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div class="nba-empty" style="background:var(--card);border:1px solid var(--border);border-radius:14px"><div class="big">✅</div><p style="margin:8px 0 0">No over-delivered orders found — every order is within its ordered quantity.</p></div>`;
+
+  el.querySelector('.nba').innerHTML = chips + body +
+    `<p class="nba-note">Read-only audit. A row flagged <b>⚠ likely phantom</b> is a DELIVERED challan whose line quantity was never recorded, so it was counted at its full ordered load. Cancelling/correcting such a challan is a separate, explicit action.</p>`;
+}
+
+(function injectAuditCss(){
+  const css = `
+  .aud-card { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .aud-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+  .aud-head .aud-cl { font-weight:600; margin-left:8px; }
+  .aud-head .aud-sku { display:block; font-size:.75rem; color:var(--text-muted,#5c7180); margin-top:2px; }
+  .aud-nums { display:flex; gap:14px; flex-wrap:wrap; font-size:.78rem; color:var(--text-muted,#5c7180); align-items:center; }
+  .aud-nums b { color:var(--text,#16303f); } .aud-nums b.over { color:#C6472A; }
+  .aud-over { font-weight:800; color:#C6472A; background:#FBE7E1; border-radius:999px; padding:2px 10px; }
+  .aud-table { width:100%; border-collapse:collapse; font-size:.8rem; }
+  .aud-table th { text-align:left; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted,#8397a3); padding:6px 8px; border-bottom:1px solid var(--border,#e4eaef); }
+  .aud-table td { padding:7px 8px; border-bottom:1px solid var(--border,#eef2f4); }
+  .aud-table .u-right { text-align:right; font-variant-numeric:tabular-nums; }
+  .aud-table tr.aud-suspect { background:#FBE7E1; }
+  .aud-flag { font-size:.68rem; font-weight:800; color:#C6472A; white-space:nowrap; }
+  `;
+  const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+})();
+
+// Repair preview (dry-run) → shows exactly what cancelling a phantom challan
+// would do, then lets the operator apply it. Nothing mutates until "Apply".
+async function repairPreview(dcId) {
+  openModal('Cancel phantom challan · ' + dcId,
+    '<div class="loading-state"><div class="spinner"></div></div>',
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:true, dc_ids:[dcId] }) });
+  if (!d) return;
+  const r = (d.results || []).find(x => x.dc_id === dcId) || {};
+  const eligible = !!r.eligible;
+  const skuRows = (r.skus || []).map(s => `
+    <tr><td>${h(s.name || s.sku)}</td><td class="u-right">${s.ordered}</td>
+      <td class="u-right">${s.delivered_before}</td><td class="u-right"><b>${s.delivered_after}</b></td></tr>`).join('');
+  const bodyHtml = `
+    <div style="font-size:.86rem;margin-bottom:10px">
+      ${eligible
+        ? `<div style="color:var(--success,#0C8E6D)">✔ <b>Safe to cancel.</b> ${h(r.reason||'')}</div>`
+        : `<div style="color:var(--danger,#C6472A)">✖ <b>Not eligible.</b> ${h(r.reason||'')}</div>`}
+    </div>
+    <table class="aud-table"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered now</th><th class="u-right">After cancel</th></tr></thead>
+      <tbody>${skuRows || '<tr><td colspan="4">No line items</td></tr>'}</tbody></table>
+    <p class="nba-note" style="text-align:left;margin-top:10px">Order <b>${h(r.order_id||'')}</b>. This is a dry-run preview — nothing has changed yet.</p>`;
+  const footer = eligible
+    ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-danger" ${dataAct('repairApply', dcId)}>Cancel this challan</button>`
+    : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  const mf = document.getElementById('modal-footer'); if (mf) mf.innerHTML = footer;
+}
+
+async function repairApply(dcId) {
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:false, dc_ids:[dcId] }) });
+  if (!d) return;
+  closeModal();
+  if (d.applied > 0) {
+    showToast(`Challan ${dcId} cancelled — order reconciled${(d.orders_closed||[]).length?' and closed':''}.`);
+    if (typeof navigate === 'function') navigate('over_delivery_audit');
+  } else {
+    showToast('Nothing changed — challan was not eligible to cancel.', 'error');
+  }
+}

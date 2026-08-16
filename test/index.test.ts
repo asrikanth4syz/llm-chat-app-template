@@ -1458,6 +1458,222 @@ describe("Order lifecycle & pipeline board", () => {
   });
 });
 
+// ── Over-delivery guard (dispatch) + Next Best Action ────────────────
+describe("Over-delivery guard & Next Best Action", () => {
+  const gdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await gdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("OD-CL", "OverDeliver Co").run();
+
+    // Order fully delivered (8/8), but a phantom SCHEDULED challan lingers.
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-3 day'))`).bind("OD-1", "OD-CL", "seed", "IN_SHIPMENT", 8000, 0, 8000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-OD-1", "OD-1", "SKU-OD", "Widget", 8, 1000, 8000).run();
+    // DC1 delivered all 8
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,dispatched_at,delivered_at)
+      VALUES (?,?,?,?,?,datetime('now','-2 day'),datetime('now','-2 day'))`).bind("OD-DC1", "OD-1", "DELIVERED", 8, 8).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-1", "OD-DC1", "SKU-OD", "Widget", 8, 8).run();
+    // Phantom DC2 still SCHEDULED — nothing left due against the order
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty)
+      VALUES (?,?,?,?,?)`).bind("OD-DC2", "OD-1", "SCHEDULED", 8, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-2", "OD-DC2", "SKU-OD", "Widget", 8, 0).run();
+
+    // A legitimately pending order: nothing delivered yet, one SCHEDULED DC.
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-1 day'))`).bind("OD-2", "OD-CL", "seed", "READY_TO_PICK", 5000, 0, 5000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-OD-2", "OD-2", "SKU-OD2", "Gadget", 5, 1000, 5000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty) VALUES (?,?,?,?,?)`)
+      .bind("OD-DC3", "OD-2", "SCHEDULED", 5, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-OD-3", "OD-DC3", "SKU-OD2", "Gadget", 5, 0).run();
+  });
+
+  it("blocks dispatch of a phantom challan on a fully-delivered order (409 OVER_DELIVERY)", async () => {
+    const res = await post("/api/delivery-challans/OD-DC2/dispatch", { vehicle_no: "KA01AB1234", driver_name: "Ravi" }, adminToken);
+    expect(res.status).toBe(409);
+    const body = await res.json() as { code:string; dc_cancelled:boolean; order_closed:boolean };
+    expect(body.code).toBe("OVER_DELIVERY");
+    expect(body.dc_cancelled).toBe(true);
+
+    // The phantom challan is cancelled and never flips to IN_TRANSIT …
+    const dc = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("OD-DC2").first() as {status:string};
+    expect(dc.status).toBe("CANCELLED");
+    // … and the settled order is auto-closed.
+    const ord = await gdb.prepare("SELECT status FROM orders WHERE id=?").bind("OD-1").first() as {status:string};
+    expect(ord.status).toBe("CLOSED");
+  });
+
+  it("still allows dispatch when the order genuinely has units outstanding", async () => {
+    const res = await post("/api/delivery-challans/OD-DC3/dispatch", { vehicle_no: "KA02CD5678", driver_name: "Anil" }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { status:string };
+    expect(body.status).toBe("IN_TRANSIT");
+  });
+
+  it("GET /api/pipeline/next-actions returns one ranked next step per in-flight order", async () => {
+    const res = await get("/api/pipeline/next-actions", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as {
+      counts:{total:number;overdue:number;at_risk:number;on_track:number};
+      actions:Array<{id:string;action:string;owner:string;sla:string;page:string;stage_key:string}>;
+      focus:{id:string}|null;
+    };
+    expect(Array.isArray(d.actions)).toBe(true);
+    expect(d.counts.total).toBe(d.actions.length);
+    // OD-2 (ready to pick) surfaces a "Dispatch challan" step owned by the warehouse.
+    const od2 = d.actions.find(a => a.id === "OD-2");
+    expect(od2).toBeTruthy();
+    expect(od2!.stage_key).toBe("dispatch");
+    expect(od2!.action).toBe("Dispatch challan");
+    // Every open action carries an owner and a target page to act on.
+    expect(od2!.owner).toBe("Warehouse");
+    expect(od2!.page).toBe("fulfilment");
+    // Ranking: the focus is the first action and is the most urgent (late before ok).
+    if (d.focus) expect(d.focus.id).toBe(d.actions[0].id);
+  });
+
+  it("GET /api/pipeline/next-actions is forbidden for external (client) roles", async () => {
+    const res = await get("/api/pipeline/next-actions", clientToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("drilldown clamps delivered to ordered and flags over-delivery instead of showing >100%", async () => {
+    // Reproduce the SP-2608-7410 shape: 582 ordered, but a full DC + a phantom
+    // follow-up DC both marked DELIVERED sum to 960 (165%).
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("OD-165", "OD-CL", "seed", "CLOSED", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-165", "OD-165", "SKU-165", "Rice 25kg", 582, 1000, 582000).run();
+    // DC-A delivered the full 582
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-165A", "OD-165", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-165A", "DC-165A", "SKU-165", "Rice 25kg", 582, 582).run();
+    // DC-B: phantom follow-up, also marked DELIVERED, adding 378 more (582+378=960)
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-165B", "OD-165", "DELIVERED", 378, 378).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-165B", "DC-165B", "SKU-165", "Rice 25kg", 378, 378).run();
+
+    const d = await (await get("/api/orders/OD-165/drilldown", adminToken)).json() as {
+      lines: Array<{qty_ordered:number;qty_delivered:number;qty_delivered_raw:number;qty_over_delivered:number;qty_due:number;status:string}>;
+      summary: {has_anomaly:boolean;total_over_delivered:number;over_delivered_lines:number;total_delivered_value:number;total_ordered_value:number};
+    };
+    const line = d.lines.find(l => true)!;
+    expect(line.qty_ordered).toBe(582);
+    expect(line.qty_delivered_raw).toBe(960);      // the raw over-count is preserved for diagnosis
+    expect(line.qty_delivered).toBe(582);          // …but reported delivered is clamped to ordered
+    expect(line.qty_over_delivered).toBe(378);     // surplus surfaced as an anomaly
+    expect(line.qty_due).toBe(0);
+    expect(line.status).toBe("over_delivered");
+    expect(d.summary.has_anomaly).toBe(true);
+    expect(d.summary.total_over_delivered).toBe(378);
+    // Value delivered never exceeds value ordered.
+    expect(d.summary.total_delivered_value).toBeLessThanOrEqual(d.summary.total_ordered_value);
+  });
+
+  it("over-delivery audit (read-only) finds the offending order + names the challans", async () => {
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("AUD-1", "OD-CL", "seed", "CLOSED", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-AUD", "AUD-1", "SKU-AUD", "Rice 25kg", 582, 1000, 582000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("AUD-DCA", "AUD-1", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("AUDI-A", "AUD-DCA", "SKU-AUD", "Rice 25kg", 582, 582).run();
+    // Phantom follow-up marked DELIVERED with qty_delivered=0 → counted at full 378 via fallback.
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("AUD-DCB", "AUD-1", "DELIVERED", 378, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("AUDI-B", "AUD-DCB", "SKU-AUD", "Rice 25kg", 378, 0).run();
+
+    const res = await get("/api/reports/over-delivery-audit", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as {
+      read_only:boolean;
+      summary:{orders_affected:number;lines_affected:number;total_over_units:number};
+      anomalies:Array<{order_id:string;sku:string;ordered:number;delivered_effective:number;over_units:number;
+        challans:Array<{dc_id:string;status:string;suspect:boolean;counted_as:number}>}>;
+    };
+    expect(d.read_only).toBe(true);
+    const a = d.anomalies.find(x => x.order_id === "AUD-1");
+    expect(a).toBeTruthy();
+    expect(a!.ordered).toBe(582);
+    expect(a!.delivered_effective).toBe(960);   // 582 + 378 counted via the fallback
+    expect(a!.over_units).toBe(378);
+    // The phantom challan is named and flagged as the suspect (delivered, qty not recorded).
+    const phantom = a!.challans.find(dc => dc.dc_id === "AUD-DCB");
+    expect(phantom!.suspect).toBe(true);
+    expect(phantom!.counted_as).toBe(378);
+  });
+
+  it("over-delivery audit is forbidden for external (client) roles", async () => {
+    const res = await get("/api/reports/over-delivery-audit", clientToken);
+    expect(res.status).toBe(403);
+  });
+
+  // Repair scenario: 582 ordered; DC-R-A delivered the real 582; DC-R-B is a
+  // phantom (DELIVERED, qty_delivered=0) adding 378 via the fallback.
+  async function seedRepairOrder() {
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("REP-1", "OD-CL", "seed", "IN_SHIPMENT", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-REP", "REP-1", "SKU-REP", "Rice 25kg", 582, 1000, 582000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-R-A", "REP-1", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-R-A", "DC-R-A", "SKU-REP", "Rice 25kg", 582, 582).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-R-B", "REP-1", "DELIVERED", 378, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-R-B", "DC-R-B", "SKU-REP", "Rice 25kg", 378, 0).run();
+  }
+
+  it("repair dry-run flags the phantom eligible, protects the real challan, and writes nothing", async () => {
+    await seedRepairOrder();
+    // Dry-run defaults to true even without the flag.
+    const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["DC-R-B", "DC-R-A"] }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { dry_run:boolean; eligible:number; applied:number;
+      results:Array<{dc_id:string;eligible:boolean;reason:string;skus:Array<{delivered_after:number;ordered:number}>}> };
+    expect(d.dry_run).toBe(true);
+    expect(d.applied).toBe(0);
+    const b = d.results.find(r => r.dc_id === "DC-R-B")!;
+    expect(b.eligible).toBe(true);                 // phantom: no stock, pure surplus
+    expect(b.skus[0].delivered_after).toBe(582);   // order still fully satisfied after removal
+    const a = d.results.find(r => r.dc_id === "DC-R-A")!;
+    expect(a.eligible).toBe(false);                // real challan: removing it would cause a shortfall
+    // Nothing mutated on a dry run.
+    const stillThere = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-B").first() as {status:string};
+    expect(stillThere.status).toBe("DELIVERED");
+  });
+
+  it("repair apply cancels only the phantom, closes the reconciled order, and leaves the real challan", async () => {
+    await seedRepairOrder();
+    const res = await post("/api/reports/over-delivery-audit/repair", { dry_run: false, dc_ids: ["DC-R-A", "DC-R-B"] }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { applied:number; orders_closed:string[] };
+    expect(d.applied).toBe(1);                     // only DC-R-B
+    const b = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-B").first() as {status:string};
+    expect(b.status).toBe("CANCELLED");
+    const a = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-A").first() as {status:string};
+    expect(a.status).toBe("DELIVERED");            // real challan untouched
+    // Order is now exactly satisfied (582/582) → closed, and audit shows no anomaly.
+    const drill = await (await get("/api/orders/REP-1/drilldown", adminToken)).json() as { summary:{has_anomaly:boolean}; lines:Array<{qty_delivered:number;qty_over_delivered:number}> };
+    expect(drill.summary.has_anomaly).toBe(false);
+    expect(drill.lines[0].qty_delivered).toBe(582);
+    expect(drill.lines[0].qty_over_delivered).toBe(0);
+  });
+
+  it("repair is forbidden for external (client) roles", async () => {
+    const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["DC-R-B"] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
 // ── Location zones (admin-managed) ───────────────────────────────────
 describe("Location zones", () => {
   it("GET /api/zones returns the default set when unset", async () => {
