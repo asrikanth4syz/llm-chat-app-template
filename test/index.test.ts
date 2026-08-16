@@ -1539,6 +1539,41 @@ describe("Over-delivery guard & Next Best Action", () => {
     const res = await get("/api/pipeline/next-actions", clientToken);
     expect(res.status).toBe(403);
   });
+
+  it("drilldown clamps delivered to ordered and flags over-delivery instead of showing >100%", async () => {
+    // Reproduce the SP-2608-7410 shape: 582 ordered, but a full DC + a phantom
+    // follow-up DC both marked DELIVERED sum to 960 (165%).
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("OD-165", "OD-CL", "seed", "CLOSED", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-165", "OD-165", "SKU-165", "Rice 25kg", 582, 1000, 582000).run();
+    // DC-A delivered the full 582
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-165A", "OD-165", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-165A", "DC-165A", "SKU-165", "Rice 25kg", 582, 582).run();
+    // DC-B: phantom follow-up, also marked DELIVERED, adding 378 more (582+378=960)
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-165B", "OD-165", "DELIVERED", 378, 378).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-165B", "DC-165B", "SKU-165", "Rice 25kg", 378, 378).run();
+
+    const d = await (await get("/api/orders/OD-165/drilldown", adminToken)).json() as {
+      lines: Array<{qty_ordered:number;qty_delivered:number;qty_delivered_raw:number;qty_over_delivered:number;qty_due:number;status:string}>;
+      summary: {has_anomaly:boolean;total_over_delivered:number;over_delivered_lines:number;total_delivered_value:number;total_ordered_value:number};
+    };
+    const line = d.lines.find(l => true)!;
+    expect(line.qty_ordered).toBe(582);
+    expect(line.qty_delivered_raw).toBe(960);      // the raw over-count is preserved for diagnosis
+    expect(line.qty_delivered).toBe(582);          // …but reported delivered is clamped to ordered
+    expect(line.qty_over_delivered).toBe(378);     // surplus surfaced as an anomaly
+    expect(line.qty_due).toBe(0);
+    expect(line.status).toBe("over_delivered");
+    expect(d.summary.has_anomaly).toBe(true);
+    expect(d.summary.total_over_delivered).toBe(378);
+    // Value delivered never exceeds value ordered.
+    expect(d.summary.total_delivered_value).toBeLessThanOrEqual(d.summary.total_ordered_value);
+  });
 });
 
 // ── Location zones (admin-managed) ───────────────────────────────────

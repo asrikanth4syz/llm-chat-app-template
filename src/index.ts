@@ -1669,31 +1669,43 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
     }
   }
 
-  // Build line-level reconciliation
+  // Build line-level reconciliation.
+  // INVARIANT: a client can never receive more than was ordered, so reported
+  // delivered is clamped to the ordered qty. The raw sum across all DELIVERED
+  // challans is kept so a genuine over-delivery (e.g. a duplicate/phantom
+  // challan that slipped through) is SURFACED as an anomaly rather than shown
+  // as a silent 165% or hidden behind a clamp.
   const lines = (orderItems as Record<string,unknown>[]).map(item => {
-    const ordered   = Number(item.qty) || 0;
-    const delivered = deliveredBySku[item.sku as string] || 0;
-    const due       = Math.max(0, ordered - delivered);
+    const ordered      = Number(item.qty) || 0;
+    const deliveredRaw = deliveredBySku[item.sku as string] || 0;
+    const delivered    = Math.min(ordered, deliveredRaw);   // never exceeds ordered
+    const over         = Math.max(0, deliveredRaw - ordered); // >0 ⇒ data anomaly
+    const due          = Math.max(0, ordered - delivered);
     return {
       sku:       item.sku,
       name:      item.name,
       unit_price: item.unit_price,
-      qty_ordered:   ordered,
-      qty_delivered: delivered,
+      qty_ordered:       ordered,
+      qty_delivered:     delivered,
+      qty_delivered_raw: deliveredRaw,
+      qty_over_delivered: over,
       qty_due:       due,
       value_ordered:   ordered   * Number(item.unit_price),
       value_delivered: delivered * Number(item.unit_price),
       value_due:       due       * Number(item.unit_price),
-      status: delivered === 0 ? 'not_delivered' : due === 0 ? 'fully_delivered' : 'partial',
+      status: over > 0 ? 'over_delivered' : delivered === 0 ? 'not_delivered' : due === 0 ? 'fully_delivered' : 'partial',
     };
   });
 
-  // Summary
+  // Summary. A line that reached its ordered qty counts as fully delivered even
+  // if the raw sum over-shot it (that surplus is reported separately as an anomaly).
   const totalLines     = lines.length;
-  const deliveredLines = lines.filter(l => l.status === 'fully_delivered').length;
+  const deliveredLines = lines.filter(l => l.qty_due === 0 && l.qty_delivered > 0).length;
   const partialLines   = lines.filter(l => l.status === 'partial').length;
-  const dueLines       = lines.filter(l => l.status !== 'fully_delivered').length;
+  const dueLines       = lines.filter(l => l.qty_due > 0).length;
   const noDeliveryLines= lines.filter(l => l.status === 'not_delivered').length;
+  const overDeliveredLines = lines.filter(l => l.qty_over_delivered > 0).length;
+  const totalOverDelivered = lines.reduce((s,l)=>s+l.qty_over_delivered,0);
 
   return json({
     order,
@@ -1705,6 +1717,9 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
       partial_lines: partialLines,
       due_lines: dueLines,
       no_delivery_lines: noDeliveryLines,
+      over_delivered_lines: overDeliveredLines,
+      total_over_delivered: totalOverDelivered,
+      has_anomaly: totalOverDelivered > 0,
       total_ordered_value:   lines.reduce((s,l)=>s+l.value_ordered,0),
       total_delivered_value: lines.reduce((s,l)=>s+l.value_delivered,0),
       total_due_value:       lines.reduce((s,l)=>s+l.value_due,0),
@@ -4766,9 +4781,9 @@ async function handleRptOrderVsDelivery(request: Request, env: Env): Promise<Res
       COALESCE(i.brand, i.category,'') AS brand_name,
       oi.name AS item_name,
       oi.qty AS ordered_qty,
-      COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS delivered_qty,
-      oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0) AS due_qty,
-      (oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) * oi.unit_price AS due_value,
+      MIN(oi.qty, COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) AS delivered_qty,
+      MAX(0, oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) AS due_qty,
+      MAX(0, oi.qty - COALESCE((SELECT SUM(CASE WHEN dc2.status='DELIVERED' AND dci.qty_delivered=0 THEN dci.qty_ordered ELSE dci.qty_delivered END) FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id WHERE dc2.order_id=o.id AND dci.sku=oi.sku),0)) * oi.unit_price AS due_value,
       (SELECT COUNT(*) FROM delivery_challans dc3 WHERE dc3.order_id=o.id AND dc3.status NOT IN ('CANCELLED')) AS dc_count,
       (SELECT MAX(dc4.delivered_at) FROM delivery_challans dc4 WHERE dc4.order_id=o.id AND dc4.status='DELIVERED') AS last_delivery_date,
       CASE

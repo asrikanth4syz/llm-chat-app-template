@@ -257,12 +257,20 @@ async function viewOrder(id) {
   const orderedUnits   = dLines.length ? dLines.reduce((s,l)=>s+(l.qty_ordered||0),0) : (order.items||[]).reduce((s,i)=>s+(i.qty||0),0);
   const deliveredUnits = dLines.reduce((s,l)=>s+(l.qty_delivered||0),0);
   const dueUnits       = dLines.reduce((s,l)=>s+(l.qty_due||0),0);
-  const fulfilPct      = orderedUnits ? Math.round(deliveredUnits/orderedUnits*100) : 0;
+  // Delivered can never exceed ordered — cap the meter at 100%. A raw sum above
+  // ordered means a duplicate/phantom challan was counted; surface it, don't hide it.
+  const overUnits      = drill?.summary?.total_over_delivered || dLines.reduce((s,l)=>s+(l.qty_over_delivered||0),0);
+  const fulfilPct      = orderedUnits ? Math.min(100, Math.round(deliveredUnits/orderedUnits*100)) : 0;
   const dueValue       = drill?.summary?.total_due_value || 0;
+  const anomalyHtml    = overUnits > 0 ? `
+      <div class="ord-meter-warn" style="margin-top:6px;font-size:.8rem;color:var(--danger,#C6472A);background:var(--danger-bg,#FBE7E1);border:1px solid var(--danger,#C6472A);border-radius:8px;padding:7px 10px">
+        ⚠ <b>${overUnits} unit${overUnits===1?'':'s'} over-delivered</b> — recorded deliveries exceed the ordered quantity. This usually means a duplicate or phantom delivery challan was counted. Review the DCs below and cancel any that shouldn't have shipped.
+      </div>` : '';
   const meterHtml = showDelivered ? `
     <div class="ord-meter">
       <div class="ord-meter-bar"><i class="del" style="width:${fulfilPct}%"></i><i class="due" style="width:${100-fulfilPct}%"></i></div>
-      <div class="ord-meter-cap">${fulfilPct}% delivered — <b>${deliveredUnits} of ${orderedUnits} units</b>${dueUnits>0?` · <b>${dueUnits}</b> due${dueValue?` (${fmt(dueValue)})`:''}`:''}</div>
+      <div class="ord-meter-cap">${fulfilPct}% delivered — <b>${Math.min(deliveredUnits,orderedUnits)} of ${orderedUnits} units</b>${dueUnits>0?` · <b>${dueUnits}</b> due${dueValue?` (${fmt(dueValue)})`:''}`:''}</div>
+      ${anomalyHtml}
     </div>` : '';
 
   const orderDCs = (dcRes||[]).filter(d => d.order_id === id);
