@@ -85,10 +85,10 @@ const iconProcure  = s => svg('<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2
 const iconWarehouse= s => svg('<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',s);
 const iconDelivery = s => svg('<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',s);
 const iconBilling  = s => svg('<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',s);
-const iconClients  = s => svg('<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',s);
+const iconClients  = s => svg('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="3.2"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16.5 3.3a3.2 3.2 0 0 1 0 6.2"/>',s);
 const iconDesk     = s => svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',s);
 const iconReports  = s => svg('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',s);
-const iconUsers    = s => svg('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',s);
+const iconUsers    = s => svg('<path d="M12 2.5l7.5 3v5c0 4.7-3.1 7.9-7.5 9.5-4.4-1.6-7.5-4.8-7.5-9.5v-5z"/><circle cx="12" cy="9.8" r="2.1"/><path d="M8.4 15.6a3.7 3.7 0 0 1 7.2 0"/>',s);
 const iconSettings = s => svg('<circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>',s);
 const iconCart     = s => svg('<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>',s);
 const iconApprove  = s => svg('<polyline points="20 6 9 17 4 12"/>',s);
@@ -120,6 +120,7 @@ const iconWallet   = s => svg('<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H19a1 1 0 0 1 
 const iconSupplier = s => svg('<path d="M3 21h18"/><path d="M5 21V8l7-3.5V21"/><path d="M12 21V9l7 3.5V21"/><line x1="8.5" y1="11" x2="8.5" y2="11.01"/><line x1="8.5" y1="15" x2="8.5" y2="15.01"/>',s);
 const iconHeadset  = s => svg('<path d="M4 13a8 8 0 0 1 16 0"/><path d="M4 13.5v3a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 .5Z"/><path d="M20 13.5v3a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 .5Z"/><path d="M18 18.5a4 4 0 0 1-4 3h-2"/>',s);
 const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2.5 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="16.5" x2="15" y2="16.5"/>',s);
+const iconToday    = s => svg('<rect x="3" y="4.5" width="18" height="16" rx="2"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/><circle cx="12" cy="15" r="1.8" fill="currentColor" stroke="none"/>',s);
 
 // Single source of truth for a page's sidebar icon — keyed by page id so every
 // role that surfaces a page gets the same, semantically-correct glyph. buildNav
@@ -127,7 +128,7 @@ const iconFile     = s => svg('<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2
 const PAGE_ICON = {
   dashboard: iconHome,
   // Orders & fulfilment
-  orders: iconOrders, next_actions: iconCheck, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
+  orders: iconOrders, next_actions: iconToday, pipeline: iconGauge, consolidated_due: iconClock, fulfilment: iconFulfil,
   todays_schedule: iconCalCheck,
   // Deliveries
   delivery: iconTruck, delivery_calendar: iconCalendar, delivery_routes: iconMap,
@@ -166,7 +167,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',   label:'Home', icon:iconHome, badge:null },
     { section:'Today & Orders' },
-    { id:'next_actions',        label:'Today',        icon:iconCheck,   badge:null },
+    { id:'next_actions',        label:'Today',        icon:iconToday,   badge:null },
     { id:'pipeline',            label:'Pipeline',     icon:iconGauge,   badge:null },
     { id:'orders',              label:'Orders',       icon:iconOrders,  badge:'!' },
     { id:'consolidated_due',    label:'Due Items',    icon:iconReceipt, badge:'!' },
@@ -206,7 +207,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',           label:'Home',             icon:iconHome,      badge:null },
     { section:'Today & Orders' },
-    { id:'next_actions',        label:'Today',            icon:iconCheck,     badge:null },
+    { id:'next_actions',        label:'Today',            icon:iconToday,     badge:null },
     { id:'pipeline',            label:'Pipeline',         icon:iconGauge,     badge:null },
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReceipt,   badge:'!' },
@@ -1200,6 +1201,23 @@ function _modalKeydown(e) {
   const overlay = document.getElementById('modal-overlay');
   if (!overlay || overlay.classList.contains('hidden')) return;
   if (e.key === 'Escape') { e.preventDefault(); requestCloseModal(); return; }
+  // Keyboard scrolling for the modal body: Arrow/Page/Home/End scroll the
+  // content even when focus is on a button. Skipped while typing in a field so
+  // the caret/selection keys keep working.
+  const SCROLL_KEYS = { ArrowDown:1, ArrowUp:1, PageDown:1, PageUp:1, Home:1, End:1 };
+  if (SCROLL_KEYS[e.key]) {
+    const ae = document.activeElement;
+    const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
+    const body = document.getElementById('modal-body');
+    if (!typing && body && body.scrollHeight > body.clientHeight + 1) {
+      const line = 64, page = Math.max(64, body.clientHeight - 48);
+      if (e.key === 'Home')      body.scrollTo({ top: 0, behavior: 'smooth' });
+      else if (e.key === 'End')  body.scrollTo({ top: body.scrollHeight, behavior: 'smooth' });
+      else body.scrollBy({ top: e.key === 'ArrowDown' ? line : e.key === 'ArrowUp' ? -line : e.key === 'PageDown' ? page : -page, behavior: 'smooth' });
+      e.preventDefault();
+      return;
+    }
+  }
   if (e.key === 'Tab') {
     const f = _modalFocusables();
     if (!f.length) return;
@@ -1230,7 +1248,15 @@ function openModal(title, body, footer = '') {
   overlay.onclick = e => { if (e.target === overlay) requestCloseModal(); };
   document.removeEventListener('keydown', _modalKeydown, true);
   document.addEventListener('keydown', _modalKeydown, true);
-  setTimeout(() => { const f = _modalFocusables(); (f[0] || modal).focus(); }, 0);
+  setTimeout(() => {
+    const bodyEl = document.getElementById('modal-body');
+    const f = _modalFocusables();
+    const firstIsField = f[0] && /^(INPUT|TEXTAREA|SELECT)$/.test(f[0].tagName);
+    // Long, read-only content (e.g. Pick & Pack details) → focus the scroll
+    // region so arrows/wheel work immediately. Forms → focus their first field.
+    if (bodyEl && bodyEl.scrollHeight > bodyEl.clientHeight + 1 && !firstIsField) bodyEl.focus();
+    else (f[0] || modal).focus();
+  }, 0);
 }
 function closeModal() {
   const overlay = document.getElementById('modal-overlay');
