@@ -866,6 +866,7 @@ export default {
       if (path==="/api/reports/order-dcs"             && method==="GET") return handleRptOrderDCs(request,env);
       if (path==="/api/reports/dc-reconciliation"    && method==="GET") return handleRptDCReconciliation(request,env);
       if (path==="/api/reports/over-delivery-audit"  && method==="GET") return handleRptOverDeliveryAudit(request,env);
+      if (path==="/api/reports/over-delivery-audit/repair" && method==="POST") return handleRepairOverDelivery(request,env);
       if (path==="/api/reports/pending-supply"       && method==="GET") return handleRptPendingSupply(request,env);
       if (path==="/api/reports/due-ageing"           && method==="GET") return handleRptDueAgeing(request,env);
       if (path==="/api/reports/brand-shortfall"      && method==="GET") return handleRptBrandShortfall(request,env);
@@ -1797,6 +1798,92 @@ async function handleRptOverDeliveryAudit(request: Request, env: Env): Promise<R
     read_only: true,
     summary: { orders_affected: ordersAffected, lines_affected: anomalies.length, total_over_units: totalOverUnits },
     anomalies,
+  });
+}
+
+// Effective delivered for one order+SKU, replicating the reporting fallback
+// (a DELIVERED challan with no recorded line qty counts at its full ordered load).
+// Optionally excludes one challan to model "what if this DC were cancelled".
+async function effectiveDeliveredForSku(env: Env, orderId: string, sku: string, excludeDcId?: string): Promise<number> {
+  const sql = `SELECT COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND di.qty_delivered=0 THEN di.qty_ordered
+                                        WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) eff
+    FROM dc_items di JOIN delivery_challans dc ON dc.id=di.dc_id
+    WHERE dc.order_id=? AND di.sku=?` + (excludeDcId ? ` AND dc.id!=?` : ``);
+  const binds: unknown[] = excludeDcId ? [orderId, sku, excludeDcId] : [orderId, sku];
+  const row = await env.DB.prepare(sql).bind(...binds).first() as {eff:number}|null;
+  return row?.eff || 0;
+}
+
+// POST /api/reports/over-delivery-audit/repair — corrects over-delivered orders
+// by cancelling the phantom challans the audit surfaced. SAFE BY CONSTRUCTION:
+// dry-run unless dry_run:false is passed explicitly, and a challan is only ever
+// eligible when it (a) recorded NO delivery (moved no stock) and (b) is pure
+// surplus — removing it leaves every order line still ≥ its ordered qty. It can
+// therefore never manufacture a shortfall or reverse real stock.
+async function handleRepairOverDelivery(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const body = await request.json().catch(()=>({})) as { dry_run?: boolean; dc_ids?: string[] };
+  const dryRun = body.dry_run !== false; // default true — apply only on explicit false
+  const dcIds = Array.from(new Set((body.dc_ids || []).filter(x => typeof x === "string"))).slice(0, 200);
+  if (!dcIds.length) return json({error:"dc_ids (array of challan IDs to cancel) is required"}, 400);
+
+  const results: Array<Record<string,unknown>> = [];
+  for (const dcId of dcIds) {
+    const dc = await env.DB.prepare("SELECT id, order_id, status FROM delivery_challans WHERE id=?").bind(dcId).first() as {id:string;order_id?:string;status?:string}|null;
+    if (!dc)                        { results.push({ dc_id: dcId, eligible:false, reason:"challan not found" }); continue; }
+    if (dc.status === "CANCELLED")  { results.push({ dc_id: dcId, order_id: dc.order_id, eligible:false, reason:"already cancelled" }); continue; }
+    if (!dc.order_id)               { results.push({ dc_id: dcId, eligible:false, reason:"challan has no order" }); continue; }
+
+    const rec = await env.DB.prepare("SELECT COALESCE(SUM(qty_delivered),0) q FROM dc_items WHERE dc_id=?").bind(dcId).first() as {q:number}|null;
+    const recordedDelivered = rec?.q || 0;
+    const { results: items } = await env.DB.prepare("SELECT sku, name, qty_ordered, qty_delivered FROM dc_items WHERE dc_id=?").bind(dcId).all() as { results: Record<string,unknown>[] };
+
+    const skuImpact: Array<Record<string,unknown>> = [];
+    let wouldShortfall = false;
+    for (const it of items) {
+      const sku = it.sku as string;
+      const oi = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=? AND sku=?").bind(dc.order_id, sku).first() as {q:number}|null;
+      const ordered = oi?.q || 0;
+      const before = await effectiveDeliveredForSku(env, dc.order_id, sku);
+      const after  = await effectiveDeliveredForSku(env, dc.order_id, sku, dcId);
+      if (ordered > 0 && after < ordered) wouldShortfall = true;
+      skuImpact.push({ sku, name: it.name, ordered, delivered_before: before, delivered_after: after });
+    }
+
+    let eligible = true, reason = "pure surplus phantom — moved no stock, safe to cancel";
+    if (recordedDelivered > 0) { eligible = false; reason = "challan recorded a stock movement — needs manual review, not auto-cancelled"; }
+    else if (wouldShortfall)   { eligible = false; reason = "cancelling would drop an order line below its ordered qty — carried needed units"; }
+
+    results.push({ dc_id: dcId, order_id: dc.order_id, status: dc.status, recorded_delivered: recordedDelivered, eligible, reason, skus: skuImpact });
+  }
+
+  const eligibleRows = results.filter(r => r.eligible);
+  let applied = 0;
+  const ordersClosed: string[] = [];
+  if (!dryRun && eligibleRows.length) {
+    for (const r of eligibleRows) {
+      await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=? AND status!='CANCELLED'").bind(r.dc_id as string).run();
+      await audit(env, user, "CANCEL", "delivery_challan", r.dc_id as string, undefined, "over-delivery repair — phantom challan cancelled");
+      applied++;
+    }
+    for (const oid of Array.from(new Set(eligibleRows.map(r => r.order_id as string)))) {
+      if (await closeOrderIfSettled(env, oid, user, "over-delivery repair — order reconciled after cancelling phantom challan(s)")) ordersClosed.push(oid);
+    }
+  }
+
+  return json({
+    dry_run: dryRun,
+    requested: dcIds.length,
+    eligible: eligibleRows.length,
+    applied,                                   // 0 on a dry run
+    orders_closed: ordersClosed,
+    note: dryRun
+      ? "Dry run — nothing was changed. Re-send with dry_run:false to cancel the eligible challans."
+      : `Cancelled ${applied} phantom challan(s).`,
+    results,
   });
 }
 

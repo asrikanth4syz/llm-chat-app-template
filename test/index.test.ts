@@ -1614,6 +1614,64 @@ describe("Over-delivery guard & Next Best Action", () => {
     const res = await get("/api/reports/over-delivery-audit", clientToken);
     expect(res.status).toBe(403);
   });
+
+  // Repair scenario: 582 ordered; DC-R-A delivered the real 582; DC-R-B is a
+  // phantom (DELIVERED, qty_delivered=0) adding 378 via the fallback.
+  async function seedRepairOrder() {
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("REP-1", "OD-CL", "seed", "IN_SHIPMENT", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-REP", "REP-1", "SKU-REP", "Rice 25kg", 582, 1000, 582000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-R-A", "REP-1", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-R-A", "DC-R-A", "SKU-REP", "Rice 25kg", 582, 582).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("DC-R-B", "REP-1", "DELIVERED", 378, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DI-R-B", "DC-R-B", "SKU-REP", "Rice 25kg", 378, 0).run();
+  }
+
+  it("repair dry-run flags the phantom eligible, protects the real challan, and writes nothing", async () => {
+    await seedRepairOrder();
+    // Dry-run defaults to true even without the flag.
+    const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["DC-R-B", "DC-R-A"] }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { dry_run:boolean; eligible:number; applied:number;
+      results:Array<{dc_id:string;eligible:boolean;reason:string;skus:Array<{delivered_after:number;ordered:number}>}> };
+    expect(d.dry_run).toBe(true);
+    expect(d.applied).toBe(0);
+    const b = d.results.find(r => r.dc_id === "DC-R-B")!;
+    expect(b.eligible).toBe(true);                 // phantom: no stock, pure surplus
+    expect(b.skus[0].delivered_after).toBe(582);   // order still fully satisfied after removal
+    const a = d.results.find(r => r.dc_id === "DC-R-A")!;
+    expect(a.eligible).toBe(false);                // real challan: removing it would cause a shortfall
+    // Nothing mutated on a dry run.
+    const stillThere = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-B").first() as {status:string};
+    expect(stillThere.status).toBe("DELIVERED");
+  });
+
+  it("repair apply cancels only the phantom, closes the reconciled order, and leaves the real challan", async () => {
+    await seedRepairOrder();
+    const res = await post("/api/reports/over-delivery-audit/repair", { dry_run: false, dc_ids: ["DC-R-A", "DC-R-B"] }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { applied:number; orders_closed:string[] };
+    expect(d.applied).toBe(1);                     // only DC-R-B
+    const b = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-B").first() as {status:string};
+    expect(b.status).toBe("CANCELLED");
+    const a = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("DC-R-A").first() as {status:string};
+    expect(a.status).toBe("DELIVERED");            // real challan untouched
+    // Order is now exactly satisfied (582/582) → closed, and audit shows no anomaly.
+    const drill = await (await get("/api/orders/REP-1/drilldown", adminToken)).json() as { summary:{has_anomaly:boolean}; lines:Array<{qty_delivered:number;qty_over_delivered:number}> };
+    expect(drill.summary.has_anomaly).toBe(false);
+    expect(drill.lines[0].qty_delivered).toBe(582);
+    expect(drill.lines[0].qty_over_delivered).toBe(0);
+  });
+
+  it("repair is forbidden for external (client) roles", async () => {
+    const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["DC-R-B"] }, clientToken);
+    expect(res.status).toBe(403);
+  });
 });
 
 // ── Location zones (admin-managed) ───────────────────────────────────

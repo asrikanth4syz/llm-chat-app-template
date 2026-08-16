@@ -418,7 +418,7 @@ async function renderOverDeliveryAudit(el) {
             <td class="u-right">${dc.qty_delivered}</td>
             <td class="u-right"><b>${dc.counted_as}</b></td>
             <td>${dc.delivered_at ? fmtWhen(dc.delivered_at) : '—'}</td>
-            <td>${dc.suspect ? '<span class="aud-flag">⚠ likely phantom</span>' : ''}</td>
+            <td>${dc.suspect ? `<span class="aud-flag">⚠ likely phantom</span> <button class="btn btn-sm btn-danger" ${dataAct('repairPreview', dc.dc_id)} style="margin-left:6px">Cancel…</button>` : ''}</td>
           </tr>`).join('');
         return `<div class="aud-card">
           <div class="aud-head">
@@ -466,3 +466,45 @@ async function renderOverDeliveryAudit(el) {
   `;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
 })();
+
+// Repair preview (dry-run) → shows exactly what cancelling a phantom challan
+// would do, then lets the operator apply it. Nothing mutates until "Apply".
+async function repairPreview(dcId) {
+  openModal('Cancel phantom challan · ' + dcId,
+    '<div class="loading-state"><div class="spinner"></div></div>',
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:true, dc_ids:[dcId] }) });
+  if (!d) return;
+  const r = (d.results || []).find(x => x.dc_id === dcId) || {};
+  const eligible = !!r.eligible;
+  const skuRows = (r.skus || []).map(s => `
+    <tr><td>${h(s.name || s.sku)}</td><td class="u-right">${s.ordered}</td>
+      <td class="u-right">${s.delivered_before}</td><td class="u-right"><b>${s.delivered_after}</b></td></tr>`).join('');
+  const bodyHtml = `
+    <div style="font-size:.86rem;margin-bottom:10px">
+      ${eligible
+        ? `<div style="color:var(--success,#0C8E6D)">✔ <b>Safe to cancel.</b> ${h(r.reason||'')}</div>`
+        : `<div style="color:var(--danger,#C6472A)">✖ <b>Not eligible.</b> ${h(r.reason||'')}</div>`}
+    </div>
+    <table class="aud-table"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered now</th><th class="u-right">After cancel</th></tr></thead>
+      <tbody>${skuRows || '<tr><td colspan="4">No line items</td></tr>'}</tbody></table>
+    <p class="nba-note" style="text-align:left;margin-top:10px">Order <b>${h(r.order_id||'')}</b>. This is a dry-run preview — nothing has changed yet.</p>`;
+  const footer = eligible
+    ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-danger" ${dataAct('repairApply', dcId)}>Cancel this challan</button>`
+    : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  const mf = document.getElementById('modal-footer'); if (mf) mf.innerHTML = footer;
+}
+
+async function repairApply(dcId) {
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:false, dc_ids:[dcId] }) });
+  if (!d) return;
+  closeModal();
+  if (d.applied > 0) {
+    showToast(`Challan ${dcId} cancelled — order reconciled${(d.orders_closed||[]).length?' and closed':''}.`);
+    if (typeof navigate === 'function') navigate('over_delivery_audit');
+  } else {
+    showToast('Nothing changed — challan was not eligible to cancel.', 'error');
+  }
+}
