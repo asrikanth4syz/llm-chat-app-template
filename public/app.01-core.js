@@ -172,10 +172,7 @@ const NAV = {
     { id:'consolidated_due',    label:'Due Items',    icon:iconReceipt, badge:'!' },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,   badge:'!' },
-    { id:'todays_schedule',     label:"Today's Runs",     icon:iconCalCheck, badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery, badge:null },
-    { id:'delivery_calendar',   label:'Delivery Calendar',icon:iconCalendar, badge:null },
-    { id:'delivery_routes',     label:'Routes',           icon:iconMap,      badge:null },
     { section:'Procurement & Stock' },
     { id:'procurement',         label:'Purchase Orders', icon:iconProcure,   badge:null },
     { id:'consolidated_orders', label:'Consolidated POs',icon:iconLayers,    badge:null },
@@ -214,10 +211,8 @@ const NAV = {
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'consolidated_due',    label:'Due Items',        icon:iconReceipt,   badge:'!' },
     { section:'Fulfilment & Delivery' },
-    { id:'todays_schedule',     label:"Today's Runs",     icon:iconCalCheck,  badge:'!' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,    badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
-    { id:'delivery_calendar',   label:'Delivery Calendar',icon:iconCalendar,  badge:null },
     { section:'Billing & Finance' },
     { id:'dc_billing',          label:'Billing',          icon:iconBilling,   badge:'!' },
     { section:'Clients' },
@@ -248,11 +243,9 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',       label:'Home',               icon:iconDashboard, badge:null },
     { section:'Operations' },
-    { id:'todays_schedule', label:"Today's Schedule",   icon:iconDelivery,  badge:'!' },
     { id:'delivery',        label:'Deliveries',         icon:iconDelivery,  badge:null },
-    { id:'delivery_calendar', label:'Delivery Calendar', icon:iconDelivery, badge:null },
     { section:'Billing & Finance' },
-    { id:'dc_billing',      label:'DC Billing',         icon:iconBilling,   badge:'!' },
+    { id:'dc_billing',      label:'Billing',            icon:iconBilling,   badge:'!' },
   ],
   delivery_exec: [
     { section:'Home' },
@@ -735,6 +728,12 @@ function canAccessPage(page) {
 const ACTION_PAGES = {
   settings:    ['super_admin', 'ops_admin'],
   place_order: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'],
+  // Phase 3: the delivery sub-pages are now tabs inside the "Deliveries" hub
+  // (page id `delivery`). They stay reachable off-nav so existing deep links
+  // (dashboard shortcuts, post-action redirects) keep working for these roles.
+  todays_schedule:   ['super_admin', 'ops_admin', 'delivery_manager'],
+  delivery_calendar: ['super_admin', 'ops_admin', 'delivery_manager'],
+  delivery_routes:   ['super_admin'],
 };
 
 function getDefaultPage() {
@@ -953,7 +952,7 @@ const PAGE_MAP = {
   vendors: 'renderVendors',
   procurement: 'renderProcurement',
   warehouse: 'renderWarehouse',
-  delivery: 'renderDelivery',
+  delivery: 'renderDeliveriesHub',
   clients: 'renderClients',
   service_desk: 'renderServiceDesk',
   reports: 'renderReports',
