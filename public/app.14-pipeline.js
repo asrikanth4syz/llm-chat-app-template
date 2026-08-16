@@ -469,42 +469,50 @@ async function renderOverDeliveryAudit(el) {
 
 // Repair preview (dry-run) → shows exactly what cancelling a phantom challan
 // would do, then lets the operator apply it. Nothing mutates until "Apply".
-async function repairPreview(dcId) {
-  openModal('Cancel phantom challan · ' + dcId,
+async function repairPreview(dcId, reverse) {
+  openModal((reverse ? 'Void challan & reverse stock · ' : 'Cancel phantom challan · ') + dcId,
     '<div class="loading-state"><div class="spinner"></div></div>',
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
-  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:true, dc_ids:[dcId] }) });
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:true, reverse_stock: !!reverse, dc_ids:[dcId] }) });
   if (!d) return;
   const r = (d.results || []).find(x => x.dc_id === dcId) || {};
   const eligible = !!r.eligible;
+  const showStock = !!reverse;
   const skuRows = (r.skus || []).map(s => `
     <tr><td>${h(s.name || s.sku)}</td><td class="u-right">${s.ordered}</td>
-      <td class="u-right">${s.delivered_before}</td><td class="u-right"><b>${s.delivered_after}</b></td></tr>`).join('');
+      <td class="u-right">${s.delivered_before}</td><td class="u-right"><b>${s.delivered_after}</b></td>
+      ${showStock ? `<td class="u-right" style="color:var(--success,#0C8E6D);font-weight:700">${s.stock_reversal>0?'+'+s.stock_reversal:'—'}</td>` : ''}</tr>`).join('');
+  // When a plain cancel is refused only because the challan moved stock, offer
+  // the explicit stock-reversing void.
+  const offerReverse = !eligible && String(r.reason||'').includes('reverse_stock');
   const bodyHtml = `
     <div style="font-size:.86rem;margin-bottom:10px">
       ${eligible
-        ? `<div style="color:var(--success,#0C8E6D)">✔ <b>Safe to cancel.</b> ${h(r.reason||'')}</div>`
+        ? `<div style="color:var(--success,#0C8E6D)">✔ <b>${reverse?'Safe to void.':'Safe to cancel.'}</b> ${h(r.reason||'')}</div>`
         : `<div style="color:var(--danger,#C6472A)">✖ <b>Not eligible.</b> ${h(r.reason||'')}</div>`}
+      ${reverse ? `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--warning-bg,#FBF0DB);border:1px solid var(--warning,#B5731A);color:#8a5a12;font-size:.8rem">⚠ Use this only if the goods did <b>not</b> physically ship. It adds the delivered units back into inventory and undoes the client-store receipt.</div>` : ''}
     </div>
-    <table class="aud-table"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered now</th><th class="u-right">After cancel</th></tr></thead>
-      <tbody>${skuRows || '<tr><td colspan="4">No line items</td></tr>'}</tbody></table>
-    <p class="nba-note" style="text-align:left;margin-top:10px">Order <b>${h(r.order_id||'')}</b>. This is a dry-run preview — nothing has changed yet.</p>`;
-  const footer = eligible
-    ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-       <button class="btn btn-danger" ${dataAct('repairApply', dcId)}>Cancel this challan</button>`
-    : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+    <table class="aud-table"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered now</th><th class="u-right">After</th>${showStock?'<th class="u-right">Back to stock</th>':''}</tr></thead>
+      <tbody>${skuRows || `<tr><td colspan="${showStock?5:4}">No line items</td></tr>`}</tbody></table>
+    <p class="nba-note" style="text-align:left;margin-top:10px">Order <b>${h(r.order_id||'')}</b>. Dry-run preview — nothing has changed yet.</p>`;
+  let footer;
+  if (eligible && reverse) footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button> <button class="btn btn-danger" ${dataAct('repairApply', dcId, true)}>Void challan &amp; reverse stock</button>`;
+  else if (eligible)       footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button> <button class="btn btn-danger" ${dataAct('repairApply', dcId)}>Cancel this challan</button>`;
+  else if (offerReverse)   footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button> <button class="btn btn-warning" ${dataAct('repairPreview', dcId, true)}>Void &amp; reverse stock…</button>`;
+  else                     footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
   document.getElementById('modal-body').innerHTML = bodyHtml;
   const mf = document.getElementById('modal-footer'); if (mf) mf.innerHTML = footer;
 }
 
-async function repairApply(dcId) {
-  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:false, dc_ids:[dcId] }) });
+async function repairApply(dcId, reverse) {
+  const d = await api('/reports/over-delivery-audit/repair', { method:'POST', body: JSON.stringify({ dry_run:false, reverse_stock: !!reverse, dc_ids:[dcId] }) });
   if (!d) return;
   closeModal();
   if (d.applied > 0) {
-    showToast(`Challan ${dcId} cancelled — order reconciled${(d.orders_closed||[]).length?' and closed':''}.`);
+    const rev = d.stock_reversed ? ` · ${d.stock_reversed} units returned to stock` : '';
+    showToast(`Challan ${dcId} ${reverse?'voided':'cancelled'} — order reconciled${(d.orders_closed||[]).length?' and closed':''}${rev}.`);
     if (typeof navigate === 'function') navigate('over_delivery_audit');
   } else {
-    showToast('Nothing changed — challan was not eligible to cancel.', 'error');
+    showToast('Nothing changed — challan was not eligible.', 'error');
   }
 }

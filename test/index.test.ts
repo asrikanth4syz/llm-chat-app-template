@@ -1672,6 +1672,62 @@ describe("Over-delivery guard & Next Best Action", () => {
     const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["DC-R-B"] }, clientToken);
     expect(res.status).toBe(403);
   });
+
+  // A surplus challan that RECORDED a delivery (moved stock): plain repair refuses
+  // it; reverse_stock voids it and adds the units back to inventory.
+  async function seedStockOrder() {
+    await gdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,1)")
+      .bind("SKU-STK", "Sugar", "Grocery", 50, 200).run();
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("STK-1", "OD-CL", "seed", "IN_SHIPMENT", 5000, 0, 5000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-STK", "STK-1", "SKU-STK", "Sugar", 100, 50, 5000).run();
+    // Real DC delivered the full 100 (recorded)
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("STK-DCA", "STK-1", "DELIVERED", 100, 100).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("STKI-A", "STK-DCA", "SKU-STK", "Sugar", 100, 100).run();
+    // Surplus DC that ALSO recorded 40 delivered (over-delivered → 140/100)
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("STK-DCB", "STK-1", "DELIVERED", 40, 40).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("STKI-B", "STK-DCB", "SKU-STK", "Sugar", 40, 40).run();
+  }
+
+  it("plain repair refuses a stock-moving surplus challan and points to reverse_stock", async () => {
+    await seedStockOrder();
+    const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["STK-DCB"] }, adminToken);
+    const d = await res.json() as { eligible:number; results:Array<{eligible:boolean;reason:string}> };
+    expect(d.eligible).toBe(0);
+    expect(d.results[0].eligible).toBe(false);
+    expect(d.results[0].reason).toContain("reverse_stock");
+  });
+
+  it("reverse_stock voids the surplus challan and adds the units back to inventory", async () => {
+    await seedStockOrder();
+    // Preview
+    const prev = await (await post("/api/reports/over-delivery-audit/repair", { dry_run:true, reverse_stock:true, dc_ids:["STK-DCB"] }, adminToken)).json() as {
+      results:Array<{eligible:boolean;reverses_stock:boolean;skus:Array<{stock_reversal:number}>}> };
+    expect(prev.results[0].eligible).toBe(true);
+    expect(prev.results[0].reverses_stock).toBe(true);
+    expect(prev.results[0].skus[0].stock_reversal).toBe(40);
+
+    const before = await gdb.prepare("SELECT stock FROM inventory WHERE sku=?").bind("SKU-STK").first() as {stock:number};
+    const res = await post("/api/reports/over-delivery-audit/repair", { dry_run:false, reverse_stock:true, dc_ids:["STK-DCB"] }, adminToken);
+    const d = await res.json() as { applied:number; stock_reversed:number };
+    expect(d.applied).toBe(1);
+    expect(d.stock_reversed).toBe(40);
+    const after = await gdb.prepare("SELECT stock FROM inventory WHERE sku=?").bind("SKU-STK").first() as {stock:number};
+    expect(after.stock - before.stock).toBe(40);            // stock added back
+    const dc = await gdb.prepare("SELECT status FROM delivery_challans WHERE id=?").bind("STK-DCB").first() as {status:string};
+    expect(dc.status).toBe("CANCELLED");
+    // Order reconciled to exactly 100/100 → no anomaly.
+    const drill = await (await get("/api/orders/STK-1/drilldown", adminToken)).json() as { summary:{has_anomaly:boolean} };
+    expect(drill.summary.has_anomaly).toBe(false);
+    // A reversing stock movement is recorded.
+    const mv = await gdb.prepare("SELECT COUNT(*) c FROM stock_movements WHERE reference_id=? AND type='DELIVERY_REVERSAL'").bind("STK-DCB").first() as {c:number};
+    expect(mv.c).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ── Live sidebar badge counts (#6) ───────────────────────────────────

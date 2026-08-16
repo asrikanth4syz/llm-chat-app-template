@@ -1816,18 +1816,23 @@ async function effectiveDeliveredForSku(env: Env, orderId: string, sku: string, 
 }
 
 // POST /api/reports/over-delivery-audit/repair — corrects over-delivered orders
-// by cancelling the phantom challans the audit surfaced. SAFE BY CONSTRUCTION:
-// dry-run unless dry_run:false is passed explicitly, and a challan is only ever
-// eligible when it (a) recorded NO delivery (moved no stock) and (b) is pure
-// surplus — removing it leaves every order line still ≥ its ordered qty. It can
-// therefore never manufacture a shortfall or reverse real stock.
+// by cancelling the surplus challans the audit surfaced. SAFE BY CONSTRUCTION:
+// dry-run unless dry_run:false is passed explicitly, and a challan is never
+// eligible if removing it would drop an order line below its ordered qty (the
+// shortfall guard). Two cases:
+//   • Zero-stock phantom (recorded no delivery) → cancel, no stock touched.
+//   • Recorded a stock movement → refused by default; only voided when the
+//     caller opts in with reverse_stock:true, which ALSO adds the delivered
+//     units back to inventory and reverses the client-store receipt. Use it
+//     only when the goods did not physically move (a duplicate/mis-record).
 async function handleRepairOverDelivery(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
 
-  const body = await request.json().catch(()=>({})) as { dry_run?: boolean; dc_ids?: string[] };
+  const body = await request.json().catch(()=>({})) as { dry_run?: boolean; dc_ids?: string[]; reverse_stock?: boolean };
   const dryRun = body.dry_run !== false; // default true — apply only on explicit false
+  const reverseStock = body.reverse_stock === true; // opt-in: void a stock-moving challan and add the stock back
   const dcIds = Array.from(new Set((body.dc_ids || []).filter(x => typeof x === "string"))).slice(0, 200);
   if (!dcIds.length) return json({error:"dc_ids (array of challan IDs to cancel) is required"}, 400);
 
@@ -1846,32 +1851,61 @@ async function handleRepairOverDelivery(request: Request, env: Env): Promise<Res
     let wouldShortfall = false;
     for (const it of items) {
       const sku = it.sku as string;
+      const qtyDel = Number(it.qty_delivered) || 0;
       const oi = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=? AND sku=?").bind(dc.order_id, sku).first() as {q:number}|null;
       const ordered = oi?.q || 0;
       const before = await effectiveDeliveredForSku(env, dc.order_id, sku);
       const after  = await effectiveDeliveredForSku(env, dc.order_id, sku, dcId);
       if (ordered > 0 && after < ordered) wouldShortfall = true;
-      skuImpact.push({ sku, name: it.name, ordered, delivered_before: before, delivered_after: after });
+      skuImpact.push({ sku, name: it.name, ordered, delivered_before: before, delivered_after: after,
+        stock_reversal: (reverseStock && qtyDel > 0) ? qtyDel : 0 });
     }
 
-    let eligible = true, reason = "pure surplus phantom — moved no stock, safe to cancel";
-    if (recordedDelivered > 0) { eligible = false; reason = "challan recorded a stock movement — needs manual review, not auto-cancelled"; }
-    else if (wouldShortfall)   { eligible = false; reason = "cancelling would drop an order line below its ordered qty — carried needed units"; }
+    // The shortfall guard is absolute — a challan carrying still-needed units is
+    // never voidable, even with reverse_stock.
+    let eligible = true, reversesStock = false, reason = "pure surplus phantom — moved no stock, safe to cancel";
+    if (wouldShortfall) {
+      eligible = false; reason = "cancelling would drop an order line below its ordered qty — carried needed units";
+    } else if (recordedDelivered > 0) {
+      if (reverseStock) { eligible = true; reversesStock = true; reason = `voids the challan and reverses ${recordedDelivered} delivered unit(s) back into stock`; }
+      else { eligible = false; reason = "challan recorded a stock movement — re-run with reverse_stock to void it and add the stock back"; }
+    }
 
-    results.push({ dc_id: dcId, order_id: dc.order_id, status: dc.status, recorded_delivered: recordedDelivered, eligible, reason, skus: skuImpact });
+    results.push({ dc_id: dcId, order_id: dc.order_id, status: dc.status, recorded_delivered: recordedDelivered,
+      eligible, reverses_stock: reversesStock, reason, skus: skuImpact });
   }
 
   const eligibleRows = results.filter(r => r.eligible);
   let applied = 0;
   const ordersClosed: string[] = [];
+  let stockReversed = 0;
   if (!dryRun && eligibleRows.length) {
     for (const r of eligibleRows) {
       await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=? AND status!='CANCELLED'").bind(r.dc_id as string).run();
-      await audit(env, user, "CANCEL", "delivery_challan", r.dc_id as string, undefined, "over-delivery repair — phantom challan cancelled");
+      if (r.reverses_stock) {
+        // Void that physically didn't happen: add the delivered units back to
+        // inventory, log a reversing movement, and undo the client-store receipt.
+        const order = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(r.order_id as string).first() as {client_id?:string}|null;
+        const { results: delItems } = await env.DB.prepare("SELECT sku, qty_delivered FROM dc_items WHERE dc_id=? AND qty_delivered>0").bind(r.dc_id as string).all() as { results: Record<string,unknown>[] };
+        for (const it of delItems) {
+          const q = Number(it.qty_delivered) || 0; if (q <= 0) continue;
+          await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(q, it.sku).run();
+          await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+            .bind(uid(), it.sku as string, 'DELIVERY_REVERSAL', q, r.dc_id as string, 'delivery_challan', `Over-delivery void — DC ${r.dc_id} cancelled`, user!.name).run();
+          if (order?.client_id) {
+            await env.DB.prepare("UPDATE client_inventory SET qty_on_hand=MAX(0,qty_on_hand-?), updated_at=datetime('now') WHERE client_id=? AND sku=?")
+              .bind(q, order.client_id, it.sku).run().catch(()=>{});
+          }
+          stockReversed += q;
+        }
+        await audit(env, user, "VOID_REVERSE_STOCK", "delivery_challan", r.dc_id as string, undefined, `over-delivery repair — voided and reversed ${r.recorded_delivered} unit(s) to stock`);
+      } else {
+        await audit(env, user, "CANCEL", "delivery_challan", r.dc_id as string, undefined, "over-delivery repair — phantom challan cancelled");
+      }
       applied++;
     }
     for (const oid of Array.from(new Set(eligibleRows.map(r => r.order_id as string)))) {
-      if (await closeOrderIfSettled(env, oid, user, "over-delivery repair — order reconciled after cancelling phantom challan(s)")) ordersClosed.push(oid);
+      if (await closeOrderIfSettled(env, oid, user, "over-delivery repair — order reconciled after cancelling surplus challan(s)")) ordersClosed.push(oid);
     }
   }
 
@@ -1880,10 +1914,11 @@ async function handleRepairOverDelivery(request: Request, env: Env): Promise<Res
     requested: dcIds.length,
     eligible: eligibleRows.length,
     applied,                                   // 0 on a dry run
+    stock_reversed: stockReversed,
     orders_closed: ordersClosed,
     note: dryRun
-      ? "Dry run — nothing was changed. Re-send with dry_run:false to cancel the eligible challans."
-      : `Cancelled ${applied} phantom challan(s).`,
+      ? "Dry run — nothing was changed. Re-send with dry_run:false to apply."
+      : `Cancelled ${applied} challan(s)${stockReversed ? `, reversed ${stockReversed} unit(s) to stock` : ''}.`,
     results,
   });
 }
