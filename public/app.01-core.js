@@ -556,6 +556,7 @@ function initApp() {
   const quickWrap = document.getElementById('tb-quick-wrap');
   if (quickWrap) quickWrap.style.display = quickActionItems().length ? '' : 'none';
   buildNav();
+  updateNavBadges(true); // live sidebar counts (internal roles); async, non-blocking
   // Restore the cart so it survives a page reload.
   try { const c = JSON.parse(localStorage.getItem('sp_cart') || '[]'); if (Array.isArray(c)) APP.cart = c; } catch (_) {}
   // Return to the last page on reload (falls back to the role's default; the
@@ -836,6 +837,7 @@ function buildNav() {
     <div id="nav-no-results" class="nav-no-results" style="display:none">No menu matches.</div>` : '';
 
   document.getElementById('sidebar-nav').innerHTML = searchHtml + html + collapseBtn;
+  applyNavBadges(); // re-apply any cached live counts over the static "!" badges
 
   // restore persisted icon-rail state (desktop only)
   const sb = document.getElementById('sidebar');
@@ -895,6 +897,36 @@ function navSearchKey(e) {
     const first = [...document.querySelectorAll('#sidebar-nav .nav-item')].find(el => el.style.display !== 'none');
     if (first) { e.target.value = ''; filterNav(''); navigate(first.id.replace('nav-', '')); }
   }
+}
+
+// Live sidebar badge counts (#6). Replaces the static "!" with real numbers
+// from /api/nav-badges for internal-ops roles; a zero count clears the badge.
+async function updateNavBadges(force) {
+  if (!APP.user) return;
+  const internalNavs = ['platform','ops','procurement','warehouse','delivery','delivery_exec','finance'];
+  if (!internalNavs.includes(APP.user.nav)) return;
+  const now = Date.now();
+  if (!force && APP._navBadgesAt && now - APP._navBadgesAt < 25000) { applyNavBadges(); return; }
+  APP._navBadgesAt = now;
+  const counts = await api('/nav-badges').catch(() => null);
+  if (!counts) return;
+  APP._navBadges = counts;
+  applyNavBadges();
+}
+function applyNavBadges() {
+  const counts = APP._navBadges; if (!counts) return;
+  Object.keys(counts).forEach(id => {
+    const item = document.getElementById('nav-' + id);
+    if (!item) return;
+    const num = Number(counts[id]) || 0;
+    let badge = item.querySelector('.nav-item-badge');
+    if (num > 0) {
+      if (!badge) { badge = document.createElement('span'); badge.className = 'nav-item-badge'; badge.setAttribute('aria-hidden', 'true'); item.appendChild(badge); }
+      badge.textContent = num > 99 ? '99+' : String(num);
+    } else if (badge) {
+      badge.remove();
+    }
+  });
 }
 
 function toggleNavSection(label) {
@@ -1017,6 +1049,7 @@ function navigate(page) {
 
   ensureClientFAB();
   closeMobileSidebar();
+  updateNavBadges(); // keep counts fresh as staff work (throttled to ~25s)
 }
 
 /* ── Persistent quick-action FAB (client roles) ───────────── */

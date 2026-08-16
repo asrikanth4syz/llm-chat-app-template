@@ -1674,6 +1674,43 @@ describe("Over-delivery guard & Next Best Action", () => {
   });
 });
 
+// ── Live sidebar badge counts (#6) ───────────────────────────────────
+describe("Nav badge counts", () => {
+  const ndb = env.DB as D1Database;
+  beforeAll(async () => {
+    await ndb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("NB-CL", "Badge Co").run();
+    await ndb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now'))`).bind("NB-APPR", "NB-CL", "seed", "PENDING_APPROVAL", 1000, 0, 1000, "Regular").run();
+    await ndb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now'))`).bind("NB-PICK", "NB-CL", "seed", "READY_TO_PICK", 1000, 0, 1000, "Regular").run();
+    // A delivered-but-unbilled challan → billing badge
+    await ndb.prepare(`INSERT INTO delivery_challans (id,order_id,status,billed,total_qty,delivered_qty,delivered_at)
+      VALUES (?,?,?,0,5,5,datetime('now'))`).bind("NB-DC", "NB-PICK", "DELIVERED").run();
+  });
+
+  it("returns live counts keyed by nav page id for internal roles", async () => {
+    const res = await get("/api/nav-badges", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as Record<string, number>;
+    // Keys present and numeric
+    for (const k of ["next_actions","orders","consolidated_due","fulfilment","dc_billing","sla_dashboard","alerts"]) {
+      expect(typeof d[k]).toBe("number");
+    }
+    // Seeded rows are reflected (≥, since the base seed may add more).
+    expect(d.orders).toBeGreaterThanOrEqual(1);       // NB-APPR pending approval
+    expect(d.fulfilment).toBeGreaterThanOrEqual(1);   // NB-PICK ready to pick
+    expect(d.dc_billing).toBeGreaterThanOrEqual(1);   // NB-DC delivered unbilled
+    expect(d.next_actions).toBeGreaterThanOrEqual(1); // includes pending approvals
+  });
+
+  it("returns an empty object for external (client) roles — no badged menus", async () => {
+    const res = await get("/api/nav-badges", clientToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as Record<string, number>;
+    expect(Object.keys(d).length).toBe(0);
+  });
+});
+
 // ── Location zones (admin-managed) ───────────────────────────────────
 describe("Location zones", () => {
   it("GET /api/zones returns the default set when unset", async () => {
