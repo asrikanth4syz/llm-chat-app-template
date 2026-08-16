@@ -865,6 +865,7 @@ export default {
       if (path==="/api/reports/dc-per-order"         && method==="GET") return handleRptDCPerOrder(request,env);
       if (path==="/api/reports/order-dcs"             && method==="GET") return handleRptOrderDCs(request,env);
       if (path==="/api/reports/dc-reconciliation"    && method==="GET") return handleRptDCReconciliation(request,env);
+      if (path==="/api/reports/over-delivery-audit"  && method==="GET") return handleRptOverDeliveryAudit(request,env);
       if (path==="/api/reports/pending-supply"       && method==="GET") return handleRptPendingSupply(request,env);
       if (path==="/api/reports/due-ageing"           && method==="GET") return handleRptDueAgeing(request,env);
       if (path==="/api/reports/brand-shortfall"      && method==="GET") return handleRptBrandShortfall(request,env);
@@ -1724,6 +1725,78 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
       total_delivered_value: lines.reduce((s,l)=>s+l.value_delivered,0),
       total_due_value:       lines.reduce((s,l)=>s+l.value_due,0),
     },
+  });
+}
+
+// GET /api/reports/over-delivery-audit — READ-ONLY. Finds every order line
+// where recorded deliveries exceed the ordered quantity (the SP-2608-7410
+// class of bug) and names the exact challans responsible. Performs NO writes;
+// it only surfaces anomalies so an operator can decide what to cancel/correct.
+async function handleRptOverDeliveryAudit(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","finance_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  // Per (order, sku): effective delivered replicates the reporting fallback
+  // (a DELIVERED challan with no recorded line qty is counted at its full
+  // ordered load), which is exactly what inflated the numbers. delivered_recorded
+  // is the pure SUM(qty_delivered) for comparison.
+  const { results: rows } = await env.DB.prepare(`
+    SELECT o.id AS order_id, o.status AS order_status, o.created_at AS order_created_at,
+           COALESCE(c.name,'') AS client_name,
+           oi.sku, oi.name AS item_name, oi.qty AS ordered,
+           COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND di.qty_delivered=0 THEN di.qty_ordered
+                             WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) AS delivered_effective,
+           COALESCE(SUM(CASE WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) AS delivered_recorded
+    FROM order_items oi
+    JOIN orders o ON o.id=oi.order_id
+    LEFT JOIN clients c ON c.id=o.client_id
+    LEFT JOIN delivery_challans dc ON dc.order_id=o.id
+    LEFT JOIN dc_items di ON di.dc_id=dc.id AND di.sku=oi.sku
+    WHERE o.status NOT IN ('CANCELLED','DRAFT')
+    GROUP BY o.id, oi.sku
+    HAVING delivered_effective > oi.qty
+    ORDER BY (delivered_effective - oi.qty) DESC
+    LIMIT 500`).all() as { results: Record<string,unknown>[] };
+
+  const anomalies: Array<Record<string,unknown>> = [];
+  for (const r of rows) {
+    const { results: challans } = await env.DB.prepare(`
+      SELECT dc.id AS dc_id, dc.dc_number, dc.status, dc.dispatched_at, dc.delivered_at,
+             di.qty_ordered, di.qty_delivered
+      FROM delivery_challans dc JOIN dc_items di ON di.dc_id=dc.id
+      WHERE dc.order_id=? AND di.sku=? ORDER BY dc.dispatched_at, dc.id`).bind(r.order_id, r.sku).all() as { results: Record<string,unknown>[] };
+    const challanList = challans.map(dc => {
+      const isDelivered = dc.status === 'DELIVERED';
+      const countedAs = isDelivered ? (Number(dc.qty_delivered) > 0 ? Number(dc.qty_delivered) : Number(dc.qty_ordered)) : 0;
+      return {
+        dc_id: dc.dc_id, dc_number: dc.dc_number, status: dc.status,
+        dispatched_at: dc.dispatched_at, delivered_at: dc.delivered_at,
+        qty_ordered: Number(dc.qty_ordered)||0, qty_delivered: Number(dc.qty_delivered)||0,
+        counted_as: countedAs,
+        // Flag likely culprits: a DELIVERED challan whose qty wasn't recorded
+        // (counted at full ordered load via the fallback) is the usual phantom.
+        suspect: isDelivered && Number(dc.qty_delivered) === 0,
+      };
+    });
+    anomalies.push({
+      order_id: r.order_id, client_name: r.client_name, order_status: r.order_status,
+      order_created_at: r.order_created_at, sku: r.sku, item_name: r.item_name,
+      ordered: Number(r.ordered)||0,
+      delivered_effective: Number(r.delivered_effective)||0,
+      delivered_recorded: Number(r.delivered_recorded)||0,
+      over_units: Math.max(0, (Number(r.delivered_effective)||0) - (Number(r.ordered)||0)),
+      challans: challanList,
+    });
+  }
+
+  const ordersAffected = new Set(anomalies.map(a => a.order_id)).size;
+  const totalOverUnits = anomalies.reduce((s,a)=>s+(a.over_units as number),0);
+  return json({
+    generated_at: new Date().toISOString(),
+    read_only: true,
+    summary: { orders_affected: ordersAffected, lines_affected: anomalies.length, total_over_units: totalOverUnits },
+    anomalies,
   });
 }
 

@@ -387,3 +387,82 @@ function fmtDwell(hrs) {
   const d = Math.floor(hh / 24), r = hh % 24;
   return r ? `${d}d ${r}h` : `${d}d`;
 }
+
+/* ============================================================
+   OVER-DELIVERY AUDIT — READ-ONLY. Lists orders where recorded
+   deliveries exceed the ordered qty (SP-2608-7410 class) and names
+   the challans responsible. No actions here — surfacing only.
+   ============================================================ */
+async function renderOverDeliveryAudit(el) {
+  injectNbaCss();
+  el.innerHTML = pageHeader('Over-Delivery Audit', 'Read-only — orders where recorded deliveries exceed what was ordered') +
+    '<div class="nba"><div class="loading-state"><div class="spinner"></div></div></div>';
+  const data = await api('/reports/over-delivery-audit');
+  if (!data) return;
+  const s = data.summary || {};
+  const anomalies = data.anomalies || [];
+
+  const chips = `<div class="nba-chips" style="grid-template-columns:repeat(3,1fr)">
+    ${nbaChip(s.orders_affected ?? 0, 'Orders affected', (s.orders_affected ? 'bad' : 'good'))}
+    ${nbaChip(s.lines_affected ?? 0, 'Line items affected', (s.lines_affected ? 'warn' : 'good'))}
+    ${nbaChip(s.total_over_units ?? 0, 'Units over-delivered', (s.total_over_units ? 'bad' : 'good'))}
+  </div>`;
+
+  const body = anomalies.length
+    ? anomalies.map(a => {
+        const rows = (a.challans || []).map(dc => `
+          <tr class="${dc.suspect ? 'aud-suspect' : ''}">
+            <td class="tnum">${h(dc.dc_number || dc.dc_id)}</td>
+            <td>${statusBadge ? statusBadge(dc.status) : h(dc.status)}</td>
+            <td class="u-right">${dc.qty_ordered}</td>
+            <td class="u-right">${dc.qty_delivered}</td>
+            <td class="u-right"><b>${dc.counted_as}</b></td>
+            <td>${dc.delivered_at ? fmtWhen(dc.delivered_at) : '—'}</td>
+            <td>${dc.suspect ? '<span class="aud-flag">⚠ likely phantom</span>' : ''}</td>
+          </tr>`).join('');
+        return `<div class="aud-card">
+          <div class="aud-head">
+            <div>
+              <a class="oid" style="font-size:.9rem" ${dataAct('orderTimelineModal', a.order_id)}>${h(a.order_id)}</a>
+              <span class="aud-cl">${h(a.client_name || '—')}</span>
+              <span class="aud-sku">${h(a.item_name || a.sku)} · ${h(a.sku)}</span>
+            </div>
+            <div class="aud-nums">
+              <span>Ordered <b>${a.ordered}</b></span>
+              <span>Counted delivered <b class="over">${a.delivered_effective}</b></span>
+              <span>Recorded <b>${a.delivered_recorded}</b></span>
+              <span class="aud-over">+${a.over_units} over</span>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="aud-table">
+              <thead><tr><th>Challan</th><th>Status</th><th class="u-right">DC qty</th><th class="u-right">Recorded</th><th class="u-right">Counted as</th><th>Delivered</th><th></th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div class="nba-empty" style="background:var(--card);border:1px solid var(--border);border-radius:14px"><div class="big">✅</div><p style="margin:8px 0 0">No over-delivered orders found — every order is within its ordered quantity.</p></div>`;
+
+  el.querySelector('.nba').innerHTML = chips + body +
+    `<p class="nba-note">Read-only audit. A row flagged <b>⚠ likely phantom</b> is a DELIVERED challan whose line quantity was never recorded, so it was counted at its full ordered load. Cancelling/correcting such a challan is a separate, explicit action.</p>`;
+}
+
+(function injectAuditCss(){
+  const css = `
+  .aud-card { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .aud-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+  .aud-head .aud-cl { font-weight:600; margin-left:8px; }
+  .aud-head .aud-sku { display:block; font-size:.75rem; color:var(--text-muted,#5c7180); margin-top:2px; }
+  .aud-nums { display:flex; gap:14px; flex-wrap:wrap; font-size:.78rem; color:var(--text-muted,#5c7180); align-items:center; }
+  .aud-nums b { color:var(--text,#16303f); } .aud-nums b.over { color:#C6472A; }
+  .aud-over { font-weight:800; color:#C6472A; background:#FBE7E1; border-radius:999px; padding:2px 10px; }
+  .aud-table { width:100%; border-collapse:collapse; font-size:.8rem; }
+  .aud-table th { text-align:left; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted,#8397a3); padding:6px 8px; border-bottom:1px solid var(--border,#e4eaef); }
+  .aud-table td { padding:7px 8px; border-bottom:1px solid var(--border,#eef2f4); }
+  .aud-table .u-right { text-align:right; font-variant-numeric:tabular-nums; }
+  .aud-table tr.aud-suspect { background:#FBE7E1; }
+  .aud-flag { font-size:.68rem; font-weight:800; color:#C6472A; white-space:nowrap; }
+  `;
+  const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+})();

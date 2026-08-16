@@ -1574,6 +1574,46 @@ describe("Over-delivery guard & Next Best Action", () => {
     // Value delivered never exceeds value ordered.
     expect(d.summary.total_delivered_value).toBeLessThanOrEqual(d.summary.total_ordered_value);
   });
+
+  it("over-delivery audit (read-only) finds the offending order + names the challans", async () => {
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("AUD-1", "OD-CL", "seed", "CLOSED", 582000, 0, 582000, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("OI-AUD", "AUD-1", "SKU-AUD", "Rice 25kg", 582, 1000, 582000).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("AUD-DCA", "AUD-1", "DELIVERED", 582, 582).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("AUDI-A", "AUD-DCA", "SKU-AUD", "Rice 25kg", 582, 582).run();
+    // Phantom follow-up marked DELIVERED with qty_delivered=0 → counted at full 378 via fallback.
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`)
+      .bind("AUD-DCB", "AUD-1", "DELIVERED", 378, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("AUDI-B", "AUD-DCB", "SKU-AUD", "Rice 25kg", 378, 0).run();
+
+    const res = await get("/api/reports/over-delivery-audit", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as {
+      read_only:boolean;
+      summary:{orders_affected:number;lines_affected:number;total_over_units:number};
+      anomalies:Array<{order_id:string;sku:string;ordered:number;delivered_effective:number;over_units:number;
+        challans:Array<{dc_id:string;status:string;suspect:boolean;counted_as:number}>}>;
+    };
+    expect(d.read_only).toBe(true);
+    const a = d.anomalies.find(x => x.order_id === "AUD-1");
+    expect(a).toBeTruthy();
+    expect(a!.ordered).toBe(582);
+    expect(a!.delivered_effective).toBe(960);   // 582 + 378 counted via the fallback
+    expect(a!.over_units).toBe(378);
+    // The phantom challan is named and flagged as the suspect (delivered, qty not recorded).
+    const phantom = a!.challans.find(dc => dc.dc_id === "AUD-DCB");
+    expect(phantom!.suspect).toBe(true);
+    expect(phantom!.counted_as).toBe(378);
+  });
+
+  it("over-delivery audit is forbidden for external (client) roles", async () => {
+    const res = await get("/api/reports/over-delivery-audit", clientToken);
+    expect(res.status).toBe(403);
+  });
 });
 
 // ── Location zones (admin-managed) ───────────────────────────────────

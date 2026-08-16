@@ -197,7 +197,8 @@ const NAV = {
     { id:'reports',              label:'Reports & BI',        icon:iconReports,   badge:null },
     { id:'sla_dashboard',        label:'SLA Dashboard',       icon:iconDashboard, badge:'!' },
     { section:'Alerts & Exceptions' },
-    { id:'alerts',      label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconCheck,  badge:null },
     { section:'Admin & Settings' },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconUsers,  badge:null },
@@ -224,6 +225,7 @@ const NAV = {
     { id:'service_desk',        label:'Service Desk',     icon:iconDesk,      badge:null },
     { section:'Alerts & Exceptions' },
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
+    { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconCheck,  badge:null },
   ],
   procurement: [
     { section:'Home' },
@@ -988,6 +990,7 @@ const PAGE_MAP = {
   alerts: 'renderAlerts',
   pipeline: 'renderPipeline',
   next_actions: 'renderNextActions',
+  over_delivery_audit: 'renderOverDeliveryAudit',
   zones: 'renderZonesPage',
 };
 
