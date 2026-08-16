@@ -1694,6 +1694,35 @@ describe("Over-delivery guard & Next Best Action", () => {
       .bind("STKI-B", "STK-DCB", "SKU-STK", "Sugar", 40, 40).run();
   }
 
+  it("a partial multi-challan delivery is NOT a false over-delivery (SP-2608-7410 shape)", async () => {
+    // Two SKUs, each ordered 96. DC-1 delivers SKU-A (96) and 0 of SKU-B;
+    // DC-2 delivers SKU-B (96) and 0 of SKU-A. Both DELIVERED → 96/96 each,
+    // fully but partially split. The old per-line fallback wrongly counted the
+    // 0 lines at full ordered load (192/192); the per-challan fallback must not.
+    await gdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','-2 day'))`).bind("MC-1", "OD-CL", "seed", "CLOSED", 9600, 0, 9600, "Regular").run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)").bind("OI-MCA", "MC-1", "MC-A", "Noodles A", 96, 50, 4800).run();
+    await gdb.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)").bind("OI-MCB", "MC-1", "MC-B", "Noodles B", 96, 50, 4800).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`).bind("MC-DC1", "MC-1", "DELIVERED", 192, 96).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("MCI-1A", "MC-DC1", "MC-A", "Noodles A", 96, 96).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("MCI-1B", "MC-DC1", "MC-B", "Noodles B", 96, 0).run();
+    await gdb.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,delivered_at) VALUES (?,?,?,?,?,datetime('now','-1 day'))`).bind("MC-DC2", "MC-1", "DELIVERED", 192, 96).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("MCI-2A", "MC-DC2", "MC-A", "Noodles A", 96, 0).run();
+    await gdb.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)").bind("MCI-2B", "MC-DC2", "MC-B", "Noodles B", 96, 96).run();
+
+    // Drilldown shows exactly 96/96 per line, no anomaly.
+    const drill = await (await get("/api/orders/MC-1/drilldown", adminToken)).json() as {
+      summary:{has_anomaly:boolean;total_over_delivered:number};
+      lines:Array<{sku:string;qty_delivered:number;qty_over_delivered:number}> };
+    expect(drill.summary.has_anomaly).toBe(false);
+    expect(drill.summary.total_over_delivered).toBe(0);
+    for (const l of drill.lines) { expect(l.qty_delivered).toBe(96); expect(l.qty_over_delivered).toBe(0); }
+
+    // The audit does not flag it as over-delivered.
+    const audit = await (await get("/api/reports/over-delivery-audit", adminToken)).json() as { anomalies:Array<{order_id:string}> };
+    expect(audit.anomalies.some(a => a.order_id === "MC-1")).toBe(false);
+  });
+
   it("plain repair refuses a stock-moving surplus challan and points to reverse_stock", async () => {
     await seedStockOrder();
     const res = await post("/api/reports/over-delivery-audit/repair", { dc_ids: ["STK-DCB"] }, adminToken);
