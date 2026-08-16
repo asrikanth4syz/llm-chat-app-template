@@ -1665,8 +1665,11 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
     dcMap[dc.id] = { ...dc as unknown as {id:string;status:string;dc_number:string|null;delivered_at:string|null}, items: dcItems as Record<string,unknown>[] };
 
     if (dc.status === 'DELIVERED') {
+      // Only fall back to ordered qty when the WHOLE challan recorded nothing
+      // (legacy). On a partial challan, a 0 line means 0 — another challan carried it.
+      const dcRecorded = (dcItems as Record<string,number>[]).reduce((s, i) => s + (Number(i.qty_delivered) || 0), 0);
       for (const item of dcItems as Record<string,number>[]) {
-        const delivered = (item.qty_delivered && item.qty_delivered > 0) ? item.qty_delivered : item.qty_ordered;
+        const delivered = dcRecorded > 0 ? (Number(item.qty_delivered) || 0) : (Number(item.qty_ordered) || 0);
         deliveredBySku[item.sku as unknown as string] = (deliveredBySku[item.sku as unknown as string] || 0) + delivered;
       }
     }
@@ -1747,7 +1750,7 @@ async function handleRptOverDeliveryAudit(request: Request, env: Env): Promise<R
     SELECT o.id AS order_id, o.status AS order_status, o.created_at AS order_created_at,
            COALESCE(c.name,'') AS client_name,
            oi.sku, oi.name AS item_name, oi.qty AS ordered,
-           COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND di.qty_delivered=0 THEN di.qty_ordered
+           COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND (SELECT COALESCE(SUM(x.qty_delivered),0) FROM dc_items x WHERE x.dc_id=dc.id)=0 THEN di.qty_ordered
                              WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) AS delivered_effective,
            COALESCE(SUM(CASE WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) AS delivered_recorded
     FROM order_items oi
@@ -1765,20 +1768,24 @@ async function handleRptOverDeliveryAudit(request: Request, env: Env): Promise<R
   for (const r of rows) {
     const { results: challans } = await env.DB.prepare(`
       SELECT dc.id AS dc_id, dc.dc_number, dc.status, dc.dispatched_at, dc.delivered_at,
-             di.qty_ordered, di.qty_delivered
+             di.qty_ordered, di.qty_delivered,
+             (SELECT COALESCE(SUM(x.qty_delivered),0) FROM dc_items x WHERE x.dc_id=dc.id) AS dc_recorded
       FROM delivery_challans dc JOIN dc_items di ON di.dc_id=dc.id
       WHERE dc.order_id=? AND di.sku=? ORDER BY dc.dispatched_at, dc.id`).bind(r.order_id, r.sku).all() as { results: Record<string,unknown>[] };
     const challanList = challans.map(dc => {
       const isDelivered = dc.status === 'DELIVERED';
-      const countedAs = isDelivered ? (Number(dc.qty_delivered) > 0 ? Number(dc.qty_delivered) : Number(dc.qty_ordered)) : 0;
+      const dcRecorded = Number(dc.dc_recorded) || 0;
+      // A line only counts at full ordered load when the WHOLE challan recorded
+      // nothing (legacy). If the challan recorded other lines, a 0 here means 0.
+      const countedAs = isDelivered ? (dcRecorded > 0 ? Number(dc.qty_delivered) : Number(dc.qty_ordered)) : 0;
       return {
         dc_id: dc.dc_id, dc_number: dc.dc_number, status: dc.status,
         dispatched_at: dc.dispatched_at, delivered_at: dc.delivered_at,
         qty_ordered: Number(dc.qty_ordered)||0, qty_delivered: Number(dc.qty_delivered)||0,
         counted_as: countedAs,
-        // Flag likely culprits: a DELIVERED challan whose qty wasn't recorded
-        // (counted at full ordered load via the fallback) is the usual phantom.
-        suspect: isDelivered && Number(dc.qty_delivered) === 0,
+        // The real culprit is a DELIVERED challan that recorded NOTHING at all,
+        // so the fallback counts its full load — not a 0 line on a partial challan.
+        suspect: isDelivered && dcRecorded === 0,
       };
     });
     anomalies.push({
@@ -1806,7 +1813,7 @@ async function handleRptOverDeliveryAudit(request: Request, env: Env): Promise<R
 // (a DELIVERED challan with no recorded line qty counts at its full ordered load).
 // Optionally excludes one challan to model "what if this DC were cancelled".
 async function effectiveDeliveredForSku(env: Env, orderId: string, sku: string, excludeDcId?: string): Promise<number> {
-  const sql = `SELECT COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND di.qty_delivered=0 THEN di.qty_ordered
+  const sql = `SELECT COALESCE(SUM(CASE WHEN dc.status='DELIVERED' AND (SELECT COALESCE(SUM(x.qty_delivered),0) FROM dc_items x WHERE x.dc_id=dc.id)=0 THEN di.qty_ordered
                                         WHEN dc.status='DELIVERED' THEN di.qty_delivered ELSE 0 END),0) eff
     FROM dc_items di JOIN delivery_challans dc ON dc.id=di.dc_id
     WHERE dc.order_id=? AND di.sku=?` + (excludeDcId ? ` AND dc.id!=?` : ``);
