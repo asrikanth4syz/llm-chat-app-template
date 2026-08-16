@@ -810,10 +810,11 @@ function buildNav() {
          </div>`;
 
     const itemsHtml = sec.items.map(item => `
-      <div class="nav-item" id="nav-${item.id}" ${dataAct('navigate', item.id)} title="${item.label}">
+      <div class="nav-item${item.id === 'dashboard' ? ' nav-item--home' : ''}" id="nav-${item.id}"
+        role="button" tabindex="0" aria-label="${item.label}" ${dataAct('navigate', item.id)} title="${item.label}">
         <span class="nav-item-icon">${navIcon(item)}</span>
         <span class="nav-item-label">${item.label}</span>
-        ${item.badge ? `<span class="nav-item-badge">${item.badge}</span>` : ''}
+        ${item.badge ? `<span class="nav-item-badge" aria-hidden="true">${item.badge}</span>` : ''}
       </div>`).join('');
 
     return headerHtml + (isFirst
@@ -998,9 +999,9 @@ function navigate(page) {
   // Remember the current page so a browser reload returns here, not the dashboard.
   try { localStorage.setItem('sp_page', page); } catch (_) {}
 
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(el => { el.classList.remove('active'); el.removeAttribute('aria-current'); });
   const navEl = document.getElementById('nav-' + page);
-  if (navEl) { navEl.classList.add('active'); revealActiveNavItem(page); }
+  if (navEl) { navEl.classList.add('active'); navEl.setAttribute('aria-current', 'page'); revealActiveNavItem(page); }
 
   document.getElementById('breadcrumb').textContent =
     (NAV[APP.user.nav] || []).find(i => i.id === page)?.label || page.replace(/_/g,' ');
@@ -1251,6 +1252,16 @@ function _dispatchAct(e) {
   else fn(...args);
 }
 document.addEventListener('click', _dispatchAct);
+// Keyboard activation for the sidebar rows (role="button" divs): Enter/Space
+// trigger the same navigation as a click, so the menu is keyboard-operable.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target;
+  if (el && el.classList && el.classList.contains('nav-item') && el.hasAttribute('data-act')) {
+    e.preventDefault();
+    _dispatchAct(e);
+  }
+});
 
 // change / input / keydown delegation — same data-args convention as click, with
 // optional data-val (pass the element's value) and data-el (pass the element).
