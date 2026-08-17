@@ -601,7 +601,10 @@ async function renderInventory(el) {
       <button class="btn btn-sm" style="background:var(--danger);color:#fff;border:none" ${dataActEl('sendCriticalAlerts')}>📧 Send Alert Email</button>
     </div>
   </div>` : ''}
-  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${h(i.name)}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</div>` : ''}
+  ${lowStock.length ? `<div class="alert alert-warning" style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span style="flex:1;min-width:220px">⚠️ <b>${lowStock.length}</b> SKU(s) below reorder level: ${lowStock.slice(0,5).map(i=>`<b>${h(i.name)}</b>`).join(', ')}${lowStock.length>5?` +${lowStock.length-5} more`:''}</span>
+    ${['super_admin','ops_admin','procurement_manager'].includes(APP.user?.role) ? `<button class="btn btn-primary btn-sm" style="flex-shrink:0" ${dataAct('raiseAllReorderPOs')}>Raise POs for all</button>` : ''}
+  </div>` : ''}
 
   <!-- Search + filter -->
   <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
@@ -1162,6 +1165,36 @@ async function reorderItem(sku, name, price, vendorId) {
      <div class="form-group"><label>Expected Delivery</label><input type="date" id="po-delivery" value="${new Date(Date.now()+3*86400000).toISOString().slice(0,10)}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmReorder', sku, name)}>Raise PO</button>`);
+}
+
+// Open the Raise-PO modal for a SKU straight from a shortcut (e.g. the Home
+// "Raise PO: X" nudge), pre-filling its price/vendor from the inventory record —
+// instead of dumping the user on the Inventory list to hunt for it.
+async function raisePOForSku(sku, name) {
+  const inv = await api('/inventory');
+  const item = (inv || []).find(i => i.sku === sku) || {};
+  reorderItem(sku, name || item.name || sku, item.unit_price || 0, item.vendor_id || '');
+}
+
+// Bulk reorder: raise POs for every below-reorder SKU via the sourcing engine
+// (one PO per resolved vendor at agreed prices), so the below-reorder highlight
+// is actionable rather than a dead-end list.
+async function raiseAllReorderPOs() {
+  const inv = await api('/inventory');
+  const low = (inv || []).filter(i => i.stock <= i.reorder_level && (i.used || i.is_critical));
+  const items = low.map(i => ({ sku: i.sku, qty: Math.max(1, (i.reorder_level * 2) - i.stock) }));
+  if (!items.length) { showToast('Nothing below reorder level.', 'info'); return; }
+  const res = await api('/purchase-orders/from-demand', {
+    method: 'POST',
+    body: JSON.stringify({ items, source: 'reorder', notes: 'Reorder — SKUs below reorder level' })
+  });
+  if (!res) return;
+  const pos = res.pos || [], uns = res.unsourced || [];
+  const vendors = new Set(pos.map(p => p.vendor_id)).size;
+  showToast(pos.length
+    ? `${pos.length} PO${pos.length === 1 ? '' : 's'} raised across ${vendors} vendor${vendors === 1 ? '' : 's'}${uns.length ? ` · ${uns.length} item(s) had no vendor` : ''}`
+    : 'No POs created — items had no resolved vendor/price', pos.length ? 'success' : 'error');
+  navigate('procurement');
 }
 
 async function confirmReorder(sku, name) {
