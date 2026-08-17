@@ -503,7 +503,7 @@ async function switchFulfilTab(tab, btn) {
     <div class="card">
       <div class="card-header">
         <span>Procurement Demand Forecast</span>
-        <button class="btn btn-primary btn-sm" ${dataAct('generateRFQFromForecast')}>Generate RFQ for All</button>
+        <button class="btn btn-primary btn-sm" ${dataAct('raiseAllPOsFromForecast')}>Raise POs for all</button>
       </div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
@@ -758,17 +758,43 @@ async function drillPendingClient(clientId, clientName) {
   );
 }
 
-async function raisePOFromForecast(sku, name, qty, vendorId) {
-  if (!vendorId) { showToast('No vendor assigned to this item', 'error'); return; }
-  const res = await api('/purchase-orders', {
+// Raise a PO for one forecast line via the sourcing engine, so it lands with
+// the vendor's agreed price and MOQ (not the old unit_price:0 shortcut).
+async function raisePOFromForecast(sku, name, qty) {
+  const res = await api('/purchase-orders/from-demand', {
     method: 'POST',
-    body: JSON.stringify({ vendor_id: vendorId, items: [{ sku, name, qty, unit_price: 0 }], notes: 'Auto-generated from Procurement Forecast' })
+    body: JSON.stringify({ items: [{ sku, qty }], source: 'forecast', notes: `Raised from Procurement Forecast — ${name}` })
   });
-  if (res) { showToast(`PO ${res.id} raised for ${name}`); navigate('procurement'); }
+  if (!res) return;
+  const pos = res.pos || [];
+  if (!pos.length) {
+    showToast((res.unsourced || []).length ? `No vendor resolved for ${name} — set a vendor/price first` : 'No PO created', 'error');
+    return;
+  }
+  showToast(`PO ${pos[0].id} raised for ${name} — ${pos[0].vendor_name}`);
+  navigate('procurement');
 }
 
-async function generateRFQFromForecast() {
-  showToast('RFQ generation from forecast is configured in Procurement module', 'info');
+// Bulk: raise POs for the whole forecast. Uses the demand-sourcing engine which
+// splits one PO per resolved vendor at agreed prices, applies the approval
+// threshold, and notifies vendors — replacing the old no-op "RFQ" stub.
+async function raiseAllPOsFromForecast() {
+  const data = await api('/reports/procurement-forecast');
+  if (!data) return;
+  const items = (data || [])
+    .filter(r => (r.suggested_procurement_qty || 0) > 0)
+    .map(r => ({ sku: r.sku, qty: r.suggested_procurement_qty }));
+  if (!items.length) { showToast('Nothing to procure — no suggested quantities.', 'info'); return; }
+  const res = await api('/purchase-orders/from-demand', {
+    method: 'POST',
+    body: JSON.stringify({ items, source: 'forecast', notes: 'Raised from Procurement Forecast' })
+  });
+  if (!res) return;
+  const pos = res.pos || [], uns = res.unsourced || [];
+  const vendors = new Set(pos.map(p => p.vendor_id)).size;
+  showToast(pos.length
+    ? `${pos.length} PO${pos.length === 1 ? '' : 's'} raised across ${vendors} vendor${vendors === 1 ? '' : 's'}${uns.length ? ` · ${uns.length} item(s) had no vendor` : ''}`
+    : 'No POs created — items had no resolved vendor/price', pos.length ? 'success' : 'error');
   navigate('procurement');
 }
 
