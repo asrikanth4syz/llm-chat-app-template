@@ -1075,9 +1075,10 @@ async function renderProcurement(el) {
     `<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
     ${statusTiles.map(t=>`
-    <div style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};border-radius:12px;padding:16px;cursor:pointer" ${dataAct('filterPO', t.key)}>
+    <div class="po-tile" data-po-status="${t.key}" role="button" tabindex="0" title="Filter POs: ${t.label}"
+      style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};--po-accent:${t.color}" ${dataAct('filterPO', t.key)}>
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
       <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${t.color};margin-bottom:4px">${t.label}</div>
       <div style="font-size:1.8rem;font-weight:800;color:#1f2937;line-height:1">${byStatus(t.key).length}</div>
@@ -1086,7 +1087,7 @@ async function renderProcurement(el) {
   </div>
 
   <!-- Charts + GRN alert -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:16px">
     <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem;margin-bottom:14px">Vendor Performance</div>
       <div style="position:relative;height:220px;width:100%">
@@ -1126,8 +1127,8 @@ async function renderProcurement(el) {
     <div class="table-wrap" id="po-table-wrap">
       <table class="table" style="margin:0">
         <thead><tr><th>PO #</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Expected</th><th>Actions</th></tr></thead>
-        <tbody id="po-tbody">${pos.map(po=>`<tr data-status="${po.status}">
-          <td><a ${dataAct('viewPO', po.id)} style="cursor:pointer;color:var(--primary);font-weight:700" title="View line items">${po.id}</a>${po.auto_generated?` <span class="badge badge-gold">Auto</span>`:''}</td>
+        <tbody id="po-tbody">${pos.map(po=>`<tr class="po-row" data-status="${po.status}" ${dataAct('viewPO', po.id)} title="View line items">
+          <td><span style="color:var(--primary);font-weight:700">${po.id}</span>${po.auto_generated?` <span class="badge badge-gold">Auto</span>`:''}</td>
           <td>${po.vendor_name||'—'}</td>
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>
@@ -1170,7 +1171,12 @@ async function renderProcurement(el) {
 
 function filterPO(status) {
   const sel = document.getElementById('po-status-filter');
-  if (sel) { sel.value = status; filterPOTable(); }
+  // Click the active tile again to clear the filter.
+  const next = (sel && sel.value === status) ? '' : status;
+  if (sel) { sel.value = next; }
+  filterPOTable();
+  const wrap = document.getElementById('po-table-wrap');
+  if (wrap && next) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function filterPOTable() {
@@ -1178,6 +1184,8 @@ function filterPOTable() {
   document.querySelectorAll('#po-tbody tr[data-status]').forEach(row => {
     row.style.display = (!status || row.dataset.status === status) ? '' : 'none';
   });
+  // Keep the summary tiles in sync — highlight the one that's active.
+  document.querySelectorAll('.po-tile').forEach(el => el.classList.toggle('active', el.dataset.poStatus === status && !!status));
 }
 
 // Line-level goods receipt: each outstanding PO line gets its own received /
