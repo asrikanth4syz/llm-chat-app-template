@@ -891,6 +891,58 @@ async function newPOForVendor(vendorId, vendorName) {
   renderPOLines();
 }
 
+// Drill into a PO to see its line items (what was actually ordered), receipt
+// progress and totals — the procurement table only showed a row summary before.
+async function viewPO(id) {
+  openModal('Purchase Order ' + id,
+    '<div class="loading-state"><div class="spinner"></div></div>',
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const d = await api(`/purchase-orders/${id}/receivable`);
+  if (!d) return;
+  const po = d.po || {}, lines = d.lines || [];
+  const rows = lines.map(l => `<tr>
+    <td><b>${h(l.name || l.sku)}</b><div style="font-size:.72rem;color:var(--text-muted)">${h(l.sku)}</div></td>
+    <td class="u-right">${l.qty}</td>
+    <td class="u-right">${l.unit_price != null ? fmt(l.unit_price) : '—'}</td>
+    <td class="u-right">${l.total != null ? fmt(l.total) : '—'}</td>
+    <td class="u-right">${l.qty_received || 0}</td>
+    <td class="u-right"><b style="color:${l.remaining > 0 ? 'var(--warning)' : 'var(--success)'}">${l.remaining}</b></td>
+  </tr>`).join('') || '<tr><td colspan="6" class="u-empty">No line items on this PO</td></tr>';
+  const body = document.getElementById('modal-body');
+  if (body) body.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:.85rem;align-items:center">
+      <div><b>Vendor:</b> ${h(po.vendor_name || '—')}</div>
+      <div><b>Status:</b> ${statusBadge(po.status)}</div>
+      <div><b>Amount:</b> ${fmt(po.grand_total || 0)}</div>
+      <div><b>Expected:</b> ${fmtDate(po.expected_delivery) || '—'}</div>
+    </div>
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-right">Qty</th><th class="u-right">Unit ₹</th><th class="u-right">Line total</th><th class="u-right">Received</th><th class="u-right">Remaining</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    ${po.notes ? `<div style="margin-top:10px;font-size:.8rem;color:var(--text-muted)"><b>Notes:</b> ${h(po.notes)}</div>` : ''}`;
+}
+
+// "New PO" needs a vendor first (a PO is per-vendor). Pick one here, then hand
+// off to the item-entry modal — instead of dumping the user on the vendor list.
+async function newPOPickVendor() {
+  const vendors = await api('/vendors');
+  if (!vendors) return;
+  const opts = (vendors || []).filter(v => v.active !== 0).map(v => `<option value="${v.id}">${h(v.name)}</option>`).join('');
+  if (!opts) { showToast('No active vendors — add a vendor first', 'error'); return; }
+  openModal('New Purchase Order',
+    `<div class="form-group"><label>Vendor</label><select id="npo-vendor" class="form-control">${opts}</select></div>
+     <p style="font-size:.82rem;color:var(--text-muted);margin:6px 0 0">Pick the vendor to raise this PO for — you'll add items on the next step.</p>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" ${dataAct('newPOPickVendorNext')}>Next: add items →</button>`);
+}
+function newPOPickVendorNext() {
+  const sel = document.getElementById('npo-vendor');
+  const vid = sel && sel.value;
+  const vname = sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+  if (!vid) { showToast('Select a vendor', 'error'); return; }
+  newPOForVendor(vid, vname); // replaces the modal with the item-entry step
+}
+
 function addPOLine(sel) {
   const sku = sel.value; if (!sku) return;
   sel.value = '';
@@ -1020,7 +1072,7 @@ async function renderProcurement(el) {
 
   el.innerHTML = `
   ${pageHeader('Procurement', `${totalOpen} open POs`,
-    `<button class="btn btn-gold" ${dataAct('navigate', 'vendors')}>${iconPlus(14)} New PO</button>`)}
+    `<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px">
@@ -1075,7 +1127,7 @@ async function renderProcurement(el) {
       <table class="table" style="margin:0">
         <thead><tr><th>PO #</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Expected</th><th>Actions</th></tr></thead>
         <tbody id="po-tbody">${pos.map(po=>`<tr data-status="${po.status}">
-          <td><b>${po.id}</b>${po.auto_generated?` <span class="badge badge-gold">Auto</span>`:''}</td>
+          <td><a ${dataAct('viewPO', po.id)} style="cursor:pointer;color:var(--primary);font-weight:700" title="View line items">${po.id}</a>${po.auto_generated?` <span class="badge badge-gold">Auto</span>`:''}</td>
           <td>${po.vendor_name||'—'}</td>
           <td>${fmt(po.grand_total)}</td>
           <td>${statusBadge(po.status)}</td>

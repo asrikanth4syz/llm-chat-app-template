@@ -4480,7 +4480,7 @@ async function handleReceivablePO(request: Request, env: Env, path: string): Pro
   const po = await env.DB.prepare("SELECT p.*,v.name as vendor_name FROM purchase_orders p LEFT JOIN vendors v ON p.vendor_id=v.id WHERE p.id=?").bind(id).first() as Record<string,unknown>|null;
   if (!po) return json({error:"Not found"}, 404);
   const {results} = await env.DB.prepare(
-    "SELECT pi.id, pi.sku, pi.name, pi.qty, COALESCE(pi.qty_received,0) as qty_received, i.track_batch FROM po_items pi LEFT JOIN inventory i ON i.sku=pi.sku WHERE pi.po_id=?"
+    "SELECT pi.id, pi.sku, pi.name, pi.qty, pi.unit_price, pi.total, COALESCE(pi.qty_received,0) as qty_received, i.track_batch FROM po_items pi LEFT JOIN inventory i ON i.sku=pi.sku WHERE pi.po_id=?"
   ).bind(id).all();
   const lines = results.map(r => ({
     ...r, remaining: Math.max(0, Number(r.qty) - Number(r.qty_received || 0)),
