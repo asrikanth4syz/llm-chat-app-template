@@ -1717,6 +1717,15 @@ async function renderDeliveriesHub(el) {
   await window[fn](body);
 }
 
+// Re-render a delivery view IN PLACE — into the Deliveries-hub body if we're in
+// the hub, else the main content when the page is open standalone. Used by the
+// in-page Refresh / post-action redraws so they no longer jump to the standalone
+// page (which dropped the hub's tab bar).
+function refreshDeliveryView(fnName) {
+  const host = document.getElementById('dhub-body') || document.getElementById('main-content');
+  if (host && typeof window[fnName] === 'function') window[fnName](host);
+}
+
 async function delivHubTab(k) {
   const tabs = delivTabsForRole(APP.user?.role);
   if (!tabs.some(t => t.k === k)) return;

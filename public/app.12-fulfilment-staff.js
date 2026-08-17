@@ -1031,7 +1031,7 @@ async function renderTodaysSchedule(el) {
 
   el.innerHTML = `
   ${pageHeader("Today's Delivery Schedule", today,
-    `<button class="btn btn-secondary" ${dataAct('navigate', 'todays_schedule')}>&#8635; Refresh</button>`)}
+    `<button class="btn btn-secondary" ${dataAct('refreshDeliveryView', 'renderTodaysSchedule')}>&#8635; Refresh</button>`)}
 
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
     <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
@@ -1163,7 +1163,7 @@ async function saveAssignDC(dcId) {
     scheduled_time: document.getElementById('dc-time').value || null,
   })});
   closeModal();
-  if (res) { showToast('DC updated'); navigate('todays_schedule'); }
+  if (res) { showToast('DC updated'); refreshDeliveryView('renderTodaysSchedule'); }
 }
 
 // Unified return flow: per-item quantities + warehouse approval (see returnDCModal)

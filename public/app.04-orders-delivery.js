@@ -955,7 +955,7 @@ async function renderOrderQueue(el) {
     return res;
   }
 
-  const STATUS_TABS = ['All','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED'];
+  const STATUS_TABS = ['All','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;

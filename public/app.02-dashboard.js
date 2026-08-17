@@ -967,7 +967,8 @@ function renderTowerRadar() {
   const q = [];
   if (d.at_risk) q.push({ sev:1, t:`Reschedule ${d.at_risk} overdue deliver${d.at_risk===1?'y':'ies'}`, s:'past date, undelivered', r:'now', nav:'delivery_calendar' });
   stAll.filter(s => s.days_cover <= 3).slice(0,2).forEach(s =>
-    q.push({ sev:1, t:`Raise PO: ${h(s.name)}`, s:`${s.days_cover} day${s.days_cover===1?'':'s'} of cover left${s.critical?' · must-have':''}`, r:'~'+fmtD(s.runout), nav:'inventory' }));
+    q.push({ sev:1, t:`Raise PO: ${h(s.name)}`, s:`${s.days_cover} day${s.days_cover===1?'':'s'} of cover left${s.critical?' · must-have':''}`, r:'~'+fmtD(s.runout),
+      act:['raisePOForSku', s.sku, s.name], nav:'inventory' }));
   (d.ghosts||[]).filter(g => g.date <= isoOff(3)).slice(0,2).forEach(g =>
     q.push({ sev:2, t:`Confirm “${h(g.name)}” cycle`, s:`${h(g.client||'')} recurring — create or skip`, r:fmtD(g.date), nav:'delivery_calendar' }));
   if (bill && bill.unbilled) q.push({ sev:2, t:`Invoice ${bill.unbilled} delivered DC${bill.unbilled===1?'':'s'}`, s:`oldest ${bill.oldest_days||0} day${bill.oldest_days===1?'':'s'} unbilled`, r:`${bill.oldest_days||0}d idle`, nav:'dc_billing' });
@@ -979,7 +980,7 @@ function renderTowerRadar() {
     `<div class="ct-card-hd"><div><div class="ct-card-title">⚡ Needs you now</div>
       <div class="ct-card-sub">ranked by cost of waiting — the pill is the reason</div></div></div>
     <div style="padding:12px 14px">
-      ${q.length ? q.map(x => `<button class="tw-aq" ${dataAct('navigate', x.nav)}>
+      ${q.length ? q.map(x => `<button class="tw-aq" ${x.act ? dataAct(...x.act) : dataAct('navigate', x.nav)}>
         <span class="sev s${x.sev}"></span>
         <span class="m"><span class="h4">${x.t}</span><span class="p">${x.s}</span></span>
         <span class="r s${x.sev}">${x.r}</span></button>`).join('')
