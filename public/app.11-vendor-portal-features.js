@@ -497,7 +497,7 @@ async function createOptimizedRoute() {
     method: 'POST',
     body: JSON.stringify({ name, dc_ids: selected, route_date: new Date().toISOString().slice(0,10) }),
   });
-  if (res) { showToast('Route created with ' + selected.length + ' stops'); navigate('delivery_routes'); }
+  if (res) { showToast('Route created with ' + selected.length + ' stops'); refreshDeliveryView('renderDeliveryRoutes'); }
 }
 
 // "New Route" header button — a self-contained modal to name a route, pick a
@@ -530,12 +530,12 @@ async function submitNewRoute() {
   if (!dc_ids.length) { showToast('Select at least one delivery challan', 'error'); return; }
   const res = await api('/delivery-routes', { method: 'POST', body: JSON.stringify({ name, dc_ids, route_date }) });
   closeModal();
-  if (res) { showToast('Route created with ' + dc_ids.length + ' stop' + (dc_ids.length !== 1 ? 's' : '')); navigate('delivery_routes'); }
+  if (res) { showToast('Route created with ' + dc_ids.length + ' stop' + (dc_ids.length !== 1 ? 's' : '')); refreshDeliveryView('renderDeliveryRoutes'); }
 }
 
 async function updateRouteStatus(id, status) {
   const res = await api('/delivery-routes/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
-  if (res) { showToast('Route status updated'); navigate('delivery_routes'); }
+  if (res) { showToast('Route status updated'); refreshDeliveryView('renderDeliveryRoutes'); }
 }
 
 /* ============================================================
