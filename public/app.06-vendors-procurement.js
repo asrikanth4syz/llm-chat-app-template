@@ -416,11 +416,23 @@ function openVendorWizard(v) {
 // product can be picked from existing inventory (auto-links the SKU) — while
 // still allowing a brand-new item to be typed.
 async function vwLoadInvList() {
+  // Pick-from-existing-inventory is a Smart Pantry Super-Admin capability only.
+  // A vendor self-onboarding adds new products (which never touch inventory
+  // directly), so we leave the picker empty for them.
+  if (APP.user?.role !== 'super_admin') { APP._vwInv = []; return; }
   const d = await api('/barcode-map').catch(() => null);
   APP._vwInv = (d?.items || []).map(i => ({ sku: i.sku, name: i.name }));
   const dl = document.getElementById('vw-inv-datalist');
   if (dl) dl.innerHTML = APP._vwInv
     .map(i => `<option value="${h(i.name)}">${h(i.sku)}</option>`).join('');
+}
+
+function vwCalcMargin(input) {
+  const tr = input.closest('tr'); if (!tr) return;
+  const rate = +(tr.querySelector('.vwp-rate')?.value) || 0;
+  const mrp = +(tr.querySelector('.vwp-mrp')?.value) || 0;
+  const m = tr.querySelector('.vwp-margin'); if (!m) return;
+  m.value = mrp > 0 ? Math.round(((mrp - rate) / mrp) * 100) : '';
 }
 
 // When a typed product name matches a catalogue item, auto-fill its SKU so the
@@ -435,6 +447,7 @@ function vwMatchProduct(input) {
 }
 
 function vendorWizardHtml(v) {
+  const sup = APP.user?.role === 'super_admin';
   const inS = 'width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:.85rem;box-sizing:border-box';
   return `
     <div class="vw-stepper">
@@ -468,11 +481,13 @@ function vendorWizardHtml(v) {
 
     <div class="vw-panel" id="vwp-3">
       <p class="vw-step-title">Products supplied</p>
-      <p class="vw-step-desc">What they sell us — basis for POs. Start typing an item to <b>pick from existing inventory</b> (auto-links the SKU), or type a new name to <b>add a new item</b>.</p>
+      <p class="vw-step-desc">${sup
+        ? 'What they sell us — basis for POs. Start typing an item to <b>pick from existing inventory</b> (auto-links the SKU), or type a new name to <b>add a new item</b>. Set MRP to capture the <b>margin on MRP</b>.'
+        : 'List the products you supply — item, pack, MOQ, rate and lead time. New products are submitted for our team to review; they are <b>not added to inventory automatically</b>.'}</p>
       <datalist id="vw-inv-datalist"></datalist>
       <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px">
         <table class="table" style="margin:0">
-          <thead><tr><th>Item</th><th>Pack</th><th style="width:66px">MOQ</th><th style="width:86px">Rate ₹</th><th style="width:66px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
+          <thead><tr><th>Item</th><th>Pack</th><th style="width:60px">MOQ</th><th style="width:82px">Rate ₹</th>${sup?'<th style="width:82px">MRP ₹</th><th style="width:70px">Margin %</th>':''}<th style="width:60px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
           <tbody id="vw-products"></tbody>
         </table>
       </div>
@@ -537,13 +552,18 @@ function vwRemoveDoc(kind) { delete APP._vw.docs[kind]; vwRenderDrop(kind); }
 
 function vwAddProductRow(p) {
   const tb = document.getElementById('vw-products'); if (!tb) return;
+  const sup = APP.user?.role === 'super_admin';
   const cs = 'width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 7px;font-size:.8rem;box-sizing:border-box';
   const tr = document.createElement('tr');
+  const mrpCells = sup ? `
+    <td><input class="vwp-mrp" type="number" min="0" ${dataInputEl('vwCalcMargin')} style="${cs};text-align:right" value="${p.mrp!=null?p.mrp:''}" placeholder="MRP"></td>
+    <td><input class="vwp-margin" type="number" readonly tabindex="-1" title="Margin on MRP = (MRP − Rate) ÷ MRP" style="${cs};text-align:right;background:var(--surface-2,#f1f5f9)" value="${p.margin_pct!=null?p.margin_pct:''}"></td>` : '';
   tr.innerHTML = `
-    <td><input class="vwp-name" list="vw-inv-datalist" ${dataInputEl('vwMatchProduct')} style="${cs}" value="${h(p.name||'')}" placeholder="Pick or type item"></td>
+    <td><input class="vwp-name" list="vw-inv-datalist" ${dataInputEl('vwMatchProduct')} style="${cs}" value="${h(p.name||'')}" placeholder="${sup?'Pick or type item':'Item name'}"></td>
     <td><input class="vwp-pack" style="${cs}" value="${h(p.pack||'')}" placeholder="Carton·24"></td>
     <td><input class="vwp-moq" type="number" min="1" style="${cs};text-align:right" value="${p.moq||1}"></td>
-    <td><input class="vwp-rate" type="number" min="0" style="${cs};text-align:right" value="${p.rate!=null?p.rate:''}"></td>
+    <td><input class="vwp-rate" type="number" min="0" ${sup?dataInputEl('vwCalcMargin'):''} style="${cs};text-align:right" value="${p.rate!=null?p.rate:''}"></td>
+    ${mrpCells}
     <td><input class="vwp-lead" type="number" min="0" style="${cs};text-align:right" value="${p.lead_days!=null?p.lead_days:3}"></td>
     <td><input class="vwp-sku" style="${cs}" value="${h(p.sku||'')}" placeholder="optional"></td>
     <td><button class="btn btn-secondary btn-sm" style="padding:3px 8px" ${dataActEl('removeClosestRow')}>✕</button></td>`;
@@ -556,6 +576,8 @@ function vwCollectProducts() {
     moq: +tr.querySelector('.vwp-moq').value || 1,
     rate: +tr.querySelector('.vwp-rate').value || 0,
     lead_days: +tr.querySelector('.vwp-lead').value || 3,
+    mrp: +(tr.querySelector('.vwp-mrp')?.value) || null,
+    margin_pct: +(tr.querySelector('.vwp-margin')?.value) || null,
     sku: tr.querySelector('.vwp-sku').value.trim() || null,
   })).filter(p => p.name);
 }

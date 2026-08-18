@@ -638,8 +638,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS vendor_products (
       id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, sku TEXT, name TEXT NOT NULL,
       pack TEXT, moq REAL DEFAULT 1, rate REAL DEFAULT 0, lead_days INTEGER DEFAULT 3,
-      status TEXT DEFAULT 'new_sku')`).run();
+      mrp REAL, margin_pct REAL, status TEXT DEFAULT 'new_sku')`).run();
   } catch { /* ignore */ }
+  // mrp / margin_pct added later — backfill columns on existing DBs (Super-Admin
+  // captures MRP and margin-on-MRP when adding a vendor's product).
+  for (const col of ["mrp REAL", "margin_pct REAL"]) {
+    try { await env.DB.prepare(`ALTER TABLE vendor_products ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
   } catch { /* column already exists */ }
@@ -2734,9 +2739,11 @@ async function saveVendorSubResources(env: Env, vendorId: string, body: Record<s
     await env.DB.prepare("DELETE FROM vendor_products WHERE vendor_id=?").bind(vendorId).run();
     for (const pr of body.products as Array<Record<string,unknown>>) {
       if (!pr.name) continue;
-      await env.DB.prepare("INSERT INTO vendor_products (id,vendor_id,sku,name,pack,moq,rate,lead_days,status) VALUES (?,?,?,?,?,?,?,?,?)")
+      await env.DB.prepare("INSERT INTO vendor_products (id,vendor_id,sku,name,pack,moq,rate,lead_days,mrp,margin_pct,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
         .bind(uid(), vendorId, pr.sku?String(pr.sku):null, String(pr.name), pr.pack?String(pr.pack):null,
-          Number(pr.moq)||1, Number(pr.rate)||0, Number(pr.lead_days)||3, pr.sku?'linked':'new_sku').run();
+          Number(pr.moq)||1, Number(pr.rate)||0, Number(pr.lead_days)||3,
+          pr.mrp!=null&&pr.mrp!==''?Number(pr.mrp):null, pr.margin_pct!=null&&pr.margin_pct!==''?Number(pr.margin_pct):null,
+          pr.sku?'linked':'new_sku').run();
     }
   }
   return undefined;
@@ -2822,7 +2829,7 @@ async function handleListVendorProducts(request: Request, env: Env, path: string
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const vid = path.split("/")[3];
-  const { results } = await env.DB.prepare("SELECT id,sku,name,pack,moq,rate,lead_days,status FROM vendor_products WHERE vendor_id=? ORDER BY name").bind(vid).all();
+  const { results } = await env.DB.prepare("SELECT id,sku,name,pack,moq,rate,lead_days,mrp,margin_pct,status FROM vendor_products WHERE vendor_id=? ORDER BY name").bind(vid).all();
   return json(results);
 }
 

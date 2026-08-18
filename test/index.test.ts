@@ -423,7 +423,7 @@ describe("Vendors", () => {
       bank_account_name: "Onboard Co", bank_account_no: "50100245678", bank_ifsc: "HDFC0001234",
       bank_name: "HDFC Bank", bank_branch: "BTM",
       documents: [{ kind: "cancelled_cheque", filename: "cheque.jpg", mime: "image/jpeg", size: 2048, data: "data:image/jpeg;base64,AAAA" }],
-      products: [{ name: "Bru Coffee 200g", pack: "Carton·24", moq: 2, rate: 185, lead_days: 3, sku: "SKU001" },
+      products: [{ name: "Bru Coffee 200g", pack: "Carton·24", moq: 2, rate: 185, lead_days: 3, sku: "SKU001", mrp: 250, margin_pct: 26 },
                  { name: "New Item", moq: 1, rate: 50, lead_days: 2 }],
     }, adminToken);
     expect(res.status).toBe(201);
@@ -437,9 +437,12 @@ describe("Vendors", () => {
     expect(docs.length).toBe(1);
     expect(docs[0].kind).toBe("cancelled_cheque");
 
-    const prods = await (await get(`/api/vendors/${id}/products`, adminToken)).json() as Array<{name:string;status:string}>;
+    const prods = await (await get(`/api/vendors/${id}/products`, adminToken)).json() as Array<{name:string;status:string;mrp:number;margin_pct:number}>;
     expect(prods.length).toBe(2);
-    expect(prods.find(p => p.name === "Bru Coffee 200g")?.status).toBe("linked"); // has SKU
+    const bru = prods.find(p => p.name === "Bru Coffee 200g");
+    expect(bru?.status).toBe("linked"); // has SKU
+    expect(bru?.mrp).toBe(250);
+    expect(bru?.margin_pct).toBe(26);
     expect(prods.find(p => p.name === "New Item")?.status).toBe("new_sku");
   });
 
