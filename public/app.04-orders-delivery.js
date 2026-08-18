@@ -456,6 +456,27 @@ async function viewOrder(id) {
         }).join('')}
       </div>`;
 
+  // Client-facing Timeline section: the same four milestones as a dated vertical
+  // list, so a client never sees the internal stages (Inventory Check, Picked,
+  // Quality Check, Vendor PO, …). Ops keep the full event history below.
+  const clientTimelineHtml = order.status === 'CANCELLED'
+    ? `<div style="color:var(--danger);font-weight:600;font-size:.85rem">❌ Order cancelled${milestoneDate(['CANCELLED'])?` · ${milestoneDate(['CANCELLED'])}`:''}.</div>`
+    : `<div style="display:grid;gap:12px">
+        ${MILESTONES.map((m,i)=>{
+          const reached = activeIdx >= i;
+          const isCurrent = activeIdx === i;
+          const dt = reached ? milestoneDate(m.statuses) : '';
+          return `<div style="display:flex;gap:10px;align-items:flex-start">
+            <div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;font-size:.7rem;font-weight:800;background:${reached?'var(--success)':'var(--border)'};color:${reached?'#fff':'var(--text-muted)'}">${reached&&!isCurrent?'✓':i+1}</div>
+            <div>
+              <div style="font-weight:${isCurrent?800:600};color:var(--navy)">${m.label}</div>
+              <div style="font-size:.72rem;color:var(--text-muted)">${dt || (isCurrent?'In progress':'Pending')}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  const clientMilestonesReached = MILESTONES.filter((m,i)=>activeIdx>=i).length;
+
   // Ops staff get the full 8-stage stepper + one next-action; clients keep the
   // simpler 4-milestone tracker. Cancelled orders show the cancelled note.
   injectOrderStepperCss();
@@ -472,7 +493,7 @@ async function viewOrder(id) {
         <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
         <div><b>Placed:</b> ${fmtDate(order.created_at)}</div>
-        <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('orderTimelineModal', id)}>🧭 Timeline</button>
+        ${isOpsRole ? `<button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('orderTimelineModal', id)}>🧭 Timeline</button>` : ''}
         ${order.order_period ? `<div><b>For:</b> ${new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'})}</div>` : ''}
       </div>
       <!-- Row 2: dates -->
@@ -513,14 +534,16 @@ async function viewOrder(id) {
       <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>`,
       true)}
     ${orderDCs.length ? orderSection('Deliveries', `${orderDCs.length} challan${orderDCs.length>1?'s':''}`, dcCards, true) : ''}
-    ${order.history?.length ? orderSection('Timeline', `${order.history.length} event${order.history.length>1?'s':''}`,
-      `<div style="display:grid;gap:6px">
-      ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
-        <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
-        <span>${statusBadge(h.to_status)}</span>
-        <span class="u-muted">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
-      </div>`).join('')}
-      </div>`, false) : ''}
+    ${isOpsRole
+      ? (order.history?.length ? orderSection('Timeline', `${order.history.length} event${order.history.length>1?'s':''}`,
+          `<div style="display:grid;gap:6px">
+          ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
+            <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
+            <span>${statusBadge(h.to_status)}</span>
+            <span class="u-muted">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
+          </div>`).join('')}
+          </div>`, false) : '')
+      : orderSection('Timeline', order.status==='CANCELLED' ? '' : `${clientMilestonesReached} of ${MILESTONES.length}`, clientTimelineHtml, false)}
     ${orderSection('Comments', (comments||[]).length ? `${comments.length}` : '', commentsHtml, false)}`,
     (() => {
       const s = order.status;
