@@ -1288,6 +1288,8 @@ function toggleModalFull() {
   }
 }
 function closeModal() {
+  // Stop any live barcode-scanner camera stream the modal started.
+  if (typeof window._scanStop === 'function') { try { window._scanStop(); } catch (e) { /* ignore */ } window._scanStop = null; }
   const overlay = document.getElementById('modal-overlay');
   overlay.classList.add('hidden');
   overlay.classList.remove('is-full');

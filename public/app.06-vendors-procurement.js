@@ -1197,24 +1197,27 @@ async function receiveGRN(poId) {
   if (!data) return;
   _grnLines = (data.lines || []).filter(l => l.remaining > 0);
   if (!_grnLines.length) { showToast('Nothing left to receive on this PO', 'info'); return; }
+  loadBarcodeMap();   // warm the scanner's barcode→SKU map (non-blocking)
   const rows = _grnLines.map((l, i) => `
     <tr>
       <td style="font-size:.82rem"><b>${h(l.name)}</b><div class="u-subtiny">${h(l.sku)}</div></td>
       <td class="u-center">${l.qty} / <b>${l.remaining}</b></td>
-      <td class="u-center"><input type="number" data-grn-recv="${i}" value="${l.remaining}" min="0" max="${l.remaining}" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+      <td class="u-center"><input type="number" data-grn-recv="${i}" data-scan-sku="${h(l.sku)}" data-scan-max="${l.remaining}" value="${l.remaining}" min="0" max="${l.remaining}" style="width:62px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       <td class="u-center"><input type="number" data-grn-rej="${i}" value="0" min="0" style="width:54px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       <td><input type="text" data-grn-batch="${i}" placeholder="batch" style="width:76px;padding:4px;border:1px solid var(--border);border-radius:6px"></td>
       <td><input type="date" data-grn-exp="${i}" style="padding:4px;border:1px solid var(--border);border-radius:6px"></td>
     </tr>`).join('');
   openModal('Receive GRN — PO ' + poId, `
+    ${scanPanelHtml('receive')}
     <div class="table-wrap"><table class="table" style="margin:0">
       <thead><tr><th>Item</th><th class="u-center">Ord / Rem</th><th class="u-center">Receive</th><th class="u-center">Reject</th><th>Batch</th><th>Expiry</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="u-subtiny" style="color:var(--text-muted);margin-top:8px">Rejected qty is logged for QC and never added to stock. Batch &amp; expiry drive near-expiry alerts.</div>
+    <div class="u-subtiny" style="color:var(--text-muted);margin-top:8px">Scan items to count receipts, or type quantities. Rejected qty is logged for QC and never added to stock. Batch &amp; expiry drive near-expiry alerts.</div>
     <div class="form-group" style="margin-top:10px"><label>Notes</label><input type="text" id="grn-notes" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmGRN', poId)}>Confirm Receipt</button>`);
+  initScan('receive');
 }
 
 async function confirmGRN(poId) {

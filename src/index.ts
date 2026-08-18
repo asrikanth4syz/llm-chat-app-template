@@ -83,7 +83,9 @@ function withSecurityHeaders(res: Response): Response {
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   h.set("Cross-Origin-Opener-Policy", "same-origin");
-  h.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  // camera=(self) enables the in-app barcode scanner (scan-to-pick / scan-to-receive)
+  // for our own origin only; geolocation and microphone stay fully disabled.
+  h.set("Permissions-Policy", "geolocation=(), microphone=(), camera=(self)");
   h.set("Content-Security-Policy", CSP);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }
@@ -771,6 +773,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/comments$/)     && method==="POST") return handleAddComment(request,env,path);
 
       // Inventory
+      if (path==="/api/barcode-map"             && method==="GET")   return handleBarcodeMap(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
       if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
@@ -2291,6 +2294,19 @@ async function handleAddComment(request: Request, env: Env, path: string): Promi
 // ════════════════════════════════════════════════════════════════════
 // INVENTORY (Gap 8 auto-reorder on patch, Gap 9 reserved stock)
 // ════════════════════════════════════════════════════════════════════
+
+// GET /api/barcode-map — lightweight sku/name/barcode list that powers the
+// in-app barcode scanner (scan-to-pick / scan-to-receive). Small payload so the
+// pick/GRN modals can resolve a scanned code → SKU without pulling full inventory.
+async function handleBarcodeMap(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user);
+  if (denied) return denied;
+  const { results } = await env.DB.prepare(
+    "SELECT sku, name, COALESCE(barcode,'') AS barcode FROM inventory WHERE active=1"
+  ).all();
+  return json({ items: results || [] });
+}
 
 async function handleListInventory(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);

@@ -270,6 +270,21 @@ describe("Inventory", () => {
     expect(res.status).toBe(401);
   });
 
+  it("GET /api/barcode-map — returns sku/name/barcode for the scanner", async () => {
+    const res = await get("/api/barcode-map", opsToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { items: Array<{ sku: string; name: string; barcode: string }> };
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.items.length).toBeGreaterThanOrEqual(2);
+    expect(body.items[0]).toHaveProperty("sku");
+    expect(body.items[0]).toHaveProperty("barcode");
+  });
+
+  it("GET /api/barcode-map — unauthenticated returns 401", async () => {
+    const res = await get("/api/barcode-map");
+    expect(res.status).toBe(401);
+  });
+
   it("GET /api/inventory — client with no catalog assignments sees all items (fallback)", async () => {
     const res = await get("/api/inventory", clientToken);
     expect(res.status).toBe(200);

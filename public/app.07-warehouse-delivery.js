@@ -527,11 +527,13 @@ async function pickOrderModal(orderId) {
     api(`/orders/${orderId}`),
     api('/bin-locations').catch(()=>[])
   ]);
+  loadBarcodeMap();   // warm the scanner's barcode→SKU map (non-blocking)
   const items = order?.items || [];
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
   openModal(`Pick Items — ${orderId}`, `
+    ${scanPanelHtml('pick')}
     <p style="color:var(--text-muted);margin-bottom:12px">
-      Enter qty actually picked (can be less than ordered) and select the bin location.
+      Scan items to count them up, or enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
     <table class="table" style="margin-bottom:16px">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
@@ -543,6 +545,7 @@ async function pickOrderModal(orderId) {
           <td>
             <input type="number" class="form-control form-control-sm pick-qty"
               data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
+              data-scan-sku="${item.sku}" data-scan-max="${item.qty}"
               value="${item.qty}" min="0" max="${item.qty}"
               style="width:72px;text-align:center"
               ${dataInputEl('colorByOrdered')}>
@@ -561,6 +564,7 @@ async function pickOrderModal(orderId) {
       <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
     </div>
   `);
+  initScan('pick');
 }
 
 async function confirmPick(orderId) {
