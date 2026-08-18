@@ -285,6 +285,23 @@ describe("Inventory", () => {
     expect(res.status).toBe(401);
   });
 
+  it("POST /api/inventory/barcodes — bulk sets barcodes and reflects in the map", async () => {
+    const res = await post("/api/inventory/barcodes", {
+      items: [{ sku: "SKU001", barcode: "8901234567890" }, { sku: "NOPE-SKU", barcode: "111" }],
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { updated: number; unknown: string[] };
+    expect(body.updated).toBe(1);
+    expect(body.unknown).toContain("NOPE-SKU");
+    const map = await (await get("/api/barcode-map", adminToken)).json() as { items: Array<{ sku: string; barcode: string }> };
+    expect(map.items.find(i => i.sku === "SKU001")?.barcode).toBe("8901234567890");
+  });
+
+  it("POST /api/inventory/barcodes — client role is forbidden", async () => {
+    const res = await post("/api/inventory/barcodes", { items: [{ sku: "SKU001", barcode: "9" }] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+
   it("GET /api/inventory — client with no catalog assignments sees all items (fallback)", async () => {
     const res = await get("/api/inventory", clientToken);
     expect(res.status).toBe(200);

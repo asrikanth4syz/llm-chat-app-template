@@ -406,9 +406,32 @@ function openVendorWizard(v) {
     vendorWizardHtml(v || {}),
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>`);
   VW_DOCS.forEach(d => vwRenderDrop(d.kind));
+  vwLoadInvList();
   if (!v || !v.id) vwAddProductRow({});
   else vwLoadExisting(v.id);
   vwGo(0);
+}
+
+// Populate the Products-step datalist from the live catalogue so a supplier's
+// product can be picked from existing inventory (auto-links the SKU) — while
+// still allowing a brand-new item to be typed.
+async function vwLoadInvList() {
+  const d = await api('/barcode-map').catch(() => null);
+  APP._vwInv = (d?.items || []).map(i => ({ sku: i.sku, name: i.name }));
+  const dl = document.getElementById('vw-inv-datalist');
+  if (dl) dl.innerHTML = APP._vwInv
+    .map(i => `<option value="${h(i.name)}">${h(i.sku)}</option>`).join('');
+}
+
+// When a typed product name matches a catalogue item, auto-fill its SKU so the
+// row links to existing inventory; clear only auto-filled SKUs when it stops matching.
+function vwMatchProduct(input) {
+  const tr = input.closest('tr'); if (!tr) return;
+  const skuEl = tr.querySelector('.vwp-sku'); if (!skuEl) return;
+  const name = (input.value || '').trim().toLowerCase();
+  const hit = (APP._vwInv || []).find(i => String(i.name || '').toLowerCase() === name);
+  if (hit) { skuEl.value = hit.sku; skuEl.dataset.auto = '1'; skuEl.style.background = 'var(--success-bg)'; }
+  else if (skuEl.dataset.auto) { skuEl.value = ''; delete skuEl.dataset.auto; skuEl.style.background = ''; }
 }
 
 function vendorWizardHtml(v) {
@@ -445,7 +468,8 @@ function vendorWizardHtml(v) {
 
     <div class="vw-panel" id="vwp-3">
       <p class="vw-step-title">Products supplied</p>
-      <p class="vw-step-desc">What they sell us — basis for POs. Link a catalogue SKU or leave blank for a new one.</p>
+      <p class="vw-step-desc">What they sell us — basis for POs. Start typing an item to <b>pick from existing inventory</b> (auto-links the SKU), or type a new name to <b>add a new item</b>.</p>
+      <datalist id="vw-inv-datalist"></datalist>
       <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px">
         <table class="table" style="margin:0">
           <thead><tr><th>Item</th><th>Pack</th><th style="width:66px">MOQ</th><th style="width:86px">Rate ₹</th><th style="width:66px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
@@ -516,7 +540,7 @@ function vwAddProductRow(p) {
   const cs = 'width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 7px;font-size:.8rem;box-sizing:border-box';
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input class="vwp-name" style="${cs}" value="${h(p.name||'')}" placeholder="Item name"></td>
+    <td><input class="vwp-name" list="vw-inv-datalist" ${dataInputEl('vwMatchProduct')} style="${cs}" value="${h(p.name||'')}" placeholder="Pick or type item"></td>
     <td><input class="vwp-pack" style="${cs}" value="${h(p.pack||'')}" placeholder="Carton·24"></td>
     <td><input class="vwp-moq" type="number" min="1" style="${cs};text-align:right" value="${p.moq||1}"></td>
     <td><input class="vwp-rate" type="number" min="0" style="${cs};text-align:right" value="${p.rate!=null?p.rate:''}"></td>

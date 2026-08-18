@@ -475,6 +475,86 @@ async function confirmBillDC(id) {
    ============================================================ */
 let _invCache = {};
 
+/* ── Bulk barcode / EAN entry — populate codes fast for the scanner ──────── */
+async function bulkBarcodeModal() {
+  const inv = await api('/inventory');
+  if (!inv) return;
+  const items = [...inv].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const withBc = items.filter(i=>i.barcode).length;
+  const rows = items.map(it => `
+    <tr class="bc-row" data-bc-text="${h((it.sku+' '+(it.name||'')).toLowerCase())}">
+      <td style="font-size:.82rem"><b>${h(it.name||it.sku)}</b></td>
+      <td style="font-family:monospace;font-size:.78rem;color:var(--text-muted)">${h(it.sku)}</td>
+      <td><input type="text" class="bc-input" data-bc-sku="${h(it.sku)}" data-bc-orig="${h(it.barcode||'')}"
+        value="${h(it.barcode||'')}" placeholder="scan or type EAN/UPC"
+        autocomplete="off" spellcheck="false"
+        style="width:100%;min-width:150px;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:.82rem"></td>
+    </tr>`).join('');
+  openModal('Bulk Barcodes', `
+    <p style="color:var(--text-muted);margin-bottom:12px;font-size:.9rem">
+      Add or update each item's barcode / EAN so the scanner can match it during pick &amp; receive.
+      <b>${withBc}</b> of <b>${items.length}</b> items have a code. Click a field and scan with a barcode gun, type it, or paste a list below.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input type="text" id="bc-search" class="filter-input" placeholder="Filter by name or SKU…" ${dataInputEl('bulkBarcodeFilter')} style="flex:1 1 220px">
+      <details style="flex:1 1 260px">
+        <summary style="cursor:pointer;font-size:.82rem;color:var(--primary);font-weight:600">Paste a list (SKU,barcode per line)</summary>
+        <div style="margin-top:8px">
+          <textarea id="bc-csv" rows="4" placeholder="SKU001,8901234567890&#10;100548,8904567890123" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:.8rem"></textarea>
+          <button class="btn btn-secondary btn-sm" ${dataAct('applyBarcodeCsv')} style="margin-top:6px">Apply to fields</button>
+        </div>
+      </details>
+    </div>
+    <div style="max-height:none;overflow-x:auto">
+      <table class="table" style="margin:0">
+        <thead><tr><th>Item</th><th>SKU</th><th style="width:38%">Barcode / EAN</th></tr></thead>
+        <tbody id="bc-tbody">${rows}</tbody>
+      </table>
+    </div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveBulkBarcodes')}>Save Barcodes</button>`);
+  enableModalExpand();
+}
+
+function bulkBarcodeFilter(el) {
+  const q = (el.value||'').trim().toLowerCase();
+  document.querySelectorAll('#bc-tbody .bc-row').forEach(tr => {
+    tr.style.display = !q || (tr.dataset.bcText||'').includes(q) ? '' : 'none';
+  });
+}
+
+function applyBarcodeCsv() {
+  const raw = document.getElementById('bc-csv')?.value || '';
+  const map = {};
+  raw.split(/\r?\n/).forEach(line => {
+    const parts = line.split(/[,\t;]/).map(s=>s.trim());
+    if (parts.length >= 2 && parts[0]) map[parts[0].toUpperCase()] = parts.slice(1).join('').trim();
+  });
+  let matched = 0, unmatched = 0;
+  document.querySelectorAll('.bc-input').forEach(inp => {
+    const key = String(inp.dataset.bcSku||'').toUpperCase();
+    if (key in map) { inp.value = map[key]; matched++; }
+  });
+  Object.keys(map).forEach(k => {
+    if (!document.querySelector(`.bc-input[data-bc-sku="${cssAttr(k)}" i]`)) unmatched++;
+  });
+  showToast(`Applied ${matched} barcode${matched===1?'':'s'}${unmatched?` · ${unmatched} SKU(s) not found`:''}`, matched?'success':'warning');
+}
+
+async function saveBulkBarcodes() {
+  const changed = Array.from(document.querySelectorAll('.bc-input'))
+    .filter(inp => (inp.value||'').trim() !== (inp.dataset.bcOrig||'').trim())
+    .map(inp => ({ sku: inp.dataset.bcSku, barcode: (inp.value||'').trim() }));
+  if (!changed.length) { showToast('No barcode changes to save', 'info'); return; }
+  const res = await api('/inventory/barcodes', { method:'POST', body: JSON.stringify({ items: changed }) });
+  if (!res) return;
+  closeModal();
+  const unknownNote = res.unknown && res.unknown.length ? ` · ${res.unknown.length} SKU(s) skipped` : '';
+  showToast(`Saved ${res.updated} barcode${res.updated===1?'':'s'}${unknownNote}`);
+  APP._barcodeMap = null;   // invalidate the scanner's cached map
+  navigate('inventory');
+}
+
 async function renderInventory(el) {
   const inv = await api('/inventory');
   if (!inv) return;
@@ -578,7 +658,9 @@ async function renderInventory(el) {
 
   el.innerHTML = `
   ${pageHeader('Inventory', `${inv.length} SKUs`,
-    `${['super_admin','ops_admin','finance_admin','procurement_manager'].includes(APP.user?.role)
+    `${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
+        ? `<button class="btn btn-secondary" ${dataAct('bulkBarcodeModal')} title="Add or update barcodes / EANs in bulk for the scanner">▥ Bulk Barcodes</button>` : ''}
+     ${['super_admin','ops_admin','finance_admin','procurement_manager'].includes(APP.user?.role)
         ? `<button class="btn btn-secondary" ${dataAct('recalcGstFromHsn')} title="Recompute every item's GST slab from its HSN code">↻ Recalc GST from HSN</button>` : ''}
      <button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
 

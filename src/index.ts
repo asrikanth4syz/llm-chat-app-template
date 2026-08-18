@@ -774,6 +774,7 @@ export default {
 
       // Inventory
       if (path==="/api/barcode-map"             && method==="GET")   return handleBarcodeMap(request,env);
+      if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
       if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
@@ -2558,6 +2559,28 @@ async function handleSendCriticalAlerts(request: Request, env: Env): Promise<Res
 
   await sendEmail(env, user!.email, subject, `Critical Stock Alert\n\n${results.length} item(s) need reorder:\n\n${itemLines}\n\nRaise POs immediately.`, html);
   return json({ok:true, count:results.length});
+}
+
+// POST /api/inventory/barcodes — bulk set/clear barcodes in one request, for the
+// inventory page's "Bulk Barcodes" helper. Body: { items:[{sku, barcode}] }.
+async function handleBulkBarcodes(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","ops_manager","procurement_manager"].includes(user!.role))
+    return json({error:"Forbidden"}, 403);
+  const body = await request.json() as { items?: Array<{sku:string; barcode:string}> };
+  const items = (body.items || []).filter(i => i && i.sku);
+  if (!items.length) return json({error:"No items to update"}, 400);
+  let updated = 0; const unknown: string[] = [];
+  for (const it of items) {
+    const bc = String(it.barcode ?? "").trim();
+    const r = await env.DB.prepare("UPDATE inventory SET barcode=? WHERE sku=?")
+      .bind(bc || null, String(it.sku).trim()).run();
+    if (Number((r.meta && (r.meta as Record<string,unknown>).changes) || 0) > 0) updated++;
+    else unknown.push(String(it.sku));
+  }
+  await audit(env, user, "UPDATE", "inventory", "barcodes", undefined, `bulk_barcode:${updated}`);
+  return json({ updated, unknown });
 }
 
 async function handlePatchInventory(request: Request, env: Env, path: string): Promise<Response> {
