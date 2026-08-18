@@ -701,120 +701,227 @@ async function viewOrderDrilldown(orderId) {
     not_delivered: 'Not Delivered',
   }[s] || s);
 
+  // Short "14 Aug" style for the compact per-line DC chips.
+  const fmtDay = iso => iso ? new Date(iso).toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) : '';
+
+  // ── Per-challan allocation ────────────────────────────────────────────────
+  // Every DELIVERED challan carries a set of {sku, qty}. We derive two views
+  // from it: (a) per line, which challans shipped it (the "Delivered via"
+  // chips); (b) per challan, which items it carried. A split SKU appears in
+  // both — once per challan — which is exactly what the drill-down shows.
+  const priceBySku = {};
+  (lines||[]).forEach(l => { priceBySku[l.sku] = Number(l.unit_price) || 0; });
+
+  const deliveredDcs = (dcs||[]).filter(d => d.status === 'DELIVERED');
+  const allocBySku = {};   // sku -> [{dc, date, qty}]
+  const dcGroups   = [];   // [{dc, rows:[{sku,name,qty,unit,amount}], units, value}]
+  const skuDcCount = {};   // sku -> number of distinct DELIVERED challans carrying it
+
+  deliveredDcs.forEach(dc => {
+    const items = dc.items || [];
+    // Fallback: if a whole challan recorded nothing, count each line at its
+    // ordered load (legacy DCs). A recorded challan is taken at face value.
+    const recorded = items.reduce((s,i)=>s+(Number(i.qty_delivered)||0),0);
+    const rows = [];
+    items.forEach(it => {
+      const qty = recorded > 0 ? (Number(it.qty_delivered)||0) : (Number(it.qty_ordered)||0);
+      if (qty <= 0) return;
+      const unit = priceBySku[it.sku] != null ? priceBySku[it.sku] : (Number(it.unit_price)||0);
+      (allocBySku[it.sku] = allocBySku[it.sku] || []).push({ dc: dc.dc_number||dc.id, date: dc.delivered_at, qty });
+      skuDcCount[it.sku] = (skuDcCount[it.sku]||0) + 1;
+      rows.push({ sku: it.sku, name: it.name, qty, unit, amount: qty*unit });
+    });
+    dcGroups.push({
+      dc, rows,
+      units: rows.reduce((s,r)=>s+r.qty,0),
+      value: rows.reduce((s,r)=>s+r.amount,0),
+    });
+  });
+
+  // ── By-item reconciliation rows (with unit cost, amounts, delivered-via) ──
   const lineRows = (lines||[]).map(l => {
     const sc = statusColor(l.status);
+    const chips = (allocBySku[l.sku]||[]).map(a =>
+      `<span class="dw-chip"><span class="n">${h(a.dc)}</span><span class="q">${a.qty}</span><span class="d">${fmtDay(a.date)}</span></span>`
+    ).join('');
     return `<tr>
-      <td style="font-family:monospace;font-size:.8rem;color:var(--text-muted)">${l.sku}</td>
-      <td class="u-b600">${l.name||l.sku}</td>
+      <td class="dw-item"><b>${h(l.name||l.sku)}</b><div class="sku">${h(l.sku)}</div></td>
       <td class="u-right">${l.qty_ordered}</td>
-      <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
+      <td style="text-align:right;color:${l.qty_delivered>0?'var(--success-strong)':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
       <td style="text-align:right;color:${l.qty_due>0?'var(--red)':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
+      <td class="u-right">${fmt(l.unit_price)}</td>
       <td class="u-right">${fmt(l.value_ordered)}</td>
-      <td style="text-align:right;color:#10b981;font-weight:600">${fmt(l.value_delivered)}</td>
+      <td style="text-align:right;color:var(--success-strong);font-weight:600">${fmt(l.value_delivered)}</td>
       <td style="text-align:right;color:${l.value_due>0?'var(--red)':'var(--text-muted)'}">${fmt(l.value_due)}</td>
+      <td>${chips ? `<div class="dw-chips">${chips}</div>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td><span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(l.status)}</span></td>
     </tr>`;
   }).join('');
 
-  const dcRows = (dcs||[]).map(dc => {
-    const c = {DELIVERED:'#10b981',IN_TRANSIT:'#06b6d4',SCHEDULED:'#f59e0b',CANCELLED:'#ef4444'}[dc.status]||'#6b7280';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:8px;background:var(--bg);margin-bottom:6px;font-size:.83rem">
-      <div>
-        <span style="font-weight:700;color:var(--navy)">${dc.id}</span>
-        <span style="margin-left:8px;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${c}22;color:${c}">${dc.status}</span>
+  // ── By-challan groups (each item under every DC that shipped it) ──────────
+  const dcStatusColor = { DELIVERED:'var(--success)', IN_TRANSIT:'var(--info)', SCHEDULED:'var(--amber)', CANCELLED:'var(--danger)' };
+  const deliveredGroupsHtml = dcGroups.map(g => {
+    const dc = g.dc;
+    const meta = [
+      dc.dispatched_at ? `Dispatched ${fmtDate(dc.dispatched_at)}` : '',
+      dc.delivered_at ? `Delivered ${fmtDate(dc.delivered_at)}` : '',
+      dc.driver_name || '', dc.vehicle_no || '',
+    ].filter(Boolean).join(' · ');
+    const rows = g.rows.map(r => {
+      const others = (allocBySku[r.sku]||[]).filter(a => a.dc !== (dc.dc_number||dc.id));
+      const split = skuDcCount[r.sku] > 1
+        ? `<span class="dw-split">split · also ${others.map(o=>`${h(o.dc)} (${o.qty})`).join(', ')}</span>` : '';
+      return `<tr>
+        <td class="dw-item"><b>${h(r.name||r.sku)}</b><div class="sku">${h(r.sku)} ${split}</div></td>
+        <td class="u-right">${r.qty}</td>
+        <td class="u-right">${fmt(r.unit)}</td>
+        <td class="u-right">${fmt(r.amount)}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="dw-dcg">
+      <div class="dw-dcg-head">
+        <span class="id">${h(dc.dc_number||dc.id)}</span>
+        <span class="dw-st" style="background:var(--success)22;color:var(--success-strong)">Delivered</span>
+        <span class="meta2">${h(meta)}</span>
+        <span class="tot">${g.units} units · ${fmt(g.value)}</span>
       </div>
-      <div class="u-muted">
-        ${dc.driver_name?`${dc.driver_name} · `:''}${dc.vehicle_no||''}
-      </div>
-      <div class="u-b600">
-        ${dc.delivered_qty||0} delivered / ${dc.total_qty||0} dispatched
+      <div style="overflow-x:auto">
+        <table class="dw-table"><thead><tr><th>Item</th><th class="u-right">Qty</th><th class="u-right">Unit ₹</th><th class="u-right">Amount</th></tr></thead>
+        <tbody>${rows}</tbody></table>
       </div>
     </div>`;
   }).join('');
 
-  const deliveryRate = summary.total_lines > 0
-    ? Math.round((summary.delivered_lines / summary.total_lines) * 100)
-    : 0;
+  // Non-delivered challans (scheduled / in-transit / cancelled) as compact rows.
+  const otherDcsHtml = (dcs||[]).filter(d => d.status !== 'DELIVERED').map(dc => {
+    const c = dcStatusColor[dc.status] || 'var(--gray)';
+    const note = dc.status === 'CANCELLED' ? 'Voided — not counted'
+      : dc.status === 'IN_TRANSIT' ? 'On the way' : 'Scheduled';
+    return `<div class="dw-dcg dw-dcg--muted">
+      <div class="dw-dcg-head">
+        <span class="id">${h(dc.dc_number||dc.id)}</span>
+        <span class="dw-st" style="background:${c}22;color:${c}">${(dc.status||'').replace('_',' ')}</span>
+        <span class="meta2">${note}</span>
+        <span class="tot">${dc.total_qty||0} units</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── At-a-glance figures for the meta bar / completion / value cards ───────
+  const totalOrderedQty   = (lines||[]).reduce((s,l)=>s+l.qty_ordered,0);
+  const totalDeliveredQty = (lines||[]).reduce((s,l)=>s+l.qty_delivered,0);
+  const pctUnits = totalOrderedQty > 0 ? Math.round(totalDeliveredQty/totalOrderedQty*100) : 0;
+  const lastDelivered = deliveredDcs.map(d=>d.delivered_at).filter(Boolean).sort().pop();
+  const cancelledCount = (dcs||[]).filter(d=>d.status==='CANCELLED').length;
+  const activeChallans = (dcs||[]).filter(d=>d.status!=='CANCELLED').length;
+  const barColor = pctUnits===100 ? 'var(--success-strong)' : pctUnits>50 ? 'var(--amber)' : 'var(--red)';
 
   const body = `
-  <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Line Items</div>
-      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.total_lines}</div>
-    </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #10b981">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Fully Delivered</div>
-      <div style="font-size:1.8rem;font-weight:800;color:#10b981;margin-top:4px">${summary.delivered_lines}</div>
-    </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.due_lines>0?'var(--red)':'var(--gray-light)'}">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Lines Due</div>
-      <div style="font-size:1.8rem;font-weight:800;color:${summary.due_lines>0?'var(--red)':'var(--navy)'};margin-top:4px">${summary.due_lines}</div>
-    </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.no_delivery_lines>0?'var(--gray)':'var(--gray-light)'}">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">No Delivery</div>
-      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.no_delivery_lines}</div>
-      <div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">zero units received</div>
-    </div>
+  <style>
+    .dw-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:16px}
+    .dw-meta .cell{background:var(--surface);padding:11px 14px}
+    .dw-meta .l{font-size:.62rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted)}
+    .dw-meta .v{font-size:.95rem;font-weight:700;margin-top:3px;color:var(--navy)}
+    .dw-vsum{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+    .dw-vsum .c{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;text-align:center}
+    .dw-vsum .l{font-size:.62rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+    .dw-vsum .v{font-size:1.25rem;font-weight:800;margin-top:3px;color:var(--navy)}
+    .dw-toggle{display:inline-flex;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px;margin-bottom:14px}
+    .dw-toggle button{border:none;background:none;font:inherit;font-size:.82rem;font-weight:700;color:var(--text-muted);padding:6px 15px;border-radius:7px;cursor:pointer}
+    .dw-toggle button.on{background:var(--surface);color:var(--primary);box-shadow:0 1px 2px rgba(16,40,50,.12)}
+    .dw-item b{font-weight:700;color:var(--navy)} .dw-item .sku{font-family:monospace;font-size:.72rem;color:var(--text-muted)}
+    .dw-chips{display:flex;flex-direction:column;gap:4px}
+    .dw-chip{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;background:var(--blue-light);color:var(--blue-hover);border:1px solid var(--blue-light);border-radius:7px;padding:2px 8px;white-space:nowrap;width:max-content}
+    .dw-chip .n{font-family:monospace;font-weight:800} .dw-chip .q{font-weight:700}
+    .dw-chip .d{color:var(--text-muted);border-left:1px solid var(--border-mid);padding-left:6px}
+    .dw-split{font-size:.63rem;font-weight:800;color:var(--amber-text);background:var(--amber-bg);border-radius:5px;padding:1px 6px;margin-left:4px;white-space:nowrap}
+    .dw-dcg{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:12px}
+    .dw-dcg--muted{opacity:.6}
+    .dw-dcg-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 14px;background:var(--surface-2);border-bottom:1px solid var(--border)}
+    .dw-dcg--muted .dw-dcg-head{border-bottom:none}
+    .dw-dcg-head .id{font-family:monospace;font-weight:800;color:var(--navy)}
+    .dw-dcg-head .meta2{color:var(--text-muted);font-size:.8rem} .dw-dcg-head .tot{margin-left:auto;font-weight:800;font-size:.85rem;color:var(--navy)}
+    .dw-st{font-size:.68rem;font-weight:800;padding:2px 9px;border-radius:999px;white-space:nowrap}
+    .dw-table{width:100%;border-collapse:collapse;font-size:.83rem;min-width:460px}
+    .dw-table thead th{text-align:left;font-size:.64rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);padding:9px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap}
+    .dw-table td{padding:10px 12px;border-bottom:1px solid var(--border-light);vertical-align:top}
+    .dw-table tbody tr:last-child td{border-bottom:none}
+    .dw-sec{font-weight:800;font-size:.9rem;color:var(--navy);margin:0 0 9px}
+  </style>
+
+  <!-- At-a-glance meta bar -->
+  <div class="dw-meta">
+    <div class="cell"><div class="l">Client</div><div class="v">${h(order.client_name||'—')}</div></div>
+    <div class="cell"><div class="l">Ordered date</div><div class="v">${fmtDate(order.created_at)}</div></div>
+    <div class="cell"><div class="l">Delivered</div><div class="v">${lastDelivered?fmtDate(lastDelivered):'—'} ${lastDelivered?'<span style="color:var(--text-muted);font-weight:400;font-size:.78rem">(last)</span>':''}</div></div>
+    <div class="cell"><div class="l">Status</div><div class="v">${statusBadge(order.status||'')}</div></div>
+    <div class="cell"><div class="l">Challans</div><div class="v" style="font-family:monospace">${activeChallans}${cancelledCount?` <span style="color:var(--text-muted);font-weight:400;font-size:.76rem">· ${cancelledCount} cancelled</span>`:''}</div></div>
+    <div class="cell"><div class="l">Lines · Qty</div><div class="v">${summary.delivered_lines}/${summary.total_lines} · <span style="color:var(--success-strong)">${totalDeliveredQty}/${totalOrderedQty}</span></div></div>
   </div>
 
-  <!-- Value summary row -->
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em">Ordered Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:var(--navy);margin-top:4px">${fmt(summary.total_ordered_value)}</div>
-    </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:#10b981;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Delivered Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:#10b981;margin-top:4px">${fmt(summary.total_delivered_value)}</div>
-    </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};font-weight:600;text-transform:uppercase;letter-spacing:.05em">Due Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};margin-top:4px">${fmt(summary.total_due_value)}</div>
-    </div>
-  </div>
-
-  <!-- Delivery rate bar -->
+  <!-- Completion bar -->
   <div style="margin-bottom:18px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-      <span style="font-size:.8rem;font-weight:700;color:var(--navy)">Delivery Completion</span>
-      <span style="font-size:.8rem;font-weight:800;color:${deliveryRate===100?'#10b981':deliveryRate>50?'var(--amber)':'var(--red)'}">${deliveryRate}%</span>
+      <span style="font-size:.8rem;font-weight:700;color:var(--navy)">Delivery completion</span>
+      <span style="font-size:.8rem;font-weight:800;color:${barColor}">${pctUnits}% · ${totalDeliveredQty} of ${totalOrderedQty} units</span>
     </div>
-    <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden">
-      <div style="height:100%;width:${deliveryRate}%;background:${deliveryRate===100?'#10b981':deliveryRate>50?'var(--amber)':'var(--red)'};border-radius:4px;transition:width .4s"></div>
+    <div style="height:9px;background:var(--border-light);border-radius:5px;overflow:hidden">
+      <div style="height:100%;width:${pctUnits}%;background:${barColor};border-radius:5px;transition:width .4s"></div>
     </div>
   </div>
 
-  <!-- Line items table -->
-  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Line Item Reconciliation</div>
-  <div style="overflow-x:auto;margin-bottom:16px">
-    <table class="table" style="font-size:.82rem">
-      <thead><tr>
-        <th>SKU</th><th>Item</th>
-        <th class="u-right">Ordered</th>
-        <th class="u-right">Delivered</th>
-        <th class="u-right">Due</th>
-        <th class="u-right">Ordered ₹</th>
-        <th class="u-right">Delivered ₹</th>
-        <th class="u-right">Due ₹</th>
-        <th>Status</th>
-      </tr></thead>
-      <tbody>${lineRows || '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
-    </table>
+  <!-- Value summary -->
+  <div class="dw-vsum">
+    <div class="c"><div class="l">Ordered value</div><div class="v">${fmt(summary.total_ordered_value)}</div></div>
+    <div class="c"><div class="l">Delivered value</div><div class="v" style="color:var(--success-strong)">${fmt(summary.total_delivered_value)}</div></div>
+    <div class="c"><div class="l">Due value</div><div class="v" style="color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'}">${fmt(summary.total_due_value)}</div></div>
   </div>
 
-  ${dcs && dcs.length ? `
-  <!-- DCs for this order -->
-  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Delivery Challans (${dcs.length})</div>
-  ${dcRows}
-  ` : ''}`;
+  <!-- View toggle -->
+  <div class="dw-toggle">
+    <button class="on" data-dwv="item" ${dataAct('dwSwitchView','item')}>By item</button>
+    <button data-dwv="challan" ${dataAct('dwSwitchView','challan')}>By challan</button>
+  </div>
+
+  <!-- BY ITEM -->
+  <div id="dw-byitem">
+    <div class="dw-sec">Line-item reconciliation <span style="font-weight:500;color:var(--text-muted);font-size:.8rem">— by item</span></div>
+    <div style="overflow-x:auto;margin-bottom:8px">
+      <table class="table" style="font-size:.82rem;min-width:900px">
+        <thead><tr>
+          <th>Item</th><th class="u-right">Ord</th><th class="u-right">Deliv</th><th class="u-right">Due</th>
+          <th class="u-right">Unit ₹</th><th class="u-right">Ordered ₹</th><th class="u-right">Delivered ₹</th><th class="u-right">Due ₹</th>
+          <th>Delivered via (challan · qty · date)</th><th>Status</th>
+        </tr></thead>
+        <tbody>${lineRows || '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- BY CHALLAN -->
+  <div id="dw-bychallan" style="display:none">
+    <div class="dw-sec">Breakdown by challan <span style="font-weight:500;color:var(--text-muted);font-size:.8rem">— a split item appears under every challan it shipped on</span></div>
+    ${deliveredGroupsHtml || '<div style="text-align:center;color:var(--text-muted);padding:24px">No delivered challans yet</div>'}
+    ${otherDcsHtml}
+  </div>`;
 
   openModal(
-    `Delivery Breakdown — ${orderId}`,
+    `Delivery Breakdown — ${orderId}${order.client_name?` · ${order.client_name}`:''}`,
     body,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
      <button class="btn btn-primary" ${dataActClose('viewOrder', orderId)}>Full Order View</button>`
   );
+  enableModalExpand();
+}
+
+// Toggle the delivery-breakdown modal between its two views.
+function dwSwitchView(v) {
+  const bi = document.getElementById('dw-byitem');
+  const bc = document.getElementById('dw-bychallan');
+  if (!bi || !bc) return;
+  bi.style.display = v === 'item' ? '' : 'none';
+  bc.style.display = v === 'challan' ? '' : 'none';
+  document.querySelectorAll('.dw-toggle button').forEach(b => b.classList.toggle('on', b.dataset.dwv === v));
 }
 
 /* ============================================================

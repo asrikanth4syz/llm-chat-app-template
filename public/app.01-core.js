@@ -1244,6 +1244,12 @@ function openModal(title, body, footer = '') {
   modal.setAttribute('aria-modal', 'true');
   modal.setAttribute('aria-labelledby', 'modal-title');
   modal.tabIndex = -1;
+  // Reset any full-screen state from a previous modal, and hide the expand
+  // control until a modal explicitly opts in via enableModalExpand().
+  modal.classList.remove('modal--full');
+  overlay.classList.remove('is-full');
+  const expandBtn = document.getElementById('modal-expand');
+  if (expandBtn) expandBtn.style.display = 'none';
   overlay.classList.remove('hidden');
   overlay.onclick = e => { if (e.target === overlay) requestCloseModal(); };
   document.removeEventListener('keydown', _modalKeydown, true);
@@ -1258,9 +1264,35 @@ function openModal(title, body, footer = '') {
     else (f[0] || modal).focus();
   }, 0);
 }
+// Reveal the header ⤢ control for modals whose content benefits from a wide,
+// full-screen layout (e.g. the multi-column delivery breakdown).
+function enableModalExpand() {
+  const btn = document.getElementById('modal-expand');
+  if (btn) btn.style.display = 'flex';
+}
+// Toggle the current modal between its default width and full screen.
+function toggleModalFull() {
+  const modal = document.getElementById('modal');
+  const overlay = document.getElementById('modal-overlay');
+  const btn = document.getElementById('modal-expand');
+  if (!modal) return;
+  const full = modal.classList.toggle('modal--full');
+  overlay.classList.toggle('is-full', full);
+  if (btn) {
+    btn.title = full ? 'Exit full screen' : 'Expand to full screen';
+    btn.setAttribute('aria-label', btn.title);
+    // Swap the glyph: outward arrows → inward arrows when expanded.
+    btn.querySelector('path').setAttribute('d', full
+      ? 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7'
+      : 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7');
+  }
+}
 function closeModal() {
   const overlay = document.getElementById('modal-overlay');
   overlay.classList.add('hidden');
+  overlay.classList.remove('is-full');
+  const modal = document.getElementById('modal');
+  if (modal) modal.classList.remove('modal--full');
   overlay.onclick = null;
   document.removeEventListener('keydown', _modalKeydown, true);
   if (_modalPrevFocus && typeof _modalPrevFocus.focus === 'function') {
