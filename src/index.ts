@@ -516,6 +516,27 @@ async function fixCategoryNames(env: Env): Promise<void> {
         AND COALESCE(inv.category,'') <> COALESCE(client_inventory.category,''))`).run();
   } catch { /* non-fatal — tables may not exist yet */ }
   try {
+    // One-time client identity rename: the seed/demo client "Meta" →
+    // "EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED". Idempotent — the WHERE/REPLACE
+    // clauses only match the old strings, so re-runs are no-ops.
+    const NEW_CLIENT_NAME = 'EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED';
+    const OLD_CLIENT_NAMES = ['Meta India', 'Meta Bangalore'];
+    for (const old of OLD_CLIENT_NAMES) {
+      await env.DB.prepare("UPDATE clients SET name=? WHERE name=?").bind(NEW_CLIENT_NAME, old).run();
+      await env.DB.prepare("UPDATE users   SET org=?  WHERE org=?").bind(NEW_CLIENT_NAME, old).run();
+      await env.DB.prepare("UPDATE notifications  SET message=REPLACE(message,?,?) WHERE message LIKE ?").bind(old, NEW_CLIENT_NAME, `%${old}%`).run();
+    }
+    // Standing-order label carrying just the "Meta" prefix (e.g. "Meta Monthly …").
+    await env.DB.prepare("UPDATE standing_orders SET name=REPLACE(name,'Meta ',?) WHERE name LIKE 'Meta %'").bind(NEW_CLIENT_NAME + ' ').run();
+    // Repair login: a client user's org IS its client's name, so mirror the live
+    // client name onto every client-linked user. This fixes any stale login
+    // snapshot (the reported "logged in still shows Meta" case) in one pass.
+    await env.DB.prepare(`UPDATE users SET org=(SELECT c.name FROM clients c WHERE c.id=users.client_id)
+      WHERE client_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM clients c WHERE c.id=users.client_id
+          AND COALESCE(c.name,'') <> '' AND c.name <> COALESCE(users.org,''))`).run();
+  } catch { /* non-fatal — tables may not exist yet */ }
+  try {
     await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
   } catch { /* column already exists */ }
   try {

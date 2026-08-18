@@ -166,14 +166,14 @@ INSERT OR IGNORE INTO users VALUES ('u4','warehouse@4syz.com','SEED:password','w
 INSERT OR IGNORE INTO users VALUES ('u5','delivery.mgr@4syz.com','SEED:password','delivery_manager','Suresh Pillai','4SYZ Platform','SP',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u6','delivery@4syz.com','SEED:password','delivery_exec','Karan Singh','4SYZ Platform','KS',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u7','finance@4syz.com','SEED:password','finance_admin','Meena Iyer','4SYZ Platform','MI',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u8','client.admin@meta.com','SEED:password','client_admin','Rahul Verma','Meta India','RV',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u9','approver@meta.com','SEED:password','client_approver','Divya Nair','Meta India','DN',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u10','user@meta.com','SEED:password','client_user','Amit Patel','Meta India','AP',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u8','client.admin@meta.com','SEED:password','client_admin','Rahul Verma','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','RV',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u9','approver@meta.com','SEED:password','client_approver','Divya Nair','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','DN',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u10','user@meta.com','SEED:password','client_user','Amit Patel','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','AP',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u11','vendor.admin@freshfarms.com','SEED:password','vendor_admin','Sunita Reddy','Fresh Farms','SR',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u12','vendor@freshfarms.com','SEED:password','vendor_user','Mohan Das','Fresh Farms','MD',1,datetime('now'));
 
 -- ── Seed: Clients ──────────────────────────────────────────────────
-INSERT OR IGNORE INTO clients VALUES ('c1','Meta India','cafm@meta.com','Rahul Verma',88,800000,542000,100000,1,datetime('now'));
+INSERT OR IGNORE INTO clients VALUES ('c1','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','cafm@meta.com','Rahul Verma',88,800000,542000,100000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c2','LinkedIn India','admin@linkedin.com','Priti Shah',92,600000,310000,75000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c3','ServiceNow India','ops@servicenow.com','Anil Kumar',74,450000,398000,50000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c4','Sodexo Enterprise','procurement@sodexo.com','Maria D''Souza',95,1200000,720000,200000,1,datetime('now'));
@@ -247,7 +247,7 @@ INSERT OR IGNORE INTO tickets VALUES ('TKT-004','c4','u10','Missing items in DC-
 INSERT OR IGNORE INTO tickets VALUES ('TKT-005','c1','u10','Request for new vendor onboarding','Need organic snack vendor for Bangalore office','MEDIUM','OPEN',datetime('now','-1 day'),NULL);
 
 -- ── Seed: Notifications ────────────────────────────────────────────
-INSERT OR IGNORE INTO notifications VALUES ('n1',NULL,'New order SP-2406-0891 submitted by Meta Bangalore',0,datetime('now','-2 hours'));
+INSERT OR IGNORE INTO notifications VALUES ('n1',NULL,'New order SP-2406-0891 submitted by EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED',0,datetime('now','-2 hours'));
 INSERT OR IGNORE INTO notifications VALUES ('n2',NULL,'PO #PO-0231 dispatched by Fresh Farms — delivery confirmed',0,datetime('now','-18 hours'));
 INSERT OR IGNORE INTO notifications VALUES ('n3',NULL,'Low stock alert: Whiteboard Markers Set (18 units remaining)',0,datetime('now','-1 day'));
 INSERT OR IGNORE INTO notifications VALUES ('n4',NULL,'DC #DC-1182 pending billing — 6 days overdue',1,datetime('now','-3 days'));

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS standing_orders (
 
 -- Seed a sample standing order
 INSERT OR IGNORE INTO standing_orders VALUES (
-  'so1', 'c1', 'Meta Monthly Essentials', 'MONTHLY',
+  'so1', 'c1', 'EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED Monthly Essentials', 'MONTHLY',
   date('now', '+30 days'), date('now', '-30 days'),
   '[{"sku":"SKU001","name":"Premium Coffee Beans","qty":12},{"sku":"SKU005","name":"Tissue Box","qty":50}]',
   1, datetime('now', '-60 days')
