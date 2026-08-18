@@ -482,12 +482,12 @@ function vendorWizardHtml(v) {
     <div class="vw-panel" id="vwp-3">
       <p class="vw-step-title">Products supplied</p>
       <p class="vw-step-desc">${sup
-        ? 'What they sell us — basis for POs. Start typing an item to <b>pick from existing inventory</b> (auto-links the SKU), or type a new name to <b>add a new item</b>. Set MRP to capture the <b>margin on MRP</b>.'
+        ? 'What they sell us — basis for POs. Start typing an item to <b>pick from existing inventory</b> (auto-links the SKU), or type a new name to <b>add a new item</b>. Set MRP to capture the <b>markdown on MRP</b>.'
         : 'List the products you supply — item, pack, MOQ, rate and lead time. New products are submitted for our team to review; they are <b>not added to inventory automatically</b>.'}</p>
       <datalist id="vw-inv-datalist"></datalist>
       <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px">
         <table class="table" style="margin:0">
-          <thead><tr><th>Item</th><th>Pack</th><th style="width:60px">MOQ</th><th style="width:82px">Rate ₹</th>${sup?'<th style="width:82px">MRP ₹</th><th style="width:70px">Margin %</th>':''}<th style="width:60px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
+          <thead><tr><th>Item</th><th>Pack</th><th style="width:60px">MOQ</th><th style="width:82px">Rate ₹</th>${sup?'<th style="width:82px">MRP ₹</th><th style="width:78px">Markdown %</th>':''}<th style="width:60px">Lead d</th><th>SKU</th><th style="width:36px"></th></tr></thead>
           <tbody id="vw-products"></tbody>
         </table>
       </div>
@@ -557,7 +557,7 @@ function vwAddProductRow(p) {
   const tr = document.createElement('tr');
   const mrpCells = sup ? `
     <td><input class="vwp-mrp" type="number" min="0" ${dataInputEl('vwCalcMargin')} style="${cs};text-align:right" value="${p.mrp!=null?p.mrp:''}" placeholder="MRP"></td>
-    <td><input class="vwp-margin" type="number" readonly tabindex="-1" title="Margin on MRP = (MRP − Rate) ÷ MRP" style="${cs};text-align:right;background:var(--surface-2,#f1f5f9)" value="${p.margin_pct!=null?p.margin_pct:''}"></td>` : '';
+    <td><input class="vwp-margin" type="number" readonly tabindex="-1" title="Markdown on MRP = (MRP − Rate) ÷ MRP × 100" style="${cs};text-align:right;background:var(--surface-2,#f1f5f9)" value="${p.margin_pct!=null?p.margin_pct:''}"></td>` : '';
   tr.innerHTML = `
     <td><input class="vwp-name" list="vw-inv-datalist" ${dataInputEl('vwMatchProduct')} style="${cs}" value="${h(p.name||'')}" placeholder="${sup?'Pick or type item':'Item name'}"></td>
     <td><input class="vwp-pack" style="${cs}" value="${h(p.pack||'')}" placeholder="Carton·24"></td>
