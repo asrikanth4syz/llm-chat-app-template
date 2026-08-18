@@ -166,14 +166,14 @@ INSERT OR IGNORE INTO users VALUES ('u4','warehouse@4syz.com','SEED:password','w
 INSERT OR IGNORE INTO users VALUES ('u5','delivery.mgr@4syz.com','SEED:password','delivery_manager','Suresh Pillai','4SYZ Platform','SP',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u6','delivery@4syz.com','SEED:password','delivery_exec','Karan Singh','4SYZ Platform','KS',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u7','finance@4syz.com','SEED:password','finance_admin','Meena Iyer','4SYZ Platform','MI',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u8','client.admin@meta.com','SEED:password','client_admin','Rahul Verma','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','RV',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u9','approver@meta.com','SEED:password','client_approver','Divya Nair','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','DN',1,datetime('now'));
-INSERT OR IGNORE INTO users VALUES ('u10','user@meta.com','SEED:password','client_user','Amit Patel','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','AP',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u8','client.admin@emeralde.in','SEED:password','client_admin','Rahul Verma','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','RV',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u9','approver@emeralde.in','SEED:password','client_approver','Divya Nair','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','DN',1,datetime('now'));
+INSERT OR IGNORE INTO users VALUES ('u10','user@emeralde.in','SEED:password','client_user','Amit Patel','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','AP',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u11','vendor.admin@freshfarms.com','SEED:password','vendor_admin','Sunita Reddy','Fresh Farms','SR',1,datetime('now'));
 INSERT OR IGNORE INTO users VALUES ('u12','vendor@freshfarms.com','SEED:password','vendor_user','Mohan Das','Fresh Farms','MD',1,datetime('now'));
 
 -- ── Seed: Clients ──────────────────────────────────────────────────
-INSERT OR IGNORE INTO clients VALUES ('c1','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','cafm@meta.com','Rahul Verma',88,800000,542000,100000,1,datetime('now'));
+INSERT OR IGNORE INTO clients VALUES ('c1','EMERALDE GLOBAL SOLUTIONS PRIVATE LIMITED','cafm@emeralde.in','Rahul Verma',88,800000,542000,100000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c2','LinkedIn India','admin@linkedin.com','Priti Shah',92,600000,310000,75000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c3','ServiceNow India','ops@servicenow.com','Anil Kumar',74,450000,398000,50000,1,datetime('now'));
 INSERT OR IGNORE INTO clients VALUES ('c4','Sodexo Enterprise','procurement@sodexo.com','Maria D''Souza',95,1200000,720000,200000,1,datetime('now'));

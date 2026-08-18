@@ -528,6 +528,12 @@ async function fixCategoryNames(env: Env): Promise<void> {
     }
     // Standing-order label carrying just the "Meta" prefix (e.g. "Meta Monthly …").
     await env.DB.prepare("UPDATE standing_orders SET name=REPLACE(name,'Meta ',?) WHERE name LIKE 'Meta %'").bind(NEW_CLIENT_NAME + ' ').run();
+    // Migrate the client's login/contact emails off the old @meta.com domain
+    // to @emeralde.in (e.g. user@meta.com → user@emeralde.in). Idempotent — only
+    // rows still on the old domain match. These are login IDs, so affected users
+    // sign in with the new address; the password is unchanged.
+    await env.DB.prepare("UPDATE users   SET email=REPLACE(email,'@meta.com','@emeralde.in') WHERE email LIKE '%@meta.com'").run();
+    await env.DB.prepare("UPDATE clients SET contact_email=REPLACE(contact_email,'@meta.com','@emeralde.in') WHERE contact_email LIKE '%@meta.com'").run();
     // Repair login: a client user's org IS its client's name, so mirror the live
     // client name onto every client-linked user. This fixes any stale login
     // snapshot (the reported "logged in still shows Meta" case) in one pass.
