@@ -1796,6 +1796,32 @@ describe("Nav badge counts", () => {
   });
 });
 
+// ── Reorder skip-open-PO guard ───────────────────────────────────────
+describe("from-demand skip_open_po guard", () => {
+  const rdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await rdb.prepare("INSERT OR IGNORE INTO vendors (id,name,category,active) VALUES (?,?,?,1)").bind("RV1", "ReVendor", "Grocery").run();
+    await rdb.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,1)").bind("RSK-1", "ReItem", "Grocery", 10, 0).run();
+    // An open (SENT) PO already covers RSK-1.
+    await rdb.prepare("INSERT INTO purchase_orders (id,vendor_id,status,grand_total) VALUES (?,?,?,?)").bind("RPO-1", "RV1", "SENT", 100).run();
+    await rdb.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)").bind("RPI-1", "RPO-1", "RSK-1", "ReItem", 10, 10, 100).run();
+  });
+
+  it("skips a SKU that already has an open PO (no duplicate re-order)", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "RSK-1", qty: 10 }], skip_open_po: true, source: "reorder" }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { pos: unknown[]; skipped_open: string[] };
+    expect(d.skipped_open).toContain("RSK-1");
+    expect(d.pos.length).toBe(0);
+  });
+
+  it("without the flag it does not report skips (manual override path)", async () => {
+    const res = await post("/api/purchase-orders/from-demand", { items: [{ sku: "RSK-1", qty: 10 }], source: "reorder" }, adminToken);
+    const d = await res.json() as { skipped_open?: string[] };
+    expect((d.skipped_open || []).length).toBe(0);
+  });
+});
+
 // ── Location zones (admin-managed) ───────────────────────────────────
 describe("Location zones", () => {
   it("GET /api/zones returns the default set when unset", async () => {

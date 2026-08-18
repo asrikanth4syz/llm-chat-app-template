@@ -1186,15 +1186,16 @@ async function raiseAllReorderPOs() {
   if (!items.length) { showToast('Nothing below reorder level.', 'info'); return; }
   const res = await api('/purchase-orders/from-demand', {
     method: 'POST',
-    body: JSON.stringify({ items, source: 'reorder', notes: 'Reorder — SKUs below reorder level' })
+    body: JSON.stringify({ items, source: 'reorder', notes: 'Reorder — SKUs below reorder level', skip_open_po: true })
   });
   if (!res) return;
-  const pos = res.pos || [], uns = res.unsourced || [];
+  const pos = res.pos || [], uns = res.unsourced || [], skipped = res.skipped_open || [];
   const vendors = new Set(pos.map(p => p.vendor_id)).size;
+  if (!pos.length && skipped.length) { showToast(`All below-reorder items already have an open PO — nothing re-raised.`, 'info'); return; }
   showToast(pos.length
-    ? `${pos.length} PO${pos.length === 1 ? '' : 's'} raised across ${vendors} vendor${vendors === 1 ? '' : 's'}${uns.length ? ` · ${uns.length} item(s) had no vendor` : ''}`
+    ? `${pos.length} PO${pos.length === 1 ? '' : 's'} raised across ${vendors} vendor${vendors === 1 ? '' : 's'}${skipped.length ? ` · ${skipped.length} already on order` : ''}${uns.length ? ` · ${uns.length} no vendor` : ''}`
     : 'No POs created — items had no resolved vendor/price', pos.length ? 'success' : 'error');
-  navigate('procurement');
+  if (pos.length) navigate('procurement');
 }
 
 async function confirmReorder(sku, name) {

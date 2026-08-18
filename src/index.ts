@@ -2917,10 +2917,28 @@ async function handlePOFromDemand(request: Request, env: Env): Promise<Response>
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (isExternalRole(user!.role)) return json({error:"Forbidden"}, 403);
-  const body = await request.json() as {items:Array<{sku:string;qty:number}>; source?:string; notes?:string};
+  const body = await request.json() as {items:Array<{sku:string;qty:number}>; source?:string; notes?:string; skip_open_po?:boolean};
   if (!body.items?.length) return json({error:"items required"}, 400);
 
-  const {groups, unsourced} = await resolveSourcing(env, body.items);  // non-compliant vendors already excluded (G9)
+  // Replenishment guard (skip_open_po): never re-raise for a SKU that already has
+  // an open, unreceived PO — otherwise repeated "Raise POs for all" clicks
+  // duplicate-order the same items. Same open-status set as the auto-reorder.
+  let items = body.items;
+  const skippedOpen: string[] = [];
+  if (body.skip_open_po) {
+    const { results: openRows } = await env.DB.prepare(
+      `SELECT DISTINCT pi.sku FROM po_items pi JOIN purchase_orders p ON p.id=pi.po_id
+       WHERE p.status IN ('PENDING_APPROVAL','SENT','ACCEPTED','DISPATCHED','PARTIALLY_RECEIVED')`
+    ).all() as { results: Array<{sku:string}> };
+    const openSet = new Set(openRows.map(r => String(r.sku)));
+    items = items.filter(it => { if (openSet.has(it.sku)) { skippedOpen.push(it.sku); return false; } return true; });
+    if (!items.length) {
+      return json({ pos: [], unsourced: [], skipped_open: skippedOpen,
+        note: "All requested items already have an open PO — nothing raised." }, 200);
+    }
+  }
+
+  const {groups, unsourced} = await resolveSourcing(env, items);  // non-compliant vendors already excluded (G9)
   const label = body.source === "brand" ? "brand consolidation" : "consolidated demand";
   const threshold = await poApprovalThreshold(env);
   const pos: Array<{id:string; vendor_id:string; vendor_name:string; grand_total:number; line_count:number; status:string}> = [];
@@ -2949,7 +2967,7 @@ async function handlePOFromDemand(request: Request, env: Env): Promise<Response>
     await audit(env, user, "CREATE", "purchase_order", id, undefined, `from_demand vendor:${g.vendor_id} total:${g.grand_total} status:${status}`);
     pos.push({id, vendor_id:g.vendor_id, vendor_name:g.vendor_name, grand_total:g.grand_total, line_count:g.lines.length, status});
   }
-  return json({pos, unsourced}, 201);
+  return json({pos, unsourced, skipped_open: skippedOpen}, 201);
 }
 
 // GET/PATCH /api/po-approval-threshold — the value (₹) above which POs are held.
@@ -4480,7 +4498,7 @@ async function handleReceivablePO(request: Request, env: Env, path: string): Pro
   const po = await env.DB.prepare("SELECT p.*,v.name as vendor_name FROM purchase_orders p LEFT JOIN vendors v ON p.vendor_id=v.id WHERE p.id=?").bind(id).first() as Record<string,unknown>|null;
   if (!po) return json({error:"Not found"}, 404);
   const {results} = await env.DB.prepare(
-    "SELECT pi.id, pi.sku, pi.name, pi.qty, COALESCE(pi.qty_received,0) as qty_received, i.track_batch FROM po_items pi LEFT JOIN inventory i ON i.sku=pi.sku WHERE pi.po_id=?"
+    "SELECT pi.id, pi.sku, pi.name, pi.qty, pi.unit_price, pi.total, COALESCE(pi.qty_received,0) as qty_received, i.track_batch FROM po_items pi LEFT JOIN inventory i ON i.sku=pi.sku WHERE pi.po_id=?"
   ).bind(id).all();
   const lines = results.map(r => ({
     ...r, remaining: Math.max(0, Number(r.qty) - Number(r.qty_received || 0)),

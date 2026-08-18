@@ -508,6 +508,14 @@ button { font-family: var(--font); cursor: pointer; }
    TABLES
    ═══════════════════════════════════════════════════════════ */
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Procurement summary tiles + PO rows — clearly interactive, ERP-grade. */
+.po-tile { border-radius: 12px; padding: 16px; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+.po-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(16,40,50,.10); }
+.po-tile:focus-visible { outline: 2px solid var(--po-accent, #0d9488); outline-offset: 2px; }
+.po-tile.active { border-color: var(--po-accent, #0d9488) !important; box-shadow: inset 0 0 0 2px var(--po-accent, #0d9488), 0 6px 16px rgba(16,40,50,.10); }
+.po-row { cursor: pointer; transition: background .12s ease; }
+.po-row:hover { background: var(--sidebar-hover, #f8fafc); }
+.po-row:focus-visible { outline: 2px solid var(--primary, #0d9488); outline-offset: -2px; }
 .table {
   width: 100%; border-collapse: collapse;
   font-size: .82rem;

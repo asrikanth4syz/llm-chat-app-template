@@ -1316,7 +1316,9 @@ document.addEventListener('click', _dispatchAct);
 document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
   const el = e.target;
-  if (el && el.classList && el.classList.contains('nav-item') && el.hasAttribute('data-act')) {
+  // Enter/Space activates any non-native control we've marked role="button"
+  // with a data-act (sidebar rows, procurement tiles, …).
+  if (el && el.matches && el.matches('[role="button"][data-act]:not(button):not(a)')) {
     e.preventDefault();
     _dispatchAct(e);
   }
