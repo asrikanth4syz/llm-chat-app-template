@@ -847,7 +847,7 @@ async function renderDelivery(el) {
         <table class="table" id="pod-scan-table">
           <thead><tr>
             <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
-            <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
+            <th>POD Upload</th><th>DC Scan</th><th>Barcode</th><th>Overall Status</th><th>Documents</th>
           </tr></thead>
           <tbody>
             ${delivered.map(dc => podScanRow(dc)).join('')}
@@ -1041,7 +1041,7 @@ async function switchDeliveryTab(tab, btn) {
           <table class="table" id="pod-scan-table">
             <thead><tr>
               <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
-              <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
+              <th>POD Upload</th><th>DC Scan</th><th>Barcode</th><th>Overall Status</th><th>Documents</th>
             </tr></thead>
             <tbody>
               ${delivered.map(dc => podScanRow(dc)).join('')}
@@ -1090,6 +1090,24 @@ async function switchDeliveryTab(tab, btn) {
 }
 
 // Shared row renderer for POD & Scans table
+// Normalise an id/barcode for matching: uppercase, alphanumerics only.
+function _dcNorm(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+// True when a challan carries a scanned barcode that matches its DC number.
+function dcBarcodeVerified(dc) {
+  const bc = _dcNorm(dc.scan_barcode); if (!bc) return false;
+  const idn = _dcNorm(dc.dc_number || dc.id); if (!idn) return false;
+  return bc === idn || bc.includes(idn) || idn.includes(bc);
+}
+// Barcode cell: the scanned code plus a Verified / Unmatched badge, or a dash.
+function dcBarcodeCell(dc) {
+  const raw = (dc.scan_barcode || '').trim();
+  if (!raw) return '<span style="color:var(--text-muted);font-size:.8rem">—</span>';
+  const code = `<div style="font-family:monospace;font-size:.75rem;margin-top:2px">${h(raw)}</div>`;
+  return dcBarcodeVerified(dc)
+    ? `<span class="badge badge-success" title="Scanned barcode matches the DC number">✓ Verified</span>${code}`
+    : `<span class="badge" style="background:var(--amber-bg);color:var(--amber-text)" title="Scanned barcode does not match the DC number">⚠ Unmatched</span>${code}`;
+}
+
 function podScanRow(dc) {
   const podOk  = !!dc.pod_uploaded;
   const scanOk = !!dc.dc_scan_uploaded;
@@ -1097,7 +1115,7 @@ function podScanRow(dc) {
   const podEff = podOk || scanOk;
   const complete = podEff && scanOk;
   const docCount = dc.doc_count || 0;
-  const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')).toLowerCase();
+  const search = (dc.id+' '+(dc.order_id||'')+' '+(dc.client_name||'')+' '+(dc.driver_name||'')+' '+(dc.scan_barcode||'')).toLowerCase();
 
   const podCell = podOk
     ? `<span class="badge badge-success">✓ Uploaded</span> <button class="btn btn-secondary btn-sm" style="margin-left:4px" ${dataAct('markPOD', dc.id)}>Re-upload</button>`
@@ -1127,6 +1145,7 @@ function podScanRow(dc) {
     <td>${fmtDate(dc.delivered_at)}</td>
     <td>${podCell}</td>
     <td>${scanCell}</td>
+    <td>${dcBarcodeCell(dc)}</td>
     <td>${statusCell}</td>
     <td>${docsCell}</td>
   </tr>`;
@@ -1765,6 +1784,8 @@ async function renderPODScans(el) {
   const podDone  = delivered.filter(d => d.pod_uploaded).length;
   const scanDone = delivered.filter(d => d.dc_scan_uploaded).length;
   const pending  = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
+  const withBc   = delivered.filter(d => (d.scan_barcode || '').trim());
+  const bcVerified = withBc.filter(dcBarcodeVerified).length;
   const tile = (label, val, sub, color) => `
     <div class="card" style="padding:14px 16px;border-top:3px solid ${color}">
       <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">${label}</div>
@@ -1777,6 +1798,7 @@ async function renderPODScans(el) {
       ${tile('POD Uploaded', `${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`, '', podDone===delivered.length?'var(--success)':'var(--warning)')}
       ${tile('DC Scanned', `${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`, '', scanDone===delivered.length?'var(--success)':'var(--warning)')}
       ${tile('Pending Action', pending, 'POD or scan missing', pending?'var(--danger)':'var(--success)')}
+      ${withBc.length ? tile('Barcodes Verified', `${bcVerified} <span style="font-size:.9rem;color:var(--text-muted)">/ ${withBc.length}</span>`, withBc.length-bcVerified?`${withBc.length-bcVerified} unmatched`:'all match DC #', bcVerified===withBc.length?'var(--success)':'var(--warning)') : ''}
     </div>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <div style="position:relative;flex:1;max-width:400px">
@@ -1790,7 +1812,7 @@ async function renderPODScans(el) {
       <table class="table" id="pod-scan-table">
         <thead><tr>
           <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
-          <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
+          <th>POD Upload</th><th>DC Scan</th><th>Barcode</th><th>Overall Status</th><th>Documents</th>
         </tr></thead>
         <tbody>${delivered.map(dc => podScanRow(dc)).join('')}</tbody>
       </table>
