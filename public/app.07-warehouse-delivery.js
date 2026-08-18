@@ -1319,11 +1319,27 @@ function uploadDCDocModal(dcId, docType) {
   );
 }
 
-function scanDCDocModal(dcId) {
+async function scanDCDocModal(dcId) {
   APP._scanPages = []; // [{dataUrl, name}]
+  // Barcode step is a configurable parameter (Settings ▸ Operations), off by
+  // default. Resolve the flag once and cache it.
+  if (APP._dcBarcodeCapture === undefined) {
+    try { const s = await api('/settings'); APP._dcBarcodeCapture = !!(s && s.dc_barcode_capture); }
+    catch { APP._dcBarcodeCapture = false; }
+  }
+  const bc = APP._dcBarcodeCapture;
   openModal(`Scan POD Document — DC #${dcId}`,
     `<input type="file" id="dc-scan-file" accept="image/*" capture="environment"
        style="display:none" ${dataChangeEl('onScanCapturedEl', dcId)}>
+
+     ${bc ? `<div style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--primary-border);border-radius:10px;background:var(--primary-light)">
+       <div style="font-weight:600;font-size:.85rem;margin-bottom:8px">DC barcode <span style="color:var(--text-muted);font-weight:400">(optional)</span></div>
+       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+         <input type="text" id="dc-barcode-input" placeholder="Scan or type the challan barcode" autocomplete="off" spellcheck="false" style="flex:1 1 200px;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:.82rem">
+         ${('BarcodeDetector' in window) ? `<button class="btn btn-secondary btn-sm" id="dc-bc-btn" ${dataAct('dcScanBarcodeStart')}>📷 Scan barcode</button>` : ''}
+       </div>
+       <div id="dc-bc-cam" hidden style="margin-top:10px;max-width:320px;aspect-ratio:4/3;background:#000;border-radius:8px;overflow:hidden"><video id="dc-bc-video" playsinline muted style="width:100%;height:100%;object-fit:cover"></video></div>
+     </div>` : ''}
 
      <!-- captured pages thumbnails (hidden until first page) -->
      <div id="scan-pages-wrap" style="display:none;margin-bottom:14px">
@@ -1358,6 +1374,47 @@ function scanDCDocModal(dcId) {
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>`
   );
+}
+
+// One-shot barcode read for the (feature-flagged) DC barcode field: opens the
+// camera, fills the field with the first code, then stops.
+async function dcScanBarcodeStart() {
+  if (!('BarcodeDetector' in window)) return;
+  const cam = document.getElementById('dc-bc-cam'), video = document.getElementById('dc-bc-video');
+  const btn = document.getElementById('dc-bc-btn'), input = document.getElementById('dc-barcode-input');
+  if (!video) return;
+  if (btn && btn.dataset.on === '1') { if (typeof window._scanStop === 'function') window._scanStop(); return; }
+  let fmts = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','codabar','qr_code'];
+  try { if (BarcodeDetector.getSupportedFormats) { const sup = await BarcodeDetector.getSupportedFormats(); const f = fmts.filter(x => sup.includes(x)); fmts = f.length ? f : sup; } } catch (e) {}
+  let detector; try { detector = new BarcodeDetector({ formats: fmts }); } catch (e) { showToast('Scanner unavailable — type the code', 'error'); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
+  catch (e) { showToast('Camera blocked — type the code or use a scanner gun', 'error'); return; }
+  video.srcObject = stream; await video.play().catch(() => {});
+  if (cam) cam.hidden = false;
+  if (btn) { btn.textContent = 'Stop'; btn.dataset.on = '1'; }
+  const state = { running: true, raf: 0 };
+  const stop = () => {
+    state.running = false; if (state.raf) cancelAnimationFrame(state.raf);
+    try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    if (video) video.srcObject = null; if (cam) cam.hidden = true;
+    if (btn) { btn.textContent = '📷 Scan barcode'; btn.dataset.on = ''; }
+  };
+  window._scanStop = stop;
+  const loop = async () => {
+    if (!state.running) return;
+    try {
+      const codes = await detector.detect(video);
+      if (codes && codes.length && codes[0].rawValue) {
+        if (input) input.value = codes[0].rawValue;
+        if (typeof scanBeep === 'function') scanBeep(880, 60);
+        showToast(`Barcode captured: ${codes[0].rawValue}`, 'success');
+        stop(); return;
+      }
+    } catch (e) { /* keep scanning */ }
+    state.raf = requestAnimationFrame(loop);
+  };
+  loop();
 }
 
 function onScanCaptured(input, dcId) {
@@ -1421,6 +1478,7 @@ async function uploadAllScanPages(dcId) {
 
   const btn = document.getElementById('dc-scan-submit');
   if (btn) { btn.disabled = true; btn.textContent = `Uploading ${pages.length} page(s)…`; }
+  const barcode = (document.getElementById('dc-barcode-input')?.value || '').trim() || undefined;
 
   let ok = 0;
   for (let i = 0; i < pages.length; i++) {
@@ -1436,7 +1494,7 @@ async function uploadAllScanPages(dcId) {
     });
     const result = await api(`/delivery-challans/${dcId}/scan/upload`, {
       method: 'POST',
-      body: JSON.stringify({ filename: `DC${dcId}_scan_p${i+1}.jpg`, mime_type: file.type, content_b64: b64, file_size: file.size })
+      body: JSON.stringify({ filename: `DC${dcId}_scan_p${i+1}.jpg`, mime_type: file.type, content_b64: b64, file_size: file.size, barcode })
     });
     if (result) ok++;
     if (btn) btn.textContent = `Uploading… ${i+1}/${pages.length}`;
@@ -1692,9 +1750,52 @@ function injectDelivHubCss() {
 const DELIV_TABS = [
   { k:'today',    label:"Today's Runs", fn:'renderTodaysSchedule' },
   { k:'list',     label:'Deliveries',   fn:'renderDelivery' },
+  { k:'pod',      label:'POD & Scans',  fn:'renderPODScans' },
   { k:'calendar', label:'Calendar',     fn:'renderDeliveryCalendar' },
   { k:'routes',   label:'Routes',       fn:'renderDeliveryRoutes' },
 ];
+
+// Standalone POD & Scans report (also reachable as a filter inside the challan
+// list). KPI tiles + a searchable table with per-DC Overall Status.
+async function renderPODScans(el) {
+  const dcs = await api('/delivery-challans');
+  if (!dcs) { el.innerHTML = `<div class="card" style="padding:32px;text-align:center;color:var(--danger)">Failed to load delivery challans.</div>`; return; }
+  const delivered = dcs.filter(d => d.status === 'DELIVERED');
+  if (!delivered.length) { el.innerHTML = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📄</div>No delivered challans yet</div>`; return; }
+  const podDone  = delivered.filter(d => d.pod_uploaded).length;
+  const scanDone = delivered.filter(d => d.dc_scan_uploaded).length;
+  const pending  = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
+  const tile = (label, val, sub, color) => `
+    <div class="card" style="padding:14px 16px;border-top:3px solid ${color}">
+      <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">${label}</div>
+      <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${val}</div>
+      ${sub?`<div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">${sub}</div>`:''}
+    </div>`;
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+      ${tile('Total Delivered', delivered.length, '', 'var(--primary)')}
+      ${tile('POD Uploaded', `${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`, '', podDone===delivered.length?'var(--success)':'var(--warning)')}
+      ${tile('DC Scanned', `${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`, '', scanDone===delivered.length?'var(--success)':'var(--warning)')}
+      ${tile('Pending Action', pending, 'POD or scan missing', pending?'var(--danger)':'var(--success)')}
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="position:relative;flex:1;max-width:400px">
+        <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" id="pod-search-input" placeholder="Search DC #, order, client, driver…" ${dataInputVal('filterPODTable')}
+          style="width:100%;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;outline:none">
+      </div>
+      <span id="pod-result-count" style="font-size:.82rem;color:var(--text-muted)"></span>
+    </div>
+    <div class="card"><div class="table-wrap">
+      <table class="table" id="pod-scan-table">
+        <thead><tr>
+          <th>DC #</th><th>Order</th><th>Client</th><th>Driver</th><th>Delivered At</th>
+          <th>POD Upload</th><th>DC Scan</th><th>Overall Status</th><th>Documents</th>
+        </tr></thead>
+        <tbody>${delivered.map(dc => podScanRow(dc)).join('')}</tbody>
+      </table>
+    </div></div>`;
+}
 // Match each role's prior menu access so the hub never widens permissions:
 // super_admin kept all four (incl. Routes); ops/delivery managers had Today +
 // List + Calendar; delivery execs only saw the challan list.

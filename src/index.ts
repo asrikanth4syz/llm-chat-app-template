@@ -581,7 +581,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS kpi_daily (
       day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
-  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT"]) {
+  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT", "scan_barcode TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -3518,7 +3518,7 @@ async function handleUploadDCDoc(request: Request, env: Env, path: string, docTy
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/")[3];
-  const body = await request.json() as { filename?: string; mime_type?: string; content_b64: string; file_size?: number };
+  const body = await request.json() as { filename?: string; mime_type?: string; content_b64: string; file_size?: number; barcode?: string };
   if (!body.content_b64) return json({ error: "content_b64 required" }, 400);
   if (body.file_size && body.file_size > 5 * 1024 * 1024) return json({ error: "File too large (max 5 MB)" }, 400);
 
@@ -3541,6 +3541,9 @@ async function handleUploadDCDoc(request: Request, env: Env, path: string, docTy
     ? "UPDATE delivery_challans SET dc_scan_uploaded=1, pod_uploaded=1 WHERE id=?"
     : "UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?";
   await env.DB.prepare(updateSql).bind(id).run();
+  // Optional scanned DC barcode (feature-flagged in the UI) — record when sent.
+  const bc = String(body.barcode || "").trim();
+  if (bc) { try { await env.DB.prepare("UPDATE delivery_challans SET scan_barcode=? WHERE id=?").bind(bc, id).run(); } catch { /* column not yet migrated */ } }
   await audit(env, user, docType === "pod" ? "POD_UPLOAD" : "DC_SCAN_UPLOAD", "delivery_challan", id, undefined, body.filename||"file");
   return json({ id, doc_type: docType, uploaded: true });
 }
@@ -4897,6 +4900,7 @@ async function handleGetSettings(request: Request, env: Env): Promise<Response> 
     zoho_configured: !!(env.ZOHO_BOOKS_ORG_ID && env.ZOHO_BOOKS_CLIENT_ID),
     zoho_inventory_configured: zohoInvConfigured(env),
     zoho_inventory_enabled: (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true",
+    dc_barcode_capture: (await getConfig(env, "dc_barcode_capture", "false")) === "true",
     twilio_configured: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN),
     msg91_configured: !!env.MSG91_AUTH_KEY,
     clients: clients.results,
@@ -4918,6 +4922,10 @@ async function handleSaveSettings(request: Request, env: Env): Promise<Response>
       await env.DB.prepare("UPDATE clients SET monthly_budget=?,approval_threshold=? WHERE id=?")
         .bind(cb.monthly_budget, cb.approval_threshold, cb.id).run();
     }
+  }
+  // Feature flag: barcode-scan step on DC (POD) capture. Off by default.
+  if (body.dc_barcode_capture !== undefined) {
+    await setConfig(env, "dc_barcode_capture", body.dc_barcode_capture ? "true" : "false", user!.sub);
   }
   await audit(env, user, "UPDATE", "settings", "global", undefined, JSON.stringify(Object.keys(body)));
   return json({ok:true, message:"Settings saved. Env var changes require a re-deploy."});

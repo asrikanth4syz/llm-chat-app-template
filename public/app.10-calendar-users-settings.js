@@ -777,6 +777,7 @@ const SETTINGS_NAV = [
   { id:'auth',          icon:'🔐', label:'Auth & OTP',       desc:'OTP, MFA, JWT session' },
   { id:'notifications', icon:'🔔', label:'Notifications',    desc:'Email & SMS config' },
   { id:'integrations',  icon:'🔗', label:'Integrations',     desc:'Zoho Books & Inventory' },
+  { id:'operations',    icon:'📦', label:'Operations',        desc:'Warehouse & delivery options' },
   { id:'budgets',       icon:'💰', label:'Client Budgets',   desc:'Monthly budgets & approval thresholds' },
   { id:'approval',      icon:'✅', label:'Approval Rules',   desc:'Order approval thresholds' },
   { id:'warehouses',    icon:'🏭', label:'Warehouses',       desc:'Manage warehouse config' },
@@ -966,6 +967,27 @@ async function settingsTab(tab, btn) {
             <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho-inventory/webhook')}>Copy</button>
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Point Zoho Inventory stock-update webhooks here to keep our stock in sync. Payload: <code>{ items: [{ sku, stock }] }</code></div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  else if (tab === 'operations') {
+    const s = await api('/settings') || {};
+    APP._dcBarcodeCapture = !!s.dc_barcode_capture;
+    el.innerHTML = `
+    <div class="card">
+      <div class="card-header"><span>Warehouse & Delivery</span></div>
+      <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="max-width:60ch">
+            <div style="font-weight:600;font-size:.9rem">Barcode scan on DC capture</div>
+            <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px">Adds an optional barcode-scan step when a delivery-challan (POD) document is captured, recording the scanned code against the challan. <b>Off by default</b> — turn it on when you're ready to roll out barcoded DCs; the photo capture works either way.</div>
+          </div>
+          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap;font-size:.85rem;font-weight:600">
+            <input type="checkbox" id="set-dc-barcode" ${s.dc_barcode_capture?'checked':''} ${dataChangeEl('saveDcBarcodeSetting')} style="width:18px;height:18px;accent-color:var(--primary);cursor:pointer">
+            <span id="set-dc-barcode-label">${s.dc_barcode_capture?'Enabled':'Disabled'}</span>
+          </label>
         </div>
       </div>
     </div>`;
@@ -1315,6 +1337,20 @@ async function saveHsnGstRate() {
 
 async function saveSettings(section) {
   showToast('These settings are controlled by environment variables — update wrangler.jsonc and redeploy to change them.', 'warning');
+}
+
+// Persist the "barcode scan on DC capture" feature flag (super-admin toggle).
+async function saveDcBarcodeSetting(el) {
+  const enabled = !!el.checked;
+  const res = await api('/settings', { method:'POST', body: JSON.stringify({ dc_barcode_capture: enabled }) });
+  if (res) {
+    APP._dcBarcodeCapture = enabled;
+    const lbl = document.getElementById('set-dc-barcode-label');
+    if (lbl) lbl.textContent = enabled ? 'Enabled' : 'Disabled';
+    showToast(`Barcode scan on DC capture ${enabled ? 'enabled' : 'disabled'}`);
+  } else {
+    el.checked = !enabled;   // revert on failure
+  }
 }
 
 async function saveClientBudgets() {

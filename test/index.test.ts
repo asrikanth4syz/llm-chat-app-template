@@ -302,6 +302,21 @@ describe("Inventory", () => {
     expect(res.status).toBe(403);
   });
 
+  it("Settings: dc_barcode_capture flag round-trips and defaults off", async () => {
+    const before = await (await get("/api/settings", adminToken)).json() as { dc_barcode_capture: boolean };
+    expect(before.dc_barcode_capture).toBe(false);
+    const save = await post("/api/settings", { dc_barcode_capture: true }, adminToken);
+    expect(ok(save.status)).toBe(true);
+    const after = await (await get("/api/settings", adminToken)).json() as { dc_barcode_capture: boolean };
+    expect(after.dc_barcode_capture).toBe(true);
+    await post("/api/settings", { dc_barcode_capture: false }, adminToken); // reset
+  });
+
+  it("Settings: non-super-admin cannot change settings", async () => {
+    const res = await post("/api/settings", { dc_barcode_capture: true }, clientToken);
+    expect(res.status).toBe(403);
+  });
+
   it("GET /api/inventory — client with no catalog assignments sees all items (fallback)", async () => {
     const res = await get("/api/inventory", clientToken);
     expect(res.status).toBe(200);
