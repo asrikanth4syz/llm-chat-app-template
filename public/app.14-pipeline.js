@@ -11,7 +11,9 @@ function injectPipeCss() {
   .pipe { --pk:#0C8E6D; --pk2:#1E7FB8; --pw:#B5731A; --pb:#C6472A;
           --pk-s:#E2F3EC; --pk2-s:#E4F0F8; --pw-s:#FBF0DB; --pb-s:#FBE7E1; }
   .pipe-kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:14px; }
-  @media (max-width:820px){ .pipe-kpis{ grid-template-columns:repeat(2,1fr); } }
+  @media (max-width:1100px){ .pipe-kpis{ grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:620px){ .pipe-kpis{ grid-template-columns:repeat(2,1fr); gap:10px; } }
+  @media (max-width:620px){ .pipe-kpi .n{ font-size:1.3rem; } }
   .pipe-kpi { background:var(--card,#fff); border:1px solid var(--border,#e4eaef); border-radius:12px; padding:13px 15px; }
   .pipe-kpi .n { font-size:1.5rem; font-weight:800; letter-spacing:-.03em; line-height:1.1; }
   .pipe-kpi .l { font-size:.74rem; color:var(--text-muted,#5c7180); margin-top:2px; }
@@ -22,9 +24,14 @@ function injectPipeCss() {
   .pipe-flowbar { display:flex; gap:3px; height:24px; }
   .pipe-flowbar .fs { border-radius:4px; background:var(--pk-s); color:var(--pk); display:grid; place-items:center; font-size:.72rem; font-weight:700; min-width:24px; font-family:ui-monospace,monospace; }
   .pipe-flowbar .fs.hot { background:var(--pw-s); color:var(--pw); box-shadow:inset 0 0 0 1px var(--pw); }
-  .pipe-board-scroll { overflow-x:auto; padding-bottom:6px; }
+  .pipe-board-scroll { overflow-x:auto; overflow-y:hidden; padding-bottom:8px; -webkit-overflow-scrolling:touch; scrollbar-width:thin; scroll-snap-type:x proximity; }
+  .pipe-board-scroll::-webkit-scrollbar { height:8px; }
+  .pipe-board-scroll::-webkit-scrollbar-thumb { background:var(--border,#cbd8de); border-radius:6px; }
   .pipe-board { display:flex; gap:12px; min-width:1120px; align-items:flex-start; }
-  .pipe-col { flex:1 1 0; min-width:158px; }
+  .pipe-col { flex:1 1 0; min-width:158px; scroll-snap-align:start; }
+  /* Tablet/phone: fixed comfortable column width so the board swipes cleanly. */
+  @media (max-width:900px){ .pipe-board{ min-width:0; } .pipe-col{ flex:0 0 78vw; max-width:300px; min-width:220px; } }
+  @media (max-width:520px){ .pipe-col{ flex:0 0 84vw; } }
   .pipe-col h4 { margin:0; font-size:.88rem; font-weight:700; display:flex; align-items:center; gap:6px; }
   .pipe-col .stgno { font-family:ui-monospace,monospace; font-size:.62rem; color:var(--text-muted,#8397a3); font-weight:700; }
   .pipe-col .cnt { margin-left:auto; font-family:ui-monospace,monospace; font-size:.74rem; font-weight:700; background:var(--bg,#f4f7f9); border:1px solid var(--border,#e4eaef); border-radius:6px; padding:0 7px; }
