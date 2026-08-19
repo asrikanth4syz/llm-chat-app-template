@@ -1355,7 +1355,7 @@ async function scanDCDocModal(dcId) {
        <div style="font-weight:600;font-size:.85rem;margin-bottom:8px">DC barcode <span style="color:var(--text-muted);font-weight:400">(optional)</span></div>
        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
          <input type="text" id="dc-barcode-input" placeholder="Scan or type the challan barcode" autocomplete="off" spellcheck="false" style="flex:1 1 200px;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:.82rem">
-         ${('BarcodeDetector' in window) ? `<button class="btn btn-secondary btn-sm" id="dc-bc-btn" ${dataAct('dcScanBarcodeStart')}>📷 Scan barcode</button>` : ''}
+         <button class="btn btn-secondary btn-sm" id="dc-bc-btn" ${dataAct('dcScanBarcodeStart')}>📷 Scan barcode</button>
        </div>
        <div id="dc-bc-cam" hidden style="margin-top:10px;max-width:320px;aspect-ratio:4/3;background:#000;border-radius:8px;overflow:hidden"><video id="dc-bc-video" playsinline muted style="width:100%;height:100%;object-fit:cover"></video></div>
      </div>` : ''}
@@ -1396,44 +1396,32 @@ async function scanDCDocModal(dcId) {
 }
 
 // One-shot barcode read for the (feature-flagged) DC barcode field: opens the
-// camera, fills the field with the first code, then stops.
+// camera (native or ZXing fallback), fills the field with the first code, stops.
 async function dcScanBarcodeStart() {
-  if (!('BarcodeDetector' in window)) return;
   const cam = document.getElementById('dc-bc-cam'), video = document.getElementById('dc-bc-video');
   const btn = document.getElementById('dc-bc-btn'), input = document.getElementById('dc-barcode-input');
   if (!video) return;
   if (btn && btn.dataset.on === '1') { if (typeof window._scanStop === 'function') window._scanStop(); return; }
-  let fmts = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','codabar','qr_code'];
-  try { if (BarcodeDetector.getSupportedFormats) { const sup = await BarcodeDetector.getSupportedFormats(); const f = fmts.filter(x => sup.includes(x)); fmts = f.length ? f : sup; } } catch (e) {}
-  let detector; try { detector = new BarcodeDetector({ formats: fmts }); } catch (e) { showToast('Scanner unavailable — type the code', 'error'); return; }
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
-  catch (e) { showToast('Camera blocked — type the code or use a scanner gun', 'error'); return; }
-  video.srcObject = stream; await video.play().catch(() => {});
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  const engine = await startCameraScan(video, (raw) => {
+    if (input) input.value = raw;
+    if (typeof scanBeep === 'function') scanBeep(880, 60);
+    showToast(`Barcode captured: ${raw}`, 'success');
+    if (typeof window._scanStop === 'function') window._scanStop();
+  });
+  if (btn) btn.disabled = false;
+  if (!engine || engine.error) {
+    showToast(engine && engine.error === 'camera' ? 'Camera blocked — type the code' : 'Live camera scan unavailable — type the code', 'error');
+    if (btn) btn.textContent = '📷 Scan barcode';
+    return;
+  }
   if (cam) cam.hidden = false;
   if (btn) { btn.textContent = 'Stop'; btn.dataset.on = '1'; }
-  const state = { running: true, raf: 0 };
-  const stop = () => {
-    state.running = false; if (state.raf) cancelAnimationFrame(state.raf);
-    try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-    if (video) video.srcObject = null; if (cam) cam.hidden = true;
+  window._scanStop = function () {
+    if (engine.stop) engine.stop();
+    if (cam) cam.hidden = true;
     if (btn) { btn.textContent = '📷 Scan barcode'; btn.dataset.on = ''; }
   };
-  window._scanStop = stop;
-  const loop = async () => {
-    if (!state.running) return;
-    try {
-      const codes = await detector.detect(video);
-      if (codes && codes.length && codes[0].rawValue) {
-        if (input) input.value = codes[0].rawValue;
-        if (typeof scanBeep === 'function') scanBeep(880, 60);
-        showToast(`Barcode captured: ${codes[0].rawValue}`, 'success');
-        stop(); return;
-      }
-    } catch (e) { /* keep scanning */ }
-    state.raf = requestAnimationFrame(loop);
-  };
-  loop();
 }
 
 function onScanCaptured(input, dcId) {

@@ -34,5 +34,8 @@
 		"start": "wrangler dev",
 		"test": "vitest",
 		"test:smoke": "node test/smoke.mjs"
+	},
+	"dependencies": {
+		"@zxing/library": "^0.21.3"
 	}
 }
