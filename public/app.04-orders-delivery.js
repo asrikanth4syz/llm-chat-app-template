@@ -942,116 +942,121 @@ async function viewOrderDrilldown(orderId) {
   enableModalExpand();
 }
 
-// ── Delivery Breakdown exports (Excel/CSV + print-to-PDF) ────────────────────
-function _ddCsvCell(v) { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
-function _ddRow(arr) { return arr.map(_ddCsvCell).join(','); }
-function _ddDownload(content, type, filename) {
-  const blob = new Blob([content], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 150);
+// ── Delivery Breakdown exports — real .xlsx (SheetJS) + PDF (jsPDF+autotable) ──
+// Both libraries are vendored locally and lazy-loaded on first use (the CSP
+// blocks external CDNs; none of them use eval/Worker so script-src 'self' is fine).
+function _ddLoadScript(src) {
+  return new Promise(res => { const s = document.createElement('script'); s.src = src; s.onload = () => res(true); s.onerror = () => res(false); document.head.appendChild(s); });
+}
+let _xlsxP = null, _jspdfP = null;
+function ensureXLSX() {
+  if (window.XLSX) return Promise.resolve(true);
+  if (_xlsxP) return _xlsxP;
+  _xlsxP = _ddLoadScript('/vendor/xlsx.min.js').then(() => !!window.XLSX);
+  return _xlsxP;
+}
+function ensureJsPDF() {
+  const ready = () => !!(window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable);
+  if (ready()) return Promise.resolve(true);
+  if (_jspdfP) return _jspdfP;
+  _jspdfP = (async () => {
+    if (!(window.jspdf && window.jspdf.jsPDF)) { if (!await _ddLoadScript('/vendor/jspdf.min.js')) return false; }
+    if (!(window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable)) { if (!await _ddLoadScript('/vendor/jspdf-autotable.min.js')) return false; }
+    return ready();
+  })();
+  return _jspdfP;
 }
 
-function exportDrilldownXls() {
+async function exportDrilldownXls() {
   const d = APP._ddExport;
   if (!d) { showToast('Open a delivery breakdown first', 'error'); return; }
+  if (!await ensureXLSX()) { showToast('Excel library failed to load', 'error'); return; }
   const { order, lines, summary, allocBySku, dcGroups, fmtDay } = d;
   const num = n => Number(n || 0);
-  const rows = [];
-  rows.push(_ddRow(['Delivery Breakdown', order.id]));
-  rows.push(_ddRow(['Client', order.client_name || '—']));
-  rows.push(_ddRow(['Ordered date', fmtDate(order.created_at)]));
-  rows.push(_ddRow(['Status', order.status || '']));
-  rows.push(_ddRow(['Lines delivered', `${summary.delivered_lines}/${summary.total_lines}`]));
-  rows.push('');
-  rows.push(_ddRow(['Item', 'SKU', 'Ordered', 'Delivered', 'Due', 'Unit Price', 'Ordered Value', 'Delivered Value', 'Due Value', 'Delivered Via']));
+  const aoa = [
+    ['Delivery Breakdown', order.id],
+    ['Client', order.client_name || '—'],
+    ['Ordered date', fmtDate(order.created_at)],
+    ['Status', (order.status || '').replace(/_/g, ' ')],
+    ['Lines delivered', `${summary.delivered_lines}/${summary.total_lines}`],
+    [],
+    ['Item', 'SKU', 'Ordered', 'Delivered', 'Due', 'Unit Price', 'Ordered Value', 'Delivered Value', 'Due Value', 'Delivered Via'],
+  ];
   (lines || []).forEach(l => {
     const via = (allocBySku[l.sku] || []).map(a => `${a.dc} x${a.qty} (${fmtDay(a.date)})`).join(' | ');
-    rows.push(_ddRow([l.name, l.sku, l.qty_ordered, l.qty_delivered, l.qty_due, num(l.unit_price), num(l.value_ordered), num(l.value_delivered), num(l.value_due), via]));
+    aoa.push([l.name, l.sku, num(l.qty_ordered), num(l.qty_delivered), num(l.qty_due), num(l.unit_price), num(l.value_ordered), num(l.value_delivered), num(l.value_due), via]);
   });
-  const totQtyOrd = (lines || []).reduce((s, l) => s + l.qty_ordered, 0);
-  const totQtyDel = (lines || []).reduce((s, l) => s + l.qty_delivered, 0);
-  const totQtyDue = (lines || []).reduce((s, l) => s + l.qty_due, 0);
-  rows.push(_ddRow(['TOTAL', '', totQtyOrd, totQtyDel, totQtyDue, '', num(summary.total_ordered_value), num(summary.total_delivered_value), num(summary.total_due_value), '']));
+  const totO = (lines || []).reduce((s, l) => s + l.qty_ordered, 0);
+  const totD = (lines || []).reduce((s, l) => s + l.qty_delivered, 0);
+  const totDue = (lines || []).reduce((s, l) => s + l.qty_due, 0);
+  aoa.push(['TOTAL', '', totO, totD, totDue, '', num(summary.total_ordered_value), num(summary.total_delivered_value), num(summary.total_due_value), '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 34 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 11 }, { wch: 14 }, { wch: 15 }, { wch: 11 }, { wch: 42 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Reconciliation');
   if (dcGroups && dcGroups.length) {
-    rows.push(''); rows.push(_ddRow(['By Challan']));
-    dcGroups.forEach(g => {
-      const dc = g.dc;
-      rows.push(_ddRow([`${dc.dc_number || dc.id}`, `Dispatched ${fmtDate(dc.dispatched_at)}`, `Delivered ${fmtDate(dc.delivered_at)}`, `${g.units} units`, num(g.value)]));
-      rows.push(_ddRow(['', 'Item', 'SKU', 'Qty', 'Unit Price', 'Amount']));
-      g.rows.forEach(r => rows.push(_ddRow(['', r.name, r.sku, r.qty, num(r.unit), num(r.amount)])));
-    });
+    const a2 = [['DC', 'Dispatched', 'Delivered', 'Item', 'SKU', 'Qty', 'Unit Price', 'Amount']];
+    dcGroups.forEach(g => { const dc = g.dc; g.rows.forEach(r => a2.push([dc.dc_number || dc.id, fmtDate(dc.dispatched_at), fmtDate(dc.delivered_at), r.name, r.sku, num(r.qty), num(r.unit), num(r.amount)])); });
+    const ws2 = XLSX.utils.aoa_to_sheet(a2);
+    ws2['!cols'] = [{ wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 30 }, { wch: 12 }, { wch: 7 }, { wch: 11 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'By Challan');
   }
-  _ddDownload('﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8;', `Delivery-Breakdown-${order.id}.csv`);
+  XLSX.writeFile(wb, `Delivery-Breakdown-${order.id}.xlsx`);
 }
 
-function exportDrilldownPdf() {
+async function exportDrilldownPdf() {
   const d = APP._ddExport;
   if (!d) { showToast('Open a delivery breakdown first', 'error'); return; }
+  if (!await ensureJsPDF()) { showToast('PDF library failed to load', 'error'); return; }
   const { order, lines, summary, allocBySku, dcGroups, fmtDay } = d;
-  const money = n => '₹' + Number(n || 0).toLocaleString('en-IN');
-  const w = window.open('', '_blank');
-  if (!w) { showToast('Allow pop-ups to export the PDF', 'error'); return; }
-  const lineRows = (lines || []).map(l => {
-    const via = (allocBySku[l.sku] || []).map(a => `${h(a.dc)}·${a.qty}·${fmtDay(a.date)}`).join('<br>') || '—';
-    return `<tr>
-      <td>${h(l.name)}<div class="sku">${h(l.sku)}</div></td>
-      <td class="r">${l.qty_ordered}</td><td class="r">${l.qty_delivered}</td><td class="r">${l.qty_due}</td>
-      <td class="r">${money(l.unit_price)}</td><td class="r">${money(l.value_ordered)}</td>
-      <td class="r">${money(l.value_delivered)}</td><td class="r">${money(l.value_due)}</td>
-      <td class="via">${via}</td></tr>`;
-  }).join('');
-  const totQtyOrd = (lines || []).reduce((s, l) => s + l.qty_ordered, 0);
-  const totQtyDel = (lines || []).reduce((s, l) => s + l.qty_delivered, 0);
-  const challanBlocks = (dcGroups || []).map(g => {
-    const dc = g.dc;
-    const rr = g.rows.map(r => `<tr><td>${h(r.name)}<div class="sku">${h(r.sku)}</div></td><td class="r">${r.qty}</td><td class="r">${money(r.unit)}</td><td class="r">${money(r.amount)}</td></tr>`).join('');
-    return `<h3>${h(dc.dc_number || dc.id)} <span class="mut">· ${g.units} units · ${money(g.value)}</span></h3>
-      <div class="mut sm">Dispatched ${fmtDate(dc.dispatched_at)} · Delivered ${fmtDate(dc.delivered_at)}${dc.driver_name ? ' · ' + h(dc.driver_name) : ''}</div>
-      <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit</th><th class="r">Amount</th></tr></thead><tbody>${rr}</tbody></table>`;
-  }).join('');
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Delivery Breakdown ${h(order.id)}</title>
-  <style>
-    *{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#15303d;margin:28px;font-size:12px}
-    h1{font-size:19px;margin:0 0 2px} h3{font-size:13px;margin:16px 0 4px}
-    .mut{color:#5c7480;font-weight:400} .sm{font-size:11px;margin-bottom:6px}
-    .meta{display:flex;flex-wrap:wrap;gap:6px 22px;margin:8px 0 14px;font-size:11px}
-    .meta b{color:#15303d} .meta span{color:#5c7480}
-    table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border-bottom:1px solid #e2e9ec;padding:6px 8px;text-align:left;vertical-align:top}
-    th{background:#f0f5f5;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#5c7480}
-    td.r,th.r{text-align:right} .sku{font-family:monospace;font-size:10px;color:#8397a3} .via{font-size:10px;color:#5c7480}
-    tfoot td{font-weight:700;border-top:2px solid #cbd8de}
-    .brand{font-size:10px;color:#8397a3;letter-spacing:.14em;text-transform:uppercase}
-    @media print{body{margin:12mm}}
-  </style></head><body>
-    <div class="brand">Smart Pantry · Pick &amp; Pack</div>
-    <h1>Delivery Breakdown — ${h(order.id)}</h1>
-    <div class="meta">
-      <span>Client <b>${h(order.client_name || '—')}</b></span>
-      <span>Ordered <b>${fmtDate(order.created_at)}</b></span>
-      <span>Status <b>${h((order.status || '').replace(/_/g, ' '))}</b></span>
-      <span>Lines <b>${summary.delivered_lines}/${summary.total_lines}</b></span>
-      <span>Qty <b>${totQtyDel}/${totQtyOrd}</b></span>
-      <span>Ordered <b>${money(summary.total_ordered_value)}</b></span>
-      <span>Delivered <b>${money(summary.total_delivered_value)}</b></span>
-      <span>Due <b>${money(summary.total_due_value)}</b></span>
-    </div>
-    <table>
-      <thead><tr><th>Item</th><th class="r">Ord</th><th class="r">Deliv</th><th class="r">Due</th><th class="r">Unit</th><th class="r">Ordered</th><th class="r">Delivered</th><th class="r">Due ₹</th><th>Delivered via</th></tr></thead>
-      <tbody>${lineRows}</tbody>
-      <tfoot><tr><td>Total</td><td class="r">${totQtyOrd}</td><td class="r">${totQtyDel}</td><td class="r">${(lines || []).reduce((s, l) => s + l.qty_due, 0)}</td><td></td><td class="r">${money(summary.total_ordered_value)}</td><td class="r">${money(summary.total_delivered_value)}</td><td class="r">${money(summary.total_due_value)}</td><td></td></tr></tfoot>
-    </table>
-    ${challanBlocks ? `<h3 style="margin-top:22px">Breakdown by challan</h3>${challanBlocks}` : ''}
-  </body></html>`;
-  w.document.open(); w.document.write(doc); w.document.close();
-  w.focus();
-  // Trigger print from the opener (same-origin about:blank) — the strict CSP
-  // blocks an inline auto-print script in the new document. User picks "Save as PDF".
-  setTimeout(() => { try { w.print(); } catch (e) { /* user can print manually */ } }, 500);
+  // jsPDF's core fonts have no ₹ glyph, so use "Rs" in the PDF.
+  const money = n => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const auto = (opts) => { if (typeof doc.autoTable === 'function') doc.autoTable(opts); else if (typeof window.jspdf.autoTable === 'function') window.jspdf.autoTable(doc, opts); };
+  doc.setFontSize(14); doc.setTextColor(21, 48, 61);
+  doc.text(`Delivery Breakdown — ${order.id}`, 14, 15);
+  doc.setFontSize(9); doc.setTextColor(90, 116, 128);
+  doc.text(`Client: ${order.client_name || '—'}    Ordered: ${fmtDate(order.created_at)}    Status: ${(order.status || '').replace(/_/g, ' ')}    Lines: ${summary.delivered_lines}/${summary.total_lines}`, 14, 22);
+  const body = (lines || []).map(l => {
+    const via = (allocBySku[l.sku] || []).map(a => `${a.dc} x${a.qty} ${fmtDay(a.date)}`).join('\n');
+    return [l.name + '\n' + l.sku, l.qty_ordered, l.qty_delivered, l.qty_due, money(l.unit_price), money(l.value_ordered), money(l.value_delivered), money(l.value_due), via];
+  });
+  const totO = (lines || []).reduce((s, l) => s + l.qty_ordered, 0);
+  const totD = (lines || []).reduce((s, l) => s + l.qty_delivered, 0);
+  const totDue = (lines || []).reduce((s, l) => s + l.qty_due, 0);
+  const rAlign = { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' } };
+  auto({
+    startY: 27,
+    head: [['Item / SKU', 'Ord', 'Deliv', 'Due', 'Unit', 'Ordered', 'Delivered', 'Due Rs', 'Delivered via']],
+    body,
+    foot: [['Total', totO, totD, totDue, '', money(summary.total_ordered_value), money(summary.total_delivered_value), money(summary.total_due_value), '']],
+    styles: { fontSize: 8, cellPadding: 2, valign: 'top' },
+    headStyles: { fillColor: [13, 142, 128], textColor: 255 },
+    footStyles: { fillColor: [240, 245, 245], textColor: 20, fontStyle: 'bold' },
+    columnStyles: rAlign,
+  });
+  if (dcGroups && dcGroups.length) {
+    doc.setFontSize(11); doc.setTextColor(21, 48, 61);
+    doc.text('Breakdown by challan', 14, doc.lastAutoTable.finalY + 9);
+    dcGroups.forEach(g => {
+      const dc = g.dc;
+      const y = doc.lastAutoTable.finalY + 13;
+      doc.setFontSize(9.5); doc.setTextColor(21, 48, 61);
+      doc.text(`${dc.dc_number || dc.id}   ${g.units} units   ${money(g.value)}`, 14, y);
+      auto({
+        startY: y + 2,
+        head: [['Item', 'SKU', 'Qty', 'Unit', 'Amount']],
+        body: g.rows.map(r => [r.name, r.sku, r.qty, money(r.unit), money(r.amount)]),
+        styles: { fontSize: 8, cellPadding: 1.6 },
+        headStyles: { fillColor: [240, 245, 245], textColor: 80 },
+        columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+        margin: { left: 14 },
+      });
+    });
+  }
+  doc.save(`Delivery-Breakdown-${order.id}.pdf`);
 }
-
 // Toggle the delivery-breakdown modal between its two views.
 function dwSwitchView(v) {
   const bi = document.getElementById('dw-byitem');
