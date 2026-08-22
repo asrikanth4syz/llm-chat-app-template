@@ -821,6 +821,7 @@ export default {
       if (path.match(/^\/api\/catalogue\/[^/]+\/fitment$/) && method==="PATCH") return handleSetFitment(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/intel$/)   && method==="PUT")   return handlePutIntel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/extract$/) && method==="POST")  return handleExtractIntel(request,env,path);
+      if (path.match(/^\/api\/catalogue\/[^/]+\/ocr$/)     && method==="POST")  return handleOcrLabel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+$/)          && method==="GET")   return handleGetCatalogueItem(request,env,path);
       if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
@@ -2891,6 +2892,49 @@ function extractProductIntel(text: string): { ingredients: Array<Record<string,u
   ];
   if (compound) claims.push(claim("Ingredient transparency", false, "compound / unspecified ingredient — qualified review needed", true));
   return { ingredients, claims };
+}
+
+// POST /api/catalogue/:sku/ocr — transcribe a label photo with a Workers AI
+// vision model. OCR needs a model (no deterministic fallback), so this is the
+// one Product-Intelligence action that requires env.AI. It only returns text —
+// the reviewer confirms it, then runs /extract. Images stay on-platform.
+async function handleOcrLabel(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can run OCR"}, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
+  if (!exists) return json({error:"Unknown SKU"}, 404);
+  if (!env.AI) return json({error:"OCR needs Workers AI, which isn't enabled on this account. Paste the label text instead."}, 503);
+
+  const body = await request.json() as { image_base64?: string };
+  let b64 = String(body.image_base64 || "").trim();
+  const comma = b64.indexOf(",");
+  if (b64.startsWith("data:") && comma >= 0) b64 = b64.slice(comma + 1); // strip data: URL prefix
+  if (!b64) return json({error:"Attach a label image to transcribe"}, 400);
+
+  let bytes: number[];
+  try {
+    const bin = atob(b64);
+    bytes = new Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } catch { return json({error:"Could not read the image data"}, 400); }
+  if (bytes.length > 6_000_000) return json({error:"Image too large — keep it under ~4 MB"}, 413);
+
+  let text = "";
+  try {
+    const out = await env.AI.run("@cf/meta/llama-3.2-11b-vision-instruct", {
+      image: bytes,
+      prompt: "Transcribe ALL text printed on this food product label exactly as written — especially the ingredients list, additive / INS / E-numbers, allergen declarations and any claims (e.g. 'No Added Sugar'). Output only the transcribed text, no commentary.",
+      max_tokens: 800,
+    }) as { response?: string; description?: string; text?: string } | string;
+    text = typeof out === "string" ? out : (out.response || out.description || out.text || "");
+  } catch (e) {
+    return json({error:"OCR failed — the vision model was unavailable. Paste the label text instead.", detail:String(e).slice(0,200)}, 502);
+  }
+  text = text.trim();
+  await audit(env, user, "OCR_LABEL", "product", sku, undefined, `${text.length} chars transcribed`);
+  return json({ sku, text });
 }
 
 async function handleExtractIntel(request: Request, env: Env, path: string): Promise<Response> {

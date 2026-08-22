@@ -279,7 +279,11 @@ async function reviewProduct(sku) {
         <b style="font-size:.82rem;color:var(--navy)">AI draft extraction <span style="font-weight:400;color:var(--text-muted)">(Phase 2)</span></b>
         <span class="attr" style="margin-left:auto"><span class="d db"></span>AI-drafted — needs human accept</span>
       </div>
-      <textarea id="rev-label" rows="3" placeholder="Paste the label ingredient / declaration text here…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">📷 Photo → OCR<input type="file" accept="image/*" capture="environment" style="display:none" ${dataChangeEl('ocrLabel', sku)}></label>
+        <span id="rev-ocr-status" style="font-size:.7rem;color:var(--text-muted)">Photograph the label and Workers AI transcribes it into the box below. You confirm before extracting.</span>
+      </div>
+      <textarea id="rev-label" rows="3" placeholder="Paste the label ingredient / declaration text here — or use Photo → OCR above…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;resize:vertical"></textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
         <button class="btn btn-secondary btn-sm" ${dataAct('runExtraction', sku)}>⚙ Run extraction</button>
         <span style="font-size:.7rem;color:var(--text-muted)">Screens additives, sugar &amp; compound ingredients and checks label claims. Never states legality.</span>
@@ -314,6 +318,26 @@ function revAddAttr() {
   revRenderAttrs();
 }
 function revDelAttr(i) { APP._revAttrs.splice(i, 1); revRenderAttrs(); }
+
+function ocrLabel(sku, input) {
+  const f = input.files && input.files[0]; if (!f) { return; }
+  const status = document.getElementById('rev-ocr-status');
+  if (f.size > 4200000) { if (status) { status.textContent = 'Image too large — keep it under ~4 MB.'; status.style.color = 'var(--red)'; } input.value = ''; return; }
+  if (status) { status.innerHTML = '<span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle"></span> Transcribing label with Workers AI…'; status.style.color = 'var(--text-muted)'; }
+  const r = new FileReader();
+  r.onload = async () => {
+    const res = await api(`/catalogue/${encodeURIComponent(sku)}/ocr`, { method: 'POST', body: JSON.stringify({ image_base64: r.result }) });
+    input.value = '';
+    if (!res || !res.text) {
+      if (status) { status.textContent = (res && res.error) || 'OCR returned no text — paste the label text instead.'; status.style.color = 'var(--red)'; }
+      return;
+    }
+    const box = document.getElementById('rev-label');
+    if (box) { box.value = res.text; box.focus(); }
+    if (status) { status.textContent = `Transcribed ${res.text.length} chars — review the text, then run extraction.`; status.style.color = 'var(--green,#16a34a)'; }
+  };
+  r.readAsDataURL(f);
+}
 
 async function runExtraction(sku) {
   const text = document.getElementById('rev-label')?.value.trim();

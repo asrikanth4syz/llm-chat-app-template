@@ -333,6 +333,18 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect((await post("/api/catalogue/SKU001/extract", { ingredient_text: "" }, adminToken)).status).toBe(400);
     expect((await post("/api/catalogue/SKU001/extract", { ingredient_text: ACCEPTANCE_LABEL }, clientToken)).status).toBe(403);
   });
+
+  it("OCR is Ops-only and guards SKU / image / Workers-AI availability", async () => {
+    // Clients can never run OCR.
+    expect((await post("/api/catalogue/SKU001/ocr", { image_base64: "x" }, clientToken)).status).toBe(403);
+    // Unknown SKU is rejected before any model call.
+    expect((await post("/api/catalogue/NOPE/ocr", { image_base64: "x" }, adminToken)).status).toBe(404);
+    // With a valid SKU: either Workers AI is unavailable in the test env (503),
+    // or it is bound and the empty/invalid image is rejected (400). Both are
+    // correct guardrails — OCR never silently succeeds without a real image.
+    const r = await post("/api/catalogue/SKU001/ocr", { image_base64: "" }, adminToken);
+    expect([400, 503]).toContain(r.status);
+  });
 });
 
 describe("Inventory", () => {
