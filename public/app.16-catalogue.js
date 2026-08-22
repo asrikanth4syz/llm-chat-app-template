@@ -444,17 +444,23 @@ async function saveFitment(sku) {
 }
 
 /* ── Reports (Super Admin / Ops): filter → PDF / Excel ──────────────────── */
+const RP_DISCLAIMER = 'Submitted by brand, checked by 4SYZ — not a regulatory approval. Super Admin / Ops only.';
+
 async function renderProductReports(el) {
   injectCatCss();
-  const data = await api('/catalogue');
+  const data = await api('/catalogue/report');
   if (!data) return;
   APP._repItems = data.items || [];
+  APP._repMeta = { at: data.generated_at, by: data.generated_by };
   const cats = [...new Set(APP._repItems.map(i => i.category).filter(Boolean))].sort();
+  const algs = [...new Set(APP._repItems.flatMap(i => (i.allergens || []).map(a => a.allergen)))].sort();
   el.innerHTML = `
-    ${pageHeader('Product Reports', 'Filter the catalogue and export as PDF or Excel')}
+    ${pageHeader('Product Reports', 'Filter the Product Intelligence dataset and export as PDF or Excel')}
     <div class="sc-toolbar">
       <select id="rp-ver" ${dataChange('rpFilter')}><option value="">All verification</option><option value="verified">4SYZ Verified</option><option value="ai_screened">AI Screened</option><option value="needs_review">Needs Review</option></select>
       <select id="rp-cat" ${dataChange('rpFilter')}><option value="">All categories</option>${cats.map(c => `<option>${h(c)}</option>`).join('')}</select>
+      <select id="rp-alg" ${dataChange('rpFilter')}><option value="">Any allergen</option>${algs.map(a => `<option>${h(a)}</option>`).join('')}</select>
+      <select id="rp-flag" ${dataChange('rpFilter')}><option value="">Any additive</option><option value="synthetic-colour">Has synthetic colour</option><option value="preservative">Has preservative</option><option value="msg">Has MSG</option><option value="artificial-sweetener">Has artificial sweetener</option><option value="added-sugar">Has added sugar</option></select>
       <select id="rp-exp" ${dataChange('rpFilter')}><option value="">Any expiry</option><option value="30">Licence expiring ≤ 30 days</option><option value="60">≤ 60 days</option><option value="past">Expired</option></select>
       <span style="flex:1"></span>
       <button class="btn btn-primary btn-sm" ${dataAct('exportProductReport', 'pdf')}>⬇ PDF</button>
@@ -467,11 +473,15 @@ async function renderProductReports(el) {
 function rpFilteredRows() {
   const ver = document.getElementById('rp-ver')?.value || '';
   const cat = document.getElementById('rp-cat')?.value || '';
+  const alg = document.getElementById('rp-alg')?.value || '';
+  const flag = document.getElementById('rp-flag')?.value || '';
   const exp = document.getElementById('rp-exp')?.value || '';
   const now = Date.now();
   return (APP._repItems || []).filter(i => {
     if (ver && i.verification !== ver) return false;
     if (cat && i.category !== cat) return false;
+    if (alg && !(i.allergens || []).some(a => a.allergen === alg)) return false;
+    if (flag && !(i.ingredient_flags || []).includes(flag)) return false;
     if (exp) {
       if (!i.expiry_date) return false;
       const days = (new Date(i.expiry_date).getTime() - now) / 86400000;
@@ -482,49 +492,92 @@ function rpFilteredRows() {
     return true;
   });
 }
+
+function rpAllergenCells(r) {
+  return (r.allergens || []).map(a => {
+    const cross = a.cross_contact_state === 'possible';
+    return `<span style="background:${cross ? '#fef3c7' : '#fee2e2'};color:${cross ? '#92400e' : '#b91c1c'};border-radius:4px;padding:1px 5px;font-size:.64rem;margin:1px;display:inline-block">${h(a.allergen)}${cross ? ' *' : ''}</span>`;
+  }).join('') || '<span style="color:var(--text-muted)">—</span>';
+}
+function rpFlagCells(r) {
+  return (r.ingredient_flags || []).map(f => `<span style="background:#e0e7ff;color:#3730a3;border-radius:4px;padding:1px 5px;font-size:.62rem;margin:1px;display:inline-block">${h(f)}</span>`).join('') || '<span style="color:var(--text-muted)">—</span>';
+}
+
 function rpFilter() {
   const rows = rpFilteredRows();
   const box = document.getElementById('rp-body'); if (!box) return;
   const verN = v => rows.filter(r => r.verification === v).length;
+  const withAlg = rows.filter(r => (r.allergens || []).length).length;
   box.innerHTML = `
     <div class="kpi">
       <div class="k"><div class="v">${verN('verified')}</div><div class="l">4SYZ Verified</div></div>
       <div class="k"><div class="v">${verN('ai_screened')}</div><div class="l">AI Screened</div></div>
-      <div class="k"><div class="v">${verN('needs_review')}</div><div class="l">Needs Review</div></div>
+      <div class="k"><div class="v">${withAlg}</div><div class="l">With allergens</div></div>
       <div class="k"><div class="v">${rows.length}</div><div class="l">Products in report</div></div>
     </div>
-    <div class="table-wrap"><table class="table" style="min-width:720px">
-      <thead><tr><th>Brand</th><th>Product</th><th>Category</th><th>Attributes</th><th>Fitment</th><th>Verification</th><th>Valid to</th></tr></thead>
+    <div class="table-wrap"><table class="table" style="min-width:900px">
+      <thead><tr><th>Brand</th><th>Product</th><th>Category</th><th>Allergens</th><th>Additive flags</th><th>Fitment</th><th>Verification</th><th>Valid to</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td>${h(r.brand || '—')}</td><td><b>${h(r.name)}</b><div class="mono" style="font-size:.7rem;color:var(--text-muted)">${h(r.sku)}</div></td>
-        <td>${h(r.category || '—')}</td><td style="font-size:.78rem">${(r.attributes || []).map(a => h(a.name)).join(', ') || '—'}</td>
+        <td>${h(r.category || '—')}</td><td style="font-size:.78rem">${rpAllergenCells(r)}</td><td>${rpFlagCells(r)}</td>
         <td><span class="fstate fs-${r.fitment_state}">${r.fitment_state}</span></td><td>${verBadge(r.verification)}</td>
-        <td class="mono">${r.expiry_date ? fmtDate(r.expiry_date) : '—'}</td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No products match.</td></tr>'}</tbody>
-    </table></div>`;
+        <td class="mono">${r.expiry_date ? fmtDate(r.expiry_date) : '—'}</td></tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">No products match.</td></tr>'}</tbody>
+    </table></div>
+    <div class="note" style="font-size:.72rem;color:var(--text-muted);margin-top:8px">* = cross-contact ("may contain"). ${RP_DISCLAIMER}</div>`;
 }
 
 async function exportProductReport(kind) {
   const rows = rpFilteredRows();
   if (!rows.length) { showToast('No products to export', 'error'); return; }
-  const head = ['Brand', 'Product', 'SKU', 'Category', 'Attributes', 'Fitment', 'Verification', 'Valid to'];
-  const body = rows.map(r => [r.brand || '', r.name, r.sku, r.category || '', (r.attributes || []).map(a => a.name).join(', '),
-    r.fitment_state, r.verification, r.expiry_date ? fmtDate(r.expiry_date) : '']);
-  const disclaimer = 'Submitted by brand, checked by 4SYZ — not a regulatory approval. Super Admin / Ops only.';
+  const stamp = (APP._repMeta?.at ? new Date(APP._repMeta.at) : new Date());
+  const meta = `Generated ${stamp.toLocaleString()}${APP._repMeta?.by ? ' by ' + APP._repMeta.by : ''}`;
+  const prov = r => `brand ${r.provenance?.brand || 0} / AI ${r.provenance?.ai || 0} / 4SYZ ${r.provenance?.['4syz'] || 0}`;
+
+  // Shared row projections
+  const prodHead = ['Brand', 'Product', 'SKU', 'Category', 'Fitment', 'Verification', 'Clean label', 'Allergens', 'Additive flags', 'Attribute provenance', 'Valid to'];
+  const prodBody = rows.map(r => [r.brand || '', r.name, r.sku, r.category || '', r.fitment_state, r.verification, r.clean_label || '',
+    (r.allergens || []).map(a => a.allergen + (a.cross_contact_state === 'possible' ? '*' : '')).join(', '),
+    (r.ingredient_flags || []).join(', '), prov(r), r.expiry_date ? fmtDate(r.expiry_date) : '']);
+
   if (kind === 'xlsx') {
     if (!(typeof ensureXLSX === 'function' && await ensureXLSX())) { showToast('Excel library failed to load', 'error'); return; }
-    const aoa = [['Smart Pantry — Product Report'], [disclaimer], [], head, ...body];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 12 }, { wch: 13 }, { wch: 12 }];
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
+    const wb = XLSX.utils.book_new();
+    const addSheet = (name, head, body, cols) => {
+      const ws = XLSX.utils.aoa_to_sheet([['Smart Pantry — Product Report'], [RP_DISCLAIMER], [meta], [], head, ...body]);
+      if (cols) ws['!cols'] = cols;
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+    addSheet('Products', prodHead, prodBody, [{ wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 26 }, { wch: 24 }, { wch: 20 }, { wch: 12 }]);
+    // Allergens sheet (one row per allergen)
+    const algBody = rows.flatMap(r => (r.allergens || []).map(a => [r.brand || '', r.name, r.sku, a.allergen, a.contains_state, a.cross_contact_state, a.source]));
+    addSheet('Allergens', ['Brand', 'Product', 'SKU', 'Allergen', 'State', 'Cross-contact', 'Source'], algBody, [{ wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 10 }]);
+    // Nutrition sheet (one row per nutrient)
+    const nutBody = rows.flatMap(r => (r.nutrition || []).map(n => [r.brand || '', r.name, r.sku, n.nutrient, n.value, n.unit, n.basis, n.source]));
+    addSheet('Nutrition', ['Brand', 'Product', 'SKU', 'Nutrient', 'Value', 'Unit', 'Basis', 'Source'], nutBody, [{ wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 10 }]);
+    // Additives sheet (one row per additive)
+    const addBody = rows.flatMap(r => (r.additives || []).map(a => [r.brand || '', r.name, r.sku, a.code, a.class]));
+    addSheet('Additives', ['Brand', 'Product', 'SKU', 'INS / E-code', 'Class'], addBody, [{ wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 18 }]);
     XLSX.writeFile(wb, 'Smart-Pantry-Product-Report.xlsx');
+    showToast(`Exported ${rows.length} products across 4 sheets`);
   } else {
     if (!(typeof ensureJsPDF === 'function' && await ensureJsPDF())) { showToast('PDF library failed to load', 'error'); return; }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    doc.setFontSize(14); doc.setTextColor(30, 58, 95); doc.text('Smart Pantry — Product Report', 14, 15);
-    doc.setFontSize(8); doc.setTextColor(120); doc.text(disclaimer, 14, 21);
     const auto = (o) => { if (typeof doc.autoTable === 'function') doc.autoTable(o); else if (window.jspdf.autoTable) window.jspdf.autoTable(doc, o); };
-    auto({ startY: 26, head: [head], body, styles: { fontSize: 8, cellPadding: 2 }, headStyles: { fillColor: [13, 148, 136] } });
+    doc.setFontSize(14); doc.setTextColor(30, 58, 95); doc.text('Smart Pantry — Product Report', 14, 15);
+    doc.setFontSize(8); doc.setTextColor(120); doc.text(RP_DISCLAIMER, 14, 20); doc.text(meta, 14, 24.5);
+    // Products
+    auto({ startY: 28, head: [prodHead], body: prodBody, styles: { fontSize: 7, cellPadding: 1.5 }, headStyles: { fillColor: [13, 148, 136] }, columnStyles: { 1: { cellWidth: 40 } } });
+    // Allergen matrix section (only rows that have allergens)
+    const algRows = rows.filter(r => (r.allergens || []).length);
+    if (algRows.length) {
+      doc.addPage('a4', 'landscape');
+      doc.setFontSize(12); doc.setTextColor(30, 58, 95); doc.text('Allergen register', 14, 15);
+      doc.setFontSize(8); doc.setTextColor(120); doc.text('* recorded as cross-contact ("may contain")', 14, 20);
+      const algBody = algRows.flatMap(r => (r.allergens || []).map(a => [r.name, r.sku, a.allergen, a.cross_contact_state === 'possible' ? 'may contain' : a.contains_state, a.source]));
+      auto({ startY: 24, head: [['Product', 'SKU', 'Allergen', 'Declaration', 'Source']], body: algBody, styles: { fontSize: 8, cellPadding: 2 }, headStyles: { fillColor: [185, 28, 28] } });
+    }
     doc.save('Smart-Pantry-Product-Report.pdf');
+    showToast(`Exported ${rows.length} products`);
   }
 }

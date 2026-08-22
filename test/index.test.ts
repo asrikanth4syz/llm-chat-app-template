@@ -376,6 +376,24 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect(["enabled", "disabled", "error"]).toContain(h.status);
   });
 
+  it("report endpoint is Ops-only and joins allergens / nutrition / additives", async () => {
+    expect((await get("/api/catalogue/report", clientToken)).status).toBe(403);
+    // Seed rich data on one SKU, then confirm the report carries it.
+    await post("/api/catalogue/SKU010/extract", { ingredient_text: RICH_LABEL, use_ai: false }, adminToken);
+    const r = await get("/api/catalogue/report", adminToken);
+    expect(r.status).toBe(200);
+    const out = await r.json() as {
+      generated_by: string;
+      items: Array<{ sku: string; allergens: unknown[]; nutrition: unknown[]; additives: unknown[]; ingredient_flags: string[]; provenance: Record<string, number> }>;
+    };
+    expect(out.generated_by).toBeTruthy();
+    const row = out.items.find(i => i.sku === "SKU010")!;
+    expect(row.allergens.length).toBeGreaterThan(0);
+    expect(row.nutrition.length).toBeGreaterThan(0);
+    expect(row.additives.length).toBeGreaterThan(0);
+    expect(row.ingredient_flags).toContain("synthetic-colour");
+  });
+
   it("OCR is Ops-only and guards SKU / image / Workers-AI availability", async () => {
     // Clients can never run OCR.
     expect((await post("/api/catalogue/SKU001/ocr", { image_base64: "x" }, clientToken)).status).toBe(403);

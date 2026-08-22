@@ -818,6 +818,7 @@ export default {
       if (path==="/api/brands"                  && method==="GET")   return handleListBrands(request,env);
       if (path==="/api/brands"                  && method==="POST")  return handleUpsertBrand(request,env);
       if (path==="/api/catalogue"               && method==="GET")   return handleListCatalogue(request,env);
+      if (path==="/api/catalogue/report"        && method==="GET")   return handleCatalogueReport(request,env);
       if (path.match(/^\/api\/catalogue\/[^/]+\/fitment$/) && method==="PATCH") return handleSetFitment(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/intel$/)   && method==="PUT")   return handlePutIntel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/extract$/) && method==="POST")  return handleExtractIntel(request,env,path);
@@ -2756,6 +2757,56 @@ async function handleListCatalogue(request: Request, env: Env): Promise<Response
   if (fCat)   items = items.filter(i => String(i.category) === fCat);
   if (fVer)   items = items.filter(i => String(i.verification) === fVer);
   return json({ items });
+}
+
+// GET /api/catalogue/report — rich, joined dataset for Product Reports
+// (Super Admin / Ops only): base fitment + attributes, allergens, nutrition,
+// additive flags, certificate status and a provenance breakdown per SKU. One
+// query set instead of N+1 detail fetches from the client.
+async function handleCatalogueReport(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can run reports"}, 403);
+
+  const { results: rows } = await env.DB.prepare(
+    `SELECT i.sku,i.name,COALESCE(i.brand,'') AS brand,COALESCE(i.category,'') AS category,
+            COALESCE(f.verification,'needs_review') AS verification, COALESCE(f.fitment_state,'PENDING') AS fitment_state,
+            COALESCE(f.clean_label,'pending') AS clean_label, f.expiry_date, f.reviewed_at, f.reviewer
+     FROM inventory i LEFT JOIN product_fitment f ON f.sku=i.sku WHERE i.active=1 ORDER BY i.name`
+  ).all() as { results: Array<Record<string,unknown>> };
+
+  const group = async (sql: string) => {
+    const { results } = await env.DB.prepare(sql).all() as { results: Array<Record<string,unknown>> };
+    const by: Record<string, Array<Record<string,unknown>>> = {};
+    for (const r of results) (by[String(r.sku)] = by[String(r.sku)] || []).push(r);
+    return by;
+  };
+  const [attrBy, algBy, nutBy, ingBy, certBy] = await Promise.all([
+    group("SELECT sku,grp,name,source FROM product_attributes"),
+    group("SELECT sku,allergen,contains_state,cross_contact_state,source FROM product_allergens"),
+    group("SELECT sku,nutrient,value,unit,basis,source FROM product_nutrition"),
+    group("SELECT sku,normalized,ins_code,functional_class,flags,source FROM product_ingredients"),
+    group("SELECT sku,cert_type,status,expiry_date,source FROM product_certifications"),
+  ]);
+
+  const items = rows.map(r => {
+    const sku = String(r.sku);
+    const ings = ingBy[sku] || [];
+    const flags = [...new Set(ings.flatMap(g => String(g.flags||"").split(",").filter(Boolean)))];
+    const provCount = { brand: 0, ai: 0, "4syz": 0 };
+    for (const a of (attrBy[sku]||[])) { const s = String(a.source); if (s in provCount) (provCount as Record<string,number>)[s]++; }
+    return {
+      ...r,
+      attributes: attrBy[sku] || [],
+      allergens: algBy[sku] || [],
+      nutrition: nutBy[sku] || [],
+      additives: ings.filter(g => g.ins_code).map(g => ({ code: String(g.ins_code).toUpperCase(), class: g.functional_class })),
+      ingredient_flags: flags,
+      certifications: certBy[sku] || [],
+      provenance: provCount,
+    };
+  });
+  return json({ items, generated_at: new Date().toISOString(), generated_by: user!.name });
 }
 
 // GET /api/catalogue/:sku — full product intelligence.
