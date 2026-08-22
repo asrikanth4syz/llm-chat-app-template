@@ -875,6 +875,28 @@ describe("Order-to-delivery authorization", () => {
     expect((await post("/api/orders/SELF-APPROVE-ORD/transition", { to: "APPROVED" }, adminToken)).status).toBe(200);
   });
 
+  it("client-scoped endpoints reject cross-tenant access (budget / credit / catalog)", async () => {
+    // Own client (c1) is allowed; another client (c2) is forbidden.
+    expect((await get("/api/clients/c1/budget", clientToken)).status).toBe(200);
+    expect((await get("/api/clients/c2/budget", clientToken)).status).toBe(403);
+    expect((await get("/api/clients/c2/credit", clientToken)).status).toBe(403);
+    expect((await get("/api/clients/c2/catalog", clientToken)).status).toBe(403);
+  });
+
+  it("client master data (PATCH /clients/:id) is staff-only", async () => {
+    expect((await patch("/api/clients/c1", { monthly_budget: 999999 }, clientToken)).status).toBe(403);
+    expect((await patch("/api/clients/c1", { monthly_budget: 999999 }, vendorToken)).status).toBe(403);
+  });
+
+  it("central guard blocks external roles from back-office endpoints", async () => {
+    for (const p of ["/api/users", "/api/staff", "/api/audit-logs", "/api/warehouses", "/api/approval-rules"]) {
+      expect((await get(p, clientToken)).status).toBe(403);
+      expect((await get(p, vendorToken)).status).toBe(403);
+    }
+    // Staff still reach them.
+    expect((await get("/api/users", adminToken)).status).toBe(200);
+  });
+
   it("delivery confirmation is idempotent — a settled challan cannot be re-delivered", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,delivered_qty) VALUES (?,?,?,?,?)")

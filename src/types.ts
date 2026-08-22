@@ -6,6 +6,10 @@ export interface Env {
   AI?: { run: (model: string, input: unknown) => Promise<unknown> };
   JWT_SECRET: string;
   APP_ENV: string;
+  // Optional production bootstrap admin (set as Cloudflare secrets). When present,
+  // provisions/rotates one super_admin after seed accounts are disabled.
+  BOOTSTRAP_ADMIN_EMAIL?: string;
+  BOOTSTRAP_ADMIN_PASSWORD?: string;
   EMAIL_FROM: string;
   MAILCHANNELS_ENABLED: string;
   ZOHO_BOOKS_ORG_ID: string;

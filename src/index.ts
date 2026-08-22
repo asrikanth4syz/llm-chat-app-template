@@ -91,6 +91,18 @@ function withSecurityHeaders(res: Response): Response {
 }
 function uid(): string { return crypto.randomUUID().replace(/-/g,"").slice(0,16); }
 
+// The dev/test default that ships in wrangler.jsonc. Production MUST override
+// JWT_SECRET with a real secret (`wrangler secret put JWT_SECRET`); a secret of
+// the same name takes precedence over the plain var at runtime.
+const DEV_JWT_SECRET = "smart-pantry-dev-secret-change-in-prod";
+function isProd(env: Env): boolean { return String(env.APP_ENV || "").toLowerCase() === "production"; }
+// A missing, default, or too-short signing key means anyone can forge a token
+// for any user/role. In production we refuse to serve rather than run weak.
+function insecureSecret(env: Env): boolean {
+  const s = env.JWT_SECRET || "";
+  return !s || s === DEV_JWT_SECRET || s.length < 32;
+}
+
 async function getUser(req: Request, env: Env): Promise<JWTPayload | null> {
   const auth = req.headers.get("Authorization") || "";
   if (!auth.startsWith("Bearer ")) return null;
@@ -128,6 +140,37 @@ function orderScopeDenied(user: JWTPayload, order: { client_id?: unknown }): Res
 // 403 unless the caller is internal 4SYZ staff (fulfillment / procurement).
 function requireInternal(user: JWTPayload): Response | null {
   return isExternalRole(user.role) ? json({ error: "Forbidden — 4SYZ staff only" }, 403) : null;
+}
+// 403 unless the caller may act for this client id: staff → any; an external
+// user → only their own client. Guards /api/clients/:id/* against cross-tenant reads.
+function clientScopeDenied(user: JWTPayload, clientId: string): Response | null {
+  if (isExternalRole(user.role) && String(user.client_id || "") !== String(clientId))
+    return json({ error: "Forbidden" }, 403);
+  return null;
+}
+
+// Defence in depth: back-office surfaces denied to external client/vendor
+// accounts centrally, before routing. [method ("*"=any), path-regex]. None of
+// these is reachable from the client/vendor UI (verified against the frontend),
+// so blocking them server-side closes the "external hits an admin endpoint"
+// class in one place, on top of per-handler role checks.
+const STAFF_ONLY_API: Array<[string, RegExp]> = [
+  ["*", /^\/api\/users(\/|$)/], ["*", /^\/api\/staff(\/|$)/],
+  ["*", /^\/api\/audit-logs$/], ["*", /^\/api\/integrations\//],
+  ["*", /^\/api\/import(\/|-jobs)/], ["*", /^\/api\/approval-rules(\/|$)/],
+  ["*", /^\/api\/approval-chains(\/|$)/], ["*", /^\/api\/approval-chain-instances(\/|$)/],
+  ["*", /^\/api\/sla-rules(\/|$)/], ["*", /^\/api\/sla-breaches$/], ["*", /^\/api\/sla\/check$/],
+  ["*", /^\/api\/dunning/], ["*", /^\/api\/warehouses(\/|$)/],
+  ["*", /^\/api\/bin-locations(\/|$)/], ["*", /^\/api\/stock-transfers$/],
+  ["*", /^\/api\/stock-movements$/], ["*", /^\/api\/porter-expenses(\/|$)/],
+  ["*", /^\/api\/delivery-routes(\/|$)/], ["*", /^\/api\/po-templates(\/|$)/],
+  ["*", /^\/api\/po-approval-threshold$/], ["*", /^\/api\/sourcing\//],
+  ["POST", /^\/api\/hsn-gst-rates$/],
+  ["POST", /^\/api\/settings$/],
+  ["POST", /^\/api\/zones(\/|$)/], ["DELETE", /^\/api\/zones(\/|$)/],
+];
+function staffOnlyApiMatch(method: string, path: string): boolean {
+  return STAFF_ONLY_API.some(([m, re]) => (m === "*" || m === method) && re.test(path));
 }
 
 // G9: return a reason a PO must not be raised to this vendor, or null if clear.
@@ -509,10 +552,20 @@ async function ensureFeatureTables(env: Env): Promise<void> {
   } catch { /* table missing / non-fatal */ }
 }
 
-// One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
-// credential is left at rest for accounts that never log in.
+// Seed accounts carry a well-known password ("password"). In development/test we
+// upgrade them to PBKDF2 in place (convenient demo logins). In PRODUCTION we must
+// never launder a known credential into a real-looking hash — instead we disable
+// every seed account outright and provision a real admin from secrets, so the
+// well-known login can never be used against a live deployment.
 async function migrateSeedPasswords(env: Env): Promise<void> {
   try {
+    if (isProd(env)) {
+      await env.DB.prepare(
+        "UPDATE users SET password_hash='disabled:'||lower(hex(randomblob(16))), active=0 WHERE password_hash LIKE 'SEED:%'"
+      ).run();
+      await provisionBootstrapAdmin(env);
+      return;
+    }
     const { results } = await env.DB.prepare(
       "SELECT id, password_hash FROM users WHERE password_hash LIKE 'SEED:%'").all();
     for (const r of (results || []) as Array<{ id: string; password_hash: string }>) {
@@ -521,6 +574,24 @@ async function migrateSeedPasswords(env: Env): Promise<void> {
         .bind("hash:" + await hashPassword(pw), r.id).run();
     }
   } catch { /* non-fatal */ }
+}
+
+// Production bootstrap: if BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD
+// secrets are set, (re)provision exactly one active super_admin with a strong
+// PBKDF2 hash so the operator has a real, rotatable way in after seed accounts
+// are disabled. No-op unless both are supplied and the password is reasonable.
+async function provisionBootstrapAdmin(env: Env): Promise<void> {
+  const email = String(env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
+  const pw = String(env.BOOTSTRAP_ADMIN_PASSWORD || "");
+  if (!email || pw.length < 10) return;
+  const hash = "hash:" + await hashPassword(pw);
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE email=?").bind(email).first() as { id?: string } | null;
+  if (existing?.id) {
+    await env.DB.prepare("UPDATE users SET password_hash=?, role='super_admin', active=1 WHERE email=?").bind(hash, email).run();
+  } else {
+    await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials,active) VALUES (?,?,?,?,?,?,?,1)")
+      .bind(uid(), email, hash, "super_admin", "Administrator", "4SYZ Platform", "AD").run();
+  }
 }
 
 async function fixCategoryNames(env: Env): Promise<void> {
@@ -798,10 +869,21 @@ export default {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return withSecurityHeaders(cors());
     if (!url.pathname.startsWith("/api/")) return withSecurityHeaders(await env.ASSETS.fetch(request));
+    // Fail closed: never serve the API in production on a weak/default JWT secret.
+    if (isProd(env) && insecureSecret(env))
+      return withSecurityHeaders(json({error:"Server misconfigured — a strong JWT_SECRET must be set via `wrangler secret put JWT_SECRET`."}, 503));
     ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
 
     const path = url.pathname.replace(/\/$/,"");
     const method = request.method;
+
+    // Central defence-in-depth: external client/vendor accounts can never reach
+    // back-office endpoints, regardless of per-handler checks.
+    if (staffOnlyApiMatch(method, path)) {
+      const u = await getUser(request, env);
+      if (!u) return withSecurityHeaders(json({error:"Unauthorized"}, 401));
+      if (isExternalRole(u.role)) return withSecurityHeaders(json({error:"Forbidden — 4SYZ staff only"}, 403));
+    }
 
     const route = async (): Promise<Response> => {
       // Auth
@@ -1160,7 +1242,9 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   // Legacy demo/seed accounts stored the password in plaintext (SEED:). Still
   // accept them during the transition, but upgrade to PBKDF2 on the spot below so
   // plaintext is removed. Startup migration handles accounts that never log in.
-  else if (hash.startsWith("SEED:")) { valid = password === hash.slice(5); wasSeed = valid; }
+  // Seed accounts use a well-known password — never accept them in production,
+  // even if the startup migration has not yet disabled them on this isolate.
+  else if (hash.startsWith("SEED:") && !isProd(env)) { valid = password === hash.slice(5); wasSeed = valid; }
   if (!valid) { await loginRecordFail(env, emailKey); return json({error:"Invalid credentials"}, 401); }
 
   await loginClearFails(env, emailKey); // successful credentials — reset the counter
@@ -4428,6 +4512,7 @@ async function handleClientBudget(request: Request, env: Env, path: string): Pro
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const cs = clientScopeDenied(user!, id); if (cs) return cs;
   const client = await env.DB.prepare(`
     SELECT monthly_budget, approval_threshold,
       COALESCE((SELECT SUM(o.grand_total) FROM orders o
@@ -4441,6 +4526,7 @@ async function handleClientBudget(request: Request, env: Env, path: string): Pro
 async function handlePatchClient(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // client master data (budget/credit) is 4SYZ-only
   const id = path.split("/").pop()!;
   const body = await request.json() as Record<string,unknown>;
   const fields: string[] = [];
@@ -4480,6 +4566,7 @@ async function handleGetClientCatalog(request: Request, env: Env, path: string):
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const clientId = path.split("/")[3];
+  const cs = clientScopeDenied(user!, clientId); if (cs) return cs;
   let results: unknown[];
   try {
     ({results} = await env.DB.prepare(
@@ -6654,6 +6741,7 @@ async function handleGetClientCredit(request: Request, env: Env, path: string): 
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const clientId = path.split("/")[3];
+  const cs = clientScopeDenied(user!, clientId); if (cs) return cs;
   const row = await env.DB.prepare(
     "SELECT id,name,credit_limit,credit_used FROM clients WHERE id=?"
   ).bind(clientId).first() as Record<string,unknown>|null;

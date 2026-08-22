@@ -42,6 +42,11 @@
 	//   { "binding": "DOCS", "bucket_name": "smart-pantry-docs" }
 	// ],
 	"vars": {
+		// DEV/TEST ONLY. Production MUST override this with a real secret:
+		//   wrangler secret put JWT_SECRET   (a secret overrides this var at runtime)
+		// With APP_ENV=production the Worker refuses to serve if JWT_SECRET is
+		// missing, this default, or shorter than 32 chars (see insecureSecret()).
+		// Also set as secrets for production: BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD.
 		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod",
 		"APP_ENV": "development",
 		"EMAIL_FROM": "noreply@smartpantry.4syz.com",
