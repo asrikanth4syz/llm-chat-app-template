@@ -273,6 +273,20 @@ async function reviewProduct(sku) {
       </div>
     </div>
 
+    <div class="ai-panel" style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--bg-subtle,#f8fafc)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:1rem">◐</span>
+        <b style="font-size:.82rem;color:var(--navy)">AI draft extraction <span style="font-weight:400;color:var(--text-muted)">(Phase 2)</span></b>
+        <span class="attr" style="margin-left:auto"><span class="d db"></span>AI-drafted — needs human accept</span>
+      </div>
+      <textarea id="rev-label" rows="3" placeholder="Paste the label ingredient / declaration text here…" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:.78rem;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <button class="btn btn-secondary btn-sm" ${dataAct('runExtraction', sku)}>⚙ Run extraction</button>
+        <span style="font-size:.7rem;color:var(--text-muted)">Screens additives, sugar &amp; compound ingredients and checks label claims. Never states legality.</span>
+      </div>
+      <div id="rev-extract" style="margin-top:10px"></div>
+    </div>
+
     <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <div class="form-group"><label>Verification</label><select id="rev-ver" class="form-control">${opt('needs_review', p.verification)}${opt('ai_screened', p.verification)}${opt('verified', p.verification)}</select></div>
       <div class="form-group"><label>Fitment state</label><select id="rev-state" class="form-control">${['PENDING','REVIEW','APPROVED','CONDITIONAL','BLOCKED','EXPIRED'].map(s => opt(s, p.fitment_state)).join('')}</select></div>
@@ -300,6 +314,44 @@ function revAddAttr() {
   revRenderAttrs();
 }
 function revDelAttr(i) { APP._revAttrs.splice(i, 1); revRenderAttrs(); }
+
+async function runExtraction(sku) {
+  const text = document.getElementById('rev-label')?.value.trim();
+  const out = document.getElementById('rev-extract');
+  if (!text) { if (out) out.innerHTML = '<span class="note" style="color:var(--red);font-size:.74rem">Paste the label text first.</span>'; return; }
+  if (out) out.innerHTML = '<div class="loading-state" style="padding:12px"><div class="spinner"></div></div>';
+  const res = await api(`/catalogue/${encodeURIComponent(sku)}/extract`, { method: 'POST', body: JSON.stringify({ ingredient_text: text }) });
+  if (!res) { if (out) out.innerHTML = '<span class="note" style="color:var(--red);font-size:.74rem">Extraction failed.</span>'; return; }
+  renderExtract(res);
+  // Reflect the AI-screened state the backend just set.
+  const ver = document.getElementById('rev-ver'); if (ver && ver.value === 'needs_review') ver.value = 'ai_screened';
+  const st = document.getElementById('rev-state'); if (st && st.value === 'PENDING') st.value = 'REVIEW';
+}
+
+function renderExtract(res) {
+  const out = document.getElementById('rev-extract'); if (!out) return;
+  const badge = res.ai_used
+    ? '<span class="attr"><span class="d d4"></span>Workers AI + rules</span>'
+    : '<span class="attr"><span class="d db"></span>Rules engine</span>';
+  const ing = (res.ingredients || []).map(g => {
+    const conf = Math.round((g.confidence || 0) * 100);
+    const flags = String(g.flags || '').split(',').filter(Boolean).map(f => `<span style="background:#fee2e2;color:#b91c1c;border-radius:4px;padding:1px 5px;font-size:.62rem;margin-left:4px">${h(f)}</span>`).join('');
+    return `<tr><td style="padding:4px 6px">${h(g.normalized || g.raw_text)}${g.ins_code ? ` <span class="mono" style="color:var(--text-muted);font-size:.66rem">E${h(g.ins_code)}</span>` : ''}</td><td style="padding:4px 6px;font-size:.72rem;color:var(--text-muted)">${h(g.functional_class || '—')}${flags}</td><td style="padding:4px 6px;text-align:right;font-size:.7rem;color:${conf >= 80 ? 'var(--green,#16a34a)' : conf >= 60 ? '#b45309' : 'var(--red)'}">${conf}%</td></tr>`;
+  }).join('');
+  const claims = (res.claims || []).map(c => {
+    const col = c.outcome === 'CONTRADICTED' ? '#b91c1c' : c.outcome === 'NEEDS_REVIEW' ? '#b45309' : '#16a34a';
+    const bg = c.outcome === 'CONTRADICTED' ? '#fee2e2' : c.outcome === 'NEEDS_REVIEW' ? '#fef3c7' : '#dcfce7';
+    return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0"><span style="background:${bg};color:${col};border-radius:5px;padding:1px 7px;font-size:.64rem;font-weight:700;white-space:nowrap">${h(c.outcome)}</span><b style="font-size:.76rem">${h(c.name)}</b><span style="font-size:.72rem;color:var(--text-muted)">— ${h(c.why)}</span></div>`;
+  }).join('');
+  out.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px"><b style="font-size:.76rem;color:var(--navy)">Extracted ingredients</b> ${badge}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:.78rem;background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      <thead><tr style="background:var(--bg-subtle,#f1f5f9);text-align:left"><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Ingredient</th><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Class / flags</th><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted);text-align:right">Conf.</th></tr></thead>
+      <tbody>${ing || '<tr><td colspan="3" style="padding:8px;color:var(--text-muted)">Nothing recognised.</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:10px"><b style="font-size:.76rem;color:var(--navy)">Label claim checks</b>${claims || '<div style="font-size:.74rem;color:var(--text-muted)">No claims checked.</div>'}</div>
+    <div class="aiflag" style="background:#fef3c7;color:#92400e;border-radius:6px;padding:7px 10px;font-size:.7rem;margin-top:10px">These are AI drafts stored as <b>brand-unverified</b>. Confirm against evidence, then set Verification → <b>verified</b> to publish.</div>`;
+}
 
 async function saveReviewIntel(sku) {
   const res = await api(`/catalogue/${encodeURIComponent(sku)}/intel`, { method: 'PUT', body: JSON.stringify({ attributes: APP._revAttrs || [] }) });

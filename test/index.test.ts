@@ -296,6 +296,43 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect(d.attributes.length).toBe(2);
     expect(d.attributes.find(a => a.name === "Vegan")?.source).toBe("4syz");
   });
+
+  const ACCEPTANCE_LABEL = "Made with Water, Sugar, Black Salt, Sea Salt, Cumin Powder, Spices & Condiments. It contains Added Colour (E150C), Acidity Regulator (E330), Permitted Class II Preservative (E211). No Added Sugar. No Preservatives.";
+
+  it("AI extraction screens additives, sugar and compound ingredients (mandatory acceptance test)", async () => {
+    const res = await post("/api/catalogue/SKU001/extract", { ingredient_text: ACCEPTANCE_LABEL, use_ai: false }, adminToken);
+    expect(res.status).toBe(200);
+    const out = await res.json() as {
+      ingredients: Array<{ ins_code: string; functional_class: string; flags: string }>;
+      claims: Array<{ name: string; outcome: string }>;
+    };
+    const flags = out.ingredients.flatMap(i => String(i.flags || "").split(",").filter(Boolean));
+    // E211 preservative + E150C synthetic colour recognised from their INS codes.
+    expect(out.ingredients.some(i => i.ins_code === "211")).toBe(true);
+    expect(out.ingredients.some(i => i.ins_code === "150c")).toBe(true);
+    expect(flags).toContain("preservative");
+    expect(flags).toContain("synthetic-colour");
+    // Compound "Spices & Condiments" flagged for qualified review.
+    expect(flags).toContain("compound");
+    // "No Added Sugar" is contradicted because sugar is present.
+    expect(out.claims.find(c => c.name === "No Added Sugar")?.outcome).toBe("CONTRADICTED");
+    expect(out.claims.find(c => c.name === "No Preservatives")?.outcome).toBe("CONTRADICTED");
+  });
+
+  it("AI extraction writes AI-sourced drafts and marks the product ai_screened (never verified)", async () => {
+    await post("/api/catalogue/SKU007/extract", { ingredient_text: ACCEPTANCE_LABEL, use_ai: false }, adminToken);
+    const d = await (await get("/api/catalogue/SKU007", adminToken)).json() as {
+      product: { verification: string }; ingredients: Array<{ source: string }>;
+    };
+    expect(d.product.verification).toBe("ai_screened");
+    expect(d.ingredients.length).toBeGreaterThan(0);
+    expect(d.ingredients.every(i => i.source === "ai")).toBe(true);
+  });
+
+  it("extraction requires label text and is forbidden for clients", async () => {
+    expect((await post("/api/catalogue/SKU001/extract", { ingredient_text: "" }, adminToken)).status).toBe(400);
+    expect((await post("/api/catalogue/SKU001/extract", { ingredient_text: ACCEPTANCE_LABEL }, clientToken)).status).toBe(403);
+  });
 });
 
 describe("Inventory", () => {

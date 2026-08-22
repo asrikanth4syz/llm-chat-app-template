@@ -1,6 +1,9 @@
 export interface Env {
   DB: D1Database;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
+  // Workers AI (Phase 2 draft extraction). Optional: an account without the
+  // binding still works via the deterministic parser, which is the source of truth.
+  AI?: { run: (model: string, input: unknown) => Promise<unknown> };
   JWT_SECRET: string;
   APP_ENV: string;
   EMAIL_FROM: string;

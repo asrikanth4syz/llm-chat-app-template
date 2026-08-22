@@ -15,6 +15,12 @@
 	"observability": {
 		"enabled": true
 	},
+	// Workers AI — powers Product Intelligence draft extraction (Phase 2). The
+	// extract handler guards on env.AI, so an account without Workers AI still
+	// works via the deterministic parser fallback.
+	"ai": {
+		"binding": "AI"
+	},
 	"triggers": {
 		// Daily delivery reminders: 03:30 UTC = 09:00 IST
 		"crons": ["30 3 * * *"]

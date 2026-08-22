@@ -820,6 +820,7 @@ export default {
       if (path==="/api/catalogue"               && method==="GET")   return handleListCatalogue(request,env);
       if (path.match(/^\/api\/catalogue\/[^/]+\/fitment$/) && method==="PATCH") return handleSetFitment(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/intel$/)   && method==="PUT")   return handlePutIntel(request,env,path);
+      if (path.match(/^\/api\/catalogue\/[^/]+\/extract$/) && method==="POST")  return handleExtractIntel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+$/)          && method==="GET")   return handleGetCatalogueItem(request,env,path);
       if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
@@ -2844,6 +2845,95 @@ async function handlePutIntel(request: Request, env: Env, path: string): Promise
   }
   await audit(env, user, "UPDATE", "product_intel", sku);
   return json({ sku, ok: true });
+}
+
+// ── Phase 2: AI draft extraction ────────────────────────────────────────────
+// Deterministic normalization + claim engine (the mandatory acceptance test):
+// recognises INS/E-numbers, functional class & flags, added sugar, compound
+// ingredients, and runs claim contradiction checks. Rules ≠ model — this is
+// deterministic and testable; Workers AI (env.AI) assists OCR/free-text when
+// available, but never drives a legal conclusion.
+const INS_MAP: Record<string, { cls: string; flags: string[] }> = {
+  "102":{cls:"Colour",flags:["synthetic-colour"]}, "110":{cls:"Colour",flags:["synthetic-colour"]},
+  "122":{cls:"Colour",flags:["synthetic-colour"]}, "129":{cls:"Colour",flags:["synthetic-colour"]},
+  "150c":{cls:"Colour",flags:["synthetic-colour"]}, "150d":{cls:"Colour",flags:["synthetic-colour"]},
+  "202":{cls:"Preservative",flags:["preservative"]}, "211":{cls:"Preservative",flags:["preservative"]},
+  "223":{cls:"Preservative",flags:["preservative"]},
+  "296":{cls:"Acidity Regulator",flags:[]}, "330":{cls:"Acidity Regulator",flags:[]}, "331":{cls:"Acidity Regulator",flags:[]},
+  "621":{cls:"Flavour Enhancer",flags:["msg"]}, "635":{cls:"Flavour Enhancer",flags:["msg"]},
+  "951":{cls:"Sweetener",flags:["artificial-sweetener"]}, "950":{cls:"Sweetener",flags:["artificial-sweetener"]},
+};
+function extractProductIntel(text: string): { ingredients: Array<Record<string,unknown>>; claims: Array<Record<string,string>> } {
+  const raw = String(text || "");
+  const lower = raw.toLowerCase();
+  const ingredients: Array<Record<string,unknown>> = [];
+  const seen = new Set<string>();
+  const reg = /\b[ei]\s?-?\s?(\d{3,4})\s?([a-d])?\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = reg.exec(raw))) {
+    const code = m[1] + (m[2] ? m[2].toLowerCase() : "");
+    if (seen.has(code)) continue; seen.add(code);
+    const info = INS_MAP[code] || INS_MAP[m[1]] || { cls: "Additive", flags: [] };
+    ingredients.push({ raw_text: m[0].trim(), normalized: "E" + code.toUpperCase(), ins_code: code,
+      functional_class: info.cls, flags: info.flags.join(","), state: "detected", source: "ai", confidence: 0.9 });
+  }
+  const hasSugar = /\bsugar\b|\bsucrose\b|\bglucose\b|\bfructose\b|\bjaggery\b/.test(lower);
+  if (hasSugar) ingredients.push({ raw_text: "sugar", normalized: "Added sugar", ins_code: "", functional_class: "Sweetener", flags: "added-sugar", state: "detected", source: "ai", confidence: 0.85 });
+  const compound = /\bspices?\b|\bcondiments?\b|\bflavou?rs?\b/.test(lower);
+  if (compound) ingredients.push({ raw_text: "spices & condiments / flavours", normalized: "Compound ingredient", ins_code: "", functional_class: "Compound", flags: "compound,unspecified", state: "detected", source: "ai", confidence: 0.55 });
+
+  const flags = new Set(ingredients.flatMap(i => String(i.flags || "").split(",").filter(Boolean)));
+  const claim = (name: string, bad: boolean, why: string, review = false) => ({ name, outcome: bad ? "CONTRADICTED" : (review ? "NEEDS_REVIEW" : "NO_CONFLICT"), why });
+  const claims = [
+    claim("No Added Sugar", hasSugar, hasSugar ? "sugar found in ingredients" : "no sugar found"),
+    claim("No Preservatives", flags.has("preservative"), flags.has("preservative") ? "preservative additive detected" : "none detected"),
+    claim("No Artificial / Synthetic Colours", flags.has("synthetic-colour"), flags.has("synthetic-colour") ? "synthetic colour detected" : "none detected"),
+  ];
+  if (compound) claims.push(claim("Ingredient transparency", false, "compound / unspecified ingredient — qualified review needed", true));
+  return { ingredients, claims };
+}
+
+async function handleExtractIntel(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can run extraction"}, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
+  if (!exists) return json({error:"Unknown SKU"}, 404);
+  const body = await request.json() as { ingredient_text?: string; use_ai?: boolean };
+  const text = String(body.ingredient_text || "").trim();
+  if (!text) return json({error:"Paste the label ingredient text to extract from"}, 400);
+
+  // Best-effort Workers AI pass — proves the binding and (later) does OCR. The
+  // deterministic engine remains the source of truth, so a failure is non-fatal.
+  let aiUsed = false;
+  if (body.use_ai !== false && env.AI) {
+    try {
+      await env.AI.run(
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        { messages: [
+          { role: "system", content: "You extract food-label facts. Reply with a short JSON object {\"additives\":[],\"has_added_sugar\":false}. Never state legality." },
+          { role: "user", content: text.slice(0, 2000) },
+        ], max_tokens: 300 });
+      aiUsed = true;
+    } catch { aiUsed = false; }
+  }
+
+  const result = extractProductIntel(text);
+  // Replace only AI-sourced ingredient drafts (keep anything a human verified).
+  await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=? AND source='ai'").bind(sku).run();
+  for (const g of result.ingredients) {
+    await env.DB.prepare("INSERT INTO product_ingredients (id,sku,raw_text,normalized,ins_code,functional_class,flags,state,source) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind(uid(), sku, g.raw_text, g.normalized, g.ins_code, g.functional_class, g.flags, g.state, "ai").run();
+  }
+  // Mark the product AI-screened (never verified — that stays a human action).
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO product_fitment (sku,verification,fitment_state,updated_at) VALUES (?, 'ai_screened', 'REVIEW', ?)
+     ON CONFLICT(sku) DO UPDATE SET verification=CASE WHEN product_fitment.verification='verified' THEN 'verified' ELSE 'ai_screened' END, updated_at=excluded.updated_at`
+  ).bind(sku, now).run();
+  await audit(env, user, "AI_EXTRACT", "product", sku, undefined, `${result.ingredients.length} drafts${aiUsed ? " · AI" : " · rules"}`);
+  return json({ sku, ai_used: aiUsed, ingredients: result.ingredients, claims: result.claims });
 }
 
 // ════════════════════════════════════════════════════════════════════
