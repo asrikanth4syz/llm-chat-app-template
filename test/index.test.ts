@@ -1239,6 +1239,51 @@ describe("PO approval + compliance gate (G8/G9)", () => {
     expect(st.status).toBe("SENT");
   });
 
+  it("PUT amends a SENT PO — recomputes totals, keeps SENT below threshold", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken)).json() as { id: string; grand_total: number };
+    const res = await put(`/api/purchase-orders/${c.id}`, { items: [{ sku: "BIGSKU", name: "Big Item", qty: 4, unit_price: 1000 }] }, adminToken);
+    expect(res.status).toBe(200);
+    const b = await res.json() as { status: string; grand_total: number };
+    expect(b.status).toBe("SENT");
+    expect(b.grand_total).toBe(c.grand_total * 2);           // qty doubled, price same
+    const recv = await (await get(`/api/purchase-orders/${c.id}/receivable`, adminToken)).json() as { lines: Array<{ qty: number }> };
+    expect(recv.lines[0].qty).toBe(4);
+  });
+
+  it("PUT amend above threshold re-enters PENDING_APPROVAL", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken)).json() as { id: string };
+    const res = await put(`/api/purchase-orders/${c.id}`, { items: [{ sku: "BIGSKU", name: "Big Item", qty: 60, unit_price: 1000 }] }, adminToken);
+    expect((await res.json() as { status: string }).status).toBe("PENDING_APPROVAL");
+  });
+
+  it("PUT amend is forbidden for non-approver roles", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken)).json() as { id: string };
+    const res = await put(`/api/purchase-orders/${c.id}`, { items: [{ sku: "BIGSKU", name: "Big Item", qty: 3, unit_price: 1000 }] }, clientToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("amend can't drop a line below the quantity already received", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 10, unit_price: 100 }] }, adminToken)).json() as { id: string };
+    await adb.prepare("UPDATE po_items SET qty_received=6 WHERE po_id=?").bind(c.id).run();
+    const res = await put(`/api/purchase-orders/${c.id}`, { items: [{ sku: "BIGSKU", name: "Big Item", qty: 4, unit_price: 100 }] }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("cancel is allowed while SENT", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken)).json() as { id: string };
+    const res = await patch(`/api/purchase-orders/${c.id}`, { status: "CANCELLED" }, adminToken);
+    expect(res.status).toBe(200);
+    const st = await adb.prepare("SELECT status FROM purchase_orders WHERE id=?").bind(c.id).first() as Record<string, string>;
+    expect(st.status).toBe("CANCELLED");
+  });
+
+  it("cancel is blocked once the PO has moved (DISPATCHED)", async () => {
+    const c = await (await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken)).json() as { id: string };
+    await adb.prepare("UPDATE purchase_orders SET status='DISPATCHED' WHERE id=?").bind(c.id).run();
+    const res = await patch(`/api/purchase-orders/${c.id}`, { status: "CANCELLED" }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
   it("threshold is configurable and enforced", async () => {
     await patch("/api/po-approval-threshold", { threshold: 1000 }, adminToken);
     const res = await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "BIGSKU", name: "Big Item", qty: 2, unit_price: 1000 }] }, adminToken);

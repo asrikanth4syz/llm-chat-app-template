@@ -808,6 +808,7 @@ export default {
       if (path==="/api/po-approval-threshold"         && method==="GET")   return handlePOApprovalThreshold(request,env,"GET");
       if (path==="/api/po-approval-threshold"         && method==="PATCH") return handlePOApprovalThreshold(request,env,"PATCH");
       if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PATCH") return handlePatchPO(request,env,path);
+      if (path.match(/^\/api\/purchase-orders\/[^/]+$/) && method==="PUT")   return handleAmendPO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/receivable$/)   && method==="GET")  return handleReceivablePO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/invoice$/)      && method==="POST") return handleInvoicePO(request,env,path);
       if (path.match(/^\/api\/purchase-orders\/[^/]+\/debit-note$/)   && method==="POST") return handleCreateDebitNote(request,env,path);
@@ -3065,6 +3066,18 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
   const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!po) return json({error:"Not found"}, 404);
 
+  // Cancellation policy: only before goods move (PENDING_APPROVAL / SENT / ACCEPTED),
+  // and only by procurement/finance leads (or super_admin). Once a PO is DISPATCHED,
+  // PARTIALLY_RECEIVED, RECEIVED or INVOICED, goods are in transit or received, so a
+  // cancel would desync stock — blocked here.
+  if (body.status === "CANCELLED") {
+    if (!["PENDING_APPROVAL","SENT","ACCEPTED"].includes(po.status))
+      return json({error:`Cannot cancel a PO once it is ${String(po.status).replace(/_/g," ")} — goods have moved. Raise a debit note instead.`}, 400);
+    if (!PO_APPROVER_ROLES.includes(user!.role))
+      return json({error:"Only procurement or finance leads can cancel a PO"}, 403);
+    await audit(env, user, "CANCEL", "purchase_order", id, po.status, "CANCELLED");
+  }
+
   // G8: approving/rejecting a held PO is restricted to procurement/finance leads.
   if (po.status === "PENDING_APPROVAL") {
     if (!PO_APPROVER_ROLES.includes(user!.role))
@@ -3107,6 +3120,81 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
 
   await audit(env, user, "UPDATE", "purchase_order", id, po.status, body.status||po.status);
   return json({id, status: body.status});
+}
+
+// PUT /api/purchase-orders/:id — amend a PO's lines/qty/price/vendor/date/notes.
+// Policy: super_admin may amend any active PO; other procurement/finance leads only
+// while the vendor hasn't acted (PENDING_APPROVAL / SENT). Terminal or billed POs
+// (CANCELLED / REJECTED / PAID / INVOICED) are never amendable. Already-received
+// quantities can't be reduced below what was received. Totals + GST are recomputed;
+// if the value crosses the approval threshold the PO re-enters PENDING_APPROVAL.
+async function handleAmendPO(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const body = await request.json() as { items:Array<{sku:string;name:string;qty:number;unit_price:number}>; expected_delivery?:string; notes?:string; vendor_id?:string };
+  const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!po) return json({error:"Not found"}, 404);
+  const status = String(po.status);
+
+  if (!PO_APPROVER_ROLES.includes(user!.role))
+    return json({error:"Only procurement or finance leads can amend a PO"}, 403);
+  if (["CANCELLED","REJECTED","PAID","INVOICED"].includes(status))
+    return json({error:`A ${status.replace(/_/g," ")} PO cannot be amended`}, 400);
+  if (user!.role !== "super_admin" && !["PENDING_APPROVAL","SENT"].includes(status))
+    return json({error:`This PO is ${status.replace(/_/g," ")} — only a super admin can amend it after the vendor has accepted`}, 403);
+  if (!body.items?.length) return json({error:"At least one line item is required"}, 400);
+
+  // Preserve receipt progress; block reducing a line below what's already received.
+  const { results: existing } = await env.DB.prepare("SELECT sku, qty_received FROM po_items WHERE po_id=?").bind(id).all() as { results: Array<Record<string,unknown>> };
+  const recvBySku: Record<string, number> = {};
+  for (const r of existing) recvBySku[String(r.sku)] = Number(r.qty_received) || 0;
+  for (const it of body.items) {
+    const recv = recvBySku[it.sku] || 0;
+    if (Number(it.qty) < recv)
+      return json({error:`${it.name || it.sku}: quantity (${it.qty}) can't be below the ${recv} already received`}, 400);
+  }
+
+  const vendorId = body.vendor_id || String(po.vendor_id);
+  if (body.vendor_id && body.vendor_id !== po.vendor_id) {
+    const issue = await vendorComplianceIssue(env, vendorId);
+    if (issue) return json({error:`Cannot switch vendor — ${issue}`}, 422);
+  }
+
+  // Recompute totals with per-line GST (mirrors handleCreatePO).
+  let subtotal = 0, gst = 0;
+  for (const it of body.items) {
+    const lt = Number(it.qty) * Number(it.unit_price);
+    const inv = await env.DB.prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(it.sku).first() as Record<string,number>|null;
+    const rate = inv && inv.gst_rate != null ? Number(inv.gst_rate) : 18;
+    subtotal += lt; gst += Math.round(lt * rate / 100);
+  }
+  const grand_total = subtotal + gst;
+
+  // Replace line items, carrying receipt progress forward.
+  await env.DB.prepare("DELETE FROM po_items WHERE po_id=?").bind(id).run();
+  for (const it of body.items) {
+    await env.DB.prepare("INSERT INTO po_items (id,po_id,sku,name,qty,unit_price,total,qty_received) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), id, it.sku, it.name, Number(it.qty), Number(it.unit_price), Number(it.qty)*Number(it.unit_price), recvBySku[it.sku] || 0).run();
+  }
+
+  // Re-approval only re-applies while the PO is still pre-vendor.
+  let newStatus = status;
+  if (["PENDING_APPROVAL","SENT"].includes(status)) {
+    const threshold = await poApprovalThreshold(env);
+    newStatus = (threshold > 0 && grand_total >= threshold) ? "PENDING_APPROVAL" : "SENT";
+  }
+
+  await env.DB.prepare("UPDATE purchase_orders SET vendor_id=?,subtotal=?,gst=?,grand_total=?,expected_delivery=?,notes=?,status=?,updated_at=datetime('now') WHERE id=?")
+    .bind(vendorId, subtotal, gst, grand_total, body.expected_delivery || po.expected_delivery || null, body.notes != null ? body.notes : (po.notes || null), newStatus, id).run();
+
+  await audit(env, user, "AMEND", "purchase_order", id, `total:${po.grand_total}`, `total:${grand_total},status:${newStatus}`);
+  if (newStatus === "PENDING_APPROVAL" && status !== "PENDING_APPROVAL")
+    await pushNotification(env, "procurement_manager", `PO ${id} amended above threshold — needs re-approval (₹${grand_total.toLocaleString("en-IN")})`);
+  else
+    await pushNotification(env, "vendor_admin", `PO ${id} amended — new total ₹${grand_total.toLocaleString("en-IN")}`);
+
+  return json({ id, status: newStatus, grand_total });
 }
 
 // ════════════════════════════════════════════════════════════════════

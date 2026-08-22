@@ -966,6 +966,80 @@ async function viewPO(id) {
       <thead><tr><th>Item</th><th class="u-right">Qty</th><th class="u-right">Unit ₹</th><th class="u-right">Line total</th><th class="u-right">Received</th><th class="u-right">Remaining</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     ${po.notes ? `<div style="margin-top:10px;font-size:.8rem;color:var(--text-muted)"><b>Notes:</b> ${h(po.notes)}</div>` : ''}`;
+
+  // Lifecycle actions — amend / cancel, gated by role + state.
+  const role = APP.user?.role;
+  const canManage = ['super_admin','ops_admin','procurement_manager','finance_admin'].includes(role);
+  const st = po.status;
+  const canEdit = canManage && !['CANCELLED','REJECTED','PAID','INVOICED'].includes(st) && (role === 'super_admin' || ['PENDING_APPROVAL','SENT'].includes(st));
+  const canCancel = canManage && ['PENDING_APPROVAL','SENT','ACCEPTED'].includes(st);
+  const foot = document.getElementById('modal-footer');
+  if (foot) foot.innerHTML =
+    `${canEdit ? `<button class="btn btn-secondary" ${dataActClose('editPOModal', id)}>✎ Edit PO</button>` : ''}
+     ${canCancel ? `<button class="btn btn-danger" ${dataActClose('cancelPO', id)}>Cancel PO</button>` : ''}
+     <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+}
+
+// Amend a raised PO — reuses the New-PO line editor, prefilled. Super-admin may
+// edit any active PO; other leads only before the vendor accepts (backend enforces).
+async function editPOModal(poId) {
+  const [d, inv] = await Promise.all([api(`/purchase-orders/${poId}/receivable`), api('/inventory')]);
+  if (!d || !inv) return;
+  const po = d.po || {}, lines = d.lines || [];
+  const [vprods, vpos] = await Promise.all([
+    api(`/vendors/${po.vendor_id}/products`).catch(() => []),
+    api(`/purchase-orders?vendor_id=${po.vendor_id}`).catch(() => []),
+  ]);
+  const vrate = {}; (vprods || []).forEach(p => { if (p.sku) vrate[p.sku] = p.rate; });
+  const last = {}; (vpos || []).forEach(p => (p.items || []).forEach(it => { if (last[it.sku] == null) last[it.sku] = it.unit_price; }));
+  _poVendor = { id: po.vendor_id, name: po.vendor_name };
+  _poPriceMap = {};
+  inv.forEach(i => { _poPriceMap[i.sku] = { name: i.name, list: i.unit_price || 0, gst: (i.gst_rate != null ? i.gst_rate : 18), vendor: vrate[i.sku], last: last[i.sku] }; });
+  _poLines = lines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, unit_price: l.unit_price, gst: (_poPriceMap[l.sku] ? _poPriceMap[l.sku].gst : 18) }));
+  const itemOpts = inv.map(i => `<option value="${i.sku}">${h(i.name)}</option>`).join('');
+  openModal(`Edit PO — ${poId}`, `
+    <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Status <b>${(po.status || '').replace(/_/g, ' ')}</b> · a line's quantity can't drop below what's already received.</div>
+    <div class="form-group"><label>Add item</label>
+      <select id="po-add" ${dataChangeEl('addPOLine')}><option value="">Select an item…</option>${itemOpts}</select>
+    </div>
+    <div class="table-wrap"><table class="table" style="margin:0">
+      <thead><tr><th>Item</th><th class="u-center">Qty</th><th class="u-right">Unit ₹</th><th class="u-center">GST</th><th class="u-right">Total</th><th></th></tr></thead>
+      <tbody id="po-lines"></tbody>
+    </table></div>
+    <div id="po-grand" style="text-align:right;font-weight:700;margin-top:10px;color:var(--navy)"></div>
+    <div class="form-group" style="margin-top:10px"><label>Expected Delivery</label><input type="date" id="po-del" value="${po.expected_delivery || ''}"></div>
+    <div class="form-group"><label>Notes</label><input type="text" id="po-notes" value="${h(po.notes || '')}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveAmendPO', poId)}>Save changes</button>`);
+  renderPOLines();
+}
+
+async function saveAmendPO(poId) {
+  recalcPO();
+  const items = _poLines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, unit_price: l.unit_price })).filter(i => i.qty > 0);
+  if (!items.length) { showToast('Keep at least one item', 'error'); return; }
+  const res = await api(`/purchase-orders/${poId}`, { method: 'PUT', body: JSON.stringify({
+    items,
+    expected_delivery: document.getElementById('po-del')?.value || null,
+    notes: document.getElementById('po-notes')?.value?.trim() || '',
+  })});
+  if (res) {
+    closeModal();
+    showToast(`PO ${poId} updated — ${fmt(res.grand_total)}${res.status === 'PENDING_APPROVAL' ? ' · needs re-approval' : ''}`);
+    navigate('procurement');
+  }
+}
+
+function cancelPO(poId) {
+  openModal(`Cancel PO ${poId}`,
+    `<p style="font-size:.9rem;line-height:1.5">Cancel purchase order <b>${poId}</b>? Any linked order is reverted for reprocessing. Cancellation is only allowed before goods are dispatched.</p>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep PO</button>
+     <button class="btn btn-danger" ${dataAct('confirmCancelPO', poId)}>Cancel PO</button>`);
+}
+
+async function confirmCancelPO(poId) {
+  const res = await api(`/purchase-orders/${poId}`, { method: 'PATCH', body: JSON.stringify({ status: 'CANCELLED' }) });
+  if (res) { closeModal(); showToast(`PO ${poId} cancelled`); navigate('procurement'); }
 }
 
 // "New PO" needs a vendor first (a PO is per-vendor). Pick one here, then hand
@@ -1189,7 +1263,9 @@ async function renderProcurement(el) {
                 ? `<button class="btn btn-primary btn-sm" ${dataAct('recordInvoice', po.id)}>Record Invoice</button> <button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
                 : po.status==='INVOICED'
                   ? `<button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
-                  : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+                  : (['SENT','ACCEPTED'].includes(po.status) && canApprovePO)
+                    ? `<button class="btn btn-secondary btn-sm" ${dataAct('cancelPO', po.id)}>Cancel</button>`
+                    : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>
