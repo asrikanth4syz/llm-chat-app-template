@@ -1265,7 +1265,9 @@ async function renderProcurement(el) {
                   ? `<button class="btn btn-secondary btn-sm" ${dataAct('debitNote', po.id)}>Debit note</button>`
                   : (['SENT','ACCEPTED'].includes(po.status) && canApprovePO)
                     ? `<button class="btn btn-secondary btn-sm" ${dataAct('cancelPO', po.id)}>Cancel</button>`
-                    : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}</td>
+                    : '<span style="color:var(--text-muted);font-size:.8rem">—</span>'}${
+            (canApprovePO && !['CANCELLED','REJECTED','PAID','INVOICED'].includes(po.status) && (APP.user?.role==='super_admin' || ['PENDING_APPROVAL','SENT'].includes(po.status)))
+              ? ` <button class="btn btn-secondary btn-sm" ${dataAct('editPOModal', po.id)}>✎ Edit</button>` : ''}</td>
         </tr>`).join('')||'<tr><td colspan="6" class="u-empty">No POs</td></tr>'}
         </tbody>
       </table>
