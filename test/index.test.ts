@@ -256,6 +256,48 @@ describe("Auth", () => {
 // ════════════════════════════════════════════════════════════════════
 // INVENTORY
 // ════════════════════════════════════════════════════════════════════
+describe("Smart Catalogue / Product Intelligence", () => {
+  it("PATCH fitment (Super Admin) publishes a product; catalogue lists it verified", async () => {
+    const res = await patch("/api/catalogue/SKU001/fitment", { verification: "verified", fitment_state: "APPROVED", clean_label: "eligible" }, adminToken);
+    expect(res.status).toBe(200);
+    const cat = await (await get("/api/catalogue", adminToken)).json() as { items: Array<Record<string, string>> };
+    const item = cat.items.find(i => i.sku === "SKU001");
+    expect(item?.verification).toBe("verified");
+    expect(item?.fitment_state).toBe("APPROVED");
+  });
+
+  it("clients see only published products", async () => {
+    await patch("/api/catalogue/SKU002/fitment", { verification: "needs_review", fitment_state: "PENDING" }, adminToken);
+    const cat = await (await get("/api/catalogue", clientToken)).json() as { items: Array<Record<string, string>> };
+    expect(cat.items.some(i => i.sku === "SKU001")).toBe(true);   // approved → visible
+    expect(cat.items.some(i => i.sku === "SKU002")).toBe(false);  // pending → hidden
+  });
+
+  it("GET /api/catalogue/:sku returns full intelligence arrays", async () => {
+    const d = await (await get("/api/catalogue/SKU001", adminToken)).json() as { product: Record<string, unknown>; attributes: unknown[]; certifications: unknown[] };
+    expect(d.product.sku).toBe("SKU001");
+    expect(Array.isArray(d.attributes)).toBe(true);
+    expect(Array.isArray(d.certifications)).toBe(true);
+  });
+
+  it("clients cannot open an unpublished product", async () => {
+    await patch("/api/catalogue/SKU002/fitment", { verification: "needs_review", fitment_state: "BLOCKED" }, adminToken);
+    expect((await get("/api/catalogue/SKU002", clientToken)).status).toBe(404);
+  });
+
+  it("fitment + intel are forbidden for clients", async () => {
+    expect((await patch("/api/catalogue/SKU001/fitment", { fitment_state: "BLOCKED" }, clientToken)).status).toBe(403);
+    expect((await put("/api/catalogue/SKU001/intel", { attributes: [] }, clientToken)).status).toBe(403);
+  });
+
+  it("PUT intel replaces attributes with their source", async () => {
+    await put("/api/catalogue/SKU001/intel", { attributes: [{ grp: "dietary", name: "Vegan", source: "4syz" }, { grp: "formulation", name: "No Added Sugar", source: "brand" }] }, adminToken);
+    const d = await (await get("/api/catalogue/SKU001", adminToken)).json() as { attributes: Array<{ name: string; source: string }> };
+    expect(d.attributes.length).toBe(2);
+    expect(d.attributes.find(a => a.name === "Vegan")?.source).toBe("4syz");
+  });
+});
+
 describe("Inventory", () => {
   it("GET /api/inventory — ops user sees all items", async () => {
     const res = await get("/api/inventory", opsToken);

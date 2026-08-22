@@ -106,6 +106,9 @@ function isExternalRole(role: string): boolean { return EXTERNAL_ROLES.includes(
 
 // Roles that may approve/reject a purchase order held for approval (G8).
 const PO_APPROVER_ROLES = ["super_admin","ops_admin","procurement_manager","finance_admin"];
+// Product Intelligence reviewers — fitment sign-off sits with Super Admin + Ops.
+const PI_ROLES = ["super_admin","ops_admin","ops_manager"];
+const CLIENT_ROLES = ["client_admin","client_user","client_approver"];
 
 // G9: return a reason a PO must not be raised to this vendor, or null if clear.
 async function vendorComplianceIssue(env: Env, vendorId: string): Promise<string | null> {
@@ -447,6 +450,14 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS po_invoices ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_invoice_no TEXT, invoice_amount REAL DEFAULT 0, invoice_date TEXT, match_status TEXT DEFAULT 'PENDING', qty_variance REAL DEFAULT 0, amount_variance REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
+    // Brand & Product Intelligence (Smart Catalogue + Product Intelligence)
+    `CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT, emoji TEXT DEFAULT '🏷️', description TEXT, status TEXT DEFAULT 'active', created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_fitment ( sku TEXT PRIMARY KEY, verification TEXT DEFAULT 'needs_review', fitment_state TEXT DEFAULT 'PENDING', clean_label TEXT DEFAULT 'pending', reviewer TEXT, reviewed_at TEXT, expiry_date TEXT, notes TEXT, updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_attributes ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, grp TEXT NOT NULL, name TEXT NOT NULL, source TEXT DEFAULT 'brand', created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_nutrition ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, nutrient TEXT NOT NULL, value TEXT, unit TEXT, basis TEXT DEFAULT 'per 100g', source TEXT DEFAULT 'brand' );`,
+    `CREATE TABLE IF NOT EXISTS product_ingredients ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, raw_text TEXT, normalized TEXT, ins_code TEXT, functional_class TEXT, flags TEXT, state TEXT DEFAULT 'detected', source TEXT DEFAULT 'brand' );`,
+    `CREATE TABLE IF NOT EXISTS product_certifications ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, cert_type TEXT NOT NULL, issuer TEXT, number TEXT, scope TEXT, issue_date TEXT, expiry_date TEXT, status TEXT DEFAULT 'active', source TEXT DEFAULT 'brand', reviewer TEXT, reviewed_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS product_allergens ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, allergen TEXT NOT NULL, contains_state TEXT DEFAULT 'not_declared', cross_contact_state TEXT DEFAULT 'unknown', source TEXT DEFAULT 'brand' );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -544,6 +555,31 @@ async function fixCategoryNames(env: Env): Promise<void> {
         AND EXISTS (SELECT 1 FROM clients c WHERE c.id=users.client_id
           AND COALESCE(c.name,'') <> '' AND c.name <> COALESCE(users.org,''))`).run();
   } catch { /* non-fatal — tables may not exist yet */ }
+  try {
+    // Seed a demonstrable Smart Catalogue off existing inventory (idempotent):
+    // brands, fitment (first 5 approved+verified, rest pending → review queue),
+    // a couple of attributes and an FSSAI certificate per approved product.
+    const { results: prods } = await env.DB.prepare(
+      "SELECT sku, name, COALESCE(brand,'') AS brand FROM inventory WHERE active=1 ORDER BY sku LIMIT 10"
+    ).all() as { results: Array<Record<string,string>> };
+    const today = new Date().toISOString().slice(0,10);
+    const plusYear = new Date(Date.now() + 330*86400000).toISOString().slice(0,10);
+    for (let i = 0; i < prods.length; i++) {
+      const sku = String(prods[i].sku);
+      const brandName = (prods[i].brand && prods[i].brand.trim()) ? prods[i].brand.trim() : String(prods[i].name).split(" ").slice(0,2).join(" ");
+      const brandId = "br-" + brandName.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,16);
+      await env.DB.prepare("INSERT OR IGNORE INTO brands (id,name,emoji) VALUES (?,?,?)").bind(brandId, brandName, "🏷️").run();
+      const approved = i < 5;
+      await env.DB.prepare("INSERT OR IGNORE INTO product_fitment (sku,verification,fitment_state,clean_label,reviewer,reviewed_at,expiry_date) VALUES (?,?,?,?,?,?,?)")
+        .bind(sku, approved?"verified":"needs_review", approved?"APPROVED":"PENDING", approved?"eligible":"pending", approved?"Ops · Seed":null, approved?today:null, approved?plusYear:null).run();
+      if (approved) {
+        await env.DB.prepare("INSERT OR IGNORE INTO product_attributes (id,sku,grp,name,source) VALUES (?,?,?,?,?)").bind("pa-"+sku+"-vegan", sku, "dietary", "Vegan", "4syz").run();
+        await env.DB.prepare("INSERT OR IGNORE INTO product_attributes (id,sku,grp,name,source) VALUES (?,?,?,?,?)").bind("pa-"+sku+"-nas", sku, "formulation", "No Added Sugar", "brand").run();
+        await env.DB.prepare("INSERT OR IGNORE INTO product_certifications (id,sku,cert_type,issuer,number,status,expiry_date,source,reviewer,reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+          .bind("pc-"+sku+"-fssai", sku, "FSSAI licence", "FSSAI", "100"+sku, "active", plusYear, "4syz", "Ops · Seed", today).run();
+      }
+    }
+  } catch { /* non-fatal — inventory may be empty */ }
   try {
     await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
   } catch { /* column already exists */ }
@@ -779,6 +815,12 @@ export default {
 
       // Inventory
       if (path==="/api/barcode-map"             && method==="GET")   return handleBarcodeMap(request,env);
+      if (path==="/api/brands"                  && method==="GET")   return handleListBrands(request,env);
+      if (path==="/api/brands"                  && method==="POST")  return handleUpsertBrand(request,env);
+      if (path==="/api/catalogue"               && method==="GET")   return handleListCatalogue(request,env);
+      if (path.match(/^\/api\/catalogue\/[^/]+\/fitment$/) && method==="PATCH") return handleSetFitment(request,env,path);
+      if (path.match(/^\/api\/catalogue\/[^/]+\/intel$/)   && method==="PUT")   return handlePutIntel(request,env,path);
+      if (path.match(/^\/api\/catalogue\/[^/]+$/)          && method==="GET")   return handleGetCatalogueItem(request,env,path);
       if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
@@ -2641,6 +2683,167 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
   // Gap 8: check auto-reorder after stock change
   if (body.stock !== undefined) await checkAutoReorder(env, user);
   return json({sku});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// BRAND & PRODUCT INTELLIGENCE — Smart Catalogue + Product Intelligence
+// Clients see only published (fitment APPROVED/CONDITIONAL) products; Super
+// Admin + Ops review and sign off. AI is Phase 2 — nothing here auto-approves.
+// ════════════════════════════════════════════════════════════════════
+
+function availabilityOf(stock: number, reorder: number): string {
+  if (stock <= 0) return "On order";
+  if (stock <= (reorder || 0)) return "Low stock";
+  return "In stock";
+}
+
+async function handleListBrands(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare("SELECT id,name,origin,emoji,description,status FROM brands WHERE status='active' ORDER BY name").all();
+  return json({ brands: results || [] });
+}
+
+async function handleUpsertBrand(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const b = await request.json() as { id?:string; name:string; origin?:string; emoji?:string; description?:string };
+  if (!b.name?.trim()) return json({error:"Brand name required"}, 400);
+  const id = b.id || ("br-" + b.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,16) + "-" + uid().slice(0,4));
+  await env.DB.prepare("INSERT INTO brands (id,name,origin,emoji,description) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,emoji=excluded.emoji,description=excluded.description")
+    .bind(id, b.name.trim(), b.origin||null, b.emoji||"🏷️", b.description||null).run();
+  await audit(env, user, "UPSERT", "brand", id, undefined, b.name);
+  return json({ id });
+}
+
+// GET /api/catalogue — product cards with fitment + attribute summary.
+async function handleListCatalogue(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const isClient = CLIENT_ROLES.includes(user!.role);
+  const url = new URL(request.url);
+  const q       = (url.searchParams.get("q") || "").trim().toLowerCase();
+  const fBrand  = (url.searchParams.get("brand") || "").trim();
+  const fCat    = (url.searchParams.get("category") || "").trim();
+  const fVer    = (url.searchParams.get("verification") || "").trim();
+
+  const visClause = isClient ? " AND COALESCE(f.fitment_state,'PENDING') IN ('APPROVED','CONDITIONAL')" : "";
+  const { results: rows } = await env.DB.prepare(
+    `SELECT i.sku,i.name,COALESCE(i.brand,'') AS brand,COALESCE(i.category,'') AS category,COALESCE(i.sub_category,'') AS sub_category,
+            i.unit_price,i.mrp,COALESCE(i.stock,0) AS stock,COALESCE(i.reorder_level,0) AS reorder_level,COALESCE(i.emoji,'📦') AS emoji,
+            COALESCE(f.verification,'needs_review') AS verification, COALESCE(f.fitment_state,'PENDING') AS fitment_state,
+            COALESCE(f.clean_label,'pending') AS clean_label, f.expiry_date, f.reviewed_at
+     FROM inventory i LEFT JOIN product_fitment f ON f.sku=i.sku
+     WHERE i.active=1${visClause} ORDER BY i.name`
+  ).all() as { results: Array<Record<string,unknown>> };
+
+  const { results: attrs } = await env.DB.prepare("SELECT sku,grp,name,source FROM product_attributes").all() as { results: Array<Record<string,unknown>> };
+  const attrBySku: Record<string, Array<Record<string,unknown>>> = {};
+  for (const a of attrs) (attrBySku[String(a.sku)] = attrBySku[String(a.sku)] || []).push(a);
+
+  let items: Array<Record<string,unknown>> = rows.map(r => ({
+    ...r,
+    price: r.unit_price,
+    availability: availabilityOf(Number(r.stock), Number(r.reorder_level)),
+    attributes: (attrBySku[String(r.sku)] || []).map(a => ({ grp:a.grp, name:a.name, source:a.source })),
+  }));
+  if (q)      items = items.filter(i => (String(i.name)+" "+String(i.brand)).toLowerCase().includes(q));
+  if (fBrand) items = items.filter(i => String(i.brand) === fBrand);
+  if (fCat)   items = items.filter(i => String(i.category) === fCat);
+  if (fVer)   items = items.filter(i => String(i.verification) === fVer);
+  return json({ items });
+}
+
+// GET /api/catalogue/:sku — full product intelligence.
+async function handleGetCatalogueItem(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const sku = decodeURIComponent(path.split("/").pop()!);
+  const product = await env.DB.prepare(
+    `SELECT i.sku,i.name,COALESCE(i.brand,'') AS brand,COALESCE(i.category,'') AS category,COALESCE(i.sub_category,'') AS sub_category,
+            i.unit_price AS price,i.mrp,COALESCE(i.stock,0) AS stock,COALESCE(i.reorder_level,0) AS reorder_level,COALESCE(i.emoji,'📦') AS emoji,COALESCE(i.barcode,'') AS barcode,
+            COALESCE(f.verification,'needs_review') AS verification,COALESCE(f.fitment_state,'PENDING') AS fitment_state,
+            COALESCE(f.clean_label,'pending') AS clean_label,f.expiry_date,f.reviewer,f.reviewed_at,f.notes
+     FROM inventory i LEFT JOIN product_fitment f ON f.sku=i.sku WHERE i.sku=?`).bind(sku).first() as Record<string,unknown> | null;
+  if (!product) return json({error:"Not found"}, 404);
+  if (CLIENT_ROLES.includes(user!.role) && !["APPROVED","CONDITIONAL"].includes(String(product.fitment_state)))
+    return json({error:"Not available"}, 404);
+
+  const [attrs, nutrition, ingredients, certs, allergens] = await Promise.all([
+    env.DB.prepare("SELECT grp,name,source FROM product_attributes WHERE sku=? ORDER BY grp,name").bind(sku).all(),
+    env.DB.prepare("SELECT nutrient,value,unit,basis,source FROM product_nutrition WHERE sku=?").bind(sku).all(),
+    env.DB.prepare("SELECT raw_text,normalized,ins_code,functional_class,flags,state,source FROM product_ingredients WHERE sku=?").bind(sku).all(),
+    env.DB.prepare("SELECT cert_type,issuer,number,scope,issue_date,expiry_date,status,source,reviewer,reviewed_at FROM product_certifications WHERE sku=? ORDER BY cert_type").bind(sku).all(),
+    env.DB.prepare("SELECT allergen,contains_state,cross_contact_state,source FROM product_allergens WHERE sku=?").bind(sku).all(),
+  ]);
+  return json({
+    product: { ...product, availability: availabilityOf(Number(product.stock), Number(product.reorder_level)) },
+    attributes: attrs.results || [], nutrition: nutrition.results || [], ingredients: ingredients.results || [],
+    certifications: certs.results || [], allergens: allergens.results || [],
+  });
+}
+
+// PATCH /api/catalogue/:sku/fitment — the Fitment Gate (Super Admin / Ops sign-off).
+async function handleSetFitment(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can review products"}, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const b = await request.json() as { verification?:string; fitment_state?:string; clean_label?:string; expiry_date?:string; notes?:string };
+  const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
+  if (!exists) return json({error:"Unknown SKU"}, 404);
+  const VER = ["needs_review","ai_screened","verified"];
+  const STATE = ["DRAFT","SUBMITTED","AI_SCREENED","REVIEW","APPROVED","CONDITIONAL","PENDING","BLOCKED","EXPIRED"];
+  const verification = VER.includes(String(b.verification)) ? b.verification! : "verified";
+  const fitment = STATE.includes(String(b.fitment_state)) ? b.fitment_state! : "APPROVED";
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO product_fitment (sku,verification,fitment_state,clean_label,reviewer,reviewed_at,expiry_date,notes,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(sku) DO UPDATE SET verification=excluded.verification,fitment_state=excluded.fitment_state,clean_label=excluded.clean_label,
+       reviewer=excluded.reviewer,reviewed_at=excluded.reviewed_at,expiry_date=excluded.expiry_date,notes=excluded.notes,updated_at=excluded.updated_at`
+  ).bind(sku, verification, fitment, b.clean_label || "pending", user!.name, now, b.expiry_date || null, b.notes || null, now).run();
+  await audit(env, user, "FITMENT", "product", sku, undefined, `${fitment}/${verification}`);
+  return json({ sku, verification, fitment_state: fitment });
+}
+
+// PUT /api/catalogue/:sku/intel — replace attributes / nutrition / ingredients /
+// certifications / allergens (Super Admin / Ops manual entry & verification).
+async function handlePutIntel(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can edit product data"}, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const b = await request.json() as {
+    attributes?: Array<{grp:string;name:string;source?:string}>;
+    nutrition?: Array<{nutrient:string;value:string;unit?:string;basis?:string;source?:string}>;
+    ingredients?: Array<{raw_text?:string;normalized?:string;ins_code?:string;functional_class?:string;flags?:string;state?:string;source?:string}>;
+    certifications?: Array<{cert_type:string;issuer?:string;number?:string;scope?:string;issue_date?:string;expiry_date?:string;status?:string;source?:string}>;
+    allergens?: Array<{allergen:string;contains_state?:string;cross_contact_state?:string;source?:string}>;
+  };
+  if (Array.isArray(b.attributes)) {
+    await env.DB.prepare("DELETE FROM product_attributes WHERE sku=?").bind(sku).run();
+    for (const a of b.attributes) if (a.name) await env.DB.prepare("INSERT INTO product_attributes (id,sku,grp,name,source) VALUES (?,?,?,?,?)").bind(uid(), sku, a.grp||"attribute", a.name, a.source||"brand").run();
+  }
+  if (Array.isArray(b.nutrition)) {
+    await env.DB.prepare("DELETE FROM product_nutrition WHERE sku=?").bind(sku).run();
+    for (const n of b.nutrition) if (n.nutrient) await env.DB.prepare("INSERT INTO product_nutrition (id,sku,nutrient,value,unit,basis,source) VALUES (?,?,?,?,?,?,?)").bind(uid(), sku, n.nutrient, n.value||"", n.unit||"", n.basis||"per 100g", n.source||"brand").run();
+  }
+  if (Array.isArray(b.ingredients)) {
+    await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
+    for (const g of b.ingredients) await env.DB.prepare("INSERT INTO product_ingredients (id,sku,raw_text,normalized,ins_code,functional_class,flags,state,source) VALUES (?,?,?,?,?,?,?,?,?)").bind(uid(), sku, g.raw_text||"", g.normalized||"", g.ins_code||"", g.functional_class||"", g.flags||"", g.state||"detected", g.source||"brand").run();
+  }
+  if (Array.isArray(b.certifications)) {
+    await env.DB.prepare("DELETE FROM product_certifications WHERE sku=?").bind(sku).run();
+    for (const c of b.certifications) if (c.cert_type) await env.DB.prepare("INSERT INTO product_certifications (id,sku,cert_type,issuer,number,scope,issue_date,expiry_date,status,source,reviewer,reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(uid(), sku, c.cert_type, c.issuer||"", c.number||"", c.scope||"", c.issue_date||"", c.expiry_date||"", c.status||"active", c.source||"brand", c.source==="4syz"?user!.name:null, c.source==="4syz"?new Date().toISOString():null).run();
+  }
+  if (Array.isArray(b.allergens)) {
+    await env.DB.prepare("DELETE FROM product_allergens WHERE sku=?").bind(sku).run();
+    for (const al of b.allergens) if (al.allergen) await env.DB.prepare("INSERT INTO product_allergens (id,sku,allergen,contains_state,cross_contact_state,source) VALUES (?,?,?,?,?,?)").bind(uid(), sku, al.allergen, al.contains_state||"not_declared", al.cross_contact_state||"unknown", al.source||"brand").run();
+  }
+  await audit(env, user, "UPDATE", "product_intel", sku);
+  return json({ sku, ok: true });
 }
 
 // ════════════════════════════════════════════════════════════════════
