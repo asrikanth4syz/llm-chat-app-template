@@ -169,9 +169,33 @@ const STAFF_ONLY_API: Array<[string, RegExp]> = [
   ["POST", /^\/api\/settings$/],
   ["POST", /^\/api\/zones(\/|$)/], ["DELETE", /^\/api\/zones(\/|$)/],
 ];
+// The only /api/reports/* keys a client may call — each self-scopes to the
+// caller's own client_id. Every other report is internal analytics (all-client
+// / all-vendor) and is denied to external accounts by the central guard.
+const CLIENT_SAFE_REPORTS = new Set([
+  "exec-summary", "drill", "sku-challans", "order-fulfilment-monthly",
+  "client-fulfilment", "client-consumption", "client-spend",
+]);
 function staffOnlyApiMatch(method: string, path: string): boolean {
+  if (/^\/api\/reports\//.test(path)) {
+    const key = path.split("/")[3] || "";
+    return !CLIENT_SAFE_REPORTS.has(key); // all reports staff-only except the client-safe set
+  }
   return STAFF_ONLY_API.some(([m, re]) => (m === "*" || m === method) && re.test(path));
 }
+// External viewers may only touch a delivery challan tied to their own client's
+// order. Resolves DC → order → client_id, then applies the client scope.
+async function dcScopeDenied(env: Env, user: JWTPayload, dcId: string): Promise<Response | null> {
+  if (!isExternalRole(user.role)) return null; // staff: any
+  const row = await env.DB.prepare(
+    "SELECT o.client_id AS client_id FROM delivery_challans d LEFT JOIN orders o ON d.order_id=o.id WHERE d.id=?"
+  ).bind(dcId).first() as { client_id?: unknown } | null;
+  if (!row) return json({ error: "Not found" }, 404);
+  return clientScopeDenied(user, String(row.client_id || ""));
+}
+// A vendor user is scoped to vendors whose contact email shares their domain
+// (the app's vendor↔PO linkage). Staff pass; clients are denied vendor data.
+function vendorEmailDomain(user: JWTPayload): string { return String(user.email || "").split("@")[1] || "\0"; }
 
 // G9: return a reason a PO must not be raised to this vendor, or null if clear.
 async function vendorComplianceIssue(env: Env, vendorId: string): Promise<string | null> {
@@ -3275,6 +3299,13 @@ async function handleExtractIntel(request: Request, env: Env, path: string): Pro
 async function handleListVendors(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // Clients have no business seeing the supplier list; vendors see only themselves.
+  if (["client_admin","client_approver","client_user"].includes(user!.role)) return json([]);
+  if (["vendor_admin","vendor_user"].includes(user!.role)) {
+    const {results} = await env.DB.prepare("SELECT * FROM vendors WHERE contact_email LIKE ? ORDER BY name")
+      .bind(`%${vendorEmailDomain(user!)}%`).all();
+    return json(results);
+  }
   const {results} = await env.DB.prepare("SELECT * FROM vendors ORDER BY name").all();
   return json(results);
 }
@@ -3403,6 +3434,12 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
+  // Clients cannot edit vendors; a vendor may edit only its own record.
+  if (isExternalRole(user!.role)) {
+    if (!["vendor_admin","vendor_user"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+    const v = await env.DB.prepare("SELECT contact_email FROM vendors WHERE id=?").bind(id).first() as {contact_email?:string}|null;
+    if (!v || !String(v.contact_email||"").includes(vendorEmailDomain(user!))) return json({error:"Forbidden"}, 403);
+  }
   const body = await request.json() as Record<string,unknown>;
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -3691,6 +3728,17 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
   const body = await request.json() as {status?:string;invoice_url?:string};
   const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!po) return json({error:"Not found"}, 404);
+
+  // External scope: clients never touch POs; a vendor may act only on its OWN PO
+  // (email-domain link) and only to acknowledge / dispatch / attach an invoice —
+  // never to approve or cancel (those stay gated to procurement below).
+  if (isExternalRole(user!.role)) {
+    if (!["vendor_admin","vendor_user"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+    const v = await env.DB.prepare("SELECT contact_email FROM vendors WHERE id=?").bind(po.vendor_id).first() as {contact_email?:string}|null;
+    if (!v || !String(v.contact_email||"").includes(vendorEmailDomain(user!))) return json({error:"Forbidden"}, 403);
+    if (!["ACCEPTED","DISPATCHED"].includes(body.status||"") && body.invoice_url===undefined)
+      return json({error:"Vendors can only acknowledge, dispatch or attach an invoice"}, 403);
+  }
 
   // Cancellation policy: only before goods move (PENDING_APPROVAL / SENT / ACCEPTED),
   // and only by procurement/finance leads (or super_admin). Once a PO is DISPATCHED,
@@ -4147,6 +4195,7 @@ async function handleListDCItems(request: Request, env: Env, path: string): Prom
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const scoped = await dcScopeDenied(env, user!, id); if (scoped) return scoped;
   const {results} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=? ORDER BY name").bind(id).all() as {results: Record<string,unknown>[]};
 
   // Enrich each item with the order-wide remaining balance so the UI can cap
@@ -4225,6 +4274,7 @@ async function handlePatchBin(request: Request, env: Env, path: string): Promise
 async function handleMarkPOD(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // POD is captured by delivery staff
   const id = path.split("/").slice(-2)[0];
   await env.DB.prepare("UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?").bind(id).run();
   await audit(env, user, "POD_UPLOAD", "delivery_challan", id);
@@ -4234,6 +4284,7 @@ async function handleMarkPOD(request: Request, env: Env, path: string): Promise<
 async function handleMarkScan(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // DC scan is captured by delivery staff
   const id = path.split("/").slice(-2)[0];
   await env.DB.prepare("UPDATE delivery_challans SET dc_scan_uploaded=1 WHERE id=?").bind(id).run();
   await audit(env, user, "DC_SCAN_UPLOAD", "delivery_challan", id);
@@ -4278,6 +4329,7 @@ async function handleListDCDocs(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/")[3];
+  const scoped = await dcScopeDenied(env, user!, id); if (scoped) return scoped;
   try {
     const { results } = await env.DB.prepare(
       `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
@@ -4294,6 +4346,7 @@ async function handleReturnDC(request: Request, env: Env, path: string): Promise
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const scoped = await dcScopeDenied(env, user!, id); if (scoped) return scoped; // clients may only return their own deliveries
   const body = await request.json() as {reason?:string; items?:{sku:string;name?:string;qty:number}[]};
 
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
@@ -6159,6 +6212,10 @@ async function handleRptClientFulfilment(request: Request, env: Env): Promise<Re
   const url = new URL(request.url);
   const from = url.searchParams.get('from') || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
+  // A client sees only its own fulfilment row — never other clients' volumes/values.
+  const isClientRole = CLIENT_ROLES.includes(user!.role);
+  const clientFilter = isClientRole && user!.client_id ? " AND o.client_id = ?" : "";
+  const binds: (string)[] = [from, to, ...(isClientRole && user!.client_id ? [String(user!.client_id)] : [])];
   const {results} = await env.DB.prepare(`
     SELECT
       c.name AS client_name,
@@ -6178,8 +6235,8 @@ async function handleRptClientFulfilment(request: Request, env: Env): Promise<Re
       SELECT dci.sku, dc2.order_id, SUM(dci.qty_delivered) AS qty_delivered
       FROM dc_items dci JOIN delivery_challans dc2 ON dci.dc_id=dc2.id GROUP BY dci.sku, dc2.order_id
     ) dlvd ON dlvd.sku=oi.sku AND dlvd.order_id=o.id
-    WHERE o.status NOT IN ('CANCELLED','DRAFT') AND date(o.created_at) >= ? AND date(o.created_at) <= ?
-    GROUP BY c.id ORDER BY fulfilment_pct ASC`).bind(from, to).all();
+    WHERE o.status NOT IN ('CANCELLED','DRAFT') AND date(o.created_at) >= ? AND date(o.created_at) <= ?${clientFilter}
+    GROUP BY c.id ORDER BY fulfilment_pct ASC`).bind(...binds).all();
   return json(results);
 }
 
@@ -6947,6 +7004,7 @@ async function handleTodaySchedule(request: Request, env: Env): Promise<Response
 async function handlePatchDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // editing a challan is 4SYZ-only
   const id = path.split("/").pop()!;
   const body = await request.json() as Record<string,unknown>;
   const fields: string[] = []; const vals: unknown[] = [];
@@ -7007,6 +7065,9 @@ async function handleSkipStandingOrder(request: Request, env: Env, path: string)
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const soId = path.split("/").slice(-2)[0];
+  const soRow = await env.DB.prepare("SELECT client_id FROM standing_orders WHERE id=?").bind(soId).first() as Record<string,unknown>|null;
+  if (!soRow) return json({error:"Not found"}, 404);
+  const scoped = clientScopeDenied(user!, String(soRow.client_id||"")); if (scoped) return scoped;
   const body = await request.json() as {date?:string};
   const date = String(body.date||'').slice(0,10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({error:"date (YYYY-MM-DD) required"}, 400);
@@ -7025,6 +7086,9 @@ async function handleMaterializeStandingOrder(request: Request, env: Env, path: 
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const soId = path.split("/").slice(-2)[0];
+  const soRow = await env.DB.prepare("SELECT client_id FROM standing_orders WHERE id=?").bind(soId).first() as Record<string,unknown>|null;
+  if (!soRow) return json({error:"Not found"}, 404);
+  const scoped = clientScopeDenied(user!, String(soRow.client_id||"")); if (scoped) return scoped;
   const body = await request.json() as {date?:string};
   const date = String(body.date||'').slice(0,10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({error:"date (YYYY-MM-DD) required"}, 400);

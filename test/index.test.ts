@@ -897,6 +897,26 @@ describe("Order-to-delivery authorization", () => {
     expect((await get("/api/users", adminToken)).status).toBe(200);
   });
 
+  it("reports: clients are denied internal analytics but allowed self-scoping reports", async () => {
+    // Internal, all-client analytics → blocked for clients and vendors.
+    expect((await get("/api/reports/procurement-forecast", clientToken)).status).toBe(403);
+    expect((await get("/api/reports/brand-shortfall", clientToken)).status).toBe(403);
+    expect((await get("/api/reports/procurement-forecast", vendorToken)).status).toBe(403);
+    // Client-safe, self-scoping reports remain reachable by clients.
+    expect((await get("/api/reports/client-consumption", clientToken)).status).toBe(200);
+    expect((await get("/api/reports/client-fulfilment", clientToken)).status).toBe(200);
+    // Staff reach everything.
+    expect((await get("/api/reports/procurement-forecast", adminToken)).status).toBe(200);
+  });
+
+  it("vendor data is not exposed to clients; vendors cannot be edited by clients", async () => {
+    // Clients get no supplier list.
+    const vlist = await (await get("/api/vendors", clientToken)).json() as unknown[];
+    expect(Array.isArray(vlist) && vlist.length === 0).toBe(true);
+    // Clients cannot edit a vendor record.
+    expect((await patch("/api/vendors/v1", { name: "hijack" }, clientToken)).status).toBe(403);
+  });
+
   it("delivery confirmation is idempotent — a settled challan cannot be re-delivered", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,delivered_qty) VALUES (?,?,?,?,?)")
