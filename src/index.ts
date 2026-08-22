@@ -110,6 +110,26 @@ const PO_APPROVER_ROLES = ["super_admin","ops_admin","procurement_manager","fina
 const PI_ROLES = ["super_admin","ops_admin","ops_manager"];
 const CLIENT_ROLES = ["client_admin","client_user","client_approver"];
 
+// ── Order-to-delivery authorization helpers ─────────────────────────────────
+// 4SYZ staff = anyone who is NOT an external client/vendor account.
+function isInternalRole(role: string): boolean { return !isExternalRole(role); }
+// Who may move an order into APPROVED (segregation of duties — a plain
+// client_user who raised the order cannot self-approve it).
+const ORDER_APPROVER_ROLES = ["super_admin","ops_admin","ops_manager","client_admin","client_approver"];
+// Operational states only 4SYZ staff may drive an order into.
+const FULFILLMENT_STATES = new Set(["ACKNOWLEDGED","INVENTORY_CHECK","VENDOR_PO_RAISED","READY_TO_PICK","PICKED","QUALITY_CHECK","IN_SHIPMENT","PARTIALLY_CLOSED","CLOSED"]);
+// 403 unless the caller may act on this order: staff act on any; an external
+// user only on their own client's order. `order` must carry client_id.
+function orderScopeDenied(user: JWTPayload, order: { client_id?: unknown }): Response | null {
+  if (isExternalRole(user.role) && (!user.client_id || String(order.client_id) !== String(user.client_id)))
+    return json({ error: "Forbidden" }, 403);
+  return null;
+}
+// 403 unless the caller is internal 4SYZ staff (fulfillment / procurement).
+function requireInternal(user: JWTPayload): Response | null {
+  return isExternalRole(user.role) ? json({ error: "Forbidden — 4SYZ staff only" }, 403) : null;
+}
+
 // G9: return a reason a PO must not be raised to this vendor, or null if clear.
 async function vendorComplianceIssue(env: Env, vendorId: string): Promise<string | null> {
   const v = await env.DB.prepare("SELECT active,onboarding_status,fssai_expiry,fssai_licence,vendor_type FROM vendors WHERE id=?").bind(vendorId).first() as Record<string,unknown> | null;
@@ -1278,8 +1298,9 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
   const id = path.split("/").pop()!;
 
   const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,u.name as creator_name
-    FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first();
+    FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first() as Record<string,unknown>|null;
   if (!order) return json({error:"Not found"}, 404);
+  const scoped = orderScopeDenied(user!, order); if (scoped) return scoped;
 
   const [{results:items},{results:history},{results:comments}] = await Promise.all([
     env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all(),
@@ -2206,6 +2227,17 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   const body = await request.json() as {to:string;note?:string};
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!order) return json({error:"Not found"}, 404);
+  // Cross-client protection: an external user may only touch their own orders.
+  const scoped = orderScopeDenied(user!, order); if (scoped) return scoped;
+  // Operational states are 4SYZ-staff only — a client can't mark its own order PICKED/IN_SHIPMENT/CLOSED.
+  if (FULFILLMENT_STATES.has(body.to) && requireInternal(user!)) return json({error:"Forbidden — 4SYZ staff only"}, 403);
+  // Approval needs an approver role, and the person who raised the order cannot
+  // self-approve it (segregation of duties); elevated staff may override.
+  if (body.to === "APPROVED") {
+    if (!ORDER_APPROVER_ROLES.includes(user!.role)) return json({error:"Forbidden — approver role required"}, 403);
+    if (order.created_by === user!.sub && !["super_admin","ops_admin"].includes(user!.role))
+      return json({error:"You cannot approve an order you raised"}, 403);
+  }
 
   const allowed = ORDER_FSM[order.status] || [];
   if (!allowed.includes(body.to)) return json({error:`Cannot transition from ${order.status} to ${body.to}`}, 400);
@@ -2262,6 +2294,7 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
 async function handlePickOrder(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly;
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string}[];partial?:boolean};
 
@@ -2298,6 +2331,9 @@ async function handleGetAllocations(request: Request, env: Env, path: string): P
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!order) return json({error:"Not found"}, 404);
+  const scoped = orderScopeDenied(user!, order); if (scoped) return scoped;
   const {results} = await env.DB.prepare("SELECT * FROM order_allocations WHERE order_id=? ORDER BY sku").bind(id).all();
   return json(results);
 }
@@ -2307,6 +2343,9 @@ async function handlePatchOrder(request: Request, env: Env, path: string): Promi
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").pop()!;
+  const scopeRow = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!scopeRow) return json({error:"Not found"}, 404);
+  const scoped = orderScopeDenied(user!, scopeRow); if (scoped) return scoped;
   const body = await request.json() as {notes?:string; predicted_delivery_date?:string; need_by_date?:string};
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -2326,6 +2365,9 @@ async function handleListComments(request: Request, env: Env, path: string): Pro
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const cScope = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!cScope) return json({error:"Not found"}, 404);
+  const cDenied = orderScopeDenied(user!, cScope); if (cDenied) return cDenied;
   const {results} = await env.DB.prepare("SELECT * FROM order_comments WHERE order_id=? ORDER BY created_at").bind(id).all();
   return json(results);
 }
@@ -2335,6 +2377,9 @@ async function handleAddComment(request: Request, env: Env, path: string): Promi
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const cScope = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!cScope) return json({error:"Not found"}, 404);
+  const cDenied = orderScopeDenied(user!, cScope); if (cDenied) return cDenied;
   const {message} = await request.json() as {message:string};
   if (!message?.trim()) return json({error:"Message required"}, 400);
   const cid = uid();
@@ -3360,6 +3405,7 @@ async function handleListPOs(request: Request, env: Env): Promise<Response> {
 async function handleCreatePO(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // procurement is 4SYZ-only
   const body = await request.json() as {vendor_id:string;order_id?:string;items:Array<{sku:string;name:string;qty:number;unit_price:number}>;expected_delivery?:string;notes?:string};
   if (!body.vendor_id || !body.items?.length) return json({error:"vendor_id and items required"}, 400);
 
@@ -3730,7 +3776,11 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
 async function handleBillDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // billing is 4SYZ-only
   const id = path.split("/").slice(-2)[0];
+  const existing = await env.DB.prepare("SELECT billed FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!existing) return json({error:"Not found"}, 404);
+  if (Number(existing.billed) === 1) return json({error:"Delivery challan already billed"}, 409); // idempotency
   await env.DB.prepare("UPDATE delivery_challans SET billed=1,billed_at=datetime('now') WHERE id=?").bind(id).run();
   const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (dc?.order_id) {
@@ -3789,12 +3839,15 @@ async function closeOrderIfSettled(env: Env, orderId: string, user: {sub:string;
 async function handleDeliverDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // delivery confirmation is 4SYZ-only
   const id = path.split("/").slice(-2)[0];
 
   const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]};
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
   if (!dc) return json({error:"Not found"}, 404);
+  // Idempotency: a DC already marked DELIVERED/CANCELLED must not re-deduct stock on replay/double-click.
+  if (["DELIVERED","CANCELLED"].includes(String(dc.status))) return json({error:`Delivery challan already ${String(dc.status).toLowerCase()}`}, 409);
 
   // Order-wide caps: total ordered per sku and what's already delivered on OTHER DCs.
   // Cumulative delivered across all DCs must never exceed the ordered qty.
@@ -3913,6 +3966,7 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
 async function handlePartialDelivery(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // delivery confirmation is 4SYZ-only
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as {delivered_qty:number;total_qty:number;notes?:string;items?:{sku:string;qty_delivered:number}[]};
   const {delivered_qty, total_qty, notes} = body;
@@ -3921,7 +3975,10 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
     return json({error:"delivered_qty must be less than total_qty"}, 400);
   }
 
-  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
+  const dc = await env.DB.prepare("SELECT order_id,status FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
+  if (!dc) return json({error:"Not found"}, 404);
+  // Idempotency: never re-deduct stock against an already-settled challan.
+  if (["DELIVERED","CANCELLED"].includes(String(dc.status))) return json({error:`Delivery challan already ${String(dc.status).toLowerCase()}`}, 409);
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
 
   // Update this DC's delivered qty
@@ -3966,6 +4023,7 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
 async function handleDispatchDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // dispatch is 4SYZ-only
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string};
 

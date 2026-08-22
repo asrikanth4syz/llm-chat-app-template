@@ -837,6 +837,53 @@ describe("Orders", () => {
   });
 });
 
+describe("Order-to-delivery authorization", () => {
+  const knownOrderId = "TST-ORDER-001"; // client c1, created_by tst-ops, DRAFT
+
+  it("external (vendor) roles cannot drive fulfillment / procurement", async () => {
+    // Vendor has no client_id, so is out of scope for every order.
+    expect((await post("/api/purchase-orders", { vendor_id: "v1", items: [{ sku: "SKU001", name: "x", qty: 1, unit_price: 10 }] }, vendorToken)).status).toBe(403);
+    expect((await post(`/api/orders/${knownOrderId}/pick`, { items: [] }, vendorToken)).status).toBe(403);
+    expect((await post("/api/delivery-challans/DC-9999/deliver", {}, vendorToken)).status).toBe(403);
+    expect((await post("/api/delivery-challans/DC-9999/partial", { delivered_qty: 1, total_qty: 2 }, vendorToken)).status).toBe(403);
+    expect((await post("/api/delivery-challans/DC-9999/bill", {}, vendorToken)).status).toBe(403);
+    // Fulfillment-state transition is staff-only.
+    expect((await post(`/api/orders/${knownOrderId}/transition`, { to: "PICKED" }, vendorToken)).status).toBe(403);
+  });
+
+  it("a client cannot read, patch, comment on or transition another client's order (IDOR)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("OTHER-CLIENT-ORD", "c2", "tst-ops", "DRAFT", 100, 18, 118, "Regular").run();
+    expect((await get("/api/orders/OTHER-CLIENT-ORD", clientToken)).status).toBe(403);
+    expect((await get("/api/orders/OTHER-CLIENT-ORD/comments", clientToken)).status).toBe(403);
+    expect((await post("/api/orders/OTHER-CLIENT-ORD/comments", { message: "peek" }, clientToken)).status).toBe(403);
+    expect((await patch("/api/orders/OTHER-CLIENT-ORD", { notes: "tamper" }, clientToken)).status).toBe(403);
+    expect((await post("/api/orders/OTHER-CLIENT-ORD/transition", { to: "CANCELLED" }, clientToken)).status).toBe(403);
+    // Own client's order remains readable.
+    expect((await get(`/api/orders/${knownOrderId}`, clientToken)).status).toBe(200);
+  });
+
+  it("the order raiser cannot self-approve; a separate approver / admin can", async () => {
+    const db = env.DB as D1Database;
+    // Order raised by the client_admin (tst-client), sitting at PENDING_APPROVAL.
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("SELF-APPROVE-ORD", "c1", "tst-client", "PENDING_APPROVAL", 100, 18, 118, "Regular").run();
+    // Creator approving their own order is blocked (segregation of duties).
+    expect((await post("/api/orders/SELF-APPROVE-ORD/transition", { to: "APPROVED" }, clientToken)).status).toBe(403);
+    // An elevated admin (not the raiser) can approve.
+    expect((await post("/api/orders/SELF-APPROVE-ORD/transition", { to: "APPROVED" }, adminToken)).status).toBe(200);
+  });
+
+  it("delivery confirmation is idempotent — a settled challan cannot be re-delivered", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,delivered_qty) VALUES (?,?,?,?,?)")
+      .bind("DC-SETTLED", knownOrderId, "DELIVERED", 5, 5).run();
+    expect((await post("/api/delivery-challans/DC-SETTLED/deliver", {}, adminToken)).status).toBe(409);
+    expect((await post("/api/delivery-challans/DC-SETTLED/partial", { delivered_qty: 1, total_qty: 5 }, adminToken)).status).toBe(409);
+  });
+});
+
 describe("Ad-hoc orders (no catalogue selection)", () => {
   // NB: vitest-pool-workers isolates D1 per test, so each test creates its own order.
   const adhocBody = {
