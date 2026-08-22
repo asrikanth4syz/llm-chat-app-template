@@ -2865,7 +2865,32 @@ const INS_MAP: Record<string, { cls: string; flags: string[] }> = {
   "621":{cls:"Flavour Enhancer",flags:["msg"]}, "635":{cls:"Flavour Enhancer",flags:["msg"]},
   "951":{cls:"Sweetener",flags:["artificial-sweetener"]}, "950":{cls:"Sweetener",flags:["artificial-sweetener"]},
 };
-function extractProductIntel(text: string): { ingredients: Array<Record<string,unknown>>; claims: Array<Record<string,string>> } {
+// Big-8 (+ India FSSAI) allergen lexicon → declaration matcher. Each hit is a
+// draft the reviewer confirms; "may contain / traces" is recorded as cross-contact.
+const ALLERGEN_MAP: Array<{ allergen: string; re: RegExp }> = [
+  { allergen: "Milk",       re: /\b(milk|dairy|whey|casein|lactose|butter|ghee|paneer|cheese|curd|khoya)\b/i },
+  { allergen: "Egg",        re: /\b(egg|albumen|ovalbumin)\b/i },
+  { allergen: "Peanut",     re: /\b(peanut|groundnut)\b/i },
+  { allergen: "Tree nuts",  re: /\b(almond|cashew|walnut|pistachio|hazelnut|pecan|tree ?nut)\b/i },
+  { allergen: "Soy",        re: /\b(soy|soya|soybean|soja)\b/i },
+  { allergen: "Wheat / Gluten", re: /\b(wheat|gluten|barley|rye|maida|atta|semolina|suji|rava)\b/i },
+  { allergen: "Fish",       re: /\b(fish|anchovy|cod|tuna)\b/i },
+  { allergen: "Crustacean", re: /\b(shrimp|prawn|crab|lobster|crustacean)\b/i },
+  { allergen: "Sesame",     re: /\b(sesame|til|tahini)\b/i },
+  { allergen: "Mustard",    re: /\b(mustard|sarson)\b/i },
+  { allergen: "Sulphites",  re: /\b(sulphite|sulfite|e ?22[0-8])\b/i },
+];
+const NUTRIENT_MAP: Array<{ nutrient: string; unit: string; re: RegExp }> = [
+  { nutrient: "Energy",        unit: "kcal", re: /\benergy\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*(?:kcal|cal)/i },
+  { nutrient: "Protein",       unit: "g",    re: /\bprotein\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+  { nutrient: "Total Fat",     unit: "g",    re: /\b(?:total\s+)?fat\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+  { nutrient: "Saturated Fat", unit: "g",    re: /\bsaturated\s+fat\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+  { nutrient: "Carbohydrate",  unit: "g",    re: /\b(?:total\s+)?carbohydrate?s?\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+  { nutrient: "Total Sugars",  unit: "g",    re: /\b(?:total\s+)?sugars?\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+  { nutrient: "Sodium",        unit: "mg",   re: /\bsodium\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*mg/i },
+  { nutrient: "Salt",          unit: "g",    re: /\bsalt\b[^0-9]{0,20}(\d+(?:\.\d+)?)\s*g/i },
+];
+function extractProductIntel(text: string): { ingredients: Array<Record<string,unknown>>; claims: Array<Record<string,string>>; allergens: Array<Record<string,unknown>>; nutrition: Array<Record<string,unknown>>; attributes: Array<Record<string,unknown>> } {
   const raw = String(text || "");
   const lower = raw.toLowerCase();
   const ingredients: Array<Record<string,unknown>> = [];
@@ -2892,7 +2917,36 @@ function extractProductIntel(text: string): { ingredients: Array<Record<string,u
     claim("No Artificial / Synthetic Colours", flags.has("synthetic-colour"), flags.has("synthetic-colour") ? "synthetic colour detected" : "none detected"),
   ];
   if (compound) claims.push(claim("Ingredient transparency", false, "compound / unspecified ingredient — qualified review needed", true));
-  return { ingredients, claims };
+
+  // Allergens — declared ("contains") vs cross-contact ("may contain / traces").
+  const allergens: Array<Record<string,unknown>> = [];
+  const mayContact = /\b(may contain|traces of|manufactured (?:in|on)|same (?:line|facility))\b/i.test(raw);
+  for (const a of ALLERGEN_MAP) {
+    if (!a.re.test(raw)) continue;
+    allergens.push({ allergen: a.allergen, contains_state: "contains",
+      cross_contact_state: mayContact ? "possible" : "unknown", source: "ai", confidence: 0.8 });
+  }
+
+  // Nutrition panel — pull declared per-serving/100g figures where present.
+  const nutrition: Array<Record<string,unknown>> = [];
+  const basis = /\bper\s*100\s*g\b/i.test(raw) ? "per 100g" : (/\bper\s*serv/i.test(raw) ? "per serving" : "per 100g");
+  for (const n of NUTRIENT_MAP) {
+    const mm = raw.match(n.re);
+    if (mm) nutrition.push({ nutrient: n.nutrient, value: mm[1], unit: n.unit, basis, source: "ai", confidence: 0.75 });
+  }
+
+  // Derived dietary/formulation attributes the reviewer can accept into the editor.
+  const attributes: Array<Record<string,unknown>> = [];
+  const addAttr = (name: string, grp: string) => attributes.push({ name, grp, source: "ai" });
+  if (flags.has("synthetic-colour"))    addAttr("Contains synthetic colour", "formulation");
+  if (flags.has("preservative"))        addAttr("Contains preservatives", "formulation");
+  if (flags.has("msg"))                 addAttr("Contains added MSG", "formulation");
+  if (flags.has("artificial-sweetener"))addAttr("Contains artificial sweetener", "formulation");
+  if (hasSugar)                         addAttr("Contains added sugar", "formulation");
+  if (!flags.has("synthetic-colour") && !flags.has("preservative") && !flags.has("msg") && !flags.has("artificial-sweetener"))
+    addAttr("No synthetic colour/preservative detected", "formulation");
+
+  return { ingredients, claims, allergens, nutrition, attributes };
 }
 
 // GET /api/ai/health — is Workers AI actually callable on this account? Does a
@@ -2984,11 +3038,21 @@ async function handleExtractIntel(request: Request, env: Env, path: string): Pro
   }
 
   const result = extractProductIntel(text);
-  // Replace only AI-sourced ingredient drafts (keep anything a human verified).
+  // Replace only AI-sourced drafts across the tables (keep anything human-entered).
   await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=? AND source='ai'").bind(sku).run();
   for (const g of result.ingredients) {
     await env.DB.prepare("INSERT INTO product_ingredients (id,sku,raw_text,normalized,ins_code,functional_class,flags,state,source) VALUES (?,?,?,?,?,?,?,?,?)")
       .bind(uid(), sku, g.raw_text, g.normalized, g.ins_code, g.functional_class, g.flags, g.state, "ai").run();
+  }
+  await env.DB.prepare("DELETE FROM product_allergens WHERE sku=? AND source='ai'").bind(sku).run();
+  for (const a of result.allergens) {
+    await env.DB.prepare("INSERT INTO product_allergens (id,sku,allergen,contains_state,cross_contact_state,source) VALUES (?,?,?,?,?,?)")
+      .bind(uid(), sku, a.allergen, a.contains_state, a.cross_contact_state, "ai").run();
+  }
+  await env.DB.prepare("DELETE FROM product_nutrition WHERE sku=? AND source='ai'").bind(sku).run();
+  for (const n of result.nutrition) {
+    await env.DB.prepare("INSERT INTO product_nutrition (id,sku,nutrient,value,unit,basis,source) VALUES (?,?,?,?,?,?,?)")
+      .bind(uid(), sku, n.nutrient, n.value, n.unit, n.basis, "ai").run();
   }
   // Mark the product AI-screened (never verified — that stays a human action).
   const now = new Date().toISOString();
@@ -2996,8 +3060,10 @@ async function handleExtractIntel(request: Request, env: Env, path: string): Pro
     `INSERT INTO product_fitment (sku,verification,fitment_state,updated_at) VALUES (?, 'ai_screened', 'REVIEW', ?)
      ON CONFLICT(sku) DO UPDATE SET verification=CASE WHEN product_fitment.verification='verified' THEN 'verified' ELSE 'ai_screened' END, updated_at=excluded.updated_at`
   ).bind(sku, now).run();
-  await audit(env, user, "AI_EXTRACT", "product", sku, undefined, `${result.ingredients.length} drafts${aiUsed ? " · AI" : " · rules"}`);
-  return json({ sku, ai_used: aiUsed, ingredients: result.ingredients, claims: result.claims });
+  await audit(env, user, "AI_EXTRACT", "product", sku, undefined,
+    `${result.ingredients.length} ing · ${result.allergens.length} allergen · ${result.nutrition.length} nutrient${aiUsed ? " · AI" : " · rules"}`);
+  return json({ sku, ai_used: aiUsed, ingredients: result.ingredients, claims: result.claims,
+    allergens: result.allergens, nutrition: result.nutrition, attributes: result.attributes });
 }
 
 // ════════════════════════════════════════════════════════════════════

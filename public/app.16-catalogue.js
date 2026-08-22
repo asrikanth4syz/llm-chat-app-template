@@ -386,14 +386,44 @@ function renderExtract(res) {
     const bg = c.outcome === 'CONTRADICTED' ? '#fee2e2' : c.outcome === 'NEEDS_REVIEW' ? '#fef3c7' : '#dcfce7';
     return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0"><span style="background:${bg};color:${col};border-radius:5px;padding:1px 7px;font-size:.64rem;font-weight:700;white-space:nowrap">${h(c.outcome)}</span><b style="font-size:.76rem">${h(c.name)}</b><span style="font-size:.72rem;color:var(--text-muted)">— ${h(c.why)}</span></div>`;
   }).join('');
+  const allergens = (res.allergens || []).map(a => {
+    const cross = a.cross_contact_state === 'possible' ? ' <span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 5px;font-size:.6rem">may contain</span>' : '';
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:#fee2e2;color:#b91c1c;border-radius:999px;padding:2px 9px;font-size:.7rem;font-weight:600;margin:2px">⚠ ${h(a.allergen)}${cross}</span>`;
+  }).join('');
+  const nutrition = (res.nutrition || []).map(n =>
+    `<tr><td style="padding:3px 6px">${h(n.nutrient)}</td><td style="padding:3px 6px;text-align:right;font-weight:600">${h(n.value)} ${h(n.unit)}</td><td style="padding:3px 6px;font-size:.66rem;color:var(--text-muted)">${h(n.basis)}</td></tr>`
+  ).join('');
+  const attrs = res.attributes || [];
+  APP._extractAttrs = attrs; // stash for "apply"
+  const attrChips = attrs.map(a => `<span class="attr"><span class="d db"></span>${h(a.name)} <span style="color:var(--text-light);font-size:.64rem">${h(a.grp)}</span></span>`).join('');
+
   out.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px"><b style="font-size:.76rem;color:var(--navy)">Extracted ingredients</b> ${badge}</div>
     <table style="width:100%;border-collapse:collapse;font-size:.78rem;background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden">
       <thead><tr style="background:var(--bg-subtle,#f1f5f9);text-align:left"><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Ingredient</th><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Class / flags</th><th style="padding:4px 6px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted);text-align:right">Conf.</th></tr></thead>
       <tbody>${ing || '<tr><td colspan="3" style="padding:8px;color:var(--text-muted)">Nothing recognised.</td></tr>'}</tbody>
     </table>
+    <div style="margin-top:10px"><b style="font-size:.76rem;color:var(--navy)">Allergens</b><div style="margin-top:4px">${allergens || '<span style="font-size:.72rem;color:var(--text-muted)">None declared in text.</span>'}</div></div>
+    ${nutrition ? `<div style="margin-top:10px"><b style="font-size:.76rem;color:var(--navy)">Nutrition (parsed)</b>
+      <table style="width:100%;border-collapse:collapse;font-size:.76rem;background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:4px"><tbody>${nutrition}</tbody></table></div>` : ''}
     <div style="margin-top:10px"><b style="font-size:.76rem;color:var(--navy)">Label claim checks</b>${claims || '<div style="font-size:.74rem;color:var(--text-muted)">No claims checked.</div>'}</div>
-    <div class="aiflag" style="background:#fef3c7;color:#92400e;border-radius:6px;padding:7px 10px;font-size:.7rem;margin-top:10px">These are AI drafts stored as <b>brand-unverified</b>. Confirm against evidence, then set Verification → <b>verified</b> to publish.</div>`;
+    ${attrs.length ? `<div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:.76rem;color:var(--navy)">Derived attributes</b><div style="display:flex;flex-wrap:wrap;gap:4px">${attrChips}</div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('applyExtractAttrs')} style="padding:3px 10px;font-size:.72rem">＋ Add to review</button></div>` : ''}
+    <div class="aiflag" style="background:#fef3c7;color:#92400e;border-radius:6px;padding:7px 10px;font-size:.7rem;margin-top:10px">Ingredients, allergens &amp; nutrition are saved as AI drafts (<b>source: AI</b>). Confirm against evidence, then set Verification → <b>verified</b> to publish.</div>`;
+}
+
+// Fold the AI-derived attributes into the reviewer's editor (deduped), marked
+// source 'ai' so provenance stays honest until a human keeps them.
+function applyExtractAttrs() {
+  const add = APP._extractAttrs || []; if (!add.length) return;
+  APP._revAttrs = APP._revAttrs || [];
+  let n = 0;
+  for (const a of add) {
+    if (APP._revAttrs.some(x => x.name.toLowerCase() === a.name.toLowerCase())) continue;
+    APP._revAttrs.push({ name: a.name, grp: a.grp, source: 'ai' }); n++;
+  }
+  revRenderAttrs();
+  showToast(n ? `${n} attribute${n === 1 ? '' : 's'} added — Save attributes to keep` : 'Already added');
 }
 
 async function saveReviewIntel(sku) {

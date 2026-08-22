@@ -319,6 +319,38 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect(out.claims.find(c => c.name === "No Preservatives")?.outcome).toBe("CONTRADICTED");
   });
 
+  const RICH_LABEL = "INGREDIENTS: Wheat Flour, Milk Solids, Soy Lecithin, Sugar, Cashew. Contains E211, E150C. May contain traces of Peanut. Nutrition per 100g: Energy 480 kcal, Protein 8g, Total Fat 22g, Total Sugars 30g, Sodium 350mg. No Added Sugar.";
+
+  it("AI extraction detects allergens, parses nutrition and derives attributes", async () => {
+    const res = await post("/api/catalogue/SKU008/extract", { ingredient_text: RICH_LABEL, use_ai: false }, adminToken);
+    expect(res.status).toBe(200);
+    const out = await res.json() as {
+      allergens: Array<{ allergen: string; contains_state: string; cross_contact_state: string; source: string }>;
+      nutrition: Array<{ nutrient: string; value: string; unit: string; source: string }>;
+      attributes: Array<{ name: string; source: string }>;
+    };
+    const alg = out.allergens.map(a => a.allergen);
+    expect(alg).toEqual(expect.arrayContaining(["Milk", "Soy", "Wheat / Gluten", "Tree nuts", "Peanut"]));
+    // "May contain traces of" is recorded as cross-contact.
+    expect(out.allergens.every(a => a.cross_contact_state === "possible")).toBe(true);
+    // Nutrition figures are pulled with units.
+    expect(out.nutrition.find(n => n.nutrient === "Energy")?.value).toBe("480");
+    expect(out.nutrition.find(n => n.nutrient === "Protein")?.unit).toBe("g");
+    // Derived attributes reflect the additive flags, all source 'ai'.
+    expect(out.attributes.some(a => a.name === "Contains synthetic colour")).toBe(true);
+    expect(out.attributes.every(a => a.source === "ai")).toBe(true);
+  });
+
+  it("extraction persists allergen and nutrition drafts as source='ai'", async () => {
+    await post("/api/catalogue/SKU009/extract", { ingredient_text: RICH_LABEL, use_ai: false }, adminToken);
+    const d = await (await get("/api/catalogue/SKU009", adminToken)).json() as {
+      allergens: Array<{ allergen: string; source: string }>; nutrition: Array<{ nutrient: string; source: string }>;
+    };
+    expect(d.allergens.length).toBeGreaterThan(0);
+    expect(d.allergens.every(a => a.source === "ai")).toBe(true);
+    expect(d.nutrition.some(n => n.nutrient === "Total Sugars" && n.source === "ai")).toBe(true);
+  });
+
   it("AI extraction writes AI-sourced drafts and marks the product ai_screened (never verified)", async () => {
     await post("/api/catalogue/SKU007/extract", { ingredient_text: ACCEPTANCE_LABEL, use_ai: false }, adminToken);
     const d = await (await get("/api/catalogue/SKU007", adminToken)).json() as {
