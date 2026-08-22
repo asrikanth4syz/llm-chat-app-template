@@ -618,9 +618,10 @@ async function provisionBootstrapAdmin(env: Env): Promise<void> {
   }
 }
 
+// The heavy one-time bootstrap (schema self-heal + data migrations + seed-account
+// retirement). Idempotent, but expensive to run on every cold isolate — runBootstrap
+// gates it behind a DB version flag so it executes once globally, not per request.
 async function fixCategoryNames(env: Env): Promise<void> {
-  if (_categoryFixApplied) return;
-  _categoryFixApplied = true;
   await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
@@ -804,6 +805,27 @@ async function fixCategoryNames(env: Env): Promise<void> {
   }
 }
 
+// Bump when new feature tables / data migrations are added — the heavy bootstrap
+// re-runs once, then the flag makes it a no-op again. This is our lightweight,
+// migration-history-free schema versioning (the D1 was bootstrapped at runtime).
+const BOOTSTRAP_VERSION = "2026-08-22";
+// Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
+// After the first success the steady-state cost per cold isolate is a cheap
+// CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
+// response. On failure it clears the in-memory latch so a later request retries.
+async function runBootstrap(env: Env): Promise<void> {
+  if (_categoryFixApplied) return;      // once per isolate
+  _categoryFixApplied = true;
+  try {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)").run();
+    const cur = await env.DB.prepare("SELECT value FROM app_meta WHERE key='bootstrap_version'").first() as { value?: string } | null;
+    if (cur?.value === BOOTSTRAP_VERSION) return; // already bootstrapped at this version — nothing to do
+    await fixCategoryNames(env);                  // schema self-heal + data migrations + seed retirement
+    await env.DB.prepare("INSERT INTO app_meta (key,value) VALUES ('bootstrap_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(BOOTSTRAP_VERSION).run();
+  } catch { _categoryFixApplied = false; /* transient failure — let a later request retry */ }
+}
+
 // Human-readable vendor code: VDR-<year>-<5-digit running number>, globally
 // sequential so it stays unique even across years.
 function formatVendorCode(year: number, seq: number): string {
@@ -885,7 +907,7 @@ export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
-      await fixCategoryNames(env); // make sure columns/tables exist first
+      await runBootstrap(env); // schema/data bootstrap (version-gated, once globally)
       await runDeliveryReminders(env);
     })());
   },
@@ -896,7 +918,7 @@ export default {
     // Fail closed: never serve the API in production on a weak/default JWT secret.
     if (isProd(env) && insecureSecret(env))
       return withSecurityHeaders(json({error:"Server misconfigured — a strong JWT_SECRET must be set via `wrangler secret put JWT_SECRET`."}, 503));
-    ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
+    ctx.waitUntil(runBootstrap(env)); // version-gated bootstrap; after first run this is a cheap no-op
 
     const path = url.pathname.replace(/\/$/,"");
     const method = request.method;

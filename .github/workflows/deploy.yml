@@ -53,9 +53,17 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Deploy only. Migrations are intentionally NOT auto-applied here: this
-          # D1 was bootstrapped at runtime (ensureFeatureTables self-heals every
-          # table/column), so it has no wrangler migration history — running
-          # `d1 migrations apply` would replay 0001+ from scratch and collide
-          # with the existing tables. If you ever switch to migration-managed
-          # schema, add a separate step:  wrangler d1 migrations apply smart-pantry-db --remote
+          # Deploy only. Schema is NOT managed by wrangler migrations: this D1 was
+          # bootstrapped at runtime and has no migration history, so
+          # `d1 migrations apply` would replay 0001+ and collide. Instead the
+          # Worker runs a version-gated bootstrap (runBootstrap / BOOTSTRAP_VERSION
+          # in src/index.ts): the heavy schema+data self-heal executes once
+          # globally, then becomes a cheap no-op. Bump BOOTSTRAP_VERSION when you
+          # add feature tables. The warmup below triggers that bootstrap at deploy
+          # time rather than on the first user request.
+
+      # Kick one request so the version-gated bootstrap runs now (it executes in
+      # waitUntil and writes app_meta.bootstrap_version). Non-fatal: a 401/anything
+      # still triggers it, and the next real request would run it anyway.
+      - name: Warm up (run one-time bootstrap)
+        run: curl -fsS -m 30 https://smart-pantry.asrikanth.workers.dev/api/auth/me -o /dev/null || true
