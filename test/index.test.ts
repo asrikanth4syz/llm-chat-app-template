@@ -334,6 +334,16 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect((await post("/api/catalogue/SKU001/extract", { ingredient_text: ACCEPTANCE_LABEL }, clientToken)).status).toBe(403);
   });
 
+  it("AI health check is Ops-only and reports a definitive status", async () => {
+    expect((await get("/api/ai/health", clientToken)).status).toBe(403);
+    const r = await get("/api/ai/health", adminToken);
+    expect(r.status).toBe(200);
+    const h = await r.json() as { status: string; bound: boolean };
+    // enabled (real inference ran), disabled (no binding), or error (bound but
+    // the call failed) — never ambiguous.
+    expect(["enabled", "disabled", "error"]).toContain(h.status);
+  });
+
   it("OCR is Ops-only and guards SKU / image / Workers-AI availability", async () => {
     // Clients can never run OCR.
     expect((await post("/api/catalogue/SKU001/ocr", { image_base64: "x" }, clientToken)).status).toBe(403);

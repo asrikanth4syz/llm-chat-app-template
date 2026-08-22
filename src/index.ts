@@ -822,6 +822,7 @@ export default {
       if (path.match(/^\/api\/catalogue\/[^/]+\/intel$/)   && method==="PUT")   return handlePutIntel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/extract$/) && method==="POST")  return handleExtractIntel(request,env,path);
       if (path.match(/^\/api\/catalogue\/[^/]+\/ocr$/)     && method==="POST")  return handleOcrLabel(request,env,path);
+      if (path==="/api/ai/health"               && method==="GET")   return handleAiHealth(request,env);
       if (path.match(/^\/api\/catalogue\/[^/]+$/)          && method==="GET")   return handleGetCatalogueItem(request,env,path);
       if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
@@ -2892,6 +2893,25 @@ function extractProductIntel(text: string): { ingredients: Array<Record<string,u
   ];
   if (compound) claims.push(claim("Ingredient transparency", false, "compound / unspecified ingredient — qualified review needed", true));
   return { ingredients, claims };
+}
+
+// GET /api/ai/health — is Workers AI actually callable on this account? Does a
+// tiny real inference so the answer reflects entitlement, not just the binding.
+async function handleAiHealth(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can check AI status"}, 403);
+  if (!env.AI) return json({ status:"disabled", bound:false, detail:"No Workers AI binding on this deployment." });
+  const t0 = Date.now();
+  try {
+    const out = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [{ role:"user", content:"Reply with the single word: ok" }], max_tokens: 5,
+    }) as { response?: string } | string;
+    const reply = (typeof out === "string" ? out : (out.response || "")).trim();
+    return json({ status:"enabled", bound:true, model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast", latency_ms: Date.now()-t0, sample: reply.slice(0,40) });
+  } catch (e) {
+    return json({ status:"error", bound:true, detail:String(e).slice(0,200), latency_ms: Date.now()-t0 });
+  }
 }
 
 // POST /api/catalogue/:sku/ocr — transcribe a label photo with a Workers AI

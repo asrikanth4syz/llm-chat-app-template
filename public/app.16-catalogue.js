@@ -239,10 +239,29 @@ async function renderProductIntel(el) {
       <div class="k"><div class="v">${items.filter(i => i.verification === 'needs_review').length}</div><div class="l">Needs Review</div></div>
       <div class="k"><div class="v">${pending.length}</div><div class="l">In review queue</div></div>
     </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 12px">
+      <span id="pi-ai-chip" style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-subtle,#f1f5f9);color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:4px 12px;font-size:.74rem;font-weight:600">
+        <span class="spinner" style="width:11px;height:11px;display:inline-block"></span> Checking Workers AI…
+      </span>
+      <button class="btn btn-secondary btn-sm" ${dataAct('checkAiHealth')} style="padding:3px 10px;font-size:.72rem">↻ Recheck</button>
+    </div>
     <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 10px"><h3 style="font-weight:800;color:var(--navy);font-size:1rem">Review queue</h3><span style="color:var(--text-muted);font-size:.82rem">${pending.length} product${pending.length===1?'':'s'}</span></div>
     ${list(pending)}
     <div style="display:flex;align-items:baseline;gap:10px;margin:18px 0 10px"><h3 style="font-weight:800;color:var(--navy);font-size:1rem">Published</h3></div>
     ${list(items.filter(i => i.fitment_state === 'APPROVED' && i.verification === 'verified'))}`;
+  checkAiHealth();
+}
+
+async function checkAiHealth() {
+  const chip = document.getElementById('pi-ai-chip'); if (!chip) return;
+  chip.innerHTML = '<span class="spinner" style="width:11px;height:11px;display:inline-block"></span> Checking Workers AI…';
+  chip.style.background = 'var(--bg-subtle,#f1f5f9)'; chip.style.color = 'var(--text-muted)'; chip.style.borderColor = 'var(--border)';
+  const r = await api('/ai/health');
+  if (!r) { chip.innerHTML = '⚠ AI status unavailable'; chip.style.color = 'var(--red)'; chip.style.borderColor = 'var(--red)'; return; }
+  const set = (bg, col, html) => { chip.style.background = bg; chip.style.color = col; chip.style.borderColor = col; chip.innerHTML = html; };
+  if (r.status === 'enabled') set('#dcfce7', '#15803d', `● Workers AI enabled <span style="font-weight:400;opacity:.8">· ${r.latency_ms}ms</span>`);
+  else if (r.status === 'disabled') set('#fee2e2', '#b91c1c', '● Workers AI not bound — OCR & AI extraction disabled');
+  else set('#fef3c7', '#b45309', `● Workers AI bound but not responding${r.detail ? ` <span style="font-weight:400;opacity:.8">· ${h(String(r.detail).slice(0,60))}</span>` : ''}`);
 }
 
 async function reviewProduct(sku) {
