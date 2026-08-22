@@ -67,6 +67,7 @@ function ok(status: number) {
 let adminToken: string;
 let clientToken: string;
 let opsToken: string;
+let vendorToken: string;
 
 beforeAll(async () => {
   const db = env.DB as D1Database;
@@ -108,6 +109,8 @@ beforeAll(async () => {
     .bind("tst-client","client@sp.test","SEED:client123","client_admin","Rahul Verma","Meta India","RV","c1",1).run();
   await db.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES (?,?,?,?,?,?,?,?)")
     .bind("tst-ops","ops@sp.test","SEED:ops123","ops_manager","Ops Manager","SmartPantry","OM",1).run();
+  await db.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES (?,?,?,?,?,?,?,?)")
+    .bind("tst-vendor","vendor@sp.test","SEED:vendor123","vendor_admin","Vendor Admin","Fresh Farms","VA",1).run();
   // c1 already seeded by migration; INSERT OR IGNORE is a no-op when it exists
   await db.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active) VALUES (?,?,?,?)")
     .bind("c1","Meta India","client@sp.test",1).run();
@@ -131,6 +134,7 @@ beforeAll(async () => {
   adminToken = await login("admin@sp.test", "admin123");
   clientToken = await login("client@sp.test", "client123");
   opsToken    = await login("ops@sp.test",    "ops123");
+  vendorToken = await login("vendor@sp.test", "vendor123");
 });
 
 // ════════════════════════════════════════════════════════════════════
@@ -331,8 +335,14 @@ describe("Smart Catalogue / Product Intelligence", () => {
     };
     const alg = out.allergens.map(a => a.allergen);
     expect(alg).toEqual(expect.arrayContaining(["Milk", "Soy", "Wheat / Gluten", "Tree nuts", "Peanut"]));
-    // "May contain traces of" is recorded as cross-contact.
-    expect(out.allergens.every(a => a.cross_contact_state === "possible")).toBe(true);
+    // Per-clause classification: declared ingredients are "contains"; only the
+    // "may contain traces of Peanut" clause is cross-contact.
+    const milk = out.allergens.find(a => a.allergen === "Milk")!;
+    expect(milk.contains_state).toBe("contains");
+    expect(milk.cross_contact_state).toBe("unknown");
+    const peanut = out.allergens.find(a => a.allergen === "Peanut")!;
+    expect(peanut.contains_state).toBe("not_declared");
+    expect(peanut.cross_contact_state).toBe("possible");
     // Nutrition figures are pulled with units.
     expect(out.nutrition.find(n => n.nutrient === "Energy")?.value).toBe("480");
     expect(out.nutrition.find(n => n.nutrient === "Protein")?.unit).toBe("g");
@@ -374,6 +384,30 @@ describe("Smart Catalogue / Product Intelligence", () => {
     // enabled (real inference ran), disabled (no binding), or error (bound but
     // the call failed) — never ambiguous.
     expect(["enabled", "disabled", "error"]).toContain(h.status);
+  });
+
+  it("vendors (external) see only published products and no internal review fields", async () => {
+    // Publish SKU001, block SKU002.
+    await patch("/api/catalogue/SKU001/fitment", { verification: "verified", fitment_state: "APPROVED", clean_label: "eligible", notes: "internal: licence checked" }, adminToken);
+    await patch("/api/catalogue/SKU002/fitment", { verification: "needs_review", fitment_state: "BLOCKED" }, adminToken);
+    // List: only APPROVED/CONDITIONAL products, none carrying reviewer/notes.
+    const list = await (await get("/api/catalogue", vendorToken)).json() as { items: Array<Record<string, unknown>> };
+    expect(list.items.every(i => ["APPROVED", "CONDITIONAL"].includes(String(i.fitment_state)))).toBe(true);
+    expect(list.items.every(i => !("reviewer" in i) && !("notes" in i))).toBe(true);
+    // Blocked product is a 404 for the vendor, same as a client.
+    expect((await get("/api/catalogue/SKU002", vendorToken)).status).toBe(404);
+    // Published detail: internal reviewer/notes are redacted, review date kept.
+    const d = await (await get("/api/catalogue/SKU001", vendorToken)).json() as { product: Record<string, unknown> };
+    expect(d.product.reviewer).toBeUndefined();
+    expect(d.product.notes).toBeUndefined();
+  });
+
+  it("fitment gate fails CLOSED on invalid/missing verification & state (never auto-publishes)", async () => {
+    // Junk values must not resolve to verified/APPROVED.
+    const res = await patch("/api/catalogue/SKU004/fitment", { verification: "totally-bogus", fitment_state: "REJECT", clean_label: "eligible" }, adminToken);
+    const out = await res.json() as { verification: string; fitment_state: string };
+    expect(out.verification).toBe("needs_review");
+    expect(out.fitment_state).toBe("PENDING");
   });
 
   it("report endpoint is Ops-only and joins allergens / nutrition / additives", async () => {

@@ -153,7 +153,7 @@ async function viewProduct(sku) {
     : `<div class="note">Nutrition not captured yet.</div>`;
   const allerg = d.allergens || [];
   const contains = allerg.filter(a => a.contains_state === 'contains').map(a => a.allergen);
-  const may = allerg.filter(a => a.cross_contact_state === 'declared' || a.contains_state === 'may_contain').map(a => a.allergen);
+  const may = allerg.filter(a => a.cross_contact_state === 'possible').map(a => a.allergen);
 
   const body = `
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-bottom:6px">
@@ -563,7 +563,9 @@ async function exportProductReport(kind) {
     if (!(typeof ensureJsPDF === 'function' && await ensureJsPDF())) { showToast('PDF library failed to load', 'error'); return; }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    const auto = (o) => { if (typeof doc.autoTable === 'function') doc.autoTable(o); else if (window.jspdf.autoTable) window.jspdf.autoTable(doc, o); };
+    const hasAuto = typeof doc.autoTable === 'function' || typeof window.jspdf.autoTable === 'function';
+    if (!hasAuto) { showToast('PDF table plugin failed to load — try Excel export', 'error'); return; }
+    const auto = (o) => { if (typeof doc.autoTable === 'function') doc.autoTable(o); else window.jspdf.autoTable(doc, o); };
     doc.setFontSize(14); doc.setTextColor(30, 58, 95); doc.text('Smart Pantry — Product Report', 14, 15);
     doc.setFontSize(8); doc.setTextColor(120); doc.text(RP_DISCLAIMER, 14, 20); doc.text(meta, 14, 24.5);
     // Products

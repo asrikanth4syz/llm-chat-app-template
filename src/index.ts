@@ -2725,7 +2725,9 @@ async function handleUpsertBrand(request: Request, env: Env): Promise<Response> 
 async function handleListCatalogue(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const isClient = CLIENT_ROLES.includes(user!.role);
+  // Any external viewer (client OR vendor) sees only published products — never
+  // unpublished items or the internal reviewer/notes fields.
+  const isClient = isExternalRole(user!.role);
   const url = new URL(request.url);
   const q       = (url.searchParams.get("q") || "").trim().toLowerCase();
   const fBrand  = (url.searchParams.get("brand") || "").trim();
@@ -2742,9 +2744,14 @@ async function handleListCatalogue(request: Request, env: Env): Promise<Response
      WHERE i.active=1${visClause} ORDER BY i.name`
   ).all() as { results: Array<Record<string,unknown>> };
 
-  const { results: attrs } = await env.DB.prepare("SELECT sku,grp,name,source FROM product_attributes").all() as { results: Array<Record<string,unknown>> };
+  // Fetch attributes only for the products actually returned (never hidden ones).
   const attrBySku: Record<string, Array<Record<string,unknown>>> = {};
-  for (const a of attrs) (attrBySku[String(a.sku)] = attrBySku[String(a.sku)] || []).push(a);
+  if (rows.length) {
+    const ph = rows.map(() => "?").join(",");
+    const { results: attrs } = await env.DB.prepare(`SELECT sku,grp,name,source FROM product_attributes WHERE sku IN (${ph})`)
+      .bind(...rows.map(r => r.sku)).all() as { results: Array<Record<string,unknown>> };
+    for (const a of attrs) (attrBySku[String(a.sku)] = attrBySku[String(a.sku)] || []).push(a);
+  }
 
   let items: Array<Record<string,unknown>> = rows.map(r => ({
     ...r,
@@ -2821,7 +2828,7 @@ async function handleGetCatalogueItem(request: Request, env: Env, path: string):
             COALESCE(f.clean_label,'pending') AS clean_label,f.expiry_date,f.reviewer,f.reviewed_at,f.notes
      FROM inventory i LEFT JOIN product_fitment f ON f.sku=i.sku WHERE i.sku=?`).bind(sku).first() as Record<string,unknown> | null;
   if (!product) return json({error:"Not found"}, 404);
-  if (CLIENT_ROLES.includes(user!.role) && !["APPROVED","CONDITIONAL"].includes(String(product.fitment_state)))
+  if (isExternalRole(user!.role) && !["APPROVED","CONDITIONAL"].includes(String(product.fitment_state)))
     return json({error:"Not available"}, 404);
 
   const [attrs, nutrition, ingredients, certs, allergens] = await Promise.all([
@@ -2831,6 +2838,9 @@ async function handleGetCatalogueItem(request: Request, env: Env, path: string):
     env.DB.prepare("SELECT cert_type,issuer,number,scope,issue_date,expiry_date,status,source,reviewer,reviewed_at FROM product_certifications WHERE sku=? ORDER BY cert_type").bind(sku).all(),
     env.DB.prepare("SELECT allergen,contains_state,cross_contact_state,source FROM product_allergens WHERE sku=?").bind(sku).all(),
   ]);
+  // Redact internal review fields from external viewers even on published items.
+  // reviewed_at is kept — it is a client-facing "checked by 4SYZ" trust signal.
+  if (isExternalRole(user!.role)) { delete product.reviewer; delete product.notes; }
   return json({
     product: { ...product, availability: availabilityOf(Number(product.stock), Number(product.reorder_level)) },
     attributes: attrs.results || [], nutrition: nutrition.results || [], ingredients: ingredients.results || [],
@@ -2849,8 +2859,9 @@ async function handleSetFitment(request: Request, env: Env, path: string): Promi
   if (!exists) return json({error:"Unknown SKU"}, 404);
   const VER = ["needs_review","ai_screened","verified"];
   const STATE = ["DRAFT","SUBMITTED","AI_SCREENED","REVIEW","APPROVED","CONDITIONAL","PENDING","BLOCKED","EXPIRED"];
-  const verification = VER.includes(String(b.verification)) ? b.verification! : "verified";
-  const fitment = STATE.includes(String(b.fitment_state)) ? b.fitment_state! : "APPROVED";
+  // Validation fails CLOSED: an invalid/missing value must not publish a product.
+  const verification = VER.includes(String(b.verification)) ? b.verification! : "needs_review";
+  const fitment = STATE.includes(String(b.fitment_state)) ? b.fitment_state! : "PENDING";
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO product_fitment (sku,verification,fitment_state,clean_label,reviewer,reviewed_at,expiry_date,notes,updated_at)
@@ -2969,13 +2980,21 @@ function extractProductIntel(text: string): { ingredients: Array<Record<string,u
   ];
   if (compound) claims.push(claim("Ingredient transparency", false, "compound / unspecified ingredient — qualified review needed", true));
 
-  // Allergens — declared ("contains") vs cross-contact ("may contain / traces").
+  // Allergens — split the declaration so each allergen is classified per its own
+  // clause: those in the "may contain / traces / same line" segment are recorded
+  // as cross-contact (not a hard "contains"), the rest as declared ingredients.
   const allergens: Array<Record<string,unknown>> = [];
-  const mayContact = /\b(may contain|traces of|manufactured (?:in|on)|same (?:line|facility))\b/i.test(raw);
+  const traceMarker = raw.search(/\b(may contain|traces of|manufactured (?:in|on)|same (?:line|facility|equipment))\b/i);
+  const declaredSeg = traceMarker >= 0 ? raw.slice(0, traceMarker) : raw;
+  const traceSeg    = traceMarker >= 0 ? raw.slice(traceMarker) : "";
   for (const a of ALLERGEN_MAP) {
-    if (!a.re.test(raw)) continue;
-    allergens.push({ allergen: a.allergen, contains_state: "contains",
-      cross_contact_state: mayContact ? "possible" : "unknown", source: "ai", confidence: 0.8 });
+    const inDeclared = a.re.test(declaredSeg);
+    const inTrace    = a.re.test(traceSeg);
+    if (!inDeclared && !inTrace) continue;
+    if (inDeclared)
+      allergens.push({ allergen: a.allergen, contains_state: "contains", cross_contact_state: "unknown", source: "ai", confidence: 0.8 });
+    else // trace-only mention
+      allergens.push({ allergen: a.allergen, contains_state: "not_declared", cross_contact_state: "possible", source: "ai", confidence: 0.7 });
   }
 
   // Nutrition panel — pull declared per-serving/100g figures where present.
@@ -3037,6 +3056,10 @@ async function handleOcrLabel(request: Request, env: Env, path: string): Promise
   const comma = b64.indexOf(",");
   if (b64.startsWith("data:") && comma >= 0) b64 = b64.slice(comma + 1); // strip data: URL prefix
   if (!b64) return json({error:"Attach a label image to transcribe"}, 400);
+  // Reject oversized payloads BEFORE decoding — base64 is ~4/3 the byte size, so
+  // a ~4 MB image encodes to ~5.6 MB. Cap the encoded string to avoid decoding
+  // and allocating an arbitrarily large buffer in the isolate.
+  if (b64.length > 5_600_000) return json({error:"Image too large — keep it under ~4 MB"}, 413);
 
   let bytes: number[];
   try {
@@ -3044,7 +3067,6 @@ async function handleOcrLabel(request: Request, env: Env, path: string): Promise
     bytes = new Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch { return json({error:"Could not read the image data"}, 400); }
-  if (bytes.length > 6_000_000) return json({error:"Image too large — keep it under ~4 MB"}, 413);
 
   let text = "";
   try {
