@@ -127,6 +127,28 @@ async function applyStockDeltaOnce(
     .bind(stockDelta, reservedDelta, sku).run();
   return true;
 }
+
+// Fixed-window per-user throttle for the (expensive, cost-bearing) AI endpoints.
+// Returns seconds to wait if the caller is over `limit` calls in the last 60s,
+// or 0 if the call is allowed (and counted). Table missing / any error → allow,
+// so a throttle glitch never takes the feature down. `bucket` scopes the window
+// (e.g. "ocr:<userId>") so each endpoint class has its own budget.
+async function aiRateLimit(env: Env, bucket: string, limit: number): Promise<number> {
+  try {
+    const now = Date.now();
+    const row = await env.DB.prepare("SELECT window_start, count FROM ai_throttle WHERE bucket=?")
+      .bind(bucket).first() as { window_start?: string; count?: number } | null;
+    const startMs = row?.window_start ? Date.parse(row.window_start) : 0;
+    const within = !!row && (now - startMs) < 60000;
+    const count = within ? Number(row!.count) || 0 : 0;
+    if (count >= limit) return Math.max(1, Math.ceil((60000 - (now - startMs)) / 1000)); // over budget
+    const startIso = within ? new Date(startMs).toISOString() : new Date(now).toISOString();
+    await env.DB.prepare(
+      "INSERT INTO ai_throttle (bucket,window_start,count) VALUES (?,?,1) ON CONFLICT(bucket) DO UPDATE SET window_start=excluded.window_start, count=?"
+    ).bind(bucket, startIso, count + 1).run();
+    return 0;
+  } catch { return 0; } // fail open — never block on a throttle error
+}
 function requireUser(u: JWTPayload | null): Response | null {
   return u ? null : json({error:"Unauthorized"}, 401);
 }
@@ -548,6 +570,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS vendor_feedback ( id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, po_id TEXT, grn_id TEXT, quality_rating INTEGER NOT NULL DEFAULT 3, delivery_rating INTEGER NOT NULL DEFAULT 3, service_rating INTEGER NOT NULL DEFAULT 3, comments TEXT, submitted_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ai_throttle ( bucket TEXT PRIMARY KEY, window_start TEXT, count INTEGER DEFAULT 0 );`,
     `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS draft_carts ( user_id TEXT PRIMARY KEY, items TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
     // PR-1: receiving spine (G1–G3)
@@ -833,7 +856,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22-2";
+const BOOTSTRAP_VERSION = "2026-08-22-3";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -3225,6 +3248,8 @@ async function handleAiHealth(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can check AI status"}, 403);
+  const hWait = await aiRateLimit(env, `aihealth:${user!.sub}`, 20);
+  if (hWait) return json({error:`Too many requests — retry in ${hWait}s`}, 429);
   if (!env.AI) return json({ status:"disabled", bound:false, detail:"No Workers AI binding on this deployment." });
   const t0 = Date.now();
   try {
@@ -3246,6 +3271,8 @@ async function handleOcrLabel(request: Request, env: Env, path: string): Promise
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can run OCR"}, 403);
+  const ocrWait = await aiRateLimit(env, `ocr:${user!.sub}`, 10); // OCR is heaviest (image + vision model)
+  if (ocrWait) return json({error:`Too many OCR requests — retry in ${ocrWait}s`}, 429);
   const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
   const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
   if (!exists) return json({error:"Unknown SKU"}, 404);
@@ -3288,6 +3315,8 @@ async function handleExtractIntel(request: Request, env: Env, path: string): Pro
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!PI_ROLES.includes(user!.role)) return json({error:"Only Super Admin or Ops can run extraction"}, 403);
+  const exWait = await aiRateLimit(env, `extract:${user!.sub}`, 30);
+  if (exWait) return json({error:`Too many extraction requests — retry in ${exWait}s`}, 429);
   const sku = decodeURIComponent(path.split("/").slice(-2)[0]);
   const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
   if (!exists) return json({error:"Unknown SKU"}, 404);

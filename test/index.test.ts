@@ -428,6 +428,18 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect(row.ingredient_flags).toContain("synthetic-colour");
   });
 
+  it("AI endpoints are rate-limited per user (OCR: 10/min → 429)", async () => {
+    // Ten calls are allowed (each rejected for a bad image, but still counted);
+    // the eleventh trips the per-user OCR budget.
+    let last = 200;
+    for (let i = 0; i < 11; i++) {
+      last = (await post("/api/catalogue/SKU001/ocr", { image_base64: "" }, adminToken)).status;
+    }
+    expect(last).toBe(429);
+    // A different user has an independent budget.
+    expect((await post("/api/catalogue/SKU001/ocr", { image_base64: "" }, opsToken)).status).not.toBe(429);
+  });
+
   it("OCR is Ops-only and guards SKU / image / Workers-AI availability", async () => {
     // Clients can never run OCR.
     expect((await post("/api/catalogue/SKU001/ocr", { image_base64: "x" }, clientToken)).status).toBe(403);
