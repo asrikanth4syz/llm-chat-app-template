@@ -274,6 +274,16 @@ describe("Smart Catalogue / Product Intelligence", () => {
     expect(cat.items.length).toBeGreaterThan(100);
   });
 
+  it("CSV inventory import handles >100 rows (chunked existence lookup)", async () => {
+    const rows = Array.from({ length: 130 }, (_, i) => ({
+      sku: `IMP-${String(i).padStart(3, "0")}`, name: `Import ${i}`, category: "Beverages", unit_price: 10, stock: 3,
+    }));
+    const res = await post("/api/import/inventory", rows, adminToken);
+    expect(res.status).toBe(200); // must not 500 on the IN(...) existence lookup
+    const body = await res.json() as { success: number };
+    expect(body.success).toBe(130);
+  });
+
   it("PATCH fitment (Super Admin) publishes a product; catalogue lists it verified", async () => {
     const res = await patch("/api/catalogue/SKU001/fitment", { verification: "verified", fitment_state: "APPROVED", clean_label: "eligible" }, adminToken);
     expect(res.status).toBe(200);

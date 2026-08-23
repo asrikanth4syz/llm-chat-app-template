@@ -128,6 +128,20 @@ async function applyStockDeltaOnce(
   return true;
 }
 
+// Run a per-chunk SELECT for a list of ids (≤`size` bound params each — D1 caps
+// a statement at ~100) and concatenate the rows. `sql` is built from the chunk's
+// placeholder string. Use this instead of a single IN(...) over an unbounded list.
+async function selectInChunks(env: Env, sql: (placeholders: string) => string, ids: string[], size = 100): Promise<Record<string,unknown>[]> {
+  const out: Record<string,unknown>[] = [];
+  for (let i = 0; i < ids.length; i += size) {
+    const chunk = ids.slice(i, i + size);
+    const ph = chunk.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(sql(ph)).bind(...chunk).all() as { results: Record<string,unknown>[] };
+    out.push(...results);
+  }
+  return out;
+}
+
 // Fixed-window per-user throttle for the (expensive, cost-bearing) AI endpoints.
 // Returns seconds to wait if the caller is over `limit` calls in the last 60s,
 // or 0 if the call is allowed (and counted). Table missing / any error → allow,
@@ -2628,10 +2642,11 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
         "SELECT sku, client_price FROM client_catalog WHERE client_id=?"
       ).bind(user!.client_id).all() as {results: {sku:string; client_price:number|null}[]};
       if (catalogRows.length > 0) {
-        const catalogSkus = catalogRows.map(r => r.sku);
-        const ph = catalogSkus.map(() => '?').join(',');
-        baseFilter += ` AND i.sku IN (${ph})`;
-        params.push(...catalogSkus);
+        // Filter via a correlated subquery (one bound param) rather than a giant
+        // IN(...) list — D1 caps a statement at ~100 bound parameters, so a client
+        // with >100 catalogued SKUs would otherwise overflow it and 500.
+        baseFilter += ` AND i.sku IN (SELECT sku FROM client_catalog WHERE client_id=?)`;
+        params.push(user!.client_id);
 
         // After fetching, overlay per-client prices onto the results
         const priceMap = Object.fromEntries(catalogRows.map(r => [r.sku, r.client_price]));
@@ -6552,11 +6567,10 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
 
   // One query to find which SKUs already exist — counts as 1 subrequest
   const skus = validRows.map(v => String(v.row.sku));
-  const ph = skus.map(() => '?').join(',');
   const existingSkus = new Set<string>();
   try {
-    const res = await env.DB.prepare(`SELECT sku FROM inventory WHERE sku IN (${ph})`).bind(...skus).all();
-    for (const r of res.results) existingSkus.add(String((r as Record<string,unknown>).sku));
+    const found = await selectInChunks(env, ph => `SELECT sku FROM inventory WHERE sku IN (${ph})`, skus);
+    for (const r of found) existingSkus.add(String(r.sku));
   } catch { /* treat all as new if lookup fails */ }
 
   // Build batch statements in chunks of 200 — each batch() call = 1 subrequest
@@ -7509,7 +7523,10 @@ function orderConsolidationFilters(url: URL): { clause: string; binds: string[] 
   if (from) { parts.push("date(o.created_at) >= date(?)"); binds.push(from); }
   if (to)   { parts.push("date(o.created_at) <= date(?)"); binds.push(to); }
   if (orderIds) {
-    const ids = orderIds.split(",").map(s => s.trim()).filter(Boolean).slice(0, 500);
+    // Capped at 100 to stay within D1's ~100 bound-parameter limit per statement
+    // (this fragment is embedded in larger report queries). This is a manual
+    // order-selection filter; bulk roll-ups use the from/to date range instead.
+    const ids = orderIds.split(",").map(s => s.trim()).filter(Boolean).slice(0, 100);
     if (ids.length) { parts.push(`o.id IN (${ids.map(() => "?").join(",")})`); binds.push(...ids); }
   }
   return { clause: parts.join(" AND "), binds };
