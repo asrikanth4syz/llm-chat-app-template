@@ -108,6 +108,25 @@ async function getUser(req: Request, env: Env): Promise<JWTPayload | null> {
   if (!auth.startsWith("Bearer ")) return null;
   return verifyJWT(auth.slice(7), env.JWT_SECRET);
 }
+
+// Apply a stock change EXACTLY ONCE, keyed by movement_key. A UNIQUE index on
+// stock_movements.movement_key makes the INSERT the concurrency gate: only the
+// first caller for a given key records the ledger row and mutates inventory; a
+// replay, retry, double-click or concurrent duplicate is a no-op. stock/reserved
+// deltas are applied in one conditional statement, so there is no read-then-write
+// gap for two requests to interleave through. Returns true if applied.
+async function applyStockDeltaOnce(
+  env: Env, key: string, sku: string, stockDelta: number, reservedDelta: number,
+  type: string, referenceId: string, referenceType: string, note: string, actor: string,
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    "INSERT OR IGNORE INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor,movement_key) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).bind(uid(), sku, type, stockDelta, referenceId, referenceType, note, actor, key).run();
+  if (!res.meta || res.meta.changes === 0) return false; // this movement was already recorded
+  await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock+?), reserved=MAX(0,reserved+?) WHERE sku=?")
+    .bind(stockDelta, reservedDelta, sku).run();
+  return true;
+}
 function requireUser(u: JWTPayload | null): Response | null {
   return u ? null : json({error:"Unauthorized"}, 401);
 }
@@ -525,7 +544,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS sla_rules ( id TEXT PRIMARY KEY, name TEXT NOT NULL, entity_type TEXT NOT NULL DEFAULT 'order', trigger_status TEXT NOT NULL, max_hours INTEGER NOT NULL, action TEXT NOT NULL DEFAULT 'NOTIFY', active INTEGER DEFAULT 1 );`,
     `CREATE TABLE IF NOT EXISTS staff ( id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, role TEXT NOT NULL DEFAULT 'delivery_staff', active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS standing_orders ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, name TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT 'MONTHLY', next_run_date TEXT, last_run_date TEXT, items TEXT NOT NULL, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
-    `CREATE TABLE IF NOT EXISTS stock_movements ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, type TEXT NOT NULL, qty_change INTEGER NOT NULL, reference_id TEXT, reference_type TEXT, note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS stock_movements ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, type TEXT NOT NULL, qty_change INTEGER NOT NULL, reference_id TEXT, reference_type TEXT, note TEXT, actor TEXT, movement_key TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS vendor_feedback ( id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, po_id TEXT, grn_id TEXT, quality_rating INTEGER NOT NULL DEFAULT 3, delivery_rating INTEGER NOT NULL DEFAULT 3, service_rating INTEGER NOT NULL DEFAULT 3, comments TEXT, submitted_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
@@ -803,12 +822,18 @@ async function fixCategoryNames(env: Env): Promise<void> {
   for (const col of ["gstin TEXT", "pan TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE clients ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
+  // Idempotency key for stock movements — the UNIQUE index makes a delivery/GRN
+  // stock change apply exactly once even under replay/concurrency (see
+  // applyStockDeltaOnce). Existing rows keep NULL keys (SQLite treats NULLs as
+  // distinct, so they don't collide).
+  try { await env.DB.prepare("ALTER TABLE stock_movements ADD COLUMN movement_key TEXT").run(); } catch { /* exists */ }
+  try { await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_movements_key ON stock_movements(movement_key)").run(); } catch { /* exists */ }
 }
 
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22";
+const BOOTSTRAP_VERSION = "2026-08-22-2";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -4039,10 +4064,8 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
     await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?")
       .bind(item.qty_delivered, id, item.sku).run();
     if (item.qty_delivered > 0) {
-      await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
-        .bind(item.qty_delivered, item.qty_delivered, item.sku).run();
-      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), item.sku, 'DELIVERY', -item.qty_delivered, id, 'delivery_challan', `Delivered via DC ${id}`, user!.name).run();
+      await applyStockDeltaOnce(env, `DELIVERY:${id}:${item.sku}`, item.sku, -item.qty_delivered, -item.qty_delivered,
+        'DELIVERY', id, 'delivery_challan', `Delivered via DC ${id}`, user!.name);
     }
   }
 
@@ -4146,10 +4169,8 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
     const pendingQty = (item.qty_ordered as number) - deliveredNow;
     await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?").bind(deliveredNow, id, item.sku).run();
     if (deliveredNow > 0) {
-      await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
-        .bind(deliveredNow, deliveredNow, item.sku).run();
-      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), item.sku as string, 'DELIVERY', -deliveredNow, id, 'delivery_challan', `Partial delivery via DC ${id}`, user!.name).run();
+      await applyStockDeltaOnce(env, `DELIVERY:${id}:${item.sku}`, item.sku as string, -deliveredNow, -deliveredNow,
+        'DELIVERY', id, 'delivery_challan', `Partial delivery via DC ${id}`, user!.name);
     }
   }
 
@@ -5434,9 +5455,8 @@ async function handleCreateGRN(request: Request, env: Env): Promise<Response> {
       .bind(lineId, grnId, ln.sku, String(it.name), accepted, rejected, ln.batch_no||null, ln.mfg_date||null, ln.expiry_date||null, qc, ln.note||null).run();
 
     if (accepted > 0) {
-      await env.DB.prepare("UPDATE inventory SET stock=stock+? WHERE sku=?").bind(accepted, ln.sku).run();
-      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), ln.sku, 'GRN', accepted, grnId, 'grn', `Received via GRN for PO ${po_id}`, user!.name).run();
+      await applyStockDeltaOnce(env, `GRN:${lineId}`, ln.sku, accepted, 0,
+        'GRN', grnId, 'grn', `Received via GRN for PO ${po_id}`, user!.name);
       // Record a batch row whenever a batch or expiry was captured (FEFO foundation).
       if (ln.batch_no || ln.expiry_date) {
         await env.DB.prepare("INSERT INTO inventory_batches (id,sku,batch_no,mfg_date,expiry_date,qty,grn_line_id) VALUES (?,?,?,?,?,?,?)")

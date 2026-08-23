@@ -924,6 +924,28 @@ describe("Order-to-delivery authorization", () => {
     expect((await post("/api/delivery-challans/DC-SETTLED/deliver", {}, adminToken)).status).toBe(409);
     expect((await post("/api/delivery-challans/DC-SETTLED/partial", { delivered_qty: 1, total_qty: 5 }, adminToken)).status).toBe(409);
   });
+
+  it("stock deduction is applied exactly once per movement key (no double-spend on replay)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,reserved,active) VALUES ('ATOM-1','Atom Test','Beverages',10,100,10,1)").run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('ATOM-ORD','c1','tst-ops','IN_SHIPMENT',100,18,118,'Regular')").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('atom-oi','ATOM-ORD','ATOM-1','Atom Test',10,10,100)").run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES ('DC-ATOM','ATOM-ORD','SCHEDULED',10)").run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('atom-di','DC-ATOM','ATOM-1','Atom Test',10,0)").run();
+
+    // First delivery deducts 10 → 90.
+    expect((await post("/api/delivery-challans/DC-ATOM/deliver", {}, adminToken)).status).toBe(200);
+    let stock = (await db.prepare("SELECT stock FROM inventory WHERE sku='ATOM-1'").first() as { stock: number }).stock;
+    expect(stock).toBe(90);
+
+    // Force the challan back to a deliverable state to bypass the status guard —
+    // simulating a concurrent/replayed apply. The movement key must still stop a
+    // second deduction, so stock stays 90 (not 80).
+    await db.prepare("UPDATE delivery_challans SET status='SCHEDULED' WHERE id='DC-ATOM'").run();
+    expect((await post("/api/delivery-challans/DC-ATOM/deliver", {}, adminToken)).status).toBe(200);
+    stock = (await db.prepare("SELECT stock FROM inventory WHERE sku='ATOM-1'").first() as { stock: number }).stock;
+    expect(stock).toBe(90);
+  });
 });
 
 describe("Ad-hoc orders (no catalogue selection)", () => {
