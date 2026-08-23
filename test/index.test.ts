@@ -900,6 +900,23 @@ describe("Order-to-delivery authorization", () => {
     expect((await patch("/api/clients/c1", { monthly_budget: 999999 }, vendorToken)).status).toBe(403);
   });
 
+  it("health is public; observability is staff-only", async () => {
+    const hres = await get("/api/health");
+    expect(hres.status).toBe(200);
+    const health = await hres.json() as { status: string; db: string };
+    expect(health.status).toBe("ok");
+    expect(health.db).toBe("ok");
+    // Observability: clients/vendors blocked, staff allowed with error + metric shape.
+    expect((await get("/api/observability", clientToken)).status).toBe(403);
+    expect((await get("/api/observability", vendorToken)).status).toBe(403);
+    const obs = await (await get("/api/observability", adminToken)).json() as {
+      errors: { last_hour: number; recent: unknown[] }; metrics: Record<string, unknown>;
+    };
+    expect(typeof obs.errors.last_hour).toBe("number");
+    expect(Array.isArray(obs.errors.recent)).toBe(true);
+    expect(obs.metrics).toHaveProperty("pending_deliveries");
+  });
+
   it("central guard blocks external roles from back-office endpoints", async () => {
     for (const p of ["/api/users", "/api/staff", "/api/audit-logs", "/api/warehouses", "/api/approval-rules"]) {
       expect((await get(p, clientToken)).status).toBe(403);

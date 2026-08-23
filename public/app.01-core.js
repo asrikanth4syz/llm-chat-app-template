@@ -145,6 +145,7 @@ const PAGE_ICON = {
   // Reports & insight
   exec_bi: iconPie, consolidated_report: iconFile, reports: iconReports,
   sla_dashboard: iconGauge, client_reports: iconPie, client_consumption: iconReports,
+  system_health: iconGauge,
   // Alerts
   alerts: iconBell,
   // Admin & settings
@@ -206,6 +207,7 @@ const NAV = {
     { id:'zones',       label:'Location Zones', icon:iconPin,    badge:null },
     { id:'templates',   label:'Templates',      icon:iconLayout, badge:null },
     { id:'import_data', label:'CSV Import',     icon:iconUpload, badge:null },
+    { id:'system_health', label:'System Health', icon:iconGauge, badge:null },
   ],
   ops: [
     { section:'Home' },
@@ -1006,6 +1008,7 @@ const PAGE_MAP = {
   approvals: 'renderApprovals',
   users: 'renderUsers',
   settings: 'renderSettings',
+  system_health: 'renderSystemHealth',
   vendor_pos: 'renderVendorPOs',
   vendor_invoices: 'renderVendorInvoices',
   vendor_payments: 'renderVendorPayments',

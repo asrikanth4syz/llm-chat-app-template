@@ -1432,3 +1432,46 @@ async function deactivateApprovalRule(id) {
   if (res) { showToast('Rule deactivated'); navigate('settings'); }
 }
 
+
+/* ── System Health (Super Admin / Ops): observability snapshot ──────────── */
+async function renderSystemHealth(el) {
+  el.innerHTML = `${pageHeader('System Health', 'Live service status, recent errors and operational metrics')}
+    <div id="sysh-body"><div class="loading-state" style="padding:24px"><div class="spinner"></div></div></div>`;
+  const [health, obs] = await Promise.all([
+    api('/health').catch(() => null),
+    api('/observability').catch(() => null),
+  ]);
+  const box = document.getElementById('sysh-body'); if (!box) return;
+  if (!obs) { box.innerHTML = '<div class="u-empty" style="padding:24px;text-align:center;color:var(--text-muted)">Could not load observability data.</div>'; return; }
+  const dbOk = health && health.status === 'ok';
+  const e1 = obs.errors?.last_hour ?? 0, e24 = obs.errors?.last_24h ?? 0;
+  const m = obs.metrics || {};
+  const tile = (v, l, col) => `<div class="k"><div class="v" style="${col ? `color:${col}` : ''}">${v}</div><div class="l">${h(l)}</div></div>`;
+  const rows = (obs.errors?.recent || []).map(r => `<tr>
+      <td class="mono" style="font-size:.68rem;white-space:nowrap">${h((r.created_at || '').replace('T',' ').slice(0,19))}</td>
+      <td><span class="mono" style="font-size:.66rem;color:var(--text-muted)">${h(r.method || '')}</span> ${h(r.path || '')}</td>
+      <td style="font-size:.76rem">${h(r.message || '')}</td>
+      <td class="mono" style="font-size:.64rem;color:var(--text-light)">${h(r.id || '')}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px">No errors recorded 🎉</td></tr>';
+  const statusRows = (m.orders_by_status || []).map(s => `<span class="attr" style="margin:2px"><b>${s.n}</b> ${h(s.status)}</span>`).join('') || '<span style="color:var(--text-muted)">—</span>';
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="display:inline-flex;align-items:center;gap:7px;background:${dbOk ? '#dcfce7' : '#fee2e2'};color:${dbOk ? '#15803d' : '#b91c1c'};border-radius:999px;padding:5px 13px;font-size:.8rem;font-weight:700">
+        ● ${dbOk ? 'Operational' : 'Degraded'}</span>
+      <span style="font-size:.74rem;color:var(--text-muted)">DB ${h(health?.db || '?')} · build ${h(health?.version || obs.version || '?')} · ${h((obs.generated_at || '').replace('T',' ').slice(0,19))} UTC</span>
+      <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('quickNav','system_health')}>↻ Refresh</button>
+    </div>
+    <div class="kpi">
+      ${tile(e1, 'Errors (1h)', e1 > 0 ? 'var(--red)' : 'var(--green,#16a34a)')}
+      ${tile(e24, 'Errors (24h)', e24 > 0 ? '#b45309' : 'var(--green,#16a34a)')}
+      ${tile(m.pending_deliveries ?? 0, 'Pending deliveries')}
+      ${tile(m.in_shipment_orders ?? 0, 'Orders in shipment')}
+      ${tile(m.open_tickets ?? 0, 'Open tickets')}
+    </div>
+    <div style="margin:14px 0 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center"><b style="font-size:.8rem;color:var(--navy)">Orders by status</b> ${statusRows}</div>
+    <div style="margin:16px 0 8px"><b style="font-size:.86rem;color:var(--navy)">Recent errors</b> <span style="color:var(--text-muted);font-size:.76rem">— quote the request id when reporting</span></div>
+    <div class="table-wrap"><table class="table" style="min-width:680px">
+      <thead><tr><th>Time (UTC)</th><th>Endpoint</th><th>Message</th><th>Request id</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}

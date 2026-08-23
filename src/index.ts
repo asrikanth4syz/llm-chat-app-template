@@ -149,6 +149,22 @@ async function aiRateLimit(env: Env, bucket: string, limit: number): Promise<num
     return 0;
   } catch { return 0; } // fail open — never block on a throttle error
 }
+
+// Structured error capture for observability. Emits one JSON line (picked up by
+// Cloudflare Workers Logs) AND persists to error_log so admins can triage recent
+// failures in-app without the dashboard. Best-effort: never throws, and trims the
+// table so it can't grow unbounded. Returns the request id to surface to the user.
+async function recordError(env: Env, meta: { reqId: string; method: string; path: string; actor?: string }, err: unknown): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? (err.stack || "") : "";
+  try { console.error(JSON.stringify({ level: "error", reqId: meta.reqId, method: meta.method, path: meta.path, actor: meta.actor || null, message })); } catch { /* logging must not throw */ }
+  try {
+    await env.DB.prepare("INSERT INTO error_log (id,method,path,status,actor,message,stack) VALUES (?,?,?,?,?,?,?)")
+      .bind(meta.reqId, meta.method, meta.path, 500, meta.actor || null, message.slice(0, 500), stack.slice(0, 2000)).run();
+    // Keep only the most recent 500 rows.
+    await env.DB.prepare("DELETE FROM error_log WHERE id NOT IN (SELECT id FROM error_log ORDER BY created_at DESC LIMIT 500)").run();
+  } catch { /* persistence is best-effort */ }
+}
 function requireUser(u: JWTPayload | null): Response | null {
   return u ? null : json({error:"Unauthorized"}, 401);
 }
@@ -206,6 +222,7 @@ const STAFF_ONLY_API: Array<[string, RegExp]> = [
   ["*", /^\/api\/stock-movements$/], ["*", /^\/api\/porter-expenses(\/|$)/],
   ["*", /^\/api\/delivery-routes(\/|$)/], ["*", /^\/api\/po-templates(\/|$)/],
   ["*", /^\/api\/po-approval-threshold$/], ["*", /^\/api\/sourcing\//],
+  ["*", /^\/api\/observability$/],
   ["POST", /^\/api\/hsn-gst-rates$/],
   ["POST", /^\/api\/settings$/],
   ["POST", /^\/api\/zones(\/|$)/], ["DELETE", /^\/api\/zones(\/|$)/],
@@ -571,6 +588,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS warehouses ( id TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT, capacity INTEGER DEFAULT 1000, active INTEGER DEFAULT 1 );`,
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS ai_throttle ( bucket TEXT PRIMARY KEY, window_start TEXT, count INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS error_log ( id TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')), method TEXT, path TEXT, status INTEGER, actor TEXT, message TEXT, stack TEXT );`,
     `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS draft_carts ( user_id TEXT PRIMARY KEY, items TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
     // PR-1: receiving spine (G1–G3)
@@ -856,7 +874,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22-3";
+const BOOTSTRAP_VERSION = "2026-08-22-4";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -985,6 +1003,8 @@ export default {
       if (path==="/api/auth/me"         && method==="GET")  return handleMe(request,env);
       if (path==="/api/auth/otp/send"   && method==="POST") return handleOTPSend(request,env);
       if (path==="/api/auth/otp/verify" && method==="POST") return handleOTPVerify(request,env);
+      if (path==="/api/health"          && method==="GET")  return handleHealth(request,env);
+      if (path==="/api/observability"   && method==="GET")  return handleObservability(request,env);
 
       // Orders — specific paths must come before the wildcard /:id routes
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
@@ -1273,8 +1293,11 @@ export default {
     try {
       return withSecurityHeaders(await route());
     } catch (err) {
-      console.error(err);
-      return withSecurityHeaders(json({error:"Internal server error"}, 500));
+      const reqId = uid();
+      // Capture off the response path so error logging never adds latency.
+      const actor = await getUser(request, env).then(u => u?.sub).catch(() => undefined);
+      ctx.waitUntil(recordError(env, { reqId, method, path, actor }, err));
+      return withSecurityHeaders(json({error:"Internal server error", request_id: reqId}, 500));
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -3309,6 +3332,40 @@ async function handleOcrLabel(request: Request, env: Env, path: string): Promise
   text = text.trim();
   await audit(env, user, "OCR_LABEL", "product", sku, undefined, `${text.length} chars transcribed`);
   return json({ sku, text });
+}
+
+// GET /api/health — unauthenticated liveness/readiness for uptime monitors.
+// Pings D1 and reports the running bootstrap version. 503 if the DB is unreachable.
+async function handleHealth(_request: Request, env: Env): Promise<Response> {
+  let db = "ok";
+  try { await env.DB.prepare("SELECT 1 AS ok").first(); } catch { db = "down"; }
+  const ok = db === "ok";
+  return json({ status: ok ? "ok" : "degraded", db, version: BOOTSTRAP_VERSION, time: new Date().toISOString() }, ok ? 200 : 503);
+}
+
+// GET /api/observability — staff-only operational snapshot: recent error volume
+// and the latest failures (for triage by request_id), plus a few live metrics.
+async function handleObservability(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({ error: "Forbidden — 4SYZ staff only" }, 403);
+  const one = async (sql: string) => Number(((await env.DB.prepare(sql).first().catch(() => null)) as { n?: number } | null)?.n || 0);
+  const [errors_1h, errors_24h, pending_deliveries, open_tickets, in_shipment] = await Promise.all([
+    one("SELECT COUNT(*) n FROM error_log WHERE created_at >= datetime('now','-1 hour')"),
+    one("SELECT COUNT(*) n FROM error_log WHERE created_at >= datetime('now','-1 day')"),
+    one("SELECT COUNT(*) n FROM delivery_challans WHERE status IN ('SCHEDULED','IN_TRANSIT')"),
+    one("SELECT COUNT(*) n FROM tickets WHERE status != 'CLOSED'"),
+    one("SELECT COUNT(*) n FROM orders WHERE status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')"),
+  ]);
+  const recent = await env.DB.prepare(
+    "SELECT id,created_at,method,path,status,actor,message FROM error_log ORDER BY created_at DESC LIMIT 20"
+  ).all().catch(() => ({ results: [] }));
+  const byStatus = await env.DB.prepare("SELECT status, COUNT(*) n FROM orders GROUP BY status").all().catch(() => ({ results: [] }));
+  return json({
+    generated_at: new Date().toISOString(), version: BOOTSTRAP_VERSION,
+    errors: { last_hour: errors_1h, last_24h: errors_24h, recent: recent.results || [] },
+    metrics: { pending_deliveries, open_tickets, in_shipment_orders: in_shipment, orders_by_status: byStatus.results || [] },
+  });
 }
 
 async function handleExtractIntel(request: Request, env: Env, path: string): Promise<Response> {
