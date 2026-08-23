@@ -2990,14 +2990,13 @@ async function handleListCatalogue(request: Request, env: Env): Promise<Response
      WHERE i.active=1${visClause} ORDER BY i.name`
   ).all() as { results: Array<Record<string,unknown>> };
 
-  // Fetch attributes only for the products actually returned (never hidden ones).
+  // Attributes are grouped in JS (a single unbounded read). We deliberately do
+  // NOT use `WHERE sku IN (...)` here — D1 caps a statement at ~100 bound
+  // parameters, so a catalogue with >100 products would overflow it and 500.
+  const { results: attrs } = await env.DB.prepare("SELECT sku,grp,name,source FROM product_attributes")
+    .all() as { results: Array<Record<string,unknown>> };
   const attrBySku: Record<string, Array<Record<string,unknown>>> = {};
-  if (rows.length) {
-    const ph = rows.map(() => "?").join(",");
-    const { results: attrs } = await env.DB.prepare(`SELECT sku,grp,name,source FROM product_attributes WHERE sku IN (${ph})`)
-      .bind(...rows.map(r => r.sku)).all() as { results: Array<Record<string,unknown>> };
-    for (const a of attrs) (attrBySku[String(a.sku)] = attrBySku[String(a.sku)] || []).push(a);
-  }
+  for (const a of attrs) (attrBySku[String(a.sku)] = attrBySku[String(a.sku)] || []).push(a);
 
   let items: Array<Record<string,unknown>> = rows.map(r => ({
     ...r,

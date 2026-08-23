@@ -261,6 +261,19 @@ describe("Auth", () => {
 // INVENTORY
 // ════════════════════════════════════════════════════════════════════
 describe("Smart Catalogue / Product Intelligence", () => {
+  it("catalogue loads with >100 products (no D1 bound-parameter overflow)", async () => {
+    const db = env.DB as D1Database;
+    for (let i = 0; i < 130; i++) {
+      const sku = `BULK-${String(i).padStart(3, "0")}`;
+      await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,1)")
+        .bind(sku, `Bulk ${i}`, "Beverages", 10, 5).run();
+    }
+    const res = await get("/api/catalogue", adminToken);
+    expect(res.status).toBe(200); // must not 500 on the IN(...) bind limit
+    const cat = await res.json() as { items: unknown[] };
+    expect(cat.items.length).toBeGreaterThan(100);
+  });
+
   it("PATCH fitment (Super Admin) publishes a product; catalogue lists it verified", async () => {
     const res = await patch("/api/catalogue/SKU001/fitment", { verification: "verified", fitment_state: "APPROVED", clean_label: "eligible" }, adminToken);
     expect(res.status).toBe(200);
