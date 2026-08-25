@@ -271,19 +271,19 @@ async function renderClientDashboard(el) {
     </div>
   </div>`;
 
-  // Load async KPIs
-  api('/reports/pending-supply').then(ps => {
-    const el = document.getElementById('due-items-count');
-    if (el) el.textContent = ps?.kpis?.due_qty ?? '0';
-  });
+  // Load async KPIs — both derived from the client's OWN fulfilment rows
+  // (client-fulfilment self-scopes to the caller's client). We intentionally do
+  // not call /reports/pending-supply here: it is an all-client ops report.
   const today   = new Date().toISOString().slice(0,10);
   const from30  = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
   api(`/reports/client-fulfilment?from=${from30}&to=${today}`).then(cf => {
-    const el = document.getElementById('client-fulfilment-pct');
-    if (el && cf?.length) {
-      const avg = cf.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/cf.length;
-      el.textContent = Math.round(avg) + '%';
-    } else if (el) el.textContent = '100%';
+    const rows = cf || [];
+    const dueEl = document.getElementById('due-items-count');
+    if (dueEl) dueEl.textContent = rows.reduce((s,r)=>s+(r.due_qty||0),0) || '0';
+    const pctEl = document.getElementById('client-fulfilment-pct');
+    if (pctEl) pctEl.textContent = rows.length
+      ? Math.round(rows.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/rows.length) + '%'
+      : '100%';
   });
 }
 
