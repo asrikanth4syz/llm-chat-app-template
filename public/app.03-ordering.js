@@ -201,8 +201,11 @@ function renderCartReview(container) {
       <div>
         <!-- Items card -->
         <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px">
-          <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-            <b style="font-size:.95rem;color:var(--navy)">Cart Items</b>
+          <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
+            <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+              <b style="font-size:.95rem;color:var(--navy)">Cart Items</b>
+              <span id="cart-items-summary" style="font-size:.76rem;color:var(--text-muted);font-weight:600"></span>
+            </div>
             <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>+ Add More Items</button>
           </div>
           <div id="review-cart-items"></div>
@@ -286,7 +289,13 @@ function refreshCartReviewUI() {
   const total = APP.cart.reduce((s,i) => s + i.qty * i.unit_price, 0);
   const gst   = Math.round(total * 0.18);
   const grand = total + gst;
-  const count = APP.cart.reduce((s,i) => s + i.qty, 0);
+  const skuCount = APP.cart.length;                              // distinct SKUs / line items
+  const count = APP.cart.reduce((s,i) => s + i.qty, 0);          // total quantity across all items
+
+  const cartSummaryEl = document.getElementById('cart-items-summary');
+  if (cartSummaryEl) cartSummaryEl.textContent = skuCount
+    ? `${skuCount} SKU${skuCount!==1?'s':''} · ${count} qty`
+    : '';
 
   const itemsEl = document.getElementById('review-cart-items');
   if (itemsEl) {
@@ -325,7 +334,7 @@ function refreshCartReviewUI() {
   const summaryEl = document.getElementById('review-summary');
   if (summaryEl) {
     summaryEl.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${skuCount} SKU${skuCount!==1?'s':''} · ${count} qty</span><span>${fmt(total)}</span></div>
       <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span class="u-muted">GST (18%)</span><span>${fmt(gst)}</span></div>
       <div style="display:flex;justify-content:space-between;padding-top:12px;border-top:2px solid var(--border);font-weight:800;font-size:1.05rem"><span>Total</span><span style="color:var(--navy)">${fmt(grand)}</span></div>
       ${grand > 100000 ? `<div class="alert alert-warning" style="margin-top:12px;font-size:.8rem">⚠️ Amount exceeds ₹1L — approval required</div>` : ''}
