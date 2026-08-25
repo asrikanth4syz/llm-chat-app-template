@@ -147,7 +147,7 @@ async function renderPlaceOrder(el) {
       <div id="csv-import-feedback" style="margin-bottom:14px"></div>
 
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" ${dataAct('processCSVUpload')} style="flex:1">Import to Cart</button>
+        <button class="btn btn-primary" ${dataAct('reviewCSVUpload')} style="flex:1">Review Import</button>
         <button class="btn btn-secondary" ${dataAct('hideEl', 'csv-upload-modal')}>Cancel</button>
       </div>
     </div>
@@ -576,6 +576,7 @@ function showCSVUploadModal() {
   if (input) input.value = '';
   const fb = document.getElementById('csv-import-feedback');
   if (fb) fb.innerHTML = '';
+  APP._csvPreview = null;
   m.style.display = 'flex';
 }
 
@@ -652,7 +653,9 @@ function downloadOrderTemplate() {
   showToast(`Exported ${catalog.length} item${catalog.length!==1?'s':''}`, 'success');
 }
 
-async function processCSVUpload() {
+// Step 1 — parse the file and show a REVIEW of what will be imported. No cart
+// mutation happens here; the user confirms on the next step.
+async function reviewCSVUpload() {
   const input = document.getElementById('csv-upload-input');
   const fb = document.getElementById('csv-import-feedback');
   if (!input || !input.files.length) { if(fb) fb.innerHTML = '<div class="alert alert-warning">Please select a CSV file.</div>'; return; }
@@ -669,29 +672,89 @@ async function processCSVUpload() {
     if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "Item Name" and "Quantity" columns.</div>'; return;
   }
   const norm = s => (s || '').trim().toLowerCase();
-  let imported = 0, skipped = 0, notFound = [];
+  const preview = []; // {label, qty, status:'ok'|'notfound'|'skipped', item?}
   for (let i = 1; i < parsed.length; i++) {
     const cols = parsed[i];
     const sku = skuIdx !== -1 ? (cols[skuIdx] || '').trim() : '';
     const name = (cols[nameIdx] || '').trim();
+    const label = name || sku;
     const qty = parseInt(cols[qtyIdx], 10);
-    if ((!name && !sku) || isNaN(qty) || qty < 1) { skipped++; continue; }
-    // Prefer an exact SKU match; otherwise match by item name (case-insensitive).
+    if (!label) continue; // truly blank row
+    if (isNaN(qty) || qty < 1) { preview.push({ label, qty: cols[qtyIdx] || '—', status: 'skipped' }); continue; }
     let item = null;
     if (sku) item = APP._catalog && APP._catalog.find(it => it.sku === sku);
     if (!item && name) item = APP._catalog && APP._catalog.find(it => norm(it.name) === norm(name));
-    if (!item) { notFound.push(name || sku); skipped++; continue; }
+    if (!item) { preview.push({ label, qty, status: 'notfound' }); continue; }
+    preview.push({ label: item.name, qty, status: 'ok', item });
+  }
+  APP._csvPreview = preview.filter(r => r.status === 'ok'); // what will actually be added
+  renderCSVReview(preview);
+}
+
+function renderCSVReview(preview) {
+  const fb = document.getElementById('csv-import-feedback'); if (!fb) return;
+  const ok = preview.filter(r => r.status === 'ok');
+  const notFound = preview.filter(r => r.status === 'notfound');
+  const skipped = preview.filter(r => r.status === 'skipped');
+  const okQty = ok.reduce((s,r) => s + r.qty, 0);
+  const badge = (r) => {
+    if (r.status === 'ok') return '<span style="color:#065f46;background:var(--success-soft-bg);border-radius:5px;padding:1px 7px;font-size:.66rem;font-weight:700">MATCHED</span>';
+    if (r.status === 'notfound') return '<span style="color:#b91c1c;background:#fee2e2;border-radius:5px;padding:1px 7px;font-size:.66rem;font-weight:700">NOT FOUND</span>';
+    return '<span style="color:var(--text-muted);background:var(--bg);border-radius:5px;padding:1px 7px;font-size:.66rem;font-weight:700">SKIPPED</span>';
+  };
+  const rows = preview.map(r => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 8px;font-size:.8rem">${h(String(r.label))}</td>
+      <td style="padding:6px 8px;text-align:right;font-size:.8rem;font-weight:600">${h(String(r.qty))}</td>
+      <td style="padding:6px 8px;text-align:right">${badge(r)}</td>
+    </tr>`).join('');
+  fb.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="padding:10px 14px;background:var(--bg);font-size:.82rem;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center">
+        <b style="color:var(--navy)">Review import</b>
+        <span style="color:#065f46;font-weight:600">${ok.length} matched · ${okQty} qty</span>
+        ${notFound.length?`<span style="color:#b91c1c;font-weight:600">${notFound.length} not found</span>`:''}
+        ${skipped.length?`<span style="color:var(--text-muted)">${skipped.length} skipped</span>`:''}
+      </div>
+      <div style="max-height:230px;overflow:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--bg)"><th style="padding:6px 8px;text-align:left;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Item</th><th style="padding:6px 8px;text-align:right;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Qty</th><th style="padding:6px 8px;text-align:right;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Status</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--text-muted)">No rows.</td></tr>'}</tbody>
+        </table>
+      </div>
+      ${notFound.length?`<div style="padding:8px 14px;font-size:.74rem;color:#b91c1c;border-top:1px solid var(--border)">Not found in your catalogue — these rows will be ignored: ${notFound.map(r=>h(String(r.label))).join(', ')}</div>`:''}
+      <div style="padding:12px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" ${dataAct('confirmCSVImport')} ${ok.length?'':'disabled'} style="flex:1;min-width:180px">✓ Add ${ok.length} item${ok.length!==1?'s':''} to Cart</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('resetCSVUpload')}>Choose different file</button>
+      </div>
+    </div>`;
+}
+
+// Step 2 — commit the reviewed, matched rows to the cart.
+function confirmCSVImport() {
+  const fb = document.getElementById('csv-import-feedback');
+  const preview = APP._csvPreview || [];
+  if (!preview.length) { if(fb) fb.innerHTML = '<div class="alert alert-warning">Nothing to import — review the file first.</div>'; return; }
+  let imported = 0;
+  for (const r of preview) {
+    const item = r.item;
     const existing = APP.cart.find(c => c.sku === item.sku);
-    if (existing) existing.qty += qty;
-    else APP.cart.push({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price });
+    if (existing) existing.qty += r.qty;
+    else APP.cart.push({ sku: item.sku, name: item.name, qty: r.qty, unit_price: item.unit_price });
     imported++;
   }
-  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">Items not found in your catalogue: ${notFound.join(', ')}</div>` : '';
-  if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'var(--success-soft-bg)':'var(--amber-bg)'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'var(--amber-text)'}">
-    <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
-    ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
+  APP._csvPreview = null;
+  if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:var(--success-soft-bg);border:1px solid #6ee7b7;font-size:.84rem;color:#065f46">
+    <b>${imported} item(s) added to cart.</b>
+    <div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>
   </div>`;
-  if (imported) refreshCartUI();
+  refreshCartUI();
+}
+
+// Clear the chosen file + preview so the user can pick another sheet.
+function resetCSVUpload() {
+  APP._csvPreview = null;
+  const input = document.getElementById('csv-upload-input'); if (input) input.value = '';
+  const fb = document.getElementById('csv-import-feedback'); if (fb) fb.innerHTML = '';
 }
 
 async function loadQuickReorder() {
