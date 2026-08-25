@@ -129,7 +129,7 @@ async function renderPlaceOrder(el) {
           <div style="min-width:28px;height:28px;border-radius:50%;background:#15803d;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.82rem">2</div>
           <div>
             <div style="font-weight:700;font-size:.88rem;color:#15803d;margin-bottom:4px">Fill in quantities</div>
-            <div style="font-size:.78rem;color:#14532d">Open in Excel / Google Sheets. Enter the quantity you need in the <b>Quantity</b> column for each item. Leave blank or 0 to skip an item. Save as CSV.</div>
+            <div style="font-size:.78rem;color:#14532d">Open in Excel / Google Sheets. Enter the quantity you need in the <b>Quantity</b> column for each item. Leave blank or 0 to skip an item. Save as CSV. <b>Only Item Name &amp; Quantity are required</b> — the other columns are optional.</div>
           </div>
         </div>
 
@@ -652,25 +652,32 @@ async function processCSVUpload() {
   const parsed = parseCSVText(text);
   if (parsed.length < 2) { if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have a header row and at least one data row.</div>'; return; }
   const headers = parsed[0].map(h => h.toLowerCase().trim());
-  const skuIdx = headers.indexOf('sku');
+  // Only Item Name + Quantity are required; SKU (and everything else) is optional.
+  const nameIdx = headers.findIndex(x => x === 'item name' || x === 'name' || x === 'item');
   const qtyIdx = headers.indexOf('quantity') !== -1 ? headers.indexOf('quantity') : headers.indexOf('qty');
-  if (skuIdx === -1 || qtyIdx === -1) {
-    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" (or "qty") columns.</div>'; return;
+  const skuIdx = headers.indexOf('sku'); // optional — used for an exact match when present
+  if (nameIdx === -1 || qtyIdx === -1) {
+    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "Item Name" and "Quantity" columns.</div>'; return;
   }
+  const norm = s => (s || '').trim().toLowerCase();
   let imported = 0, skipped = 0, notFound = [];
   for (let i = 1; i < parsed.length; i++) {
     const cols = parsed[i];
-    const sku = (cols[skuIdx] || '').trim();
+    const sku = skuIdx !== -1 ? (cols[skuIdx] || '').trim() : '';
+    const name = (cols[nameIdx] || '').trim();
     const qty = parseInt(cols[qtyIdx], 10);
-    if (!sku || isNaN(qty) || qty < 1) { skipped++; continue; }
-    const item = APP._catalog && APP._catalog.find(it => it.sku === sku);
-    if (!item) { notFound.push(sku); skipped++; continue; }
-    const existing = APP.cart.find(c => c.sku === sku);
+    if ((!name && !sku) || isNaN(qty) || qty < 1) { skipped++; continue; }
+    // Prefer an exact SKU match; otherwise match by item name (case-insensitive).
+    let item = null;
+    if (sku) item = APP._catalog && APP._catalog.find(it => it.sku === sku);
+    if (!item && name) item = APP._catalog && APP._catalog.find(it => norm(it.name) === norm(name));
+    if (!item) { notFound.push(name || sku); skipped++; continue; }
+    const existing = APP.cart.find(c => c.sku === item.sku);
     if (existing) existing.qty += qty;
-    else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
+    else APP.cart.push({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
-  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
+  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">Items not found in your catalogue: ${notFound.join(', ')}</div>` : '';
   if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'var(--success-soft-bg)':'var(--amber-bg)'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'var(--amber-text)'}">
     <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
     ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
