@@ -560,7 +560,14 @@ async function submitAdhocOrder() {
 
 function showCSVUploadModal() {
   const m = document.getElementById('csv-upload-modal');
-  if (m) m.style.display = 'flex';
+  if (!m) return;
+  // Reset each time it opens — the modal is a persistent node, so a previously
+  // chosen file name and any prior import feedback would otherwise linger.
+  const input = document.getElementById('csv-upload-input');
+  if (input) input.value = '';
+  const fb = document.getElementById('csv-import-feedback');
+  if (fb) fb.innerHTML = '';
+  m.style.display = 'flex';
 }
 
 function searchCatalog(q) {
