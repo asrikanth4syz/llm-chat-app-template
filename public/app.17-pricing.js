@@ -79,40 +79,57 @@ async function renderPriceRevisions(el) {
     </table></div>`;
 }
 
-async function openProposeRevision() {
+async function openProposeRevision(preClient, preSku) {
   injectPricingCss();
-  const [clients, inv] = await Promise.all([api('/clients').catch(()=>[]), api('/inventory').catch(()=>[])]);
-  APP._prInv = inv || [];
-  const clientOpts = (clients || []).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
-  const skuOpts = (inv || []).slice(0, 500).map(i => `<option value="${i.sku}" data-price="${i.unit_price||0}" data-mrp="${i.mrp||0}">${h(i.name)} — ${i.sku}</option>`).join('');
+  const clients = (await api('/clients').catch(()=>[])) || [];
+  const clientOpts = clients.map(c => `<option value="${c.id}" ${c.id===preClient?'selected':''}>${h(c.name)}</option>`).join('');
   const body = `
-    <div class="form-group"><label>Client</label><select id="pr-client" class="form-control">${clientOpts}</select></div>
-    <div class="form-group"><label>Item</label><select id="pr-sku" class="form-control" ${dataChange('prFillCurrent')}>${skuOpts}</select></div>
+    <div class="form-group"><label>1 · Client</label>
+      <select id="pr-client" class="form-control" ${dataChange('prLoadClientProducts')}>
+        <option value="">Select a client…</option>${clientOpts}</select></div>
+    <div class="form-group"><label>2 · Product <span style="color:var(--text-muted);font-weight:400">(from this client's assigned list)</span></label>
+      <select id="pr-sku" class="form-control" ${dataChange('prFillCurrent')}><option value="">Select a client first…</option></select></div>
     <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <div class="form-group"><label>Current MRP</label><input id="pr-oldmrp" class="form-control" disabled></div>
       <div class="form-group"><label>New MRP</label><input id="pr-newmrp" class="form-control" type="number" step="0.01"></div>
-      <div class="form-group"><label>Current price</label><input id="pr-oldprice" class="form-control" disabled></div>
+      <div class="form-group"><label>Current price for this client</label><input id="pr-oldprice" class="form-control" disabled></div>
       <div class="form-group"><label>New client price</label><input id="pr-newprice" class="form-control" type="number" step="0.01"></div>
       <div class="form-group"><label>Effective from</label><input id="pr-eff" class="form-control" type="date"></div>
       <div class="form-group"><label>Reason</label><select id="pr-reason" class="form-control"><option>Vendor cost increase</option><option>Contract revision</option><option>FX / import duty</option><option>Vendor rate drop</option><option>Promotional</option></select></div>
     </div>
     <div class="form-group"><label>Note to client (optional)</label><input id="pr-note" class="form-control" placeholder="e.g. Supplier revised base rate; passing through at cost."></div>
-    <div class="aiflag" style="background:#eff6ff;color:#1d4ed8;border-radius:8px;padding:9px 12px;font-size:.78rem">Price <b>decreases</b> apply automatically. <b>Increases</b> are sent to the client approver for consent before taking effect.</div>`;
+    <div class="aiflag" style="background:#eff6ff;color:#1d4ed8;border-radius:8px;padding:9px 12px;font-size:.78rem">3 · Change the price, then <b>Share with client</b>. Price <b>decreases</b> apply automatically; <b>increases</b> are sent to the client approver for consent.</div>`;
   const footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-    <button class="btn btn-primary" ${dataAct('submitRevision')}>Submit</button>`;
+    <button class="btn btn-primary" ${dataAct('submitRevision')}>Share with client</button>`;
   openModal('Propose price revision', body, footer);
   const eff = document.getElementById('pr-eff'); if (eff) eff.value = new Date().toISOString().slice(0,10);
+  if (preClient) await prLoadClientProducts(preSku);
+}
+// Populate the product dropdown from the SELECTED client's assigned catalogue,
+// carrying that client's own current price + MRP into each option.
+async function prLoadClientProducts(preSku) {
+  const clientId = document.getElementById('pr-client')?.value;
+  const sel = document.getElementById('pr-sku'); if (!sel) return;
+  if (!clientId) { sel.innerHTML = '<option value="">Select a client first…</option>'; prFillCurrent(); return; }
+  sel.innerHTML = '<option>Loading…</option>';
+  const items = (await api(`/clients/${encodeURIComponent(clientId)}/catalog`).catch(()=>[])) || [];
+  if (!items.length) { sel.innerHTML = '<option value="">No products assigned to this client</option>'; prFillCurrent(); return; }
+  sel.innerHTML = items.map(i => {
+    const price = i.effective_price ?? i.client_price ?? i.unit_price ?? 0;
+    const sku = typeof preSku === 'string' ? preSku : '';
+    return `<option value="${i.sku}" data-price="${price}" data-mrp="${i.mrp||0}" ${i.sku===sku?'selected':''}>${h(i.name)} — ${i.sku} · ${fmt(price)}</option>`;
+  }).join('');
   prFillCurrent();
 }
 function prFillCurrent() {
   const sel = document.getElementById('pr-sku'); if (!sel) return;
   const opt = sel.options[sel.selectedIndex];
-  const price = opt?.getAttribute('data-price') || '0';
-  const mrp = opt?.getAttribute('data-mrp') || '0';
-  document.getElementById('pr-oldprice').value = price;
-  document.getElementById('pr-oldmrp').value = mrp;
-  const np = document.getElementById('pr-newprice'); if (np && !np.value) np.value = price;
-  const nm = document.getElementById('pr-newmrp'); if (nm && !nm.value) nm.value = mrp;
+  const has = opt && opt.value;
+  const price = has ? (opt.getAttribute('data-price') || '0') : '';
+  const mrp = has ? (opt.getAttribute('data-mrp') || '0') : '';
+  const set = (id, v, keep) => { const e = document.getElementById(id); if (e && (!keep || !e.value)) e.value = v; };
+  set('pr-oldprice', price); set('pr-oldmrp', mrp);
+  set('pr-newprice', price, true); set('pr-newmrp', mrp, true);
 }
 async function submitRevision() {
   const body = {
