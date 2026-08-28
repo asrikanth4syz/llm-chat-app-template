@@ -453,6 +453,7 @@ function ccAssignedRow(item) {
         <div style="font-weight:600;font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
         <div class="u-muted-xs">${item.sku} · ${item.category||''}</div>
       </div>
+      <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;flex-shrink:0;padding:3px 10px" ${dataAct('reviseClientPrice', item.sku)} title="Propose a price change and send it to the client for approval">Revise</button>
       <button class="btn btn-sm" style="background:var(--danger-soft-bg);color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
     </div>
     <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
@@ -471,6 +472,15 @@ function ccAssignedRow(item) {
         : `<span id="cc-price-badge-${item.sku}" style="font-size:.68rem;color:var(--text-muted);white-space:nowrap">Global</span>`}
     </div>
   </div>`;
+}
+
+// Open the governed price-revision flow pre-filled with this client + product.
+// (The inline field above is a direct base-price edit; this routes the change
+// through client approval and the audit trail.)
+function reviseClientPrice(sku) {
+  if (!_ccClientId) return;
+  if (typeof openProposeRevision === 'function') openProposeRevision(_ccClientId, sku);
+  else showToast('Pricing module not available', 'error');
 }
 
 async function saveCCPrice(sku, input) {
