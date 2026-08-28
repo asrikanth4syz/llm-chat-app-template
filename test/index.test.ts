@@ -496,6 +496,22 @@ describe("Client price revisions", () => {
     expect(res.status).toBe(400);
   });
 
+  it("an effective date in the past is rejected", async () => {
+    const past = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
+    const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU006", new_price: 9999, effective_date: past }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("proposing a second revision supersedes the pending one (reported back)", async () => {
+    await post("/api/price-revisions", { client_id: "c1", sku: "SKU010", new_price: 500, new_mrp: 600, reason: "v1", effective_date: today }, adminToken);
+    const second = await (await post("/api/price-revisions", { client_id: "c1", sku: "SKU010", new_price: 520, new_mrp: 600, reason: "v2", effective_date: today }, adminToken)).json() as { superseded: number };
+    expect(second.superseded).toBe(1);
+    const list = await (await get("/api/price-revisions?client_id=c1", adminToken)).json() as { items: Array<{ sku: string; state: string; new_price: number }> };
+    const s10 = list.items.filter(i => i.sku === "SKU010");
+    expect(s10.filter(i => i.state === "awaiting_client").length).toBe(1); // only the newest is open
+    expect(s10.some(i => i.state === "superseded")).toBe(true);
+  });
+
   it("a price decrease auto-accepts (no client approval needed)", async () => {
     const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU002", new_price: 1, reason: "Vendor rate drop", effective_date: today }, adminToken);
     const rev = await res.json() as { status: string; direction: string };

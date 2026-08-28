@@ -879,6 +879,11 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
   } catch { /* column already exists */ }
+  // Pick allocation columns (migration 0007) — the runtime-bootstrapped DB has no
+  // migration history, so add them here or the pick-list query 500s on a missing column.
+  for (const col of ["picker_id TEXT", "picker_name TEXT", "picked_at TEXT"]) {
+    try { await env.DB.prepare(`ALTER TABLE orders ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
   for (const col of ["gstin TEXT", "pan TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE clients ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
@@ -893,7 +898,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22-5";
+const BOOTSTRAP_VERSION = "2026-08-22-6";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -4949,14 +4954,18 @@ async function handleCreatePriceRevision(request: Request, env: Env): Promise<Re
   if (priceSame && mrpSame) return json({error:"No change to submit — the new price and MRP match the client's current values."}, 400);
 
   const direction = newPrice < oldPrice ? "down" : "up";
-  const effective = String(b.effective_date || "").slice(0,10) || new Date().toISOString().slice(0,10);
+  const today = new Date().toISOString().slice(0,10);
+  const effective = String(b.effective_date || "").slice(0,10) || today;
+  // An effective date in the past would apply with no notice — reject it.
+  if (effective < today) return json({error:"Effective date can't be in the past."}, 400);
   // Decreases (and no MRP increase) auto-accept; increases await client sign-off.
   const autoAccept = newPrice <= oldPrice && (newMrp == null || oldMrp == null || newMrp <= oldMrp);
   const status = autoAccept ? "auto_accepted" : "awaiting_client";
   const now = new Date().toISOString();
 
   // Supersede any still-open (awaiting) revision for the same client+SKU.
-  await env.DB.prepare("UPDATE client_price_revisions SET status='superseded', updated_at=? WHERE client_id=? AND sku=? AND status='awaiting_client'").bind(now, clientId, sku).run();
+  const sup = await env.DB.prepare("UPDATE client_price_revisions SET status='superseded', updated_at=? WHERE client_id=? AND sku=? AND status='awaiting_client'").bind(now, clientId, sku).run();
+  const supersededCount = Number(sup.meta?.changes || 0);
 
   const id = "PR-" + uid().slice(0,8);
   await env.DB.prepare(
@@ -4969,7 +4978,7 @@ async function handleCreatePriceRevision(request: Request, env: Env): Promise<Re
     await pushNotification(env, "client_approver", `Price revision ${id} awaiting your approval — ${sku} ${oldPrice}→${newPrice}`);
   }
   await audit(env, user, "PRICE_REVISION", "client_price", `${clientId}/${sku}`, String(oldPrice), `${newPrice} (${status})`);
-  return json({ id, status, direction, old_price: oldPrice, new_price: newPrice, old_mrp: oldMrp, new_mrp: newMrp, effective_date: effective }, 201);
+  return json({ id, status, direction, old_price: oldPrice, new_price: newPrice, old_mrp: oldMrp, new_mrp: newMrp, effective_date: effective, superseded: supersededCount }, 201);
 }
 
 // GET /api/price-revisions — ops list (optional ?client_id, ?status).

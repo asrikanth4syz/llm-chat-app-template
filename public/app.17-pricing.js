@@ -98,11 +98,13 @@ async function openProposeRevision(preClient, preSku) {
       <div class="form-group"><label>Reason</label><select id="pr-reason" class="form-control"><option>Vendor cost increase</option><option>Contract revision</option><option>FX / import duty</option><option>Vendor rate drop</option><option>Promotional</option></select></div>
     </div>
     <div class="form-group"><label>Note to client (optional)</label><input id="pr-note" class="form-control" placeholder="e.g. Supplier revised base rate; passing through at cost."></div>
+    <div id="pr-supersede" style="display:none;background:#fef3c7;color:#92400e;border-radius:8px;padding:9px 12px;font-size:.78rem;margin-bottom:8px"></div>
     <div class="aiflag" style="background:#eff6ff;color:#1d4ed8;border-radius:8px;padding:9px 12px;font-size:.78rem">3 · Change the price, then <b>Share with client</b>. Price <b>decreases</b> apply automatically; <b>increases</b> are sent to the client approver for consent.</div>`;
   const footer = `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
     <button class="btn btn-primary" ${dataAct('submitRevision')}>Share with client</button>`;
   openModal('Propose price revision', body, footer);
-  const eff = document.getElementById('pr-eff'); if (eff) eff.value = new Date().toISOString().slice(0,10);
+  const eff = document.getElementById('pr-eff'); const today = new Date().toISOString().slice(0,10);
+  if (eff) { eff.value = today; eff.min = today; } // never let an effective date fall in the past
   if (preClient) await prLoadClientProducts(preSku);
 }
 // Populate the product dropdown from the SELECTED client's assigned catalogue,
@@ -119,6 +121,13 @@ async function prLoadClientProducts(preSku) {
     const sku = typeof preSku === 'string' ? preSku : '';
     return `<option value="${i.sku}" data-price="${price}" data-mrp="${i.mrp||0}" ${i.sku===sku?'selected':''}>${h(i.name)} — ${i.sku} · ${fmt(price)}</option>`;
   }).join('');
+  // Note any still-pending revisions for this client, so we can warn the user
+  // that proposing a new one will replace the old one.
+  APP._prPending = {};
+  try {
+    const rev = await api('/price-revisions?client_id=' + encodeURIComponent(clientId));
+    for (const r of (rev?.items || [])) if (r.state === 'awaiting_client') APP._prPending[r.sku] = r;
+  } catch (e) { /* non-fatal */ }
   prFillCurrent();
 }
 function prFillCurrent() {
@@ -130,6 +139,13 @@ function prFillCurrent() {
   const set = (id, v, keep) => { const e = document.getElementById(id); if (e && (!keep || !e.value)) e.value = v; };
   set('pr-oldprice', price); set('pr-oldmrp', mrp);
   set('pr-newprice', price, true); set('pr-newmrp', mrp, true);
+  // Surface an existing pending revision for this product.
+  const note = document.getElementById('pr-supersede');
+  const pending = has && APP._prPending ? APP._prPending[opt.value] : null;
+  if (note) {
+    if (pending) { note.style.display = 'block'; note.innerHTML = `⚠ A revision to <b>${fmt(pending.new_price)}</b> is already awaiting this client's approval (effective ${pending.effective_date ? fmtDate(pending.effective_date) : '—'}). Submitting will <b>replace</b> it.`; }
+    else note.style.display = 'none';
+  }
 }
 async function submitRevision() {
   const body = {
@@ -149,8 +165,14 @@ async function submitRevision() {
   const priceSame = Math.abs(body.new_price - oldPrice) < 0.005;
   const mrpSame = !(body.new_mrp > 0) || Math.abs(body.new_mrp - oldMrp) < 0.005;
   if (priceSame && mrpSame) { showToast('No change to submit — the price and MRP match the current values', 'error'); return; }
+  if (body.effective_date && body.effective_date < new Date().toISOString().slice(0,10)) { showToast('Effective date can\'t be in the past', 'error'); return; }
   const res = await api('/price-revisions', { method: 'POST', body: JSON.stringify(body) });
-  if (res) { closeModal(); showToast(res.status === 'auto_accepted' ? 'Decrease applied automatically' : 'Sent to client for approval'); navigate('price_revisions'); }
+  if (res) {
+    closeModal();
+    const base = res.status === 'auto_accepted' ? 'Decrease applied automatically' : 'Sent to client for approval';
+    showToast(res.superseded ? base + ' — replaced the pending revision' : base);
+    navigate('price_revisions');
+  }
 }
 
 /* ── Client approvals inbox ─────────────────────────────────────────── */
