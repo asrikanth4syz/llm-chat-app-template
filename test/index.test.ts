@@ -489,6 +489,13 @@ describe("Client price revisions", () => {
     expect(rev.direction).toBe("up");
   });
 
+  it("a no-op revision (unchanged price & MRP) is rejected", async () => {
+    const inv = await (await get("/api/inventory", adminToken)).json() as Array<{ sku: string; unit_price: number; mrp: number }>;
+    const item = inv.find(i => i.sku === "SKU005")!;
+    const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU005", new_price: item.unit_price, new_mrp: item.mrp, effective_date: today }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
   it("a price decrease auto-accepts (no client approval needed)", async () => {
     const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU002", new_price: 1, reason: "Vendor rate drop", effective_date: today }, adminToken);
     const rev = await res.json() as { status: string; direction: string };

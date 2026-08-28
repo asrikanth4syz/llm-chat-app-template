@@ -4942,6 +4942,12 @@ async function handleCreatePriceRevision(request: Request, env: Env): Promise<Re
   const oldMrp = overrides[sku]?.mrp ?? (inv.mrp ?? null);
   const newMrp = b.new_mrp != null && isFinite(Number(b.new_mrp)) ? Number(b.new_mrp) : oldMrp;
 
+  // A revision must represent an actual change — never record a no-op (it would
+  // pollute the audit trail and the change report). Tolerant of float rounding.
+  const priceSame = Math.abs(newPrice - Number(oldPrice)) < 0.005;
+  const mrpSame = newMrp == null || oldMrp == null || Math.abs(Number(newMrp) - Number(oldMrp)) < 0.005;
+  if (priceSame && mrpSame) return json({error:"No change to submit — the new price and MRP match the client's current values."}, 400);
+
   const direction = newPrice < oldPrice ? "down" : "up";
   const effective = String(b.effective_date || "").slice(0,10) || new Date().toISOString().slice(0,10);
   // Decreases (and no MRP increase) auto-accept; increases await client sign-off.

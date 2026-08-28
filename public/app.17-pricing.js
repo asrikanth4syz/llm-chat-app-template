@@ -141,7 +141,14 @@ async function submitRevision() {
     note: document.getElementById('pr-note').value.trim(),
     effective_date: document.getElementById('pr-eff').value,
   };
+  if (!body.client_id || !body.sku) { showToast('Select a client and a product', 'error'); return; }
   if (!(body.new_price > 0)) { showToast('Enter a valid new price', 'error'); return; }
+  // Block a no-op: at least one of price / MRP must actually change.
+  const oldPrice = parseFloat(document.getElementById('pr-oldprice').value) || 0;
+  const oldMrp = parseFloat(document.getElementById('pr-oldmrp').value) || 0;
+  const priceSame = Math.abs(body.new_price - oldPrice) < 0.005;
+  const mrpSame = !(body.new_mrp > 0) || Math.abs(body.new_mrp - oldMrp) < 0.005;
+  if (priceSame && mrpSame) { showToast('No change to submit — the price and MRP match the current values', 'error'); return; }
   const res = await api('/price-revisions', { method: 'POST', body: JSON.stringify(body) });
   if (res) { closeModal(); showToast(res.status === 'auto_accepted' ? 'Decrease applied automatically' : 'Sent to client for approval'); navigate('price_revisions'); }
 }
