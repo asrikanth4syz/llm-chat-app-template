@@ -130,6 +130,7 @@ beforeAll(async () => {
     .bind("c1","SKU001","tst-admin").run();
   await db.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)")
     .bind("c1","SKU002","tst-admin").run();
+  for (const s of ["SKU003","SKU004"]) await db.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)").bind("c1",s,"tst-admin").run();
 
   adminToken = await login("admin@sp.test", "admin123");
   clientToken = await login("client@sp.test", "client123");
@@ -473,6 +474,59 @@ describe("Smart Catalogue / Product Intelligence", () => {
     // correct guardrails — OCR never silently succeeds without a real image.
     const r = await post("/api/catalogue/SKU001/ocr", { image_base64: "" }, adminToken);
     expect([400, 503]).toContain(r.status);
+  });
+});
+
+describe("Client price revisions", () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  it("only 4SYZ commercial roles can propose; clients cannot", async () => {
+    expect((await post("/api/price-revisions", { client_id: "c1", sku: "SKU001", new_price: 500 }, clientToken)).status).toBe(403);
+    const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU001", new_price: 999, new_mrp: 1200, reason: "Vendor cost increase", effective_date: today }, adminToken);
+    expect(res.status).toBe(201);
+    const rev = await res.json() as { status: string; direction: string; old_price: number };
+    expect(rev.status).toBe("awaiting_client"); // increase needs client approval
+    expect(rev.direction).toBe("up");
+  });
+
+  it("a price decrease auto-accepts (no client approval needed)", async () => {
+    const res = await post("/api/price-revisions", { client_id: "c1", sku: "SKU002", new_price: 1, reason: "Vendor rate drop", effective_date: today }, adminToken);
+    const rev = await res.json() as { status: string; direction: string };
+    expect(rev.status).toBe("auto_accepted");
+    expect(rev.direction).toBe("down");
+  });
+
+  it("client accepts an increase; cross-tenant decision is forbidden; catalogue then shows the new price", async () => {
+    const created = await (await post("/api/price-revisions", { client_id: "c1", sku: "SKU003", new_price: 777, new_mrp: 900, reason: "Contract revision", effective_date: today }, adminToken)).json() as { id: string };
+    // Appears in the client's pending inbox.
+    const pend = await (await get("/api/price-revisions/pending", clientToken)).json() as { items: Array<{ id: string; status: string }> };
+    expect(pend.items.some(i => i.id === created.id && i.status === "awaiting_client")).toBe(true);
+    // A different tenant / a plain vendor cannot decide it.
+    expect((await post(`/api/price-revisions/${created.id}/decision`, { decision: "accept" }, vendorToken)).status).toBe(403);
+    // The client approver accepts.
+    const dec = await post(`/api/price-revisions/${created.id}/decision`, { decision: "accept" }, clientToken);
+    expect(dec.status).toBe(200);
+    // Effective today → the client catalogue now reflects the new price & MRP.
+    const cat = await (await get("/api/clients/c1/catalog", clientToken)).json() as Array<{ sku: string; client_price: number; mrp: number }>;
+    const row = cat.find(r => r.sku === "SKU003")!;
+    expect(row.client_price).toBe(777);
+    expect(row.mrp).toBe(900);
+  });
+
+  it("report is period-scoped and carries old/new for both MRP and price", async () => {
+    await post("/api/price-revisions", { client_id: "c1", sku: "SKU004", new_price: 610, new_mrp: 800, reason: "FX", effective_date: today }, adminToken);
+    const rep = await (await get(`/api/price-revisions/report?client_id=c1&from=${today}&to=${today}`, adminToken)).json() as {
+      summary: { total: number; increases: number; decreases: number };
+      items: Array<{ sku: string; old_mrp: number; new_mrp: number; old_price: number; new_price: number; direction: string }>;
+    };
+    expect(rep.summary.total).toBeGreaterThan(0);
+    const r = rep.items.find(i => i.sku === "SKU004")!;
+    expect(r.new_price).toBe(610);
+    expect(r.new_mrp).toBe(800);
+    expect(typeof r.old_price).toBe("number");
+    // A client only ever sees its own client's report.
+    const cRep = await (await get(`/api/price-revisions/report?from=${today}&to=${today}`, clientToken)).json() as { client_id: string };
+    expect(cRep.client_id).toBe("c1");
   });
 });
 

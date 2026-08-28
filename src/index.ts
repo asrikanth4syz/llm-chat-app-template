@@ -199,6 +199,10 @@ function isInternalRole(role: string): boolean { return !isExternalRole(role); }
 // Who may move an order into APPROVED (segregation of duties — a plain
 // client_user who raised the order cannot self-approve it).
 const ORDER_APPROVER_ROLES = ["super_admin","ops_admin","ops_manager","client_admin","client_approver"];
+// Who may propose/manage client price revisions (4SYZ commercial side).
+const PRICE_ADMIN_ROLES = ["super_admin","ops_admin","procurement_manager","finance_admin"];
+// Who may accept/reject a revision on the client side.
+const PRICE_APPROVER_ROLES = ["client_admin","client_approver"];
 // Operational states only 4SYZ staff may drive an order into.
 const FULFILLMENT_STATES = new Set(["ACKNOWLEDGED","INVENTORY_CHECK","VENDOR_PO_RAISED","READY_TO_PICK","PICKED","QUALITY_CHECK","IN_SHIPMENT","PARTIALLY_CLOSED","CLOSED"]);
 // 403 unless the caller may act on this order: staff act on any; an external
@@ -603,6 +607,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS ai_throttle ( bucket TEXT PRIMARY KEY, window_start TEXT, count INTEGER DEFAULT 0 );`,
     `CREATE TABLE IF NOT EXISTS error_log ( id TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')), method TEXT, path TEXT, status INTEGER, actor TEXT, message TEXT, stack TEXT );`,
+    `CREATE TABLE IF NOT EXISTS client_price_revisions ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, sku TEXT NOT NULL, old_mrp REAL, new_mrp REAL, old_price REAL, new_price REAL, direction TEXT, reason TEXT, note TEXT, effective_date TEXT, status TEXT DEFAULT 'awaiting_client', proposed_by TEXT, proposed_by_name TEXT, proposed_at TEXT DEFAULT (datetime('now')), decided_by TEXT, decided_by_name TEXT, decided_at TEXT, updated_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS zoho_sync_log ( id TEXT PRIMARY KEY, direction TEXT NOT NULL, items INTEGER DEFAULT 0, pushed INTEGER DEFAULT 0, simulated INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'OK', note TEXT, actor TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS draft_carts ( user_id TEXT PRIMARY KEY, items TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
     // PR-1: receiving spine (G1–G3)
@@ -888,7 +893,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22-4";
+const BOOTSTRAP_VERSION = "2026-08-22-5";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -1111,6 +1116,14 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="PATCH")  return handlePatchClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="DELETE") return handleRemoveClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+$/) && method==="PATCH") return handlePatchClient(request,env,path);
+
+      // Client price revisions (specific routes before the parameterised decision route)
+      if (path==="/api/price-revisions"          && method==="GET")  return handleListPriceRevisions(request,env);
+      if (path==="/api/price-revisions"          && method==="POST") return handleCreatePriceRevision(request,env);
+      if (path==="/api/price-revisions/pending"  && method==="GET")  return handleClientPendingRevisions(request,env);
+      if (path==="/api/price-revisions/report"   && method==="GET")  return handlePriceRevisionReport(request,env);
+      if (path==="/api/price-revisions/history"  && method==="GET")  return handlePriceRevisionHistory(request,env);
+      if (path.match(/^\/api\/price-revisions\/[^/]+\/decision$/) && method==="POST") return handleDecidePriceRevision(request,env,path);
 
       // Tickets
       if (path==="/api/tickets"                     && method==="GET")   return handleListTickets(request,env);
@@ -4787,6 +4800,18 @@ async function handleGetClientCatalog(request: Request, env: Env, path: string):
        ORDER BY i.name`
     ).bind(clientId).all());
   }
+  // Overlay any price/MRP revision that is accepted and now in effect, so the
+  // client always sees the price actually in force (not the stale base price).
+  try {
+    const overrides = await activePriceOverrides(env, clientId);
+    if (Object.keys(overrides).length) {
+      results = (results as Array<Record<string,unknown>>).map(r => {
+        const ov = overrides[String(r.sku)];
+        if (!ov) return r;
+        return { ...r, client_price: ov.price, effective_price: ov.price, ...(ov.mrp != null ? { mrp: ov.mrp } : {}) };
+      });
+    }
+  } catch { /* revisions table not ready — serve base prices */ }
   return json(results);
 }
 
@@ -4856,6 +4881,194 @@ async function handleRemoveClientCatalogItem(request: Request, env: Env, path: s
   await env.DB.prepare("DELETE FROM client_catalog WHERE client_id=? AND sku=?").bind(clientId, sku).run();
   await audit(env, user, "UPDATE", "client_catalog", clientId, sku, "removed");
   return json({removed: sku});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CLIENT PRICE REVISIONS
+// Effective-dated changes to a client's MRP and negotiated price, governed by a
+// propose → (client) accept → activate lifecycle with a full audit trail.
+// Decreases auto-accept (they only benefit the client); increases require the
+// client's explicit acceptance. Prices are never overwritten — the live price is
+// resolved from the latest accepted revision whose effective date has arrived.
+// ════════════════════════════════════════════════════════════════════
+
+// Derived display state for a revision row (kept out of storage so it is always
+// consistent with today's date).
+function revState(r: { status?: unknown; effective_date?: unknown }): string {
+  const s = String(r.status || "");
+  if (s === "accepted") {
+    const eff = String(r.effective_date || "");
+    return eff && eff > new Date().toISOString().slice(0,10) ? "scheduled" : "active";
+  }
+  return s; // awaiting_client | auto_accepted | rejected | superseded
+}
+
+// Overlay map of the currently-effective price/MRP override per SKU for a client
+// (latest accepted/auto-accepted revision whose effective date has passed). One
+// query; used to show clients the price actually in force.
+async function activePriceOverrides(env: Env, clientId: string): Promise<Record<string, { price: number; mrp: number | null }>> {
+  const today = new Date().toISOString().slice(0,10);
+  const { results } = await env.DB.prepare(
+    `SELECT r.sku, r.new_price, r.new_mrp FROM client_price_revisions r
+     WHERE r.client_id=? AND r.status IN ('accepted','auto_accepted') AND date(r.effective_date) <= date(?)
+       AND r.id = (SELECT r2.id FROM client_price_revisions r2
+                   WHERE r2.client_id=r.client_id AND r2.sku=r.sku AND r2.status IN ('accepted','auto_accepted')
+                     AND date(r2.effective_date) <= date(?)
+                   ORDER BY date(r2.effective_date) DESC, r2.proposed_at DESC LIMIT 1)`
+  ).bind(clientId, today, today).all() as { results: Array<Record<string, unknown>> };
+  const map: Record<string, { price: number; mrp: number | null }> = {};
+  for (const r of results) map[String(r.sku)] = { price: Number(r.new_price), mrp: r.new_mrp != null ? Number(r.new_mrp) : null };
+  return map;
+}
+
+// POST /api/price-revisions — propose a revision (4SYZ commercial roles).
+async function handleCreatePriceRevision(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PRICE_ADMIN_ROLES.includes(user!.role)) return json({error:"Only 4SYZ commercial roles can propose price revisions"}, 403);
+  const b = await request.json() as { client_id?:string; sku?:string; new_price?:number; new_mrp?:number|null; reason?:string; note?:string; effective_date?:string };
+  const clientId = String(b.client_id||"").trim();
+  const sku = String(b.sku||"").trim();
+  if (!clientId || !sku) return json({error:"client_id and sku are required"}, 400);
+  const newPrice = Number(b.new_price);
+  if (!isFinite(newPrice) || newPrice <= 0) return json({error:"A valid new price is required"}, 400);
+
+  // Resolve the current (base or already-active) price & MRP for this client+SKU.
+  const inv = await env.DB.prepare("SELECT unit_price, mrp FROM inventory WHERE sku=?").bind(sku).first() as { unit_price?:number; mrp?:number }|null;
+  if (!inv) return json({error:"Unknown SKU"}, 404);
+  const cc = await env.DB.prepare("SELECT client_price FROM client_catalog WHERE client_id=? AND sku=?").bind(clientId, sku).first() as { client_price?:number }|null;
+  const overrides = await activePriceOverrides(env, clientId);
+  const oldPrice = overrides[sku]?.price ?? (cc?.client_price ?? inv.unit_price ?? 0);
+  const oldMrp = overrides[sku]?.mrp ?? (inv.mrp ?? null);
+  const newMrp = b.new_mrp != null && isFinite(Number(b.new_mrp)) ? Number(b.new_mrp) : oldMrp;
+
+  const direction = newPrice < oldPrice ? "down" : "up";
+  const effective = String(b.effective_date || "").slice(0,10) || new Date().toISOString().slice(0,10);
+  // Decreases (and no MRP increase) auto-accept; increases await client sign-off.
+  const autoAccept = newPrice <= oldPrice && (newMrp == null || oldMrp == null || newMrp <= oldMrp);
+  const status = autoAccept ? "auto_accepted" : "awaiting_client";
+  const now = new Date().toISOString();
+
+  // Supersede any still-open (awaiting) revision for the same client+SKU.
+  await env.DB.prepare("UPDATE client_price_revisions SET status='superseded', updated_at=? WHERE client_id=? AND sku=? AND status='awaiting_client'").bind(now, clientId, sku).run();
+
+  const id = "PR-" + uid().slice(0,8);
+  await env.DB.prepare(
+    `INSERT INTO client_price_revisions (id,client_id,sku,old_mrp,new_mrp,old_price,new_price,direction,reason,note,effective_date,status,proposed_by,proposed_by_name,decided_by,decided_by_name,decided_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, clientId, sku, oldMrp, newMrp, oldPrice, newPrice, direction, b.reason||null, b.note||null, effective, status,
+         user!.sub, user!.name, autoAccept ? "system" : null, autoAccept ? "Auto (price decrease)" : null, autoAccept ? now : null).run();
+
+  if (!autoAccept) {
+    await pushNotification(env, "client_approver", `Price revision ${id} awaiting your approval — ${sku} ${oldPrice}→${newPrice}`);
+  }
+  await audit(env, user, "PRICE_REVISION", "client_price", `${clientId}/${sku}`, String(oldPrice), `${newPrice} (${status})`);
+  return json({ id, status, direction, old_price: oldPrice, new_price: newPrice, old_mrp: oldMrp, new_mrp: newMrp, effective_date: effective }, 201);
+}
+
+// GET /api/price-revisions — ops list (optional ?client_id, ?status).
+async function handleListPriceRevisions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({error:"Forbidden — 4SYZ staff only"}, 403);
+  const url = new URL(request.url);
+  const clientId = url.searchParams.get("client_id");
+  const { results } = await env.DB.prepare(
+    `SELECT r.*, i.name AS item_name, i.emoji, c.name AS client_name
+     FROM client_price_revisions r LEFT JOIN inventory i ON i.sku=r.sku LEFT JOIN clients c ON c.id=r.client_id
+     ${clientId ? "WHERE r.client_id=?" : ""} ORDER BY r.proposed_at DESC LIMIT 200`
+  ).bind(...(clientId ? [clientId] : [])).all() as { results: Array<Record<string,unknown>> };
+  return json({ items: results.map(r => ({ ...r, state: revState(r) })) });
+}
+
+// GET /api/price-revisions/pending — client inbox (awaiting this client's decision).
+async function handleClientPendingRevisions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const clientId = user!.client_id;
+  if (!isExternalRole(user!.role) || !clientId) {
+    // staff can view a client's inbox via ?client_id
+    const cid = new URL(request.url).searchParams.get("client_id");
+    if (isExternalRole(user!.role) || !cid) return json({ items: [] });
+    return listClientRevisions(env, cid);
+  }
+  return listClientRevisions(env, clientId);
+}
+async function listClientRevisions(env: Env, clientId: string): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    `SELECT r.*, i.name AS item_name, i.emoji FROM client_price_revisions r LEFT JOIN inventory i ON i.sku=r.sku
+     WHERE r.client_id=? AND r.status != 'superseded' ORDER BY (r.status='awaiting_client') DESC, r.proposed_at DESC LIMIT 100`
+  ).bind(clientId).all() as { results: Array<Record<string,unknown>> };
+  return json({ items: results.map(r => ({ ...r, state: revState(r) })) });
+}
+
+// POST /api/price-revisions/:id/decision — client accepts or rejects.
+async function handleDecidePriceRevision(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const rev = await env.DB.prepare("SELECT * FROM client_price_revisions WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!rev) return json({error:"Not found"}, 404);
+  // Only this client's approver (or an internal admin acting for them) may decide.
+  if (isExternalRole(user!.role)) {
+    if (!PRICE_APPROVER_ROLES.includes(user!.role) || String(user!.client_id||"") !== String(rev.client_id))
+      return json({error:"Forbidden"}, 403);
+  } else if (!PRICE_ADMIN_ROLES.includes(user!.role)) {
+    return json({error:"Forbidden"}, 403);
+  }
+  if (rev.status !== "awaiting_client") return json({error:`This revision is already ${revState(rev)}`}, 409);
+  const b = await request.json() as { decision?:string };
+  const decision = b.decision === "reject" ? "rejected" : b.decision === "accept" ? "accepted" : "";
+  if (!decision) return json({error:"decision must be 'accept' or 'reject'"}, 400);
+  const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE client_price_revisions SET status=?, decided_by=?, decided_by_name=?, decided_at=?, updated_at=? WHERE id=?")
+    .bind(decision, user!.sub, user!.name, now, now, id).run();
+  await pushNotification(env, "ops_admin", `Price revision ${id} ${decision} by ${user!.name}`);
+  await audit(env, user, "PRICE_DECISION", "client_price", String(rev.id), String(rev.status), decision);
+  return json({ id, status: decision, state: revState({ status: decision, effective_date: rev.effective_date }) });
+}
+
+// GET /api/price-revisions/history?client_id=&sku= — full audit trail for one item.
+async function handlePriceRevisionHistory(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  let clientId = url.searchParams.get("client_id") || "";
+  const sku = url.searchParams.get("sku") || "";
+  if (isExternalRole(user!.role)) clientId = String(user!.client_id || ""); // clients: own only
+  if (!clientId || !sku) return json({ items: [] });
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM client_price_revisions WHERE client_id=? AND sku=? ORDER BY date(effective_date) DESC, proposed_at DESC"
+  ).bind(clientId, sku).all() as { results: Array<Record<string,unknown>> };
+  return json({ items: results.map(r => ({ ...r, state: revState(r) })) });
+}
+
+// GET /api/price-revisions/report?client_id=&from=&to= — changed prices in a window.
+async function handlePriceRevisionReport(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  let clientId = url.searchParams.get("client_id") || "";
+  if (isExternalRole(user!.role)) clientId = String(user!.client_id || ""); // clients: own only
+  const from = url.searchParams.get("from") || new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const to   = url.searchParams.get("to")   || new Date().toISOString().slice(0,10);
+  const where = ["date(r.effective_date) >= date(?)", "date(r.effective_date) <= date(?)", "r.status != 'superseded'"];
+  const binds: string[] = [from, to];
+  if (clientId) { where.push("r.client_id=?"); binds.push(clientId); }
+  const { results } = await env.DB.prepare(
+    `SELECT r.*, i.name AS item_name, i.emoji, c.name AS client_name
+     FROM client_price_revisions r LEFT JOIN inventory i ON i.sku=r.sku LEFT JOIN clients c ON c.id=r.client_id
+     WHERE ${where.join(" AND ")} ORDER BY date(r.effective_date) DESC, r.proposed_at DESC LIMIT 500`
+  ).bind(...binds).all() as { results: Array<Record<string,unknown>> };
+  const rows: Array<Record<string,unknown>> = results.map(r => ({ ...r, state: revState(r) }));
+  const up = rows.filter(r => r.direction === "up"), down = rows.filter(r => r.direction === "down");
+  const pct = (r: Record<string,unknown>) => { const o = Number(r.old_price)||0; return o ? (Number(r.new_price)-o)/o*100 : 0; };
+  const avg = (a: Array<Record<string,unknown>>) => a.length ? a.reduce((s,r)=>s+pct(r),0)/a.length : 0;
+  return json({
+    from, to, client_id: clientId || null,
+    summary: { total: rows.length, increases: up.length, decreases: down.length, avg_increase_pct: +avg(up).toFixed(1), avg_decrease_pct: +avg(down).toFixed(1) },
+    items: rows,
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
