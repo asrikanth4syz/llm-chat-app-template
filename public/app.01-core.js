@@ -1197,7 +1197,7 @@ function statusBadge(s) {
     HIGH:'danger', MEDIUM:'warning', LOW:'success',
   };
   const cls = map[s] || 'primary';
-  return `<span class="badge badge-${cls}">${s.replace(/_/g,' ')}</span>`;
+  return `<span class="badge badge-${cls}">${String(s || '—').replace(/_/g,' ')}</span>`;
 }
 
 function orderTypeBadge(t) {

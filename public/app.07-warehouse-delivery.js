@@ -316,7 +316,7 @@ function renderWHPickList(el, picklist) {
   // Group by order
   const orders = {};
   picklist.forEach(row => {
-    if (!orders[row.order_id]) orders[row.order_id] = { order_id: row.order_id, client_name: row.client_name, created_at: row.created_at, items: [] };
+    if (!orders[row.order_id]) orders[row.order_id] = { order_id: row.order_id, client_name: row.client_name, created_at: row.created_at, status: row.status, picker_name: row.picker_name, items: [] };
     orders[row.order_id].items.push(row);
   });
   const orderList = Object.values(orders);
