@@ -1029,6 +1029,7 @@ export default {
       if (path==="/api/auth/otp/verify" && method==="POST") return handleOTPVerify(request,env);
       if (path==="/api/health"          && method==="GET")  return handleHealth(request,env);
       if (path==="/api/observability"   && method==="GET")  return handleObservability(request,env);
+      if (path==="/api/client-errors"   && method==="POST") return handleClientError(request,env);
 
       // Orders — specific paths must come before the wildcard /:id routes
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
@@ -3373,6 +3374,26 @@ async function handleHealth(_request: Request, env: Env): Promise<Response> {
   try { await env.DB.prepare("SELECT 1 AS ok").first(); } catch { db = "down"; }
   const ok = db === "ok";
   return json({ status: ok ? "ok" : "degraded", db, version: BOOTSTRAP_VERSION, time: new Date().toISOString() }, ok ? 200 : 503);
+}
+
+// POST /api/client-errors — best-effort sink for front-end JS exceptions
+// (window.onerror / unhandledrejection). Lands in the same error_log so
+// client-side crashes are visible in System Health. Auth optional; capped and
+// rate-limited so it can never flood the log. Always 204 — never a hard error.
+async function handleClientError(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env).catch(() => null);
+  let b: { message?: string; stack?: string; page?: string; url?: string };
+  try { b = await request.json() as typeof b; } catch { return new Response(null, { status: 204 }); }
+  const msg = String(b.message || "").slice(0, 500);
+  if (!msg) return new Response(null, { status: 204 });
+  const who = user?.sub || "anon";
+  if (await aiRateLimit(env, "clienterr:" + who, 30)) return new Response(null, { status: 204 }); // 30/min/user
+  try {
+    await env.DB.prepare("INSERT INTO error_log (id,method,path,status,actor,message,stack) VALUES (?,?,?,?,?,?,?)")
+      .bind(uid(), "CLIENT", String(b.page || b.url || "").slice(0, 200), 0, who, msg, String(b.stack || "").slice(0, 2000)).run();
+    await env.DB.prepare("DELETE FROM error_log WHERE id NOT IN (SELECT id FROM error_log ORDER BY created_at DESC LIMIT 500)").run();
+  } catch { /* best-effort */ }
+  return new Response(null, { status: 204 });
 }
 
 // GET /api/observability — staff-only operational snapshot: recent error volume

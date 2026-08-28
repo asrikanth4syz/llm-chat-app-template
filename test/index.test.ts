@@ -1017,6 +1017,14 @@ describe("Order-to-delivery authorization", () => {
     expect(obs.metrics).toHaveProperty("pending_deliveries");
   });
 
+  it("front-end errors are captured and surface in observability", async () => {
+    const msg = "TypeError: capture-test-" + Date.now();
+    const res = await post("/api/client-errors", { message: msg, stack: "at renderWHPickList (app.07.js:352)", page: "warehouse" }, clientToken);
+    expect(res.status).toBe(204);
+    const obs = await (await get("/api/observability", adminToken)).json() as { errors: { recent: Array<{ method: string; message: string }> } };
+    expect(obs.errors.recent.some(e => e.method === "CLIENT" && e.message === msg)).toBe(true);
+  });
+
   it("central guard blocks external roles from back-office endpoints", async () => {
     for (const p of ["/api/users", "/api/staff", "/api/audit-logs", "/api/warehouses", "/api/approval-rules"]) {
       expect((await get(p, clientToken)).status).toBe(403);

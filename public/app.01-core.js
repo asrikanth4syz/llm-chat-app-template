@@ -5,6 +5,39 @@
 // ── State ──────────────────────────────────────────────────
 const APP = { user: null, page: 'dashboard', cart: [], charts: {}, token: null };
 
+// ── Front-end error capture ────────────────────────────────
+// Report uncaught JS exceptions and promise rejections to the server so they
+// surface in System Health (client-side crashes never reach the API error log
+// otherwise). Deduped and capped so it can never flood.
+(function () {
+  let sent = 0; const seen = Object.create(null);
+  function reportClientError(message, stack) {
+    try {
+      if (sent >= 20) return;
+      const key = String(message || '').slice(0, 140);
+      if (seen[key]) return; seen[key] = 1; sent++;
+      fetch('/api/client-errors', {
+        method: 'POST', keepalive: true,
+        headers: Object.assign({ 'Content-Type': 'application/json' }, APP.token ? { Authorization: 'Bearer ' + APP.token } : {}),
+        body: JSON.stringify({
+          message: String(message || '').slice(0, 500),
+          stack: String(stack || '').slice(0, 2000),
+          page: APP.page, url: (location.hash || location.pathname || '').slice(0, 200),
+        }),
+      }).catch(function () {});
+    } catch (e) { /* reporting must never throw */ }
+  }
+  window.addEventListener('error', function (e) {
+    if (!e || !e.message) return;
+    reportClientError(e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno + ':' + e.colno : ''), e.error && e.error.stack);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    const r = e && e.reason;
+    reportClientError('Unhandled promise rejection: ' + ((r && r.message) || r), r && r.stack);
+  });
+  window.reportClientError = reportClientError; // available for manual catches
+})();
+
 // Persist the cart across reloads (localStorage) AND across devices (server).
 // Called after every cart change, plus a backstop on tab hide/close.
 function persistCart() {
