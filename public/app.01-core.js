@@ -180,6 +180,7 @@ const PAGE_ICON = {
   sla_dashboard: iconGauge, client_reports: iconPie, client_consumption: iconReports,
   system_health: iconGauge,
   price_revisions: iconReports, price_report: iconPie, price_approvals: iconReports,
+  unbranded_items: iconInventory,
   // Alerts
   alerts: iconBell,
   // Admin & settings
@@ -243,6 +244,7 @@ const NAV = {
     { id:'zones',       label:'Location Zones', icon:iconPin,    badge:null },
     { id:'templates',   label:'Templates',      icon:iconLayout, badge:null },
     { id:'import_data', label:'CSV Import',     icon:iconUpload, badge:null },
+    { id:'unbranded_items', label:'Unbranded Items', icon:iconInventory, badge:null },
     { id:'system_health', label:'System Health', icon:iconGauge, badge:null },
   ],
   ops: [
@@ -266,6 +268,7 @@ const NAV = {
     { id:'smart_catalogue', label:'Smart Catalogue', icon:iconInventory, badge:null },
     { id:'product_review',  label:'Product Review',  icon:iconEye,       badge:'!' },
     { id:'product_reports', label:'Product Reports', icon:iconReports,   badge:null },
+    { id:'unbranded_items', label:'Unbranded Items', icon:iconInventory, badge:null },
     { section:'Alerts & Exceptions' },
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
     { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconEye,    badge:null },
@@ -278,6 +281,7 @@ const NAV = {
     { id:'vendors',     label:'Vendors',       icon:iconVendors,   badge:null },
     { section:'Inventory' },
     { id:'inventory',   label:'Inventory',     icon:iconInventory, badge:null },
+    { id:'unbranded_items', label:'Unbranded Items', icon:iconInventory, badge:null },
     { section:'Reports & Insights' },
     { id:'consolidated_report', label:'Consolidated Report', icon:iconReports, badge:null },
   ],
@@ -1054,6 +1058,7 @@ const PAGE_MAP = {
   price_revisions: 'renderPriceRevisions',
   price_report: 'renderPriceReport',
   price_approvals: 'renderPriceApprovals',
+  unbranded_items: 'renderUnbrandedItems',
   vendor_pos: 'renderVendorPOs',
   vendor_invoices: 'renderVendorInvoices',
   vendor_payments: 'renderVendorPayments',

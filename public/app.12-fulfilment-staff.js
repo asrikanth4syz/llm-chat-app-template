@@ -283,7 +283,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map((r,i)=>`<tr>
-          <td><button class="btn-plain" ${dataAct('toggleBrandDrill', i, String(r.brand_name), from30, today)} style="border:0;background:none;cursor:pointer;font-size:.8rem;color:var(--primary);padding:0 6px 0 0" title="Show products"><span id="bd-caret-${i}">▸</span></button><b>${h(r.brand_name)}</b>${r.brand_name==='Unassigned'?' <span title="These items have no brand or category — assign one in Inventory" style="font-size:.6rem;font-weight:700;background:var(--warning-soft-bg,#fef3c7);color:var(--warning,#92400e);border-radius:4px;padding:1px 6px;margin-left:6px">NEEDS BRAND</span>':''}</td><td>${r.category||'—'}</td>
+          <td><button class="btn-plain" ${dataAct('toggleBrandDrill', i, String(r.brand_name), from30, today)} style="border:0;background:none;cursor:pointer;font-size:.8rem;color:var(--primary);padding:0 6px 0 0" title="Show products"><span id="bd-caret-${i}">▸</span></button><b>${h(r.brand_name)}</b>${r.brand_name==='Unassigned'?` <span ${dataAct('quickNav','unbranded_items')} title="Assign brands to these items" style="cursor:pointer;font-size:.6rem;font-weight:700;background:var(--warning-soft-bg,#fef3c7);color:var(--warning,#92400e);border-radius:4px;padding:1px 6px;margin-left:6px">NEEDS BRAND →</span>`:''}</td><td>${r.category||'—'}</td>
           <td title="${h(r.clients)}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
@@ -903,6 +903,50 @@ function initiateBrandPOEdited(i) {
   const items = d.items.map((it,j)=>({ sku: it.sku, qty: parseInt((document.getElementById(`bdq-${i}-${j}`)||{}).value, 10) || 0 })).filter(x => x.qty > 0);
   if (!items.length) { showToast('Enter at least one quantity', 'error'); return; }
   openDemandPO(items, 'brand', `Initiate PO — ${d.brand}`);
+}
+
+/* ============================================================
+   UNBRANDED ITEMS — assign a brand (data-quality worklist)
+   ============================================================ */
+async function renderUnbrandedItems(el) {
+  const data = await api('/inventory/unbranded');
+  if (!data) return;
+  APP._unbranded = data.items || [];
+  const brands = data.brands || [];
+  const dl = `<datalist id="brand-list">${brands.map(b => `<option value="${h(b)}">`).join('')}</datalist>`;
+  const rows = APP._unbranded.map(it => `<tr id="ub-row-${it.sku}">
+      <td><b>${h(it.name)}</b></td>
+      <td style="color:var(--text-muted);font-size:.82rem">${it.sku}</td>
+      <td>${it.category ? h(it.category) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td>${it.stock}</td>
+      <td><input list="brand-list" id="ub-${it.sku}" placeholder="Enter or pick a brand"
+            style="width:180px;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-size:.85rem"
+            ${dataEnterEl('_blurEl')} aria-label="Brand for ${h(it.name)}"></td>
+      <td><button class="btn btn-primary btn-sm" ${dataAct('assignBrand', it.sku)}>Save</button></td>
+    </tr>`).join('');
+  el.innerHTML = `
+    ${pageHeader('Unbranded Items', 'Assign a brand to inventory with no brand set — keeps Brand Procurement grouping and reports clean')}
+    ${dl}
+    <div class="card">
+      <div class="card-header"><span>Items needing a brand (<span id="ub-count">${APP._unbranded.length}</span>)</span></div>
+      ${APP._unbranded.length === 0
+        ? '<div style="padding:32px;text-align:center;color:var(--success);font-weight:600">✓ Every active item has a brand assigned.</div>'
+        : `<div class="table-wrap"><table class="table">
+            <thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Stock</th><th>Brand</th><th></th></tr></thead>
+            <tbody>${rows}</tbody></table></div>`}
+    </div>`;
+}
+async function assignBrand(sku) {
+  const input = document.getElementById('ub-' + sku);
+  const brand = input ? input.value.trim() : '';
+  if (!brand) { showToast('Enter a brand name', 'error'); return; }
+  const res = await api(`/inventory/${encodeURIComponent(sku)}`, { method: 'PATCH', body: JSON.stringify({ brand }) });
+  if (!res) return;
+  const row = document.getElementById('ub-row-' + sku); if (row) row.remove();
+  APP._unbranded = (APP._unbranded || []).filter(i => i.sku !== sku);
+  const cnt = document.getElementById('ub-count'); if (cnt) cnt.textContent = APP._unbranded.length;
+  showToast(`Brand set — ${brand}`);
+  if (!APP._unbranded.length) navigate('unbranded_items'); // refresh to the all-clear state
 }
 
 /* ============================================================

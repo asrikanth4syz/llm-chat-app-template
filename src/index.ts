@@ -1067,6 +1067,7 @@ export default {
       if (path==="/api/ai/health"               && method==="GET")   return handleAiHealth(request,env);
       if (path.match(/^\/api\/catalogue\/[^/]+$/)          && method==="GET")   return handleGetCatalogueItem(request,env,path);
       if (path==="/api/inventory/barcodes"      && method==="POST")  return handleBulkBarcodes(request,env);
+      if (path==="/api/inventory/unbranded"     && method==="GET")   return handleListUnbranded(request,env);
       if (path==="/api/inventory"               && method==="GET")   return handleListInventory(request,env);
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
       if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
@@ -2915,10 +2916,26 @@ async function handleBulkBarcodes(request: Request, env: Env): Promise<Response>
   return json({ updated, unknown });
 }
 
+// GET /api/inventory/unbranded — SKUs with no brand assigned, plus the existing
+// brand list (for a consistent picker). Staff-only data-quality worklist.
+async function handleListUnbranded(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly;
+  const { results: items } = await env.DB.prepare(
+    "SELECT sku, name, COALESCE(category,'') AS category, COALESCE(unit_price,0) AS unit_price, COALESCE(stock,0) AS stock FROM inventory WHERE active=1 AND (brand IS NULL OR TRIM(brand)='') ORDER BY name"
+  ).all();
+  const { results: brandRows } = await env.DB.prepare(
+    "SELECT DISTINCT brand FROM inventory WHERE brand IS NOT NULL AND TRIM(brand)<>'' ORDER BY brand"
+  ).all() as { results: Array<{ brand: string }> };
+  return json({ items, brands: brandRows.map(b => b.brand) });
+}
+
 async function handlePatchInventory(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
   if (denied) return denied;
+  const staffOnly = requireInternal(user!); if (staffOnly) return staffOnly; // inventory master edits are 4SYZ-only
   const sku = path.split("/").pop()!;
   const body = await request.json() as Record<string,unknown>;
 

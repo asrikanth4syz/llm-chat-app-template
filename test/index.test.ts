@@ -567,6 +567,18 @@ describe("Brand procurement — unassigned items", () => {
     const items = await res.json() as Array<{ sku: string }>;
     expect(items.some(x => x.sku === "NOBRAND-1")).toBe(true);
   });
+
+  it("unbranded worklist lists no-brand SKUs (staff-only) and assigning a brand clears it", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,brand) VALUES ('UB-1','Widget','Snacks',10,3,1,'')").run();
+    expect((await get("/api/inventory/unbranded", clientToken)).status).toBe(403); // staff only
+    const before = await (await get("/api/inventory/unbranded", adminToken)).json() as { items: Array<{ sku: string }>; brands: string[] };
+    expect(before.items.some(i => i.sku === "UB-1")).toBe(true);
+    // Assign a brand via the inventory PATCH the UI uses.
+    expect((await patch("/api/inventory/UB-1", { brand: "Acme" }, adminToken)).status).toBe(200);
+    const after = await (await get("/api/inventory/unbranded", adminToken)).json() as { items: Array<{ sku: string }> };
+    expect(after.items.some(i => i.sku === "UB-1")).toBe(false); // no longer unbranded
+  });
 });
 
 describe("Inventory", () => {
