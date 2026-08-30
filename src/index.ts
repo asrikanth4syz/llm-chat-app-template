@@ -6329,7 +6329,7 @@ async function handleRptBrandProcurement(request: Request, env: Env): Promise<Re
   const to = url.searchParams.get('to') || new Date().toISOString().slice(0,10);
   const {results} = await env.DB.prepare(`
     SELECT
-      COALESCE(i.brand, i.category) AS brand_name,
+      COALESCE(NULLIF(TRIM(i.brand),''), NULLIF(TRIM(i.category),''), 'Unassigned') AS brand_name,
       i.category,
       SUM(oi.qty) AS total_ordered_qty,
       COALESCE(SUM(dci_sum.qty_delivered),0) AS total_delivered_qty,
@@ -6352,7 +6352,7 @@ async function handleRptBrandProcurement(request: Request, env: Env): Promise<Re
     ) dci_sum ON dci_sum.sku=oi.sku AND dci_sum.order_id=o.id
     WHERE o.status NOT IN ('CANCELLED','DRAFT')
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?
-    GROUP BY COALESCE(i.brand,i.category)
+    GROUP BY COALESCE(NULLIF(TRIM(i.brand),''), NULLIF(TRIM(i.category),''), 'Unassigned')
     ORDER BY total_ordered_qty DESC`).bind(from, to).all();
   return json(results);
 }
@@ -6383,7 +6383,7 @@ async function handleRptBrandProcurementItems(request: Request, env: Env): Promi
       GROUP BY dci.sku, dc.order_id
     ) dci_sum ON dci_sum.sku=oi.sku AND dci_sum.order_id=o.id
     WHERE o.status NOT IN ('CANCELLED','DRAFT')
-      AND COALESCE(i.brand,i.category)=?
+      AND COALESCE(NULLIF(TRIM(i.brand),''), NULLIF(TRIM(i.category),''), 'Unassigned')=?
       AND date(o.created_at) >= ? AND date(o.created_at) <= ?
     GROUP BY oi.sku
     HAVING shortfall_qty > 0

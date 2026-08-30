@@ -283,7 +283,7 @@ async function switchFulfilTab(tab, btn) {
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
         <tbody>${data.map((r,i)=>`<tr>
-          <td><button class="btn-plain" ${dataAct('toggleBrandDrill', i, String(r.brand_name), from30, today)} style="border:0;background:none;cursor:pointer;font-size:.8rem;color:var(--primary);padding:0 6px 0 0" title="Show products"><span id="bd-caret-${i}">▸</span></button><b>${h(r.brand_name)}</b></td><td>${r.category}</td>
+          <td><button class="btn-plain" ${dataAct('toggleBrandDrill', i, String(r.brand_name), from30, today)} style="border:0;background:none;cursor:pointer;font-size:.8rem;color:var(--primary);padding:0 6px 0 0" title="Show products"><span id="bd-caret-${i}">▸</span></button><b>${h(r.brand_name)}</b>${r.brand_name==='Unassigned'?' <span title="These items have no brand or category — assign one in Inventory" style="font-size:.6rem;font-weight:700;background:var(--warning-soft-bg,#fef3c7);color:var(--warning,#92400e);border-radius:4px;padding:1px 6px;margin-left:6px">NEEDS BRAND</span>':''}</td><td>${r.category||'—'}</td>
           <td title="${h(r.clients)}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>

@@ -553,6 +553,22 @@ describe("Client price revisions", () => {
   });
 });
 
+describe("Brand procurement — unassigned items", () => {
+  it("items with no brand group under 'Unassigned' and the drilldown works (no 'brand required')", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,brand) VALUES ('NOBRAND-1','No Brand Item','',10,5,1,'')").run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at) VALUES ('NB-ORD','c1','tst-ops','APPROVED',70,13,83,'Regular',datetime('now'))").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('nb-oi','NB-ORD','NOBRAND-1','No Brand Item',7,10,70)").run();
+    const bp = await (await get("/api/reports/brand-procurement", adminToken)).json() as Array<{ brand_name: string }>;
+    expect(bp.some(r => r.brand_name === "Unassigned")).toBe(true);
+    // The drilldown that previously 400'd now resolves the Unassigned bucket.
+    const res = await get("/api/reports/brand-procurement-items?brand=Unassigned", adminToken);
+    expect(res.status).toBe(200);
+    const items = await res.json() as Array<{ sku: string }>;
+    expect(items.some(x => x.sku === "NOBRAND-1")).toBe(true);
+  });
+});
+
 describe("Inventory", () => {
   it("GET /api/inventory — ops user sees all items", async () => {
     const res = await get("/api/inventory", opsToken);
