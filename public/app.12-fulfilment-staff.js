@@ -282,15 +282,16 @@ async function switchFulfilTab(tab, btn) {
       <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'brand-procurement')}>&#8595; CSV</button></div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Category</th><th>Clients</th><th>Total Ordered</th><th>Total Delivered</th><th>Shortfall</th><th>Suggested PO Qty</th><th>Primary Vendor</th><th>Actions</th></tr></thead>
-        <tbody>${data.map(r=>`<tr>
-          <td><b>${h(r.brand_name)}</b></td><td>${r.category}</td>
+        <tbody>${data.map((r,i)=>`<tr>
+          <td><button class="btn-plain" ${dataAct('toggleBrandDrill', i, String(r.brand_name), from30, today)} style="border:0;background:none;cursor:pointer;font-size:.8rem;color:var(--primary);padding:0 6px 0 0" title="Show products"><span id="bd-caret-${i}">▸</span></button><b>${h(r.brand_name)}</b></td><td>${r.category}</td>
           <td title="${h(r.clients)}">${r.client_count} clients</td>
           <td>${r.total_ordered_qty}</td><td>${r.total_delivered_qty}</td>
           <td><b style="color:${r.shortfall_qty>0?'var(--danger)':'var(--success)'}">${r.shortfall_qty}</b></td>
           <td><b style="color:var(--blue)">${r.suggested_po_qty}</b></td>
           <td>${r.primary_vendor||'—'}</td>
           <td>${r.suggested_po_qty>0?`<button class="btn btn-primary btn-sm" ${dataAct('initiateBrandPO', String(r.brand_name), r.vendor_id||'', from30, today)}>🛒 Initiate PO</button>`:'<span style="color:var(--success);font-size:.8rem">✓ Fulfilled</span>'}</td>
-        </tr>`).join('')||'<tr><td colspan="9" class="u-empty">No data</td></tr>'}
+        </tr>
+        <tr class="brand-drill" id="bd-${i}" style="display:none"><td colspan="9" style="padding:0;background:var(--surface-2,#f8fafc)"><div id="bd-body-${i}" style="padding:12px 16px"></div></td></tr>`).join('')||'<tr><td colspan="9" class="u-empty">No data</td></tr>'}
         </tbody>
       </table></div>
     </div>`;
@@ -861,6 +862,47 @@ async function initiateBrandPO(brand, _vendorId, from, to) {
   const items = await api(`/reports/brand-procurement-items?brand=${encodeURIComponent(brand)}&from=${from}&to=${to}`);
   if (!items || !items.length) { showToast('No shortfall items for this brand', 'error'); return; }
   openDemandPO(items.map(it => ({ sku: it.sku, qty: Math.round(it.shortfall_qty) })), 'brand', `Initiate PO — ${brand}`);
+}
+
+// Expand a brand to its product-level breakdown, with an editable suggested PO qty.
+async function toggleBrandDrill(i, brand, from, to) {
+  const row = document.getElementById('bd-' + i); if (!row) return;
+  const caret = document.getElementById('bd-caret-' + i);
+  if (row.style.display !== 'none') { row.style.display = 'none'; if (caret) caret.textContent = '▸'; return; }
+  row.style.display = ''; if (caret) caret.textContent = '▾';
+  const body = document.getElementById('bd-body-' + i); if (!body) return;
+  body.innerHTML = '<div class="loading-state" style="padding:12px"><div class="spinner"></div></div>';
+  const items = (await api(`/reports/brand-procurement-items?brand=${encodeURIComponent(brand)}&from=${from}&to=${to}`)) || [];
+  APP._brandDrill = APP._brandDrill || {};
+  APP._brandDrill[i] = { brand, from, to, items };
+  if (!items.length) { body.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem">No shortfall products for this brand.</div>'; return; }
+  body.innerHTML = `
+    <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">Products — ${h(brand)} <span style="color:var(--text-muted);font-weight:400">(edit the PO qty before raising)</span></div>
+    <div class="table-wrap"><table class="table" style="margin:0;background:#fff">
+      <thead><tr><th>Product</th><th>SKU</th><th>Unit ₹</th><th>Shortfall</th><th style="width:120px">PO Qty</th></tr></thead>
+      <tbody>${items.map((it,j)=>`<tr>
+        <td><b>${h(it.name||it.sku)}</b></td>
+        <td style="color:var(--text-muted);font-size:.8rem">${it.sku}</td>
+        <td>${it.unit_price!=null?fmt(it.unit_price):'—'}</td>
+        <td>${Math.round(it.shortfall_qty)}</td>
+        <td><input type="number" min="0" step="1" value="${Math.round(it.shortfall_qty)}" id="bdq-${i}-${j}"
+              style="width:100px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:.85rem" aria-label="PO quantity for ${h(it.name||it.sku)}"></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" ${dataAct('initiateBrandPOEdited', i)}>🛒 Initiate PO with these quantities</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('resetBrandDrillQty', i)}>↺ Reset to suggested</button>
+    </div>`;
+}
+function resetBrandDrillQty(i) {
+  const d = (APP._brandDrill||{})[i]; if (!d) return;
+  d.items.forEach((it,j)=>{ const el = document.getElementById(`bdq-${i}-${j}`); if (el) el.value = Math.round(it.shortfall_qty); });
+}
+function initiateBrandPOEdited(i) {
+  const d = (APP._brandDrill||{})[i]; if (!d) { showToast('Expand the brand first', 'error'); return; }
+  const items = d.items.map((it,j)=>({ sku: it.sku, qty: parseInt((document.getElementById(`bdq-${i}-${j}`)||{}).value, 10) || 0 })).filter(x => x.qty > 0);
+  if (!items.length) { showToast('Enter at least one quantity', 'error'); return; }
+  openDemandPO(items, 'brand', `Initiate PO — ${d.brand}`);
 }
 
 /* ============================================================
