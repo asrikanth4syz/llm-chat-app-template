@@ -529,12 +529,22 @@ async function pickOrderModal(orderId) {
   ]);
   loadBarcodeMap();   // warm the scanner's barcode→SKU map (non-blocking)
   const items = order?.items || [];
+  const client = order?.client_name || '—';
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
   openModal(`Pick Items — ${orderId}`, `
+    <div style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px;font-size:.9rem">
+      <span style="color:var(--text-muted)">Client:</span>
+      <b>${client}</b>
+    </div>
     ${scanPanelHtml('pick')}
-    <p style="color:var(--text-muted);margin-bottom:12px">
+    <p style="color:var(--text-muted);margin-bottom:10px">
       Scan items to count them up, or enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" ${dataAct('pickFillAll')}>Fill ordered</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')}>Clear all</button>
+      <div id="pick-summary" style="margin-left:auto;font-size:.85rem;color:var(--text-muted)"></div>
+    </div>
     <div class="table-scroll" tabindex="0" style="margin-bottom:16px">
     <table class="table">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
@@ -549,7 +559,7 @@ async function pickOrderModal(orderId) {
               data-scan-sku="${item.sku}" data-scan-max="${item.qty}"
               value="${item.qty}" min="0" max="${item.qty}"
               style="width:72px;text-align:center"
-              ${dataInputEl('colorByOrdered')}>
+              data-keydown="pickQtyKey" ${dataInputEl('pickQtyInput')}>
           </td>
           <td>
             <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
@@ -567,6 +577,67 @@ async function pickOrderModal(orderId) {
     </div>
   `);
   initScan('pick');
+  updatePickSummary();
+}
+
+// Per-row qty handler: colour short-picks amber AND refresh the running total.
+function pickQtyInput(el) {
+  colorByOrdered(el);
+  updatePickSummary();
+}
+
+// Live "cross-check" line above the pick grid: how many lines have a qty and
+// how many units in total, versus what was ordered — plus a short-pick flag.
+function updatePickSummary() {
+  const inputs = Array.from(document.querySelectorAll('.pick-qty'));
+  const totalLines = inputs.length;
+  let pickedLines = 0, pickedQty = 0, orderedQty = 0, shortLines = 0;
+  inputs.forEach(inp => {
+    const q = parseInt(inp.value, 10) || 0;
+    const ord = parseInt(inp.dataset.ordered, 10) || 0;
+    orderedQty += ord;
+    if (q > 0) pickedLines++;
+    pickedQty += q;
+    if (q < ord) shortLines++;
+  });
+  const el = document.getElementById('pick-summary');
+  if (!el) return;
+  const shortTag = shortLines
+    ? ` · <span style="color:var(--warning);font-weight:700">${shortLines} short</span>`
+    : '';
+  el.innerHTML =
+    `<b style="color:var(--text)">${pickedLines}</b> of ${totalLines} lines` +
+    ` · <b style="color:var(--text)">${pickedQty}</b> / ${orderedQty} units${shortTag}`;
+}
+
+// Bulk actions: set every line to its ordered qty, or clear every line to zero
+// (start a scan/confirm-up pick). Dispatch input so colour + summary refresh.
+function pickSetAll(toOrdered) {
+  document.querySelectorAll('.pick-qty').forEach(inp => {
+    inp.value = toOrdered ? (inp.dataset.ordered || '0') : '0';
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+function pickFillAll()  { pickSetAll(true); }
+function pickClearAll() { pickSetAll(false); }
+
+// Spreadsheet-style navigation down/up the qty column while filling picks:
+// Enter or ArrowDown → next line, Shift+Enter or ArrowUp → previous line,
+// keeping the focused input scrolled into view inside the bounded list.
+function pickQtyKey(e) {
+  const key = e.key;
+  const isDown = key === 'ArrowDown' || (key === 'Enter' && !e.shiftKey);
+  const isUp   = key === 'ArrowUp'   || (key === 'Enter' &&  e.shiftKey);
+  if (!isDown && !isUp) return;
+  const inputs = Array.from(document.querySelectorAll('.pick-qty'));
+  const idx = inputs.indexOf(e.target);
+  if (idx === -1) return;
+  const next = inputs[idx + (isDown ? 1 : -1)];
+  if (!next) return;
+  e.preventDefault();
+  next.focus();
+  next.select();
+  next.scrollIntoView({ block: 'nearest' });
 }
 
 async function confirmPick(orderId) {
