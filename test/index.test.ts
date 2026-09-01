@@ -1004,6 +1004,24 @@ describe("Order-to-delivery authorization", () => {
     expect((await get(`/api/orders/${knownOrderId}`, clientToken)).status).toBe(200);
   });
 
+  it("double-submit of the dispatch transition creates exactly one DC (compare-and-swap dedup)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("DEDUP-ORD", "c1", "tst-ops", "PICKED", 100, 18, 118, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("dedup-oi", "DEDUP-ORD", "DEDUP-1", "Dedup Item", 5, 20, 100).run();
+    // Fire two dispatch transitions back-to-back, as a double-click on a slow network would.
+    const [r1, r2] = await Promise.all([
+      post("/api/orders/DEDUP-ORD/transition", { to: "IN_SHIPMENT" }, opsToken),
+      post("/api/orders/DEDUP-ORD/transition", { to: "IN_SHIPMENT" }, opsToken),
+    ]);
+    // Both succeed (idempotent) — one advances, the other is deduped or FSM-rejected.
+    expect([200, 400]).toContain(r1.status);
+    expect([200, 400]).toContain(r2.status);
+    const dcs = await db.prepare("SELECT COUNT(*) n FROM delivery_challans WHERE order_id='DEDUP-ORD' AND status!='CANCELLED'").first() as { n: number };
+    expect(dcs.n).toBe(1);
+  });
+
   it("the order raiser cannot self-approve; a separate approver / admin can", async () => {
     const db = env.DB as D1Database;
     // Order raised by the client_admin (tst-client), sitting at PENDING_APPROVAL.

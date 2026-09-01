@@ -2477,7 +2477,18 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   const allowed = ORDER_FSM[order.status] || [];
   if (!allowed.includes(body.to)) return json({error:`Cannot transition from ${order.status} to ${body.to}`}, 400);
 
-  await env.DB.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=?").bind(body.to, id).run();
+  // Compare-and-swap: only flip the row if it is STILL in the status we validated.
+  // Two rapid clicks (double-submit on a slow network) both read the same status
+  // and both pass the FSM check above — without this guard both would advance the
+  // order and each would mint its own Delivery Challan. The conditional WHERE makes
+  // exactly one UPDATE win; the loser changes 0 rows and returns idempotently below,
+  // so no duplicate/phantom DC is ever created.
+  const upd = await env.DB.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=? AND status=?")
+    .bind(body.to, id, order.status).run();
+  if ((upd.meta?.changes ?? 0) === 0) {
+    const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as {status?:string}|null;
+    return json({ id, status: cur?.status ?? body.to, deduped: true });
+  }
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
     .bind(uid(), id, order.status, body.to, user!.sub, user!.name, body.note||null).run();
 
@@ -2490,7 +2501,10 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   }
 
   // Auto-create DC when IN_SHIPMENT — use picked allocations if available, else order items
-  if (body.to === "IN_SHIPMENT") {
+  const existingDC = body.to === "IN_SHIPMENT"
+    ? await env.DB.prepare("SELECT id FROM delivery_challans WHERE order_id=? AND status!='CANCELLED' LIMIT 1").bind(id).first()
+    : null;
+  if (body.to === "IN_SHIPMENT" && !existingDC) {
     const {results: allocations} = await env.DB.prepare(
       "SELECT sku, item_name as name, SUM(qty) as qty FROM order_allocations WHERE order_id=? GROUP BY sku"
     ).bind(id).all() as {results: Record<string,unknown>[]};

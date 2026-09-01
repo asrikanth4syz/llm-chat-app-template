@@ -508,13 +508,25 @@ function createDCFromPicklist(orderId) {
 }
 
 async function confirmCreateDCFromPicklist(orderId) {
-  const res = await api(`/orders/${orderId}/transition`, {
-    method: 'POST',
-    body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
-  });
+  // Guard against double-submit: if a slow response leaves the button on screen,
+  // a second click must not fire a second dispatch (which minted duplicate DCs).
+  if (APP._dispatching) return;
+  APP._dispatching = true;
+  const btn = document.querySelector('#modal [data-act="confirmCreateDCFromPicklist"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Dispatching…'; }
+  let res;
+  try {
+    res = await api(`/orders/${orderId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
+    });
+  } finally {
+    APP._dispatching = false;
+  }
   closeModal();
   if (!res) return;
-  showToast(`Order ${orderId} dispatched — DC created`);
+  if (res.deduped) { showToast(`Order ${orderId} was already dispatched`, 'info'); }
+  else { showToast(`Order ${orderId} dispatched — DC created`); }
   // Refresh the view the button was clicked from, so the row's status/actions
   // reflect IN_SHIPMENT immediately (otherwise a second click re-fires the same
   // transition and the FSM rejects IN_SHIPMENT→IN_SHIPMENT).
