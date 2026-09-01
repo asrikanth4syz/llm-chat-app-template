@@ -535,7 +535,7 @@ async function pickOrderModal(orderId) {
     <p style="color:var(--text-muted);margin-bottom:12px">
       Scan items to count them up, or enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
-    <div class="table-scroll" style="margin-bottom:16px">
+    <div class="table-scroll" tabindex="0" style="margin-bottom:16px">
     <table class="table">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
