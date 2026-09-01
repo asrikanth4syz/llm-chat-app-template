@@ -535,7 +535,8 @@ async function pickOrderModal(orderId) {
     <p style="color:var(--text-muted);margin-bottom:12px">
       Scan items to count them up, or enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
-    <table class="table" style="margin-bottom:16px">
+    <div class="table-scroll" style="margin-bottom:16px">
+    <table class="table">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
         ${(items||[]).map(item=>`<tr>
@@ -559,6 +560,7 @@ async function pickOrderModal(orderId) {
         </tr>`).join('')}
       </tbody>
     </table>
+    </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
       <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>

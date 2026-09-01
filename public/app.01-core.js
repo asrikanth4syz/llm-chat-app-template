@@ -1318,7 +1318,9 @@ function openModal(title, body, footer = '') {
   const expandBtn = document.getElementById('modal-expand');
   if (expandBtn) expandBtn.style.display = 'none';
   overlay.classList.remove('hidden');
-  overlay.onclick = e => { if (e.target === overlay) requestCloseModal(); };
+  // Do NOT close on backdrop click — the modal closes only via the × (or Esc),
+  // so an accidental click outside can't discard a form the user is filling.
+  overlay.onclick = null;
   document.removeEventListener('keydown', _modalKeydown, true);
   document.addEventListener('keydown', _modalKeydown, true);
   setTimeout(() => {
