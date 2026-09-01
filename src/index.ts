@@ -1275,6 +1275,7 @@ export default {
       if (path.match(/^\/api\/approval-chain-instances\/[^/]+\/act$/) && method==="POST") return handleApprovalChainAct(request,env,path);
 
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/dispatch$/) && method==="POST") return handleDispatchDC(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/void$/) && method==="POST") return handleVoidDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/items$/) && method==="GET") return handleListDCItems(request,env,path);
       if (path==="/api/stock-movements" && method==="GET") return handleListStockMovements(request,env);
 
@@ -4402,6 +4403,79 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   await pushNotification(env, "client_admin", `DC ${id} dispatched — vehicle ${body.vehicle_no||'TBD'}`);
   await audit(env, user, "DISPATCH", "delivery_challan", id, undefined, JSON.stringify({vehicle:body.vehicle_no,driver:body.driver_name}));
   return json({id, status:"IN_TRANSIT"});
+}
+
+// POST /api/delivery-challans/:id/void — cancel a duplicate/erroneous challan that
+// has NOT delivered anything (SCHEDULED or IN_TRANSIT, no recorded qty_delivered).
+// Such a challan moved no on-hand stock (stock is deducted only at delivery), so
+// cancelling it is stock-neutral. If it was the order's only live challan and the
+// order was pushed to IN_SHIPMENT/PARTIALLY_CLOSED by it, the order is reverted to
+// PICKED (re-dispatchable) and the reservation the dispatch released is restored.
+// A DELIVERED challan is refused here — that path is the Over-Delivery Audit, which
+// also reverses the stock movement. Admin-only, dry-run by default.
+async function handleVoidDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden — admin only"}, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(()=>({})) as { dry_run?: boolean; note?: string };
+  const dryRun = body.dry_run !== false; // preview unless explicitly applied
+
+  const dc = await env.DB.prepare("SELECT id, order_id, status FROM delivery_challans WHERE id=?").bind(id).first() as {id:string;order_id?:string;status?:string}|null;
+  if (!dc) return json({error:"Delivery challan not found"}, 404);
+  if (dc.status === "CANCELLED") return json({ dc_id:id, order_id:dc.order_id, status:"CANCELLED", already:true, applied:false });
+  if (dc.status === "DELIVERED")
+    return json({error:"This challan is DELIVERED — use the Over-Delivery Audit to void it and reverse the stock.", code:"DELIVERED"}, 400);
+  const rec = await env.DB.prepare("SELECT COALESCE(SUM(qty_delivered),0) q FROM dc_items WHERE dc_id=?").bind(id).first() as {q:number}|null;
+  if ((rec?.q || 0) > 0)
+    return json({error:"This challan already recorded a delivery — use the Over-Delivery Audit to void it and reverse the stock.", code:"HAS_DELIVERY"}, 400);
+
+  // Would the order revert? Only if this is its last live challan and it sits in a
+  // post-dispatch state that this challan is responsible for.
+  let willRevertOrder = false;
+  let orderStatus: string | undefined;
+  if (dc.order_id) {
+    const ord = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(dc.order_id).first() as {status?:string}|null;
+    orderStatus = ord?.status;
+    const others = await env.DB.prepare("SELECT COUNT(*) n FROM delivery_challans WHERE order_id=? AND id!=? AND status!='CANCELLED'").bind(dc.order_id, id).first() as {n:number};
+    willRevertOrder = (others?.n || 0) === 0 && (orderStatus === "IN_SHIPMENT" || orderStatus === "PARTIALLY_CLOSED");
+  }
+
+  if (dryRun) {
+    return json({
+      dc_id: id, order_id: dc.order_id, status: dc.status, order_status: orderStatus,
+      eligible: true, will_revert_order: willRevertOrder, applied: false,
+      message: `Cancelling challan ${id} moves no stock` + (willRevertOrder ? ` and returns order ${dc.order_id} to PICKED (re-dispatchable).` : `.`),
+    });
+  }
+
+  // Apply: cancel the challan (idempotent guard on status).
+  await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE id=? AND status!='CANCELLED'").bind(id).run();
+  await audit(env, user, "VOID_DC", "delivery_challan", id, dc.status, body.note || "duplicate/erroneous challan voided");
+
+  if (willRevertOrder && dc.order_id) {
+    const reverted = await env.DB.prepare("UPDATE orders SET status='PICKED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    if ((reverted.meta?.changes ?? 0) > 0) {
+      await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
+        .bind(uid(), dc.order_id, orderStatus, "PICKED", user!.sub, user!.name, `Challan ${id} voided — order returned for re-dispatch`).run();
+      // Restore the reservation the dispatch released for any un-dispatched remainder
+      // (mirror-inverse of the IN_SHIPMENT partial-pick release), so PICKED again
+      // holds the full ordered qty. Full picks released nothing, so this is a no-op there.
+      const {results: allocations} = await env.DB.prepare(
+        "SELECT sku, SUM(qty) as qty FROM order_allocations WHERE order_id=? GROUP BY sku"
+      ).bind(dc.order_id).all() as {results: Record<string,unknown>[]};
+      if (allocations.length > 0) {
+        const {results: orderItems} = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
+        for (const oi of orderItems) {
+          const alloc = allocations.find(a => a.sku === oi.sku);
+          const remaining = (Number(oi.qty) || 0) - (alloc ? Number(alloc.qty) || 0 : 0);
+          if (remaining > 0) await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(remaining, oi.sku).run();
+        }
+      }
+    }
+  }
+
+  return json({ dc_id: id, order_id: dc.order_id, status:"CANCELLED", reverted_order: willRevertOrder, applied: true });
 }
 
 async function handleListDCItems(request: Request, env: Env, path: string): Promise<Response> {

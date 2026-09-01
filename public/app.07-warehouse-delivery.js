@@ -797,6 +797,7 @@ async function renderDelivery(el) {
 
   function dcCardScheduled(dc) {
     const canDispatch = APP.user?.role !== 'delivery_exec';
+    const canVoid = ['super_admin','ops_admin'].includes(APP.user?.role);
     return `
     <div class="card" style="padding:0;overflow:hidden">
       <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
@@ -812,6 +813,7 @@ async function renderDelivery(el) {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
+          ${canVoid ? `<button class="btn btn-danger btn-sm" ${dataAct('voidDCModal', dc.id)}>Void</button>` : ''}
           ${canDispatch ? `<button class="btn btn-primary btn-sm" ${dataAct('dispatchDCModal', dc.id)}>Dispatch →</button>` : ''}
         </div>
       </div>
@@ -1352,6 +1354,38 @@ async function confirmDispatch(dcId) {
   } else {
     closeModal();
   }
+}
+
+// Void a duplicate / erroneous challan (admin-only). Two steps: a dry-run preview
+// tells us whether cancelling also returns the order to PICKED, then Confirm applies.
+async function voidDCModal(dcId) {
+  const preview = await api(`/delivery-challans/${dcId}/void`, { method:'POST', body: JSON.stringify({ dry_run:true }) });
+  if (!preview) return;                    // api() surfaces the reason toast (e.g. DELIVERED)
+  if (preview.already) { showToast(`DC ${dcId} is already cancelled`, 'info'); return; }
+  const revertNote = preview.will_revert_order
+    ? `<p style="margin:10px 0 0;color:var(--warning)">This is the order's only active challan, so order <b>${preview.order_id}</b> will return to <b>PICKED</b> and can be dispatched again.</p>`
+    : `<p style="margin:10px 0 0;color:var(--text-muted)">The order keeps its other active challan(s); only this one is cancelled.</p>`;
+  openModal(`Void DC ${dcId}`,
+    `<p style="margin:0;color:var(--text)">Cancel delivery challan <b>${dcId}</b>? It has not delivered anything, so no stock is affected. The challan is kept as <b>CANCELLED</b> for the audit trail (not hard-deleted).</p>${revertNote}`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep challan</button>
+     <button class="btn btn-danger" ${dataAct('confirmVoidDC', dcId)}>Void challan</button>`);
+}
+
+async function confirmVoidDC(dcId) {
+  if (APP._voiding) return;
+  APP._voiding = true;
+  const btn = document.querySelector('#modal [data-act="confirmVoidDC"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Voiding…'; }
+  let res;
+  try {
+    res = await api(`/delivery-challans/${dcId}/void`, { method:'POST', body: JSON.stringify({ dry_run:false }) });
+  } finally {
+    APP._voiding = false;
+  }
+  closeModal();
+  if (!res) return;
+  showToast(`DC ${dcId} voided${res.reverted_order ? ` — order ${res.order_id} returned to PICKED` : ''}`);
+  switchDeliveryTab('scheduled', document.querySelectorAll('#dc-tabs .tab-btn')[0]);
 }
 
 async function markDelivered(dcId) {
