@@ -99,7 +99,7 @@ function scRenderGrid(items) {
     return `<article class="sc-card">
       <div class="img" ${dataAct('viewProduct', p.sku)} style="cursor:pointer">${p.emoji || '📦'}
         <span class="vb">${verBadge(p.verification)}</span>
-        <label class="cmp" onclick="event.stopPropagation()"><input type="checkbox" ${checked} ${dataActEl('toggleCompare', p.sku)} style="width:12px;height:12px;margin:0"> Compare</label>
+        <label class="cmp" onclick="event.stopPropagation()"><input type="checkbox" ${checked} ${dataChangeEl('toggleCompare', p.sku)} style="width:12px;height:12px;margin:0"> Compare</label>
       </div>
       <div class="bd">
         <span class="br">${h(p.brand || '—')}</span>
