@@ -812,7 +812,11 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS kpi_daily (
       day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
-  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT", "scan_barcode TEXT"]) {
+  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT", "scan_barcode TEXT",
+    // Delivery quantity-variance sign-off: when a delivery's qty differs from what was
+    // expected, the DC is flagged for warehouse-lead approval (apply-now, sign-off-later).
+    "variance_status TEXT", "variance_data TEXT", "variance_reviewed_by TEXT",
+    "variance_reviewed_at TEXT", "variance_review_note TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -898,7 +902,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
 // Bump when new feature tables / data migrations are added — the heavy bootstrap
 // re-runs once, then the flag makes it a no-op again. This is our lightweight,
 // migration-history-free schema versioning (the D1 was bootstrapped at runtime).
-const BOOTSTRAP_VERSION = "2026-08-22-6";
+const BOOTSTRAP_VERSION = "2026-09-02-1";
 // Gate the expensive bootstrap so it runs ONCE GLOBALLY, off the request path.
 // After the first success the steady-state cost per cold isolate is a cheap
 // CREATE-IF-NOT-EXISTS + one SELECT. Runs under ctx.waitUntil, never blocking a
@@ -1111,6 +1115,8 @@ export default {
       if (path.match(/^\/api\/standing-orders\/[^/]+\/materialize$/) && method==="POST") return handleMaterializeStandingOrder(request,env,path);
       if (path==="/api/delivery-challans"                            && method==="GET")  return handleListDCs(request,env);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
+      if (path==="/api/delivery-variances"                          && method==="GET")  return handleListDeliveryVariances(request,env);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/variance-review$/) && method==="POST") return handleReviewDeliveryVariance(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/partial$/)  && method==="POST") return handlePartialDelivery(request,env,path);
 
@@ -4230,6 +4236,20 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
 
   const totalDelivered = deliveries.reduce((s, i) => s + i.qty_delivered, 0);
 
+  // Quantity-variance sign-off: the expected hand-over per line is min(dispatched,
+  // order balance). Any line delivered short of (or, defensively, over) that is a
+  // variance that a warehouse lead must sign off on. Stock still applies now
+  // (apply-now, sign-off-later) — this only flags the DC for review.
+  const varianceLines = deliveries
+    .map(i => {
+      // Expected hand-over on this DC line = dispatched, capped to the order balance
+      // before this delivery (delivered + still-outstanding).
+      const exp = Math.min(i.qty_dispatched, i.qty_delivered + i.order_remaining);
+      return { sku: i.sku, name: i.name, dispatched: i.qty_dispatched, delivered: i.qty_delivered, expected: exp, diff: i.qty_delivered - exp };
+    })
+    .filter(v => v.diff !== 0);
+  const hasVariance = varianceLines.length > 0;
+
   // Update dc_items and deduct stock for actually delivered quantities
   for (const item of deliveries) {
     await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?")
@@ -4240,9 +4260,14 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
     }
   }
 
-  // Mark this DC as delivered
-  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,delivered_at=datetime('now') WHERE id=?")
-    .bind(totalDelivered, id).run();
+  // Mark this DC as delivered; flag the quantity variance for warehouse-lead sign-off.
+  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,delivered_at=datetime('now'),variance_status=?,variance_data=? WHERE id=?")
+    .bind(totalDelivered, hasVariance ? "PENDING" : "NONE", hasVariance ? JSON.stringify(varianceLines) : null, id).run();
+  if (hasVariance) {
+    const shortSummary = varianceLines.map(v => `${v.name || v.sku} ${v.delivered}/${v.expected}`).join(", ");
+    await pushNotification(env, "ops_admin", `⚠ Delivery variance on DC ${id} — needs sign-off: ${shortSummary}`);
+    await audit(env, user, "DELIVER_VARIANCE", "delivery_challan", id, undefined, shortSummary);
+  }
 
   // Create follow-up DC only for items still OUTSTANDING against the order
   // (based on order remaining, so we never schedule more than was ordered).
@@ -4307,7 +4332,59 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
 
   await pushNotification(env, "client_admin", `Delivery ${id} confirmed — ${totalDelivered} units`);
   await audit(env, user, "DELIVER", "delivery_challan", id);
-  return json({id, status:"DELIVERED", delivered: totalDelivered, order_closed: orderFullyClosed, partial: shortItems.length > 0});
+  return json({id, status:"DELIVERED", delivered: totalDelivered, order_closed: orderFullyClosed, partial: shortItems.length > 0, variance: hasVariance, variance_lines: varianceLines});
+}
+
+// GET /api/delivery-variances — warehouse-lead queue of deliveries whose quantity
+// differed from what was expected. PENDING first (awaiting sign-off), then recently
+// decided. Each row carries the per-line variance and whether a voice note is attached.
+async function handleListDeliveryVariances(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden — warehouse lead only"}, 403);
+  const { results } = await env.DB.prepare(`
+    SELECT dc.id, dc.order_id, dc.delivered_at, dc.variance_status, dc.variance_data,
+           dc.variance_reviewed_by, dc.variance_reviewed_at, dc.variance_review_note,
+           o.client_id, c.name AS client_name,
+           (SELECT COUNT(*) FROM dc_documents dd WHERE dd.dc_id=dc.id AND dd.doc_type='voice') AS voice_count
+    FROM delivery_challans dc
+    LEFT JOIN orders o ON o.id=dc.order_id
+    LEFT JOIN clients c ON c.id=o.client_id
+    WHERE dc.variance_status IN ('PENDING','APPROVED','REJECTED')
+    ORDER BY CASE dc.variance_status WHEN 'PENDING' THEN 0 ELSE 1 END, dc.delivered_at DESC
+    LIMIT 200`).all() as { results: Record<string,unknown>[] };
+  const rows = (results || []).map(r => ({
+    ...r,
+    variance: (() => { try { return JSON.parse(String(r.variance_data || "[]")); } catch { return []; } })(),
+    has_voice: Number(r.voice_count || 0) > 0,
+  }));
+  return json(rows);
+}
+
+// POST /api/delivery-challans/:id/variance-review — warehouse lead signs off (or
+// rejects) a flagged delivery variance. Apply-now/sign-off-later: stock already
+// moved, so this records the decision; a rejection raises a follow-up notification
+// (the lead then uses returns / stock correction to fix it).
+async function handleReviewDeliveryVariance(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden — warehouse lead only"}, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(()=>({})) as { decision?: string; note?: string };
+  const decision = String(body.decision || "").toUpperCase();
+  if (!["APPROVED","REJECTED"].includes(decision)) return json({error:"decision must be APPROVED or REJECTED"}, 400);
+
+  const dc = await env.DB.prepare("SELECT id, variance_status FROM delivery_challans WHERE id=?").bind(id).first() as {id:string;variance_status?:string}|null;
+  if (!dc) return json({error:"Delivery challan not found"}, 404);
+  if (dc.variance_status !== "PENDING") return json({error:`No pending variance to review (status: ${dc.variance_status || "NONE"})`}, 409);
+
+  await env.DB.prepare("UPDATE delivery_challans SET variance_status=?,variance_reviewed_by=?,variance_reviewed_at=datetime('now'),variance_review_note=? WHERE id=?")
+    .bind(decision, user!.name, body.note || null, id).run();
+  await audit(env, user, decision === "APPROVED" ? "VARIANCE_APPROVED" : "VARIANCE_REJECTED", "delivery_challan", id, "PENDING", body.note || decision);
+  if (decision === "REJECTED") {
+    await pushNotification(env, "ops_admin", `Delivery variance on DC ${id} REJECTED by ${user!.name} — needs correction${body.note ? `: ${body.note}` : ""}`);
+  }
+  return json({ id, variance_status: decision });
 }
 
 // Gap 14: Partial delivery

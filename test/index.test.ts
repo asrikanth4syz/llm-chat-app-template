@@ -1057,6 +1057,49 @@ describe("Order-to-delivery authorization", () => {
     expect(refused.status).toBe(400);
   });
 
+  it("a short delivery is flagged as a variance and a warehouse lead can sign it off", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('VAR-ORD','c1','tst-ops','IN_SHIPMENT',100,18,118,'Regular')").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('var-oi','VAR-ORD','VAR-1','Var Item',10,10,100)").run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES ('DC-VAR','VAR-ORD','IN_TRANSIT',10)").run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('var-di','DC-VAR','VAR-1','Var Item',10,0)").run();
+
+    // Deliver only 7 of 10 → variance.
+    const del = await post("/api/delivery-challans/DC-VAR/deliver", { items: [{ sku: "VAR-1", qty_delivered: 7 }] }, opsToken);
+    expect(del.status).toBe(200);
+    const dbody = await del.json() as { variance: boolean };
+    expect(dbody.variance).toBe(true);
+    const flagged = await db.prepare("SELECT variance_status FROM delivery_challans WHERE id='DC-VAR'").first() as { variance_status: string };
+    expect(flagged.variance_status).toBe("PENDING");
+
+    // Appears in the warehouse-lead queue; a client cannot see it.
+    expect((await get("/api/delivery-variances", clientToken)).status).toBe(403);
+    const queue = await get("/api/delivery-variances", adminToken);
+    expect(queue.status).toBe(200);
+    const qrows = await queue.json() as Array<{ id: string; variance_status: string }>;
+    expect(qrows.some(r => r.id === "DC-VAR" && r.variance_status === "PENDING")).toBe(true);
+
+    // Sign-off flips it to APPROVED; a second review is rejected (already decided).
+    const rev = await post("/api/delivery-challans/DC-VAR/variance-review", { decision: "APPROVED" }, adminToken);
+    expect(rev.status).toBe(200);
+    const signed = await db.prepare("SELECT variance_status FROM delivery_challans WHERE id='DC-VAR'").first() as { variance_status: string };
+    expect(signed.variance_status).toBe("APPROVED");
+    expect((await post("/api/delivery-challans/DC-VAR/variance-review", { decision: "REJECTED" }, adminToken)).status).toBe(409);
+  });
+
+  it("an exact-quantity delivery is NOT flagged as a variance", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('VAR-ORD2','c1','tst-ops','IN_SHIPMENT',100,18,118,'Regular')").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('var-oi2','VAR-ORD2','VAR-2','Var Item 2',10,10,100)").run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES ('DC-VAR2','VAR-ORD2','IN_TRANSIT',10)").run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('var-di2','DC-VAR2','VAR-2','Var Item 2',10,0)").run();
+    const del = await post("/api/delivery-challans/DC-VAR2/deliver", { items: [{ sku: "VAR-2", qty_delivered: 10 }] }, opsToken);
+    const dbody = await del.json() as { variance: boolean };
+    expect(dbody.variance).toBe(false);
+    const flagged = await db.prepare("SELECT variance_status FROM delivery_challans WHERE id='DC-VAR2'").first() as { variance_status: string };
+    expect(flagged.variance_status).toBe("NONE");
+  });
+
   it("the order raiser cannot self-approve; a separate approver / admin can", async () => {
     const db = env.DB as D1Database;
     // Order raised by the client_admin (tst-client), sitting at PENDING_APPROVAL.
