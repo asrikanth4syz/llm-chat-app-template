@@ -162,13 +162,13 @@ async function execMarkDelivered(dcId) {
         <td>${it.item_name||it.sku}</td>
         <td class="u-empty">${it.qty_ordered}</td>
         <td style="text-align:center;font-weight:600${maxDeliver<it.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
-        <td class="u-center"><input type="number" data-sku="${it.sku}" data-expected="${maxDeliver}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
+        <td class="u-center"><input type="number" data-sku="${it.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}" ${dataInputEl('clampMax', maxDeliver)} style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-align:center"></td>
       </tr>`;}).join('')}
       </tbody>
     </table>
     ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Some items already had quantity delivered on earlier DCs — the deliverable amount is capped to the order balance.</div>':''}
-    <div id="voice-panel" style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
-      <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span id="voice-req-hint" style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+      <div style="font-weight:700;font-size:.82rem;color:var(--navy);margin-bottom:8px">🎙 Voice Message <span style="font-weight:400;color:var(--text-muted)">(optional — delivery note for the office)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" id="voice-rec-btn" class="btn btn-secondary btn-sm" ${dataAct('toggleVoiceRecording')}>● Record</button>
         <span id="voice-rec-status" style="font-size:.76rem;color:var(--text-muted)">Not recorded</span>
@@ -179,11 +179,6 @@ async function execMarkDelivered(dcId) {
     `<button class="btn btn-secondary" ${dataAct('stopVoiceAndClose')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmExecDelivery', dcId)}>Confirm Delivery</button>`
   );
-  // A voice note is REQUIRED whenever the delivered qty differs from what was
-  // expected; keep the hint live as the delivery person edits quantities.
-  const mb = document.getElementById('modal-body');
-  if (mb) mb.addEventListener('input', updateExecVarianceHint);
-  updateExecVarianceHint();
 }
 
 /* ── Voice note recording (MediaRecorder) ── */
@@ -232,40 +227,9 @@ function discardVoiceNote() {
   const btn = document.getElementById('voice-rec-btn'); if (btn) btn.textContent = '● Record';
 }
 
-// True when any delivered qty differs from the expected (dispatched, capped to
-// balance) — i.e. a short/over delivery that needs a spoken explanation + sign-off.
-function execHasVariance() {
-  return Array.from(document.querySelectorAll('#modal-body input[data-sku]'))
-    .some(inp => (parseInt(inp.value, 10) || 0) !== (parseInt(inp.dataset.expected, 10) || 0));
-}
-
-// Keep the voice-note requirement hint in sync with the quantities entered.
-function updateExecVarianceHint() {
-  const hint = document.getElementById('voice-req-hint');
-  const panel = document.getElementById('voice-panel');
-  if (!hint) return;
-  if (execHasVariance()) {
-    hint.textContent = '(required — record a note explaining the quantity change)';
-    hint.style.color = 'var(--danger)';
-    if (panel) { panel.style.borderColor = 'var(--danger)'; panel.style.background = 'var(--warning-bg)'; }
-  } else {
-    hint.textContent = '(optional — delivery note for the office)';
-    hint.style.color = 'var(--text-muted)';
-    if (panel) { panel.style.borderColor = 'var(--border)'; panel.style.background = 'var(--surface-2)'; }
-  }
-}
-
 async function confirmExecDelivery(dcId) {
   stopVoiceIfRecording();
-  // Give a just-stopped recording a moment to finalize into APP._voiceNote.
-  if (APP._voiceRecorder && APP._voiceRecorder.state !== 'inactive') await new Promise(r => setTimeout(r, 350));
   const inputs = document.querySelectorAll('#modal-body input[data-sku]');
-  // Enforce: a quantity variance cannot be confirmed without a voice explanation.
-  if (execHasVariance() && !APP._voiceNote) {
-    showToast('Quantity changed — record a voice message explaining it before confirming', 'error');
-    updateExecVarianceHint();
-    return;
-  }
   const items = Array.from(inputs).map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
   const res = await api('/delivery-challans/' + dcId + '/deliver', { method:'POST', body: JSON.stringify({ items }) });
   if (res) {
@@ -276,100 +240,10 @@ async function confirmExecDelivery(dcId) {
       APP._voiceNote = null;
     }
     closeModal();
-    const base = res.partial ? 'Partial delivery recorded — follow-up DC created' : 'DC ' + dcId + ' fully delivered' + (res.order_closed ? ' — order closed' : '');
-    showToast(res.variance ? base + ' · variance sent for warehouse-lead sign-off' : base, res.variance ? 'info' : 'success');
+    const msg = res.partial ? 'Partial delivery recorded — follow-up DC created' : 'DC ' + dcId + ' fully delivered' + (res.order_closed ? ' — order closed' : '');
+    showToast(msg);
     navigate('dashboard');
   }
-}
-
-/* ============================================================
-   DELIVERY QUANTITY-VARIANCE SIGN-OFF (warehouse lead)
-   ============================================================ */
-async function renderDeliveryVariances(el) {
-  const rows = await api('/delivery-variances');
-  if (!rows) return;
-  const pending  = rows.filter(r => r.variance_status === 'PENDING');
-  const decided  = rows.filter(r => r.variance_status !== 'PENDING');
-
-  const varTable = (v) => `
-    <table class="table" style="margin:8px 0 0">
-      <thead><tr><th>Item</th><th class="u-center">Expected</th><th class="u-center">Delivered</th><th class="u-center">Difference</th></tr></thead>
-      <tbody>${(v||[]).map(l=>`<tr>
-        <td>${h(l.name||l.sku)}</td>
-        <td class="u-center">${l.expected}</td>
-        <td class="u-center" style="font-weight:700">${l.delivered}</td>
-        <td class="u-center" style="font-weight:700;color:${l.diff<0?'var(--danger)':'var(--warning)'}">${l.diff>0?'+':''}${l.diff}</td>
-      </tr>`).join('')}</tbody>
-    </table>`;
-
-  const card = (r, isPending) => `
-    <div class="card" style="padding:16px 18px;margin-bottom:12px;border-left:4px solid ${isPending?'var(--warning)':(r.variance_status==='APPROVED'?'var(--success)':'var(--danger)')}">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div>
-          <span style="font-weight:700">DC #${r.id}</span>
-          <span style="color:var(--text-muted);font-size:.82rem">· ${h(r.client_name||'Unknown client')} · Order ${r.order_id||'—'}</span>
-        </div>
-        <div style="font-size:.78rem;color:var(--text-muted)">Delivered ${fmtDate(r.delivered_at)}</div>
-      </div>
-      ${varTable(r.variance)}
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px">
-        ${r.has_voice
-          ? `<button class="btn btn-secondary btn-sm" ${dataActEl('playDCVoice', r.id)}>🎙 Play voice note</button>
-             <span class="dc-voice-slot" data-dc="${r.id}"></span>`
-          : `<span style="font-size:.78rem;color:var(--danger)">⚠ No voice note attached</span>`}
-        ${isPending ? `<div style="margin-left:auto;display:flex;gap:8px">
-          <button class="btn btn-danger btn-sm" ${dataAct('rejectVarianceModal', r.id)}>Reject</button>
-          <button class="btn btn-success btn-sm" ${dataAct('approveVariance', r.id)}>Approve</button>
-        </div>` : `<div style="margin-left:auto;font-size:.8rem;color:var(--text-muted)">
-          ${r.variance_status==='APPROVED'?'✓ Approved':'✕ Rejected'} by ${h(r.variance_reviewed_by||'—')} · ${fmtDate(r.variance_reviewed_at)}
-          ${r.variance_review_note?`<div style="margin-top:2px">“${h(r.variance_review_note)}”</div>`:''}
-        </div>`}
-      </div>
-    </div>`;
-
-  el.innerHTML = `
-    ${pageHeader('Delivery Variances', 'Deliveries whose quantity differed from what was dispatched — review the voice note and sign off')}
-    <div class="card" style="padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap">
-      <div><div class="u-label">Awaiting sign-off</div><div style="font-size:1.6rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--success)'}">${pending.length}</div></div>
-      <div><div class="u-label">Reviewed (recent)</div><div style="font-size:1.6rem;font-weight:800;color:var(--navy)">${decided.length}</div></div>
-    </div>
-    <h3 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Pending sign-off</h3>
-    ${pending.length ? pending.map(r=>card(r,true)).join('') : '<div class="card" style="padding:28px;text-align:center;color:var(--text-muted)">No variances awaiting sign-off 🎉</div>'}
-    ${decided.length ? `<h3 style="font-size:.95rem;margin:18px 0 8px;color:var(--navy)">Recently reviewed</h3>${decided.map(r=>card(r,false)).join('')}` : ''}
-  `;
-}
-
-// Lazily fetch and play the delivery's voice note into the card's inline slot.
-async function playDCVoice(dcId, btn) {
-  const slot = document.querySelector(`.dc-voice-slot[data-dc="${dcId}"]`);
-  if (!slot) return;
-  if (slot.dataset.loaded) { const a = slot.querySelector('audio'); if (a) { a.play(); } return; }
-  if (btn) btn.disabled = true;
-  const docs = await api(`/delivery-challans/${dcId}/documents`);
-  if (btn) btn.disabled = false;
-  const voice = (docs||[]).find(d => d.doc_type === 'voice' || (d.mime_type||'').startsWith('audio/'));
-  if (!voice || !voice.content_b64) { showToast('Voice note could not be loaded', 'error'); return; }
-  slot.innerHTML = `<audio controls autoplay src="data:${voice.mime_type||'audio/webm'};base64,${voice.content_b64}" style="height:32px;max-width:260px;vertical-align:middle"></audio>`;
-  slot.dataset.loaded = '1';
-}
-
-async function approveVariance(dcId) {
-  const res = await api(`/delivery-challans/${dcId}/variance-review`, { method:'POST', body: JSON.stringify({ decision:'APPROVED' }) });
-  if (res) { showToast(`DC ${dcId} variance approved`); navigate('delivery_variances'); }
-}
-
-function rejectVarianceModal(dcId) {
-  openModal(`Reject variance — DC ${dcId}`,
-    `<p style="margin:0 0 10px;color:var(--text-muted)">Rejecting flags this delivery for correction and notifies Ops. Add a short reason.</p>
-     <textarea id="var-reject-note" rows="3" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px" placeholder="e.g. Short delivery not justified — re-count and re-deliver"></textarea>`,
-    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-danger" ${dataAct('confirmRejectVariance', dcId)}>Reject variance</button>`);
-}
-
-async function confirmRejectVariance(dcId) {
-  const note = document.getElementById('var-reject-note')?.value?.trim() || '';
-  const res = await api(`/delivery-challans/${dcId}/variance-review`, { method:'POST', body: JSON.stringify({ decision:'REJECTED', note }) });
-  if (res) { closeModal(); showToast(`DC ${dcId} variance rejected — Ops notified`); navigate('delivery_variances'); }
 }
 
 /* ============================================================
