@@ -914,10 +914,17 @@ async function runBootstrap(env: Env): Promise<void> {
     await env.DB.prepare("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)").run();
     const cur = await env.DB.prepare("SELECT value FROM app_meta WHERE key='bootstrap_version'").first() as { value?: string } | null;
     if (cur?.value === BOOTSTRAP_VERSION) return; // already bootstrapped at this version — nothing to do
-    await fixCategoryNames(env);                  // schema self-heal + data migrations + seed retirement
+    // Persist the version FIRST, before the heavy migration. The migrations below
+    // are idempotent self-heal, so running them once is enough — but if one throws
+    // (e.g. under D1 write contention right after a deploy) we must NOT let the
+    // whole pass re-fire on the very next request. Doing so storms D1 and makes
+    // unrelated reads (login, orders) fail intermittently app-wide. Marking the
+    // version done up front means the pass runs at most once per deploy; anything
+    // it misses is reapplied on the next version bump.
     await env.DB.prepare("INSERT INTO app_meta (key,value) VALUES ('bootstrap_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .bind(BOOTSTRAP_VERSION).run();
-  } catch { _categoryFixApplied = false; /* transient failure — let a later request retry */ }
+    await fixCategoryNames(env);                  // schema self-heal + data migrations + seed retirement
+  } catch { /* leave the version persisted; never re-arm the retry (avoids a re-run storm) */ }
 }
 
 // Human-readable vendor code: VDR-<year>-<5-digit running number>, globally
