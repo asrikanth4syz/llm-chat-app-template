@@ -3415,10 +3415,21 @@ async function handleOcrLabel(request: Request, env: Env, path: string): Promise
 // GET /api/health — unauthenticated liveness/readiness for uptime monitors.
 // Pings D1 and reports the running bootstrap version. 503 if the DB is unreachable.
 async function handleHealth(_request: Request, env: Env): Promise<Response> {
-  let db = "ok";
-  try { await env.DB.prepare("SELECT 1 AS ok").first(); } catch { db = "down"; }
+  let db = "ok"; let db_error: string | null = null;
+  try { await env.DB.prepare("SELECT 1 AS ok").first(); } catch (e) { db = "down"; db_error = e instanceof Error ? e.message : String(e); }
+  // Diagnostics (public, non-sensitive): whether representative reads work and
+  // which migration version is actually stored vs what this code expects. Helps
+  // tell a D1 outage apart from a code/schema problem without needing to log in.
+  let users_read: string | null = null, dc_read: string | null = null, stored_version: string | null = null;
+  try { const r = await env.DB.prepare("SELECT COUNT(*) n FROM users").first() as {n?:number}|null; users_read = `ok (${r?.n ?? 0})`; }
+    catch (e) { users_read = "ERROR: " + (e instanceof Error ? e.message : String(e)); }
+  try { const r = await env.DB.prepare("SELECT COUNT(*) n FROM delivery_challans").first() as {n?:number}|null; dc_read = `ok (${r?.n ?? 0})`; }
+    catch (e) { dc_read = "ERROR: " + (e instanceof Error ? e.message : String(e)); }
+  try { const r = await env.DB.prepare("SELECT value FROM app_meta WHERE key='bootstrap_version'").first() as {value?:string}|null; stored_version = r?.value ?? "(none)"; }
+    catch (e) { stored_version = "ERROR: " + (e instanceof Error ? e.message : String(e)); }
   const ok = db === "ok";
-  return json({ status: ok ? "ok" : "degraded", db, version: BOOTSTRAP_VERSION, time: new Date().toISOString() }, ok ? 200 : 503);
+  return json({ status: ok ? "ok" : "degraded", db, db_error, code_version: BOOTSTRAP_VERSION, stored_version,
+    reads: { users: users_read, delivery_challans: dc_read }, time: new Date().toISOString() }, ok ? 200 : 503);
 }
 
 // POST /api/client-errors — best-effort sink for front-end JS exceptions
