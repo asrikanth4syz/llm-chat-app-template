@@ -750,6 +750,9 @@ function startNotificationPolling() {
   let firstPoll = true;
   APP._notifInterval = setInterval(async () => {
     if (!APP.token) { clearInterval(APP._notifInterval); return; }
+    // Skip polling while the tab is hidden — no point spending DB row-reads on a
+    // background tab nobody is looking at (this was a major D1 read consumer).
+    if (document.hidden) return;
     const data = await api('/notifications').catch(() => null);
     if (!data) return;
     const unread = data.filter(n => !n.read_flag);
@@ -769,7 +772,7 @@ function startNotificationPolling() {
     }
     if (firstPoll) { APP._lastToastedNotifId = newestId; firstPoll = false; }
     APP._prevUnread = unreadCount;
-  }, 30000);
+  }, 60000);   // 60s (was 30s) — halves the standing notification read load
 }
 
 // Single source of truth for page-level access: a role may open a page only if it

@@ -309,8 +309,15 @@ function injectNbaCss() {
   .nba-empty .big { font-size:2rem; }
   .nba-note { font-size:.72rem; color:var(--text-muted,#8397a3); margin-top:12px; text-align:center; }
   @media (max-width:720px){
-    .nba-row { grid-template-columns:26px 1fr auto; }
-    .nba-what, .nba-row .nba-meta .nba-sla { display:none; }
+    .nba-row { grid-template-columns:26px 1fr auto; column-gap:10px; }
+    /* Hide the whole meta column (not just the SLA pill) so the row has exactly
+       three cells — otherwise the empty meta box took a column and pushed the
+       action button (e.g. "Raise invoice →") partly off-screen. */
+    .nba-what, .nba-meta { display:none; }
+    /* Let the order cell shrink and ellipsis instead of shoving the button out. */
+    .nba-order { min-width:0; }
+    .nba-order .oid, .nba-order .ocl, .nba-order .ostg { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .nba-btn { padding:8px 12px; }
   }`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }

@@ -1022,6 +1022,41 @@ describe("Order-to-delivery authorization", () => {
     expect(dcs.n).toBe(1);
   });
 
+  it("voiding a scheduled duplicate DC cancels it and returns the order to PICKED", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("VOID-ORD", "c1", "tst-ops", "IN_SHIPMENT", 100, 18, 118, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES ('DC-VOID','VOID-ORD','SCHEDULED',5)").run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('void-di','DC-VOID','VOID-1','Void Item',5,0)").run();
+
+    // A client cannot void; only admins can.
+    expect((await post("/api/delivery-challans/DC-VOID/void", { dry_run: true }, clientToken)).status).toBe(403);
+
+    // Dry-run preview reports the revert without changing anything.
+    const preview = await post("/api/delivery-challans/DC-VOID/void", { dry_run: true }, adminToken);
+    expect(preview.status).toBe(200);
+    const pv = await preview.json() as { eligible: boolean; will_revert_order: boolean; applied: boolean };
+    expect(pv.eligible).toBe(true);
+    expect(pv.will_revert_order).toBe(true);
+    expect(pv.applied).toBe(false);
+    const stillScheduled = await db.prepare("SELECT status FROM delivery_challans WHERE id='DC-VOID'").first() as { status: string };
+    expect(stillScheduled.status).toBe("SCHEDULED");
+
+    // Apply: challan cancelled, order back to PICKED.
+    const applied = await post("/api/delivery-challans/DC-VOID/void", { dry_run: false }, adminToken);
+    expect(applied.status).toBe(200);
+    const dcRow = await db.prepare("SELECT status FROM delivery_challans WHERE id='DC-VOID'").first() as { status: string };
+    expect(dcRow.status).toBe("CANCELLED");
+    const ordRow = await db.prepare("SELECT status FROM orders WHERE id='VOID-ORD'").first() as { status: string };
+    expect(ordRow.status).toBe("PICKED");
+
+    // A delivered challan is refused (belongs to the over-delivery audit path).
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('VOID-ORD2','c1','tst-ops','IN_SHIPMENT',100,18,118,'Regular')").run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES ('DC-VOID2','VOID-ORD2','DELIVERED',5)").run();
+    const refused = await post("/api/delivery-challans/DC-VOID2/void", { dry_run: false }, adminToken);
+    expect(refused.status).toBe(400);
+  });
+
   it("the order raiser cannot self-approve; a separate approver / admin can", async () => {
     const db = env.DB as D1Database;
     // Order raised by the client_admin (tst-client), sitting at PENDING_APPROVAL.
