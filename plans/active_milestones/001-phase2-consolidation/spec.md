@@ -1,30 +1,36 @@
 # Product Specification: Phase 2 — Consolidation
 
-> **Milestone type:** Brownfield consolidation. A first implementation of all four items exists on
-> branch `claude/phase-2-consolidation-34ggxj` (see `context.md`). This spec defines the **contract
-> independently of that implementation** — expected values are stated explicitly so any criterion can
-> *fail* the current code. (Rev 2 after spec-validator: all acceptance criteria are now falsifiable and
-> pinned to explicit expected values, per `validation/spec-validation.md`.)
+> **Rev 3** (spec-validator rounds 1 + 2 folded; gate resolved — see `validation/spec-validation.md`,
+> `validation/spec-validation-r2.md`). Brownfield consolidation: a first implementation exists on
+> `claude/phase-2-consolidation-34ggxj` (see `context.md`). Acceptance criteria are pinned to explicit
+> expected values so any criterion can *fail* the current code. Two criteria (AC3, AC5) encode **latent
+> bugs** the panel found in the shipped code that Planning/Construction must fix.
 
 ## 🎯 Executive Summary
-* **Goal:** Consolidate the scattered Orders and Deliveries surfaces into addressable tabbed hubs, with
-  one phase-based order-status stepper, verified against an explicit acceptance contract.
-* **Target User:** Internal staff (super_admin, ops_admin, delivery roles) and client roles
-  (client_admin, client_approver, client_user).
-* **Business Value:** fewer sidebar entries, a consistent tabbed model, URL-addressable/shareable tabs
-  that survive reload + back/forward, and a single status model replacing divergent progress bars.
+* **Goal:** consolidate the scattered Orders and Deliveries surfaces into addressable tabbed hubs, with
+  one phase-based order-status stepper, verified against an explicit, implementation-independent contract.
+* **Target User:** internal staff (super_admin, ops_admin, delivery roles) and client roles.
+* **Business Value:** fewer sidebar entries; a consistent tabbed model; URL-addressable/shareable tabs
+  that survive reload + back/forward; one status model replacing divergent progress bars.
 
-## 📖 Reference tables (single source of truth for the criteria below)
+## 📖 Reference tables (single source of truth)
 
-### R1 — Role universe (12 roles in `ROLES`)
-`super_admin, ops_admin, procurement_manager, warehouse_exec, delivery_manager, delivery_exec,
-finance_admin, client_admin, client_approver, client_user, vendor_admin, vendor_user`.
-"Delivery roles" = {delivery_manager, delivery_exec}. Tests MUST derive the iteration set from
-`Object.keys(ROLES)` and assert its length is **12**.
+### R1 — Role universe
+`ROLES` = exactly these 12 keys: `super_admin, ops_admin, procurement_manager, warehouse_exec,
+delivery_manager, delivery_exec, finance_admin, client_admin, client_approver, client_user,
+vendor_admin, vendor_user`. "Delivery roles" = {delivery_manager, delivery_exec}.
+- Tests MUST assert `Object.keys(ROLES)` **deep-equals** this set (order-insensitive), not merely
+  `length === 12`.
+- **Phantom-role reconciliation:** every role key appearing in any `ACTION_PAGES` value MUST be a member
+  of `Object.keys(ROLES)`. `ACTION_PAGES.place_order` currently lists `ops_manager` (not in `ROLES`) —
+  this stray entry MUST be removed (or `ops_manager` added to `ROLES` if it is a real role); a test
+  asserts no phantom roles remain.
 
-### R2 — Order status universe → phase (authoritative; supersedes any "N statuses" prose)
-The stepper MUST accept **every** status string the app can assign, cross-referenced to `statusBadge`
-(`public/app.01-core.js`). Mapping:
+### R2 — Order status → phase (closed universe)
+The stepper's accepted universe is **exactly** the union of the statuses in this table **and** the
+non-lifecycle tokens listed in the fallback rule below — a finite, closed set. `statusBadge` is a
+*reference for the order-lifecycle subset only* (its priority tokens HIGH/MEDIUM/LOW are **not**
+statuses and are treated as unknown by the fallback).
 
 | Phase (index) | Statuses |
 |---|---|
@@ -33,192 +39,162 @@ The stepper MUST accept **every** status string the app can assign, cross-refere
 | Fulfilment (2) | INVENTORY_CHECK, VENDOR_PO_RAISED, READY_TO_PICK, PICKED, QUALITY_CHECK |
 | Shipment (3) | IN_SHIPMENT, PARTIALLY_CLOSED |
 | Delivered (4) | CLOSED, DELIVERED, RECEIVED |
-| Cancelled (terminal, index −1) | CANCELLED, REJECTED |
+| Cancelled (terminal, −1) | CANCELLED, REJECTED |
 
-- **DELIVERED/RECEIVED/REJECTED** are display synonyms accepted for robustness even though the core
-  order FSM in `context.md` ends at CANCELLED; they are included deliberately (not an FSM claim).
-- **Fallback:** any status **not** in this table and **not** CANCELLED/REJECTED — including
-  `null`/`undefined`/`''`/unknown future statuses, and any order-adjacent status seen in `statusBadge`
-  that is not an order-lifecycle status (e.g. IN_TRANSIT, DISPATCHED, ACCEPTED, SENT, SCHEDULED, OPEN,
-  IN_PROGRESS, RESOLVED, INVOICED) — MUST render the stepper anchored at Placed (index 0) with **no**
-  step marked done/current, and MUST NOT throw. (This is the documented, testable "unknown" state.)
-- **PARTIALLY_CLOSED** is intentionally mapped to Shipment (accepted product decision; a distinct
-  partial-delivery indicator is out of scope for this milestone).
+- DELIVERED/RECEIVED/REJECTED are display synonyms (not an FSM claim).
+- **Fallback set (each MUST render the Placed-anchored, no-step-lit stepper without throwing):**
+  `null, undefined, ''`, the non-lifecycle tokens `IN_TRANSIT, DISPATCHED, ACCEPTED, SENT, SCHEDULED,
+  OPEN, IN_PROGRESS, RESOLVED, INVOICED`, the priority tokens `HIGH, MEDIUM, LOW`, and **any** other
+  string not in the phase table. (Property: any input not in the phase table and not CANCELLED/REJECTED →
+  fallback render.)
+- **Distinct terminal marker:** CANCELLED/REJECTED MUST render a testable cancelled marker (a node with
+  selector `.ostep--cancelled` / red ✕) that the fallback render does **not** produce, so the two
+  no-progress states are DOM-distinguishable.
+- PARTIALLY_CLOSED → Shipment is an accepted product decision (a distinct partial indicator is out of scope).
 
-### R3 — Hub tab table (slug ↔ backing page id ↔ label ↔ ACL check)
-| Hub page id | Tab slug (URL) | Backing page id (renderer) | Label | Tab shown iff |
-|---|---|---|---|---|
-| `orders` | `queue` | `orders` (renderOrderQueue) | Queue | canAccessPage('orders') |
-| `orders` | `pipeline` | `pipeline` (renderPipeline) | Pipeline | canAccessPage('pipeline') |
-| `orders` | `due` | `consolidated_due` (renderConsolidatedDue) | Due Items | canAccessPage('consolidated_due') |
-| `my_orders` | `orders` | `my_orders` (renderMyOrders) | My Orders | canAccessPage('my_orders') |
-| `my_orders` | `tracking` | `track_delivery` (renderTrackDelivery) | Track Delivery | canAccessPage('track_delivery') |
-| `delivery` | `today` | `todays_schedule` | Today's Runs | delivTabsForRole |
-| `delivery` | `list` | `delivery` (renderDelivery) | Deliveries | delivTabsForRole |
-| `delivery` | `calendar` | `delivery_calendar` | Calendar | delivTabsForRole |
-| `delivery` | `routes` | `delivery_routes` | Routes | delivTabsForRole (super_admin only) |
+### R3 — Hub tab table (slug ↔ backing page id ↔ label ↔ gate); **default tab = first row per hub**
+| Hub page id | Tab slug | Backing page id | Label | Tab shown iff | Default? |
+|---|---|---|---|---|---|
+| `orders` | `queue` | `orders` (renderOrderQueue) | Queue | canAccessPage('orders') | ★ default |
+| `orders` | `pipeline` | `pipeline` | Pipeline | canAccessPage('pipeline') | |
+| `orders` | `due` | `consolidated_due` | Due Items | canAccessPage('consolidated_due') | |
+| `my_orders` | `orders` | `my_orders` (renderMyOrders) | My Orders | canAccessPage('my_orders') | ★ default |
+| `my_orders` | `tracking` | `track_delivery` | Track Delivery | canAccessPage('track_delivery') | |
+| `delivery` | `today` | `todays_schedule` | Today's Runs | **delivTabsForRole** | |
+| `delivery` | `list` | `delivery` (renderDelivery) | Deliveries | **delivTabsForRole** | ★ default |
+| `delivery` | `calendar` | `delivery_calendar` | Calendar | **delivTabsForRole** | |
+| `delivery` | `routes` | `delivery_routes` | Routes | **delivTabsForRole** (super_admin) | |
 
-Slugs are stable and lowercase. The router MUST resolve a `#hub/slug` **only** through this table.
-
-## 🛠️ User Stories & Workflows
-- **As** an ops_admin, **I want** Queue, Pipeline, and Due Items under one "Orders" surface **so that**
-  I stop hunting across three sidebar entries.
-- **As** any user, **I want** the current tab reflected in the URL **so that** I can reload, deep-link,
-  and use back/forward and land on the same tab.
-- **As** a delivery_manager, **I want** the Deliveries hub tabs addressable **without** widening access.
-- **As** a client_user, **I want** "My Orders" and "Track Delivery" in one place.
-- **As** any user viewing an order, **I want** its status as a five-phase stepper reading the same
-  everywhere.
-- **As** an ops_admin, **I want** the overdue Due-Items count on the Orders-hub tab **so that** folding
-  Due Items into a tab does not cost me the at-a-glance signal.
+- **Gate authority:** orders/my_orders tabs are gated by `canAccessPage(backing)`; **delivery tabs are
+  gated solely by `delivTabsForRole(role)`**. To keep the two consistent, a test MUST assert
+  `delivTabsForRole(role)` equals `{ tab | canAccessPage(backingPageId(tab)) }` for all 12 roles × the 4
+  delivery tabs (single effective authority, no divergence).
+- **Default tab** for a role = the first row (in table order) for that hub whose gate passes for the role.
+- The Queue tab's gate equals the Orders hub's own accessibility, so Queue is always shown when the hub
+  is open; AC12's 0-/1-accessible-tab branches are therefore exercised via the My Orders and Deliveries
+  hubs, not Orders.
 
 ## 📋 Acceptance Criteria
-*Each expected value is explicit (per R1–R3); a criterion the current code violates FAILS the milestone
-and is a fix, not a relabel.*
 
-### AC1 — Every hub tab is URL-addressable and survives reload
-- **Given** a role that can access the Orders hub
-- **When** it activates the Pipeline tab
-- **Then** `location.hash === '#orders/pipeline'`, and a full reload re-opens the Orders hub on Pipeline
-  (not the default tab, not the dashboard). Same for `#orders/queue`, `#orders/due`, `#my_orders/*`,
-  `#delivery/*` per R3.
+### AC1 — Hub tabs are URL-addressable; default landing is normalized
+Activating a tab sets `location.hash` to its `#hub/slug` (R3); reload re-opens that hub+tab. Landing on a
+hub without a tab (bare `#orders`, or `navigate('orders')`) MUST normalize the hash to `#hub/<defaultSlug>`
+(R3 default) via `replaceState`. Single-accessible-tab hubs (AC12) still normalize to their `#hub/slug`.
 
-### AC2 — Hash takes precedence over stored page on boot
-- **Given** `localStorage.sp_page` and `location.hash` disagree on reload (e.g. `sp_page='dashboard'`,
-  hash `#orders/pipeline`)
-- **When** the app boots
-- **Then** a present **and accessible** `location.hash` wins (page + tab); `sp_page` is used only when
-  the hash is empty/invalid/forbidden; the resolved landing is deterministic.
+### AC2 — Boot precedence: hash > sp_page, with defined fallbacks
+On boot: if `location.hash` names an **accessible** page (and, for a hub, resolves to an accessible tab
+per AC6) it wins (page + tab). Else `localStorage.sp_page`, if accessible, is used. Else `getDefaultPage(role)`.
+The resolved landing is deterministic for every combination.
 
-### AC3 — Back/forward flips tabs in place, including return-to-same-tab
-- **Given** a user toggles `#orders/queue` → `#orders/pipeline`
-- **When** they press Back
-- **Then** the hub returns to Queue. **And** given they later navigate away and press Back to a hash
-  whose tab equals the last value the app itself wrote, that Back **still** flips the tab (the echo
-  dedupe MUST be a one-shot token set immediately before `writeHash` and cleared on receipt of the
-  matching `hashchange`, per-hub — NOT an indefinitely-retained last-tab comparison).
+### AC3 — Back/forward flips tabs in place, including return-to-last-written-tab (**bug fix**)
+A programmatic self-write MUST NOT cause a tab-body re-render; **any** user-driven hashchange — including
+Back/forward returning to a hash whose tab equals the value the app last wrote itself — MUST flip the tab
+(assert: write tab A, navigate away, Back to a hash with tab A → the tab-body renderer fires / render
+token increments). The dedupe MUST also handle the **write-same-hash case**: when `writeHash` writes a
+hash equal to the current one, no `hashchange` fires, so the dedupe state MUST NOT be left "armed" in a
+way that swallows the next genuine navigation to that tab. *(This is a real defect in the shipped
+`_hubTabWritten` design; the one-shot-token phrasing is guidance, not a mandated data structure — the
+observable behavior above is the contract.)*
 
 ### AC4 — In-hub tab switch renders the body exactly once
-- **Given** an in-hub tab switch (click or back/forward)
-- **When** it occurs
-- **Then** the target tab-body renderer is invoked **exactly once** (assert via a render-count spy or a
-  `data-render-token` that increments by exactly 1), the hub-shell/tab-bar builder is **not** re-run,
-  and `#main-content`'s hub container DOM node is preserved (no full-page teardown).
+Measurement window = from the click/back event dispatch until the next animation frame settles. Within it:
+a **genuine** tab switch invokes the target tab-body renderer **exactly once**, does not re-run the
+hub-shell/tab-bar builder, and preserves the hub container DOM node; a **same-tab** hashchange (resolved
+tab already active) invokes the tab-body renderer **zero** additional times.
 
-### AC5 — Raw hash input obeys the same ACL + folding as navigate()
-- **Given** any role and a raw `location.hash` typed/shared/reloaded (not via `navigate()`)
-- **When** `onHashChange` or `initApp` boot resolves it
-- **Then** it applies the **identical** `canAccessPage` gate and `HUB_REDIRECT` folding as `navigate()`:
-  a hash to a folded page id (`#pipeline`, `#consolidated_due`, `#track_delivery`, delivery sub-pages)
-  is redirected into its hub tab and the hash normalized (never a bare standalone page); a hash to a
-  page/tab the role may not access is refused. Concretely: `delivery_exec` setting `#delivery/routes`
-  does **not** reach Routes.
+### AC5 — Raw hash obeys the role's real gate + folds folded pages (**bug check**)
+`onHashChange` and `initApp` boot apply the same access decision and `HUB_REDIRECT` folding as `navigate()`:
+for orders/my_orders that gate is `canAccessPage`; for delivery it is `delivTabsForRole` (R3). A raw hash
+to a folded page id — `#pipeline`, `#consolidated_due`, `#track_delivery`, `#todays_schedule`,
+`#delivery_calendar`, `#delivery_routes` — is redirected into its hub tab and the hash normalized via
+`replaceState` (never a bare standalone page, no history spam, no double tab-body render). A hash to a
+page/tab the role cannot access is refused per AC6. Concrete negative: `delivery_exec` setting
+`#delivery/routes` does **not** reach Routes (delivTabsForRole grants it only `list`).
 
-### AC6 — Malformed / unknown / forbidden hash has a defined safe landing
-- **Given** a hash like `#orders/`, `#orders/bogus`, `#nope/x`, wrong case, or a forbidden tab
-- **When** resolved
-- **Then** unknown page → dashboard; unknown/forbidden tab on a valid accessible hub → the hub's default
-  **accessible** tab; the hash is normalized via `replaceState`; `#main-content` is never left empty and
-  nothing throws. Slug matching is lowercase; a trailing slash is treated as no tab.
+### AC6 — Malformed / unknown / forbidden hash → defined safe landing
+Unknown page → dashboard. Unknown or forbidden **tab** on an accessible hub → that hub's **default
+accessible tab** (R3), hash normalized via `replaceState`. `#main-content` is never empty; nothing throws.
+Slugs are lowercase; a trailing slash means "no tab" (→ default tab).
 
-### AC7 — ACL parity against an independent baseline (not against ACTION_PAGES)
-- **Given** a **frozen fixture** capturing, per role, the pre-consolidation reachable-page set
-  (nav ∪ ACTION_PAGES snapshot, committed as test data) AND a hand-authored expected-access matrix
-- **When** `canAccessPage(role, pg)` is evaluated for all 12 roles (R1) × every `PAGE_MAP` page
-- **Then** every (role, page) reachable before consolidation is still reachable, no (role, page) is
-  reachable that the hand-authored matrix forbids, and explicit **negative** cases hold (e.g.
-  `delivery_exec` ∌ {calendar, routes, today}; client roles ∌ staff-only pages). `npm run test:smoke`
-  passes all existing checks (routes resolve, every `dataAct` target resolves, no off-nav quick action).
+### AC7 — ACL judged against a committed, hand-authored matrix (the sole authority)
+A **committed fixture** enumerates the expected access decision (allow/deny) for **every** (role ∈ R1,
+page ∈ `PAGE_MAP`) pair, hand-authored from product intent — **not** derived from `ACTION_PAGES` or
+`canAccessPage`. The test asserts live `canAccessPage(role,pg)` equals that matrix cell-by-cell. A
+separate lower-bound fixture, derived from the **pre-consolidation sidebar NAV** (menu-visible pages only,
+from git history — not `ACTION_PAGES`), asserts no role lost a page it could previously reach from its
+menu. Explicit negatives included in the matrix: `delivery_exec` ∌ {`delivery_calendar`, `delivery_routes`,
+`todays_schedule`}; client roles ∌ the staff-only page set {`orders`, `pipeline`, `consolidated_due`,
+`fulfilment`, `warehouse`, `procurement`, `vendors`, `clients`, `users`, `staff`, `zones`, `dc_billing`,
+`reports`, `exec_bi`}. `npm run test:smoke` still passes all its existing checks.
 
-### AC8 — No page id removed (against a frozen baseline, no stubs)
-- **Given** a committed fixture listing every **pre-consolidation** `PAGE_MAP` page id
-- **When** the consolidation is applied
-- **Then** current `PAGE_MAP` ⊇ that frozen set; each id resolves to a function; and each **folded** id's
-  renderer produces real content or an intentional redirect (**not** an empty stub). Untouched navs
-  (procurement, warehouse, finance, vendor, vendor_user) are byte-for-byte unchanged.
+### AC8 — No page id removed; untouched navs unchanged (against committed fixtures)
+A committed fixture lists every **pre-consolidation** `PAGE_MAP` page id; the test asserts current
+`PAGE_MAP` ⊇ that set and each id resolves to a function. Each **folded** id's renderer, given a seeded
+fixture, MUST inject its primary content container (a named selector: pipeline board table, due-items
+table, tracking list) or perform a documented redirect — asserted, so an empty stub fails. The `NAV`
+arrays for the five untouched profiles (procurement, warehouse, finance, vendor, vendor_user) MUST
+deep-equal a committed snapshot of their `{id,label}` structures (not a byte diff). (`vendor_user` is both
+a role and a nav profile; the fixture covers the nav profile.)
 
-### AC9 — Phase stepper maps every status per R2, with a defined fallback
-- **Given** `phaseStepper(status)` iterated over the full R2 status set **plus** {null, undefined, '',
-  'IN_TRANSIT', 'DISPATCHED', 'ACCEPTED', 'RESOLVED', 'INVOICED'}
-- **Then** each maps to its R2 phase / cancelled marker; every fallback input renders the Placed-anchored
-  no-progress stepper without throwing. Test asserts each input by name.
+### AC9 — Phase stepper mapped + exhaustive fallback + distinct cancelled marker
+`phaseStepper(status)` is asserted for **every** status in R2's phase table (by name → its phase), for
+CANCELLED/REJECTED (→ the `.ostep--cancelled` marker), and for the **entire** R2 fallback set (null,
+undefined, '', IN_TRANSIT, DISPATCHED, ACCEPTED, SENT, SCHEDULED, OPEN, IN_PROGRESS, RESOLVED, INVOICED,
+HIGH, MEDIUM, LOW, and one never-seen random string) → Placed-anchored no-progress render, no throw, and
+NOT the cancelled marker.
 
-### AC10 — One stepper, reused; no bespoke bar remains (enumerated)
-- **Given** the enumerated set of order-progress surfaces {client My Orders cards (`renderMyOrders`),
-  and any other surface that renders order lifecycle progress}
-- **Then** each uses the shared `phaseStepper`; a grep/AST assertion confirms the old bespoke
-  `ORDER_STEPS`/5-stage-bar constructs are **absent** from `public/app.*.js`.
+### AC10 — One stepper, reused; enumerated surfaces (positive + negative checks)
+Closed list of order-progress surfaces that MUST call `phaseStepper` (grepped now): `renderMyOrders`
+(client cards); plus any surface the pre-work grep finds rendering a lifecycle progress bar. A test
+asserts each listed surface calls `phaseStepper` (positive), and that the concrete bespoke tokens/markers
+(`ORDER_STEPS`, and the inline 5-`div` progress-bar template) are absent from `public/app.*.js`
+(negative). Renaming the identifier does not satisfy it — the positive assertion is primary.
 
 ### AC11 — Order Queue phase filter preserves exact-status deep links
-- **Given** the Order Queue phase-stepper filter
-- **When** `oqGoto('PENDING_APPROVAL')` / `openPendingApprovals` runs
-- **Then** the table filters to that exact status **and** its phase ("Approved") is highlighted; clicking
-  a phase filters to all statuses in that phase (R2); an "All" step clears the filter.
+`oqGoto('PENDING_APPROVAL')` / `openPendingApprovals` filters the table to that exact status and highlights
+its phase (Approved); clicking a phase filters to all statuses in that phase (R2); an "All" step clears.
 
-### AC12 — Orders hub tab set is role-correct (0/1/≥2 rule)
-- **Given** super_admin / ops_admin
-- **Then** the Orders hub shows Queue · Pipeline · Due Items. **General rule:** a hub shows only tabs
-  whose backing page the role `canAccessPage` (R3); with **≥2** accessible tabs → tab bar; **exactly 1**
-  → that tab's renderer directly, no bar; **0** → the hub is inaccessible (`canAccessPage(hub)` false →
-  redirect to dashboard).
+### AC12 — Hub tab set is role-correct (0 / 1 / ≥2 rule)
+A hub shows only tabs whose gate passes for the role (R3). **≥2** accessible → tab bar; **exactly 1** →
+that tab's renderer directly, no bar, still hash-normalized (AC1); **0 accessible tabs** → treat the hub as
+inaccessible → redirect to dashboard (this is distinct from `canAccessPage(hub)`; a hub whose page id is
+in nav but with zero accessible tabs still lands on dashboard/empty-state, not a broken bar).
 
 ### AC13 — My Orders hub tab set is role-correct
-- **Given** client_admin / client_approver / client_user
-- **Then** the My Orders hub shows Orders · Track Delivery **only for tabs the role can access** (R3, AC12
-  rule); `track_delivery` is off-sidebar, reachable via `ACTION_PAGES`, folded via `HUB_REDIRECT`. A
-  client role lacking `canAccessPage('track_delivery')` MUST NOT be shown the Tracking tab.
+The My Orders hub shows Orders and Track Delivery **only for tabs the role's gate passes** (R3, AC12). A
+client role lacking `canAccessPage('track_delivery')` is NOT shown the Tracking tab. `track_delivery` is
+off-sidebar, reachable via `ACTION_PAGES`, folded via `HUB_REDIRECT`.
 
-### AC14 — Deliveries hub addressable, access unchanged
-- **Given** the Deliveries hub
-- **Then** its tabs are addressable per R3, honor deep links + back/forward, and the role→tab set is
-  exactly what `delivTabsForRole` granted before (delivery_exec sees only `list`).
+### AC14 — Deliveries hub addressable; access via delivTabsForRole unchanged
+Deliveries tabs are addressable per R3, honor deep links + back/forward, and each role's tab set equals
+`delivTabsForRole(role)` exactly as before (delivery_exec → only `list`). Consistency with AC7's authority
+is asserted per R3's gate-authority rule.
 
-### AC15 — Due Items hub-tab count badge (approved enhancement)
-- **Definition:** the badge value = **count of due items that are overdue**, computed from the same
-  data the pre-consolidation sidebar `!` badge used (the `/nav-badges` / due-items signal); it MUST
-  equal that pre-consolidation value for the same data. (If that source is a boolean presence flag, the
-  count comes from the due-items dataset filtered to overdue.)
-- **Given** the Orders hub for a role that can see Due Items, and a deterministic fixture with N>0
-  overdue due items
-- **Then** the "Due Items" tab renders a visible badge showing N **within the same async cycle that
-  loads the badge data** (it MUST NOT block tab render, and MUST eventually populate — a permanently
-  absent badge is a FAIL). Counts > 99 display as "99+". `count === 0` → **badge absent**.
-  Data **unavailable / NaN / negative** → a distinct non-count state (no badge, treated as unknown —
-  NOT rendered as 0). The badge MUST NOT break the smoke `dataAct`/route invariants.
+### AC15 — Due Items hub-tab count badge
+- **Value:** `N = |{ due item : overdue }|`, where **overdue** = the due-items dataset row is past its
+  due date (the same `days_overdue > 0` / due-date-before-today predicate and field the Due Items page
+  itself uses), computed from the `/nav-badges` or `/reports/consolidated-due` signal. (The old sidebar
+  `!` was a presence flag with no count, so there is no legacy number to equal — this definition stands
+  on its own.)
+- **Render states (exact DOM):** the badge **element** is present in the tab-bar DOM synchronously at hub
+  render (may start empty/hidden) and MUST NOT delay tab-body render. When the data promise the test
+  awaits settles with `N > 0`, the badge shows `N` within one animation frame; **`N > 99` shows "99+"**;
+  **`N === 0` → badge hidden/absent**; **data unavailable / NaN / negative → a distinct unknown state**
+  (`data-badge-state="unknown"`, no number — observably different from the zero state). "Permanently
+  absent is a FAIL" applies **only** to the `N > 0`-loadable case. The badge must not break the smoke
+  `dataAct`/route invariants.
 
-### AC16 — Logout clears ALL addressable-tab state
-- **Given** a user on any hub hash (`#orders/pipeline`, `#delivery/routes`, `#my_orders/tracking`, …)
-- **When** they log out
-- **Then** `doLogout` resets to a hash-free URL via `history.replaceState(null,'',location.pathname
-  + location.search)` for **any** current hash (asserted `location.hash === ''`), fires no navigation
-  while logged out, and clears `localStorage.sp_page` (already done today) so a fresh login on the same
-  browser never deep-links into the previous user's surface.
+### AC16 — Logout clears all addressable-tab state
+`doLogout` resets to a hash-free URL via `history.replaceState(null,'',location.pathname+location.search)`
+for **any** current hash (assert `location.hash === ''`), fires no navigation while logged out, and clears
+`localStorage.sp_page` (already done today).
 
-## 🚨 Constraints & Edge Cases
-- **No-build SPA:** browser-native ES in `public/app.NN-*.js`; new click handlers are top-level
-  `function` declarations (window globals for `dataAct` + smoke).
-- **Page-id invariant:** never delete a page id; fold into a hub tab + `ACTION_PAGES`.
-- **Smoke is a gate but not the ACL oracle:** `canAccessPage`'s correctness is judged by AC7's
-  independent matrix/baseline, not by the self-referential `nav ∪ ACTION_PAGES` identity.
-- **Nested header (DECISION — keep as-is):** hub tab bodies reuse full renderers with their own
-  `pageHeader`; the stacked header is accepted for parity with the Deliveries hub. Out of scope to change.
-- **Non-functional gate:** `npm run test:smoke` green and `tsc --noEmit` clean are release conditions.
-- **Roles untouched:** procurement, warehouse, finance, vendor, vendor_user navs unchanged (AC8).
-
-## 🎨 UI/UX Mockups
-```
-Orders hub (super_admin / ops_admin)          URL: #orders/queue | #orders/pipeline | #orders/due
-┌───────────────────────────────────────────────┐
-│ [ Queue ]  [ Pipeline ]  [ Due Items ‹99+› ]   │  ‹N› = overdue count badge (absent when 0)
-├───────────────────────────────────────────────┤
-│  active tab body = existing renderer            │
-│  Queue: ● All — 📝 Placed — ✅ Approved — 📦 …   │  phase-stepper filter
-└───────────────────────────────────────────────┘
-Phase stepper: 📝 Placed ─✓─ ✅ Approved ─●─ 📦 Fulfilment ─○─ 🚚 Shipment ─○─ 🏁 Delivered
-  (CANCELLED/REJECTED → red ✕ terminal; unknown/null → Placed-anchored, no step lit)
-```
+## 🚨 Constraints
+- No-build SPA; new handlers are top-level `function` declarations (window globals for `dataAct` + smoke).
+- Page-id invariant: never delete a page id; fold into a hub tab + `ACTION_PAGES`.
+- Nested header (kept as-is; out of scope). Non-functional gate: `npm run test:smoke` green + `tsc
+  --noEmit` clean. Untouched navs unchanged (AC8).
 
 ## Out of scope
-- Backend/API changes. Suppressing hub-hosted renderers' own headers. Re-adding a sidebar affordance
-  for the due count. A distinct PARTIALLY_CLOSED partial-delivery indicator. New consolidation beyond
-  the four named items.
+Backend/API changes; suppressing hub-hosted renderers' headers; a sidebar due-count affordance; a distinct
+PARTIALLY_CLOSED indicator; consolidation beyond the four named items.
