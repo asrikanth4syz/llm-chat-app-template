@@ -1365,7 +1365,9 @@ async function renderOrderQueue(el) {
   APP._oqTableHtml = oqTableHtml;
   APP._oqKpiHtml   = oqKpiHtml;
   APP._oqMonthPickerHtml = monthPickerHtml;
-  if (!APP._oqStatusTab) APP._oqStatusTab = 'All';
+  // Restore the tab from the URL hash (deep-link / refresh), else keep in-memory.
+  APP._oqStatusTab = getTabHash('orders') || APP._oqStatusTab || 'All';
+  setTabHash('orders', APP._oqStatusTab);
 
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
@@ -1457,6 +1459,7 @@ function switchOQMainTab(tab) {
 
 function switchOQTab(tab) {
   APP._oqStatusTab = tab;
+  setTabHash('orders', tab);
   const tabsEl = document.getElementById('oq-tabs');
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');

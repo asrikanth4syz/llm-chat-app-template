@@ -783,7 +783,9 @@ async function renderDelivery(el) {
   </div>`;
 
   APP._dcData = dcs;
-  APP._dcTab  = APP._dcTab || 'scheduled';
+  // Restore the tab from the URL hash (deep-link / refresh), else in-memory (G2).
+  APP._dcTab  = getTabHash('delivery') || APP._dcTab || 'scheduled';
+  setTabHash('delivery', APP._dcTab);
 
   function tabsHtml(active) {
     const podPending = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
@@ -982,6 +984,7 @@ async function renderDelivery(el) {
 
 async function switchDeliveryTab(tab, btn) {
   APP._dcTab = tab;
+  setTabHash('delivery', tab);
   document.querySelectorAll('#dc-tabs .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
 

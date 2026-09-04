@@ -623,6 +623,10 @@ function initApp() {
   // navigate() ACL guard redirects if the saved page isn't allowed for this role).
   let startPage = getDefaultPage();
   try { const p = localStorage.getItem('sp_page'); if (p && canAccessPage(p)) startPage = p; } catch (_) {}
+  // Cold deep-link: #orders=… / #delivery=… opens that hub directly; the hub
+  // render then restores the exact tab from the same hash (G2 addressable tabs).
+  const hashPage = (location.hash.match(/^#([a-z_]+)=/) || [])[1];
+  if (hashPage && HUB_PAGES.includes(hashPage) && canAccessPage(hashPage)) startPage = hashPage;
   navigate(startPage);
   loadServerCart();        // reconcile with the server-saved draft cart (cross-device)
   loadNotifications();
@@ -1093,9 +1097,29 @@ const PAGE_MAP = {
   zones: 'renderZonesPage',
 };
 
+// ── Addressable in-hub tabs (Phase 2 · G2) ──────────────────────────────────
+// A hub page reflects its active tab in the URL hash (#page=tab) via replaceState,
+// so a refresh keeps the tab and the URL is shareable/deep-linkable. Deliberately
+// replaceState (not a history push) — no back-button churn, no hashchange loop.
+const HUB_PAGES = ['orders', 'delivery'];
+function setTabHash(page, tab) {
+  if (!tab) return;
+  const hh = '#' + page + '=' + tab;
+  if (location.hash !== hh) { try { history.replaceState(null, '', hh); } catch (_) {} }
+}
+function getTabHash(page) {
+  const hash = location.hash || '', pre = '#' + page + '=';
+  return hash.startsWith(pre) ? decodeURIComponent(hash.slice(pre.length)) : '';
+}
+function syncPageHash(page) {
+  if (HUB_PAGES.includes(page)) return;      // hub render manages its own tab hash
+  if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch (_) {} }
+}
+
 function navigate(page) {
   // ACL guard: never render a page outside the current role's navigation.
   if (!canAccessPage(page)) { showToast('That section is not available for your role', 'info'); page = getDefaultPage(); }
+  syncPageHash(page);
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
   APP.page = page;
