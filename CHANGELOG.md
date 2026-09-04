@@ -548,3 +548,11 @@ After deploying `0008_user_client_link.sql`, existing client users must **log ou
 - `orderTypeBadge()` helper: Regular=blue, Urgent=red, Ad-Hoc=amber
 - Badge shown in: Order Queue table, My Orders table, My Orders cards, Order Detail modal
 - Urgent orders highlight row amber in Order Queue table
+
+### Phase 2 — Consolidation
+- **Addressable tabs (hash routing):** the URL hash is now the source of truth for the current page and, on tabbed hubs, the active tab (`#orders/pipeline`, `#delivery/calendar`, `#my_orders/tracking`). Deep links and browser back/forward work; `navigate(page, { tab })` keeps the hash in sync. Core helpers: `parseHash`, `writeHash`, `routeTab`, `registerHub`, `onHashChange`.
+- **Phase-based status stepper:** shared `phaseStepper(status)` component + `ORDER_PHASES` map grouping the 14 FSM statuses into five phases (Placed → Approved → Fulfilment → Shipment → Delivered), with a Cancelled terminal marker. Single source of truth reused across surfaces.
+- **Merged Orders surfaces:** the `orders` page is now a hub with addressable tabs **Queue · Pipeline · Due Items** (`renderOrdersHub`). Pipeline and Due Items left the sidebar and fold in as tabs; they stay reachable off-nav via `ACTION_PAGES`, and shortcuts/deep links redirect into the hub (`HUB_REDIRECT`). The Order Queue's flat 14-status strip was replaced by a phase-stepper filter (exact-status deep links like `oqGoto` still work — they light up their phase).
+- **Merged Deliveries hub:** the existing Deliveries hub (Today · Deliveries · Calendar · Routes) tabs are now addressable (`#delivery/<tab>`) and honour deep links / back-forward.
+- **Merged client order surfaces:** client **My Orders** + **Track Delivery** combined into one `renderMyOrdersHub` (tabs Orders · Tracking). Client order cards now use the shared phase stepper instead of a bespoke 5-stage bar.
+- No page ids were removed, so ACL, quick actions and the frontend smoke test are unaffected.

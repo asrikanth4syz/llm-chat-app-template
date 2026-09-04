@@ -168,9 +168,10 @@ const NAV = {
     { id:'dashboard',   label:'Home', icon:iconHome, badge:null },
     { section:'Today & Orders' },
     { id:'next_actions',        label:'Today',        icon:iconToday,   badge:null },
-    { id:'pipeline',            label:'Pipeline',     icon:iconGauge,   badge:null },
+    // Phase 2: Pipeline and Due Items are now addressable tabs inside the Orders
+    // hub (#orders/pipeline, #orders/due). They stay reachable off-nav via
+    // ACTION_PAGES so existing deep links / shortcuts keep working.
     { id:'orders',              label:'Orders',       icon:iconOrders,  badge:'!' },
-    { id:'consolidated_due',    label:'Due Items',    icon:iconReceipt, badge:'!' },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,   badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery, badge:null },
@@ -208,9 +209,8 @@ const NAV = {
     { id:'dashboard',           label:'Home',             icon:iconHome,      badge:null },
     { section:'Today & Orders' },
     { id:'next_actions',        label:'Today',            icon:iconToday,     badge:null },
-    { id:'pipeline',            label:'Pipeline',         icon:iconGauge,     badge:null },
+    // Phase 2: Pipeline + Due Items fold into the Orders hub (addressable tabs).
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
-    { id:'consolidated_due',    label:'Due Items',        icon:iconReceipt,   badge:'!' },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,    badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
@@ -267,8 +267,8 @@ const NAV = {
     { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { section:'Ordering' },
     { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
+    // Phase 2: "My Orders" is now a hub with a Track Delivery tab (#my_orders/tracking).
     { id:'my_orders',      label:'My Orders',      icon:iconOrders,    badge:null },
-    { id:'track_delivery', label:'Track Delivery', icon:iconDelivery,  badge:null },
     { id:'approvals',      label:'Approvals',      icon:iconApprove,   badge:null },
     { section:'My Store' },
     { id:'my_inventory',   label:'My Inventory',   icon:iconInventory, badge:null },
@@ -286,7 +286,6 @@ const NAV = {
     { section:'Ordering' },
     { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
     { id:'my_orders',     label:'All Orders',     icon:iconOrders,   badge:null },
-    { id:'track_delivery',label:'Track Delivery', icon:iconDelivery, badge:null },
   ],
   client_user: [
     { section:'Home' },
@@ -294,7 +293,6 @@ const NAV = {
     { section:'Ordering' },
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
-    { id:'track_delivery',label:'Track Delivery',icon:iconDelivery,badge:null },
     { section:'My Store' },
     { id:'my_inventory', label:'My Inventory', icon:iconInventory, badge:null },
   ],
@@ -464,6 +462,9 @@ function doLogout() {
   document.getElementById('login-btn').querySelector('span').textContent = 'Sign In';
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
+  // Drop any addressable-tab hash so a fresh login doesn't deep-link the last
+  // page; replaceState avoids firing hashchange while logged out.
+  try { if (location.hash) history.replaceState(null, '', location.pathname + location.search); } catch (_) {}
 }
 
 async function tryAutoLogin() {
@@ -564,7 +565,13 @@ function initApp() {
   // navigate() ACL guard redirects if the saved page isn't allowed for this role).
   let startPage = getDefaultPage();
   try { const p = localStorage.getItem('sp_page'); if (p && canAccessPage(p)) startPage = p; } catch (_) {}
-  navigate(startPage);
+  // A URL hash (deep link / refresh on an addressable tab) wins over the stored
+  // page so the tab it names opens directly.
+  const { page: hashPage, tab: hashTab } = parseHash();
+  if (hashPage && canAccessPage(hashPage)) navigate(hashPage, { tab: hashTab, fromHash: true });
+  else navigate(startPage);
+  // Back/forward and manual hash edits re-route (idempotent: same listener ref).
+  window.addEventListener('hashchange', onHashChange);
   loadServerCart();        // reconcile with the server-saved draft cart (cross-device)
   loadNotifications();
   startNotificationPolling();
@@ -730,6 +737,13 @@ function canAccessPage(page) {
 const ACTION_PAGES = {
   settings:    ['super_admin', 'ops_admin'],
   place_order: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'],
+  // Phase 2: Pipeline & Due Items are now tabs inside the "Orders" hub (page id
+  // `orders`). They stay reachable off-nav so dashboard/report shortcuts and
+  // #orders/pipeline · #orders/due deep links keep working for these roles.
+  pipeline:         ['super_admin', 'ops_admin'],
+  consolidated_due: ['super_admin', 'ops_admin'],
+  // Phase 2: Track Delivery is now a tab inside the client "My Orders" hub.
+  track_delivery:   ['client_admin', 'client_approver', 'client_user'],
   // Phase 3: the delivery sub-pages are now tabs inside the "Deliveries" hub
   // (page id `delivery`). They stay reachable off-nav so existing deep links
   // (dashboard shortcuts, post-action redirects) keep working for these roles.
@@ -978,9 +992,9 @@ function closeMobileSidebar() {
 const PAGE_MAP = {
   dashboard: 'renderDashboard',
   place_order: 'renderPlaceOrder',
-  my_orders: 'renderMyOrders',
+  my_orders: 'renderMyOrdersHub',
   track_delivery: 'renderTrackDelivery',
-  orders: 'renderOrderQueue',
+  orders: 'renderOrdersHub',
   dc_billing: 'renderDCBilling',
   inventory: 'renderInventory',
   vendors: 'renderVendors',
@@ -1023,12 +1037,33 @@ const PAGE_MAP = {
   zones: 'renderZonesPage',
 };
 
-function navigate(page) {
+// Phase 2: pages folded into a hub redirect to the hub on their tab, so every
+// existing shortcut / deep link (dashboard tiles, "Open Pipeline →", post-action
+// redirects) lands inside the merged surface instead of a bare standalone page.
+const HUB_REDIRECT = {
+  pipeline:          { page: 'orders',   tab: 'pipeline' },
+  consolidated_due:  { page: 'orders',    tab: 'due' },
+  track_delivery:    { page: 'my_orders', tab: 'tracking' },
+  todays_schedule:   { page: 'delivery',  tab: 'today' },
+  delivery_calendar: { page: 'delivery', tab: 'calendar' },
+  delivery_routes:   { page: 'delivery', tab: 'routes' },
+};
+function navigate(page, opts = {}) {
+  // Fold a folded page into its hub only when this role may reach both the hub
+  // and the sub-page (so the hub never widens access beyond the old menus).
+  const rd = HUB_REDIRECT[page];
+  if (rd && canAccessPage(rd.page) && canAccessPage(page)) { page = rd.page; opts = { ...opts, tab: rd.tab }; }
   // ACL guard: never render a page outside the current role's navigation.
-  if (!canAccessPage(page)) { showToast('That section is not available for your role', 'info'); page = getDefaultPage(); }
+  if (!canAccessPage(page)) { showToast('That section is not available for your role', 'info'); page = getDefaultPage(); opts = {}; }
   Object.values(APP.charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   APP.charts = {};
   APP.page = page;
+  // Desired initial tab for a tabbed-hub page (Orders / Deliveries). The hub
+  // renderer reads this (or the URL hash) to pick which tab to open with.
+  APP._navTab = opts.tab || null;
+  // Keep the URL hash in sync so tabs are addressable and links are shareable —
+  // unless we arrived here *because* the hash changed (avoids a feedback loop).
+  if (!opts.fromHash) writeHash(page, opts.tab || null);
   // Remember the current page so a browser reload returns here, not the dashboard.
   try { localStorage.setItem('sp_page', page); } catch (_) {}
 
@@ -1051,6 +1086,125 @@ function navigate(page) {
   ensureClientFAB();
   closeMobileSidebar();
   updateNavBadges(); // keep counts fresh as staff work (throttled to ~25s)
+}
+
+/* ── Addressable tabs (hash routing) ────────────────────────
+   The URL hash is the source of truth for the current page and, for tabbed
+   hubs, the active tab: "#orders" or "#orders/pipeline". A hub registers an
+   in-place tab switcher with registerHub(page, fn) so back/forward and hash
+   edits flip the tab without a full re-render; navigate() writes the hash so
+   deep links stay shareable. Our own hash writes are remembered per page
+   (_hubTabWritten) so the hashchange they fire is ignored — only genuine
+   back/forward or manual edits flip a tab. */
+const APP_HUBS = {};            // page id -> (tabKey) => void  (in-place switch)
+const _hubTabWritten = {};      // page id -> last tab we wrote to the hash ourselves
+function registerHub(page, switchFn) { APP_HUBS[page] = switchFn; }
+
+function parseHash() {
+  const raw = (location.hash || '').replace(/^#\/?/, '');
+  if (!raw) return { page: null, tab: null };
+  const [page, tab] = raw.split('/');
+  return { page: page || null, tab: tab || null };
+}
+// Write the hash and remember the tab we set, so the hashchange event our own
+// write fires is recognised as self-generated (no timing races): onHashChange
+// only reacts when the hash names a tab that differs from what we last wrote.
+function writeHash(page, tab) {
+  _hubTabWritten[page] = tab || null;
+  const want = '#' + page + (tab ? '/' + tab : '');
+  if (location.hash !== want) location.hash = want;
+}
+// The tab a hub should open with: the hash's tab if this hub knows it, else the
+// pending nav tab, else the fallback. Hubs call this at render time.
+function routeTab(page, allowed, fallback) {
+  const { page: hp, tab } = parseHash();
+  if (hp === page && tab && allowed.includes(tab)) return tab;
+  if (APP._navTab && allowed.includes(APP._navTab)) return APP._navTab;
+  return fallback;
+}
+function onHashChange() {
+  if (!APP.user) return;
+  const { page, tab } = parseHash();
+  if (!page || !canAccessPage(page)) return;
+  if (page !== APP.page) { navigate(page, { tab, fromHash: true }); return; }
+  // Same page: flip the hub tab in place — but ignore the echo of our own write
+  // (tab already equals what we last set), so only real back/forward acts.
+  const sw = APP_HUBS[page];
+  if (sw && tab && _hubTabWritten[page] !== tab) sw(tab);
+}
+
+/* Shared tab-bar styling for addressable hubs (Orders, etc.). */
+let _hubCssDone = false;
+function injectHubCss() {
+  if (_hubCssDone) return; _hubCssDone = true;
+  const css = `
+  .hub-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .hub-tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;
+    font-size:.9rem;font-weight:700;color:var(--text-muted);padding:9px 14px;border-radius:8px 8px 0 0;white-space:nowrap}
+  .hub-tab:hover{color:var(--text,#15303d);background:var(--bg,#f4f7f9)}
+  .hub-tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+  .hub-tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px}`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+/* ── Order lifecycle phases (phase-based status stepper) ─────
+   The order FSM has ~14 statuses; operators think in five phases. This is the
+   single source of truth mapping each status to a phase — used by the shared
+   stepper component and the Orders-queue phase filter. */
+const ORDER_PHASES = [
+  { key:'placed',     label:'Placed',     icon:'📝', statuses:['DRAFT','PENDING_PRICING','SUBMITTED'] },
+  { key:'approved',   label:'Approved',   icon:'✅', statuses:['PENDING_APPROVAL','APPROVED','ACKNOWLEDGED'] },
+  { key:'fulfilment', label:'Fulfilment', icon:'📦', statuses:['INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'] },
+  { key:'shipment',   label:'Shipment',   icon:'🚚', statuses:['IN_SHIPMENT','PARTIALLY_CLOSED'] },
+  { key:'delivered',  label:'Delivered',  icon:'🏁', statuses:['CLOSED','DELIVERED','RECEIVED'] },
+];
+function orderPhaseIndex(status) {
+  if (status === 'CANCELLED' || status === 'REJECTED') return -1;
+  return ORDER_PHASES.findIndex(p => p.statuses.includes(status));
+}
+function orderPhaseKey(status) { const i = orderPhaseIndex(status); return i < 0 ? null : ORDER_PHASES[i].key; }
+
+let _stepperCssDone = false;
+function injectStepperCss() {
+  if (_stepperCssDone) return; _stepperCssDone = true;
+  const css = `
+  .ostep{display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
+  .ostep-node{display:flex;flex-direction:column;align-items:center;gap:5px;flex:0 0 auto;min-width:64px;text-align:center}
+  .ostep-dot{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:.85rem;border:2px solid var(--border);background:var(--surface,#fff);color:var(--text-muted);line-height:1}
+  .ostep-lbl{font-size:.68rem;font-weight:700;color:var(--text-muted);white-space:nowrap}
+  .ostep-node.done .ostep-dot{background:var(--success,#10b981);border-color:var(--success,#10b981);color:#fff}
+  .ostep-node.done .ostep-lbl{color:var(--success,#10b981)}
+  .ostep-node.current .ostep-dot{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 0 0 4px color-mix(in srgb,var(--primary) 22%,transparent)}
+  .ostep-node.current .ostep-lbl{color:var(--primary)}
+  .ostep-bar{flex:1 1 18px;height:3px;min-width:16px;background:var(--border);border-radius:2px;margin:0 -2px 18px}
+  .ostep-bar.done{background:var(--success,#10b981)}
+  .ostep--compact .ostep-node{min-width:52px}
+  .ostep--compact .ostep-dot{width:24px;height:24px;font-size:.72rem}
+  .ostep--cancelled .ostep-node.cancelled .ostep-dot{background:var(--danger,#ef4444);border-color:var(--danger,#ef4444);color:#fff}
+  .ostep--cancelled .ostep-node.cancelled .ostep-lbl{color:var(--danger,#ef4444)}`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+// Reusable horizontal stepper for an order's lifecycle phase. `status` is any
+// FSM status; CANCELLED/REJECTED render a red terminal marker.
+function phaseStepper(status, opts = {}) {
+  injectStepperCss();
+  const cancelled = (status === 'CANCELLED' || status === 'REJECTED');
+  const cur = orderPhaseIndex(status);
+  return `<div class="ostep${opts.compact ? ' ostep--compact' : ''}${cancelled ? ' ostep--cancelled' : ''}" role="list" aria-label="Order progress">
+    ${ORDER_PHASES.map((p, i) => {
+      const state = cancelled ? (i === 0 ? 'cancelled' : 'todo')
+                  : i < cur ? 'done' : i === cur ? 'current' : 'todo';
+      const dot = cancelled && i === 0 ? '✕' : state === 'done' ? '✓' : p.icon;
+      const node = `<div class="ostep-node ${state}" role="listitem"${state === 'current' ? ' aria-current="step"' : ''}>
+        <span class="ostep-dot">${dot}</span>
+        <span class="ostep-lbl">${cancelled && i === 0 ? 'Cancelled' : p.label}</span>
+      </div>`;
+      const bar = i < ORDER_PHASES.length - 1
+        ? `<span class="ostep-bar ${(!cancelled && i < cur) ? 'done' : ''}"></span>` : '';
+      return node + bar;
+    }).join('')}
+  </div>`;
 }
 
 /* ── Persistent quick-action FAB (client roles) ───────────── */
