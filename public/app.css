@@ -1102,3 +1102,16 @@ details.card > summary { user-select: none; }
 .cmdk-foot kbd{font-family:ui-monospace,monospace;font-weight:600;background:var(--surface-2);
   border:1px solid var(--border);border-radius:4px;padding:0 5px;margin-right:4px}
 @media (prefers-reduced-motion:reduce){.cmdk-ov{animation:none}}
+
+/* ── Order Queue phase stepper (Phase 2 · G1) ── */
+.oq-phase .oq-step-n{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;
+  background:var(--surface-2);color:var(--text-muted);font-size:.62rem;font-weight:700;margin-right:6px;
+  vertical-align:middle;line-height:1}
+.oq-phase.active .oq-step-n{background:var(--primary);color:#fff}
+.oq-substatus{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}
+.oq-chip{border:1px solid var(--border);background:var(--surface);color:var(--text-muted);border-radius:20px;
+  padding:4px 11px;font-size:.74rem;font-weight:600;cursor:pointer;text-transform:capitalize;line-height:1.4}
+.oq-chip:hover{border-color:var(--primary);color:var(--primary)}
+.oq-chip.active{background:rgba(13,148,136,.14);border-color:var(--primary);color:#0a6b60;font-weight:700}
+:root[data-theme="dark"] .oq-chip.active{color:#5eead4;background:rgba(45,212,191,.16)}
+.oq-chip b{font-weight:700;margin-left:3px;opacity:.85}

@@ -1177,6 +1177,31 @@ async function renderTrackDelivery(el) {
 /* ============================================================
    ORDER QUEUE (Ops)
    ============================================================ */
+// The 13 raw FSM states collapse into 5 human-readable phases. The Order Queue's
+// primary tabs are these phases (a stepper); selecting one reveals its exact
+// sub-statuses for drill-down. A tab value is 'All', a 'phase:*' key, or an exact
+// status (deep-links like openPendingApprovals still pass an exact status).
+const OQ_PHASES = [
+  { key:'phase:draft',      label:'Draft',      states:['PENDING_PRICING','SUBMITTED'] },
+  { key:'phase:approval',   label:'Approval',   states:['PENDING_APPROVAL','APPROVED'] },
+  { key:'phase:fulfilment', label:'Fulfilment', states:['ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK'] },
+  { key:'phase:delivery',   label:'Delivery',   states:['IN_SHIPMENT','PARTIALLY_CLOSED'] },
+  { key:'phase:closed',     label:'Closed',     states:['CLOSED','CANCELLED'] },
+];
+// Which phase a tab selection belongs to (for highlighting the active step).
+function oqPhaseFor(sel) {
+  if (!sel || sel === 'All') return 'All';
+  if (sel.startsWith('phase:')) return sel;
+  const p = OQ_PHASES.find(p => p.states.includes(sel));
+  return p ? p.key : 'All';
+}
+// The set of statuses a tab selects (null = every status).
+function oqStatesForTab(tab) {
+  if (!tab || tab === 'All') return null;
+  if (tab.startsWith('phase:')) { const p = OQ_PHASES.find(p => p.key === tab); return p ? p.states : []; }
+  return [tab];
+}
+
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
@@ -1205,7 +1230,6 @@ async function renderOrderQueue(el) {
     return res;
   }
 
-  const STATUS_TABS = ['All','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
@@ -1282,19 +1306,33 @@ async function renderOrderQueue(el) {
 
   function oqTabsHtml() {
     const fOrders = filteredOrders();
-    return `<div class="tabs" style="margin-bottom:0;flex-wrap:wrap">
-      ${STATUS_TABS.map(s=>{
-        const cnt = s==='All' ? fOrders.length : fOrders.filter(o=>o.status===s).length;
-        return `<button class="tab-btn${APP._oqStatusTab===s?' active':''}" ${dataAct('switchOQTab', s)}>
-          ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
-        </button>`;
-      }).join('')}
+    const sel = APP._oqStatusTab || 'All';
+    const activePhase = oqPhaseFor(sel);
+    const cnt = states => fOrders.filter(o => states.includes(o.status)).length;
+    // Primary row: All + the 5 lifecycle phases as a numbered stepper.
+    const primary = `<div class="tabs oq-phases" style="margin-bottom:0;flex-wrap:wrap">
+      <button class="tab-btn${sel==='All'?' active':''}" ${dataAct('switchOQTab','All')}>All
+        <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${fOrders.length}</span></button>
+      ${OQ_PHASES.map((p,i)=>`<button class="tab-btn oq-phase${activePhase===p.key?' active':''}" ${dataAct('switchOQTab',p.key)}>
+        <span class="oq-step-n">${i+1}</span>${p.label}
+        <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt(p.states)}</span></button>`).join('')}
     </div>`;
+    // Secondary row: exact sub-statuses of the active phase, for drill-down.
+    let sub = '';
+    if (activePhase !== 'All') {
+      const p = OQ_PHASES.find(p => p.key === activePhase);
+      sub = `<div class="oq-substatus">
+        <button class="oq-chip${sel===activePhase?' active':''}" ${dataAct('switchOQTab',activePhase)}>All ${p.label}</button>
+        ${p.states.map(s=>`<button class="oq-chip${sel===s?' active':''}" ${dataAct('switchOQTab',s)}>${s.replace(/_/g,' ')} <b>${fOrders.filter(o=>o.status===s).length}</b></button>`).join('')}
+      </div>`;
+    }
+    return primary + sub;
   }
 
   function oqTableHtml(tab) {
     const fOrders = filteredOrders();
-    const filtered = tab==='All' ? fOrders : fOrders.filter(o=>o.status===tab);
+    const states = oqStatesForTab(tab);
+    const filtered = states ? fOrders.filter(o=>states.includes(o.status)) : fOrders;
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
