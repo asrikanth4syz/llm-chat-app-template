@@ -1094,6 +1094,11 @@
      MAIN APPLICATION (unchanged)
 ══════════════════════════════════════════════════════ -->
 <div id="app" class="app hidden">
+  <a class="skip-link" href="#main-content" data-act="skipToContent">Skip to content</a>
+  <!-- Screen-reader announcements: toasts + wayfinding are mirrored here so they
+       are spoken. polite = status, assertive = errors that interrupt. -->
+  <div id="sr-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="sr-alert" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-brand">

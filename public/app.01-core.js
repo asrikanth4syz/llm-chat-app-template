@@ -1106,8 +1106,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + page);
   if (navEl) { navEl.classList.add('active'); navEl.setAttribute('aria-current', 'page'); revealActiveNavItem(page); }
 
-  document.getElementById('breadcrumb').textContent =
-    (NAV[APP.user.nav] || []).find(i => i.id === page)?.label || page.replace(/_/g,' ');
+  renderBreadcrumb(page);
 
   const main = document.getElementById('main-content');
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
@@ -1257,7 +1256,119 @@ function showToast(msg, type = 'success') {
     animation:'slideUp .2s ease' });
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3200);
+  // Announce to screen readers — errors interrupt (assertive), the rest is polite.
+  const live = document.getElementById(type === 'error' ? 'sr-alert' : 'sr-live');
+  if (live) { live.textContent = ''; requestAnimationFrame(() => { live.textContent = msg; }); }
 }
+
+// Breadcrumb trail: Home › Section › Page. Home is a real control back to the
+// role's landing page; the section is the NAV group the page sits under. Replaces
+// the old flat page label so deep navigation always shows "where am I".
+function renderBreadcrumb(page) {
+  const el = document.getElementById('breadcrumb'); if (!el) return;
+  const nav = NAV[APP.user?.nav] || [];
+  const idx = nav.findIndex(i => i.id === page);
+  let section = null;
+  for (let i = idx; i >= 0; i--) { if (nav[i].section) { section = nav[i].section; break; } }
+  const label = (idx >= 0 ? nav[idx].label : null) || page.replace(/_/g, ' ');
+  const home = getDefaultPage ? getDefaultPage() : 'dashboard';
+  const parts = [];
+  if (page !== home) parts.push(`<button class="bc-link" ${dataAct('navigate', home)}>Home</button>`);
+  if (section && page !== home) parts.push(`<span class="bc-sec">${h(section)}</span>`);
+  parts.push(`<span class="bc-cur" aria-current="page">${h(label)}</span>`);
+  el.innerHTML = parts.map((p, i) => (i ? '<span class="bc-sep" aria-hidden="true">›</span>' : '') + p).join('');
+}
+
+// Skip-to-content: move focus (not just scroll) into the main region.
+function skipToContent() {
+  const main = document.getElementById('main-content');
+  if (main) { main.setAttribute('tabindex', '-1'); main.focus(); main.scrollIntoView(); }
+}
+
+/* ===========================================================================
+   Command palette (⌘K / Ctrl-K) — keyboard-first jump to any page the current
+   role can reach, plus recents. Deliberately client-side only: it indexes the
+   role's NAV (already access-checked) and reads NOTHING from the database, so it
+   adds zero D1 row-reads. Entity search stays in the top-bar box.
+   =========================================================================== */
+let _cmdkOpen = false, _cmdkItems = [], _cmdkSel = 0, _cmdkPrevFocus = null;
+
+function cmdkPages() {
+  const nav = NAV[APP.user?.nav] || []; let sec = ''; const out = [];
+  for (const i of nav) { if (i.section) { sec = i.section; continue; } if (i.id) out.push({ id: i.id, label: i.label, section: sec }); }
+  return out;
+}
+function cmdkGetRecents() { try { return JSON.parse(localStorage.getItem('sp_cmdk_recents') || '[]'); } catch { return []; } }
+function cmdkPushRecent(id) { let r = cmdkGetRecents().filter(x => x !== id); r.unshift(id); r = r.slice(0, 5);
+  try { localStorage.setItem('sp_cmdk_recents', JSON.stringify(r)); } catch { /* private mode */ } }
+
+function openCommandPalette() {
+  if (_cmdkOpen) return; _cmdkOpen = true; _cmdkPrevFocus = document.activeElement;
+  const ov = document.createElement('div'); ov.className = 'cmdk-ov'; ov.id = 'cmdk-ov';
+  ov.innerHTML = `
+    <div class="cmdk" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="cmdk-in">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input id="cmdk-q" type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list"
+          aria-activedescendant="cmdk-row-0" aria-label="Jump to a page" autocomplete="off" placeholder="Jump to a page…">
+        <kbd class="cmdk-esc">ESC</kbd>
+      </div>
+      <div class="cmdk-list" id="cmdk-list" role="listbox" aria-label="Pages"></div>
+      <div class="cmdk-foot"><span><kbd>↑↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+    </div>`;
+  ov.addEventListener('click', e => { if (e.target === ov) closeCommandPalette(); });
+  document.body.appendChild(ov);
+  const q = document.getElementById('cmdk-q');
+  q.addEventListener('input', () => cmdkRender(q.value.trim()));
+  q.addEventListener('keydown', cmdkKey);
+  cmdkRender('');
+  setTimeout(() => q.focus(), 0);
+}
+function closeCommandPalette() {
+  _cmdkOpen = false; const ov = document.getElementById('cmdk-ov'); if (ov) ov.remove();
+  if (_cmdkPrevFocus && _cmdkPrevFocus.focus) { try { _cmdkPrevFocus.focus(); } catch { /* gone */ } }
+  _cmdkPrevFocus = null;
+}
+function cmdkRender(q) {
+  const pages = cmdkPages(); let items, grp;
+  if (!q) { const rec = cmdkGetRecents().map(id => pages.find(p => p.id === id)).filter(Boolean);
+    items = rec.length ? rec : pages; grp = rec.length ? 'Recent' : 'All pages'; }
+  else { const ql = q.toLowerCase(); items = pages.filter(p => (p.label + ' ' + p.section).toLowerCase().includes(ql)); grp = 'Pages'; }
+  _cmdkItems = items; _cmdkSel = 0;
+  const list = document.getElementById('cmdk-list'); if (!list) return;
+  if (!items.length) { list.innerHTML = `<div class="cmdk-empty">No page matches “${h(q)}”. Try “orders”, “billing”, “health”…</div>`;
+    document.getElementById('cmdk-q')?.removeAttribute('aria-activedescendant'); return; }
+  list.innerHTML = `<div class="cmdk-grp">${grp}</div>` + items.map((p, i) =>
+    `<div class="cmdk-row" id="cmdk-row-${i}" role="option" aria-selected="${i === 0}" data-i="${i}"
+       onclick="cmdkChoose(${i})" onmousemove="cmdkHover(${i})">
+       <span class="cmdk-ic" aria-hidden="true">▸</span>
+       <span class="cmdk-tx"><b>${h(p.label)}</b>${p.section ? `<small>${h(p.section)}</small>` : ''}</span></div>`).join('');
+  cmdkMark();
+}
+function cmdkMark() {
+  const rows = document.querySelectorAll('.cmdk-row');
+  rows.forEach((r, i) => { const s = i === _cmdkSel; r.setAttribute('aria-selected', s);
+    if (s) { r.scrollIntoView({ block: 'nearest' }); document.getElementById('cmdk-q')?.setAttribute('aria-activedescendant', 'cmdk-row-' + i); } });
+}
+function cmdkHover(i) { _cmdkSel = i; cmdkMark(); }
+function cmdkKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeCommandPalette(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); _cmdkSel = Math.min(_cmdkSel + 1, _cmdkItems.length - 1); cmdkMark(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _cmdkSel = Math.max(_cmdkSel - 1, 0); cmdkMark(); }
+  else if (e.key === 'Enter') { e.preventDefault(); cmdkChoose(_cmdkSel); }
+  else if (e.key === 'Tab') { e.preventDefault(); } // trap focus in the palette
+}
+function cmdkChoose(i) {
+  const p = _cmdkItems[i]; if (!p) return;
+  cmdkPushRecent(p.id); closeCommandPalette(); navigate(p.id);
+}
+// Global ⌘K / Ctrl-K toggle (only once the app shell is live).
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+    if (!APP.user) return;
+    e.preventDefault(); _cmdkOpen ? closeCommandPalette() : openCommandPalette();
+  }
+});
 
 // ---- Modal manager: focus trap, ESC/backdrop close, focus restore, ARIA ----
 let _modalPrevFocus = null;
