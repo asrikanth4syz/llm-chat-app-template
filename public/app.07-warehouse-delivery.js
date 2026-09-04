@@ -783,9 +783,7 @@ async function renderDelivery(el) {
   </div>`;
 
   APP._dcData = dcs;
-  // Restore the tab from the URL hash (deep-link / refresh), else in-memory (G2).
-  APP._dcTab  = getTabHash('delivery') || APP._dcTab || 'scheduled';
-  setTabHash('delivery', APP._dcTab);
+  APP._dcTab  = APP._dcTab || 'scheduled';
 
   function tabsHtml(active) {
     const podPending = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
@@ -984,7 +982,6 @@ async function renderDelivery(el) {
 
 async function switchDeliveryTab(tab, btn) {
   APP._dcTab = tab;
-  setTabHash('delivery', tab);
   document.querySelectorAll('#dc-tabs .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
 
@@ -1942,7 +1939,12 @@ async function renderDeliveriesHub(el) {
   // A single-tab role (delivery exec) gets the plain page — no pointless tab bar.
   if (tabs.length <= 1) { await window[(tabs[0] || DELIV_TABS[1]).fn](el); return; }
   injectDelivHubCss();
+  // Addressable hub tab (G2): restore from the URL hash (#delivery=routes …),
+  // else in-memory, else the first tab this role can see.
+  const hashTab = getTabHash('delivery');
+  if (hashTab && tabs.some(t => t.k === hashTab)) APP._delivTab = hashTab;
   if (!tabs.some(t => t.k === APP._delivTab)) APP._delivTab = tabs[0].k;
+  setTabHash('delivery', APP._delivTab);
   const active = APP._delivTab;
   el.innerHTML = `
     <div class="dhub-tabs" role="tablist" aria-label="Deliveries">
@@ -1967,6 +1969,7 @@ async function delivHubTab(k) {
   const tabs = delivTabsForRole(APP.user?.role);
   if (!tabs.some(t => t.k === k)) return;
   APP._delivTab = k;
+  setTabHash('delivery', k);
   document.querySelectorAll('.dhub-tab').forEach(b => {
     const on = b.dataset.k === k;
     b.classList.toggle('on', on);
