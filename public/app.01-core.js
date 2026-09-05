@@ -1143,7 +1143,10 @@ function injectHubCss() {
     font-size:.9rem;font-weight:700;color:var(--text-muted);padding:9px 14px;border-radius:8px 8px 0 0;white-space:nowrap}
   .hub-tab:hover{color:var(--text,#15303d);background:var(--bg,#f4f7f9)}
   .hub-tab.on{color:var(--primary);border-bottom-color:var(--primary)}
-  .hub-tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px}`;
+  .hub-tab:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+  .hub-badge{display:inline-block;margin-left:6px;min-width:18px;padding:0 6px;border-radius:20px;
+    font-size:.68rem;font-weight:800;line-height:18px;text-align:center;vertical-align:middle;
+    background:var(--danger,#ef4444);color:#fff}`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
 

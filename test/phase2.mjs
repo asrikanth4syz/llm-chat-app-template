@@ -50,7 +50,7 @@ expect("all app scripts load without error", errors.length === 0 || (console.log
 
 const src = localScripts.map((s) => readFileSync(path.join(ROOT, "public", s), "utf8")).join("\n");
 
-const res = await page.evaluate((args) => {
+const res = await page.evaluate(async (args) => {
   const { R1, aclMatrix, preIds, untouchedNav } = args;
   const out = {};
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -171,6 +171,23 @@ const res = await page.evaluate((args) => {
     out.spPageCleared = localStorage.getItem("sp_page") === null;
   } catch (e) { out.logoutErr = String(e.message); }
 
+  // ── AC15: Due Items badge states (drive loadOrdersDueBadge with a controllable fetch) ──
+  async function badgeState(fetchImpl) {
+    let el = document.getElementById("orders-due-badge");
+    if (!el) { el = document.createElement("span"); el.id = "orders-due-badge"; el.className = "hub-badge"; document.body.appendChild(el); }
+    el.hidden = true; el.textContent = ""; el.removeAttribute("data-badge-state");
+    const orig = window.fetch; window.fetch = fetchImpl;
+    try { await loadOrdersDueBadge(); } finally { window.fetch = orig; }
+    const e = document.getElementById("orders-due-badge");
+    return { hidden: e.hidden, text: e.textContent, state: e.getAttribute("data-badge-state") };
+  }
+  const overdueRows = (n) => Array.from({ length: n }, () => ({ days_overdue: 3 })).concat([{ days_overdue: 0 }]);
+  out.badgeN5     = await badgeState(async () => ({ ok: true, json: async () => overdueRows(5) }));
+  out.badgeZero   = await badgeState(async () => ({ ok: true, json: async () => [{ days_overdue: 0 }, { days_overdue: -1 }] }));
+  out.badgeBig    = await badgeState(async () => ({ ok: true, json: async () => overdueRows(150) }));
+  out.badgeUnavail= await badgeState(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+  out.badgeThrows = await badgeState(async () => { throw new Error("network"); });
+
   return out;
 }, { R1, aclMatrix, preIds, untouchedNav });
 
@@ -199,6 +216,14 @@ expect("AC16 · logout clears sp_page", res.spPageCleared === true);
 // AC10 (source-level)
 expect("AC10 · renderMyOrders calls phaseStepper", /renderMyOrders[\s\S]{0,4000}?phaseStepper\(/.test(src));
 expect("AC10 · no bespoke ORDER_STEPS constant remains", !/\bORDER_STEPS\b/.test(src));
+
+// AC15 · Due Items badge
+expect("AC15 · badge element rendered synchronously on the due tab", /id="orders-due-badge"/.test(src) && /loadOrdersDueBadge\(\)/.test(src));
+expect("AC15 · overdue count N>0 shows N, visible", res.badgeN5.text === "5" && res.badgeN5.hidden === false && res.badgeN5.state === "count");
+expect("AC15 · count 0 → badge hidden", res.badgeZero.hidden === true && res.badgeZero.state === "zero");
+expect("AC15 · count > 99 → '99+'", res.badgeBig.text === "99+" && res.badgeBig.hidden === false);
+expect("AC15 · data unavailable → distinct unknown state, hidden", res.badgeUnavail.hidden === true && res.badgeUnavail.state === "unknown");
+expect("AC15 · fetch throws → unknown state, no throw", res.badgeThrows.hidden === true && res.badgeThrows.state === "unknown");
 
 await close();
 

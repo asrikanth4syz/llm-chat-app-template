@@ -42,11 +42,45 @@ async function renderOrdersHub(el) {
   registerHub('orders', ordersHubTab);
   el.innerHTML = `
     <div class="hub-tabs" id="orders-hub-tabs" role="tablist" aria-label="Orders">
-      ${tabs.map(t => `<button class="hub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('ordersHubTab', t.k)}>${h(t.label)}</button>`).join('')}
+      ${tabs.map(t => {
+        // Phase 2 (AC15): the Due Items tab carries an overdue-count badge, so the
+        // at-a-glance signal that used to live on the sidebar survives the fold.
+        const badge = t.k === 'due' ? `<span class="hub-badge" id="orders-due-badge" hidden></span>` : '';
+        return `<button class="hub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('ordersHubTab', t.k)}>${h(t.label)}${badge}</button>`;
+      }).join('')}
     </div>
     <div id="orders-hub-body"><div class="loading-state"><div class="spinner"></div></div></div>`;
+  // Fire-and-forget: the badge populates asynchronously and never blocks the tab body.
+  if (tabs.some(t => t.k === 'due')) loadOrdersDueBadge();
   const body = document.getElementById('orders-hub-body');
   await window[tabs.find(t => t.k === active).fn](body);
+}
+
+// AC15: populate the Due Items hub-tab badge with the count of OVERDUE due items
+// (rows with days_overdue > 0 from /reports/consolidated-due — the same signal the
+// Due Items page uses). Uses a raw fetch (not api()) so a background badge never
+// triggers api()'s error toast or 401 logout. States: count>0 → "N" (or "99+");
+// count 0 → hidden; data unavailable/NaN → a distinct data-badge-state="unknown".
+async function loadOrdersDueBadge() {
+  let rows = null;
+  try {
+    const res = await fetch('/api/reports/consolidated-due', {
+      headers: APP.token ? { 'Authorization': 'Bearer ' + APP.token } : {},
+    });
+    if (res.ok) rows = await res.json();
+  } catch (_) { /* leave rows null → unknown */ }
+  const el = document.getElementById('orders-due-badge');
+  if (!el) return; // tab bar gone (navigated away)
+  if (!Array.isArray(rows)) {
+    el.hidden = true; el.textContent = ''; el.setAttribute('data-badge-state', 'unknown'); return;
+  }
+  const n = rows.filter(r => Number(r.days_overdue) > 0).length;
+  if (!Number.isFinite(n) || n <= 0) {
+    el.hidden = true; el.textContent = ''; el.setAttribute('data-badge-state', 'zero'); return;
+  }
+  el.textContent = n > 99 ? '99+' : String(n);
+  el.hidden = false; el.setAttribute('data-badge-state', 'count');
+  el.title = `${n} overdue due item${n === 1 ? '' : 's'}`;
 }
 
 async function ordersHubTab(k) {
