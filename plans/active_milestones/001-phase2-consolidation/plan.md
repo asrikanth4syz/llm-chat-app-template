@@ -16,9 +16,14 @@
   `renderMyOrders` (uses `phaseStepper`), `renderTrackDelivery`.
 - **Deliveries hub** in `public/app.07-warehouse-delivery.js`: `DELIV_TABS/delivTabsForRole/
   renderDeliveriesHub/delivHubTab`.
-- **Verified facts** (read-only): the delivery gate is already consistent — `delivTabsForRole(role)`
-  equals `{tab | canAccessPage(backing)}` for super_admin/ops_admin/delivery_manager/delivery_exec (so
-  AC5/R3/AC14 → a lock-in test, no fix expected). `ACTION_PAGES.place_order` contains the phantom role
+- **Verified facts** (read-only): the delivery gate is consistent **for the four roles that can open the
+  Deliveries hub** — `delivTabsForRole(role)` equals `{tab | canAccessPage(backing)}` for
+  super_admin/ops_admin/delivery_manager/delivery_exec. **Correction (plan-validator first domino):**
+  `delivTabsForRole` (app.07:1697-1701) returns `{today,list,calendar}` for the other 8 roles too, even
+  though they cannot reach the hub (`delivery` is not in their nav) — so a naive "all 12 roles" equality
+  would be red for them. `delivTabsForRole` is only ever *invoked* for hub-accessible roles, so this is a
+  dead path; the fix is (B5) a defensive guard returning `[]` for no-access roles, and scoping A4f to
+  hub-accessible roles. See Group B/B5. `ACTION_PAGES.place_order` contains the phantom role
   `ops_manager` (app.01-core.js:739) — a real small fix. `renderOrdersHub` already normalizes to
   `#orders/<default>` via `writeHash(active)`, and `routeTab` already falls back to the default tab for
   an unknown/forbidden slug (AC1/AC6 mostly satisfied; the test confirms and closes gaps).
@@ -39,9 +44,18 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
 
 ### Group A — Executable ACs: fixtures + a Phase-2 test module  *(no product code)*
 > New file `test/phase2.mjs` (mirrors `smoke.mjs`'s loader) + JSON fixtures under `test/fixtures/`.
-> Add script `"test:phase2": "node test/phase2.mjs"` to `package.json`. Commit A even where some checks
-> start red — the red checks are the spec for Group B/C. (Mark red checks `.todo`/xfail with a comment
-> naming the AC so the commit is green-CI but the intent is recorded; Group B/C flip them to asserting.)
+> **A0:** add `"test:phase2": "node test/phase2.mjs"` to `package.json`.
+> **Manual xfail (plan-validator finding):** a plain `node` script has no `.todo`/xfail primitive and
+> `smoke.mjs` exits non-zero on any `failures[]` entry. So `phase2.mjs` defines two recorders:
+> `expect(name,cond)` (a failure increments the exit code) and `todo(name,cond,ac)` (an expected-red
+> check: prints `⚠ TODO[ac]`, **never** touches the exit code). Group A registers each known-red AC via
+> `todo(...)` so Commit A stays green-CI while recording intent; Group B/C move each id from `todo()` to
+> `expect()` as it goes green. Do not rely on a framework feature.
+> **Per-URL fetch stub (plan-validator finding):** `smoke.mjs` stubs `window.fetch` to a URL-agnostic
+> 401. `phase2.mjs` MUST install its OWN fetch stub that switches on the request URL (routes
+> `/reports/consolidated-due` and `/nav-badges` to fixtures for AC15; everything else → 401), rather
+> than reusing smoke's blanket stub — otherwise the badge always hits the "unavailable" branch and the
+> N>0 / 0 render-state checks can never pass.
 
 - [ ] **A1 [P]** `test/fixtures/acl-matrix.json` — hand-authored allow/deny for every (role ∈ R1) ×
   (page ∈ PAGE_MAP), authored from `NAV`/product intent, **not** copied from `ACTION_PAGES`. Include the
@@ -64,8 +78,10 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
     (→ output contains `ostep--cancelled`), and the full fallback set (null,undefined,'',IN_TRANSIT,
     DISPATCHED,ACCEPTED,SENT,SCHEDULED,OPEN,IN_PROGRESS,RESOLVED,INVOICED,HIGH,MEDIUM,LOW,'ZZZ_UNKNOWN')
     → `orderPhaseIndex` === -1 **and** output does NOT contain `ostep--cancelled` and does not throw. [AC9]
-  - **A4f** delivery gate consistency: for each role, `delivTabsForRole(role)` slugs’ backing pages equal
-    `{tab | canAccessPage(backing)}`. [AC5/R3/AC14]
+  - **A4f** delivery gate consistency: for each role **that can open the hub** (`canAccessPage('delivery')`
+    true), `delivTabsForRole(role)` slugs’ backing pages equal `{tab | canAccessPage(backing)}`. Plus, for
+    every role that CANNOT open the hub, assert `delivTabsForRole(role)` is `[]` — starts red (drives B5).
+    [AC5/R3/AC14]
   - **A4g** enumerated stepper surfaces: assert `renderMyOrders` source calls `phaseStepper`; assert the
     bespoke tokens (`ORDER_STEPS`, inline 5-`div` progress-bar) are absent from `public/app.*.js`. [AC10]
   - **A4h** hash addressability: for a stubbed `APP.user`, drive `navigate('orders',{tab})` and
@@ -96,6 +112,11 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
 - [ ] **B4** Raw-hash ACL/fold — only if A4j is red: make `onHashChange`+`initApp` boot run every raw hash
   through the same access decision (`canAccessPage` for orders/my_orders; `delivTabsForRole` for delivery)
   and `HUB_REDIRECT` fold, normalizing via `replaceState`. Flip A4j. [AC5]  **Verify:** A4j green; smoke green.
+- [ ] **B5** `delivTabsForRole` defensive guard: return `[]` when the role cannot open the Deliveries hub
+  (no delivery backing page reachable — e.g. lead guard `if (!canAccessPage('delivery')) return [];`), so
+  the R3/AC14 gate-consistency invariant holds for **all 12** roles, not just hub-accessible ones. Flip the
+  no-access half of A4f. (Dead-path hardening — hub-accessible roles are unaffected.) [AC5/R3/AC14]
+  **Verify:** A4f fully green; `test:smoke` green; delivery hub still renders for delivery roles.
 - **Commit B** (one commit per applied fix; skip a task whose Group-A check was already green and note it).
 
 ### Group C — Due-Items hub-tab count badge  *(product code, `app.04-orders-delivery.js`; new AC15 check)*
