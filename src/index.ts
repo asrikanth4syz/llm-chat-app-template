@@ -732,18 +732,18 @@ async function ensureFeatureTables(env: Env): Promise<void> {
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES
-        ('0401',0,'Milk, fresh'),('0402',5,'Milk powder / concentrated milk'),
-        ('0901',5,'Coffee'),('0902',5,'Tea'),('1701',5,'Sugar'),
-        ('1704',18,'Sugar confectionery'),('1806',18,'Chocolate & cocoa preparations'),
-        ('1905',18,'Biscuits, bread, cakes'),('2009',12,'Fruit & vegetable juices'),
-        ('2106',12,'Food preparations n.e.s. (namkeen/snacks)'),
-        ('2201',18,'Water, incl. mineral (unsweetened)'),
-        ('2202',28,'Aerated / sweetened / flavoured beverages'),
-        ('3401',18,'Soap'),('3402',18,'Detergents & cleaning preparations'),
-        ('3808',18,'Disinfectants / sanitizers'),('3924',18,'Plastic tableware / kitchenware'),
-        ('4802',12,'Paper'),('4817',18,'Envelopes'),
-        ('4820',12,'Registers, notebooks, exercise books'),
-        ('4823',18,'Paper articles (napkins, tissues)'),('9608',18,'Pens')`
+        ('040120',0,'Milk, fresh'),('040210',5,'Milk powder / concentrated milk'),
+        ('090121',5,'Coffee, roasted'),('090230',5,'Tea, black (fermented)'),('170199',5,'Sugar'),
+        ('170490',18,'Sugar confectionery'),('180690',18,'Chocolate & cocoa preparations'),
+        ('190590',18,'Biscuits, bread, cakes'),('200989',12,'Fruit & vegetable juices'),
+        ('210690',12,'Food preparations n.e.s. (namkeen/snacks)'),
+        ('220110',18,'Water, incl. mineral (unsweetened)'),
+        ('220210',28,'Aerated / sweetened / flavoured beverages'),
+        ('340111',18,'Soap (toilet/bar)'),('340220',18,'Detergents & cleaning preparations'),
+        ('380894',18,'Disinfectants / sanitizers'),('392410',18,'Plastic tableware / kitchenware'),
+        ('480257',12,'Paper'),('481710',18,'Envelopes'),
+        ('482020',12,'Registers, notebooks, exercise books'),
+        ('482369',18,'Paper articles (napkins, tissues)'),('960810',18,'Pens (ball point)')`
     ).run();
   } catch { /* table missing / non-fatal */ }
 }
@@ -2631,7 +2631,7 @@ async function handleAddInventory(request: Request, env: Env): Promise<Response>
   const sku = `SKU${String(Math.floor(Math.random()*900+100)).padStart(3,"0")}`;
   // GST comes from the HSN slab when the code maps; otherwise honour a supplied
   // rate, falling back to 18 only as a last resort.
-  const hsnVal = body.hsn_code ? String(body.hsn_code) : "2101";
+  const hsnVal = body.hsn_code ? String(body.hsn_code) : "";
   const derivedGst = await gstRateForHsn(env, hsnVal);
   const gstVal = derivedGst != null ? derivedGst : (body.gst_rate != null ? Number(body.gst_rate) : 18);
   await env.DB.prepare(`INSERT INTO inventory
@@ -2679,6 +2679,9 @@ async function handleUpsertHsnGstRate(request: Request, env: Env): Promise<Respo
   const hsn = String(body.hsn||"").replace(/\D/g,"");
   const rate = Number(body.gst_rate);
   if (!hsn) return json({error:"HSN code required"}, 400);
+  // HSN must be a 6-digit (or full 8-digit) code — GST no longer accepts the
+  // coarse 2/4-digit headings for the mapping table.
+  if (hsn.length !== 6 && hsn.length !== 8) return json({error:"HSN code must be 6 digits (8 also accepted)"}, 400);
   if (![0,5,12,18,28].includes(rate)) return json({error:"GST rate must be one of 0, 5, 12, 18, 28"}, 400);
   await env.DB.prepare(
     `INSERT INTO hsn_gst_rates (hsn, gst_rate, description, updated_at, updated_by)

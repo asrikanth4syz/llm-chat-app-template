@@ -1452,27 +1452,27 @@ describe("Client consumption report (received / consumed / stock / low-stock)", 
 // ── HSN-driven GST slab ──────────────────────────────────────────────
 // A product's GST must come from its HSN code (0/5/12/18/28%), never a flat 18%.
 describe("HSN → GST slab", () => {
-  it("GET /api/hsn-gst resolves the seeded slab for a known heading", async () => {
-    const res = await get("/api/hsn-gst?hsn=2202", adminToken);
+  it("GET /api/hsn-gst resolves the seeded 6-digit slab", async () => {
+    const res = await get("/api/hsn-gst?hsn=220210", adminToken);
     expect(res.status).toBe(200);
     const data = await res.json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
     expect(data.gst_rate).toBe(28); // aerated/flavoured beverages
   });
 
-  it("GET /api/hsn-gst falls back from an 8-digit code to its 4-digit heading", async () => {
-    const data = await (await get("/api/hsn-gst?hsn=09011100", adminToken)).json() as { gst_rate: number; matched: boolean };
+  it("GET /api/hsn-gst falls back from an 8-digit code to its 6-digit subheading", async () => {
+    const data = await (await get("/api/hsn-gst?hsn=09012100", adminToken)).json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
-    expect(data.gst_rate).toBe(5); // coffee, heading 0901
+    expect(data.gst_rate).toBe(5); // coffee, subheading 090121
   });
 
   it("GET /api/hsn-gst reports no match for an unmapped code", async () => {
-    const data = await (await get("/api/hsn-gst?hsn=9999", adminToken)).json() as { matched: boolean };
+    const data = await (await get("/api/hsn-gst?hsn=999999", adminToken)).json() as { matched: boolean };
     expect(data.matched).toBe(false);
   });
 
   it("POST /api/inventory derives GST from the HSN code, ignoring a wrong supplied rate", async () => {
-    const res = await post("/api/inventory", { name: "Fizzy Cola", category: "Beverages", unit_price: 40, hsn_code: "2202", gst_rate: 18 }, adminToken);
+    const res = await post("/api/inventory", { name: "Fizzy Cola", category: "Beverages", unit_price: 40, hsn_code: "220210", gst_rate: 18 }, adminToken);
     expect(res.status).toBe(201);
     const { sku } = await res.json() as { sku: string };
     const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
@@ -1480,10 +1480,10 @@ describe("HSN → GST slab", () => {
   });
 
   it("PATCH /api/inventory re-derives GST when the HSN code changes", async () => {
-    const created = await post("/api/inventory", { name: "Mystery Item", category: "Grocery", unit_price: 10, hsn_code: "0901" }, adminToken);
+    const created = await post("/api/inventory", { name: "Mystery Item", category: "Grocery", unit_price: 10, hsn_code: "090121" }, adminToken);
     const { sku } = await created.json() as { sku: string };
-    // starts at 5% (coffee); move it to a 12%-heading and expect GST to follow
-    await patch(`/api/inventory/${sku}`, { hsn_code: "2009" }, adminToken); // juices → 12
+    // starts at 5% (coffee); move it to a 12%-subheading and expect GST to follow
+    await patch(`/api/inventory/${sku}`, { hsn_code: "200989" }, adminToken); // juices → 12
     const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
     expect(row.gst_rate).toBe(12);
   });
@@ -1491,7 +1491,7 @@ describe("HSN → GST slab", () => {
   it("POST /api/inventory/recalc-gst backfills a wrong stored rate from the HSN", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES (?,?,?,?,?,?,?,?)")
-      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "2202", 18).run(); // should be 28
+      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "220210", 18).run(); // should be 28
     const res = await post("/api/inventory/recalc-gst", {}, adminToken);
     expect(res.status).toBe(200);
     const data = await res.json() as { updated: number };
@@ -1500,16 +1500,21 @@ describe("HSN → GST slab", () => {
     expect(row.gst_rate).toBe(28);
   });
 
-  it("POST /api/hsn-gst-rates upserts a mapping that the lookup then resolves", async () => {
-    const res = await post("/api/hsn-gst-rates", { hsn: "3305", gst_rate: 18, description: "Hair preparations" }, adminToken);
+  it("POST /api/hsn-gst-rates upserts a 6-digit mapping that the lookup then resolves", async () => {
+    const res = await post("/api/hsn-gst-rates", { hsn: "330510", gst_rate: 18, description: "Shampoo / hair preparations" }, adminToken);
     expect(res.status).toBe(200);
-    const data = await (await get("/api/hsn-gst?hsn=3305", adminToken)).json() as { gst_rate: number; matched: boolean };
+    const data = await (await get("/api/hsn-gst?hsn=330510", adminToken)).json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
     expect(data.gst_rate).toBe(18);
   });
 
+  it("POST /api/hsn-gst-rates rejects a non-6-digit HSN code", async () => {
+    expect((await post("/api/hsn-gst-rates", { hsn: "4901", gst_rate: 12 }, adminToken)).status).toBe(400);   // 4-digit
+    expect((await post("/api/hsn-gst-rates", { hsn: "49", gst_rate: 12 }, adminToken)).status).toBe(400);     // 2-digit
+  });
+
   it("POST /api/hsn-gst-rates rejects a rate outside the legal slabs", async () => {
-    const res = await post("/api/hsn-gst-rates", { hsn: "4901", gst_rate: 7 }, adminToken);
+    const res = await post("/api/hsn-gst-rates", { hsn: "490100", gst_rate: 7 }, adminToken);
     expect(res.status).toBe(400);
   });
 });

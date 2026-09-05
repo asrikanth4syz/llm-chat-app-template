@@ -1138,11 +1138,11 @@ async function settingsTab(tab, btn) {
       </div>
       <div class="card-body" style="padding:20px;display:grid;gap:16px">
         <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
-          Add or edit HSN mappings below. Codes may be full (8-digit) or a heading prefix (4-digit) — the lookup falls back from 8→6→4→2 digits.
+          Add or edit HSN mappings below. Use the <b>6-digit</b> HSN (8-digit also accepted) — the lookup falls back from 8→6→4→2 digits when an item's code is longer.
           After changing mappings, use <b>↻ Recalc GST from HSN</b> on the Inventory page to apply them to existing items.
         </div>
         <div style="display:grid;grid-template-columns:1fr 120px 2fr auto;gap:10px;align-items:end">
-          <div class="form-group" style="margin:0"><label>HSN Code</label><input type="text" id="hg-hsn" placeholder="e.g. 2202"></div>
+          <div class="form-group" style="margin:0"><label>HSN Code</label><input type="text" id="hg-hsn" inputmode="numeric" maxlength="8" placeholder="e.g. 220210"></div>
           <div class="form-group" style="margin:0"><label>GST Slab</label>
             <select id="hg-rate"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18" selected>18%</option><option value="28">28%</option></select>
           </div>

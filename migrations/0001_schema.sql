@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   reorder_level INTEGER DEFAULT 20,
   max_stock INTEGER DEFAULT 200,
   vendor_id TEXT,
-  hsn_code TEXT DEFAULT '2101',
+  hsn_code TEXT DEFAULT '',
   gst_rate REAL DEFAULT 18,
   emoji TEXT DEFAULT '📦',
   active INTEGER DEFAULT 1
