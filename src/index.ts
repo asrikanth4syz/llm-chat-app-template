@@ -5536,7 +5536,9 @@ async function handleListDunningEvents(request: Request, env: Env): Promise<Resp
 async function handleImportInventory(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  // Inventory import is Super Admin only — it can bulk-rewrite catalogue, pricing
+  // and cost/margin fields, so it stays tightly held.
+  if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
 
   let rows: Record<string,unknown>[];
   try { rows = await request.json() as Record<string,unknown>[]; }
@@ -5565,6 +5567,36 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
     for (const r of res.results) existingSkus.add(String((r as Record<string,unknown>).sku));
   } catch { /* treat all as new if lookup fails */ }
 
+  // Column resolvers for the full inventory import template, so a downloaded
+  // ("Download Current Inventory") + amended file round-trips completely — not just
+  // the handful of columns the old import touched. Values are coerced with the same
+  // sensible defaults `handleAddInventory` uses. Column names come from this fixed
+  // whitelist only (never from the CSV), so interpolating them into SQL is safe.
+  const num = (v: unknown, d: number) => { const n = Number(v); return String(v ?? '').trim() !== '' && Number.isFinite(n) ? n : d; };
+  const txt = (v: unknown, d: string) => { const s = String(v ?? '').trim(); return s || d; };
+  const IMP_SPEC: Record<string, (v: unknown) => string | number> = {
+    name:            v => txt(v, ''),
+    category:        v => txt(v, 'General'),
+    sub_category:    v => txt(v, 'Normal'),
+    brand:           v => txt(v, ''),
+    stock:           v => num(v, 0),
+    unit_price:      v => num(v, 0),
+    mrp:             v => num(v, 0),
+    cost_excl_gst:   v => num(v, 0),
+    gst_rate:        v => num(v, 18),
+    reorder_level:   v => num(v, 10),
+    max_stock:       v => num(v, 500),
+    uom:             v => txt(v, 'unit'),
+    pack_size:       v => num(v, 1),
+    units_per_case:  v => num(v, 1),
+    weight_grams:    v => num(v, 0),
+    barcode:         v => txt(v, ''),
+    vendor_sku:      v => txt(v, ''),
+    vendor_lead_days:v => num(v, 3),
+    vendor_moq:      v => num(v, 1),
+  };
+  const IMP_COLS = Object.keys(IMP_SPEC);
+
   // Build batch statements in chunks of 200 — each batch() call = 1 subrequest
   const CHUNK = 200;
   for (let c = 0; c < validRows.length; c += CHUNK) {
@@ -5574,23 +5606,20 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
 
     for (const { row, idx } of chunk) {
       const sku = String(row.sku);
+      // Only touch columns the CSV actually provides (header present), so a partial
+      // upload never wipes fields it omitted; a full-template file updates everything.
+      const provided = IMP_COLS.filter(c => c in row);
       if (existingSkus.has(sku)) {
+        const cols = provided.length ? provided : ['name'];
         stmts.push(env.DB.prepare(
-          `UPDATE inventory SET name=?,stock=?,unit_price=?,category=?,brand=?,gst_rate=?,reorder_level=?,max_stock=? WHERE sku=?`
-        ).bind(
-          row.name, Number(row.stock)||0, Number(row.unit_price)||0,
-          row.category||"General", row.brand||"",
-          Number(row.gst_rate)||18, Number(row.reorder_level)||10, Number(row.max_stock)||500,
-          sku
-        ));
+          `UPDATE inventory SET ${cols.map(c => `${c}=?`).join(',')} WHERE sku=?`
+        ).bind(...cols.map(c => IMP_SPEC[c](row[c])), sku));
       } else {
+        const cols = ['name', ...provided.filter(c => c !== 'name')];
+        const allCols = ['sku', ...cols];
         stmts.push(env.DB.prepare(
-          `INSERT OR IGNORE INTO inventory (sku,name,stock,unit_price,category,brand,gst_rate,reorder_level,max_stock) VALUES (?,?,?,?,?,?,?,?,?)`
-        ).bind(
-          sku, row.name, Number(row.stock)||0, Number(row.unit_price)||0,
-          row.category||"General", row.brand||"",
-          Number(row.gst_rate)||18, Number(row.reorder_level)||10, Number(row.max_stock)||500
-        ));
+          `INSERT OR IGNORE INTO inventory (${allCols.join(',')}) VALUES (${allCols.map(() => '?').join(',')})`
+        ).bind(sku, ...cols.map(c => IMP_SPEC[c](row[c]))));
         existingSkus.add(sku);
       }
       chunkIdxMap.push(idx);

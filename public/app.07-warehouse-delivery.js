@@ -1717,6 +1717,7 @@ async function renderDeliveriesHub(el) {
   APP._delivTab = active;
   writeHash('delivery', active);
   registerHub('delivery', delivHubTab);
+  setHubBreadcrumb('delivery', (tabs.find(t => t.k === active) || {}).label);
   el.innerHTML = `
     <div class="dhub-tabs" role="tablist" aria-label="Deliveries">
       ${tabs.map(t => `<button class="dhub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('delivHubTab', t.k)}>${h(t.label)}</button>`).join('')}
@@ -1741,6 +1742,7 @@ async function delivHubTab(k) {
   if (!tabs.some(t => t.k === k)) return;
   APP._delivTab = k;
   writeHash('delivery', k);
+  setHubBreadcrumb('delivery', (DELIV_TABS.find(t => t.k === k) || {}).label);
   document.querySelectorAll('.dhub-tab').forEach(b => {
     const on = b.dataset.k === k;
     b.classList.toggle('on', on);

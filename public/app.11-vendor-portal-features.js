@@ -656,13 +656,16 @@ async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
   const canImportVendors = APP.user && !['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user.role);
-  const startTab = APP._importDefaultTab || 'inventory';
+  // Inventory import (catalogue/pricing/cost rewrite) is Super Admin only.
+  const canImportInventory = APP.user?.role === 'super_admin';
+  let startTab = APP._importDefaultTab || (canImportInventory ? 'inventory' : 'orders');
+  if (startTab === 'inventory' && !canImportInventory) startTab = 'orders';
   APP._importDefaultTab = null;
 
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
-    <button class="tab-pill${startTab==='inventory'?' active':''}" ${dataActEl('importTab', 'inventory')}>Inventory</button>
+    ${canImportInventory ? '<button class="tab-pill'+(startTab==='inventory'?' active':'')+'" '+dataActEl('importTab','inventory')+'>Inventory</button>' : ''}
     <button class="tab-pill${startTab==='orders'?' active':''}" ${dataActEl('importTab', 'orders')}>Orders</button>
     ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" '+dataActEl('importTab','vendors')+'>Vendors</button>' : ''}
     <button class="tab-pill${startTab==='jobs'?' active':''}" ${dataActEl('importTab', 'jobs')}>Import History</button>
@@ -737,6 +740,10 @@ function showImportTab(tab, jobs) {
     return;
   }
   const isInventory = tab === 'inventory';
+  if (isInventory && APP.user?.role !== 'super_admin') {
+    el.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted)">Inventory import is restricted to Super Admin.</div>`;
+    return;
+  }
   const cols = isInventory
     ? 'sku, name, category, sub_category, brand, stock, unit_price, mrp, cost_excl_gst, gst_rate, reorder_level, max_stock, uom, pack_size, units_per_case, weight_grams, barcode, vendor_sku, vendor_lead_days, vendor_moq'
     : 'client_id, grand_total, subtotal, gst, notes';
@@ -748,9 +755,15 @@ function showImportTab(tab, jobs) {
         <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import ${isInventory ? 'Inventory Items' : 'Orders'}</div>
         <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers</div>
       </div>
-      <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', tab)}>⬇ Download Sample Template</button>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        ${isInventory ? `<button class="btn btn-secondary btn-sm" ${dataAct('downloadCurrentInventory')}>⬇ Download Current Inventory</button>` : ''}
+        <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', tab)}>⬇ Download Sample Template</button>
+      </div>
     </div>
     <div style="padding:16px 20px">
+      ${isInventory ? `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:#1e40af">
+        <b>Bulk edit &amp; backup:</b> <b>Download Current Inventory</b> exports every item in this exact column layout. Amend the values in Excel and re-upload here — rows are matched by <code>sku</code>, so existing items are <b>updated in place</b> and new SKUs are added.
+      </div>` : ''}
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
         <div style="font-weight:700;color:var(--navy);margin-bottom:6px">Required columns</div>
         <code style="color:var(--blue);word-break:break-all">${cols}</code>
@@ -766,6 +779,22 @@ function showImportTab(tab, jobs) {
       </div>
     </div>
   </div>`;
+}
+
+// Export every inventory item as a CSV whose header row EXACTLY matches the
+// inventory import template (see `cols` above), so the file round-trips: download
+// → amend in Excel → re-import (matched by sku). Values are raw (no ₹/grouping)
+// so numbers re-import cleanly; cells are quoted only when they contain a comma,
+// quote or newline (Excel-friendly).
+const INVENTORY_EXPORT_COLS = ['sku','name','category','sub_category','brand','stock','unit_price','mrp','cost_excl_gst','gst_rate','reorder_level','max_stock','uom','pack_size','units_per_case','weight_grams','barcode','vendor_sku','vendor_lead_days','vendor_moq'];
+async function downloadCurrentInventory() {
+  const items = await api('/inventory');
+  if (!items) return; // api() already surfaced the error
+  if (!items.length) { showToast('No inventory items to export', 'info'); return; }
+  const cell = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const header = INVENTORY_EXPORT_COLS.join(',');
+  const body = items.map(it => INVENTORY_EXPORT_COLS.map(c => cell(it[c])).join(',')).join('\n');
+  _downloadCSV('inventory-export', header + '\n' + body);
 }
 
 // Proper RFC-4180 CSV parser — handles quoted fields, embedded commas, CRLF, UTF-8 BOM
