@@ -11,7 +11,7 @@
   - *Spec:* `plans/active_milestones/001-phase2-consolidation/spec.md`
   - *Context:* `plans/active_milestones/001-phase2-consolidation/context.md`
 
-- [ ] **Milestone 2: Zoho Inventory → App sync** — STATUS: ACTIVE
+- [x] **Milestone 2: Zoho Inventory → App sync** — STATUS: COMPLETED (built; ships disabled + dry-run, awaiting secrets + live rollout)
   - *Description:* One-way Zoho Inventory → SmartPantry sync (Model A: Zoho owns stock). Cron
     delta every 3h + nightly full reconcile; OAuth refresh-token auth; SKU-keyed upsert; watermark
     in app_config; import_jobs audit; super-admin "Sync now"; dry-run rollout. Backend + small
