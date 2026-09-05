@@ -1,0 +1,83 @@
+{
+  "_comment": "AC8 frozen: {id,label} for nav profiles Phase 2 must not touch.",
+  "profiles": {
+    "procurement": [
+      {
+        "id": "dashboard",
+        "label": "Home"
+      },
+      {
+        "id": "procurement",
+        "label": "Purchase Orders"
+      },
+      {
+        "id": "vendors",
+        "label": "Vendors"
+      },
+      {
+        "id": "inventory",
+        "label": "Inventory"
+      },
+      {
+        "id": "consolidated_report",
+        "label": "Consolidated Report"
+      }
+    ],
+    "warehouse": [
+      {
+        "id": "dashboard",
+        "label": "Home"
+      },
+      {
+        "id": "warehouse",
+        "label": "Warehouse"
+      },
+      {
+        "id": "inventory",
+        "label": "Inventory"
+      }
+    ],
+    "finance": [
+      {
+        "id": "dashboard",
+        "label": "Home"
+      },
+      {
+        "id": "dc_billing",
+        "label": "DC Billing"
+      },
+      {
+        "id": "reports",
+        "label": "Reports & BI"
+      }
+    ],
+    "vendor": [
+      {
+        "id": "dashboard",
+        "label": "Home"
+      },
+      {
+        "id": "vendor_pos",
+        "label": "Purchase Orders"
+      },
+      {
+        "id": "vendor_invoices",
+        "label": "Invoices"
+      },
+      {
+        "id": "vendor_payments",
+        "label": "Payments"
+      }
+    ],
+    "vendor_user": [
+      {
+        "id": "dashboard",
+        "label": "Home"
+      },
+      {
+        "id": "vendor_pos",
+        "label": "Purchase Orders"
+      }
+    ]
+  }
+}

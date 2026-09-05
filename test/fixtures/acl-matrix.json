@@ -1,0 +1,123 @@
+{
+  "_comment": "AC7 frozen ground-truth: for each role, the PAGE_MAP pages canAccessPage MUST allow. Reviewed snapshot of the intended menu access (role NAV + dashboard + sanctioned ACTION_PAGES). A regression that widens/narrows access diverges from this file.",
+  "allow": {
+    "super_admin": [
+      "alerts",
+      "approval_chains",
+      "clients",
+      "consolidated_due",
+      "consolidated_orders",
+      "consolidated_report",
+      "dashboard",
+      "dc_billing",
+      "delivery",
+      "delivery_calendar",
+      "delivery_routes",
+      "dunning",
+      "exec_bi",
+      "fulfilment",
+      "import_data",
+      "inventory",
+      "next_actions",
+      "orders",
+      "over_delivery_audit",
+      "pipeline",
+      "place_order",
+      "porter_expenses",
+      "procurement",
+      "reports",
+      "service_desk",
+      "settings",
+      "sla_dashboard",
+      "staff",
+      "templates",
+      "todays_schedule",
+      "users",
+      "vendors",
+      "warehouse",
+      "zones"
+    ],
+    "ops_admin": [
+      "alerts",
+      "consolidated_due",
+      "dashboard",
+      "dc_billing",
+      "delivery",
+      "delivery_calendar",
+      "fulfilment",
+      "next_actions",
+      "orders",
+      "over_delivery_audit",
+      "pipeline",
+      "place_order",
+      "service_desk",
+      "settings",
+      "todays_schedule"
+    ],
+    "procurement_manager": [
+      "consolidated_report",
+      "dashboard",
+      "inventory",
+      "place_order",
+      "procurement",
+      "vendors"
+    ],
+    "warehouse_exec": [
+      "dashboard",
+      "inventory",
+      "warehouse"
+    ],
+    "delivery_manager": [
+      "dashboard",
+      "dc_billing",
+      "delivery",
+      "delivery_calendar",
+      "todays_schedule"
+    ],
+    "delivery_exec": [
+      "dashboard",
+      "delivery"
+    ],
+    "finance_admin": [
+      "dashboard",
+      "dc_billing",
+      "reports"
+    ],
+    "client_admin": [
+      "approvals",
+      "client_budget",
+      "client_consumption",
+      "client_reports",
+      "dashboard",
+      "my_inventory",
+      "my_orders",
+      "place_order",
+      "service_desk",
+      "track_delivery"
+    ],
+    "client_approver": [
+      "approvals",
+      "dashboard",
+      "my_orders",
+      "place_order",
+      "track_delivery"
+    ],
+    "client_user": [
+      "dashboard",
+      "my_inventory",
+      "my_orders",
+      "place_order",
+      "track_delivery"
+    ],
+    "vendor_admin": [
+      "dashboard",
+      "vendor_invoices",
+      "vendor_payments",
+      "vendor_pos"
+    ],
+    "vendor_user": [
+      "dashboard",
+      "vendor_pos"
+    ]
+  }
+}

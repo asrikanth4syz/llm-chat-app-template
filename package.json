@@ -33,6 +33,7 @@
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",
-		"test:smoke": "node test/smoke.mjs"
+		"test:smoke": "node test/smoke.mjs",
+		"test:phase2": "node test/phase2.mjs"
 	}
 }
