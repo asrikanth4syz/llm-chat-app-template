@@ -548,3 +548,26 @@ After deploying `0008_user_client_link.sql`, existing client users must **log ou
 - `orderTypeBadge()` helper: Regular=blue, Urgent=red, Ad-Hoc=amber
 - Badge shown in: Order Queue table, My Orders table, My Orders cards, Order Detail modal
 - Urgent orders highlight row amber in Order Queue table
+
+### Phase 2 — Consolidation
+- **Addressable tabs (hash routing):** the URL hash is now the source of truth for the current page and, on tabbed hubs, the active tab (`#orders/pipeline`, `#delivery/calendar`, `#my_orders/tracking`). Deep links and browser back/forward work; `navigate(page, { tab })` keeps the hash in sync. Core helpers: `parseHash`, `writeHash`, `routeTab`, `registerHub`, `onHashChange`.
+- **Phase-based status stepper:** shared `phaseStepper(status)` component + `ORDER_PHASES` map grouping the 14 FSM statuses into five phases (Placed → Approved → Fulfilment → Shipment → Delivered), with a Cancelled terminal marker. Single source of truth reused across surfaces.
+- **Merged Orders surfaces:** the `orders` page is now a hub with addressable tabs **Queue · Pipeline · Due Items** (`renderOrdersHub`). Pipeline and Due Items left the sidebar and fold in as tabs; they stay reachable off-nav via `ACTION_PAGES`, and shortcuts/deep links redirect into the hub (`HUB_REDIRECT`). The Order Queue's flat 14-status strip was replaced by a phase-stepper filter (exact-status deep links like `oqGoto` still work — they light up their phase).
+- **Merged Deliveries hub:** the existing Deliveries hub (Today · Deliveries · Calendar · Routes) tabs are now addressable (`#delivery/<tab>`) and honour deep links / back-forward.
+- **Merged client order surfaces:** client **My Orders** + **Track Delivery** combined into one `renderMyOrdersHub` (tabs Orders · Tracking). Client order cards now use the shared phase stepper instead of a bespoke 5-stage bar.
+- No page ids were removed, so ACL, quick actions and the frontend smoke test are unaffected.
+
+### Phase 2 — Consolidation · verify-and-harden pass (orchestrated)
+Ran the spec-driven lifecycle (research → spec + spec-gate → plan + plan-gate → construction)
+over the shipped Phase-2 code; artifacts under `plans/active_milestones/001-phase2-consolidation/`.
+- **Executable acceptance criteria:** new `test/phase2.mjs` (`npm run test:phase2`) loads the app over
+  a real http origin and asserts every Phase-2 AC against the shipped code; frozen fixtures under
+  `test/fixtures/` (hand-authored ACL matrix, pre-consolidation page-id list, untouched-NAV snapshot).
+  12+ ACs verified green (hash addressability, phase-stepper status coverage incl. fallback + cancelled
+  marker, ACL parity, no-page-id-removed, logout hash/sp_page clear, one-stepper reuse).
+- **Fixes the gates found:** removed the phantom role `ops_manager` from `ACTION_PAGES.place_order`
+  (not in `ROLES`); `delivTabsForRole` now returns `[]` for roles that cannot open the Deliveries hub
+  (tab set now matches `canAccessPage` for all 12 roles).
+- **Enhancement:** the Orders-hub "Due Items" tab shows an overdue-count badge (count of
+  `days_overdue > 0`), preserving the at-a-glance signal lost from the sidebar; async, non-blocking,
+  99+ cap, hidden at zero, distinct `unknown` state when data is unavailable.

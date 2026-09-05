@@ -1,4 +1,149 @@
 /* ============================================================
+   ORDERS HUB  (Phase 2 — merged Orders surfaces)
+   One addressable-tab surface for the staff order views that used to be three
+   separate sidebar pages: the live Queue, the Pipeline board, and Due Items.
+   Tabs are deep-linkable as #orders/<tab>; each tab body is rendered by its
+   existing page renderer, unchanged.
+   ============================================================ */
+const ORDERS_TABS = [
+  { k:'queue',    label:'Queue',     fn:'renderOrderQueue',      page:'orders' },
+  { k:'pipeline', label:'Pipeline',  fn:'renderPipeline',        page:'pipeline' },
+  { k:'due',      label:'Due Items', fn:'renderConsolidatedDue', page:'consolidated_due' },
+];
+function ordersTabsForRole() { return ORDERS_TABS.filter(t => canAccessPage(t.page)); }
+
+let _oqPhaseCssDone = false;
+function injectOqPhaseCss() {
+  if (_oqPhaseCssDone) return; _oqPhaseCssDone = true;
+  const css = `
+  .oq-phasebar{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+  .oq-phase{appearance:none;background:none;border:1px solid transparent;border-radius:9px;cursor:pointer;
+    display:flex;align-items:center;gap:6px;padding:7px 11px;font-size:.82rem;font-weight:700;color:var(--text-muted)}
+  .oq-phase:hover{background:var(--bg,#f4f7f9);color:var(--navy,#15303d)}
+  .oq-phase.on{background:color-mix(in srgb,var(--primary) 12%,transparent);border-color:color-mix(in srgb,var(--primary) 32%,transparent);color:var(--primary)}
+  .oq-phase-ic{font-size:.9rem;line-height:1}
+  .oq-phase-cnt{font-size:.72rem;font-weight:800;background:var(--border);color:var(--navy,#15303d);border-radius:20px;padding:1px 7px;min-width:20px;text-align:center}
+  .oq-phase.on .oq-phase-cnt{background:var(--primary);color:#fff}
+  .oq-phase--cancel.on{background:color-mix(in srgb,var(--danger,#ef4444) 12%,transparent);border-color:color-mix(in srgb,var(--danger,#ef4444) 32%,transparent);color:var(--danger,#ef4444)}
+  .oq-phase--cancel.on .oq-phase-cnt{background:var(--danger,#ef4444)}
+  .oq-phase-sep{width:14px;height:2px;background:var(--border);border-radius:2px;flex:0 0 auto}
+  @media(max-width:640px){.oq-phase-sep{display:none}.oq-phase{padding:6px 9px;font-size:.78rem}}`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+async function renderOrdersHub(el) {
+  const tabs = ordersTabsForRole();
+  // A single-tab role gets the plain page — no pointless tab bar.
+  if (tabs.length <= 1) { await window[(tabs[0] || ORDERS_TABS[0]).fn](el); return; }
+  injectHubCss();
+  const active = routeTab('orders', tabs.map(t => t.k), tabs[0].k);
+  APP._ordersTab = active;
+  writeHash('orders', active);
+  registerHub('orders', ordersHubTab);
+  el.innerHTML = `
+    <div class="hub-tabs" id="orders-hub-tabs" role="tablist" aria-label="Orders">
+      ${tabs.map(t => {
+        // Phase 2 (AC15): the Due Items tab carries an overdue-count badge, so the
+        // at-a-glance signal that used to live on the sidebar survives the fold.
+        const badge = t.k === 'due' ? `<span class="hub-badge" id="orders-due-badge" hidden></span>` : '';
+        return `<button class="hub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('ordersHubTab', t.k)}>${h(t.label)}${badge}</button>`;
+      }).join('')}
+    </div>
+    <div id="orders-hub-body"><div class="loading-state"><div class="spinner"></div></div></div>`;
+  // Fire-and-forget: the badge populates asynchronously and never blocks the tab body.
+  if (tabs.some(t => t.k === 'due')) loadOrdersDueBadge();
+  const body = document.getElementById('orders-hub-body');
+  await window[tabs.find(t => t.k === active).fn](body);
+}
+
+// AC15: populate the Due Items hub-tab badge with the count of OVERDUE due items
+// (rows with days_overdue > 0 from /reports/consolidated-due — the same signal the
+// Due Items page uses). Uses a raw fetch (not api()) so a background badge never
+// triggers api()'s error toast or 401 logout. States: count>0 → "N" (or "99+");
+// count 0 → hidden; data unavailable/NaN → a distinct data-badge-state="unknown".
+async function loadOrdersDueBadge() {
+  let rows = null;
+  try {
+    const res = await fetch('/api/reports/consolidated-due', {
+      headers: APP.token ? { 'Authorization': 'Bearer ' + APP.token } : {},
+    });
+    if (res.ok) rows = await res.json();
+  } catch (_) { /* leave rows null → unknown */ }
+  const el = document.getElementById('orders-due-badge');
+  if (!el) return; // tab bar gone (navigated away)
+  if (!Array.isArray(rows)) {
+    el.hidden = true; el.textContent = ''; el.setAttribute('data-badge-state', 'unknown'); return;
+  }
+  const n = rows.filter(r => Number(r.days_overdue) > 0).length;
+  if (!Number.isFinite(n) || n <= 0) {
+    el.hidden = true; el.textContent = ''; el.setAttribute('data-badge-state', 'zero'); return;
+  }
+  el.textContent = n > 99 ? '99+' : String(n);
+  el.hidden = false; el.setAttribute('data-badge-state', 'count');
+  el.title = `${n} overdue due item${n === 1 ? '' : 's'}`;
+}
+
+async function ordersHubTab(k) {
+  const tabs = ordersTabsForRole();
+  if (!tabs.some(t => t.k === k)) return;
+  APP._ordersTab = k;
+  writeHash('orders', k);
+  document.querySelectorAll('#orders-hub-tabs .hub-tab').forEach(b => {
+    const on = b.dataset.k === k;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const body = document.getElementById('orders-hub-body');
+  if (!body) return;
+  body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  await window[ORDERS_TABS.find(t => t.k === k).fn](body);
+}
+
+/* ============================================================
+   MY ORDERS HUB  (Phase 2 — client order surfaces)
+   Merges the client "My Orders" and "Track Delivery" pages into one
+   addressable-tab surface (#my_orders/orders · #my_orders/tracking).
+   ============================================================ */
+const MYORDERS_TABS = [
+  { k:'orders',   label:'My Orders',      fn:'renderMyOrders',      page:'my_orders' },
+  { k:'tracking', label:'Track Delivery', fn:'renderTrackDelivery', page:'track_delivery' },
+];
+function myOrdersTabsForRole() { return MYORDERS_TABS.filter(t => canAccessPage(t.page)); }
+
+async function renderMyOrdersHub(el) {
+  const tabs = myOrdersTabsForRole();
+  if (tabs.length <= 1) { await window[(tabs[0] || MYORDERS_TABS[0]).fn](el); return; }
+  injectHubCss();
+  const active = routeTab('my_orders', tabs.map(t => t.k), tabs[0].k);
+  APP._myOrdersTab = active;
+  writeHash('my_orders', active);
+  registerHub('my_orders', myOrdersHubTab);
+  el.innerHTML = `
+    <div class="hub-tabs" id="myorders-hub-tabs" role="tablist" aria-label="My Orders">
+      ${tabs.map(t => `<button class="hub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('myOrdersHubTab', t.k)}>${h(t.label)}</button>`).join('')}
+    </div>
+    <div id="myorders-hub-body"><div class="loading-state"><div class="spinner"></div></div></div>`;
+  const body = document.getElementById('myorders-hub-body');
+  await window[tabs.find(t => t.k === active).fn](body);
+}
+
+async function myOrdersHubTab(k) {
+  const tabs = myOrdersTabsForRole();
+  if (!tabs.some(t => t.k === k)) return;
+  APP._myOrdersTab = k;
+  writeHash('my_orders', k);
+  document.querySelectorAll('#myorders-hub-tabs .hub-tab').forEach(b => {
+    const on = b.dataset.k === k;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const body = document.getElementById('myorders-hub-body');
+  if (!body) return;
+  body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  await window[MYORDERS_TABS.find(t => t.k === k).fn](body);
+}
+
+/* ============================================================
    MY ORDERS
    ============================================================ */
 async function renderMyOrders(el) {
@@ -21,7 +166,6 @@ async function renderMyOrders(el) {
     if (!APP._moSearch) APP._moSearch = '';
 
     const STATUS_LABEL = { DRAFT:'Draft', PENDING_PRICING:'Awaiting Pricing', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
-    const ORDER_STEPS = ['SUBMITTED','APPROVED','READY_TO_PICK','IN_SHIPMENT','CLOSED'];
     const STATUS_COLOR = { DRAFT:'#6b7280', PENDING_PRICING:'#d97706', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
 
     function moFiltered() {
@@ -33,12 +177,6 @@ async function renderMyOrders(el) {
         list = list.filter(o => o.id.toLowerCase().includes(q) || (o.notes||'').toLowerCase().includes(q));
       }
       return list;
-    }
-
-    function orderProgress(status) {
-      if (status === 'CANCELLED') return -1;
-      const idx = ORDER_STEPS.indexOf(status);
-      return idx === -1 ? 0 : idx;
     }
 
     function moRender() {
@@ -61,23 +199,10 @@ async function renderMyOrders(el) {
         const isCancelled = o.status === 'CANCELLED';
         const isPartial   = o.status === 'PARTIALLY_CLOSED';
         const isDone      = o.status === 'CLOSED';
-        const progress    = orderProgress(o.status);
         const itemNames   = (o.items||[]).slice(0,4).map(i=>i.name||i.item_name||'').filter(Boolean);
 
-        // Progress bar (5 stages)
-        const progressBar = isCancelled ? `
-          <div style="margin:12px 0 4px;display:flex;align-items:center;gap:8px">
-            <div style="flex:1;height:4px;border-radius:2px;background:var(--red-soft-bg)"></div>
-            <span style="font-size:.72rem;color:var(--red);font-weight:700;white-space:nowrap">Cancelled</span>
-          </div>` : `
-          <div style="margin:12px 0 8px">
-            <div style="display:flex;gap:2px;margin-bottom:4px">
-              ${ORDER_STEPS.map((s,i) => `<div style="flex:1;height:4px;border-radius:2px;background:${i<=progress?sc:'var(--border)'}"></div>`).join('')}
-            </div>
-            <div style="display:flex;justify-content:space-between">
-              ${ORDER_STEPS.map((s,i) => `<span style="font-size:.65rem;color:${i<=progress?sc:'var(--text-muted)'};font-weight:${i===progress?700:400};${i===0?'':'text-align:center;flex:1'}">${i===0?STATUS_LABEL[s]:STATUS_LABEL[s]}</span>`).join('')}
-            </div>
-          </div>`;
+        // Phase-based status stepper (shared component, single source of truth).
+        const progressBar = `<div style="margin:12px 0 8px">${phaseStepper(o.status, { compact:true })}</div>`;
 
         return `
         <div style="background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:12px;overflow:hidden;border:1px solid ${isCancelled?'var(--red-soft-bg)':isDone?'#bbf7d0':'var(--border)'}">
@@ -955,7 +1080,6 @@ async function renderOrderQueue(el) {
     return res;
   }
 
-  const STATUS_TABS = ['All','PENDING_PRICING','SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
@@ -1030,21 +1154,40 @@ async function renderOrderQueue(el) {
     </div>`;
   }
 
+  // Phase 2: the flat 14-status strip is replaced by a phase-based status
+  // stepper filter. The active filter (APP._oqStatusTab) is 'All', a phase key
+  // ('phase:<key>'), or an exact status (kept so KPI-tile deep links like
+  // oqGoto('PENDING_APPROVAL') still work — they just light up their phase).
+  function oqActivePhaseKey() {
+    const t = APP._oqStatusTab || 'All';
+    if (t === 'All') return 'All';
+    if (t.startsWith('phase:')) return t.slice(6);
+    if (['CANCELLED','REJECTED'].includes(t)) return 'cancelled';
+    return orderPhaseKey(t) || 'All';
+  }
   function oqTabsHtml() {
+    injectOqPhaseCss();
     const fOrders = filteredOrders();
-    return `<div class="tabs" style="margin-bottom:0;flex-wrap:wrap">
-      ${STATUS_TABS.map(s=>{
-        const cnt = s==='All' ? fOrders.length : fOrders.filter(o=>o.status===s).length;
-        return `<button class="tab-btn${APP._oqStatusTab===s?' active':''}" ${dataAct('switchOQTab', s)}>
-          ${s==='All'?'All':s.replace(/_/g,' ')} <span class="badge badge-secondary" style="margin-left:4px;font-size:.72rem">${cnt}</span>
-        </button>`;
-      }).join('')}
+    const activeKey = oqActivePhaseKey();
+    const cnt = ph => fOrders.filter(o => ph.statuses.includes(o.status)).length;
+    const cancelledN = fOrders.filter(o => ['CANCELLED','REJECTED'].includes(o.status)).length;
+    const step = (key, on, act, icon, label, count, extraCls='') =>
+      `<button class="oq-phase ${on?'on':''} ${extraCls}" role="tab" aria-selected="${on}" ${dataAct('switchOQTab', act)}>
+        ${icon?`<span class="oq-phase-ic">${icon}</span>`:''}<span class="oq-phase-lbl">${label}</span><span class="oq-phase-cnt">${count}</span>
+      </button>`;
+    return `<div class="oq-phasebar" role="tablist" aria-label="Filter orders by phase">
+      ${step('All', activeKey==='All', 'All', '', 'All', fOrders.length)}
+      ${ORDER_PHASES.map(p => `<span class="oq-phase-sep" aria-hidden="true"></span>${step(p.key, activeKey===p.key, 'phase:'+p.key, p.icon, p.label, cnt(p))}`).join('')}
+      ${cancelledN ? `<span class="oq-phase-sep" aria-hidden="true"></span>${step('cancelled', activeKey==='cancelled', 'CANCELLED', '✕', 'Cancelled', cancelledN, 'oq-phase--cancel')}` : ''}
     </div>`;
   }
 
   function oqTableHtml(tab) {
     const fOrders = filteredOrders();
-    const filtered = tab==='All' ? fOrders : fOrders.filter(o=>o.status===tab);
+    let filtered;
+    if (!tab || tab === 'All') filtered = fOrders;
+    else if (tab.startsWith('phase:')) { const ph = ORDER_PHASES.find(p => p.key === tab.slice(6)); filtered = ph ? fOrders.filter(o => ph.statuses.includes(o.status)) : fOrders; }
+    else filtered = fOrders.filter(o=>o.status===tab);
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';

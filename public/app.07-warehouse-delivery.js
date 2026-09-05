@@ -1695,6 +1695,11 @@ const DELIV_TABS = [
 // super_admin kept all four (incl. Routes); ops/delivery managers had Today +
 // List + Calendar; delivery execs only saw the challan list.
 function delivTabsForRole(role) {
+  // Roles that cannot open the Deliveries hub get no tabs — keeps the tab set
+  // consistent with canAccessPage for all roles, not just hub-accessible ones
+  // (the hub never renders for them; this hardens the dead path).
+  const navProfile = (typeof ROLES !== 'undefined' && ROLES[role]) ? ROLES[role].nav : null;
+  if (!(NAV[navProfile] || []).some(i => i.id === 'delivery')) return [];
   if (role === 'delivery_exec') return DELIV_TABS.filter(t => t.k === 'list');
   if (role === 'super_admin')   return DELIV_TABS;
   return DELIV_TABS.filter(t => t.k !== 'routes');
@@ -1705,8 +1710,13 @@ async function renderDeliveriesHub(el) {
   // A single-tab role (delivery exec) gets the plain page — no pointless tab bar.
   if (tabs.length <= 1) { await window[(tabs[0] || DELIV_TABS[1]).fn](el); return; }
   injectDelivHubCss();
+  // Phase 2: the active tab is addressable as #delivery/<k>. The hash wins on a
+  // deep link / refresh; otherwise fall back to the last-used tab.
   if (!tabs.some(t => t.k === APP._delivTab)) APP._delivTab = tabs[0].k;
-  const active = APP._delivTab;
+  const active = routeTab('delivery', tabs.map(t => t.k), APP._delivTab);
+  APP._delivTab = active;
+  writeHash('delivery', active);
+  registerHub('delivery', delivHubTab);
   el.innerHTML = `
     <div class="dhub-tabs" role="tablist" aria-label="Deliveries">
       ${tabs.map(t => `<button class="dhub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('delivHubTab', t.k)}>${h(t.label)}</button>`).join('')}
@@ -1730,6 +1740,7 @@ async function delivHubTab(k) {
   const tabs = delivTabsForRole(APP.user?.role);
   if (!tabs.some(t => t.k === k)) return;
   APP._delivTab = k;
+  writeHash('delivery', k);
   document.querySelectorAll('.dhub-tab').forEach(b => {
     const on = b.dataset.k === k;
     b.classList.toggle('on', on);
