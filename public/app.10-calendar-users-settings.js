@@ -918,14 +918,18 @@ async function settingsTab(tab, btn) {
       </div>
     </div>
 
+    ${APP.user?.role === 'super_admin' ? `
     <div class="card" style="margin-top:16px">
-      <div class="card-header"><span>Zoho Inventory Sync</span>${z.enabled ? '<span class="badge badge-success">On</span>' : '<span class="badge badge-warning">Off</span>'}</div>
+      <div class="card-header"><span>Zoho Inventory Sync</span>
+        ${z.enabled ? '<span class="badge badge-success">On</span>' : '<span class="badge badge-warning">Off</span>'}
+        <span class="badge ${z.mode==='live'?'badge-danger':'badge-info'}">${z.mode==='live'?'LIVE':'Dry-run'}</span>
+      </div>
       <div class="card-body" style="display:grid;gap:16px;padding:20px">
         <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
             <div>
-              <div style="font-weight:600;font-size:.9rem">Stock sync with Zoho Inventory</div>
-              <div style="font-size:.78rem;color:var(--text-muted)">Push our stock levels to Zoho and accept stock updates back via webhook</div>
+              <div style="font-weight:600;font-size:.9rem">Pull stock &amp; catalogue from Zoho Inventory</div>
+              <div style="font-size:.78rem;color:var(--text-muted)">One-way: <b>Zoho → this app</b>. Zoho owns stock (Model A); this app never writes back to Zoho.</div>
             </div>
             <button class="btn btn-sm ${z.enabled ? 'btn-danger' : 'btn-success'}" ${dataAct('zohoInvToggle', !z.enabled)}>
               ${z.enabled ? 'Disable' : 'Enable'} Sync
@@ -933,42 +937,45 @@ async function settingsTab(tab, btn) {
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.8rem">
             ${statusPill(z.configured, 'API configured', 'API not configured')}
-            ${z.simulated_mode ? '<span class="badge badge-warning">Simulated mode</span>' : ''}
+            <label style="display:flex;align-items:center;gap:6px">Mode
+              <select ${dataChangeVal('zohoInvSetMode')} class="input" style="padding:2px 6px;font-size:.8rem">
+                <option value="dryrun" ${z.mode!=='live'?'selected':''}>Dry-run (writes nothing)</option>
+                <option value="live" ${z.mode==='live'?'selected':''}>Live (writes stock)</option>
+              </select>
+            </label>
             <span style="color:var(--text-muted)">${z.item_count ?? 0} active items</span>
           </div>
-          ${z.simulated_mode ? `<div style="font-size:.76rem;color:var(--text-muted)">Set <code>ZOHO_ACCESS_TOKEN</code> and <code>ZOHO_INVENTORY_ORG_ID</code> in wrangler.jsonc to push to the live Zoho org. Until then, syncs run in simulated mode so you can validate the flow.</div>` : ''}
+          ${!z.configured ? `<div style="font-size:.76rem;color:var(--text-muted)">Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_INVENTORY_ORG_ID</code> and <code>ZOHO_DC</code> as Worker secrets, then enable dry-run to verify the field mapping before going live.</div>` : ''}
         </div>
 
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync Now</button>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
+          <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
           <div style="font-size:.8rem;color:var(--text-muted)">
-            ${z.last_sync_at ? `Last sync: <b>${fmtDate(z.last_sync_at)}</b>${z.last_result ? ` · ${h(z.last_result)}` : ''}` : 'Never synced'}
+            ${z.last_sync_at ? `Last run: <b>${fmtDate(z.last_sync_at)}</b>` : 'Never synced'}
+            ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
           </div>
+        </div>
+        <div style="font-size:.78rem;color:var(--text-muted);display:flex;flex-wrap:wrap;gap:12px">
+          <span>Cursor: <b>${z.cursor_utc ? fmtDate(z.cursor_utc) : '—'}</b></span>
+          <span>Last full reconcile: <b>${z.last_full_at ? fmtDate(z.last_full_at) : 'never'}</b>${z.last_full_stale ? ' <span class="badge badge-warning">stale &gt;48h</span>' : ''}</span>
         </div>
 
         ${(z.recent_log||[]).length ? `
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:6px">
           <table class="table" style="margin:0">
-            <thead><tr><th>When</th><th>Direction</th><th>Items</th><th>Result</th></tr></thead>
+            <thead><tr><th>When</th><th>Run</th><th>Fetched</th><th>Written</th><th>Failed</th></tr></thead>
             <tbody>${z.recent_log.map(l=>`<tr>
               <td style="font-size:.8rem;color:var(--text-muted)">${fmtDate(l.created_at)}</td>
-              <td>${l.direction==='pull'?'⬇ Pull':'⬆ Push'}</td>
-              <td>${l.items}</td>
-              <td style="font-size:.8rem">${l.direction==='pull'?`${l.pushed} updated`:`${l.pushed} pushed · ${l.simulated} simulated`}</td>
+              <td style="font-size:.8rem">${h(String(l.type||'').replace(/^zoho-sync-?/,'') || 'sync')}</td>
+              <td>${l.total ?? 0}</td>
+              <td>${l.success_count ?? 0}</td>
+              <td>${(l.failed_count ?? 0) > 0 ? `<span style="color:var(--danger,#dc2626)">${l.failed_count}</span>` : '0'}</td>
             </tr>`).join('')}</tbody>
           </table>
         </div>` : ''}
-
-        <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px">
-          <div style="font-size:.82rem;font-weight:600;margin-bottom:6px">Inbound Webhook URL (Zoho → us)</div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <code style="font-size:.8rem;background:#f1f5f9;padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho-inventory/webhook</code>
-            <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho-inventory/webhook')}>Copy</button>
-          </div>
-          <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Point Zoho Inventory stock-update webhooks here to keep our stock in sync. Payload: <code>{ items: [{ sku, stock }] }</code></div>
-        </div>
       </div>
-    </div>`;
+    </div>` : ''}`;
   }
 
   else if (tab === 'budgets') {
@@ -1340,20 +1347,51 @@ async function testEmail() {
   showToast('Test email queued — check server logs for delivery status');
 }
 
+function _zohoReloadIntegrations() {
+  settingsTab('integrations', document.querySelector('.settings-nav-btn.active'));
+}
+
 async function zohoInvToggle(enable) {
   const res = await api('/integrations/zoho-inventory/toggle', { method:'POST', body: JSON.stringify({ enabled: !!enable }) });
   if (!res) return;
   showToast(res.enabled ? 'Zoho Inventory sync enabled' : 'Zoho Inventory sync disabled');
-  settingsTab('integrations', document.querySelector('.settings-nav-btn.active'));
+  _zohoReloadIntegrations();
+}
+
+async function zohoInvSetMode(mode) {
+  const res = await api('/integrations/zoho-inventory/toggle', { method:'POST', body: JSON.stringify({ mode }) });
+  if (!res) return;
+  showToast(res.mode === 'live' ? 'Zoho sync set to LIVE — writes stock' : 'Zoho sync set to dry-run — writes nothing');
+  _zohoReloadIntegrations();
+}
+
+// Reports one Zoho→app pull run (delta or full) back to the operator.
+function _zohoReport(res) {
+  if (!res) return;
+  if (res.status === 'skipped') { showToast('A sync is already in flight — skipped'); return; }
+  if (res.status === 'disabled') { showToast('Sync is disabled — enable it first'); return; }
+  if (res.status === 'not_configured') { showToast('Zoho secrets not configured'); return; }
+  if (res.status === 'started') { showToast('Full reconcile started — check the run log shortly'); return; }
+  if (res.status === 'error') { showToast(`Sync error: ${(res.errors && res.errors[0]) || 'see run log'}`); return; }
+  const m = res.mode === 'dryrun' ? ' (dry-run, nothing written)' : '';
+  showToast(`Pull ${res.scope}: ${res.written} written · ${res.deactivated||0} deactivated · ${res.failed||0} failed${m}`);
 }
 
 async function zohoInvSyncNow() {
-  const btn = document.querySelector('#settings-content .btn-primary');
+  const btn = document.querySelector('[data-act="zohoInvSyncNow"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
-  const res = await api('/integrations/zoho-inventory/sync', { method:'POST' });
-  if (!res) { if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync Now'; } return; }
-  showToast(`Synced ${res.items} item${res.items!==1?'s':''} to Zoho${res.simulated_mode ? ' (simulated)' : ` · ${res.pushed} pushed`}`);
-  settingsTab('integrations', document.querySelector('.settings-nav-btn.active'));
+  const res = await api('/integrations/zoho-inventory/sync', { method:'POST', body: JSON.stringify({}) });
+  _zohoReport(res);
+  _zohoReloadIntegrations();
+}
+
+async function zohoInvFullReconcile() {
+  if (!confirm('Run a full reconcile now? In LIVE mode this overwrites stock from Zoho and soft-deactivates SKUs Zoho no longer lists.')) return;
+  const btn = document.querySelector('[data-act="zohoInvFullReconcile"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Reconciling…'; }
+  const res = await api('/integrations/zoho-inventory/sync', { method:'POST', body: JSON.stringify({ full: true }) });
+  _zohoReport(res);
+  setTimeout(_zohoReloadIntegrations, 1500);
 }
 
 function addApprovalRuleModal() {

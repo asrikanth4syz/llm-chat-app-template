@@ -221,88 +221,355 @@ async function nextPONumber(env: Env): Promise<string> {
 // stock updates back via a webhook. Real API calls fire when an OAuth access
 // token is configured; otherwise the push is simulated so the whole flow —
 // toggle, sync, log, webhook — is exercisable before credentials are wired in.
-function zohoInvConfigured(env: Env): boolean {
-  return !!((env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID) && env.ZOHO_ACCESS_TOKEN);
+// ══════════════════════════════════════════════════════════════════════
+// Zoho Inventory → App sync (milestone 002). ONE-WAY pull: Zoho is the stock
+// authority (Model A). The app NEVER writes to Zoho (the old app→Zoho push is
+// retired). Ships DISABLED + dry-run by default. Built against an injectable
+// fetch so vitest drives it deterministically (no live Zoho in CI).
+//   stock ← stock_on_hand ; `reserved` is an app-owned overlay the sync never
+//   touches (order placement only reserves; stock moves on physical dispatch).
+// ══════════════════════════════════════════════════════════════════════
+type FetchImpl = typeof fetch;
+
+const ZOHO_SYNC = {
+  PER_PAGE: 200,
+  OVERLAP_SEC: 10 * 60,           // delta lower-bound safety margin (boundary edits)
+  OVERLAP_CAP_SEC: 24 * 60 * 60,  // never rewind the cursor more than this
+  MAX_RETRIES: 4,
+  RETRY_BASE_MS: 1000,
+  RETRY_CAP_MS: 20000,
+  MAX_PAGES_PER_RUN: 100,         // 20k items/run ceiling; overflow → cursor holds
+  LOCK_TTL_SEC: 15 * 60,
+  TOKEN_SKEW_SEC: 120,
+  MAX_DEACTIVATE_PCT: 10,         // abort nightly deactivation above this share
+} as const;
+
+const WEIGHT_UNITS: Record<string, number> = { kg:1000, g:1, gm:1, gms:1, gram:1, grams:1, lb:453.592, lbs:453.592, oz:28.3495 };
+
+class ZohoAuthError extends Error {}
+
+const _zSleep = (ms: number) => new Promise<void>(r => setTimeout(r, Math.min(ms, ZOHO_SYNC.RETRY_CAP_MS)));
+function zohoDc(env: Env): string { return (env.ZOHO_DC || "in").trim(); }
+function zohoConfigured(env: Env): boolean {
+  return !!(env.ZOHO_CLIENT_ID && env.ZOHO_CLIENT_SECRET && env.ZOHO_REFRESH_TOKEN && (env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID));
+}
+// Offset-bearing ISO → UTC epoch seconds (Date.parse honours the offset). 0 if unparseable.
+function toEpoch(v: unknown): number { const t = Date.parse(String(v ?? "")); return Number.isFinite(t) ? Math.floor(t/1000) : 0; }
+
+// OAuth2 refresh-token → cached access token. Refresh token is the SOLE source
+// (the static ZOHO_ACCESS_TOKEN is not used live). Never logs the token/secrets.
+async function zohoGetToken(env: Env, fetchImpl: FetchImpl, force = false): Promise<string> {
+  const now = Math.floor(Date.now()/1000);
+  if (!force) {
+    const cached = await getConfig(env, "zoho_token", "");
+    const exp = parseInt(await getConfig(env, "zoho_token_exp", "0"), 10) || 0;
+    if (cached && exp - ZOHO_SYNC.TOKEN_SKEW_SEC > now) return cached;
+  }
+  const body = new URLSearchParams({
+    refresh_token: env.ZOHO_REFRESH_TOKEN || "",
+    client_id: env.ZOHO_CLIENT_ID || "",
+    client_secret: env.ZOHO_CLIENT_SECRET || "",
+    grant_type: "refresh_token",
+  });
+  const res = await fetchImpl(`https://accounts.zoho.${zohoDc(env)}/oauth/v2/token`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString(),
+  });
+  const data = await res.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string };
+  if (!res.ok || !data.access_token) throw new ZohoAuthError(data.error || `token refresh failed (${res.status})`);
+  await setConfig(env, "zoho_token", data.access_token, "system");
+  await setConfig(env, "zoho_token_exp", String(now + (data.expires_in || 3600)), "system");
+  return data.access_token;
 }
 
-async function pushItemToZoho(env: Env, item: {sku:string; name:string; stock:number}): Promise<"pushed"|"simulated"> {
-  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID;
-  if (!env.ZOHO_ACCESS_TOKEN || !orgId) {
-    console.log(`[ZohoInv] (simulated) ${item.sku} → stock ${item.stock}`);
-    return "simulated";
-  }
-  try {
-    await fetch(`https://www.zohoapis.in/inventory/v1/items?organization_id=${orgId}`, {
-      method: "POST",
-      headers: { "Authorization": `Zoho-oauthtoken ${env.ZOHO_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sku: item.sku, name: item.name, initial_stock: item.stock }),
-    });
-    return "pushed";
-  } catch (e) {
-    console.log(`[ZohoInv] push failed for ${item.sku}: ${String(e)}`);
-    return "simulated";
+// One page of items, with capped exponential back-off on 429/5xx (honours Retry-After).
+async function zohoFetchPage(
+  env: Env, token: string, page: number, modifiedSinceEpoch: number, fetchImpl: FetchImpl,
+): Promise<{ items: Record<string,unknown>[]; hasMore: boolean; total: number }> {
+  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID || "";
+  const qs = new URLSearchParams({ organization_id: orgId, per_page: String(ZOHO_SYNC.PER_PAGE), page: String(page) });
+  const headers: Record<string,string> = { "Authorization": `Zoho-oauthtoken ${token}` };
+  if (modifiedSinceEpoch > 0) headers["If-Modified-Since"] = new Date(modifiedSinceEpoch*1000).toUTCString();
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/inventory/v1/items?${qs.toString()}`, { headers });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt >= ZOHO_SYNC.MAX_RETRIES) throw new Error(`Zoho items page ${page}: HTTP ${res.status} after ${attempt} retries`);
+      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+      await _zSleep(Number.isFinite(ra) ? ra*1000 : Math.min(ZOHO_SYNC.RETRY_CAP_MS, ZOHO_SYNC.RETRY_BASE_MS * 2**attempt));
+      continue;
+    }
+    if (res.status === 401) throw new ZohoAuthError(`401 on items page ${page}`);
+    if (res.status === 304) return { items: [], hasMore: false, total: 0 }; // not-modified
+    if (!res.ok) throw new Error(`Zoho items page ${page}: HTTP ${res.status}`);
+    const data = await res.json().catch(() => ({})) as { items?: Record<string,unknown>[]; page_context?: { has_more_page?: boolean; total?: number } };
+    return {
+      items: Array.isArray(data.items) ? data.items : [],
+      hasMore: !!data.page_context?.has_more_page,
+      total: Number(data.page_context?.total ?? 0),
+    };
   }
 }
 
-async function runZohoInventorySync(env: Env, actor?: string): Promise<{items:number; pushed:number; simulated:number; at:string}> {
-  const { results } = await env.DB.prepare(
-    "SELECT sku, name, COALESCE(stock,0) as stock FROM inventory WHERE active=1"
-  ).all() as {results: Array<{sku:string;name:string;stock:number}>};
-  let pushed = 0, simulated = 0;
-  for (const it of results) {
-    const r = await pushItemToZoho(env, it);
-    if (r === "pushed") pushed++; else simulated++;
+// Map a Zoho item → an app inventory row (R1). Only present, non-blank values are
+// set, so a partial payload never blanks a column. `null`+reason for a blank sku.
+function mapZohoItem(z: Record<string, unknown>): { row: Record<string, unknown>; modifiedEpoch: number } | { error: string } {
+  const sku = String(z.sku ?? "").trim();
+  if (!sku) return { error: "blank sku" };
+  const row: Record<string, unknown> = { sku };
+  const put = (col: string, val: unknown) => { if (val !== undefined && val !== null && String(val).trim() !== "") row[col] = val; };
+  put("zoho_item_id", z.item_id);
+  put("name", z.name);
+  put("unit_price", z.rate);
+  put("cost_excl_gst", z.purchase_rate);
+  put("mrp", z.mrp ?? z.cf_mrp);
+  if (z.stock_on_hand !== undefined && z.stock_on_hand !== null && String(z.stock_on_hand).trim() !== "")
+    row["stock"] = Math.max(0, Math.round(Number(z.stock_on_hand) || 0)); // Model A
+  put("gst_rate", z.tax_percentage);
+  put("category", z.category_name);
+  put("brand", z.brand ?? z.cf_brand);
+  put("barcode", z.ean ?? z.upc);
+  put("uom", z.unit);
+  if (z.weight !== undefined && z.weight !== null && String(z.weight).trim() !== "") {
+    const factor = WEIGHT_UNITS[String(z.weight_unit ?? "g").toLowerCase().trim()];
+    if (factor) row["weight_grams"] = Math.round(Number(z.weight) * factor); // else skip ambiguous unit
   }
-  const at = new Date().toISOString();
-  await setConfig(env, "zoho_inv_last_sync_at", at, actor);
-  await setConfig(env, "zoho_inv_last_result", `${pushed} pushed · ${simulated} simulated · ${results.length} items`);
+  if (z.status !== undefined && z.status !== null && String(z.status).trim() !== "")
+    row["active"] = String(z.status).toLowerCase() === "active" ? 1 : 0;
+  return { row, modifiedEpoch: toEpoch(z.last_modified_time) };
+}
+
+interface ZohoSyncResult {
+  status: "ok" | "disabled" | "skipped" | "not_configured" | "error";
+  mode: "dryrun" | "live";
+  scope: "delta" | "full";
+  total: number; written: number; deactivated: number; failed: number;
+  errors: string[]; cursor_epoch: number;
+}
+
+async function logSyncJob(env: Env, r: ZohoSyncResult, actor: string): Promise<void> {
   try {
-    await env.DB.prepare("INSERT INTO zoho_sync_log (id,direction,items,pushed,simulated,status,actor) VALUES (?,?,?,?,?,?,?)")
-      .bind(uid(), "push", results.length, pushed, simulated, "OK", actor ?? null).run();
+    const type = `zoho-sync-${r.scope}${r.mode === "dryrun" ? "-dryrun" : ""}`;
+    await env.DB.prepare(
+      "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
+    ).bind(uid(), type, r.total, r.written, r.failed, JSON.stringify(r.errors.slice(0, 50)), actor).run();
+  } catch { /* import_jobs may be missing — non-fatal */ }
+  try {
+    await setConfig(env, "zoho_last_result", JSON.stringify({
+      status: r.status, scope: r.scope, mode: r.mode, total: r.total,
+      written: r.written, deactivated: r.deactivated, failed: r.failed, at: new Date().toISOString(),
+    }), actor);
+    await setConfig(env, "zoho_last_sync_at", new Date().toISOString(), actor);
   } catch { /* non-fatal */ }
-  return { items: results.length, pushed, simulated, at };
+}
+
+// The orchestrator: one Zoho→app pull. Non-throwing (a cron must never crash).
+// See spec 002 AC1–AC9. `fetchImpl` is injected in tests.
+async function runZohoSync(
+  env: Env,
+  opts: { full?: boolean; mode?: "dryrun" | "live"; actor?: string; fetchImpl?: FetchImpl } = {},
+): Promise<ZohoSyncResult> {
+  const fetchImpl = opts.fetchImpl || fetch;
+  const scope: "delta" | "full" = opts.full ? "full" : "delta";
+  const actor = opts.actor || "system";
+  const r: ZohoSyncResult = { status: "ok", mode: "dryrun", scope, total: 0, written: 0, deactivated: 0, failed: 0, errors: [], cursor_epoch: 0 };
+
+  // AC7: kill switch is the FIRST op — no network when disabled.
+  if ((await getConfig(env, "zoho_sync_enabled", "0")) !== "1") {
+    r.status = "disabled"; return r; // no job row for a disabled no-op (avoids log spam)
+  }
+  r.mode = opts.mode || ((await getConfig(env, "zoho_sync_mode", "dryrun")) === "live" ? "live" : "dryrun");
+  if (!zohoConfigured(env)) { r.status = "not_configured"; r.errors.push("Zoho secrets not configured"); await logSyncJob(env, r, actor); return r; }
+
+  // AC7: atomic non-overlap lock (CAS on app_config). Value = "<epoch>:<token>".
+  const now = Math.floor(Date.now()/1000);
+  const runToken = `${now}:${uid()}`;
+  const staleBefore = now - ZOHO_SYNC.LOCK_TTL_SEC;
+  await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('zoho_sync_lock','')").run().catch(() => {});
+  const acq = await env.DB.prepare(
+    `UPDATE app_config SET value=?, updated_at=datetime('now'), updated_by=? WHERE key='zoho_sync_lock'
+       AND (value='' OR value IS NULL OR CAST(substr(value,1,instr(value,':')-1) AS INTEGER) < ?)`
+  ).bind(runToken, actor, staleBefore).run();
+  if (!(acq.meta?.changes)) { r.status = "skipped"; r.errors.push("another sync in flight"); return r; }
+
+  const cursorBefore = await getConfig(env, "zoho_sync_cursor", "");
+  const cursorEpoch = cursorBefore ? (parseInt(cursorBefore, 10) || toEpoch(cursorBefore)) : 0;
+  r.cursor_epoch = cursorEpoch;
+
+  try {
+    const firstRun = !cursorEpoch;
+    const doFull = scope === "full" || firstRun; // first run bootstraps a full fetch
+    const modifiedSince = doFull ? 0 : Math.max(0, cursorEpoch - ZOHO_SYNC.OVERLAP_SEC);
+
+    // Buffer ALL pages and verify completeness BEFORE any write (D1 has no cross-batch txn).
+    let token = await zohoGetToken(env, fetchImpl);
+    const buffered: Record<string,unknown>[] = [];
+    let page = 1, hasMore = true, total = 0, reAuthed = false, capHit = false;
+    while (hasMore) {
+      if (page > ZOHO_SYNC.MAX_PAGES_PER_RUN) { capHit = true; r.errors.push(`page cap ${ZOHO_SYNC.MAX_PAGES_PER_RUN} hit — cursor held`); break; }
+      let pg;
+      try {
+        pg = await zohoFetchPage(env, token, page, modifiedSince, fetchImpl);
+      } catch (e) {
+        if (e instanceof ZohoAuthError && !reAuthed) { token = await zohoGetToken(env, fetchImpl, true); reAuthed = true; continue; }
+        throw e; // any other fetch error aborts with NO writes (cursor unchanged)
+      }
+      buffered.push(...pg.items);
+      total = pg.total || total;
+      hasMore = pg.hasMore;
+      page++;
+    }
+    const fetchComplete = !capHit; // every page fetched without error
+    r.total = buffered.length;
+
+    // Map + find the max modified watermark.
+    const mapped: { row: Record<string, unknown>; idx: number }[] = [];
+    const seen = new Set<string>();
+    let maxModified = cursorEpoch, blankSkipped = 0;
+    buffered.forEach((z, i) => {
+      const m = mapZohoItem(z);
+      if ("error" in m) { blankSkipped++; if (r.errors.length < 50) r.errors.push(`item ${i+1}: ${m.error}`); return; }
+      mapped.push({ row: m.row, idx: i });
+      seen.add(String(m.row.sku));
+      if (m.modifiedEpoch > maxModified) maxModified = m.modifiedEpoch;
+    });
+
+    // Deactivation is allowed only after a provably-complete full fetch.
+    const deactAllowed = scope === "full" && fetchComplete && !hasMore && (total > 0 ? r.total === total : true);
+    if (scope === "full" && !deactAllowed) r.errors.push(`deactivation skipped — fetch not provably complete (fetched ${r.total}, zoho total ${total})`);
+
+    // AC5: dry-run computes the diff and writes/advances NOTHING.
+    if (r.mode === "dryrun") {
+      const existing = await countExistingSkus(env, [...seen]);
+      const wouldDeactivate = deactAllowed ? await countStaleZohoSkus(env, new Date(now*1000).toISOString()) : 0;
+      r.written = mapped.length; r.deactivated = wouldDeactivate; r.failed = blankSkipped;
+      r.errors.unshift(`dryrun: +${seen.size - existing} new / ~${existing} update / -${wouldDeactivate} deactivate (nothing written)`);
+      await logSyncJob(env, r, actor);
+      return r; // cursor + last_full_at untouched
+    }
+
+    // AC3: live upsert (stock ← stock_on_hand; reserved untouched). Stamp provenance
+    // uniformly so the nightly reconcile can find rows absent from THIS run.
+    const runStamp = new Date(now*1000).toISOString();
+    for (const m of mapped) m.row.zoho_synced_at = runStamp;
+    const { written, errors: wErr } = await upsertInventoryRows(env, mapped, {
+      extraSpec: { active: v => _invNum(v, 1), zoho_item_id: v => _invTxt(v, ""), zoho_synced_at: v => _invTxt(v, "") },
+    });
+    r.written = written; r.errors.push(...wErr); r.failed = blankSkipped + wErr.length;
+
+    // AC4: provenance-scoped soft-deactivate + 10% safety valve.
+    if (deactAllowed && wErr.length === 0) {
+      const activeZoho = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL AND active=1");
+      const stale = await countStaleZohoSkus(env, runStamp); // active zoho-origin rows not touched this run
+      if (activeZoho > 0 && stale > Math.floor(activeZoho * ZOHO_SYNC.MAX_DEACTIVATE_PCT / 100)) {
+        r.errors.push(`deactivation aborted — would deactivate ${stale}/${activeZoho} (> ${ZOHO_SYNC.MAX_DEACTIVATE_PCT}%)`);
+      } else if (stale > 0) {
+        await env.DB.prepare("UPDATE inventory SET active=0 WHERE zoho_synced_at IS NOT NULL AND zoho_synced_at < ? AND active=1").bind(runStamp).run();
+        r.deactivated = stale;
+      }
+    }
+
+    // AC2/AC9: advance the cursor ONLY on a fully successful run.
+    const runSuccess = fetchComplete && wErr.length === 0;
+    if (runSuccess) {
+      if (scope === "full") await setConfig(env, "zoho_last_full_at", String(now), actor);
+      if (maxModified > cursorEpoch) { await setConfig(env, "zoho_sync_cursor", String(maxModified), actor); r.cursor_epoch = maxModified; }
+    }
+    await logSyncJob(env, r, actor);
+    return r;
+  } catch (e) {
+    r.status = "error";
+    r.errors.push(e instanceof ZohoAuthError ? `auth: ${e.message}` : String(e));
+    await logSyncJob(env, r, actor);
+    return r; // non-throwing; cursor untouched
+  } finally {
+    // Release only OUR lock.
+    await env.DB.prepare("UPDATE app_config SET value='' WHERE key='zoho_sync_lock' AND value=?").bind(runToken).run().catch(() => {});
+  }
+}
+
+// active Zoho-origin rows whose provenance stamp predates `runStamp` = absent from this run.
+async function countStaleZohoSkus(env: Env, runStamp: string): Promise<number> {
+  return scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL AND zoho_synced_at < ? AND active=1", [runStamp]);
+}
+async function countExistingSkus(env: Env, skus: string[]): Promise<number> {
+  let n = 0;
+  for (let c = 0; c < skus.length; c += 200) {
+    const part = skus.slice(c, c+200); if (!part.length) break;
+    const ph = part.map(() => '?').join(',');
+    n += await scalarCount(env, `SELECT COUNT(*) AS n FROM inventory WHERE sku IN (${ph})`, part);
+  }
+  return n;
+}
+async function scalarCount(env: Env, sql: string, binds: unknown[] = []): Promise<number> {
+  try { const row = await env.DB.prepare(sql).bind(...binds).first() as { n?: number } | null; return Number(row?.n ?? 0); }
+  catch { return 0; }
 }
 
 async function handleZohoInvStatus(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const enabled = (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true";
-  const lastSync = await getConfig(env, "zoho_inv_last_sync_at", "");
-  const lastResult = await getConfig(env, "zoho_inv_last_result", "");
+  const enabled = (await getConfig(env, "zoho_sync_enabled", "0")) === "1";
+  const mode = (await getConfig(env, "zoho_sync_mode", "dryrun")) === "live" ? "live" : "dryrun";
+  const cursor = await getConfig(env, "zoho_sync_cursor", "");
+  const cursorEpoch = cursor ? (parseInt(cursor, 10) || 0) : 0;
+  const lastFull = await getConfig(env, "zoho_last_full_at", "");
+  const lastFullEpoch = lastFull ? (parseInt(lastFull, 10) || 0) : 0;
+  const lastResultRaw = await getConfig(env, "zoho_last_result", "");
+  const lastSync = await getConfig(env, "zoho_last_sync_at", "");
   const itemCount = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=1").first() as {n:number}|null;
-  let log: unknown[] = [];
-  try { const { results } = await env.DB.prepare("SELECT * FROM zoho_sync_log ORDER BY created_at DESC LIMIT 5").all(); log = results; } catch { /* table pending */ }
+  let recent: unknown[] = [];
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id,type,total,success_count,failed_count,errors,created_at FROM import_jobs WHERE type LIKE 'zoho-sync%' ORDER BY created_at DESC LIMIT 5"
+    ).all(); recent = results;
+  } catch { /* table pending */ }
+  const nowEpoch = Math.floor(Date.now()/1000);
   return json({
-    configured: zohoInvConfigured(env),
+    direction: "zoho→app (one-way, Model A)",
+    configured: zohoConfigured(env),
     enabled,
-    simulated_mode: !zohoInvConfigured(env),
+    mode,
+    cursor_epoch: cursorEpoch || null,
+    cursor_utc: cursorEpoch ? new Date(cursorEpoch*1000).toISOString() : null,
+    last_full_at: lastFullEpoch ? new Date(lastFullEpoch*1000).toISOString() : null,
+    last_full_stale: lastFullEpoch ? (nowEpoch - lastFullEpoch) > 48*3600 : true,
+    last_result: lastResultRaw ? (() => { try { return JSON.parse(lastResultRaw); } catch { return lastResultRaw; } })() : null,
     last_sync_at: lastSync || null,
-    last_result: lastResult || null,
     item_count: itemCount?.n || 0,
-    recent_log: log,
+    recent_log: recent,
   });
 }
 
 async function handleZohoInvToggle(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
-  const body = await request.json() as { enabled?: boolean };
-  const enabled = !!body.enabled;
-  await setConfig(env, "zoho_inv_sync_enabled", enabled ? "true" : "false", user!.sub);
-  await audit(env, user, "UPDATE", "integration", "zoho_inventory", undefined, `enabled:${enabled}`);
-  return json({ enabled });
+  // Enabling the sync / flipping to live can overwrite catalogue + stock — Super Admin only.
+  if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
+  const body = await request.json().catch(() => ({})) as { enabled?: boolean; mode?: string };
+  if (typeof body.enabled === "boolean") await setConfig(env, "zoho_sync_enabled", body.enabled ? "1" : "0", user!.sub);
+  if (body.mode === "live" || body.mode === "dryrun") await setConfig(env, "zoho_sync_mode", body.mode, user!.sub);
+  await audit(env, user, "UPDATE", "integration", "zoho_inventory", undefined, `enabled:${body.enabled ?? "-"} mode:${body.mode ?? "-"}`);
+  return json({
+    enabled: (await getConfig(env, "zoho_sync_enabled", "0")) === "1",
+    mode: (await getConfig(env, "zoho_sync_mode", "dryrun")) === "live" ? "live" : "dryrun",
+  });
 }
 
-async function handleZohoInvSync(request: Request, env: Env): Promise<Response> {
+async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
-  const enabled = (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true";
-  if (!enabled) return json({error:"Zoho Inventory sync is disabled — enable it first"}, 400);
-  const result = await runZohoInventorySync(env, user!.sub);
-  await audit(env, user, "SYNC", "integration", "zoho_inventory", undefined, `${result.pushed} pushed, ${result.simulated} simulated`);
-  return json({ ok: true, ...result, simulated_mode: !zohoInvConfigured(env) });
+  // Manual sync can overwrite catalogue + stock — Super Admin only.
+  if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
+  const body = await request.json().catch(() => ({})) as { mode?: string; full?: boolean };
+  const mode = body.mode === "live" ? "live" : body.mode === "dryrun" ? "dryrun" : undefined;
+  await audit(env, user, "SYNC", "integration", "zoho_inventory", undefined, `pull ${body.full ? "full" : "delta"} ${mode ?? "config"}`);
+  if (body.full) {
+    // Full reconcile can exceed the request budget → run it async, poll status.
+    ctx.waitUntil(runZohoSync(env, { full: true, mode, actor: user!.sub }));
+    return json({ status: "started", scope: "full", async: true });
+  }
+  const result = await runZohoSync(env, { full: false, mode, actor: user!.sub });
+  const code = result.status === "skipped" ? 409 : result.status === "error" ? 500 : 200;
+  return json(result, code);
 }
 
 // Inbound: Zoho pushes stock changes → update our inventory stock levels.
@@ -452,6 +719,11 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `ALTER TABLE grn_records ADD COLUMN status TEXT DEFAULT 'POSTED'`,
     `ALTER TABLE grn_records ADD COLUMN received_by_name TEXT`,
     `ALTER TABLE inventory ADD COLUMN track_batch INTEGER DEFAULT 0`,
+    // Zoho Inventory sync (milestone 002): provenance markers. A SKU is
+    // "Zoho-originated" iff zoho_synced_at IS NOT NULL — only those are ever
+    // soft-deactivated by the nightly reconcile; app-native/CSV SKUs are left alone.
+    `ALTER TABLE inventory ADD COLUMN zoho_item_id TEXT`,
+    `ALTER TABLE inventory ADD COLUMN zoho_synced_at TEXT`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Seed the HSN→GST slab map when empty (mirrors migration 0037 so the mapping
@@ -696,12 +968,22 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
   return { gstin: g.gstin, pan };
 }
 
+// Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
+export { runZohoSync, mapZohoItem, upsertInventoryRows };
+
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       await fixCategoryNames(env); // make sure columns/tables exist first
       await runDeliveryReminders(env);
+      // Zoho Inventory pull (milestone 002). Disabled + dry-run by default, so this
+      // is a no-op until a super-admin enables it. Branch on the cron expression:
+      //   "30 3 * * *" → nightly full reconcile ; anything else → 3-hourly delta.
+      try {
+        const full = (controller.cron || "") === "30 3 * * *";
+        await runZohoSync(env, { full });
+      } catch (e) { console.error("zoho sync cron error:", String(e)); }
     })());
   },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -855,7 +1137,7 @@ export default {
       // Gap 4b: Zoho Inventory sync
       if (path==="/api/integrations/zoho-inventory/status"  && method==="GET")  return handleZohoInvStatus(request,env);
       if (path==="/api/integrations/zoho-inventory/toggle"  && method==="POST") return handleZohoInvToggle(request,env);
-      if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env);
+      if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env,ctx);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
@@ -4822,8 +5104,8 @@ async function handleGetSettings(request: Request, env: Env): Promise<Response> 
     otp_enabled: env.OTP_ENABLED === "true",
     mailchannels_enabled: env.MAILCHANNELS_ENABLED === "true",
     zoho_configured: !!(env.ZOHO_BOOKS_ORG_ID && env.ZOHO_BOOKS_CLIENT_ID),
-    zoho_inventory_configured: zohoInvConfigured(env),
-    zoho_inventory_enabled: (await getConfig(env, "zoho_inv_sync_enabled", "false")) === "true",
+    zoho_inventory_configured: zohoConfigured(env),
+    zoho_inventory_enabled: (await getConfig(env, "zoho_sync_enabled", "0")) === "1",
     twilio_configured: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN),
     msg91_configured: !!env.MSG91_AUTH_KEY,
     clients: clients.results,
@@ -5533,6 +5815,104 @@ async function handleListDunningEvents(request: Request, env: Env): Promise<Resp
 // Feature 18: CSV IMPORT
 // ════════════════════════════════════════════════════════════════════
 
+// Coercion helpers + the inventory-column whitelist shared by CSV import and the
+// Zoho sync. Column names come from this fixed whitelist ONLY (never from row
+// keys), so interpolating them into SQL is safe.
+const _invNum = (v: unknown, d: number) => { const n = Number(v); return String(v ?? '').trim() !== '' && Number.isFinite(n) ? n : d; };
+const _invTxt = (v: unknown, d: string) => { const s = String(v ?? '').trim(); return s || d; };
+const INVENTORY_UPSERT_SPEC: Record<string, (v: unknown) => string | number> = {
+  name:            v => _invTxt(v, ''),
+  category:        v => _invTxt(v, 'General'),
+  sub_category:    v => _invTxt(v, 'Normal'),
+  brand:           v => _invTxt(v, ''),
+  stock:           v => _invNum(v, 0),
+  unit_price:      v => _invNum(v, 0),
+  mrp:             v => _invNum(v, 0),
+  cost_excl_gst:   v => _invNum(v, 0),
+  gst_rate:        v => _invNum(v, 18),
+  reorder_level:   v => _invNum(v, 10),
+  max_stock:       v => _invNum(v, 500),
+  uom:             v => _invTxt(v, 'unit'),
+  pack_size:       v => _invNum(v, 1),
+  units_per_case:  v => _invNum(v, 1),
+  weight_grams:    v => _invNum(v, 0),
+  barcode:         v => _invTxt(v, ''),
+  vendor_sku:      v => _invTxt(v, ''),
+  vendor_lead_days:v => _invNum(v, 3),
+  vendor_moq:      v => _invNum(v, 1),
+};
+
+// Shared SKU-keyed, data-loss-safe upsert (used by CSV import AND the Zoho sync).
+// Only touches columns a row actually provides, so a partial row never wipes
+// omitted fields; a NEW sku needs a non-blank name, and an update never blanks an
+// existing name. `extraSpec` lets the Zoho sync also write provenance/active
+// columns the CSV surface doesn't expose. Returns per-row written/error counts;
+// callers own the import_jobs audit row.
+async function upsertInventoryRows(
+  env: Env,
+  rows: { row: Record<string, unknown>; idx: number }[],
+  opts: { extraSpec?: Record<string, (v: unknown) => string | number> } = {},
+): Promise<{ written: number; errors: string[] }> {
+  let written = 0; const errors: string[] = [];
+  if (!rows.length) return { written, errors };
+  const SPEC = { ...INVENTORY_UPSERT_SPEC, ...(opts.extraSpec || {}) };
+  const COLS = Object.keys(SPEC);
+
+  // Which SKUs already exist (chunked IN() to respect bind limits).
+  const existingSkus = new Set<string>();
+  const allSkus = rows.map(v => String(v.row.sku));
+  for (let c = 0; c < allSkus.length; c += 200) {
+    const part = allSkus.slice(c, c + 200);
+    const ph = part.map(() => '?').join(',');
+    try {
+      const res = await env.DB.prepare(`SELECT sku FROM inventory WHERE sku IN (${ph})`).bind(...part).all();
+      for (const r of res.results) existingSkus.add(String((r as Record<string, unknown>).sku));
+    } catch { /* treat as new if lookup fails */ }
+  }
+
+  const CHUNK = 200;
+  for (let c = 0; c < rows.length; c += CHUNK) {
+    const chunk = rows.slice(c, c + CHUNK);
+    const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+    const idxMap: number[] = []; // original row index per stmt (kept in lockstep)
+    for (const { row, idx } of chunk) {
+      const sku = String(row.sku);
+      const provided = COLS.filter(col => col in row);
+      const nameBlank = String(row.name ?? '').trim() === '';
+      if (existingSkus.has(sku)) {
+        // never blank an existing name with an empty value
+        const cols = (provided.length ? provided : ['name']).filter(col => !(col === 'name' && nameBlank));
+        if (!cols.length) continue; // nothing to write for this row
+        stmts.push(env.DB.prepare(
+          `UPDATE inventory SET ${cols.map(col => `${col}=?`).join(',')} WHERE sku=?`
+        ).bind(...cols.map(col => SPEC[col](row[col])), sku));
+        idxMap.push(idx);
+      } else {
+        if (nameBlank) { errors.push(`Row ${idx + 1} (${sku}): name is required for a new SKU`); continue; }
+        // inventory.category and .unit_price are NOT NULL without a DB default, so a
+        // brand-new SKU whose payload omits them must still get the spec default
+        // (only on INSERT — an UPDATE never touches columns the row didn't provide).
+        const REQUIRED_ON_INSERT = ['category', 'unit_price'].filter(c => c in SPEC);
+        const insertProvided = [...new Set([...provided, ...REQUIRED_ON_INSERT])];
+        const cols = ['name', ...insertProvided.filter(col => col !== 'name')];
+        const allCols = ['sku', ...cols];
+        stmts.push(env.DB.prepare(
+          `INSERT OR IGNORE INTO inventory (${allCols.join(',')}) VALUES (${allCols.map(() => '?').join(',')})`
+        ).bind(sku, ...cols.map(col => SPEC[col](row[col]))));
+        existingSkus.add(sku);
+        idxMap.push(idx);
+      }
+    }
+    try {
+      if (stmts.length) await env.DB.batch(stmts);
+      written += stmts.length;
+    } catch (e) {
+      for (let i = 0; i < stmts.length; i++) errors.push(`Row ${idxMap[i] + 1}: ${String(e)}`);
+    }
+  }
+  return { written, errors };
+}
+
 async function handleImportInventory(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -5546,104 +5926,25 @@ async function handleImportInventory(request: Request, env: Env): Promise<Respon
 
   if (!Array.isArray(rows) || !rows.length) return json({error:"No rows provided"}, 400);
 
-  let success = 0; const errors: string[] = [];
-
-  // Validate rows and split valid/invalid upfront
-  const validRows: { row: Record<string,unknown>; idx: number }[] = [];
+  // CSV contract: both sku and name are required on every row.
+  const errors: string[] = [];
+  const valid: { row: Record<string,unknown>; idx: number }[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row.sku || !row.name) { errors.push(`Row ${i+1}: sku and name are required`); }
-    else validRows.push({ row, idx: i });
+    if (!row.sku || !row.name) errors.push(`Row ${i+1}: sku and name are required`);
+    else valid.push({ row, idx: i });
   }
 
-  if (validRows.length === 0) return json({success: 0, failed: errors.length, errors});
-
-  // One query to find which SKUs already exist — counts as 1 subrequest
-  const skus = validRows.map(v => String(v.row.sku));
-  const ph = skus.map(() => '?').join(',');
-  const existingSkus = new Set<string>();
-  try {
-    const res = await env.DB.prepare(`SELECT sku FROM inventory WHERE sku IN (${ph})`).bind(...skus).all();
-    for (const r of res.results) existingSkus.add(String((r as Record<string,unknown>).sku));
-  } catch { /* treat all as new if lookup fails */ }
-
-  // Column resolvers for the full inventory import template, so a downloaded
-  // ("Download Current Inventory") + amended file round-trips completely — not just
-  // the handful of columns the old import touched. Values are coerced with the same
-  // sensible defaults `handleAddInventory` uses. Column names come from this fixed
-  // whitelist only (never from the CSV), so interpolating them into SQL is safe.
-  const num = (v: unknown, d: number) => { const n = Number(v); return String(v ?? '').trim() !== '' && Number.isFinite(n) ? n : d; };
-  const txt = (v: unknown, d: string) => { const s = String(v ?? '').trim(); return s || d; };
-  const IMP_SPEC: Record<string, (v: unknown) => string | number> = {
-    name:            v => txt(v, ''),
-    category:        v => txt(v, 'General'),
-    sub_category:    v => txt(v, 'Normal'),
-    brand:           v => txt(v, ''),
-    stock:           v => num(v, 0),
-    unit_price:      v => num(v, 0),
-    mrp:             v => num(v, 0),
-    cost_excl_gst:   v => num(v, 0),
-    gst_rate:        v => num(v, 18),
-    reorder_level:   v => num(v, 10),
-    max_stock:       v => num(v, 500),
-    uom:             v => txt(v, 'unit'),
-    pack_size:       v => num(v, 1),
-    units_per_case:  v => num(v, 1),
-    weight_grams:    v => num(v, 0),
-    barcode:         v => txt(v, ''),
-    vendor_sku:      v => txt(v, ''),
-    vendor_lead_days:v => num(v, 3),
-    vendor_moq:      v => num(v, 1),
-  };
-  const IMP_COLS = Object.keys(IMP_SPEC);
-
-  // Build batch statements in chunks of 200 — each batch() call = 1 subrequest
-  const CHUNK = 200;
-  for (let c = 0; c < validRows.length; c += CHUNK) {
-    const chunk = validRows.slice(c, c + CHUNK);
-    const stmts: ReturnType<typeof env.DB.prepare>[] = [];
-    const chunkIdxMap: number[] = []; // track original row index per stmt
-
-    for (const { row, idx } of chunk) {
-      const sku = String(row.sku);
-      // Only touch columns the CSV actually provides (header present), so a partial
-      // upload never wipes fields it omitted; a full-template file updates everything.
-      const provided = IMP_COLS.filter(c => c in row);
-      if (existingSkus.has(sku)) {
-        const cols = provided.length ? provided : ['name'];
-        stmts.push(env.DB.prepare(
-          `UPDATE inventory SET ${cols.map(c => `${c}=?`).join(',')} WHERE sku=?`
-        ).bind(...cols.map(c => IMP_SPEC[c](row[c])), sku));
-      } else {
-        const cols = ['name', ...provided.filter(c => c !== 'name')];
-        const allCols = ['sku', ...cols];
-        stmts.push(env.DB.prepare(
-          `INSERT OR IGNORE INTO inventory (${allCols.join(',')}) VALUES (${allCols.map(() => '?').join(',')})`
-        ).bind(sku, ...cols.map(c => IMP_SPEC[c](row[c]))));
-        existingSkus.add(sku);
-      }
-      chunkIdxMap.push(idx);
-    }
-
-    try {
-      await env.DB.batch(stmts);
-      success += stmts.length;
-    } catch (e) {
-      // Batch failed — record error for each row in this chunk and fall back to individual inserts
-      for (let i = 0; i < stmts.length; i++) {
-        errors.push(`Row ${chunkIdxMap[i]+1} (${chunk[i].row.sku}): ${String(e)}`);
-      }
-    }
-  }
+  const { written, errors: writeErrors } = await upsertInventoryRows(env, valid);
+  errors.push(...writeErrors);
 
   try {
-    const jobId = uid();
     await env.DB.prepare(
       "INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)"
-    ).bind(jobId, "inventory", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
+    ).bind(uid(), "inventory", rows.length, written, errors.length, JSON.stringify(errors), user!.sub).run();
   } catch { /* non-fatal — job log table may be missing */ }
 
-  return json({success, failed: errors.length, errors});
+  return json({ success: written, failed: errors.length, errors });
 }
 
 async function handleImportOrders(request: Request, env: Env): Promise<Response> {

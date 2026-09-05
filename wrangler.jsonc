@@ -16,8 +16,9 @@
 		"enabled": true
 	},
 	"triggers": {
-		// Daily delivery reminders: 03:30 UTC = 09:00 IST
-		"crons": ["30 3 * * *"]
+		// "30 3 * * *": 03:30 UTC = 09:00 IST — daily delivery reminders + Zoho full reconcile.
+		// "0 */3 * * *": every 3 hours — Zoho Inventory delta pull (no-op until enabled).
+		"crons": ["30 3 * * *", "0 */3 * * *"]
 	},
 	"upload_source_maps": true,
 	"d1_databases": [
