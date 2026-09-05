@@ -1695,6 +1695,11 @@ const DELIV_TABS = [
 // super_admin kept all four (incl. Routes); ops/delivery managers had Today +
 // List + Calendar; delivery execs only saw the challan list.
 function delivTabsForRole(role) {
+  // Roles that cannot open the Deliveries hub get no tabs — keeps the tab set
+  // consistent with canAccessPage for all roles, not just hub-accessible ones
+  // (the hub never renders for them; this hardens the dead path).
+  const navProfile = (typeof ROLES !== 'undefined' && ROLES[role]) ? ROLES[role].nav : null;
+  if (!(NAV[navProfile] || []).some(i => i.id === 'delivery')) return [];
   if (role === 'delivery_exec') return DELIV_TABS.filter(t => t.k === 'list');
   if (role === 'super_admin')   return DELIV_TABS;
   return DELIV_TABS.filter(t => t.k !== 'routes');

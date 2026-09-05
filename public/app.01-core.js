@@ -736,7 +736,7 @@ function canAccessPage(page) {
 // Pages not in any sidebar nav that specific roles may still reach via buttons/menus.
 const ACTION_PAGES = {
   settings:    ['super_admin', 'ops_admin'],
-  place_order: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'],
+  place_order: ['super_admin', 'ops_admin', 'procurement_manager'],
   // Phase 2: Pipeline & Due Items are now tabs inside the "Orders" hub (page id
   // `orders`). They stay reachable off-nav so dashboard/report shortcuts and
   // #orders/pipeline · #orders/due deep links keep working for these roles.

@@ -177,7 +177,7 @@ const res = await page.evaluate((args) => {
 console.log("\nAcceptance criteria:");
 // AC7 / R1
 expect("AC7/R1 · ROLES is exactly the 12 R1 roles", res.rolesExact);
-todo("AC7/R1 · no ACTION_PAGES role outside ROLES", res.phantomRoles.length === 0 || (console.log("     phantom:", res.phantomRoles), false), "R1/B1");
+expect("AC7/R1 · no ACTION_PAGES role outside ROLES", res.phantomRoles.length === 0 || (console.log("     phantom:", res.phantomRoles), false));
 expect("AC7 · canAccessPage matches frozen ACL matrix", res.matrixDiffs.length === 0 || (console.log("     diffs:", res.matrixDiffs), false));
 // AC8
 expect("AC8 · PAGE_MAP ⊇ pre-consolidation ids", res.missingIds.length === 0 || (console.log("     missing:", res.missingIds), false));
@@ -188,7 +188,7 @@ expect("AC9 · CANCELLED/REJECTED render cancelled marker", res.cancelledMarker)
 expect("AC9 · fallback set → no-progress, no throw, no cancelled marker", res.fbBad.length === 0 || (console.log("     bad:", res.fbBad), false));
 // AC5/R3/AC14
 expect("AC5/R3/AC14 · delivery gate consistent for hub-accessible roles", res.delivDiffHub.length === 0 || (console.log("     diffs:", res.delivDiffHub), false));
-todo("AC5/R3/AC14 · delivTabsForRole == [] for no-access roles", res.delivNoAccessNonEmpty.length === 0 || (console.log("     nonempty:", res.delivNoAccessNonEmpty), false), "R3/B5");
+expect("AC5/R3/AC14 · delivTabsForRole == [] for no-access roles", res.delivNoAccessNonEmpty.length === 0 || (console.log("     nonempty:", res.delivNoAccessNonEmpty), false));
 // AC1 / AC3 / AC16
 expect("AC1 · hub tab hash round-trips (#hub/slug)", res.hashBad.length === 0 || (console.log("     bad:", res.hashBad), false));
 expect("AC1 · routeTab honors hash tab + falls back on unknown", res.routeTabFromHash && res.routeTabFallback);
