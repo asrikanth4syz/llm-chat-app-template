@@ -57,14 +57,14 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
 > than reusing smoke's blanket stub — otherwise the badge always hits the "unavailable" branch and the
 > N>0 / 0 render-state checks can never pass.
 
-- [ ] **A1 [P]** `test/fixtures/acl-matrix.json` — hand-authored allow/deny for every (role ∈ R1) ×
+- [x] **A1 [P]** `test/fixtures/acl-matrix.json` — hand-authored allow/deny for every (role ∈ R1) ×
   (page ∈ PAGE_MAP), authored from `NAV`/product intent, **not** copied from `ACTION_PAGES`. Include the
   AC7 negatives (delivery_exec ∌ calendar/routes/today; client roles ∌ the staff-only set). [AC7]
-- [ ] **A2 [P]** `test/fixtures/pre-consolidation-page-ids.json` — the frozen list of page ids from
+- [x] **A2 [P]** `test/fixtures/pre-consolidation-page-ids.json` — the frozen list of page ids from
   `origin/main`'s `PAGE_MAP` (`git show origin/main:public/app.01-core.js` → extract keys). [AC8]
-- [ ] **A3 [P]** `test/fixtures/untouched-nav.json` — `{id,label}` arrays for NAV profiles
+- [x] **A3 [P]** `test/fixtures/untouched-nav.json` — `{id,label}` arrays for NAV profiles
   procurement/warehouse/finance/vendor/vendor_user, captured from `origin/main`. [AC8]
-- [ ] **A4** `test/phase2.mjs` — load `public/app.*.js` in `index.html` order (reuse smoke's loader), then
+- [x] **A4** `test/phase2.mjs` — load `public/app.*.js` in `index.html` order (reuse smoke's loader), then
   in `page.evaluate` assert:
   - **A4a** `Object.keys(ROLES)` deep-equals R1's 12; every role in any `ACTION_PAGES` value ∈ ROLES
     (fails on `ops_manager` → red until B1). [AC7,R1]
@@ -99,20 +99,20 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
   test:smoke` still green. **Commit A.**
 
 ### Group B — Router/ACL fixes driven by Group-A red checks  *(product code, `app.01-core.js`; serialize — same file)*
-- [ ] **B1** Remove `ops_manager` from `ACTION_PAGES.place_order` (app.01-core.js:739) — it is not in
+- [x] **B1** Remove `ops_manager` from `ACTION_PAGES.place_order` (app.01-core.js:739) — it is not in
   `ROLES`. Flip A4a to asserting. [AC7,R1]  **Verify:** `test:phase2` A4a green; `test:smoke` green.
-- [ ] **B2** AC1/AC6 default-tab normalization — only if A4h/A4j show a gap: ensure a bare `#hub` and an
+- [x] **B2** AC1/AC6 default-tab normalization — only if A4h/A4j show a gap: ensure a bare `#hub` and an
   unknown/forbidden tab normalize (via `replaceState`) to the hub's default **accessible** tab, and
   `onHashChange`/boot refuse a forbidden tab landing on the default tab rather than a blank body. Flip
   A4h/A4j. [AC1,AC6]  **Verify:** A4h/A4j green; `test:smoke` green.
-- [ ] **B3** AC3 echo-dedupe hardening — only if A4i is red: replace the retained `_hubTabWritten` compare
+- [x] **B3** AC3 echo-dedupe hardening — only if A4i is red: replace the retained `_hubTabWritten` compare
   with a one-shot guard set immediately before `writeHash` and cleared on the next `hashchange` **and**
   on a next-tick fallback (covers the write-same-hash no-event case), preserving "self-write → no
   re-render". Flip A4i. [AC3]  **Verify:** A4i green; back/forward manual trace; `test:smoke` green.
-- [ ] **B4** Raw-hash ACL/fold — only if A4j is red: make `onHashChange`+`initApp` boot run every raw hash
+- [x] **B4** Raw-hash ACL/fold — only if A4j is red: make `onHashChange`+`initApp` boot run every raw hash
   through the same access decision (`canAccessPage` for orders/my_orders; `delivTabsForRole` for delivery)
   and `HUB_REDIRECT` fold, normalizing via `replaceState`. Flip A4j. [AC5]  **Verify:** A4j green; smoke green.
-- [ ] **B5** `delivTabsForRole` defensive guard: return `[]` when the role cannot open the Deliveries hub
+- [x] **B5** `delivTabsForRole` defensive guard: return `[]` when the role cannot open the Deliveries hub
   (no delivery backing page reachable — e.g. lead guard `if (!canAccessPage('delivery')) return [];`), so
   the R3/AC14 gate-consistency invariant holds for **all 12** roles, not just hub-accessible ones. Flip the
   no-access half of A4f. (Dead-path hardening — hub-accessible roles are unaffected.) [AC5/R3/AC14]
@@ -120,22 +120,22 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
 - **Commit B** (one commit per applied fix; skip a task whose Group-A check was already green and note it).
 
 ### Group C — Due-Items hub-tab count badge  *(product code, `app.04-orders-delivery.js`; new AC15 check)*
-- [ ] **C1** In `renderOrdersHub`/`ordersHubTab`, render the "Due Items" tab label with a badge
+- [x] **C1** In `renderOrdersHub`/`ordersHubTab`, render the "Due Items" tab label with a badge
   **element present synchronously** (empty/hidden). Add a helper that reads the overdue count from the
   same signal the Due page uses (`/reports/consolidated-due` → count rows with `days_overdue > 0`, or the
   `/nav-badges` consolidated_due count), populates the badge within one frame of the promise settling;
   `N>99`→"99+"; `N===0`→hidden; unavailable/NaN/negative→`data-badge-state="unknown"` (no number). Must
   not block tab render, must not add a `dataAct` target that breaks smoke. [AC15]
-- [ ] **C2** Extend the `test/phase2.mjs` fetch stub to route `/reports/consolidated-due` (and/or
+- [x] **C2** Extend the `test/phase2.mjs` fetch stub to route `/reports/consolidated-due` (and/or
   `/nav-badges`) to a fixture; assert the three render states (N>0 shows N / 99+ ; 0 → absent ;
   unavailable → `data-badge-state="unknown"`) and that the badge element exists before the promise
   resolves. [AC15]
 - **Verify:** `npm run test:phase2` (AC15 block green) + `npm run test:smoke` + `tsc --noEmit`. **Commit C.**
 
 ### Group D — Final validation & CHANGELOG  *(docs/tests only)*
-- [ ] **D1** Update `CHANGELOG.md` Phase-2 entry to note the verify-and-harden pass (executable ACs,
+- [x] **D1** Update `CHANGELOG.md` Phase-2 entry to note the verify-and-harden pass (executable ACs,
   fixtures, any fixes applied). [docs]
-- [ ] **D2** Full green run: `npm run test:smoke && npm run test:phase2 && npx tsc --noEmit`. **Commit D.**
+- [x] **D2** Full green run: `npm run test:smoke && npm run test:phase2 && npx tsc --noEmit`. **Commit D.**
 
 ## Test commands (every task)
 - `npm run test:smoke` — existing invariants (must stay green throughout).
@@ -154,3 +154,15 @@ Within a group, `[P]` marks tasks that touch disjoint files and may run in paral
   handlers directly (call `onHashChange()` after setting `location.hash`) as the existing smoke does.
 - Extracting `origin/main` `PAGE_MAP`/`NAV` for fixtures must use `git show origin/main:…`, not the
   working tree (which already has the consolidation).
+
+---
+## Completion status (construction)
+- **Group A** ✅ committed `dc9754b` — fixtures + `test/phase2.mjs`; 12 ACs verified green against shipped code.
+- **Group B** ✅ committed `56e8ebc` — B1 (ops_manager phantom removed) + B5 (delivTabsForRole guard).
+  - B2 (default-tab normalization), B3 (echo-dedupe hardening), B4 (raw-hash ACL/fold) were **conditional
+    on a red check**; all their checks came back **green** against the shipped code (AC1 hash round-trip +
+    routeTab fallback, AC3 back-to-same-tab with the real switcher, AC5 delivery gate) — so no code change
+    was needed. Verified, not skipped.
+- **Group C** ✅ committed `d3c4cc1` — Due Items overdue-count badge (AC15), 6 checks green.
+- **Group D** ✅ this commit — CHANGELOG + final validation.
+- **Final gate:** `npm run test:smoke` green · `npm run test:phase2` green (0 todos) · `tsc --noEmit` clean.

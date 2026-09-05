@@ -147,6 +147,15 @@ const res = await page.evaluate(async (args) => {
   location.hash = "#orders/bogus";
   out.routeTabFallback = routeTab("orders", ["queue","pipeline","due"], "queue") === "queue";
 
+  // ── AC5/AC6: raw-hash fold + forbidden-tab refusal (routing-decision level) ──
+  out.hubRedirectMap = eq(HUB_REDIRECT.pipeline, { page: "orders", tab: "pipeline" })
+    && eq(HUB_REDIRECT.consolidated_due, { page: "orders", tab: "due" })
+    && eq(HUB_REDIRECT.track_delivery, { page: "my_orders", tab: "tracking" })
+    && eq(HUB_REDIRECT.delivery_routes, { page: "delivery", tab: "routes" });
+  // A forbidden tab in the hash falls back to an allowed tab (delivery_exec can't reach routes).
+  location.hash = "#delivery/routes";
+  out.forbiddenTabRefused = routeTab("delivery", ["list"], "list") === "list";
+
   // ── AC3: echo dedupe — return-to-last-written-tab must still flip ──
   // Simulate: hub 'orders' registered; write tab A (queue); later a hashchange to queue must flip.
   // The registered switcher must mirror the REAL one (ordersHubTab), which calls
@@ -209,6 +218,8 @@ expect("AC5/R3/AC14 · delivTabsForRole == [] for no-access roles", res.delivNoA
 // AC1 / AC3 / AC16
 expect("AC1 · hub tab hash round-trips (#hub/slug)", res.hashBad.length === 0 || (console.log("     bad:", res.hashBad), false));
 expect("AC1 · routeTab honors hash tab + falls back on unknown", res.routeTabFromHash && res.routeTabFallback);
+expect("AC5 · HUB_REDIRECT folds folded page ids into their hub tab", res.hubRedirectMap);
+expect("AC6 · forbidden hub tab falls back to an allowed tab", res.forbiddenTabRefused);
 expect("AC3 · Back to last-written tab still flips (real switcher)", res.ac3ReturnFlips);
 expect("AC16 · logout clears hash", res.hashCleared === true);
 expect("AC16 · logout clears sp_page", res.spPageCleared === true);

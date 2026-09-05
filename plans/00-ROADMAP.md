@@ -2,7 +2,7 @@
 
 ## 📦 Release v0.2.0 — SmartPantry Consolidation — STATUS: ACTIVE
 
-- [ ] **Milestone 1: Phase 2 — Consolidation** — STATUS: ACTIVE
+- [x] **Milestone 1: Phase 2 — Consolidation** — STATUS: COMPLETED
   - *Description:* Merge Orders surfaces and the Deliveries hub into addressable tabbed hubs, add a
     shared phase-based order-status stepper, and make all hub tabs URL-addressable. Brownfield
     verification-and-hardening of the existing implementation on
