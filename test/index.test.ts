@@ -322,6 +322,55 @@ describe("Inventory", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════
+// INVENTORY IMPORT ROUND-TRIP (Download Current Inventory → amend → re-import)
+// ════════════════════════════════════════════════════════════════════
+describe("Inventory import round-trip", () => {
+  const full = {
+    sku: "RT-001", name: "Round Trip Tea", category: "Beverages", sub_category: "Healthy",
+    brand: "Tata", stock: 42, unit_price: 180, mrp: 220, cost_excl_gst: 140, gst_rate: 12,
+    reorder_level: 15, max_stock: 300, uom: "box", pack_size: 12, units_per_case: 24,
+    weight_grams: 250, barcode: "BC-RT-001", vendor_sku: "V-RT-01", vendor_lead_days: 5, vendor_moq: 6,
+  };
+
+  it("imports a full-template row and persists EVERY column", async () => {
+    const res = await post("/api/import/inventory", [full], adminToken);
+    expect(ok(res.status)).toBe(true);
+    const inv = await (await get("/api/inventory", adminToken)).json() as Array<Record<string, unknown>>;
+    const row = inv.find(i => i.sku === "RT-001")!;
+    expect(row).toBeTruthy();
+    // Columns the OLD import dropped must now round-trip:
+    expect(row.sub_category).toBe("Healthy");
+    expect(Number(row.mrp)).toBe(220);
+    expect(Number(row.cost_excl_gst)).toBe(140);
+    expect(row.uom).toBe("box");
+    expect(Number(row.pack_size)).toBe(12);
+    expect(Number(row.units_per_case)).toBe(24);
+    expect(Number(row.weight_grams)).toBe(250);
+    expect(row.barcode).toBe("BC-RT-001");
+    expect(row.vendor_sku).toBe("V-RT-01");
+    expect(Number(row.vendor_lead_days)).toBe(5);
+    expect(Number(row.vendor_moq)).toBe(6);
+    // …and the columns it always handled:
+    expect(Number(row.stock)).toBe(42);
+    expect(Number(row.gst_rate)).toBe(12);
+  });
+
+  it("a partial re-import updates only provided columns and never wipes the rest", async () => {
+    // Seed the full row first (tests get isolated storage), then re-import a
+    // partial file with only sku + stock — everything else must be preserved.
+    await post("/api/import/inventory", [full], adminToken);
+    const res = await post("/api/import/inventory", [{ sku: "RT-001", name: "Round Trip Tea", stock: 7 }], adminToken);
+    expect(ok(res.status)).toBe(true);
+    const inv = await (await get("/api/inventory", adminToken)).json() as Array<Record<string, unknown>>;
+    const row = inv.find(i => i.sku === "RT-001")!;
+    expect(Number(row.stock)).toBe(7);          // changed
+    expect(row.sub_category).toBe("Healthy");    // preserved
+    expect(Number(row.mrp)).toBe(220);           // preserved
+    expect(row.barcode).toBe("BC-RT-001");       // preserved
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
 // VENDORS
 // ════════════════════════════════════════════════════════════════════
 describe("Vendors", () => {
