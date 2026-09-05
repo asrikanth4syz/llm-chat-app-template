@@ -1100,6 +1100,15 @@ const APP_HUBS = {};            // page id -> (tabKey) => void  (in-place switch
 const _hubTabWritten = {};      // page id -> last tab we wrote to the hash ourselves
 function registerHub(page, switchFn) { APP_HUBS[page] = switchFn; }
 
+// Reflect the active hub tab in the topbar breadcrumb ("Hub › Tab"). navigate()
+// sets the breadcrumb to the page label; hubs call this so switching a tab (which
+// does not re-run navigate) keeps the breadcrumb in step with what's on screen.
+function setHubBreadcrumb(page, tabLabel) {
+  const el = document.getElementById('breadcrumb'); if (!el) return;
+  const pageLabel = (NAV[APP.user?.nav] || []).find(i => i.id === page)?.label || page.replace(/_/g, ' ');
+  el.textContent = tabLabel ? `${pageLabel} › ${tabLabel}` : pageLabel;
+}
+
 function parseHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
   if (!raw) return { page: null, tab: null };

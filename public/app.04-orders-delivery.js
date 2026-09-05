@@ -40,6 +40,7 @@ async function renderOrdersHub(el) {
   APP._ordersTab = active;
   writeHash('orders', active);
   registerHub('orders', ordersHubTab);
+  setHubBreadcrumb('orders', tabs.find(t => t.k === active).label);
   el.innerHTML = `
     <div class="hub-tabs" id="orders-hub-tabs" role="tablist" aria-label="Orders">
       ${tabs.map(t => {
@@ -88,6 +89,7 @@ async function ordersHubTab(k) {
   if (!tabs.some(t => t.k === k)) return;
   APP._ordersTab = k;
   writeHash('orders', k);
+  setHubBreadcrumb('orders', (ORDERS_TABS.find(t => t.k === k) || {}).label);
   document.querySelectorAll('#orders-hub-tabs .hub-tab').forEach(b => {
     const on = b.dataset.k === k;
     b.classList.toggle('on', on);
@@ -118,6 +120,7 @@ async function renderMyOrdersHub(el) {
   APP._myOrdersTab = active;
   writeHash('my_orders', active);
   registerHub('my_orders', myOrdersHubTab);
+  setHubBreadcrumb('my_orders', tabs.find(t => t.k === active).label);
   el.innerHTML = `
     <div class="hub-tabs" id="myorders-hub-tabs" role="tablist" aria-label="My Orders">
       ${tabs.map(t => `<button class="hub-tab ${t.k===active?'on':''}" role="tab" aria-selected="${t.k===active}" data-k="${t.k}" ${dataAct('myOrdersHubTab', t.k)}>${h(t.label)}</button>`).join('')}
@@ -132,6 +135,7 @@ async function myOrdersHubTab(k) {
   if (!tabs.some(t => t.k === k)) return;
   APP._myOrdersTab = k;
   writeHash('my_orders', k);
+  setHubBreadcrumb('my_orders', (MYORDERS_TABS.find(t => t.k === k) || {}).label);
   document.querySelectorAll('#myorders-hub-tabs .hub-tab').forEach(b => {
     const on = b.dataset.k === k;
     b.classList.toggle('on', on);

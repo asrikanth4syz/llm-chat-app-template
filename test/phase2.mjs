@@ -169,6 +169,12 @@ const res = await page.evaluate(async (args) => {
   out.ac3ReturnFlips = flipped >= 2;
   APP.user = null; APP.page = null;
 
+  // ── Breadcrumb reflects the active hub tab ("Hub › Tab") ──
+  APP.user = { role: "super_admin", nav: "platform" };
+  setHubBreadcrumb("orders", "Pipeline");
+  out.breadcrumbTab = (document.getElementById("breadcrumb") || {}).textContent === "Orders › Pipeline";
+  APP.user = null;
+
   // ── AC16: logout clears hash + sp_page ──
   try {
     location.hash = "#orders/pipeline";
@@ -221,6 +227,7 @@ expect("AC1 · routeTab honors hash tab + falls back on unknown", res.routeTabFr
 expect("AC5 · HUB_REDIRECT folds folded page ids into their hub tab", res.hubRedirectMap);
 expect("AC6 · forbidden hub tab falls back to an allowed tab", res.forbiddenTabRefused);
 expect("AC3 · Back to last-written tab still flips (real switcher)", res.ac3ReturnFlips);
+expect("Breadcrumb reflects active hub tab (Hub › Tab)", res.breadcrumbTab === true);
 expect("AC16 · logout clears hash", res.hashCleared === true);
 expect("AC16 · logout clears sp_page", res.spPageCleared === true);
 
