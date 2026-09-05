@@ -5536,7 +5536,9 @@ async function handleListDunningEvents(request: Request, env: Env): Promise<Resp
 async function handleImportInventory(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  if (!["super_admin","ops_admin","warehouse_exec","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  // Inventory import is Super Admin only — it can bulk-rewrite catalogue, pricing
+  // and cost/margin fields, so it stays tightly held.
+  if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
 
   let rows: Record<string,unknown>[];
   try { rows = await request.json() as Record<string,unknown>[]; }

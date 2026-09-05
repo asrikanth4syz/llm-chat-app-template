@@ -656,13 +656,16 @@ async function renderImportData(el) {
   const jobs = await api('/import-jobs') || [];
   window._importJobs = jobs;
   const canImportVendors = APP.user && !['client_admin','client_user','client_approver','vendor_admin','vendor_user','delivery_exec'].includes(APP.user.role);
-  const startTab = APP._importDefaultTab || 'inventory';
+  // Inventory import (catalogue/pricing/cost rewrite) is Super Admin only.
+  const canImportInventory = APP.user?.role === 'super_admin';
+  let startTab = APP._importDefaultTab || (canImportInventory ? 'inventory' : 'orders');
+  if (startTab === 'inventory' && !canImportInventory) startTab = 'orders';
   APP._importDefaultTab = null;
 
   el.innerHTML = `
   ${pageHeader('CSV Data Import', 'Import inventory and orders from CSV files')}
   <div class="tab-pills" id="import-tabs" style="margin-bottom:16px">
-    <button class="tab-pill${startTab==='inventory'?' active':''}" ${dataActEl('importTab', 'inventory')}>Inventory</button>
+    ${canImportInventory ? '<button class="tab-pill'+(startTab==='inventory'?' active':'')+'" '+dataActEl('importTab','inventory')+'>Inventory</button>' : ''}
     <button class="tab-pill${startTab==='orders'?' active':''}" ${dataActEl('importTab', 'orders')}>Orders</button>
     ${canImportVendors ? '<button class="tab-pill'+(startTab==='vendors'?' active':'')+'" '+dataActEl('importTab','vendors')+'>Vendors</button>' : ''}
     <button class="tab-pill${startTab==='jobs'?' active':''}" ${dataActEl('importTab', 'jobs')}>Import History</button>
@@ -737,6 +740,10 @@ function showImportTab(tab, jobs) {
     return;
   }
   const isInventory = tab === 'inventory';
+  if (isInventory && APP.user?.role !== 'super_admin') {
+    el.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted)">Inventory import is restricted to Super Admin.</div>`;
+    return;
+  }
   const cols = isInventory
     ? 'sku, name, category, sub_category, brand, stock, unit_price, mrp, cost_excl_gst, gst_rate, reorder_level, max_stock, uom, pack_size, units_per_case, weight_grams, barcode, vendor_sku, vendor_lead_days, vendor_moq'
     : 'client_id, grand_total, subtotal, gst, notes';

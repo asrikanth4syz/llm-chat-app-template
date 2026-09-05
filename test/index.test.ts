@@ -355,6 +355,11 @@ describe("Inventory import round-trip", () => {
     expect(Number(row.gst_rate)).toBe(12);
   });
 
+  it("is Super Admin only — a non-super-admin gets 403", async () => {
+    const res = await post("/api/import/inventory", [full], opsToken);
+    expect(res.status).toBe(403);
+  });
+
   it("a partial re-import updates only provided columns and never wipes the rest", async () => {
     // Seed the full row first (tests get isolated storage), then re-import a
     // partial file with only sku + stock — everything else must be preserved.
