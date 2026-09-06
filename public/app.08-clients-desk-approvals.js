@@ -442,7 +442,90 @@ async function manageClientCatalog(clientId, clientName) {
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Done</button>`);
 }
 
+// Per-unit price maths shared by render + live recompute.
+function _cclCompute(mrp, list, cost, gst, eff) {
+  return {
+    discMrp:  mrp  > 0 ? (mrp - eff) / mrp * 100   : 0,
+    discList: list > 0 ? (list - eff) / list * 100 : 0,
+    gstAmt:   eff * gst / 100,
+    landed:   eff * (1 + gst / 100),
+    margin:   eff > 0 ? (eff - cost) / eff * 100    : 0,
+  };
+}
+const _cclR2 = n => '₹' + (Number(n) || 0).toFixed(2);
+const _cclP1 = n => (Number(n) || 0).toFixed(1) + '%';
+
+// Super Admin gets the full ERP price ladder; everyone else keeps the compact row.
 function ccAssignedRow(item) {
+  return APP.user?.role === 'super_admin' ? ccLadderRow(item) : ccBasicRow(item);
+}
+
+function ccLadderRow(item) {
+  const mrp  = Number(item.mrp) || 0;
+  const list = Number(item.unit_price) || 0;
+  const cost = Number(item.cost_excl_gst) || 0;
+  const gst  = Number(item.gst_rate) || 0;
+  const hasCustom = item.client_price != null;
+  const clientVal = hasCustom ? Number(item.client_price) : '';
+  const eff  = hasCustom ? Number(item.client_price) : list; // effective price for the maths
+  const c = _cclCompute(mrp, list, cost, gst, eff);
+  const belowCost = eff < cost;
+  const aboveMrp  = mrp > 0 && eff > mrp;
+  const sku = item.sku;
+  return `<div id="cc-row-${sku}" class="ccl" data-mrp="${mrp}" data-list="${list}" data-cost="${cost}" data-gst="${gst}">
+    <div class="ccl-id">
+      <span class="emo">${item.emoji || '📦'}</span>
+      <div class="ccl-nm">
+        <div class="t">${h(item.name)}</div>
+        <div class="m"><span class="num">${sku}</span> · ${h(item.category || '')}${item.hsn_code ? ` · HSN <span class="num">${h(item.hsn_code)}</span>` : ''}</div>
+      </div>
+      <span class="ccl-chip gst">GST ${gst}%</span>
+      ${mrp > 0 ? `<span class="ccl-chip mrp">MRP <b>${_cclR2(mrp)}</b></span>` : ''}
+      <button class="ccl-rm" ${dataAct('removeCCItem', sku)}>Remove</button>
+    </div>
+    <div class="ccl-grid">
+      <div class="ccl-c mrp"><span class="k">MRP</span><span class="v">${_cclR2(mrp)}</span><span class="s">ceiling</span></div>
+      <div class="ccl-c"><span class="k">List</span><span class="v">${_cclR2(list)}</span><span class="s">excl GST</span></div>
+      <div class="ccl-c client">
+        <span class="k">Client · excl GST</span>
+        <span class="inw"><span class="rs">₹</span><input type="number" min="0" step="0.01" value="${clientVal}" placeholder="${list.toFixed(2)}"
+          id="cc-price-${sku}" title="Leave blank to use the list price ${_cclR2(list)}"
+          ${dataInput('ccRecalcLadder', sku)} ${dataBlur('saveCCPrice', sku)} data-el ${dataEnterEl('_blurEl')}></span>
+        <span class="s">${hasCustom ? 'custom' : 'list'}</span>
+      </div>
+      <div class="ccl-c disc"><span class="k">Discount</span><span class="v" id="ccl-dm-${sku}">${_cclP1(c.discMrp)}</span><span class="s"><span id="ccl-dl-${sku}">${_cclP1(c.discList)}</span> off list</span></div>
+      <div class="ccl-c gst"><span class="k">GST ${gst}%</span><span class="v">+</span><span class="s" id="ccl-ga-${sku}">+${_cclR2(c.gstAmt)}</span></div>
+      <div class="ccl-c landed"><span class="k">Landed</span><span class="v" id="ccl-ld-${sku}">${_cclR2(c.landed)}</span><span class="s">incl GST</span></div>
+    </div>
+    <div class="ccl-foot">
+      <span class="ccl-pill ${belowCost ? 'bad' : 'ok'}" id="ccl-mp-${sku}"><span id="ccl-ml-${sku}">${belowCost ? 'Below cost ' : 'Margin '}</span><span class="num" id="ccl-mv-${sku}">${_cclP1(c.margin)}</span> · cost ${_cclR2(cost)}</span>
+      <span class="ccl-pill ${aboveMrp ? 'bad' : 'ok'}" id="ccl-xp-${sku}">${aboveMrp ? '⚠ above MRP' : '✓ within MRP'}</span>
+    </div>
+  </div>`;
+}
+
+// Live recompute as the operator types a client price.
+function ccRecalcLadder(sku) {
+  const row = document.getElementById(`cc-row-${sku}`);
+  const input = document.getElementById(`cc-price-${sku}`);
+  if (!row || !input) return;
+  const mrp = Number(row.dataset.mrp), list = Number(row.dataset.list), cost = Number(row.dataset.cost), gst = Number(row.dataset.gst);
+  const raw = parseFloat(input.value);
+  const eff = (isFinite(raw) && raw >= 0) ? raw : list; // blank/invalid → list price
+  const c = _cclCompute(mrp, list, cost, gst, eff);
+  const set = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+  set(`ccl-dm-${sku}`, _cclP1(c.discMrp));
+  set(`ccl-dl-${sku}`, _cclP1(c.discList));
+  set(`ccl-ga-${sku}`, '+' + _cclR2(c.gstAmt));
+  set(`ccl-ld-${sku}`, _cclR2(c.landed));
+  set(`ccl-mv-${sku}`, _cclP1(c.margin));
+  const mp = document.getElementById(`ccl-mp-${sku}`);
+  if (mp) { mp.className = 'ccl-pill ' + (eff < cost ? 'bad' : 'ok'); set(`ccl-ml-${sku}`, eff < cost ? 'Below cost ' : 'Margin '); }
+  const xp = document.getElementById(`ccl-xp-${sku}`);
+  if (xp) { const over = mrp > 0 && eff > mrp; xp.className = 'ccl-pill ' + (over ? 'bad' : 'ok'); xp.textContent = over ? '⚠ above MRP' : '✓ within MRP'; }
+}
+
+function ccBasicRow(item) {
   const globalPrice = item.unit_price ?? 0;
   const clientPrice = item.client_price != null ? item.client_price : '';
   const hasCustom = item.client_price != null;

@@ -601,6 +601,18 @@ function toggleProfileMenu(e) {
   closeTbMenus();
   if (open) m.classList.remove('hidden');
 }
+// Light ⇄ dark theme. Flips the effective theme (accounting for the OS default
+// when the user hasn't chosen yet) and persists the choice. The sun/moon icon
+// swap is pure CSS keyed off data-theme, so nothing else to update here.
+function toggleTheme() {
+  const el = document.documentElement;
+  const cur = el.getAttribute('data-theme');
+  const sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = cur === 'dark' || (!cur && sysDark);
+  const next = isDark ? 'light' : 'dark';
+  el.setAttribute('data-theme', next);
+  try { localStorage.setItem('sp-theme', next); } catch (e) { /* private mode */ }
+}
 function toggleQuickActions(e) {
   if (e) e.stopPropagation();
   const m = document.getElementById('quick-menu'); if (!m) return;
