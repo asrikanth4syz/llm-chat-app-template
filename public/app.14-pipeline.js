@@ -302,8 +302,23 @@ function injectNbaCss() {
   .nba-empty .big { font-size:2rem; }
   .nba-note { font-size:.72rem; color:var(--text-muted,#8397a3); margin-top:12px; text-align:center; }
   @media (max-width:720px){
-    .nba-row { grid-template-columns:26px 1fr auto; }
-    .nba-what, .nba-row .nba-meta .nba-sla { display:none; }
+    /* Stack the row so the ACTION stays visible (never hide what to do next):
+       line 1 = rank · order · button, line 2 = the action, line 3 = SLA. */
+    .nba-row {
+      grid-template-columns:26px 1fr auto;
+      grid-template-areas:"rank order btn" "what what what" "meta meta meta";
+      gap:6px 12px; align-items:center;
+    }
+    .nba-row > .nba-rank  { grid-area:rank; }
+    .nba-row > .nba-order { grid-area:order; }
+    .nba-row > .nba-btn   { grid-area:btn; align-self:center; }
+    .nba-row > .nba-what  { grid-area:what; }
+    .nba-row > .nba-meta  { grid-area:meta; flex-direction:row; align-items:center; }
+    .nba-focus .fx-verb { font-size:1.15rem; }
+  }
+  @media (max-width:420px){
+    .nba-chips { grid-template-columns:repeat(2,1fr); }
+    .nba-btn { padding:8px 12px; }
   }`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
