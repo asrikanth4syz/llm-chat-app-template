@@ -762,10 +762,40 @@ async function migrateSeedPasswords(env: Env): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
+// Old 4-digit starter HSN heading → its 6-digit subheading. Production runs on the
+// self-heal path (the deploy pipeline does NOT apply migrations/*.sql), so the
+// 6-digit standardisation must also happen here, once, at runtime.
+const HSN_4TO6: [string, string][] = [
+  ['0401','040120'],['0402','040210'],['0901','090121'],['0902','090230'],
+  ['1701','170199'],['1704','170490'],['1806','180690'],['1905','190590'],
+  ['2009','200989'],['2106','210690'],['2201','220110'],['2202','220210'],
+  ['3401','340111'],['3402','340220'],['3808','380894'],['3924','392410'],
+  ['4802','480257'],['4817','481710'],['4820','482020'],['4823','482369'],
+  ['9608','960810'],
+];
+// One-time (persistently guarded) migration of the seeded 4-digit HSN codes to
+// 6-digit. Runs once ever — the app_config flag stops it re-running on later cold
+// starts, so an admin who intentionally re-adds a 4-digit code is never clobbered.
+async function migrateHsnTo6Digit(env: Env): Promise<void> {
+  try {
+    if ((await getConfig(env, "hsn_6digit_migrated", "")) === "1") return;
+    for (const [oldHsn, newHsn] of HSN_4TO6) {
+      // Remap items still on the 4-digit code; the 6-digit rows are seeded by
+      // ensureFeatureTables. Delete the superseded 4-digit map row.
+      await env.DB.prepare("UPDATE inventory SET hsn_code=? WHERE hsn_code=?").bind(newHsn, oldHsn).run();
+      await env.DB.prepare("DELETE FROM hsn_gst_rates WHERE hsn=?").bind(oldHsn).run();
+    }
+    // Retire the old 4-digit default marker (never a real classification).
+    await env.DB.prepare("UPDATE inventory SET hsn_code='' WHERE hsn_code='2101'").run();
+    await setConfig(env, "hsn_6digit_migrated", "1", "system");
+  } catch { /* non-fatal — retried next cold start until the flag is set */ }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
   await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
+  await migrateHsnTo6Digit(env);  // standardise seeded HSN codes to 6-digit (once)
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
@@ -969,7 +999,7 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
 }
 
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
-export { runZohoSync, mapZohoItem, upsertInventoryRows };
+export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges

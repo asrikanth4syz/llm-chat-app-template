@@ -806,7 +806,7 @@ describe("Consolidated order report (by product)", () => {
 // ── Zoho Inventory → app sync (milestone 002): one-way pull, Model A ────
 // Endpoint gating uses SELF; the core semantics are driven directly through the
 // exported runZohoSync with an INJECTED fetch (no live Zoho in CI).
-import { runZohoSync, mapZohoItem } from "../src/index";
+import { runZohoSync, mapZohoItem, migrateHsnTo6Digit } from "../src/index";
 
 // A deterministic Zoho stand-in: token POST + paginated GET items. Records every
 // call so a test can assert the app NEVER POSTs to the Zoho items endpoint.
@@ -1516,6 +1516,31 @@ describe("HSN → GST slab", () => {
   it("POST /api/hsn-gst-rates rejects a rate outside the legal slabs", async () => {
     const res = await post("/api/hsn-gst-rates", { hsn: "490100", gst_rate: 7 }, adminToken);
     expect(res.status).toBe(400);
+  });
+
+  // Production runs on the self-heal path (deploy does NOT apply migrations/*.sql),
+  // so the 4-digit→6-digit standardisation must also work at runtime, once.
+  it("runtime migrateHsnTo6Digit replaces 4-digit rows/codes and is guarded to run once", async () => {
+    const db = env.DB as D1Database;
+    // Simulate a pre-migration DB: a 4-digit map row, an item on that code, a 2101 default.
+    await db.prepare("INSERT OR REPLACE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES ('2202',28,'legacy 4-digit')").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code) VALUES ('HSN4','Legacy Cola','Beverages',30,0,1,'2202')").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code) VALUES ('HSNDEF','Defaulted','Grocery',10,0,1,'2101')").run();
+    await db.prepare("DELETE FROM app_config WHERE key='hsn_6digit_migrated'").run();
+
+    await migrateHsnTo6Digit(env);
+
+    expect(await getCfg("hsn_6digit_migrated")).toBe("1");
+    expect(await (db.prepare("SELECT 1 FROM hsn_gst_rates WHERE hsn='2202'").first())).toBeNull(); // 4-digit row gone
+    const item = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='HSN4'").first() as { hsn_code: string };
+    expect(item.hsn_code).toBe("220210"); // remapped to 6-digit
+    const def = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='HSNDEF'").first() as { hsn_code: string };
+    expect(def.hsn_code).toBe(""); // 2101 default retired
+
+    // Guard: re-adding a 4-digit code and re-running must NOT touch it (flag set).
+    await db.prepare("INSERT OR REPLACE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES ('0901',5,'re-added by admin')").run();
+    await migrateHsnTo6Digit(env);
+    expect(await (db.prepare("SELECT 1 FROM hsn_gst_rates WHERE hsn='0901'").first())).not.toBeNull();
   });
 });
 
