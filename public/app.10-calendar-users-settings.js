@@ -1141,7 +1141,7 @@ async function settingsTab(tab, btn) {
           Add or edit HSN mappings below. Use the <b>6-digit</b> HSN (8-digit also accepted) — the lookup falls back from 8→6→4→2 digits when an item's code is longer.
           After changing mappings, use <b>↻ Recalc GST from HSN</b> on the Inventory page to apply them to existing items.
         </div>
-        <div style="display:grid;grid-template-columns:1fr 120px 2fr auto;gap:10px;align-items:end">
+        <div class="hg-form">
           <div class="form-group" style="margin:0"><label>HSN Code</label><input type="text" id="hg-hsn" inputmode="numeric" maxlength="8" placeholder="e.g. 220210"></div>
           <div class="form-group" style="margin:0"><label>GST Slab</label>
             <select id="hg-rate"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18" selected>18%</option><option value="28">28%</option></select>
@@ -1151,14 +1151,14 @@ async function settingsTab(tab, btn) {
         </div>
       </div>
       <div class="table-wrap">
-        <table class="table">
+        <table class="table table-cards">
           <thead><tr><th>HSN</th><th>GST Slab</th><th>Description</th><th>Updated</th><th></th></tr></thead>
           <tbody>${list.map(r=>`<tr>
-            <td><b>${r.hsn}</b></td>
-            <td>${slabBadge(Number(r.gst_rate))}</td>
-            <td>${r.description||'—'}</td>
-            <td style="font-size:.76rem;color:var(--text-muted)">${(r.updated_at||'').slice(0,10)||'—'}</td>
-            <td><button class="btn btn-sm btn-secondary" ${dataAct('editHsnGstRate', r.hsn, Number(r.gst_rate), r.description||'')}>Edit</button></td>
+            <td data-label="HSN" class="card-title-cell"><b>${r.hsn}</b></td>
+            <td data-label="GST Slab">${slabBadge(Number(r.gst_rate))}</td>
+            <td data-label="Description">${r.description||'—'}</td>
+            <td data-label="Updated" style="font-size:.76rem;color:var(--text-muted)">${(r.updated_at||'').slice(0,10)||'—'}</td>
+            <td><button class="btn btn-sm btn-secondary" style="width:100%" ${dataAct('editHsnGstRate', r.hsn, Number(r.gst_rate), r.description||'')}>Edit</button></td>
           </tr>`).join('')||'<tr><td colspan="5" class="u-empty">No HSN mappings yet — add one above</td></tr>'}
           </tbody>
         </table>
