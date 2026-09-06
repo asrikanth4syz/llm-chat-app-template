@@ -803,56 +803,163 @@ describe("Consolidated order report (by product)", () => {
   });
 });
 
-describe("Zoho Inventory sync", () => {
-  it("status reports configured/enabled flags and an item count", async () => {
-    const res = await get("/api/integrations/zoho-inventory/status", adminToken);
-    expect(res.status).toBe(200);
-    const body = await res.json() as { configured: boolean; enabled: boolean; item_count: number };
+// ── Zoho Inventory → app sync (milestone 002): one-way pull, Model A ────
+// Endpoint gating uses SELF; the core semantics are driven directly through the
+// exported runZohoSync with an INJECTED fetch (no live Zoho in CI).
+import { runZohoSync, mapZohoItem, migrateHsnTo6Digit } from "../src/index";
+
+// A deterministic Zoho stand-in: token POST + paginated GET items. Records every
+// call so a test can assert the app NEVER POSTs to the Zoho items endpoint.
+function mockZoho(pages: Record<string, unknown>[][]) {
+  const calls: { url: string; method: string }[] = [];
+  const flatTotal = pages.reduce((n, p) => n + p.length, 0);
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = typeof url === "string" ? url : (url as URL).toString();
+    const method = (init?.method || "GET").toUpperCase();
+    calls.push({ url: u, method });
+    if (u.includes("/oauth/v2/token"))
+      return new Response(JSON.stringify({ access_token: "tok-abc", expires_in: 3600 }), { status: 200 });
+    if (u.includes("/inventory/v1/items")) {
+      const page = Number(new URL(u).searchParams.get("page") || "1");
+      const items = pages[page - 1] || [];
+      return new Response(JSON.stringify({ items, page_context: { has_more_page: page < pages.length, total: flatTotal } }), { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+// runZohoSync reads env.ZOHO_* + env.DB; a spread copy supplies secrets while keeping the test DB.
+function zohoEnv() {
+  return { ...(env as Record<string, unknown>), ZOHO_CLIENT_ID: "cid", ZOHO_CLIENT_SECRET: "sec", ZOHO_REFRESH_TOKEN: "ref", ZOHO_INVENTORY_ORG_ID: "org", ZOHO_DC: "in" } as unknown as typeof env;
+}
+async function setCfg(key: string, value: string) {
+  await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key, value).run();
+}
+async function getCfg(key: string) {
+  const row = await (env.DB as D1Database).prepare("SELECT value FROM app_config WHERE key=?").bind(key).first() as { value: string } | null;
+  return row?.value ?? "";
+}
+async function invRow(sku: string) {
+  return (env.DB as D1Database).prepare("SELECT sku,stock,active,zoho_synced_at,zoho_item_id FROM inventory WHERE sku=?").bind(sku).first() as Promise<Record<string, unknown> | null>;
+}
+
+describe("Zoho Inventory sync — mapping", () => {
+  it("maps documented Zoho fields → app columns (stock ← stock_on_hand)", () => {
+    const m = mapZohoItem({ sku: "Z1", item_id: "zi1", name: "Tea", rate: 100, purchase_rate: 70, stock_on_hand: 42, tax_percentage: 12, category_name: "Beverages", status: "active", last_modified_time: "2026-09-05T06:00:00+05:30" });
+    expect("row" in m).toBe(true);
+    if ("row" in m) {
+      expect(m.row.stock).toBe(42);
+      expect(m.row.unit_price).toBe(100);
+      expect(m.row.cost_excl_gst).toBe(70);
+      expect(m.row.gst_rate).toBe(12);
+      expect(m.row.active).toBe(1);
+      expect(m.row.zoho_item_id).toBe("zi1");
+      expect(m.modifiedEpoch).toBe(Math.floor(Date.parse("2026-09-05T06:00:00+05:30") / 1000));
+    }
+  });
+  it("skips a blank sku", () => {
+    expect("error" in mapZohoItem({ sku: "  ", name: "x" })).toBe(true);
+  });
+});
+
+describe("Zoho Inventory sync — endpoint gating", () => {
+  it("status returns the pull-model shape", async () => {
+    const body = await get("/api/integrations/zoho-inventory/status", adminToken).then(r => r.json()) as Record<string, unknown>;
+    expect(body.direction).toContain("zoho→app");
     expect(typeof body.configured).toBe("boolean");
-    expect(typeof body.enabled).toBe("boolean");
-    expect(body.item_count).toBeGreaterThanOrEqual(0);
+    expect(["dryrun", "live"]).toContain(body.mode);
   });
-
-  it("sync is blocked until enabled, then runs and logs (simulated mode)", async () => {
-    // Disabled by default → 400
-    const off = await post("/api/integrations/zoho-inventory/sync", {}, adminToken);
-    expect(off.status).toBe(400);
-
-    // Enable, then sync succeeds
-    const en = await post("/api/integrations/zoho-inventory/toggle", { enabled: true }, adminToken);
-    expect(en.status).toBe(200);
-    expect((await en.json() as { enabled: boolean }).enabled).toBe(true);
-
-    const run = await post("/api/integrations/zoho-inventory/sync", {}, adminToken);
-    expect(run.status).toBe(200);
-    const body = await run.json() as { ok: boolean; items: number; simulated: number; simulated_mode: boolean };
-    expect(body.ok).toBe(true);
-    expect(body.items).toBeGreaterThanOrEqual(1);       // seeded inventory
-    expect(body.simulated_mode).toBe(true);             // no ZOHO_ACCESS_TOKEN in tests
-    expect(body.simulated).toBe(body.items);
-
-    // Status now reflects enabled + a last sync + a log row
-    const st = await get("/api/integrations/zoho-inventory/status", adminToken).then(r => r.json()) as { enabled: boolean; last_sync_at: string | null; recent_log: unknown[] };
-    expect(st.enabled).toBe(true);
-    expect(st.last_sync_at).toBeTruthy();
-    expect(st.recent_log.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("only ops/admin can toggle or sync (client 403)", async () => {
+  it("toggle + manual sync are super-admin only", async () => {
     expect((await post("/api/integrations/zoho-inventory/toggle", { enabled: true }, clientToken)).status).toBe(403);
+    expect((await post("/api/integrations/zoho-inventory/toggle", { enabled: true }, opsToken)).status).toBe(403);
     expect((await post("/api/integrations/zoho-inventory/sync", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/integrations/zoho-inventory/sync", {}, opsToken)).status).toBe(403);
+  });
+  it("disabled sync is a no-op (super-admin, still 200)", async () => {
+    await setCfg("zoho_sync_enabled", "0");
+    const res = await post("/api/integrations/zoho-inventory/sync", {}, adminToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { status: string }).status).toBe("disabled");
+  });
+});
+
+describe("Zoho Inventory sync — core (injected fetch)", () => {
+  it("disabled → performs NO network calls", async () => {
+    await setCfg("zoho_sync_enabled", "0");
+    const { impl, calls } = mockZoho([[{ sku: "SKU001", stock_on_hand: 5, last_modified_time: "2026-01-01T00:00:00Z" }]]);
+    const r = await runZohoSync(zohoEnv(), { fetchImpl: impl });
+    expect(r.status).toBe("disabled");
+    expect(calls.length).toBe(0);
   });
 
-  it("inbound webhook updates our stock from Zoho", async () => {
-    const res = await post("/api/integrations/zoho-inventory/webhook", {
-      items: [{ sku: "SKU001", stock: 777 }, { sku: "NON_EXISTENT", stock: 5 }],
-    }, adminToken);
-    expect(res.status).toBe(200);
-    const body = await res.json() as { ok: boolean; updated: number };
-    expect(body.updated).toBe(1); // only the real SKU is updated
+  it("live delta overwrites stock, stamps provenance, advances the cursor", async () => {
+    await setCfg("zoho_sync_enabled", "1");
+    await setCfg("zoho_sync_mode", "live");
+    await setCfg("zoho_sync_cursor", "");
+    const mod = "2026-09-05T06:00:00+05:30";
+    const { impl, calls } = mockZoho([[{ sku: "SKU001", item_id: "z-sku001", name: "Basmati Rice 5kg", stock_on_hand: 321, last_modified_time: mod }]]);
+    const r = await runZohoSync(zohoEnv(), { fetchImpl: impl });
+    expect(r.status).toBe("ok");
+    expect(r.written).toBe(1);
+    const row = await invRow("SKU001");
+    expect(Number(row?.stock)).toBe(321);          // stock ← stock_on_hand
+    expect(row?.zoho_synced_at).toBeTruthy();       // provenance stamped
+    expect(row?.zoho_item_id).toBe("z-sku001");
+    // cursor advanced to the max last_modified_time (UTC epoch)
+    expect(r.cursor_epoch).toBe(Math.floor(Date.parse(mod) / 1000));
+    // NEVER a POST to Zoho items — only token POST + GET items
+    expect(calls.some(c => c.url.includes("/inventory/v1/items") && c.method === "POST")).toBe(false);
+  });
 
-    const inv = await get("/api/inventory", adminToken).then(r => r.json()) as Array<{ sku: string; stock: number }>;
-    expect(inv.find(i => i.sku === "SKU001")?.stock).toBe(777);
+  it("dry-run writes nothing and does not advance the cursor", async () => {
+    await setCfg("zoho_sync_enabled", "1");
+    await setCfg("zoho_sync_mode", "dryrun");
+    await setCfg("zoho_sync_cursor", "1000");
+    // seed a known stock we can prove is untouched
+    await (env.DB as D1Database).prepare("UPDATE inventory SET stock=7 WHERE sku='SKU001'").run();
+    const { impl } = mockZoho([[{ sku: "SKU001", stock_on_hand: 999, last_modified_time: "2026-09-09T00:00:00Z" }]]);
+    const r = await runZohoSync(zohoEnv(), { fetchImpl: impl });
+    expect(r.mode).toBe("dryrun");
+    expect(Number((await invRow("SKU001"))?.stock)).toBe(7); // unchanged
+    expect(await getCfg("zoho_sync_cursor")).toBe("1000");   // not advanced
+  });
+
+  it("a fetch failure aborts with no writes and holds the cursor", async () => {
+    await setCfg("zoho_sync_enabled", "1");
+    await setCfg("zoho_sync_mode", "live");
+    await setCfg("zoho_sync_cursor", "500");
+    await (env.DB as D1Database).prepare("UPDATE inventory SET stock=11 WHERE sku='SKU001'").run();
+    const impl = (async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : (url as URL).toString();
+      if (u.includes("/oauth/v2/token")) return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 });
+      throw new Error("network down"); // non-retryable → immediate abort
+    }) as unknown as typeof fetch;
+    const r = await runZohoSync(zohoEnv(), { fetchImpl: impl });
+    expect(r.status).toBe("error");
+    expect(Number((await invRow("SKU001"))?.stock)).toBe(11); // no partial clobber
+    expect(await getCfg("zoho_sync_cursor")).toBe("500");     // cursor held
+  });
+
+  it("full reconcile soft-deactivates absent Zoho SKUs but never app-native ones", async () => {
+    const db = env.DB as D1Database;
+    await setCfg("zoho_sync_enabled", "1");
+    await setCfg("zoho_sync_mode", "live");
+    // Reset provenance so this test's fixture is the ONLY Zoho-origin population
+    // (other tests leave zoho_synced_at set) → the 10% valve math is deterministic.
+    await db.prepare("UPDATE inventory SET zoho_synced_at=NULL").run();
+    // ZINV-OLD: previously from Zoho (old stamp), now absent → should deactivate
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,zoho_synced_at) VALUES ('ZINV-OLD','Old Zoho Item','General',10,5,1,'2000-01-01T00:00:00.000Z')").run();
+    // CSV-NATIVE: never from Zoho (NULL provenance) → must stay active
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,zoho_synced_at) VALUES ('CSV-NATIVE','Hand Added','General',10,5,1,NULL)").run();
+    // A full page of still-present Zoho items so the 1 stale SKU stays under the 10% valve.
+    const keep = Array.from({ length: 10 }, (_, i) => ({ sku: `ZKEEP-${i}`, name: `Keep ${i}`, stock_on_hand: 3, last_modified_time: "2026-09-09T00:00:00Z" }));
+    const { impl } = mockZoho([[{ sku: "ZINV-NEW", name: "Fresh", stock_on_hand: 20, last_modified_time: "2026-09-09T00:00:00Z" }, ...keep]]);
+    const r = await runZohoSync(zohoEnv(), { full: true, fetchImpl: impl });
+    expect(r.status).toBe("ok");
+    expect(r.deactivated).toBe(1);
+    expect(Number((await invRow("ZINV-OLD"))?.active)).toBe(0);   // deactivated
+    expect(Number((await invRow("CSV-NATIVE"))?.active)).toBe(1); // untouched (app-native)
+    expect(Number((await invRow("ZKEEP-0"))?.active)).toBe(1);    // present in Zoho → active
   });
 });
 
@@ -1345,27 +1452,27 @@ describe("Client consumption report (received / consumed / stock / low-stock)", 
 // ── HSN-driven GST slab ──────────────────────────────────────────────
 // A product's GST must come from its HSN code (0/5/12/18/28%), never a flat 18%.
 describe("HSN → GST slab", () => {
-  it("GET /api/hsn-gst resolves the seeded slab for a known heading", async () => {
-    const res = await get("/api/hsn-gst?hsn=2202", adminToken);
+  it("GET /api/hsn-gst resolves the seeded 6-digit slab", async () => {
+    const res = await get("/api/hsn-gst?hsn=220210", adminToken);
     expect(res.status).toBe(200);
     const data = await res.json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
     expect(data.gst_rate).toBe(28); // aerated/flavoured beverages
   });
 
-  it("GET /api/hsn-gst falls back from an 8-digit code to its 4-digit heading", async () => {
-    const data = await (await get("/api/hsn-gst?hsn=09011100", adminToken)).json() as { gst_rate: number; matched: boolean };
+  it("GET /api/hsn-gst falls back from an 8-digit code to its 6-digit subheading", async () => {
+    const data = await (await get("/api/hsn-gst?hsn=09012100", adminToken)).json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
-    expect(data.gst_rate).toBe(5); // coffee, heading 0901
+    expect(data.gst_rate).toBe(5); // coffee, subheading 090121
   });
 
   it("GET /api/hsn-gst reports no match for an unmapped code", async () => {
-    const data = await (await get("/api/hsn-gst?hsn=9999", adminToken)).json() as { matched: boolean };
+    const data = await (await get("/api/hsn-gst?hsn=999999", adminToken)).json() as { matched: boolean };
     expect(data.matched).toBe(false);
   });
 
   it("POST /api/inventory derives GST from the HSN code, ignoring a wrong supplied rate", async () => {
-    const res = await post("/api/inventory", { name: "Fizzy Cola", category: "Beverages", unit_price: 40, hsn_code: "2202", gst_rate: 18 }, adminToken);
+    const res = await post("/api/inventory", { name: "Fizzy Cola", category: "Beverages", unit_price: 40, hsn_code: "220210", gst_rate: 18 }, adminToken);
     expect(res.status).toBe(201);
     const { sku } = await res.json() as { sku: string };
     const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
@@ -1373,10 +1480,10 @@ describe("HSN → GST slab", () => {
   });
 
   it("PATCH /api/inventory re-derives GST when the HSN code changes", async () => {
-    const created = await post("/api/inventory", { name: "Mystery Item", category: "Grocery", unit_price: 10, hsn_code: "0901" }, adminToken);
+    const created = await post("/api/inventory", { name: "Mystery Item", category: "Grocery", unit_price: 10, hsn_code: "090121" }, adminToken);
     const { sku } = await created.json() as { sku: string };
-    // starts at 5% (coffee); move it to a 12%-heading and expect GST to follow
-    await patch(`/api/inventory/${sku}`, { hsn_code: "2009" }, adminToken); // juices → 12
+    // starts at 5% (coffee); move it to a 12%-subheading and expect GST to follow
+    await patch(`/api/inventory/${sku}`, { hsn_code: "200989" }, adminToken); // juices → 12
     const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
     expect(row.gst_rate).toBe(12);
   });
@@ -1384,7 +1491,7 @@ describe("HSN → GST slab", () => {
   it("POST /api/inventory/recalc-gst backfills a wrong stored rate from the HSN", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES (?,?,?,?,?,?,?,?)")
-      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "2202", 18).run(); // should be 28
+      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "220210", 18).run(); // should be 28
     const res = await post("/api/inventory/recalc-gst", {}, adminToken);
     expect(res.status).toBe(200);
     const data = await res.json() as { updated: number };
@@ -1393,17 +1500,47 @@ describe("HSN → GST slab", () => {
     expect(row.gst_rate).toBe(28);
   });
 
-  it("POST /api/hsn-gst-rates upserts a mapping that the lookup then resolves", async () => {
-    const res = await post("/api/hsn-gst-rates", { hsn: "3305", gst_rate: 18, description: "Hair preparations" }, adminToken);
+  it("POST /api/hsn-gst-rates upserts a 6-digit mapping that the lookup then resolves", async () => {
+    const res = await post("/api/hsn-gst-rates", { hsn: "330510", gst_rate: 18, description: "Shampoo / hair preparations" }, adminToken);
     expect(res.status).toBe(200);
-    const data = await (await get("/api/hsn-gst?hsn=3305", adminToken)).json() as { gst_rate: number; matched: boolean };
+    const data = await (await get("/api/hsn-gst?hsn=330510", adminToken)).json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
     expect(data.gst_rate).toBe(18);
   });
 
+  it("POST /api/hsn-gst-rates rejects a non-6-digit HSN code", async () => {
+    expect((await post("/api/hsn-gst-rates", { hsn: "4901", gst_rate: 12 }, adminToken)).status).toBe(400);   // 4-digit
+    expect((await post("/api/hsn-gst-rates", { hsn: "49", gst_rate: 12 }, adminToken)).status).toBe(400);     // 2-digit
+  });
+
   it("POST /api/hsn-gst-rates rejects a rate outside the legal slabs", async () => {
-    const res = await post("/api/hsn-gst-rates", { hsn: "4901", gst_rate: 7 }, adminToken);
+    const res = await post("/api/hsn-gst-rates", { hsn: "490100", gst_rate: 7 }, adminToken);
     expect(res.status).toBe(400);
+  });
+
+  // Production runs on the self-heal path (deploy does NOT apply migrations/*.sql),
+  // so the 4-digit→6-digit standardisation must also work at runtime, once.
+  it("runtime migrateHsnTo6Digit replaces 4-digit rows/codes and is guarded to run once", async () => {
+    const db = env.DB as D1Database;
+    // Simulate a pre-migration DB: a 4-digit map row, an item on that code, a 2101 default.
+    await db.prepare("INSERT OR REPLACE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES ('2202',28,'legacy 4-digit')").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code) VALUES ('HSN4','Legacy Cola','Beverages',30,0,1,'2202')").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code) VALUES ('HSNDEF','Defaulted','Grocery',10,0,1,'2101')").run();
+    await db.prepare("DELETE FROM app_config WHERE key='hsn_6digit_migrated'").run();
+
+    await migrateHsnTo6Digit(env);
+
+    expect(await getCfg("hsn_6digit_migrated")).toBe("1");
+    expect(await (db.prepare("SELECT 1 FROM hsn_gst_rates WHERE hsn='2202'").first())).toBeNull(); // 4-digit row gone
+    const item = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='HSN4'").first() as { hsn_code: string };
+    expect(item.hsn_code).toBe("220210"); // remapped to 6-digit
+    const def = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='HSNDEF'").first() as { hsn_code: string };
+    expect(def.hsn_code).toBe(""); // 2101 default retired
+
+    // Guard: re-adding a 4-digit code and re-running must NOT touch it (flag set).
+    await db.prepare("INSERT OR REPLACE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES ('0901',5,'re-added by admin')").run();
+    await migrateHsnTo6Digit(env);
+    expect(await (db.prepare("SELECT 1 FROM hsn_gst_rates WHERE hsn='0901'").first())).not.toBeNull();
   });
 });
 

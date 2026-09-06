@@ -1197,25 +1197,25 @@ async function renderOrderQueue(el) {
       const isUrgent = o.status==='PENDING_APPROVAL';
       const todayStr = new Date().toISOString().slice(0,10);
       return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
-        <td>
+        <td class="card-title-cell">
           <b>${o.id}</b>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'var(--warning)'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
           ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
-        <td>${o.client_name||'—'}</td>
-        <td style="font-weight:700">${fmt(o.grand_total)}</td>
-        <td>${statusBadge(o.status)}</td>
-        <td>${orderTypeBadge(o.order_type||'Regular')}</td>
-        <td class="u-center">
+        <td data-label="Client">${o.client_name||'—'}</td>
+        <td data-label="Amount" style="font-weight:700">${fmt(o.grand_total)}</td>
+        <td data-label="Status">${statusBadge(o.status)}</td>
+        <td data-label="Type">${orderTypeBadge(o.order_type||'Regular')}</td>
+        <td data-label="Items" class="u-center">
           <span style="font-weight:700;font-size:.88rem">${o.item_count||0}</span>
-          <span style="font-size:.72rem;color:var(--text-muted);display:block">items</span>
+          <span style="font-size:.72rem;color:var(--text-muted)"> items</span>
         </td>
-        <td class="u-center">
+        <td data-label="Total Qty" class="u-center">
           <span style="font-weight:700;font-size:.88rem">${o.total_qty||0}</span>
-          <span style="font-size:.72rem;color:var(--text-muted);display:block">units</span>
+          <span style="font-size:.72rem;color:var(--text-muted)"> units</span>
         </td>
-        <td style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
-        <td>${orderQueueActions(o)}</td>
+        <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
+        <td data-label="Actions">${orderQueueActions(o)}</td>
       </tr>`;
     }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
@@ -1255,7 +1255,7 @@ async function renderOrderQueue(el) {
         <div id="oq-tabs">${oqTabsHtml()}</div>
       </div>
       <div class="table-wrap">
-        <table class="table" style="margin:0">
+        <table class="table table-cards" style="margin:0">
           <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${oqTableHtml(APP._oqStatusTab)}
         </table>
@@ -1302,7 +1302,7 @@ function switchOQMainTab(tab) {
         <div id="oq-tabs">${APP._oqTabsHtml?APP._oqTabsHtml():''}</div>
       </div>
       <div class="table-wrap">
-        <table class="table" style="margin:0">
+        <table class="table table-cards" style="margin:0">
           <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
         </table>

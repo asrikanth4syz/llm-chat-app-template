@@ -935,7 +935,7 @@ async function editInventoryItem(sku) {
         <div class="form-group"><label>Pack Size</label><input type="number" id="ei-packsize" value="${item.pack_size||1}" min="1"></div>
         <div class="form-group"><label>Units per Case</label><input type="number" id="ei-upc" value="${item.units_per_case||1}" min="1"></div>
         <div class="form-group"><label>Weight (grams)</label><input type="number" id="ei-weight" value="${item.weight_grams||0}" min="0" step="0.1"></div>
-        <div class="form-group"><label>HSN Code</label><input type="text" id="ei-hsn" value="${item.hsn_code||''}" oninput="hsnAutoGst('ei-hsn','ei-gst')"><small id="ei-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
+        <div class="form-group"><label>HSN Code <span style="color:var(--muted);font-weight:400">— 6-digit</span></label><input type="text" id="ei-hsn" value="${item.hsn_code||''}" inputmode="numeric" maxlength="8" placeholder="e.g. 220210" oninput="hsnAutoGst('ei-hsn','ei-gst')"><small id="ei-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
         <div class="form-group"><label>Storage Location</label><input type="text" id="ei-location" value="${item.inv_location||'instock'}"></div>
       </div>
     </div>
@@ -1244,7 +1244,7 @@ function renderAddItem() {
      </div>
      <div class="form-group"><label>Unit Price (₹)</label><input type="number" id="item-price" min="0" step="0.01"></div>
      <div class="form-group"><label>Opening Stock</label><input type="number" id="item-stock" value="0" min="0"></div>
-     <div class="form-group"><label>HSN Code</label><input type="text" id="item-hsn" value="" placeholder="e.g. 2202" oninput="hsnAutoGst('item-hsn','item-gst')"><small id="item-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
+     <div class="form-group"><label>HSN Code <span style="color:var(--muted);font-weight:400">— 6-digit</span></label><input type="text" id="item-hsn" value="" inputmode="numeric" maxlength="8" placeholder="e.g. 220210" oninput="hsnAutoGst('item-hsn','item-gst')"><small id="item-hsn-hint" style="color:var(--muted);font-size:.7rem"></small></div>
      <div class="form-group"><label>GST Rate (%) <span style="color:var(--muted);font-weight:400">— set by HSN</span></label>${gstSlabSelect('item-gst', null)}</div>
      <div class="form-group"><label>Emoji</label><input type="text" id="item-emoji" value="📦" maxlength="2"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>

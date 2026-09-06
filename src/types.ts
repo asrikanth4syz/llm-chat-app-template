@@ -11,6 +11,11 @@ export interface Env {
   ZOHO_INVENTORY_ORG_ID?: string;
   ZOHO_ACCESS_TOKEN?: string;
   ZOHO_INVENTORY_WEBHOOK_SECRET?: string;
+  // Zoho Inventory → App sync (milestone 002): OAuth2 refresh-token flow.
+  ZOHO_CLIENT_ID?: string;
+  ZOHO_CLIENT_SECRET?: string;
+  ZOHO_REFRESH_TOKEN?: string;
+  ZOHO_DC?: string; // data centre, e.g. "in" → accounts.zoho.in / zohoapis.in
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_FROM_NUMBER: string;
