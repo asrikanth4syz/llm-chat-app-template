@@ -4,7 +4,7 @@
    code, never a free-typed number. The dropdown is read-only to
    the user; typing an HSN auto-selects the matching slab.
    ============================================================ */
-const GST_SLABS = [0, 5, 12, 18, 28];
+const GST_SLABS = [0, 5, 12, 18, 28, 40];  // 40% = GST 2.0 demerit rate (aerated/sugary drinks, etc.)
 function gstSlabSelect(id, current) {
   const cur = current != null ? Number(current) : null;
   const opts = ['<option value="">— (no HSN match)</option>']

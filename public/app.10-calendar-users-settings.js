@@ -1128,7 +1128,7 @@ async function settingsTab(tab, btn) {
     const rates = await api('/hsn-gst-rates') || [];
     const list = Array.isArray(rates) ? rates : [];
     const slabBadge = r => {
-      const c = { 0:'#6b7280', 5:'#0891b2', 12:'#2563eb', 18:'#d97706', 28:'#dc2626' }[r] || '#6b7280';
+      const c = { 0:'#6b7280', 5:'#0891b2', 12:'#2563eb', 18:'#d97706', 28:'#dc2626', 40:'#9f1239' }[r] || '#6b7280';
       return `<span class="badge" style="background:${c};color:#fff">${r}%</span>`;
     };
     el.innerHTML = `
@@ -1144,7 +1144,7 @@ async function settingsTab(tab, btn) {
         <div class="hg-form">
           <div class="form-group" style="margin:0"><label>HSN Code</label><input type="text" id="hg-hsn" inputmode="numeric" maxlength="8" placeholder="e.g. 220210"></div>
           <div class="form-group" style="margin:0"><label>GST Slab</label>
-            <select id="hg-rate"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18" selected>18%</option><option value="28">28%</option></select>
+            <select id="hg-rate"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18" selected>18%</option><option value="28">28%</option><option value="40">40%</option></select>
           </div>
           <div class="form-group" style="margin:0"><label>Description</label><input type="text" id="hg-desc" placeholder="e.g. Aerated beverages"></div>
           <button class="btn btn-primary" ${dataAct('saveHsnGstRate')}>Add / Update</button>
