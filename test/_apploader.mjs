@@ -61,7 +61,7 @@ export async function loadApp({ fetchRouterSrc = "() => null" } = {}) {
   ` });
 
   for (const src of localScripts) {
-    try { await page.addScriptTag({ path: path.join(PUBLIC, src) }); }
+    try { await page.addScriptTag({ path: path.join(PUBLIC, src.split("?")[0]) }); }
     catch (e) { errors.push(`addScriptTag(${src}): ${e.message}`); }
   }
   const close = async () => { try { await browser.close(); } finally { server.close(); } };

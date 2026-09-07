@@ -48,7 +48,7 @@ const untouchedNav = FIX("untouched-nav.json").profiles;
 console.log(`\nLoaded ${localScripts.length} script(s). Load errors: ${errors.length}`);
 expect("all app scripts load without error", errors.length === 0 || (console.log("   ", errors.slice(0,3)), false));
 
-const src = localScripts.map((s) => readFileSync(path.join(ROOT, "public", s), "utf8")).join("\n");
+const src = localScripts.map((s) => readFileSync(path.join(ROOT, "public", s.split("?")[0]), "utf8")).join("\n");
 
 const res = await page.evaluate(async (args) => {
   const { R1, aclMatrix, preIds, untouchedNav } = args;
