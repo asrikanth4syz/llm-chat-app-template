@@ -738,7 +738,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
         ('190590',18,'Biscuits, bread, cakes'),('200989',12,'Fruit & vegetable juices'),
         ('210690',12,'Food preparations n.e.s. (namkeen/snacks)'),
         ('220110',18,'Water, incl. mineral (unsweetened)'),
-        ('220210',28,'Aerated / sweetened / flavoured beverages'),
+        ('220210',40,'Aerated / sweetened / flavoured beverages (GST 2.0 demerit)'),
         ('340111',18,'Soap (toilet/bar)'),('340220',18,'Detergents & cleaning preparations'),
         ('380894',18,'Disinfectants / sanitizers'),('392410',18,'Plastic tableware / kitchenware'),
         ('480257',12,'Paper'),('481710',18,'Envelopes'),
@@ -791,11 +791,24 @@ async function migrateHsnTo6Digit(env: Env): Promise<void> {
   } catch { /* non-fatal — retried next cold start until the flag is set */ }
 }
 
+// One-time (guarded): aerated/sweetened beverages moved to the GST 2.0 40% demerit
+// slab. Bump the HSN map row and any inventory items still on the old 28% rate.
+// Only touches rows still at 28% so an admin's explicit edit is never overwritten.
+async function migrateAeratedGst40(env: Env): Promise<void> {
+  try {
+    if ((await getConfig(env, "aerated_gst40_migrated", "")) === "1") return;
+    await env.DB.prepare("UPDATE hsn_gst_rates SET gst_rate=40 WHERE hsn IN ('220210','2202') AND gst_rate=28").run();
+    await env.DB.prepare("UPDATE inventory SET gst_rate=40 WHERE hsn_code IN ('220210','2202') AND gst_rate=28").run();
+    await setConfig(env, "aerated_gst40_migrated", "1", "system");
+  } catch { /* non-fatal — retried next cold start until the flag is set */ }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
   await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
   await migrateHsnTo6Digit(env);  // standardise seeded HSN codes to 6-digit (once)
+  await migrateAeratedGst40(env); // aerated beverages → GST 2.0 40% slab (once)
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
@@ -2712,7 +2725,7 @@ async function handleUpsertHsnGstRate(request: Request, env: Env): Promise<Respo
   // HSN must be a 6-digit (or full 8-digit) code — GST no longer accepts the
   // coarse 2/4-digit headings for the mapping table.
   if (hsn.length !== 6 && hsn.length !== 8) return json({error:"HSN code must be 6 digits (8 also accepted)"}, 400);
-  if (![0,5,12,18,28].includes(rate)) return json({error:"GST rate must be one of 0, 5, 12, 18, 28"}, 400);
+  if (![0,5,12,18,28,40].includes(rate)) return json({error:"GST rate must be one of 0, 5, 12, 18, 28, 40"}, 400);
   await env.DB.prepare(
     `INSERT INTO hsn_gst_rates (hsn, gst_rate, description, updated_at, updated_by)
      VALUES (?,?,?,datetime('now'),?)

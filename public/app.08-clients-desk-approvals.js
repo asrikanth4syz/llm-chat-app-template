@@ -493,8 +493,8 @@ function ccLadderRow(item) {
           ${dataInput('ccRecalcLadder', sku)} ${dataBlur('saveCCPrice', sku)} data-el ${dataEnterEl('_blurEl')}></span>
         <span class="s">${hasCustom ? 'custom' : 'list'}</span>
       </div>
-      <div class="ccl-c disc"><span class="k">Discount</span><span class="v" id="ccl-dm-${sku}">${_cclP1(c.discMrp)}</span><span class="s"><span id="ccl-dl-${sku}">${_cclP1(c.discList)}</span> off list</span></div>
-      <div class="ccl-c gst"><span class="k">GST ${gst}%</span><span class="v">+</span><span class="s" id="ccl-ga-${sku}">+${_cclR2(c.gstAmt)}</span></div>
+      <div class="ccl-c disc"><span class="k">Discount</span><span class="v" id="ccl-dm-${sku}">${_cclP1(c.discMrp)}</span><span class="s">off MRP · <span id="ccl-dl-${sku}">${_cclP1(c.discList)}</span> off list</span></div>
+      <div class="ccl-c gst"><span class="k">GST</span><span class="v">${gst}%</span><span class="s" id="ccl-ga-${sku}">+${_cclR2(c.gstAmt)}</span></div>
       <div class="ccl-c landed"><span class="k">Landed</span><span class="v" id="ccl-ld-${sku}">${_cclR2(c.landed)}</span><span class="s">incl GST</span></div>
     </div>
     <div class="ccl-foot">

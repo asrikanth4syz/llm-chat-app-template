@@ -1457,7 +1457,7 @@ describe("HSN → GST slab", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as { gst_rate: number; matched: boolean };
     expect(data.matched).toBe(true);
-    expect(data.gst_rate).toBe(28); // aerated/flavoured beverages
+    expect(data.gst_rate).toBe(40); // aerated beverages — GST 2.0 40% demerit slab
   });
 
   it("GET /api/hsn-gst falls back from an 8-digit code to its 6-digit subheading", async () => {
@@ -1476,7 +1476,7 @@ describe("HSN → GST slab", () => {
     expect(res.status).toBe(201);
     const { sku } = await res.json() as { sku: string };
     const row = await (env.DB as D1Database).prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind(sku).first() as { gst_rate: number };
-    expect(row.gst_rate).toBe(28);
+    expect(row.gst_rate).toBe(40); // aerated → 40% demerit slab
   });
 
   it("PATCH /api/inventory re-derives GST when the HSN code changes", async () => {
@@ -1491,13 +1491,13 @@ describe("HSN → GST slab", () => {
   it("POST /api/inventory/recalc-gst backfills a wrong stored rate from the HSN", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES (?,?,?,?,?,?,?,?)")
-      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "220210", 18).run(); // should be 28
+      .bind("HSNFIX", "Wrongly 18", "Beverages", 50, 0, 1, "220210", 18).run(); // aerated → should be 40
     const res = await post("/api/inventory/recalc-gst", {}, adminToken);
     expect(res.status).toBe(200);
     const data = await res.json() as { updated: number };
     expect(data.updated).toBeGreaterThanOrEqual(1);
     const row = await db.prepare("SELECT gst_rate FROM inventory WHERE sku=?").bind("HSNFIX").first() as { gst_rate: number };
-    expect(row.gst_rate).toBe(28);
+    expect(row.gst_rate).toBe(40);
   });
 
   it("POST /api/hsn-gst-rates upserts a 6-digit mapping that the lookup then resolves", async () => {
@@ -1516,6 +1516,13 @@ describe("HSN → GST slab", () => {
   it("POST /api/hsn-gst-rates rejects a rate outside the legal slabs", async () => {
     const res = await post("/api/hsn-gst-rates", { hsn: "490100", gst_rate: 7 }, adminToken);
     expect(res.status).toBe(400);
+  });
+
+  it("POST /api/hsn-gst-rates accepts the GST 2.0 40% demerit slab", async () => {
+    const res = await post("/api/hsn-gst-rates", { hsn: "240220", gst_rate: 40, description: "Cigarettes" }, adminToken);
+    expect(res.status).toBe(200);
+    const data = await (await get("/api/hsn-gst?hsn=240220", adminToken)).json() as { gst_rate: number; matched: boolean };
+    expect(data.gst_rate).toBe(40);
   });
 
   // Production runs on the self-heal path (deploy does NOT apply migrations/*.sql),
