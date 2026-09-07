@@ -803,12 +803,26 @@ async function migrateAeratedGst40(env: Env): Promise<void> {
   } catch { /* non-fatal — retried next cold start until the flag is set */ }
 }
 
+// One-time (guarded): GST 2.0 retired the 28% slab; in this pantry catalogue 28%
+// only ever applied to aerated/sugary drinks, which move to the 40% demerit slab.
+// Many such items were never tagged with HSN 220210, so the HSN-based bump above
+// misses them — reconcile every remaining 28% item to 40% once. Runs a single time
+// (flag-guarded), so an item an admin deliberately sets to 28% later is never touched.
+async function migrateGst28ItemsTo40(env: Env): Promise<void> {
+  try {
+    if ((await getConfig(env, "gst28_all_to_40", "")) === "1") return;
+    await env.DB.prepare("UPDATE inventory SET gst_rate=40 WHERE gst_rate=28").run();
+    await setConfig(env, "gst28_all_to_40", "1", "system");
+  } catch { /* non-fatal — retried next cold start until the flag is set */ }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
   await ensureFeatureTables(env); // create feature tables missing when later migrations were not applied
   await migrateHsnTo6Digit(env);  // standardise seeded HSN codes to 6-digit (once)
-  await migrateAeratedGst40(env); // aerated beverages → GST 2.0 40% slab (once)
+  await migrateAeratedGst40(env); // aerated beverages (HSN-tagged) → 40% slab (once)
+  await migrateGst28ItemsTo40(env); // reconcile all remaining 28% items → 40% (once)
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
