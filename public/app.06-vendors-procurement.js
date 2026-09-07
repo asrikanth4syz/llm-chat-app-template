@@ -48,7 +48,7 @@ async function renderVendors(el) {
     const isAtRisk    = (v.on_time_rate||0)<75 || (v.fill_rate||0)<85;
     const initials    = v.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
     return `
-    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${isAtRisk?'var(--danger)':'var(--success)'}">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${isAtRisk?'var(--danger)':'var(--success)'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
@@ -120,9 +120,9 @@ async function renderVendors(el) {
   const fssaiSoon    = fssaiFlagged.filter(v => v.fssai_expiry >= _today);
   const anyExpired = fssaiExpired.length > 0;
   const fssaiChip = v => {
-    const btn = `<button class="btn btn-sm" style="background:#fff;border:1px solid var(--border);font-size:.72rem" ${dataAct('editVendorById', _regVendor(v))}>Renew</button>`;
+    const btn = `<button class="btn btn-sm" style="background:var(--surface);border:1px solid var(--border);font-size:.72rem" ${dataAct('editVendorById', _regVendor(v))}>Renew</button>`;
     const expd = v.fssai_expiry < _today;
-    return `<span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid ${expd?'#fca5a5':'#fde68a'};border-radius:8px;padding:5px 8px 5px 11px;font-size:.78rem">
+    return `<span style="display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid ${expd?'#fca5a5':'#fde68a'};border-radius:8px;padding:5px 8px 5px 11px;font-size:.78rem">
       <span><b>${h(v.name)}</b> · <span style="color:${expd?'var(--danger)':'#b45309'};font-weight:700">${expd?'expired':'expires'} ${fmtDate(v.fssai_expiry)}</span></span>${btn}</span>`;
   };
   const fssaiBanner = fssaiFlagged.length ? `
@@ -146,11 +146,11 @@ async function renderVendors(el) {
   </div>
 
   <!-- Search & Filter bar -->
-  <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+  <div style="background:var(--surface);border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <input type="text" id="vendor-search-q" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
       ${dataInput('filterVendorCards')}>
-    <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:#fff"
+    <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:var(--surface)"
       ${dataChangeEl('vendorSetCat')}>
       <option value="">All Categories</option>
       ${allCategories.map(c=>`<option value="${c}"${APP._vendorCat===c?' selected':''}>${c}</option>`).join('')}
@@ -166,19 +166,19 @@ async function renderVendors(el) {
 
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Total Vendors</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeVendors.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
       <div class="u-label2">Avg On-time Rate</div>
       <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgOnTime)};margin-top:6px">${avgOnTime}%</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgFill)}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgFill)}">
       <div class="u-label2">Avg Fill Rate</div>
       <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgFill)};margin-top:6px">${avgFill}%</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
       <div class="u-label2">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
       <div class="u-subtiny">below performance threshold</div>
@@ -804,7 +804,7 @@ function vendorViewHTML(v, docs, products) {
 
       <!-- rail -->
       <div style="display:flex;flex-direction:column;gap:14px">
-        <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
           <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Onboarding progress</div>
           <div style="display:flex;justify-content:space-between;font-size:.74rem;color:var(--text-muted);margin-bottom:6px"><span>Overall completion</span><b style="color:var(--primary)">${pctDone}%</b></div>
           <div style="height:8px;background:var(--surface-2);border-radius:100px;overflow:hidden;margin-bottom:12px"><i style="display:block;height:100%;width:${pctDone}%;background:linear-gradient(90deg,var(--primary),#14b8a6)"></i></div>
@@ -815,11 +815,11 @@ function vendorViewHTML(v, docs, products) {
 
     <!-- bottom row: documents + activity -->
     <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;margin-top:18px" class="vv-grid">
-      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
         <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Required documents</div>
         ${docRows}
       </div>
-      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
         <div style="font-size:.66rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Activity</div>
         ${activityHtml}
       </div>
@@ -1081,20 +1081,20 @@ async function renderProcurement(el) {
       style="background:${t.bg};border:1px solid ${t.urgent?t.color+'55':'#e5e7eb'};--po-accent:${t.color}" ${dataAct('filterPO', t.key)}>
       <div style="font-size:1.4rem;margin-bottom:6px">${t.icon}</div>
       <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${t.color};margin-bottom:4px">${t.label}</div>
-      <div style="font-size:1.8rem;font-weight:800;color:#1f2937;line-height:1">${byStatus(t.key).length}</div>
+      <div style="font-size:1.8rem;font-weight:800;color:var(--text);line-height:1">${byStatus(t.key).length}</div>
       <div style="font-size:.72rem;color:var(--gray);margin-top:4px">${fmt(valByStatus(t.key))}</div>
     </div>`).join('')}
   </div>
 
   <!-- Charts + GRN alert -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <div style="background:var(--surface);border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem;margin-bottom:14px">Vendor Performance</div>
       <div style="position:relative;height:220px;width:100%">
         <canvas id="vendorChart"></canvas>
       </div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <div style="background:var(--surface);border-radius:12px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div style="font-weight:700;color:var(--navy);font-size:.9rem">GRN Pending Receipt</div>
         <span style="background:#f5f3ff;color:var(--violet);border-radius:20px;padding:2px 10px;font-size:.75rem;font-weight:700">${pendingGRN.length} DCs</span>
@@ -1102,7 +1102,7 @@ async function renderProcurement(el) {
       ${pendingGRN.length === 0
         ? '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:.84rem">No pending GRNs</div>'
         : pendingGRN.map(po=>`
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;background:#f8f9fa;margin-bottom:8px;border:1px solid #e5e7eb">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;background:#f8f9fa;margin-bottom:8px;border:1px solid var(--border)">
             <div>
               <div style="font-weight:700;font-size:.84rem">${po.id} <span style="font-weight:400;color:var(--text-muted)">· ${po.vendor_name||'—'}</span></div>
               <div class="u-subtiny">${fmt(po.grand_total)} · Expected ${fmtDate(po.expected_delivery)}</div>
@@ -1114,7 +1114,7 @@ async function renderProcurement(el) {
   </div>
 
   <!-- PO table -->
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
       <div style="font-weight:700;color:var(--navy);font-size:.9rem">All Purchase Orders</div>
       <div style="display:flex;gap:8px;align-items:center">

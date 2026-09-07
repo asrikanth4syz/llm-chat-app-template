@@ -880,7 +880,7 @@ async function renderStaff(el) {
     const rc = STAFF_ROLE_COLOR[s.role] || '#6b7280';
     const initials = s.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
     return `
-    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${s.active?1:.55}">
+    <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${s.active?1:.55}">
       <div style="width:44px;height:44px;border-radius:50%;background:${s.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
       <div class="u-flex1">
         <div style="font-weight:700;font-size:.9rem;color:var(--navy)">${h(s.name)}
@@ -912,7 +912,7 @@ async function renderStaff(el) {
     ${Object.entries(byRole).map(([role, members])=>{
       const rc = STAFF_ROLE_COLOR[role]||'#6b7280';
       const activeCount = members.filter(s=>s.active).length;
-      return `<div style="background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${rc}">
+      return `<div style="background:var(--surface);border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${rc}">
         <div style="font-size:.7rem;font-weight:700;color:${rc};text-transform:uppercase;letter-spacing:.06em">${STAFF_ROLE_LABEL[role]||role}</div>
         <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${activeCount}</div>
         <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">active · ${members.length} total</div>
@@ -930,7 +930,7 @@ async function renderStaff(el) {
   </div>`).join('')}
 
   ${staff.length===0?`
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
     <div style="font-size:2.5rem;margin-bottom:12px">👷</div>
     <div style="font-weight:700;font-size:1rem;color:var(--navy)">No staff yet</div>
     <div style="font-size:.84rem;margin-top:6px">Add your delivery staff and support team.</div>
