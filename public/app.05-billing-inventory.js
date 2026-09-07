@@ -607,7 +607,7 @@ async function renderInventory(el) {
   </div>` : ''}
 
   <!-- Search + filter -->
-  <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+  <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
     <input type="search" id="inv-search" placeholder="🔍  Search by name, SKU or brand…"
       style="width:100%;padding:9px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;outline:none;box-sizing:border-box"
       ${dataInputEl('invSearch')} data-focus>
@@ -633,7 +633,7 @@ async function renderInventory(el) {
   </div>
 
   <!-- Table — click row to expand 4-section detail -->
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--text-muted)">Click any row to see full details · Select rows with checkboxes for bulk actions · Click column headers to sort</div>
     <div class="table-wrap">
       <table class="table" id="inv-table" style="margin:0">
@@ -668,7 +668,7 @@ async function renderInventory(el) {
         (active
           ? (s === 'Healthy' ? 'background:#d1fae5;color:var(--success-strong);border-color:var(--success-strong);font-weight:700'
                               : 'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700')
-          : 'background:#fff;color:#374151;border-color:#d1d5db;font-weight:400');
+          : 'background:var(--surface);color:#374151;border-color:#d1d5db;font-weight:400');
       btn.onclick = function() { invFilterSubCat(s); };
       container.appendChild(btn);
     });

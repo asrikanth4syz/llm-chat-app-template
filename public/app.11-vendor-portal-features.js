@@ -24,7 +24,7 @@ async function renderVendorPOs(el) {
     const stepIdx = steps.indexOf(po.status);
     const isOverdue = po.expected_delivery && po.status!=='INVOICED' && new Date(po.expected_delivery)<new Date();
     return `
-    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid ${isOverdue?'var(--danger)':m.border}">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid ${isOverdue?'var(--danger)':m.border}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
         <div>
           <div style="display:flex;align-items:center;gap:8px">
@@ -73,22 +73,22 @@ async function renderVendorPOs(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
       <div class="u-label2">Action Required</div>
       <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
       <div class="u-subtiny">${fmt(totalValue)} pending</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
       <div class="u-label2">Accepted</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
       <div class="u-subtiny">preparing to dispatch</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--violet)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--violet)">
       <div class="u-label2">Dispatched</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${dispatchedPOs.length}</div>
       <div class="u-subtiny">awaiting invoice</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Invoiced</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoicedPOs.length}</div>
       <div class="u-subtiny">payment pending</div>
@@ -111,7 +111,7 @@ async function renderVendorPOs(el) {
   <div style="font-size:.84rem;font-weight:700;color:var(--success-strong);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:${sentPOs.length||acceptedPOs.length||dispatchedPOs.length?20:0}px">📄 Invoiced — Awaiting Payment</div>
   ${invoicedPOs.map(po=>poCard(po)).join('')}` : ''}
 
-  ${pos.length===0?`<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+  ${pos.length===0?`<div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
     <div style="font-size:2.5rem;margin-bottom:12px">📦</div>
     <div style="font-weight:700;font-size:1rem;color:var(--navy)">No purchase orders yet</div>
     <div style="font-size:.84rem;margin-top:6px">POs will appear here when the ops team sends them to you.</div>
@@ -216,17 +216,17 @@ async function renderVendorInvoices(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Invoices Submitted</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoiced.length}</div>
       <div class="u-subtiny">${fmt(totalInv)} total</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
       <div class="u-label2">Awaiting Upload</div>
       <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
       <div class="u-subtiny">dispatched, no invoice yet</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Net-30 Terms</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">30d</div>
       <div class="u-subtiny">avg payment cycle</div>
@@ -236,7 +236,7 @@ async function renderVendorInvoices(el) {
   ${pending.length ? `
   <div style="font-size:.84rem;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚡ Awaiting Invoice Upload</div>
   ${pending.map(po=>`
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid var(--amber);display:flex;justify-content:space-between;align-items:center;gap:12px">
+  <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid var(--amber);display:flex;justify-content:space-between;align-items:center;gap:12px">
     <div>
       <div style="font-weight:700;font-size:.92rem;color:var(--navy)">${po.id}</div>
       <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">Dispatched ${fmtDate(po.updated_at)} · ${fmt(po.grand_total)}</div>
@@ -247,12 +247,12 @@ async function renderVendorInvoices(el) {
 
   <div style="font-size:.84rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Submitted Invoices</div>
   ${invoiced.length===0 ? `
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
     <div style="font-size:2rem;margin-bottom:10px">📄</div>
     <div style="font-weight:600;color:var(--navy)">No invoices submitted yet</div>
     <div style="font-size:.82rem;margin-top:6px">Invoices appear here once uploaded after dispatch.</div>
   </div>` :
-  `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  `<div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     ${invoiced.map((po,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<invoiced.length-1?'border-bottom:1px solid var(--border)':''}">
       <div style="min-width:0">
@@ -297,22 +297,22 @@ async function renderVendorPayments(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--warning)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--warning)'}">
       <div class="u-label2">Pending Receivable</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalPending)}</div>
       <div class="u-subtiny">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
       <div class="u-label2">Overdue</div>
       <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};margin-top:6px">${overdue.length}</div>
       <div class="u-subtiny">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'var(--amber)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'var(--amber)':'var(--gray-light)'}">
       <div class="u-label2">Due This Week</div>
       <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'var(--warning)':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
       <div class="u-subtiny">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Payment Terms</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">Net-30</div>
       <div class="u-subtiny">from invoice date</div>
@@ -320,14 +320,14 @@ async function renderVendorPayments(el) {
   </div>
 
   ${invoiced.length===0 ? `
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
     <div style="font-size:2.5rem;margin-bottom:12px">💰</div>
     <div style="font-weight:700;font-size:1rem;color:var(--navy)">No pending payments</div>
     <div style="font-size:.84rem;margin-top:6px">Submit invoices after dispatch to start tracking payments.</div>
   </div>` : `
 
   <!-- Payment tracker cards -->
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Payment Tracker</span>
       <span style="font-size:.76rem;color:var(--text-muted)">All amounts due on Net-30 from invoice date</span>
@@ -568,13 +568,13 @@ async function renderDunning(el) {
     <div>
       <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Escalation Rules</div>
       ${rules.length===0 ? `
-      <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+      <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
         <div style="font-size:1.8rem;margin-bottom:10px">📋</div>
         <div style="font-weight:600;color:var(--navy)">No rules configured</div>
         <div style="font-size:.82rem;margin-top:6px">Add rules to automate payment escalation.</div>
         <button class="btn btn-primary" style="margin-top:14px" ${dataAct('addDunningRuleModal')}>Add First Rule</button>
       </div>` :
-      `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      `<div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
         ${rules.sort((a,b)=>(a.days_overdue||0)-(b.days_overdue||0)).map((r,i)=>{
           const ac = ACTION_COLOR[r.action] || '#6b7280';
           return `<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">
@@ -594,12 +594,12 @@ async function renderDunning(el) {
     <div>
       <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recent Events</div>
       ${recentEvents.length===0 ? `
-      <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
+      <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:40px;text-align:center;color:var(--text-muted)">
         <div style="font-size:1.8rem;margin-bottom:10px">📭</div>
         <div style="font-weight:600;color:var(--navy)">No events yet</div>
         <div style="font-size:.82rem;margin-top:6px">Run a dunning check to trigger escalations.</div>
       </div>` :
-      `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+      `<div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
         ${recentEvents.map((e,i)=>{
           const ac = ACTION_COLOR[e.action_taken] || '#6b7280';
           return `<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;gap:12px;${i<recentEvents.length-1?'border-bottom:1px solid var(--border)':''}">
@@ -1075,8 +1075,8 @@ async function renderTemplates(el) {
       <div style="padding:0 18px 10px">
         <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px">
-          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
-          ${items.length>4?`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
+          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:var(--bg);border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
+          ${items.length>4?`<span style="padding:2px 8px;background:var(--bg);border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
         </div>
       </div>` : ''}
       <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
@@ -1139,8 +1139,8 @@ function tplTab(tab, btn) {
       <div style="padding:0 18px 10px">
         <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">Items</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px">
-          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
-          ${items.length>4?`<span style="padding:2px 8px;background:#f1f5f9;border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
+          ${items.slice(0,4).map(i=>`<span style="padding:2px 8px;background:var(--bg);border-radius:10px;font-size:.75rem">${i.name||i.sku}</span>`).join('')}
+          ${items.length>4?`<span style="padding:2px 8px;background:var(--bg);border-radius:10px;font-size:.75rem;color:var(--text-muted)">+${items.length-4} more</span>`:''}
         </div>
       </div>` : ''}
       <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
@@ -1260,22 +1260,22 @@ async function renderSLADashboard(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">SLA Rules</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length}</div>
       <div class="u-subtiny">active monitoring rules</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${activeBreaches.length?'var(--danger)':'var(--success)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${activeBreaches.length?'var(--danger)':'var(--success)'}">
       <div class="u-label2">Active Breaches</div>
       <div style="font-size:2rem;font-weight:800;color:${activeBreaches.length?'var(--danger)':'var(--success)'};margin-top:6px">${activeBreaches.length}</div>
       <div class="u-subtiny">${activeBreaches.length?'require action':'all clear'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'var(--danger)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'var(--danger)':'var(--gray-light)'}">
       <div class="u-label2">Critical (24h+)</div>
       <div style="font-size:2rem;font-weight:800;color:${criticalBreaches.length?'var(--danger)':'var(--navy)'};margin-top:6px">${criticalBreaches.length}</div>
       <div class="u-subtiny">breached over 24h ago</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--navy)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--navy)">
       <div class="u-label2">Max SLA Hours</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length ? Math.max(...rules.map(r=>r.max_hours||0)) : '—'}</div>
       <div class="u-subtiny">longest configured rule</div>
@@ -1285,7 +1285,7 @@ async function renderSLADashboard(el) {
   <!-- Breaches alert -->
   ${activeBreaches.length ? `
   <div style="font-size:.82rem;font-weight:700;color:var(--danger);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">⚠ Active Breaches</div>
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:18px">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:18px">
     ${activeBreaches.map((b,i)=>{
       const hoursAgo = Math.round((Date.now()-new Date(b.breached_at).getTime())/3600000);
       const isCrit = hoursAgo > 24;
@@ -1311,7 +1311,7 @@ async function renderSLADashboard(el) {
 
   <!-- SLA Rules -->
   <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Configured Rules</div>
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     ${rules.length===0 ? `<div class="u-empty-lg">No SLA rules configured</div>` :
     rules.map((r,i)=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;gap:12px;${i<rules.length-1?'border-bottom:1px solid var(--border)':''}">

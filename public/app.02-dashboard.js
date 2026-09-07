@@ -107,7 +107,7 @@ async function renderClientDashboard(el) {
       { icon:'🚚', label:'Track',         sub:inTransitDCs.length+' in transit', act:'quickNav', arg:'track_delivery' },
       { icon:'📊', label:'Reports',       sub:'spend & usage',    act:'quickNav', arg:'client_reports' },
     ].filter(a=>{ const pg = a.arg ?? (a.act==='quickNavCSV' ? 'place_order' : undefined); return pg===undefined || canAccessPage(pg); }).map(a=>`
-    <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" data-hoverlift>
+    <button ${a.arg!==undefined?dataAct(a.act,a.arg):dataAct(a.act)} style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 10px;cursor:pointer;text-align:center;transition:box-shadow .15s,transform .15s" data-hoverlift>
       <div style="font-size:1.5rem;margin-bottom:5px">${a.icon}</div>
       <div style="font-weight:700;font-size:.8rem;color:var(--navy)">${a.label}</div>
       <div style="font-size:.68rem;color:var(--text-muted);margin-top:2px">${a.sub}</div>
@@ -116,13 +116,13 @@ async function renderClientDashboard(el) {
 
   <!-- ═══ STATUS CHIPS ROW ═══ -->
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-    <button ${dataAct('navigate', 'my_orders')} style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
+    <button ${dataAct('navigate', 'my_orders')} style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
       <b style="color:var(--navy)">${activeOrders}</b> active orders
     </button>
     <button ${dataAct('navigate', 'track_delivery')} style="display:inline-flex;align-items:center;gap:6px;background:${inTransitDCs.length?'var(--amber-bg)':'#fff'};border:1px solid ${inTransitDCs.length?'#fcd34d':'var(--border)'};border-radius:20px;padding:6px 14px;cursor:pointer;font-size:.78rem">
       <b style="color:${inTransitDCs.length?'var(--warning)':'var(--navy)'}">${inTransitDCs.length}</b> in transit
     </button>
-    <span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:.78rem">
+    <span style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:.78rem">
       <b style="color:var(--success)">${deliveredThisMonth.length}</b> delivered this month
     </span>
     <span style="display:inline-flex;align-items:center;gap:6px;background:${pctSpent>90?'var(--danger-soft-bg)':'#fff'};border:1px solid ${pctSpent>90?'var(--red-soft-bg)':'var(--border)'};border-radius:20px;padding:6px 14px;font-size:.78rem">
@@ -326,22 +326,22 @@ async function renderClientBudget(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${color}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${color}">
       <div class="u-label2">Spent This Month</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(spent)}</div>
       <div class="u-subtiny">${pct}% of budget</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
       <div class="u-label2">Monthly Budget</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(budget)}</div>
       <div class="u-subtiny">${fmt(remain)} remaining</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
       <div class="u-label2">Health Score</div>
       <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'};margin-top:6px">${health}/100</div>
       <div class="u-subtiny">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Total Orders</div>
       <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${(orders||[]).length}</div>
       <div class="u-subtiny">${active.length} active · ${closed.length} closed</div>
@@ -349,7 +349,7 @@ async function renderClientBudget(el) {
   </div>
 
   <!-- Budget bar -->
-  <div style="background:#fff;border-radius:14px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+  <div style="background:var(--surface);border-radius:14px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <span style="font-weight:700;font-size:.9rem">Monthly Budget Utilisation</span>
       <span style="font-size:.82rem;color:var(--text-muted)">${fmt(spent)} of ${fmt(budget)}</span>
@@ -367,7 +367,7 @@ async function renderClientBudget(el) {
   <!-- Spend by month + recent orders -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <!-- Monthly trend -->
-    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:.9rem;color:var(--navy)">Monthly Spend Trend</div>
       <div style="padding:16px">
         ${months.length===0?`<div style="text-align:center;padding:24px;color:var(--text-muted)">No historical spend data</div>`:
@@ -388,7 +388,7 @@ async function renderClientBudget(el) {
     </div>
 
     <!-- Recent closed orders -->
-    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700;font-size:.9rem;color:var(--navy)">Recent Spend</div>
       <div>
         ${closed.slice(0,6).map(o=>`
@@ -456,7 +456,7 @@ async function renderOpsDashboard(el) {
     .ct-delta.good{color:var(--success)}.ct-delta.bad{color:var(--danger)}.ct-delta.flat{color:var(--text-muted)}
     .ct-delta svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
     .ct-delta .ct-win{color:var(--text-muted);font-weight:600}
-    .ct-card{background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;border:1px solid var(--border)}
+    .ct-card{background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;border:1px solid var(--border)}
     .ct-card-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
     .ct-card-title{font-weight:700;color:var(--navy);font-size:.88rem}
     .ct-card-sub{font-size:.73rem;color:var(--text-muted);margin-top:1px}
@@ -477,7 +477,7 @@ async function renderOpsDashboard(el) {
     .ct-client-fill{height:100%;border-radius:3px}
     /* ── Predictive radar (Phase 1) ── */
     .tw-pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
-    .tw-pk{background:#fff;border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:.15s}
+    .tw-pk{background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:.15s}
     .tw-pk:hover{border-color:var(--primary);transform:translateY(-1px)}
     .tw-pk .l{font-size:.62rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
     .tw-pk .v{font-size:1.4rem;font-weight:900;color:var(--navy);margin-top:3px;line-height:1.1}
@@ -486,7 +486,7 @@ async function renderOpsDashboard(el) {
     .tw-pk .t.up{color:var(--success)}.tw-pk .t.dn{color:var(--danger)}.tw-pk .t.fl{color:var(--text-muted)}
     .tw-pk .f{font-size:.68rem;color:var(--navy);margin-top:7px;background:var(--primary-light);border-radius:7px;padding:5px 8px;line-height:1.45}
     .tw-pk .f b{color:var(--primary-hover)}
-    .tw-fc{display:flex;gap:11px;align-items:flex-start;width:100%;text-align:left;font-family:inherit;border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:8px;background:#fff;cursor:pointer;transition:.13s}
+    .tw-fc{display:flex;gap:11px;align-items:flex-start;width:100%;text-align:left;font-family:inherit;border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:8px;background:var(--surface);cursor:pointer;transition:.13s}
     .tw-fc:hover{border-color:var(--primary);transform:translateX(3px)}
     .tw-fc:last-child{margin-bottom:0}
     .tw-fc .ic{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
@@ -507,12 +507,12 @@ async function renderOpsDashboard(el) {
     .tw-bar .d{font-size:.58rem;font-weight:700;color:var(--text-muted)}
     .tw-bar .n{font-size:.6rem;font-weight:800;color:var(--text-muted)}
     .tw-bar .n.over{color:var(--danger)}
-    .tw-hz{border:1px solid var(--border);background:#fff;color:var(--text-muted);font-size:.74rem;font-weight:700;padding:5px 13px;border-radius:20px;cursor:pointer;font-family:inherit;transition:.14s}
+    .tw-hz{border:1px solid var(--border);background:var(--surface);color:var(--text-muted);font-size:.74rem;font-weight:700;padding:5px 13px;border-radius:20px;cursor:pointer;font-family:inherit;transition:.14s}
     .tw-hz:hover{border-color:var(--primary);color:var(--navy)}
     .tw-hz.on{background:var(--primary);border-color:var(--primary);color:#fff}
     .tw-grid{display:grid;grid-template-columns:1.45fr 1fr;gap:14px;align-items:start}
     @media(max-width:1050px){.tw-grid{grid-template-columns:1fr}}
-    .tw-aq{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:7px;background:#fff;cursor:pointer;transition:.13s}
+    .tw-aq{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:7px;background:var(--surface);cursor:pointer;transition:.13s}
     .tw-aq:hover{border-color:var(--primary);transform:translateX(3px)}
     .tw-aq:last-child{margin-bottom:0}
     .tw-aq .sev{width:5px;align-self:stretch;border-radius:4px;flex-shrink:0}
@@ -522,7 +522,7 @@ async function renderOpsDashboard(el) {
     .tw-aq .p{font-size:.68rem;color:var(--text-muted);display:block}
     .tw-aq .r{font-size:.6rem;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;flex-shrink:0}
     .tw-aq .r.s1{background:var(--danger-soft-bg);color:var(--danger)}.tw-aq .r.s2{background:var(--amber-bg);color:#b45309}.tw-aq .r.s3{background:#e9eef4;color:#25384d}
-    .tw-chg{font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;background:#fff;border:1px solid var(--border);color:var(--navy);white-space:nowrap}
+    .tw-chg{font-size:.68rem;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--surface);border:1px solid var(--border);color:var(--navy);white-space:nowrap}
     .tw-chg.g{background:#d1fae5;color:#047857;border-color:transparent}
     .tw-chg.b{background:var(--danger-soft-bg);color:var(--danger);border-color:transparent}
     .tw-chg.lead{background:var(--surface-2);color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:.6rem}

@@ -189,7 +189,7 @@ async function renderMyOrders(el) {
       const container = document.getElementById('mo-cards');
 
       if (filtered.length === 0) {
-        container.innerHTML = `<div style="padding:56px;text-align:center;background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        container.innerHTML = `<div style="padding:56px;text-align:center;background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
           <div style="font-size:3rem;margin-bottom:12px">📋</div>
           <div style="font-weight:700;font-size:1rem;color:var(--navy)">No orders found</div>
           <div style="font-size:.83rem;color:var(--text-muted);margin-top:6px">Try "All" or clear the search filter</div>
@@ -209,7 +209,7 @@ async function renderMyOrders(el) {
         const progressBar = `<div style="margin:12px 0 8px">${phaseStepper(o.status, { compact:true })}</div>`;
 
         return `
-        <div style="background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:12px;overflow:hidden;border:1px solid ${isCancelled?'var(--red-soft-bg)':isDone?'#bbf7d0':'var(--border)'}">
+        <div style="background:var(--surface);border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:12px;overflow:hidden;border:1px solid ${isCancelled?'var(--red-soft-bg)':isDone?'#bbf7d0':'var(--border)'}">
           <!-- Card top bar -->
           <div style="height:3px;background:${sc}"></div>
           <div style="padding:16px 20px">
@@ -304,7 +304,7 @@ async function renderMyOrders(el) {
     </div>
 
     <!-- Search + filter row -->
-    <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <input type="search" placeholder="🔍  Search orders…" value="${APP._moSearch||''}"
         style="flex:1;min-width:180px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
         ${dataInputEl('moSearch')} data-focus>
@@ -868,19 +868,19 @@ async function viewOrderDrilldown(orderId) {
   const body = `
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
       <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Line Items</div>
       <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.total_lines}</div>
     </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #10b981">
+    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #10b981">
       <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Fully Delivered</div>
       <div style="font-size:1.8rem;font-weight:800;color:#10b981;margin-top:4px">${summary.delivered_lines}</div>
     </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.due_lines>0?'var(--red)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.due_lines>0?'var(--red)':'var(--gray-light)'}">
       <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Lines Due</div>
       <div style="font-size:1.8rem;font-weight:800;color:${summary.due_lines>0?'var(--red)':'var(--navy)'};margin-top:4px">${summary.due_lines}</div>
     </div>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.no_delivery_lines>0?'var(--gray)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.no_delivery_lines>0?'var(--gray)':'var(--gray-light)'}">
       <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">No Delivery</div>
       <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.no_delivery_lines}</div>
       <div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">zero units received</div>
@@ -1004,22 +1004,22 @@ async function renderTrackDelivery(el) {
   el.innerHTML = `
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
       <div class="u-label2">Scheduled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${scheduledDCs.length}</div>
       <div class="u-subtiny">upcoming deliveries</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'var(--amber)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inTransitDCs.length?'var(--amber)':'var(--gray-light)'}">
       <div class="u-label2">In Transit</div>
       <div style="font-size:2rem;font-weight:800;color:${inTransitDCs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${inTransitDCs.length}</div>
       <div class="u-subtiny">on the way now</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Delivered (Month)</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${deliveredMonth.length}</div>
       <div class="u-subtiny">this month</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Units In Transit</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${itemsInTransit}</div>
       <div class="u-subtiny">units en route</div>
@@ -1027,7 +1027,7 @@ async function renderTrackDelivery(el) {
   </div>
 
   <!-- 3-column pipeline -->
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden">
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;background:#f8f9fa;border-bottom:1px solid var(--border)">
       ${[['🔵 Scheduled',scheduledDCs.length,'#3b82f6','#e0e7ff'],['🟡 In Transit',inTransitDCs.length,'#d97706','#fef3c7'],['🟢 Delivered',deliveredMonth.length,'#059669','#d1fae5']].map((col,i)=>`
       <div style="padding:12px 20px;${i<2?'border-right:1px solid var(--border)':''}">

@@ -428,11 +428,11 @@ function renderReports(el) {
         <option value="">Loading clients…</option>
       </select>
       <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        ${['month','quarter','year'].map(g=>`<button id="aftab-${g}" ${dataAct('setAdminFulfilGran', g)} style="padding:6px 12px;font-size:.76rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
+        ${['month','quarter','year'].map(g=>`<button id="aftab-${g}" ${dataAct('setAdminFulfilGran', g)} style="padding:6px 12px;font-size:.76rem;font-weight:600;background:var(--surface);border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}
       </div>
       <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <button id="afmode-chart" ${dataAct('setAdminFulfilMode', 'chart')} style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📊</button>
-        <button id="afmode-table" ${dataAct('setAdminFulfilMode', 'table')} style="padding:6px 12px;font-size:.76rem;background:#fff;border:none;cursor:pointer">📋</button>
+        <button id="afmode-chart" ${dataAct('setAdminFulfilMode', 'chart')} style="padding:6px 12px;font-size:.76rem;background:var(--surface);border:none;cursor:pointer">📊</button>
+        <button id="afmode-table" ${dataAct('setAdminFulfilMode', 'table')} style="padding:6px 12px;font-size:.76rem;background:var(--surface);border:none;cursor:pointer">📋</button>
       </div>
       <input type="date" id="adm-rpt-from" class="form-control" style="max-width:150px;font-size:.8rem" value="${admFrom}">
       <span style="font-size:.8rem;color:var(--text-muted)">to</span>
@@ -827,8 +827,8 @@ function renderClientReports(el) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <span style="font-weight:700;font-size:.9rem;color:var(--navy)">Order vs Delivery</span>
         <div style="flex:1;height:1px;background:var(--border);margin-left:4px"></div>
-        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">${['month','quarter','year'].map(g=>`<button id="ftab-${g}" ${dataAct('switchFulfilGranularity', g)} style="padding:6px 13px;font-size:.75rem;font-weight:600;background:#fff;border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}</div>
-        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden"><button id="fmode-chart" ${dataAct('switchFulfilMode', 'chart')} title="Chart" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📊</button><button id="fmode-table" ${dataAct('switchFulfilMode', 'table')} title="Table" style="padding:6px 11px;font-size:.75rem;background:#fff;border:none;cursor:pointer">📋</button></div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">${['month','quarter','year'].map(g=>`<button id="ftab-${g}" ${dataAct('switchFulfilGranularity', g)} style="padding:6px 13px;font-size:.75rem;font-weight:600;background:var(--surface);border:none;cursor:pointer;color:var(--text-muted)">${g==='month'?'Monthly':g==='quarter'?'Quarterly':'Fiscal Year'}</button>`).join('')}</div>
+        <div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden"><button id="fmode-chart" ${dataAct('switchFulfilMode', 'chart')} title="Chart" style="padding:6px 11px;font-size:.75rem;background:var(--surface);border:none;cursor:pointer">📊</button><button id="fmode-table" ${dataAct('switchFulfilMode', 'table')} title="Table" style="padding:6px 11px;font-size:.75rem;background:var(--surface);border:none;cursor:pointer">📋</button></div>
       </div>
       <div id="rpt-fulfil-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div></div>
     </div>
@@ -1749,7 +1749,7 @@ async function ocDrill(i, sku) {
     if (!rows) { body.innerHTML = '<div style="color:var(--danger)">Failed to load breakdown</div>'; return; }
     body.dataset.loaded = '1';
     body.innerHTML = `
-      <table class="table" style="margin:0;background:#fff;border-radius:8px">
+      <table class="table" style="margin:0;background:var(--surface);border-radius:8px">
         <thead><tr><th>Client</th><th>Order</th><th>Date</th><th>Status</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th></tr></thead>
         <tbody>${rows.map(d => `<tr ${dataAct('viewOrder', d.order_id)} style="cursor:pointer">
           <td><b>${h(d.client_name)}</b></td>

@@ -87,9 +87,9 @@ async function renderDeliveryCalendar(el) {
   <div id="dcal-kpis"></div>
   <div class="card" style="padding:10px 14px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <div style="display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden">
-      <button ${dataAct('dcalNav', -1)} aria-label="Previous month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">‹</button>
+      <button ${dataAct('dcalNav', -1)} aria-label="Previous month" style="border:none;background:var(--surface);padding:6px 11px;cursor:pointer;font-size:.9rem">‹</button>
       <span id="dcal-month-label" style="padding:6px 12px;font-weight:700;color:var(--navy);min-width:130px;text-align:center"></span>
-      <button ${dataAct('dcalNav', 1)} aria-label="Next month" style="border:none;background:#fff;padding:6px 11px;cursor:pointer;font-size:.9rem">›</button>
+      <button ${dataAct('dcalNav', 1)} aria-label="Next month" style="border:none;background:var(--surface);padding:6px 11px;cursor:pointer;font-size:.9rem">›</button>
     </div>
     <button class="btn btn-secondary btn-sm" ${dataAct('dcalToday')}>Today</button>
     <button class="dcal-vbtn on" id="dcal-v-month" ${dataAct('dcalSetView', 'month')}>Month</button>
@@ -506,7 +506,7 @@ async function renderUsers(el) {
     const rc = ROLE_COLOR[u.role] || '#6b7280';
     const roleName = (ROLES[u.role]?.label || u.role).replace(/_/g,' ');
     return `
-    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${u.active?1:.6}">
+    <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 18px;display:flex;align-items:center;gap:14px;opacity:${u.active?1:.6}">
       <div style="width:44px;height:44px;border-radius:50%;background:${u.active?rc:'#9ca3af'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${u.initials||u.name[0]}</div>
       <div class="u-flex1">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -546,19 +546,19 @@ async function renderUsers(el) {
 
   <!-- KPI tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Total Users</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${users.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Active</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeUsers.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'var(--gray-light)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${inactiveUsers.length?'var(--gray-light)':'var(--gray-light)'}">
       <div class="u-label2">Inactive</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${inactiveUsers.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--purple)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--purple)">
       <div class="u-label2">2FA Enabled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${with2FA}</div>
       <div class="u-subtiny">${users.length?Math.round(with2FA/users.length*100):0}% of users</div>
@@ -910,7 +910,7 @@ async function settingsTab(tab, btn) {
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px">
           <div style="font-size:.82rem;font-weight:600;margin-bottom:6px">Webhook URL</div>
           <div style="display:flex;align-items:center;gap:8px">
-            <code style="font-size:.8rem;background:#f1f5f9;padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho/webhook</code>
+            <code style="font-size:.8rem;background:var(--bg);padding:6px 10px;border-radius:6px;flex:1;word-break:break-all">${origin}/api/integrations/zoho/webhook</code>
             <button class="btn btn-secondary btn-sm" ${dataAct('copyText', origin+'/api/integrations/zoho/webhook')}>Copy</button>
           </div>
           <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">Configure this URL in Zoho Books → Settings → Webhooks</div>

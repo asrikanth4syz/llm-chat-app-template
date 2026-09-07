@@ -29,22 +29,22 @@ async function renderDeliveryExecDashboard(el) {
 
   <!-- KPI row -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">In Transit</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${inTransit.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${totalItems} items to deliver</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Overdue</div>
       <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};line-height:1.2;margin-top:6px">${overdue.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${overdue.length?'requires attention':'on track'}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Delivered Today</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${delivToday.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">completed runs</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--warning)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--warning)">
       <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Scheduled</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${scheduled.length}</div>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">pending dispatch</div>
@@ -58,7 +58,7 @@ async function renderDeliveryExecDashboard(el) {
   </div>
 
   ${inTransit.length === 0 ? `
-    <div style="background:#fff;border-radius:12px;padding:40px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+    <div style="background:var(--surface);border-radius:12px;padding:40px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
       <div style="font-size:2.5rem;margin-bottom:8px">✅</div>
       <div style="font-weight:700;color:var(--navy);font-size:1rem">All deliveries complete!</div>
       <div style="color:var(--text-muted);font-size:.85rem;margin-top:4px">No active in-transit challans assigned to you.</div>
@@ -75,7 +75,7 @@ async function renderDeliveryExecDashboard(el) {
     <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Pending POD / Scan (${pendingPOD.length})</div>
     <span style="background:#fef9c3;color:var(--amber-text);font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:10px">Action needed</span>
   </div>
-  <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
+  <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:16px">
     ${pendingPOD.map(dc => `
     <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -111,7 +111,7 @@ async function renderDeliveryExecDashboard(el) {
 function execDCCard(dc, today) {
   const overdue = dc.expected_delivery_date && dc.expected_delivery_date < today;
   const eta = dc.expected_delivery_date ? new Date(dc.expected_delivery_date).toLocaleDateString('en-IN',{day:'numeric',month:'short'}) : '—';
-  return `<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);border:1px solid ${overdue?'var(--danger)':'var(--border)'};overflow:hidden">
+  return `<div style="background:var(--surface);border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);border:1px solid ${overdue?'var(--danger)':'var(--border)'};overflow:hidden">
     <!-- Card header -->
     <div style="padding:14px 16px;background:${overdue?'var(--danger-bg)':'var(--surface-2)'};border-bottom:1px solid ${overdue?'var(--red-soft-bg)':'var(--border)'};display:flex;justify-content:space-between;align-items:center">
       <div>
@@ -265,7 +265,7 @@ async function renderClients(el) {
     const budColor   = budgetPct>90?'var(--danger)':budgetPct>75?'#f59e0b':'var(--success)';
     const initials   = c.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
     return `
-    <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${hColor}">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${hColor}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:40px;height:40px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
@@ -333,21 +333,21 @@ async function renderClients(el) {
 
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Total Clients</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${clients.length}</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Total Budget</div>
       <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalBudget)}</div>
       <div class="u-subtiny">${fmt(totalSpent)} spent this month</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'var(--gray-light)'}">
       <div class="u-label2">Near Budget Limit</div>
       <div style="font-size:2rem;font-weight:800;color:${overBudget?'var(--warning)':'var(--navy)'};margin-top:6px">${overBudget}</div>
       <div class="u-subtiny">&gt;90% budget used</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
       <div class="u-label2">At Risk</div>
       <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
       <div class="u-subtiny">health score &lt;70</div>
@@ -393,7 +393,7 @@ async function manageClientCatalog(clientId, clientName) {
        <input id="cc-search" type="search" placeholder="Search by name or SKU…"
          style="flex:1;min-width:140px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem"
          ${dataInput('renderCCSearchResults')} data-focusact="renderCCSearchResults">
-       <select id="cc-cat-filter" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;color:var(--navy);background:#fff"
+       <select id="cc-cat-filter" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;color:var(--navy);background:var(--surface)"
          ${dataChange('renderCCSearchResults')}>
          <option value="">All Categories</option>${catOpts}
        </select>
@@ -404,7 +404,7 @@ async function manageClientCatalog(clientId, clientName) {
        <!-- By category -->
        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:220px;padding:10px 12px;background:#f0f7ff;border-radius:8px;border:1px solid #bfdbfe;flex-wrap:wrap">
          <span style="font-size:.76rem;font-weight:700;color:#1e40af;white-space:nowrap">By Category:</span>
-         <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:110px;background:#fff">
+         <select id="cc-import-cat" style="padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:6px;font-size:.8rem;flex:1;min-width:110px;background:var(--surface)">
            <option value="">— Select —</option>${catOpts}
          </select>
          <button class="btn btn-sm" style="background:#1d4ed8;color:#fff;border:none;padding:5px 12px;font-size:.78rem;white-space:nowrap" ${dataAct('importCCByCategory')}>Import</button>
@@ -421,7 +421,7 @@ async function manageClientCatalog(clientId, clientName) {
      <div id="cc-csv-preview" style="display:none;margin-bottom:14px;border:1px solid #bbf7d0;border-radius:8px;background:var(--success-bg);padding:12px"></div>
 
      <!-- Search results (add) -->
-     <div id="cc-search-results" style="display:none;max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:#fff"></div>
+     <div id="cc-search-results" style="display:none;max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:var(--surface)"></div>
 
      <!-- Assigned items -->
      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -538,13 +538,13 @@ function ccBasicRow(item) {
       </div>
       <button class="btn btn-sm" style="background:var(--danger-soft-bg);color:var(--danger);border:none;flex-shrink:0;padding:3px 10px" ${dataAct('removeCCItem', item.sku)}>Remove</button>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface);border:1px solid var(--border);border-radius:6px">
       <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap">Global ₹${globalPrice}</span>
       <span class="u-muted-xs">→</span>
       <label style="font-size:.72rem;font-weight:600;color:var(--navy);white-space:nowrap">Client Price ₹</label>
       <input type="number" min="0" step="0.01" placeholder="${globalPrice}"
         value="${clientPrice}"
-        style="flex:1;min-width:70px;padding:4px 8px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.85rem;background:#fff"
+        style="flex:1;min-width:70px;padding:4px 8px;border:1.5px solid ${hasCustom?'var(--navy)':'var(--border)'};border-radius:6px;font-size:.85rem;background:var(--surface)"
         id="cc-price-${item.sku}"
         ${dataBlur('saveCCPrice', item.sku)} data-el
         ${dataEnterEl('_blurEl')}
@@ -834,7 +834,7 @@ function showCCCsvPreview(matched, unmatched, alreadyIn) {
         ${matched.map(m=>{
           const gp = m.item.unit_price ?? 0;
           const custom = m.clientPrice != null;
-          return `<div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:#fff;border-radius:6px;border:1px solid #bbf7d0">
+          return `<div style="display:flex;align-items:center;gap:8px;font-size:.8rem;padding:4px 8px;background:var(--surface);border-radius:6px;border:1px solid #bbf7d0">
             <span>${m.item.emoji||'📦'}</span>
             <span style="font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(m.item.name)}</span>
             <span class="u-muted" style="flex-shrink:0">${m.item.sku}</span>
@@ -1158,7 +1158,7 @@ async function renderServiceDesk(el) {
     const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
     const isRaiserRole = isClient || ['vendor_admin','vendor_user'].includes(APP.user?.role);
     return `
-    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
+    <div style="background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px 20px;margin-bottom:10px;border-left:4px solid ${pm.color}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
         <div style="min-width:0;cursor:pointer" ${dataAct('viewTicketModal', t.id)} title="View ticket details">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1250,7 +1250,7 @@ async function renderServiceDesk(el) {
   ${inProgT.map(t=>ticketCard(t)).join('')}` : ''}
 
   ${openT.length===0&&inProgT.length===0?`
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted);margin-bottom:20px">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted);margin-bottom:20px">
     <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
     <div style="font-weight:700;font-size:1rem;color:var(--navy)">All tickets resolved!</div>
     <div style="font-size:.84rem;margin-top:6px">No open issues right now.</div>
@@ -1453,17 +1453,17 @@ async function renderApprovals(el) {
 
   <!-- Summary tiles -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
       <div class="u-label2">Pending Approval</div>
       <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
       <div class="u-subtiny">awaiting decision</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
       <div class="u-label2">In Progress</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${approved.length}</div>
       <div class="u-subtiny">approved & processing</div>
     </div>
-    <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
+    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
       <div class="u-label2">Pending Value</div>
       <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(pending.reduce((s,o)=>s+(o.grand_total||0),0))}</div>
       <div class="u-subtiny">total value pending</div>
@@ -1472,13 +1472,13 @@ async function renderApprovals(el) {
 
   <!-- Pending approvals -->
   ${pending.length===0 ?
-    `<div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
+    `<div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:48px;text-align:center;color:var(--text-muted)">
       <div style="font-size:2.5rem;margin-bottom:12px">✅</div>
       <div style="font-weight:700;font-size:1rem;color:var(--navy)">All caught up!</div>
       <div style="font-size:.84rem;margin-top:6px">No orders are waiting for your approval.</div>
     </div>` :
   pending.map(o=>`
-  <div style="background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid var(--amber)">
+  <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid var(--amber)">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
       <div>
         <div style="font-weight:800;font-size:1rem;color:var(--navy)">${o.id}</div>
@@ -1506,7 +1506,7 @@ async function renderApprovals(el) {
   <div style="margin-top:20px">
     <div style="font-size:.84rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Recently Approved — In Progress</div>
     ${approved.slice(0,4).map(o=>`
-    <div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" ${dataAct('viewOrder', o.id)}>
+    <div style="background:var(--surface);border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:14px 18px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" ${dataAct('viewOrder', o.id)}>
       <div>
         <div style="font-weight:700;font-size:.88rem">${o.id}</div>
         <div class="u-subtiny">${fmtDate(o.created_at)}</div>

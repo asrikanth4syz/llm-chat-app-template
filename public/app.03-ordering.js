@@ -34,7 +34,7 @@ async function renderPlaceOrder(el) {
     </div>
 
     ${last3.length ? `
-    <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+    <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="font-size:.82rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.05em">🔄 Quick Reorder</span>
         <span style="font-size:.75rem;color:var(--text-muted)">from recent history</span>
@@ -55,7 +55,7 @@ async function renderPlaceOrder(el) {
       </div>
     </div>` : ''}
 
-    <div style="background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
+    <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px">
       <input type="search" id="catalog-search" placeholder="🔍  Search items by name or SKU…"
         style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;outline:none;transition:border .2s;box-sizing:border-box"
         ${dataInputVal('searchCatalog')} data-focus>
@@ -102,7 +102,7 @@ async function renderPlaceOrder(el) {
 
   <!-- CSV Export / Import Modal -->
   <div id="csv-upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;align-items:center;justify-content:center">
-    <div style="background:#fff;border-radius:16px;padding:28px;width:520px;max-width:95vw;box-shadow:0 8px 40px rgba(0,0,0,.22)">
+    <div style="background:var(--surface);border-radius:16px;padding:28px;width:520px;max-width:95vw;box-shadow:0 8px 40px rgba(0,0,0,.22)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
         <div>
           <div style="font-weight:800;font-size:1rem;color:var(--navy)">Order via Spreadsheet</div>
@@ -139,7 +139,7 @@ async function renderPlaceOrder(el) {
           <div style="flex:1">
             <div style="font-weight:700;font-size:.88rem;color:var(--amber-text);margin-bottom:4px">Upload the filled CSV</div>
             <div style="font-size:.78rem;color:#78350f;margin-bottom:10px">Items with a quantity will be added to your cart. Review and place the order.</div>
-            <input type="file" id="csv-upload-input" accept=".csv" style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:#fff">
+            <input type="file" id="csv-upload-input" accept=".csv" style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:var(--surface)">
           </div>
         </div>
       </div>
@@ -200,7 +200,7 @@ function renderCartReview(container) {
       <!-- Left: items + options -->
       <div>
         <!-- Items card -->
-        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px">
+        <div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px">
           <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
             <b style="font-size:.95rem;color:var(--navy)">Cart Items</b>
             <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>+ Add More Items</button>
@@ -209,7 +209,7 @@ function renderCartReview(container) {
         </div>
 
         <!-- Order Type -->
-        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 18px;margin-bottom:16px">
+        <div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);padding:16px 18px;margin-bottom:16px">
           <label style="font-weight:700;font-size:.88rem;display:block;margin-bottom:10px;color:var(--navy)">Order Type</label>
           <div style="display:flex;gap:8px">
             ${['Regular','Urgent','Ad-Hoc'].map(t=>{
@@ -238,7 +238,7 @@ function renderCartReview(container) {
         </div>
 
         <!-- Notes -->
-        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);padding:16px 18px">
+        <div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);padding:16px 18px">
           <label style="font-weight:700;font-size:.88rem;display:block;margin-bottom:8px;color:var(--navy)">Delivery Notes <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
           <textarea id="cart-notes" rows="3" placeholder="Special instructions, delivery address, contact person…"
             style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;resize:vertical;box-sizing:border-box;outline:none;transition:border .2s"
@@ -256,7 +256,7 @@ function renderCartReview(container) {
 
       <!-- Right: summary + actions -->
       <div style="position:sticky;top:16px">
-        <div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
+        <div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden">
           <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><b>Order Summary</b></div>
           <div style="padding:16px 18px" id="review-summary"></div>
           <div style="padding:0 18px 18px;display:flex;flex-direction:column;gap:8px">
@@ -311,7 +311,7 @@ function refreshCartReviewUI() {
               </div>
               <span style="font-weight:700;min-width:64px;text-align:right;font-size:.9rem">${fmt(item.qty * item.unit_price)}</span>
               <button ${dataAct('removeCartItem', item.sku)}
-                style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
+                style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text-muted);font-size:.78rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s"
                 data-hoverdanger>✕</button>
             </div>
           </div>
@@ -819,7 +819,7 @@ function renderCatalogItems(items) {
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   if (view === 'list') {
-    return `<div style="background:#fff;border-radius:12px;border:1px solid var(--border);overflow:hidden">
+    return `<div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden">
       <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
         <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div class="u-center">Quantity</div>
       </div>

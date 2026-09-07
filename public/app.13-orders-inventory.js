@@ -158,7 +158,7 @@ function oiOrderView() {
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
         ${low.slice(0,5).map(i => `
-          <div style="display:flex;align-items:center;gap:11px;border:1px solid var(--border);border-radius:11px;padding:9px 12px;background:#fff">
+          <div style="display:flex;align-items:center;gap:11px;border:1px solid var(--border);border-radius:11px;padding:9px 12px;background:var(--surface)">
             <div style="flex:1;min-width:0"><b style="font-size:.86rem">${h(i.item_name)}</b><small style="display:block;color:var(--text-muted);font-size:.74rem" class="tnum">${i.qty_on_hand||0} left · reorder point ${i.reorder_level||0}</small></div>
             <span class="badge ${i.stock_status==='out'?'badge-danger':'badge-warning'}">${i.stock_status==='out'?'Out soon':'Low'}</span>
             <button class="btn btn-secondary btn-sm" ${dataAct('oiAddUsual', i.sku)}>Add</button>
