@@ -816,6 +816,23 @@ async function migrateGst28ItemsTo40(env: Env): Promise<void> {
   } catch { /* non-fatal — retried next cold start until the flag is set */ }
 }
 
+// One-time (guarded): the 28→40 reconciliation above moves aerated/sugary drinks
+// to the 40% demerit slab, but many were never tagged with an HSN, so GST 2.0 (40%)
+// showed without a matching HSN code (e.g. "Monster Energy Drink"). In this catalogue
+// 40% only ever applies to aerated beverages, whose canonical GST 2.0 heading is
+// 220210 — stamp it onto any 40% item still missing an HSN so GST and HSN both trace
+// to the same GST 2.0 row. Only fills a blank code, so an admin's explicit HSN (or a
+// non-aerated 40% item they later classify) is never overwritten. Runs a single time.
+async function migrateBackfillAeratedHsn(env: Env): Promise<void> {
+  try {
+    if ((await getConfig(env, "aerated_hsn_backfilled", "")) === "1") return;
+    await env.DB.prepare(
+      "UPDATE inventory SET hsn_code='220210' WHERE gst_rate=40 AND (hsn_code IS NULL OR hsn_code='')"
+    ).run();
+    await setConfig(env, "aerated_hsn_backfilled", "1", "system");
+  } catch { /* non-fatal — retried next cold start until the flag is set */ }
+}
+
 async function fixCategoryNames(env: Env): Promise<void> {
   if (_categoryFixApplied) return;
   _categoryFixApplied = true;
@@ -823,6 +840,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
   await migrateHsnTo6Digit(env);  // standardise seeded HSN codes to 6-digit (once)
   await migrateAeratedGst40(env); // aerated beverages (HSN-tagged) → 40% slab (once)
   await migrateGst28ItemsTo40(env); // reconcile all remaining 28% items → 40% (once)
+  await migrateBackfillAeratedHsn(env); // tag 40% items lacking an HSN with 220210 (once)
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
@@ -1026,7 +1044,7 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
 }
 
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
-export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit };
+export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
