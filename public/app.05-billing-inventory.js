@@ -1270,7 +1270,7 @@ async function saveNewItem() {
 // Admin backfill: recompute every item's GST slab from its HSN code, fixing the
 // historical data where products defaulted to 18%.
 async function recalcGstFromHsn() {
-  if (!confirm("Recompute GST for every catalogue item from its HSN code?\n\nItems whose HSN maps to a different slab (0/5/12/18/28%) will be updated. Items with an unmapped HSN are left unchanged.")) return;
+  if (!confirm("Recompute GST for every catalogue item from its HSN code?\n\nItems whose HSN maps to a different slab (0/5/12/18/28/40%) will be updated. Items with an unmapped HSN are left unchanged.")) return;
   const res = await api('/inventory/recalc-gst', { method:'POST', body: '{}' });
   if (!res) return;
   let msg = `GST recalculated — ${res.updated} item(s) updated`;
