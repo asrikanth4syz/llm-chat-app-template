@@ -1086,7 +1086,11 @@ details.card > summary { user-select: none; }
    MRP → list → client price → discount (pre-GST) → GST → landed.
    Token-driven, so it themes light/dark for free.
    ═══════════════════════════════════════════════════════════ */
-.ccl { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+/* flex-shrink:0 is essential: this row is a flex item of the column-flex
+   #cc-assigned-list (max-height + overflow). Because the row also has
+   overflow:hidden, its flex auto-min-size is 0, so with many rows the container
+   squeezes each to ~2px and clips the content (blank lines). Pin it to content height. */
+.ccl { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; flex-shrink: 0; }
 .ccl-id { display: flex; align-items: center; gap: 9px; padding: 9px 11px; flex-wrap: wrap; }
 .ccl-id .emo { font-size: 1.2rem; line-height: 1; flex-shrink: 0; }
 .ccl-nm { min-width: 120px; flex: 1; }
