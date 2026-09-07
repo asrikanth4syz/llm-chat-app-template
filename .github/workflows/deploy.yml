@@ -48,6 +48,18 @@ jobs:
           echo "--- wrangler whoami (token account + scopes) ---"
           npx wrangler whoami || echo "::warning::wrangler whoami failed — token is invalid or unauthorized"
 
+      # Cache-busting: rewrite the ?v=… token on every local asset to this commit's
+      # short SHA, so each deploy serves app.css + app.*.js under fresh, matching URLs.
+      # A fixed token let a stale app.css get cached against a newer app.*.js
+      # (client-catalogue rows rendered unstyled). A per-commit token makes that
+      # impossible — the browser/edge can never serve a half-updated pair.
+      - name: Stamp asset cache-busting version (unique per deploy)
+        run: |
+          v="${GITHUB_SHA::12}"
+          sed -i -E "s/\?v=[A-Za-z0-9._-]+/?v=$v/g" public/index.html
+          echo "Stamped assets with ?v=$v"
+          grep -oE 'app\.css\?v=[A-Za-z0-9._-]+' public/index.html | head -1
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
