@@ -39,6 +39,8 @@ const html = readFileSync(path.join(PUBLIC, "index.html"), "utf8");
 
 // Local (non-CDN) script sources, in document order — this list grows automatically
 // when app.js is split into multiple files and index.html is updated.
+// Strip any ?v=… cache-busting query so the src resolves to a real file on disk.
+const diskPath = (src) => path.join(PUBLIC, src.split("?")[0]);
 const localScripts = [...html.matchAll(/<script\s+src="([^"]+)"[^>]*>/g)]
   .map((m) => m[1])
   .filter((src) => !/^https?:\/\//.test(src));
@@ -72,7 +74,7 @@ console.log(`\nLoading ${localScripts.length} local script(s): ${localScripts.jo
 for (const src of localScripts) {
   const before = errors.length;
   try {
-    await page.addScriptTag({ path: path.join(PUBLIC, src) });
+    await page.addScriptTag({ path: diskPath(src) });
   } catch (e) {
     errors.push(`addScriptTag(${src}): ${e.message}`);
   }
@@ -88,7 +90,7 @@ const DEAD_TARGETS = new Set([
   "openNewRouteModal",
   "invBulkModal", "invClearSelection", "invSortBy", "invBulkApply", "invFilterCat",
 ]);
-const allSource = localScripts.map((s) => readFileSync(path.join(PUBLIC, s), "utf8")).join("\n");
+const allSource = localScripts.map((s) => readFileSync(diskPath(s), "utf8")).join("\n");
 const actTargets = [...new Set([...allSource.matchAll(/dataAct(?:El|Close)?\('([A-Za-z_$][\w$]*)'/g)].map((m) => m[1]))]
   .filter((n) => !DEAD_TARGETS.has(n));
 
