@@ -806,7 +806,7 @@ describe("Consolidated order report (by product)", () => {
 // ── Zoho Inventory → app sync (milestone 002): one-way pull, Model A ────
 // Endpoint gating uses SELF; the core semantics are driven directly through the
 // exported runZohoSync with an INJECTED fetch (no live Zoho in CI).
-import { runZohoSync, mapZohoItem, migrateHsnTo6Digit } from "../src/index";
+import { runZohoSync, mapZohoItem, migrateHsnTo6Digit, migrateBackfillAeratedHsn } from "../src/index";
 
 // A deterministic Zoho stand-in: token POST + paginated GET items. Records every
 // call so a test can assert the app NEVER POSTs to the Zoho items endpoint.
@@ -1548,6 +1548,30 @@ describe("HSN → GST slab", () => {
     await db.prepare("INSERT OR REPLACE INTO hsn_gst_rates (hsn,gst_rate,description) VALUES ('0901',5,'re-added by admin')").run();
     await migrateHsnTo6Digit(env);
     expect(await (db.prepare("SELECT 1 FROM hsn_gst_rates WHERE hsn='0901'").first())).not.toBeNull();
+  });
+
+  // GST 2.0: aerated drinks reconciled to 40% often carried no HSN, so GST showed
+  // without a matching HSN code. Backfill stamps 220210 onto 40% items missing one.
+  it("runtime migrateBackfillAeratedHsn tags 40% items lacking an HSN with 220210, guarded once", async () => {
+    const db = env.DB as D1Database;
+    // A 40% item with no HSN (the reported "Monster" case), and one with an explicit HSN.
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES ('AER1','Monster Energy','Beverages',125,0,1,'',40)").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES ('AER2','Tagged Cola','Beverages',30,0,1,'220120',40)").run();
+    await db.prepare("DELETE FROM app_config WHERE key='aerated_hsn_backfilled'").run();
+
+    await migrateBackfillAeratedHsn(env);
+
+    expect(await getCfg("aerated_hsn_backfilled")).toBe("1");
+    const filled = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='AER1'").first() as { hsn_code: string };
+    expect(filled.hsn_code).toBe("220210"); // blank HSN backfilled
+    const kept = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='AER2'").first() as { hsn_code: string };
+    expect(kept.hsn_code).toBe("220120"); // explicit HSN left untouched
+
+    // Guard: a new 40%-without-HSN item added later is NOT retagged (flag is set).
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES ('AER3','Later Fizz','Beverages',20,0,1,'',40)").run();
+    await migrateBackfillAeratedHsn(env);
+    const later = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='AER3'").first() as { hsn_code: string };
+    expect(later.hsn_code).toBe("");
   });
 });
 
