@@ -529,10 +529,19 @@ async function pickOrderModal(orderId) {
   ]);
   const items = order?.items || [];
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
-  openModal(`Pick Items — ${orderId}`, `
+  const totalOrdered = (items||[]).reduce((n,i)=>n+(parseInt(i.qty)||0),0);
+  const clientName = order?.client_name || '';
+  openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
       Enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
+    <!-- Live picking tally: lines & qty picked vs what the system ordered, so the
+         picker can reconcile the manual count against system qty before confirming. -->
+    <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 12px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
+      <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${items.length}</span></span>
+      <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalOrdered} ordered</span></span>
+      <span id="ps-match" style="font-weight:600"></span>
+    </div>
     <table class="table" style="margin-bottom:16px">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
@@ -545,7 +554,7 @@ async function pickOrderModal(orderId) {
               data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
               value="${item.qty}" min="0" max="${item.qty}"
               style="width:72px;text-align:center"
-              ${dataInputEl('colorByOrdered')}>
+              ${dataInputEl('onPickQty')}>
           </td>
           <td>
             <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
@@ -561,6 +570,33 @@ async function pickOrderModal(orderId) {
       <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
     </div>
   `);
+  updatePickSummary(); // seed the tally from the pre-filled (=ordered) quantities
+}
+
+// Combined qty-input handler for the Pick Items modal: keep the below-ordered
+// colour cue and refresh the live picked tally.
+function onPickQty(el) { colorByOrdered(el); updatePickSummary(); }
+
+// Recompute "lines picked / qty picked" from the modal inputs and flag whether the
+// manually picked total reconciles with the system-ordered total.
+function updatePickSummary() {
+  const inputs = document.querySelectorAll('.pick-qty');
+  if (!inputs.length) return;
+  let lines = 0, qty = 0, ordered = 0;
+  inputs.forEach(inp => {
+    const v = parseInt(inp.value) || 0;
+    ordered += parseInt(inp.dataset.ordered) || 0;
+    if (v > 0) lines++;
+    qty += v;
+  });
+  const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+  set('ps-lines', lines);
+  set('ps-qty', qty);
+  const m = document.getElementById('ps-match');
+  if (!m) return;
+  if (qty === ordered)      { m.textContent = '✓ Matches system qty'; m.style.color = 'var(--success)'; }
+  else if (qty < ordered)   { m.textContent = `▼ Short by ${ordered - qty}`; m.style.color = 'var(--warning)'; }
+  else                      { m.textContent = `▲ Over by ${qty - ordered}`; m.style.color = 'var(--danger)'; }
 }
 
 async function confirmPick(orderId) {
