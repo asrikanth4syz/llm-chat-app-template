@@ -2114,6 +2114,72 @@ describe("Dispatch — single capture with a system DC number", () => {
   });
 });
 
+// ── Delivery discrepancy: voice + manager approval before DELIVERED ───
+describe("Delivery discrepancy approval", () => {
+  const vdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await vdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES ('VC-CL','Variance Co',1)").run();
+    await vdb.prepare(`INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES ('VD-1','VC-CL','seed','IN_SHIPMENT',1000,0,1000,'Regular',datetime('now'))`).run();
+    await vdb.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('VD-OIA','VD-1','VD-A','Item A',10,10,100)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('VD-OIB','VD-1','VD-B','Item B',5,10,50)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('VDC-1','VD-1','IN_TRANSIT',15,'DCN-90001')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('VDI-A','VDC-1','VD-A','Item A',10,0)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('VDI-B','VDC-1','VD-B','Item B',5,0)").run();
+  });
+  const addVoice = () => vdb.prepare("INSERT INTO dc_documents (dc_id,doc_type,filename,mime_type,content_b64,file_size,uploaded_by) VALUES ('VDC-1','voice','n.webm','audio/webm','AAAA',4,'driver')").run();
+
+  it("an exact delivery finalizes immediately (no approval needed)", async () => {
+    const res = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:10},{sku:'VD-B',qty_delivered:5}] }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { status:string };
+    expect(d.status).toBe("DELIVERED");
+  });
+
+  it("a short delivery is blocked without a voice note, then held for approval with one", async () => {
+    const noVoice = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}] }, adminToken);
+    expect(noVoice.status).toBe(400);
+    expect((await noVoice.json() as {code:string}).code).toBe("VOICE_REQUIRED");
+
+    await addVoice();
+    const held = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'2 damaged' }, adminToken);
+    expect(held.status).toBe(200);
+    expect((await held.json() as {pending_approval:boolean}).pending_approval).toBe(true);
+    const dc = await vdb.prepare("SELECT status, delivery_approval FROM delivery_challans WHERE id='VDC-1'").first() as { status:string; delivery_approval:string };
+    expect(dc.status).toBe("IN_TRANSIT");           // NOT delivered yet
+    expect(dc.delivery_approval).toBe("PENDING");
+  });
+
+  it("approving a held delivery finalizes with the proposed quantities", async () => {
+    await addVoice();
+    await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'x' }, adminToken);
+    const res = await post("/api/delivery-challans/VDC-1/deliver-decision", { decision:'approve' }, adminToken);
+    expect(res.status).toBe(200);
+    const dc = await vdb.prepare("SELECT status, delivery_approval FROM delivery_challans WHERE id='VDC-1'").first() as { status:string; delivery_approval:string };
+    expect(dc.status).toBe("DELIVERED");
+    expect(dc.delivery_approval).toBe("APPROVED");
+    const a = await vdb.prepare("SELECT qty_delivered FROM dc_items WHERE id='VDI-A'").first() as { qty_delivered:number };
+    expect(a.qty_delivered).toBe(8); // the approved (short) quantity, not the dispatched 10
+  });
+
+  it("rejecting a held delivery leaves it in transit for re-delivery", async () => {
+    await addVoice();
+    await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'x' }, adminToken);
+    const res = await post("/api/delivery-challans/VDC-1/deliver-decision", { decision:'reject' }, adminToken);
+    expect(res.status).toBe(200);
+    const dc = await vdb.prepare("SELECT status, delivery_approval FROM delivery_challans WHERE id='VDC-1'").first() as { status:string; delivery_approval:string };
+    expect(dc.status).toBe("IN_TRANSIT");
+    expect(dc.delivery_approval).toBe("REJECTED");
+  });
+
+  it("only super_admin/ops_admin can decide a held delivery", async () => {
+    await addVoice();
+    await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'x' }, adminToken);
+    const res = await post("/api/delivery-challans/VDC-1/deliver-decision", { decision:'approve' }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});
+
 // ── Reorder skip-open-PO guard ───────────────────────────────────────
 describe("from-demand skip_open_po guard", () => {
   const rdb = env.DB as D1Database;
