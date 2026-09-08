@@ -579,7 +579,8 @@ async function renderInventory(el) {
   el.innerHTML = `
   ${pageHeader('Inventory', `${inv.length} SKUs`,
     `${['super_admin','ops_admin','finance_admin','procurement_manager'].includes(APP.user?.role)
-        ? `<button class="btn btn-secondary" ${dataAct('recalcGstFromHsn')} title="Recompute every item's GST slab from its HSN code">↻ Recalc GST from HSN</button>` : ''}
+        ? `<button class="btn btn-secondary" ${dataAct('recalcGstFromHsn')} title="Recompute every item's GST slab from its HSN code">↻ Recalc GST from HSN</button>
+           <button class="btn btn-secondary" ${dataAct('assignAeratedHsn')} title="Stamp HSN 220210 on 40% items missing an HSN (GST 2.0 aerated/sugary drinks)">⊕ Assign HSN to 40% items</button>` : ''}
      <button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
 
   <!-- KPI tiles — icon-chip style, responsive -->
@@ -1278,5 +1279,20 @@ async function recalcGstFromHsn() {
   showToast(msg, res.updated ? 'success' : 'info');
   if (res.unmatched_hsns && res.unmatched_hsns.length)
     console.warn('Unmapped HSN codes (left unchanged — add them in Settings → HSN → GST):', res.unmatched_hsns);
+  navigate('inventory');
+}
+
+// Admin backfill (GST → HSN): GST 2.0 puts aerated/sugary drinks on the 40% demerit
+// slab (HSN 220210). Items reconciled to 40% often carry no HSN, so stamp 220210 on
+// any 40% item still missing one. Idempotent — safe to run repeatedly.
+async function assignAeratedHsn() {
+  if (!confirm("Assign HSN 220210 to every 40% item that has no HSN code?\n\nGST 2.0 classes aerated/sugary drinks at 40% under HSN 220210. Items already carrying an HSN are left unchanged.")) return;
+  const res = await api('/inventory/assign-hsn', { method:'POST', body: '{}' });
+  if (!res) return;
+  let msg;
+  if (res.updated) msg = `HSN 220210 assigned to ${res.updated} item(s)`;
+  else if (res.gst40_total === 0) msg = 'No items are on the 40% slab — nothing to assign';
+  else msg = `All ${res.gst40_total} item(s) at 40% already have an HSN`;
+  showToast(msg, res.updated ? 'success' : 'info');
   navigate('inventory');
 }

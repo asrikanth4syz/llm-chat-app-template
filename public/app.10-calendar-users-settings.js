@@ -1137,6 +1137,7 @@ async function settingsTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-size:.83rem;color:var(--text-muted)">A product's GST is derived from its HSN code (0/5/12/18/28/40%)</span>
           <button class="btn btn-secondary btn-sm" ${dataAct('recalcGstFromHsn')} title="Apply the mappings below to every catalogue item">↻ Recalc GST from HSN</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('assignAeratedHsn')} title="Stamp HSN 220210 on 40% items missing an HSN (GST 2.0 aerated/sugary drinks)">⊕ Assign HSN to 40% items</button>
         </div>
       </div>
       <div class="card-body" style="padding:20px;display:grid;gap:16px">
