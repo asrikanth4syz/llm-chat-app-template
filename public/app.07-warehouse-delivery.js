@@ -348,16 +348,19 @@ function renderWHPickList(el, picklist) {
           </div>
           <div class="table-wrap">
             <table class="table" style="margin:0">
-              <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
+              <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Qty Picked</th><th>Stock Available</th><th>Bin Picked From</th></tr></thead>
               <tbody>${order.items.map(item=>`<tr>
                 <td><b>${h(item.item_name)}</b></td>
                 <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
                 <td>${item.qty}</td>
+                <td>${item.picked_qty!=null
+                  ? `<b style="color:${item.picked_qty<item.qty?'var(--warning)':'var(--success)'}">${item.picked_qty}</b>${item.picked_qty<item.qty?`<span style="margin-left:4px;font-size:.75rem;color:var(--warning)">(short by ${item.qty-item.picked_qty})</span>`:''}`
+                  : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
                   <b>${item.stock_available}</b>
                   ${item.stock_available<item.qty?`<span style="margin-left:4px;font-size:.75rem">(short by ${item.qty-item.stock_available})</span>`:''}
                 </td>
-                ${order.status==='PICKED'?`<td>${item.bin_code||'—'}</td>`:''}
+                <td>${item.bin_code||'—'}</td>
               </tr>`).join('')}
               </tbody>
             </table>
@@ -529,10 +532,19 @@ async function pickOrderModal(orderId) {
   ]);
   const items = order?.items || [];
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
-  openModal(`Pick Items — ${orderId}`, `
+  const totalOrdered = (items||[]).reduce((n,i)=>n+(parseInt(i.qty)||0),0);
+  const clientName = order?.client_name || '';
+  openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
       Enter qty actually picked (can be less than ordered) and select the bin location.
     </p>
+    <!-- Live picking tally: lines & qty picked vs what the system ordered, so the
+         picker can reconcile the manual count against system qty before confirming. -->
+    <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 12px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
+      <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${items.length}</span></span>
+      <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalOrdered} ordered</span></span>
+      <span id="ps-match" style="font-weight:600"></span>
+    </div>
     <table class="table" style="margin-bottom:16px">
       <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
@@ -545,7 +557,7 @@ async function pickOrderModal(orderId) {
               data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
               value="${item.qty}" min="0" max="${item.qty}"
               style="width:72px;text-align:center"
-              ${dataInputEl('colorByOrdered')}>
+              ${dataInputEl('onPickQty')}>
           </td>
           <td>
             <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
@@ -561,17 +573,47 @@ async function pickOrderModal(orderId) {
       <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
     </div>
   `);
+  updatePickSummary(); // seed the tally from the pre-filled (=ordered) quantities
+}
+
+// Combined qty-input handler for the Pick Items modal: keep the below-ordered
+// colour cue and refresh the live picked tally.
+function onPickQty(el) { colorByOrdered(el); updatePickSummary(); }
+
+// Recompute "lines picked / qty picked" from the modal inputs and flag whether the
+// manually picked total reconciles with the system-ordered total.
+function updatePickSummary() {
+  const inputs = document.querySelectorAll('.pick-qty');
+  if (!inputs.length) return;
+  let lines = 0, qty = 0, ordered = 0;
+  inputs.forEach(inp => {
+    const v = parseInt(inp.value) || 0;
+    ordered += parseInt(inp.dataset.ordered) || 0;
+    if (v > 0) lines++;
+    qty += v;
+  });
+  const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+  set('ps-lines', lines);
+  set('ps-qty', qty);
+  const m = document.getElementById('ps-match');
+  if (!m) return;
+  if (qty === ordered)      { m.textContent = '✓ Matches system qty'; m.style.color = 'var(--success)'; }
+  else if (qty < ordered)   { m.textContent = `▼ Short by ${ordered - qty}`; m.style.color = 'var(--warning)'; }
+  else                      { m.textContent = `▲ Over by ${qty - ordered}`; m.style.color = 'var(--danger)'; }
 }
 
 async function confirmPick(orderId) {
   const qtyInputs = document.querySelectorAll('.pick-qty');
+  // Send EVERY line with its actual picked qty (blank → 0), so a short/zero pick is
+  // recorded against that line instead of being dropped and later defaulting to the
+  // full ordered quantity.
   const items = Array.from(qtyInputs).map(inp => {
     const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
     const qty = parseInt(inp.value) || 0;
     return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
-  }).filter(i => i.qty > 0);
-  if (!items.length) { showToast('Enter at least 1 item to pick', 'error'); return; }
-  const hasPartial = Array.from(qtyInputs).some(inp => +inp.value < +inp.dataset.ordered);
+  });
+  if (!items.some(i => i.qty > 0)) { showToast('Enter a quantity for at least one item', 'error'); return; }
+  const hasPartial = Array.from(qtyInputs).some(inp => (parseInt(inp.value) || 0) < +inp.dataset.ordered);
   const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial }) });
   if (res) {
     showToast(`Order ${orderId} marked as PICKED${hasPartial ? ' (partial)' : ''}`);

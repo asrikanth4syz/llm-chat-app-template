@@ -2504,8 +2504,11 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     ).bind(id).all() as {results: Record<string,unknown>[]};
     const {results: orderItems} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as {results: Record<string,unknown>[]};
 
-    // Use allocations if pick was done, otherwise fall back to order quantities
-    const dispatchItems = allocations.length > 0 ? allocations : orderItems;
+    // Use allocations if pick was done, otherwise fall back to order quantities.
+    // Allocations can carry zero-qty lines (an item that was short-picked to 0) —
+    // dispatch only the lines with a positive picked qty.
+    const dispatchItems = (allocations.length > 0 ? allocations : orderItems)
+      .filter(i => (i.qty as number) > 0);
     const totalQty = dispatchItems.reduce((s, i) => s + (i.qty as number), 0);
     const dcId = `DC-${Math.floor(Math.random()*9000+1000)}`;
     await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
@@ -3971,7 +3974,7 @@ async function handlePickList(request: Request, env: Env): Promise<Response> {
       o.picker_name, o.picked_at,
       oi.sku, oi.name as item_name, oi.qty,
       COALESCE(i.stock,0) as stock_available,
-      oa.bin_code
+      oa.bin_code, oa.qty AS picked_qty
     FROM orders o JOIN clients c ON o.client_id=c.id
     JOIN order_items oi ON oi.order_id=o.id
     LEFT JOIN inventory i ON i.sku=oi.sku
