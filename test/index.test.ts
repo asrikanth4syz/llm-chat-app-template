@@ -1500,6 +1500,26 @@ describe("HSN → GST slab", () => {
     expect(row.gst_rate).toBe(40);
   });
 
+  it("POST /api/inventory/assign-hsn stamps 220210 on 40% items missing an HSN and reports counts", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES ('AHN1','Monster No HSN','Beverages',125,0,1,'',40)").run();
+    await db.prepare("INSERT OR REPLACE INTO inventory (sku,name,category,unit_price,stock,active,hsn_code,gst_rate) VALUES ('AHN2','Tagged 40','Beverages',30,0,1,'240220',40)").run();
+    const res = await post("/api/inventory/assign-hsn", {}, adminToken);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { updated: number; gst40_total: number };
+    expect(data.updated).toBeGreaterThanOrEqual(1);
+    expect(data.gst40_total).toBeGreaterThanOrEqual(2);
+    const filled = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='AHN1'").first() as { hsn_code: string };
+    expect(filled.hsn_code).toBe("220210");
+    const kept = await db.prepare("SELECT hsn_code FROM inventory WHERE sku='AHN2'").first() as { hsn_code: string };
+    expect(kept.hsn_code).toBe("240220"); // explicit HSN left untouched
+  });
+
+  it("POST /api/inventory/assign-hsn is forbidden to non-privileged roles", async () => {
+    const res = await post("/api/inventory/assign-hsn", {}, clientToken);
+    expect(res.status).toBe(403);
+  });
+
   it("POST /api/hsn-gst-rates upserts a 6-digit mapping that the lookup then resolves", async () => {
     const res = await post("/api/hsn-gst-rates", { hsn: "330510", gst_rate: 18, description: "Shampoo / hair preparations" }, adminToken);
     expect(res.status).toBe(200);

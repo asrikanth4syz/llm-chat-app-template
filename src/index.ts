@@ -1105,6 +1105,7 @@ export default {
       if (path==="/api/inventory"               && method==="POST")  return handleAddInventory(request,env);
       if (path==="/api/inventory/critical-alerts" && method==="POST") return handleSendCriticalAlerts(request,env);
       if (path==="/api/inventory/recalc-gst"    && method==="POST")  return handleRecalcGst(request,env);
+      if (path==="/api/inventory/assign-hsn"    && method==="POST")  return handleAssignAeratedHsn(request,env);
       if (path==="/api/hsn-gst"                 && method==="GET")   return handleHsnGstLookup(request,env);
       if (path==="/api/hsn-gst-rates"           && method==="GET")   return handleListHsnGstRates(request,env);
       if (path==="/api/hsn-gst-rates"           && method==="POST")  return handleUpsertHsnGstRate(request,env);
@@ -2791,6 +2792,27 @@ async function handleRecalcGst(request: Request, env: Env): Promise<Response> {
   } catch (e) { return json({error:"Recalc failed: "+String(e)}, 500); }
   await audit(env, user, "RECALC", "inventory", "gst", undefined, `updated:${updated}`);
   return json({ok:true, updated, unmatched, unmatched_hsns:[...unmatchedHsns]});
+}
+
+// Backfill the HSN direction: GST 2.0 puts aerated/sugary drinks on the 40% demerit
+// slab, whose canonical heading is 220210. Any 40% item still lacking an HSN gets it
+// stamped so GST% and HSN both resolve from the same GST 2.0 row. Idempotent and
+// admin-triggered (a button), so it works regardless of the one-time migration's
+// background timing, and the returned counts confirm what actually matched.
+async function handleAssignAeratedHsn(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","finance_admin","procurement_manager"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  try {
+    const total = (await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE gst_rate=40").first() as {n:number}|null)?.n ?? 0;
+    const res = await env.DB.prepare(
+      "UPDATE inventory SET hsn_code='220210' WHERE gst_rate=40 AND (hsn_code IS NULL OR hsn_code='')"
+    ).run();
+    const updated = res.meta?.changes ?? 0;
+    await audit(env, user, "ASSIGN_HSN", "inventory", "220210", undefined, `updated:${updated}`);
+    // gst40_total lets the caller see whether any items are actually stored at 40%.
+    return json({ok:true, updated, gst40_total:total, hsn:"220210"});
+  } catch (e) { return json({error:"Assign HSN failed: "+String(e)}, 500); }
 }
 
 let _criticalTableReady = false;
