@@ -83,7 +83,9 @@ function withSecurityHeaders(res: Response): Response {
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   h.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   h.set("Cross-Origin-Opener-Policy", "same-origin");
-  h.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  // Microphone allowed for same-origin only — needed for the delivery-discrepancy
+  // voice note (MediaRecorder). Geolocation and camera stay fully disabled.
+  h.set("Permissions-Policy", "geolocation=(), microphone=(self), camera=()");
   h.set("Content-Security-Policy", CSP);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }
@@ -910,7 +912,12 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS kpi_daily (
       day TEXT PRIMARY KEY, data TEXT, created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
-  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT"]) {
+  for (const col of ["reminder_armed INTEGER", "reminder_sent_at TEXT",
+    // Delivery-discrepancy approval: a short/excess delivery is held for a super-admin
+    // or ops-admin (warehouse manager) to approve, with the driver's voice explanation,
+    // before the challan is marked DELIVERED.
+    "delivery_approval TEXT", "variance_note TEXT", "variance_payload TEXT",
+    "variance_by TEXT", "variance_at TEXT", "variance_reviewed_by TEXT", "variance_reviewed_at TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -1158,6 +1165,8 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/partial$/)  && method==="POST") return handlePartialDelivery(request,env,path);
+      if (path==="/api/delivery-approvals"                          && method==="GET")  return handleListDeliveryApprovals(request,env);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver-decision$/) && method==="POST") return handleDeliveryDecision(request,env,path);
 
       // Clients
       if (path==="/api/clients"  && method==="GET")  return handleListClients(request,env);
@@ -3541,15 +3550,49 @@ async function closeOrderIfSettled(env: Env, orderId: string, user: {sub:string;
   return true;
 }
 
+// Driver-facing delivery confirmation. An exact delivery (every line delivered as
+// dispatched) finalizes immediately. A short/excess delivery is HELD: the driver's
+// voice explanation must already be attached, and a super-admin or ops-admin
+// (warehouse manager) approves it before the challan is marked DELIVERED.
 async function handleDeliverDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]; variance_note?:string};
 
-  const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]};
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
   if (!dc) return json({error:"Not found"}, 404);
+
+  // Discrepancy = any line delivered != dispatched (short or excess).
+  const hasDiscrepancy = dcItems.some(di => {
+    const dispatched = Number(di.qty_ordered) || 0;
+    const req = body.items?.find(i => i.sku === di.sku);
+    const delivered = req ? (Number(req.qty_delivered) || 0) : dispatched;
+    return delivered !== dispatched;
+  });
+
+  // Hold a short/excess delivery for approval — but only once (an already-APPROVED
+  // challan finalizes with the approved quantities).
+  if (hasDiscrepancy && dc.delivery_approval !== "APPROVED") {
+    const voice = await env.DB.prepare("SELECT COUNT(*) AS n FROM dc_documents WHERE dc_id=? AND doc_type='voice'").bind(id).first() as {n:number}|null;
+    if (!voice || !voice.n) return json({error:"A voice explanation is required to submit a short or excess delivery for approval", code:"VOICE_REQUIRED"}, 400);
+    await env.DB.prepare(
+      "UPDATE delivery_challans SET delivery_approval='PENDING', variance_payload=?, variance_note=?, variance_by=?, variance_at=datetime('now'), variance_reviewed_by=NULL, variance_reviewed_at=NULL WHERE id=?"
+    ).bind(JSON.stringify(body.items||[]), body.variance_note||null, user!.name, id).run();
+    await pushNotification(env, "ops_admin", `Delivery ${dc.dc_number||id} has a quantity discrepancy — awaiting approval`);
+    await audit(env, user, "DELIVERY_VARIANCE_SUBMIT", "delivery_challan", id, undefined, body.variance_note||"");
+    return json({id, status:"PENDING_APPROVAL", pending_approval:true});
+  }
+
+  return applyDeliveryFinalize(env, id, body.items, user!, dc, dcItems);
+}
+
+// Apply and finalize a delivery: clamp to order caps, deduct stock, mark DELIVERED,
+// spin up a follow-up DC for any shortfall, close/partial-close the order, and post
+// the delivered goods into the client's store inventory. Shared by the direct
+// (exact) delivery path and the approval path.
+async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:string;qty_delivered:number}[]|undefined, user: JWTPayload, dc: Record<string,unknown>, dcItems: Record<string,unknown>[]): Promise<Response> {
 
   // Order-wide caps: total ordered per sku and what's already delivered on OTHER DCs.
   // Cumulative delivered across all DCs must never exceed the ordered qty.
@@ -3566,7 +3609,7 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
 
   // Merge per-item delivered qtys, clamped to min(dispatched, order remaining)
   const deliveries = dcItems.map(di => {
-    const override = body.items?.find(i => i.sku === di.sku);
+    const override = requestedItems?.find(i => i.sku === di.sku);
     const dispatched = di.qty_ordered as number;
     const cap = orderCap[di.sku as string] != null
       ? Math.max(0, orderCap[di.sku as string] - (deliveredElsewhere[di.sku as string] || 0))
@@ -3663,6 +3706,58 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   await pushNotification(env, "client_admin", `Delivery ${id} confirmed — ${totalDelivered} units`);
   await audit(env, user, "DELIVER", "delivery_challan", id);
   return json({id, status:"DELIVERED", delivered: totalDelivered, order_closed: orderFullyClosed, partial: shortItems.length > 0});
+}
+
+// Deliveries held for a discrepancy — the approval queue for super-admin / ops-admin.
+async function handleListDeliveryApprovals(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const {results} = await env.DB.prepare(
+    `SELECT dc.id, dc.dc_number, dc.order_id, dc.total_qty, dc.driver_name, dc.variance_note,
+            dc.variance_by, dc.variance_at, dc.variance_payload, c.name AS client_name
+       FROM delivery_challans dc
+       LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
+      WHERE dc.delivery_approval='PENDING' ORDER BY dc.variance_at ASC`
+  ).all();
+  return json(results);
+}
+
+// Approve or reject a held (discrepancy) delivery. Approve finalizes with the
+// driver's proposed quantities; reject sends it back for re-delivery. Gated to
+// super-admin / ops-admin (warehouse manager).
+async function handleDeliveryDecision(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(()=>({})) as {decision?:string; note?:string};
+
+  const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
+  if (!dc) return json({error:"Not found"}, 404);
+  if (dc.delivery_approval !== "PENDING") return json({error:"This delivery is not awaiting approval", code:"NOT_PENDING"}, 409);
+
+  if (body.decision === "approve") {
+    let items: {sku:string;qty_delivered:number}[] = [];
+    try { items = JSON.parse(String(dc.variance_payload||"[]")); } catch { items = []; }
+    const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
+    // Mark approved first so the finalize path treats it as cleared.
+    await env.DB.prepare("UPDATE delivery_challans SET delivery_approval='APPROVED', variance_reviewed_by=?, variance_reviewed_at=datetime('now') WHERE id=?")
+      .bind(user!.name, id).run();
+    const res = await applyDeliveryFinalize(env, id, items, user!, dc, dcItems);
+    await audit(env, user, "DELIVERY_VARIANCE_APPROVE", "delivery_challan", id, undefined, body.note||"");
+    return res;
+  }
+
+  if (body.decision === "reject") {
+    await env.DB.prepare("UPDATE delivery_challans SET delivery_approval='REJECTED', variance_reviewed_by=?, variance_reviewed_at=datetime('now') WHERE id=?")
+      .bind(user!.name, id).run();
+    await pushNotification(env, "delivery_exec", `Delivery ${dc.dc_number||id} discrepancy was rejected — please re-deliver`);
+    await audit(env, user, "DELIVERY_VARIANCE_REJECT", "delivery_challan", id, undefined, body.note||"");
+    return json({id, delivery_approval:"REJECTED"});
+  }
+
+  return json({error:"decision must be 'approve' or 'reject'"}, 400);
 }
 
 // Gap 14: Partial delivery
@@ -3880,11 +3975,14 @@ async function handleUploadDCDoc(request: Request, env: Env, path: string, docTy
     return json({ error: "Failed to store document: " + msg }, 500);
   }
 
-  // scanning the POD document satisfies both flags — it's the same physical document
+  // scanning the POD document satisfies both flags — it's the same physical document.
+  // A voice note is a discrepancy explanation, not proof of delivery, so it sets no flag.
   const updateSql = docType === "scan"
     ? "UPDATE delivery_challans SET dc_scan_uploaded=1, pod_uploaded=1 WHERE id=?"
-    : "UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?";
-  await env.DB.prepare(updateSql).bind(id).run();
+    : docType === "pod"
+      ? "UPDATE delivery_challans SET pod_uploaded=1 WHERE id=?"
+      : null;
+  if (updateSql) await env.DB.prepare(updateSql).bind(id).run();
   await audit(env, user, docType === "pod" ? "POD_UPLOAD" : "DC_SCAN_UPLOAD", "delivery_challan", id, undefined, body.filename||"file");
   return json({ id, doc_type: docType, uploaded: true });
 }

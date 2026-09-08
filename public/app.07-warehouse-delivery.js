@@ -804,11 +804,7 @@ async function renderDelivery(el) {
           Dispatched ${fmtDate(dc.dispatched_at)}
           ${dc.expected_delivery_date ? ` · Due ${fmtDate(dc.expected_delivery_date)}` : ''}
         </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
-          <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>
-          <button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Delivered</button>
-        </div>
+        <div style="display:flex;gap:6px">${dcTransitActions(dc)}</div>
       </div>
     </div>`;
   }
@@ -1004,11 +1000,7 @@ async function switchDeliveryTab(tab, btn) {
               Dispatched ${fmtDate(dc.dispatched_at)}
               ${dc.expected_delivery_date?` · Due ${fmtDate(dc.expected_delivery_date)}`:''}
             </div>
-            <div style="display:flex;gap:6px">
-              <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
-              <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>
-              <button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Delivered</button>
-            </div>
+            <div style="display:flex;gap:6px">${dcTransitActions(dc)}</div>
           </div>
         </div>`;
       }
@@ -1303,36 +1295,85 @@ async function markDelivered(dcId) {
     return;
   }
   const capped = items.some(i => i.order_remaining != null && i.order_remaining < i.qty_ordered);
+  APP._deliveryVoice = null; // reset any prior recording
   openModal(`Confirm Delivery — ${dcId}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
-      Enter actual qty delivered for each item. You cannot deliver more than the order's outstanding balance — if less, a follow-up DC is created for the remainder.
+      Enter the actual qty delivered for each item. If any line is <b>short or excess</b> vs what was dispatched,
+      you must record a short voice explanation — the delivery is then sent to a manager for approval before it is marked delivered.
     </p>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Outstanding</th><th class="u-center">Delivered</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Expected</th><th class="u-center">Delivered</th></tr></thead>
       <tbody>
-        ${items.map(i=>{ const maxDeliver = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
+        ${items.map(i=>{ const expected = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
           <td><b>${i.sku}</b></td>
           <td>${h(i.name)}</td>
           <td class="u-empty">${i.qty_ordered}</td>
-          <td style="text-align:center;font-weight:600${maxDeliver<i.qty_ordered?';color:var(--warning)':''}">${maxDeliver}</td>
+          <td style="text-align:center;font-weight:600${expected<i.qty_ordered?';color:var(--warning)':''}">${expected}</td>
           <td class="u-center"><input type="number" class="form-control form-control-sm deliver-qty"
-            data-sku="${i.sku}" value="${maxDeliver}" min="0" max="${maxDeliver}"
+            data-sku="${i.sku}" data-expected="${expected}" value="${expected}" min="0"
             style="width:80px;text-align:center"
-            ${dataInputEl('clampDeliver', maxDeliver)}></td>
+            ${dataInputEl('onDeliverQty')}></td>
         </tr>`;}).join('')}
       </tbody>
     </table>
-    ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Deliverable qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
+    ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Expected qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
+    <div id="deliver-variance" hidden style="border:1px solid var(--warning);background:var(--warning-bg);border-radius:8px;padding:12px;margin-bottom:12px">
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:6px">⚠ Quantity discrepancy — voice explanation required</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <button type="button" class="btn btn-secondary btn-sm" id="voice-btn" ${dataAct('toggleVoiceRecording')}>🎙 Record</button>
+        <span id="voice-status" style="font-size:.8rem;color:var(--text-muted)">Not recorded</span>
+        <audio id="voice-playback" controls hidden style="height:34px"></audio>
+      </div>
+      <input type="text" id="variance-note" class="form-control form-control-sm" placeholder="Optional note (e.g. 2 cases damaged in transit)">
+    </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-      <button class="btn btn-success" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
+      <button class="btn btn-success" id="deliver-confirm-btn" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
     </div>
   `);
 }
 
+// Recompute delivery discrepancy as quantities are typed; reveal the voice-note
+// section and switch the confirm button to "Submit for Approval" when short/excess.
+function onDeliverQty(el) {
+  const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
+  let discrepancy = false;
+  inputs.forEach(inp => {
+    const v = parseInt(inp.value) || 0;
+    const expected = parseInt(inp.dataset.expected) || 0;
+    inp.style.color = v !== expected ? 'var(--warning)' : 'inherit';
+    if (v !== expected) discrepancy = true;
+  });
+  const section = document.getElementById('deliver-variance');
+  const btn = document.getElementById('deliver-confirm-btn');
+  if (section) section.hidden = !discrepancy;
+  if (btn) btn.textContent = discrepancy ? 'Submit for Approval' : 'Confirm Delivery';
+}
+
 async function confirmDelivery(dcId) {
-  const inputs = document.querySelectorAll('.deliver-qty');
-  const items = Array.from(inputs).map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
+  const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
+  const items = inputs.map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
+  const discrepancy = inputs.some(inp => (parseInt(inp.value)||0) !== (parseInt(inp.dataset.expected)||0));
+
+  if (discrepancy) {
+    if (!APP._deliveryVoice) { showToast('Record a voice explanation for the short/excess delivery', 'error'); return; }
+    // Attach the recording, then submit for approval (server holds it as PENDING).
+    const v = APP._deliveryVoice;
+    const up = await api(`/delivery-challans/${dcId}/voice/upload`, { method:'POST', body: JSON.stringify({
+      filename: `delivery-note-${dcId}.webm`, mime_type: v.mime, content_b64: v.b64, file_size: v.size
+    }) });
+    if (!up) return;
+    const note = document.getElementById('variance-note')?.value || '';
+    const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items, variance_note: note }) });
+    if (!res) return;
+    closeModal();
+    showToast('Sent to manager for approval — delivery on hold', 'info');
+    APP._deliveryVoice = null;
+    if (APP.page === 'deliveries' || APP.page === 'warehouse') navigate(APP.page);
+    else switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
+    return;
+  }
+
   const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items }) });
   if (res) {
     closeModal();
@@ -1340,6 +1381,117 @@ async function confirmDelivery(dcId) {
     showToast(msg);
     switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]);
   }
+}
+
+// ── Delivery discrepancy: voice recording + manager approval ──────────
+// Live in-browser recording via MediaRecorder (works on desktop and mobile web).
+// The recorded clip is held on APP._deliveryVoice as base64 for upload on submit.
+async function toggleVoiceRecording() {
+  const btn = document.getElementById('voice-btn');
+  const status = document.getElementById('voice-status');
+  const playback = document.getElementById('voice-playback');
+  // Stop an in-progress recording.
+  if (APP._voiceRecorder && APP._voiceRecorder.state === 'recording') {
+    APP._voiceRecorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    showToast('Voice recording is not supported on this device/browser', 'error');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(stream);
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = String(reader.result || '');
+        const b64 = dataUrl.split(',')[1] || '';
+        APP._deliveryVoice = { b64, mime: blob.type, size: blob.size };
+        if (playback) { playback.src = dataUrl; playback.hidden = false; }
+        if (status) status.textContent = `Recorded · ${(blob.size/1024).toFixed(0)} KB`;
+      };
+      reader.readAsDataURL(blob);
+      if (btn) { btn.textContent = '🎙 Re-record'; btn.classList.remove('btn-danger'); }
+    };
+    APP._voiceRecorder = rec;
+    rec.start();
+    if (btn) { btn.textContent = '⏹ Stop'; btn.classList.add('btn-danger'); }
+    if (status) status.textContent = 'Recording…';
+  } catch {
+    showToast('Microphone permission denied — cannot record', 'error');
+  }
+}
+
+// Transit-card action buttons — shared by both transit renderers so a
+// pending-approval challan is handled identically. A held (discrepancy) delivery
+// shows a manager "Review" action instead of the driver "Delivered" button.
+function dcTransitActions(dc) {
+  const base = `<button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
+     <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>`;
+  if (dc.delivery_approval === 'PENDING') {
+    return base + (['super_admin','ops_admin'].includes(APP.user?.role)
+      ? ` <button class="btn btn-warning btn-sm" ${dataAct('reviewDeliveryModal', dc.id)}>⚠ Review discrepancy</button>`
+      : ` <span class="badge badge-warning" title="A short/excess delivery is awaiting manager approval">⏳ Awaiting approval</span>`);
+  }
+  return base + ` <button class="btn btn-success btn-sm" ${dataAct('markDelivered', dc.id)}>✓ Delivered</button>`;
+}
+
+// Manager review of a held delivery: proposed vs dispatched, the driver's voice
+// note, then Approve (finalize) or Reject (send back for re-delivery).
+async function reviewDeliveryModal(dcId) {
+  const [dc, items, docs] = await Promise.all([
+    api(`/delivery-challans/${dcId}`).catch(()=>null),
+    api(`/delivery-challans/${dcId}/items`).catch(()=>[]),
+    api(`/delivery-challans/${dcId}/documents`).catch(()=>[])
+  ]);
+  if (!dc) { showToast('Delivery not found', 'error'); return; }
+  let proposed = [];
+  try { proposed = JSON.parse(dc.variance_payload || '[]'); } catch { proposed = []; }
+  const propBySku = Object.fromEntries((proposed||[]).map(p => [p.sku, p.qty_delivered]));
+  const rows = (items||[]).map(i => {
+    const dispatched = i.qty_ordered;
+    const delivered = propBySku[i.sku] != null ? propBySku[i.sku] : dispatched;
+    const delta = delivered - dispatched;
+    const col = delta === 0 ? 'inherit' : (delta < 0 ? 'var(--warning)' : 'var(--danger)');
+    return `<tr><td><b>${i.sku}</b></td><td>${h(i.name)}</td>
+      <td class="u-center">${dispatched}</td>
+      <td class="u-center"><b>${delivered}</b></td>
+      <td class="u-center" style="color:${col};font-weight:600">${delta>0?'+':''}${delta}</td></tr>`;
+  }).join('');
+  const voice = (docs||[]).filter(d => d.doc_type === 'voice');
+  const players = voice.length ? voice.map(d => {
+    const src = String(d.content_b64||'').startsWith('data:') ? d.content_b64 : `data:${d.mime_type||'audio/webm'};base64,${d.content_b64}`;
+    return `<audio controls src="${src}" style="width:100%;height:38px;margin-top:6px"></audio>`;
+  }).join('') : '<div style="color:var(--text-muted);font-size:.82rem">No voice note attached</div>';
+  openModal(`Review Delivery — ${dc.dc_number||dcId}`, `
+    <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px">
+      ${h(dc.client_name||'')} · Order ${dc.order_id||'—'} · submitted by ${h(dc.variance_by||'—')}
+    </div>
+    <table class="table" style="margin-bottom:12px">
+      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Delivered</th><th class="u-center">Δ</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${dc.variance_note?`<div style="font-size:.85rem;margin-bottom:8px"><b>Note:</b> ${h(dc.variance_note)}</div>`:''}
+    <div style="font-weight:600;font-size:.8rem;margin-bottom:2px">🎙 Driver's voice explanation</div>
+    ${players}
+  `,
+  `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+   <button class="btn btn-danger" ${dataAct('confirmDeliveryDecision', dcId, 'reject')}>Reject</button>
+   <button class="btn btn-success" ${dataAct('confirmDeliveryDecision', dcId, 'approve')}>Approve &amp; Deliver</button>`);
+}
+
+async function confirmDeliveryDecision(dcId, decision) {
+  const res = await api(`/delivery-challans/${dcId}/deliver-decision`, { method:'POST', body: JSON.stringify({ decision }) });
+  if (!res) return;
+  closeModal();
+  showToast(decision === 'approve' ? `Delivery approved${res.order_closed?' — order closed':''}` : 'Delivery rejected — sent back for re-delivery', decision === 'approve' ? 'success' : 'info');
+  if (APP.page === 'deliveries' || APP.page === 'warehouse') navigate(APP.page);
+  else switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
 }
 
 function markPOD(dcId)  { uploadDCDocModal(dcId, 'pod'); }
