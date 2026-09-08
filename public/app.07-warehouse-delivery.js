@@ -348,16 +348,19 @@ function renderWHPickList(el, picklist) {
           </div>
           <div class="table-wrap">
             <table class="table" style="margin:0">
-              <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Stock Available</th>${order.status==='PICKED'?'<th>Bin Picked From</th>':''}</tr></thead>
+              <thead><tr><th>Item Name</th><th>SKU</th><th>Qty Required</th><th>Qty Picked</th><th>Stock Available</th><th>Bin Picked From</th></tr></thead>
               <tbody>${order.items.map(item=>`<tr>
                 <td><b>${h(item.item_name)}</b></td>
                 <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
                 <td>${item.qty}</td>
+                <td>${item.picked_qty!=null
+                  ? `<b style="color:${item.picked_qty<item.qty?'var(--warning)':'var(--success)'}">${item.picked_qty}</b>${item.picked_qty<item.qty?`<span style="margin-left:4px;font-size:.75rem;color:var(--warning)">(short by ${item.qty-item.picked_qty})</span>`:''}`
+                  : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="color:${item.stock_available<item.qty?'var(--danger)':'var(--success)'}">
                   <b>${item.stock_available}</b>
                   ${item.stock_available<item.qty?`<span style="margin-left:4px;font-size:.75rem">(short by ${item.qty-item.stock_available})</span>`:''}
                 </td>
-                ${order.status==='PICKED'?`<td>${item.bin_code||'—'}</td>`:''}
+                <td>${item.bin_code||'—'}</td>
               </tr>`).join('')}
               </tbody>
             </table>
@@ -601,13 +604,16 @@ function updatePickSummary() {
 
 async function confirmPick(orderId) {
   const qtyInputs = document.querySelectorAll('.pick-qty');
+  // Send EVERY line with its actual picked qty (blank → 0), so a short/zero pick is
+  // recorded against that line instead of being dropped and later defaulting to the
+  // full ordered quantity.
   const items = Array.from(qtyInputs).map(inp => {
     const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
     const qty = parseInt(inp.value) || 0;
     return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
-  }).filter(i => i.qty > 0);
-  if (!items.length) { showToast('Enter at least 1 item to pick', 'error'); return; }
-  const hasPartial = Array.from(qtyInputs).some(inp => +inp.value < +inp.dataset.ordered);
+  });
+  if (!items.some(i => i.qty > 0)) { showToast('Enter a quantity for at least one item', 'error'); return; }
+  const hasPartial = Array.from(qtyInputs).some(inp => (parseInt(inp.value) || 0) < +inp.dataset.ordered);
   const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial }) });
   if (res) {
     showToast(`Order ${orderId} marked as PICKED${hasPartial ? ' (partial)' : ''}`);

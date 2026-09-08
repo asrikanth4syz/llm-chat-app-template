@@ -2038,6 +2038,38 @@ describe("Nav badge counts", () => {
   });
 });
 
+// ── Picking: a 0/blank line records as 0, never the ordered total ─────
+describe("Pick — zero/blank line records its actual qty", () => {
+  const pdb = env.DB as D1Database;
+  beforeAll(async () => {
+    await pdb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES (?,?,1)").bind("PK-CL", "Pick Co").run();
+    await pdb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now'))`).bind("PK-1", "PK-CL", "seed", "READY_TO_PICK", 1000, 0, 1000, "Regular").run();
+    await pdb.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)").bind("PK-OI-A", "PK-1", "PK-A", "Item A", 10, 10, 100).run();
+    await pdb.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)").bind("PK-OI-B", "PK-1", "PK-B", "Item B", 5, 10, 50).run();
+  });
+
+  it("records a 0-qty line as 0 (not the ordered total) and the picklist surfaces it", async () => {
+    const res = await post("/api/orders/PK-1/pick", { items: [
+      { sku: "PK-A", name: "Item A", qty: 10, bin_code: "" },
+      { sku: "PK-B", name: "Item B", qty: 0,  bin_code: "" },
+    ], partial: true }, adminToken);
+    expect(res.status).toBe(200);
+
+    // Allocations record the actual picked qty per line, 0 included.
+    const { results } = await pdb.prepare("SELECT sku, qty FROM order_allocations WHERE order_id='PK-1'").all() as { results: {sku:string; qty:number}[] };
+    const bySku = Object.fromEntries(results.map(r => [r.sku, r.qty]));
+    expect(bySku["PK-A"]).toBe(10);
+    expect(bySku["PK-B"]).toBe(0); // recorded as 0 — NOT defaulted to the ordered 5
+
+    // ...and the picklist exposes picked_qty so a short/zero pick is visible.
+    const rows = await (await get("/api/orders/picklist", adminToken)).json() as { order_id:string; sku:string; picked_qty:number|null }[];
+    const mine = rows.filter(r => r.order_id === "PK-1");
+    expect(mine.find(r => r.sku === "PK-A")?.picked_qty).toBe(10);
+    expect(mine.find(r => r.sku === "PK-B")?.picked_qty).toBe(0);
+  });
+});
+
 // ── Reorder skip-open-PO guard ───────────────────────────────────────
 describe("from-demand skip_open_po guard", () => {
   const rdb = env.DB as D1Database;
