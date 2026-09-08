@@ -216,6 +216,17 @@ async function nextPONumber(env: Env): Promise<string> {
   return `PO-${String(n).padStart(5, "0")}`;
 }
 
+// Gap-free, sequential delivery-challan numbers (e.g. DCN-00042) from an app_config
+// counter. The challan number is system-owned and assigned at creation, so the
+// dispatch step never asks an operator to type one (no duplicate identifier).
+async function nextDCNumber(env: Env): Promise<string> {
+  await env.DB.prepare("INSERT INTO app_config (key,value) VALUES ('dc_seq','0') ON CONFLICT(key) DO NOTHING").run();
+  await env.DB.prepare("UPDATE app_config SET value = CAST(value AS INTEGER)+1, updated_at=datetime('now') WHERE key='dc_seq'").run();
+  const row = await env.DB.prepare("SELECT value FROM app_config WHERE key='dc_seq'").first() as {value:string}|null;
+  const n = Number(row?.value) || 1;
+  return `DCN-${String(n).padStart(5, "0")}`;
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -1143,6 +1154,7 @@ export default {
       if (path.match(/^\/api\/standing-orders\/[^/]+\/skip$/)        && method==="POST") return handleSkipStandingOrder(request,env,path);
       if (path.match(/^\/api\/standing-orders\/[^/]+\/materialize$/) && method==="POST") return handleMaterializeStandingOrder(request,env,path);
       if (path==="/api/delivery-challans"                            && method==="GET")  return handleListDCs(request,env);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+$/)           && method==="GET")  return handleGetDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/partial$/)  && method==="POST") return handlePartialDelivery(request,env,path);
@@ -2511,8 +2523,9 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
       .filter(i => (i.qty as number) > 0);
     const totalQty = dispatchItems.reduce((s, i) => s + (i.qty as number), 0);
     const dcId = `DC-${Math.floor(Math.random()*9000+1000)}`;
-    await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
-      .bind(dcId, id, totalQty).run();
+    const dcNumber = await nextDCNumber(env); // system-owned challan number, never typed by an operator
+    await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)")
+      .bind(dcId, id, totalQty, dcNumber).run();
     for (const item of dispatchItems) {
       await env.DB.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
         .bind(uid(), dcId, item.sku, item.name, item.qty).run();
@@ -3455,6 +3468,20 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
   return json(results);
 }
 
+// GET /api/delivery-challans/:id — single challan (used to pre-fill the dispatch modal
+// so its logistics fields are entered once, then only confirmed on re-open).
+async function handleGetDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").pop()!;
+  const dc = await env.DB.prepare(
+    `SELECT dc.*, c.name as client_name FROM delivery_challans dc
+     LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id WHERE dc.id=?`
+  ).bind(id).first();
+  if (!dc) return json({error:"Not found"}, 404);
+  return json(dc);
+}
+
 async function handleBillDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -3577,8 +3604,9 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   if (shortItems.length > 0 && dc.order_id) {
     const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
     const remainingTotal = shortItems.reduce((s, i) => s + i.order_remaining, 0);
-    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)")
-      .bind(newDCId, dc.order_id, remainingTotal).run();
+    const newDCNumber = await nextDCNumber(env);
+    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)")
+      .bind(newDCId, dc.order_id, remainingTotal, newDCNumber).run();
     for (const r of shortItems) {
       await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
         .bind(uid(), newDCId, r.sku, r.name, r.order_remaining).run();
@@ -3675,7 +3703,8 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
     await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(dc.order_id).run();
     const remaining = total_qty - delivered_qty;
     const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
-    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,'SCHEDULED',?)").bind(newDCId, dc.order_id, remaining).run();
+    const newDCNumber = await nextDCNumber(env);
+    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)").bind(newDCId, dc.order_id, remaining, newDCNumber).run();
     // Create dc_items for the new DC with remaining qtys
     for (const item of dcItems) {
       const pendingQty = (item.qty_ordered as number) - Math.floor((item.qty_ordered as number) * ratio);
@@ -3695,7 +3724,7 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string};
+  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string;staff_id?:string;scheduled_time?:string};
 
   const dc = await env.DB.prepare("SELECT order_id, status FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string;status?:string}|null;
   if (!dc) return json({error:"Delivery challan not found"}, 404);
@@ -3718,8 +3747,11 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
     }
   }
 
-  await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,dispatched_at=datetime('now'),expected_delivery_date=? WHERE id=?")
-    .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, body.expected_delivery_date||null, id).run();
+  // Single, atomic dispatch capture — staff and scheduled time land here too, so the
+  // operator enters every logistics detail once, at gate-out (no earlier assign step,
+  // no follow-up PATCH). COALESCE keeps any value already on the challan if omitted.
+  await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,staff_id=COALESCE(?,staff_id),scheduled_time=COALESCE(?,scheduled_time),dispatched_at=datetime('now'),expected_delivery_date=? WHERE id=?")
+    .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, body.staff_id||null, body.scheduled_time||null, body.expected_delivery_date||null, id).run();
   if (dc.order_id) {
     await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status IN ('READY_TO_PICK','PARTIALLY_CLOSED')")
       .bind(dc.order_id).run();
