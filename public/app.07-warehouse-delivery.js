@@ -1242,18 +1242,27 @@ async function toggleDCItemsInline(dcId, btn) {
 }
 
 async function dispatchDCModal(dcId) {
-  const staff = await api('/staff') || [];
-  const staffOpts = staff.filter(s=>s.active && s.role==='delivery_staff')
-    .map(s=>`<option value="${s.id}">${h(s.name)}</option>`).join('');
-  openModal(`Dispatch DC — ${dcId}`,
-    `<p style="margin-bottom:12px;color:var(--text-muted)">Enter vehicle and driver details to dispatch DC <b>${dcId}</b>. Order status will advance to IN_SHIPMENT.</p>
-     <div class="form-group"><label>DC Number</label><input type="text" id="dp-dcnum" placeholder="e.g. 702037"></div>
+  // Single dispatch capture (gate-out): everything is entered once, here. The challan
+  // number is system-owned, so it's shown read-only, never typed. Existing values are
+  // pre-filled so re-opening never asks for the same detail twice.
+  const [staff, dc] = await Promise.all([
+    api('/staff').catch(()=>[]),
+    api(`/delivery-challans/${dcId}`).catch(()=>null)
+  ]);
+  const staffOpts = (staff||[]).filter(s=>s.active && s.role==='delivery_staff')
+    .map(s=>`<option value="${s.id}" ${dc&&dc.staff_id===s.id?'selected':''}>${h(s.name)}</option>`).join('');
+  const dcNumber = (dc && (dc.dc_number||dc.id)) || dcId;
+  const v = (x)=> x==null ? '' : String(x);
+  openModal(`Dispatch DC — ${dcNumber}`,
+    `<p style="margin-bottom:12px;color:var(--text-muted)">Confirm the vehicle and driver to dispatch this challan. The challan moves to <b>In Transit</b> and the order to <b>In Shipment</b>.</p>
+     <div class="form-group"><label>DC Number <span style="color:var(--text-muted);font-weight:400">— system-assigned</span></label>
+       <input type="text" value="${h(dcNumber)}" disabled style="background:var(--surface-2);color:var(--text-muted)"></div>
      <div class="form-group"><label>Assign Staff</label><select id="dp-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
-     <div class="form-group"><label>Scheduled Time</label><input type="time" id="dp-time"></div>
-     <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234"></div>
-     <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar"></div>
-     <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655"></div>
-     <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected"></div>`,
+     <div class="form-group"><label>Scheduled Time</label><input type="time" id="dp-time" value="${v(dc&&dc.scheduled_time)}"></div>
+     <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234" value="${v(dc&&dc.vehicle_no)}"></div>
+     <div class="form-group"><label>Driver Name</label><input type="text" id="dp-driver" placeholder="e.g. Rajesh Kumar" value="${v(dc&&dc.driver_name)}"></div>
+     <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655" value="${v(dc&&dc.driver_phone)}"></div>
+     <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected" value="${v(dc&&dc.expected_delivery_date)}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
 }
@@ -1263,29 +1272,25 @@ async function confirmDispatch(dcId) {
   const driver_name            = document.getElementById('dp-driver').value;
   const driver_phone           = document.getElementById('dp-phone').value;
   const expected_delivery_date = document.getElementById('dp-expected').value;
-  const dc_number              = document.getElementById('dp-dcnum').value;
   const staff_id               = document.getElementById('dp-staff').value;
   const scheduled_time         = document.getElementById('dp-time').value;
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
+  // One atomic dispatch call carries every logistics field — no follow-up PATCH.
   const res = await api('/delivery-challans/' + dcId + '/dispatch', {
     method:'POST',
-    body: JSON.stringify({vehicle_no, driver_name, driver_phone, expected_delivery_date: expected_delivery_date||null})
+    body: JSON.stringify({
+      vehicle_no, driver_name, driver_phone,
+      staff_id: staff_id||null, scheduled_time: scheduled_time||null,
+      expected_delivery_date: expected_delivery_date||null
+    })
   });
-  if (res) {
-    // Also PATCH dc_number, staff_id, scheduled_time
-    const patchBody = {};
-    if (dc_number) patchBody.dc_number = dc_number;
-    if (staff_id) patchBody.staff_id = staff_id;
-    if (scheduled_time) patchBody.scheduled_time = scheduled_time;
-    if (Object.keys(patchBody).length) {
-      await api(`/delivery-challans/${dcId}`, { method:'PATCH', body: JSON.stringify(patchBody) });
-    }
-    closeModal();
-    showToast(`DC ${dcId} dispatched — in transit`);
-    switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
-  } else {
-    closeModal();
-  }
+  closeModal();
+  if (!res) return;
+  showToast(`DC ${dcId} dispatched — in transit`);
+  // Refresh whatever view launched this so the "Dispatch" action disappears and the
+  // operator is never re-prompted for the same challan.
+  if (APP.page === 'deliveries' || APP.page === 'warehouse') navigate(APP.page);
+  else switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
 }
 
 async function markDelivered(dcId) {

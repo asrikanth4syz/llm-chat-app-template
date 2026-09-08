@@ -2070,6 +2070,50 @@ describe("Pick — zero/blank line records its actual qty", () => {
   });
 });
 
+// ── Dispatch: one capture, system-owned DC number ────────────────────
+describe("Dispatch — single capture with a system DC number", () => {
+  const ddb = env.DB as D1Database;
+  beforeAll(async () => {
+    await ddb.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES ('DSP-CL','Dispatch Co',1)").run();
+    await ddb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES ('DSP-1','DSP-CL','seed','PICKED',1000,0,1000,'Regular',datetime('now'))`).run();
+    await ddb.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('DSP-OI','DSP-1','DSP-A','Item A',4,10,40)").run();
+  });
+
+  it("auto-numbers the challan on IN_SHIPMENT and dispatches staff+time in one call", async () => {
+    const t = await post("/api/orders/DSP-1/transition", { to: "IN_SHIPMENT", note: "dispatch" }, adminToken);
+    expect(t.status).toBe(200);
+    const dc = await ddb.prepare("SELECT id, dc_number, status FROM delivery_challans WHERE order_id='DSP-1'").first() as { id:string; dc_number:string; status:string } | null;
+    expect(dc).toBeTruthy();
+    expect(String(dc!.dc_number)).toMatch(/^DCN-\d{5}$/); // system-assigned, never typed
+    expect(dc!.status).toBe("SCHEDULED");
+
+    // A single dispatch call carries staff_id + scheduled_time — no follow-up PATCH.
+    const d = await post(`/api/delivery-challans/${dc!.id}/dispatch`, {
+      vehicle_no: "MH12-AB-1234", driver_name: "Rajesh", staff_id: "stf-1", scheduled_time: "09:30",
+    }, adminToken);
+    expect(d.status).toBe(200);
+    const after = await ddb.prepare("SELECT status, vehicle_no, staff_id, scheduled_time FROM delivery_challans WHERE id=?").bind(dc!.id).first() as { status:string; vehicle_no:string; staff_id:string; scheduled_time:string };
+    expect(after.status).toBe("IN_TRANSIT");
+    expect(after.vehicle_no).toBe("MH12-AB-1234");
+    expect(after.staff_id).toBe("stf-1");
+    expect(after.scheduled_time).toBe("09:30");
+  });
+
+  it("GET /api/delivery-challans/:id returns the single challan for pre-fill", async () => {
+    await ddb.prepare(`INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,created_at)
+      VALUES ('DSP-2','DSP-CL','seed','PICKED',500,0,500,'Regular',datetime('now'))`).run();
+    await ddb.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('DSP-OI2','DSP-2','DSP-B','Item B',2,10,20)").run();
+    await post("/api/orders/DSP-2/transition", { to: "IN_SHIPMENT", note: "x" }, adminToken);
+    const dc = await ddb.prepare("SELECT id FROM delivery_challans WHERE order_id='DSP-2'").first() as { id:string };
+    const res = await get(`/api/delivery-challans/${dc.id}`, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { id:string; dc_number:string };
+    expect(body.id).toBe(dc.id);
+    expect(String(body.dc_number)).toMatch(/^DCN-/);
+  });
+});
+
 // ── Reorder skip-open-PO guard ───────────────────────────────────────
 describe("from-demand skip_open_po guard", () => {
   const rdb = env.DB as D1Database;
