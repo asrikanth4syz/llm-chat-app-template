@@ -437,7 +437,7 @@ async function renderOpsDashboard(el) {
 
   el.innerHTML = `
   <style>
-    .ct-kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
+    .ct-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
     .ct-kpi{position:relative;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px 15px 16px;cursor:pointer;overflow:hidden;text-align:left;font-family:inherit;transition:transform .16s cubic-bezier(.2,.7,.2,1),box-shadow .18s,border-color .15s}
     .ct-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac,var(--primary));opacity:.4;transition:opacity .18s}
     .ct-kpi:hover{transform:translateY(-3px);box-shadow:0 12px 26px -14px rgba(20,26,36,.28);border-color:var(--border-mid)}
@@ -534,7 +534,7 @@ async function renderOpsDashboard(el) {
     .tw-h .s{font-weight:900;width:30px;text-align:right;flex-shrink:0}
     .tw-h .pv{font-size:.64rem;color:var(--text-muted);width:52px;text-align:right;flex-shrink:0}
     @media(max-width:1050px){.tw-pulse{grid-template-columns:repeat(2,1fr)}}
-    @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:1050px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
     @media(max-width:700px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
     /* ── Part A restyle (presentation only) ── */
@@ -576,9 +576,9 @@ async function renderOpsDashboard(el) {
         { icon:CT_ICON.box,     label:'Total Orders',    value:totalOrders||0,     meta:`${pendingOrders||0} active`,                     state:'calm',                       nav:'orders',       trend:'totalOrders',    good:'up' },
         { icon:CT_ICON.clock,   label:'Pending Approval', value:pendingApproval||0, meta:`${pickedPending} picked · ${inShipment} transit`, state:pendingApproval>0?'warn':'calm', nav:'orders', click:'openPendingApprovals', pill:pendingApproval>0?'Action':null, trend:'pendingApproval', good:'down' },
         { icon:CT_ICON.alert,   label:'Due Line Items',   value:dueCount||0,        meta:`${pendingSupply?.kpis?.due_qty||0} units overdue`, state:dueCount>0?'crit':'calm', nav:'fulfilment', pill:dueCount>0?'Overdue':null,  trend:'dueItems',       good:'down' },
-        { icon:CT_ICON.receipt, label:'Pending Billing',  value:pendingDCBilling||0,meta:'DCs awaiting invoice',                          state:pendingDCBilling>0?'warn':'calm', nav:'dc_billing', pill:pendingDCBilling>0?'To bill':null, trend:'pendingBilling', good:'down' },
-        { icon:CT_ICON.bars,    label:'Low Stock SKUs',   value:lowStock||0,        meta:'reorder required',                              state:lowStock>0?'warn':'calm', nav:'inventory',  pill:lowStock>0?'Reorder':null,  trend:'lowStock',       good:'down' },
-        { icon:CT_ICON.life,    label:'Open Tickets',     value:openTickets||0,     meta:'support queue',                                 state:'info',                       nav:'service_desk', trend:'openTickets',    good:'down' },
+        // De-dup (A2): Pending Billing / Low Stock / Open Tickets live in the Action
+        // Required queue below — the KPI band's 4th tile is a health metric (in transit).
+        { icon:CT_ICON.truck,   label:'In Shipment',      value:inShipment||0,      meta:'orders in transit',                             state:'calm',                       nav:'fulfilment',   trend:'inShipment',     good:'up' },
       ];
       return tiles.map(t => { const c = TONE[t.state]; const flag = t.state==='warn'||t.state==='crit';
         return `<button class="ct-kpi${flag?' ct-flag':''}" style="--ac:${c.ac};--acbg:${c.bg};--acic:${c.ic}" ${t.click?dataAct(t.click):dataAct('navigate',t.nav)}>
