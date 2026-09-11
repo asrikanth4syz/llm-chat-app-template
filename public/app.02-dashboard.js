@@ -423,14 +423,15 @@ async function renderOpsDashboard(el) {
   const toPickCount     = byStatus['ACKNOWLEDGED']||0;
   const delayedDel      = pendingSupply?.kpis?.delayed_deliveries||0;
 
+  // Monochrome accent ramp (faint → solid) so stage size reads without a rainbow legend.
   const pipeline = [
-    { key:'SUBMITTED',        label:'Submitted',    color:'#3b82f6' },
-    { key:'ACKNOWLEDGED',     label:'To Pick',      color:'#8b5cf6' },
-    { key:'PICKED',           label:'Picked',       color:'#0d9488' },
-    { key:'IN_SHIPMENT',      label:'In Transit',   color:'#06b6d4' },
-    { key:'PARTIALLY_CLOSED', label:'Partial',      color:'#f59e0b' },
-    { key:'CLOSED',           label:'Closed',       color:'#16a34a' },
-    { key:'CANCELLED',        label:'Cancelled',    color:'#ef4444' },
+    { key:'SUBMITTED',        label:'Submitted',    color:'#C7CBEF' },
+    { key:'ACKNOWLEDGED',     label:'To Pick',      color:'#A6ADE6' },
+    { key:'PICKED',           label:'Picked',       color:'#818BD9' },
+    { key:'IN_SHIPMENT',      label:'In Transit',   color:'#5B67C9' },
+    { key:'PARTIALLY_CLOSED', label:'Partial',      color:'#404DB0' },
+    { key:'CLOSED',           label:'Closed',       color:'#2B3690' },
+    { key:'CANCELLED',        label:'Cancelled',    color:'#B8BDC8' },
   ];
   const pipeTotal = pipeline.reduce((s,p)=>s+(byStatus[p.key]||0),0)||1;
 
@@ -536,14 +537,19 @@ async function renderOpsDashboard(el) {
     @media(max-width:1280px){.ct-kpi-grid{grid-template-columns:repeat(3,1fr)}}
     @media(max-width:1050px){.ct-mid{grid-template-columns:1fr}.ct-mid-left{grid-template-columns:1fr 1fr}}
     @media(max-width:700px){.ct-kpi-grid{grid-template-columns:repeat(2,1fr)}.ct-mid-left{grid-template-columns:1fr}}
+    /* ── Part A restyle (presentation only) ── */
+    .ct-card-title{font-family:'Archivo',var(--font,inherit)}
+    .ct-kpi-val{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700;letter-spacing:-.02em}
+    .ct-action-val{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+    .ct-action-ico svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+    .ct-card--focus{border-color:var(--border-mid,var(--border-strong,#cdd2dd));box-shadow:0 2px 5px rgba(16,22,36,.06),0 18px 40px -20px rgba(16,22,36,.30)}
   </style>
 
   <!-- ── PAGE HEADER ── -->
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
-        <span style="font-size:1.4rem;font-weight:900;color:var(--navy);letter-spacing:-.03em">${(NAV[APP.user?.nav]||[]).find(i=>i.id==='dashboard')?.label || 'Control Tower'}</span>
-        <span style="background:#e8f0fb;color:var(--blue);border-radius:20px;padding:2px 9px;font-size:.65rem;font-weight:800;letter-spacing:.05em">LIVE</span>
+        <span style="font-family:'Archivo',var(--font,inherit);font-size:1.4rem;font-weight:800;color:var(--navy);letter-spacing:-.03em">${(NAV[APP.user?.nav]||[]).find(i=>i.id==='dashboard')?.label || 'Control Tower'}</span>
       </div>
       <div style="font-size:.8rem;color:var(--text-muted)">${new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
     </div>
@@ -558,11 +564,12 @@ async function renderOpsDashboard(el) {
   <!-- ── KPI TILES ── -->
   <div class="ct-kpi-grid">
     ${(() => {
+      // One brand accent for healthy tiles (calm/info); semantic amber/red only where a state is live.
       const TONE = {
-        calm: { ac:'#0d9488', bg:'#f0fdfa', ic:'#0f766e' },
-        warn: { ac:'#d97706', bg:'#fffbeb', ic:'#b45309' },
-        crit: { ac:'#dc2626', bg:'#fef2f2', ic:'#dc2626' },
-        info: { ac:'#2563eb', bg:'#eef4ff', ic:'#2563eb' },
+        calm: { ac:'#3b47b0', bg:'#eef0fb', ic:'#2b3690' },
+        warn: { ac:'#b26a0e', bg:'#faefdd', ic:'#b26a0e' },
+        crit: { ac:'#be3a2c', bg:'#fbe6e3', ic:'#be3a2c' },
+        info: { ac:'#3b47b0', bg:'#eef0fb', ic:'#2b3690' },
       };
       const trends = data.kpiTrends || null;
       const tiles = [
@@ -685,7 +692,7 @@ async function renderOpsDashboard(el) {
     </div>
 
     <!-- Action Required -->
-    <div class="ct-card">
+    <div class="ct-card ct-card--focus">
       <div class="ct-card-hd">
         <div>
           <div class="ct-card-title">Action Required</div>
@@ -695,17 +702,17 @@ async function renderOpsDashboard(el) {
       </div>
       <div style="padding:12px 14px">
         ${[
-          { label:'Pending Approval',   val:pendingApproval,   color:'#d97706', bg:'#fef3c7', icon:'⏳', page:'orders', click:'openPendingApprovals' },
-          { label:'Due Line Items',     val:dueCount,          color:'var(--danger)', bg:'#fee2e2', icon:'🚨', page:'fulfilment' },
-          { label:'Overdue Deliveries', val:delayedDel,        color:'var(--danger)', bg:'#fee2e2', icon:'🚚', page:'delivery'   },
-          { label:'Orders to Pick',     val:toPickCount,       color:'#8b5cf6', bg:'#f3e8ff', icon:'🏭', page:'warehouse'   },
-          { label:'Low Stock SKUs',     val:lowStock||0,       color:'#d97706', bg:'#fef3c7', icon:'📊', page:'inventory'   },
-          { label:'Pending Billing',    val:pendingDCBilling||0, color:'#2E75B6', bg:'#dbeafe', icon:'🧾', page:'dc_billing' },
-          { label:'Open Tickets',       val:openTickets||0,    color:'#7c3aed', bg:'#f3e8ff', icon:'🎫', page:'service_desk' },
+          { label:'Pending Approval',   val:pendingApproval,   color:'#b26a0e', bg:'#faefdd', icon:CT_ICON.clock,   page:'orders', click:'openPendingApprovals' },
+          { label:'Due Line Items',     val:dueCount,          color:'var(--danger)', bg:'#fbe6e3', icon:CT_ICON.alert,   page:'fulfilment' },
+          { label:'Overdue Deliveries', val:delayedDel,        color:'var(--danger)', bg:'#fbe6e3', icon:CT_ICON.truck,   page:'delivery'   },
+          { label:'Orders to Pick',     val:toPickCount,       color:'#2b3690', bg:'#eef0fb', icon:CT_ICON.pick,    page:'warehouse'   },
+          { label:'Low Stock SKUs',     val:lowStock||0,       color:'#b26a0e', bg:'#faefdd', icon:CT_ICON.bars,    page:'inventory'   },
+          { label:'Pending Billing',    val:pendingDCBilling||0, color:'#2b3690', bg:'#eef0fb', icon:CT_ICON.receipt, page:'dc_billing' },
+          { label:'Open Tickets',       val:openTickets||0,    color:'#2b3690', bg:'#eef0fb', icon:CT_ICON.ticket,  page:'service_desk' },
         ].map(a => {
           const hot = a.val > 0;
           return `<div class="ct-action${hot?' hot':''}" ${a.click?dataAct(a.click):dataAct('navigate',a.page)}>
-            <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'}">${a.icon}</div>
+            <div class="ct-action-ico" style="background:${hot?a.bg:'#f3f4f6'};color:${hot?a.color:'#9aa1ad'}"><svg viewBox="0 0 24 24">${a.icon}</svg></div>
             <div class="u-flex1">
               <div style="font-size:.82rem;font-weight:${hot?'600':'500'};color:${hot?'var(--text)':'var(--text-muted)'}">${a.label}</div>
             </div>
@@ -722,7 +729,7 @@ async function renderOpsDashboard(el) {
 
   // Render chart after DOM is ready
   const labels = ['SUBMITTED','ACKNOWLEDGED','PICKED','IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
-  const colors  = ['#3b82f6','#8b5cf6','#0d9488','#06b6d4','#f59e0b','#16a34a','#ef4444'];
+  const colors  = ['#C7CBEF','#A6ADE6','#818BD9','#5B67C9','#404DB0','#2B3690','#B8BDC8'];
   const counts  = labels.map(l => byStatus[l]||0);
   const ctx = document.getElementById('statusChart');
   if (ctx) {
