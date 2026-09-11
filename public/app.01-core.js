@@ -1192,7 +1192,7 @@ let _stepperCssDone = false;
 function injectStepperCss() {
   if (_stepperCssDone) return; _stepperCssDone = true;
   const css = `
-  .ostep{display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
+  .ophase{display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
   .ostep-node{display:flex;flex-direction:column;align-items:center;gap:5px;flex:0 0 auto;min-width:64px;text-align:center}
   .ostep-dot{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
     font-size:.85rem;border:2px solid var(--border);background:var(--surface,#fff);color:var(--text-muted);line-height:1}
@@ -1203,10 +1203,10 @@ function injectStepperCss() {
   .ostep-node.current .ostep-lbl{color:var(--primary)}
   .ostep-bar{flex:1 1 18px;height:3px;min-width:16px;background:var(--border);border-radius:2px;margin:0 -2px 18px}
   .ostep-bar.done{background:var(--success,#10b981)}
-  .ostep--compact .ostep-node{min-width:52px}
-  .ostep--compact .ostep-dot{width:24px;height:24px;font-size:.72rem}
-  .ostep--cancelled .ostep-node.cancelled .ostep-dot{background:var(--danger,#ef4444);border-color:var(--danger,#ef4444);color:#fff}
-  .ostep--cancelled .ostep-node.cancelled .ostep-lbl{color:var(--danger,#ef4444)}`;
+  .ophase--compact .ostep-node{min-width:52px}
+  .ophase--compact .ostep-dot{width:24px;height:24px;font-size:.72rem}
+  .ophase--cancelled .ostep-node.cancelled .ostep-dot{background:var(--danger,#ef4444);border-color:var(--danger,#ef4444);color:#fff}
+  .ophase--cancelled .ostep-node.cancelled .ostep-lbl{color:var(--danger,#ef4444)}`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
 // Reusable horizontal stepper for an order's lifecycle phase. `status` is any
@@ -1215,7 +1215,7 @@ function phaseStepper(status, opts = {}) {
   injectStepperCss();
   const cancelled = (status === 'CANCELLED' || status === 'REJECTED');
   const cur = orderPhaseIndex(status);
-  return `<div class="ostep${opts.compact ? ' ostep--compact' : ''}${cancelled ? ' ostep--cancelled' : ''}" role="list" aria-label="Order progress">
+  return `<div class="ophase${opts.compact ? ' ophase--compact' : ''}${cancelled ? ' ophase--cancelled' : ''}" role="list" aria-label="Order progress">
     ${ORDER_PHASES.map((p, i) => {
       const state = cancelled ? (i === 0 ? 'cancelled' : 'todo')
                   : i < cur ? 'done' : i === cur ? 'current' : 'todo';
