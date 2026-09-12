@@ -2985,7 +2985,24 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
 async function handleListVendors(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT * FROM vendors ORDER BY name").all();
+  // Enrich each vendor with purchase-order aggregates: committed spend, PO count,
+  // delivered-PO count (drives the "New — no history" rule), and last order date.
+  const {results} = await env.DB.prepare(`
+    SELECT v.*,
+      COALESCE(p.po_count,0)        AS po_count,
+      COALESCE(p.delivered_count,0) AS delivered_count,
+      COALESCE(p.spend,0)           AS spend,
+      p.last_order                  AS last_order
+    FROM vendors v
+    LEFT JOIN (
+      SELECT vendor_id,
+        COUNT(*) AS po_count,
+        SUM(CASE WHEN status IN ('RECEIVED','INVOICED','CLOSED','PAID') THEN 1 ELSE 0 END) AS delivered_count,
+        SUM(grand_total) AS spend,
+        MAX(created_at)  AS last_order
+      FROM purchase_orders GROUP BY vendor_id
+    ) p ON p.vendor_id = v.id
+    ORDER BY v.name`).all();
   return json(results);
 }
 

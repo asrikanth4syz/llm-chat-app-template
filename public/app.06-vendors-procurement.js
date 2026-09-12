@@ -24,12 +24,21 @@ async function renderVendors(el) {
     });
   }
 
+  if (!APP._vendorView) APP._vendorView = 'table';
   const vendors = applyFilters(allVendors);
   const activeVendors = allVendors.filter(v=>v.active!==0);
-  const avgOnTime  = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.on_time_rate||0),0)/activeVendors.length) : 0;
-  const avgFill    = activeVendors.length ? Math.round(activeVendors.reduce((s,v)=>s+(v.fill_rate||0),0)/activeVendors.length) : 0;
-  const atRisk     = activeVendors.filter(v=>(v.on_time_rate||0)<75||(v.fill_rate||0)<85).length;
+  // A vendor is "New" until it has at least one delivered PO — its 0% metrics are
+  // no-data, not failure, so they're excluded from the averages and the At-Risk count.
+  const hasHistory = v => (v.delivered_count||0) > 0;
+  const scored = activeVendors.filter(hasHistory);
+  const avgOnTime  = scored.length ? Math.round(scored.reduce((s,v)=>s+(v.on_time_rate||0),0)/scored.length) : 0;
+  const avgFill    = scored.length ? Math.round(scored.reduce((s,v)=>s+(v.fill_rate||0),0)/scored.length) : 0;
+  const isAtRisk   = v => hasHistory(v) && ((v.on_time_rate||0)<75 || (v.fill_rate||0)<85);
+  const atRisk     = activeVendors.filter(isAtRisk).length;
   const allCategories = [...new Set([...VENDOR_CATS, ...allVendors.flatMap(v=>(v.category||'').split(',').map(s=>s.trim())).filter(Boolean)])].sort();
+  const inr = n => '₹' + (Number(n)||0).toLocaleString('en-IN', {maximumFractionDigits:0});
+  const inrShort = n => { const x=Number(n)||0; return x>=1e7?'₹'+(x/1e7).toFixed(1)+'Cr':x>=1e5?'₹'+(x/1e5).toFixed(1)+'L':x>=1e3?'₹'+(x/1e3).toFixed(0)+'k':'₹'+x; };
+  const ratingChip = v => `<span title="${(+v.rating||0).toFixed(1)} / 5" style="display:inline-flex;align-items:center;gap:3px;font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;color:var(--navy);background:var(--surface-2,#f1f3f7);border:1px solid var(--border);border-radius:6px;padding:2px 7px"><span style="color:var(--amber,#d97706)">★</span>${(+v.rating||0).toFixed(1)}</span>`;
 
   function scoreColor(val) {
     return val >= 90 ? 'var(--success)' : val >= 75 ? '#d97706' : 'var(--danger)';
@@ -43,12 +52,24 @@ async function renderVendors(el) {
   }
 
   function vendorCard(v) {
+    const hist        = hasHistory(v);
     const onTimeColor = scoreColor(v.on_time_rate||0);
     const fillColor   = scoreColor(v.fill_rate||0);
-    const isAtRisk    = (v.on_time_rate||0)<75 || (v.fill_rate||0)<85;
+    const atRiskV     = isAtRisk(v);
     const initials    = v.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+    const topColor    = atRiskV?'var(--danger)':hist?'var(--success)':'var(--blue,#2563eb)';
+    // No delivered POs yet → show "—" (no data), not a misleading 0% bar.
+    const metric = (label, rate, color) => hist
+      ? `<div>
+          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px"><span>${label}</span><span style="font-weight:700;color:${color}">${pct(rate||0)}</span></div>
+          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden"><div style="height:100%;width:${rate||0}%;background:${color};border-radius:3px"></div></div>
+        </div>`
+      : `<div>
+          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px"><span>${label}</span><span style="font-weight:700;color:var(--text-muted)">—</span></div>
+          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden"></div>
+        </div>`;
     return `
-    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${isAtRisk?'var(--danger)':'var(--success)'}">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${topColor}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
@@ -57,36 +78,18 @@ async function renderVendors(el) {
             ${v.vendor_code?`<div style="font-family:ui-monospace,monospace;font-size:.68rem;font-weight:700;letter-spacing:.03em;color:var(--text-muted);margin-top:1px">${v.vendor_code}</div>`:''}
             <div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
               ${(v.category||'—').split(',').filter(Boolean).map(c=>`<span style="font-size:.65rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.trim()}</span>`).join('')}
-              ${isAtRisk?`<span style="font-size:.66rem;font-weight:700;background:var(--danger-bg);color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
+              ${atRiskV?`<span style="font-size:.66rem;font-weight:700;background:var(--danger-bg);color:var(--danger);border-radius:4px;padding:1px 6px">⚠ At Risk</span>`:''}
+              ${!hist?`<span style="font-size:.66rem;font-weight:700;background:#e8f0fb;color:var(--blue,#2563eb);border-radius:4px;padding:1px 6px" title="No delivered purchase orders yet">New</span>`:''}
             </div>
           </div>
         </div>
-        <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:.76rem">${starRating(v.rating||0)}</div>
-          <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">${(+v.rating||0).toFixed(1)} / 5.0</div>
-        </div>
+        <div style="text-align:right;flex-shrink:0">${ratingChip(v)}</div>
       </div>
 
       <!-- Performance metrics -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px">
-            <span>On-time Rate</span>
-            <span style="font-weight:700;color:${onTimeColor}">${pct(v.on_time_rate||0)}</span>
-          </div>
-          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-            <div style="height:100%;width:${v.on_time_rate||0}%;background:${onTimeColor};border-radius:3px"></div>
-          </div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-muted);margin-bottom:3px">
-            <span>Fill Rate</span>
-            <span style="font-weight:700;color:${fillColor}">${pct(v.fill_rate||0)}</span>
-          </div>
-          <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden">
-            <div style="height:100%;width:${v.fill_rate||0}%;background:${fillColor};border-radius:3px"></div>
-          </div>
-        </div>
+        ${metric('On-time Rate', v.on_time_rate, onTimeColor)}
+        ${metric('Fill Rate', v.fill_rate, fillColor)}
       </div>
 
       <!-- Meta row -->
@@ -108,6 +111,47 @@ async function renderVendors(el) {
         <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>New PO</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('openVendorFeedbackModal', v.id, v.name)}>Rate</button>
       </div>
+    </div>`;
+  }
+
+  // Dense, comparison-first table view (the "database" view). Same New rule as the
+  // cards: a vendor with no delivered PO shows "—", never a false 0%.
+  function vendorTableHTML(list) {
+    const th = (label, right) => `<th style="text-align:${right?'right':'left'};padding:10px 12px;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);white-space:nowrap;position:sticky;top:0;background:var(--surface-2,#f1f3f7);border-bottom:1px solid var(--border)">${label}</th>`;
+    const cell = (rate, hist) => hist ? `<b style="color:${scoreColor(rate||0)}">${pct(rate||0)}</b>` : `<span style="color:var(--text-muted)">—</span>`;
+    const rows = list.map(v => {
+      const hist = hasHistory(v), risk = isAtRisk(v);
+      const initials = v.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+      const status = risk
+        ? `<span style="font-size:.64rem;font-weight:700;color:var(--danger);background:var(--danger-bg);border-radius:20px;padding:2px 9px;white-space:nowrap">⚠ At Risk</span>`
+        : !hist
+          ? `<span style="font-size:.64rem;font-weight:700;color:var(--blue,#2563eb);background:#e8f0fb;border-radius:20px;padding:2px 9px">New</span>`
+          : `<span style="font-size:.64rem;font-weight:700;color:var(--success);background:#dcfce7;border-radius:20px;padding:2px 9px">Healthy</span>`;
+      const mono = 'font-family:ui-monospace,monospace;font-size:.8rem;font-variant-numeric:tabular-nums';
+      return `<tr data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}" style="border-bottom:1px solid var(--border)">
+        <td style="padding:9px 12px"><div style="display:flex;align-items:center;gap:10px">
+          <div style="width:30px;height:30px;border-radius:7px;background:var(--navy);color:#fff;font-size:.66rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${initials}</div>
+          <div style="min-width:0"><div style="font-weight:700;font-size:.84rem;color:var(--navy);white-space:nowrap">${h(v.name)}</div>
+          <div style="font-family:ui-monospace,monospace;font-size:.62rem;color:var(--text-muted)">${v.vendor_code||''}${v.category?` · ${(v.category||'').split(',')[0].trim()}`:''}</div></div>
+        </div></td>
+        <td style="padding:9px 12px;text-align:right">${cell(v.on_time_rate, hist)}</td>
+        <td style="padding:9px 12px;text-align:right">${cell(v.fill_rate, hist)}</td>
+        <td style="padding:9px 12px;text-align:right;${mono}">${v.avg_lead_days!=null&&v.avg_lead_days!==''?v.avg_lead_days+'d':'—'}</td>
+        <td style="padding:9px 12px;text-align:right">${ratingChip(v)}</td>
+        <td style="padding:9px 12px;text-align:right;${mono};font-weight:700">${(v.po_count||0)>0?inrShort(v.spend):'—'}</td>
+        <td style="padding:9px 12px;text-align:right;${mono}">${v.po_count||0}</td>
+        <td style="padding:9px 12px;text-align:right;font-family:ui-monospace,monospace;font-size:.74rem;color:var(--text-muted)">${v.last_order?fmtDate(v.last_order):'—'}</td>
+        <td style="padding:9px 12px">${status}</td>
+        <td style="padding:9px 12px;text-align:right;white-space:nowrap">
+          <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
+          <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>PO</button>
+        </td></tr>`;
+    }).join('');
+    return `<div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.06)">
+      <table style="width:100%;min-width:840px;border-collapse:collapse">
+        <thead><tr>${th('Vendor')}${th('On-time',1)}${th('Fill',1)}${th('Lead',1)}${th('Rating',1)}${th('Spend',1)}${th('POs',1)}${th('Last order',1)}${th('Status')}${th('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>`;
   }
 
@@ -162,6 +206,10 @@ async function renderVendors(el) {
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
     </label>
     <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" ${dataAct('clearVendorSearch')}>Clear</button>
+    <div style="display:inline-flex;background:var(--surface-2,#f1f3f7);border:1px solid var(--border);border-radius:8px;padding:2px;margin-left:auto">
+      <button class="btn btn-sm" style="border:none;background:${APP._vendorView!=='cards'?'var(--surface)':'transparent'};box-shadow:${APP._vendorView!=='cards'?'0 1px 2px rgba(0,0,0,.12)':'none'};color:var(--navy);font-size:.76rem;padding:5px 12px" ${dataAct('setVendorView','table')}>▤ Table</button>
+      <button class="btn btn-sm" style="border:none;background:${APP._vendorView==='cards'?'var(--surface)':'transparent'};box-shadow:${APP._vendorView==='cards'?'0 1px 2px rgba(0,0,0,.12)':'none'};color:var(--navy);font-size:.76rem;padding:5px 12px" ${dataAct('setVendorView','cards')}>▦ Cards</button>
+    </div>
   </div>
 
   <!-- Summary tiles -->
@@ -185,14 +233,18 @@ async function renderVendors(el) {
     </div>
   </div>
 
-  <!-- Vendor cards -->
+  <!-- Vendor list — table (database) or cards, at-risk first then rating -->
   <div id="vendor-no-match" style="text-align:center;padding:40px;color:var(--text-muted);display:${vendors.length===0?'block':'none'}">No vendors match your search.</div>
-  <div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
-    ${allVendors.sort((a,b)=>{
-      const aRisk = ((a.on_time_rate||0)<75||(a.fill_rate||0)<85)?1:0;
-      const bRisk = ((b.on_time_rate||0)<75||(b.fill_rate||0)<85)?1:0;
-      return bRisk - aRisk || (b.rating||0)-(a.rating||0);
-    }).map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}">${vendorCard(v)}</div>`).join('')}
+  <div id="vendor-list">
+    ${(() => {
+      const sorted = [...allVendors].sort((a,b)=>{
+        const ar = isAtRisk(a)?1:0, br = isAtRisk(b)?1:0;
+        return br - ar || (b.rating||0)-(a.rating||0);
+      });
+      return APP._vendorView==='cards'
+        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}">${vendorCard(v)}</div>`).join('')}</div>`
+        : vendorTableHTML(sorted);
+    })()}
   </div>
   `;
   APP._allVendors = allVendors;
@@ -206,7 +258,7 @@ function filterVendorCards() {
   APP._vendorSearch = q;
   APP._vendorLoc    = loc;
   let visible = 0;
-  document.querySelectorAll('#vendor-cards-grid > [data-vname]').forEach(el => {
+  document.querySelectorAll('#vendor-list [data-vname]').forEach(el => {
     const nameMatch = !q || el.dataset.vname.includes(q) || el.dataset.vcat.includes(q);
     const locMatch  = !loc || el.dataset.vloc.includes(loc);
     const catMatch  = !cat || el.dataset.vcat.includes(cat.toLowerCase());
@@ -219,6 +271,12 @@ function filterVendorCards() {
   if (noMatch) noMatch.style.display = visible === 0 ? 'block' : 'none';
   const clearBtn = document.getElementById('vendor-clear-btn');
   if (clearBtn) clearBtn.style.display = (q||loc||cat) ? '' : 'none';
+}
+
+// Switch the vendor directory between the table (database) view and cards, then re-render.
+function setVendorView(view) {
+  APP._vendorView = view === 'cards' ? 'cards' : 'table';
+  navigate('vendors');
 }
 
 const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationery'];
