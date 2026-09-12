@@ -338,6 +338,48 @@ async function handleAllocateDC(request: Request, env: Env): Promise<Response> {
   return json({ number: res.number, fy: res.fy, class: res.klass });
 }
 
+// POST /api/delivery-challans/ad-hoc — Phase 1: create a challan-first DC (no
+// order behind it). Draws its number from the active FY series for the
+// category's class. Body: { category, client_name, items_text?, notes?,
+// delivery_person? }. 409 when the FY series is not set up.
+async function handleCreateAdHocDC(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON body" }, 400); }
+
+  const category = String(body.category || "").trim();
+  if (!category) return json({ error: "category is required" }, 400);
+  const client_name = String(body.client_name || "").trim();
+  if (!client_name) return json({ error: "client_name is required" }, 400);
+  const items_text = String(body.items_text || "").trim();
+  const notes = String(body.notes || "").trim();
+  const delivery_person = String(body.delivery_person || "").trim();
+
+  const alloc = await allocateDCSeriesNumber(env, category);
+  if (alloc.error) return json({ error: alloc.error, needs_series: true, fy: alloc.fy }, 409);
+  const dcNo = String(alloc.number);
+  const id = `dc${uid().slice(0, 10)}`;
+  await env.DB.prepare(`INSERT INTO delivery_challans
+    (id, order_id, status, dc_number, ad_hoc, dc_class, category, client_name, items_text, notes, driver_name, dispatched_at)
+    VALUES (?, '', 'DISPATCHED', ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+    .bind(id, dcNo, alloc.klass, category, client_name, items_text || null, notes || null, delivery_person || null).run();
+  await audit(env, user, "CREATE_ADHOC_DC", "delivery_challan", id, undefined, `${dcNo} · ${category}`);
+  return json({ id, dc_number: dcNo, class: alloc.klass, category, client_name, status: "DISPATCHED" }, 201);
+}
+
+// GET /api/delivery-challans/ad-hoc — the ad-hoc DC register (most recent first).
+async function handleListAdHocDCs(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_number, dc_class, category, client_name, items_text, status, dispatched_at, delivered_at, notes
+     FROM delivery_challans WHERE ad_hoc=1 ORDER BY dispatched_at DESC, dc_number DESC LIMIT 200`
+  ).all();
+  return json(results);
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -1030,7 +1072,12 @@ async function fixCategoryNames(env: Env): Promise<void> {
     // or ops-admin (warehouse manager) to approve, with the driver's voice explanation,
     // before the challan is marked DELIVERED.
     "delivery_approval TEXT", "variance_note TEXT", "variance_payload TEXT",
-    "variance_by TEXT", "variance_at TEXT", "variance_reviewed_by TEXT", "variance_reviewed_at TEXT"]) {
+    "variance_by TEXT", "variance_at TEXT", "variance_reviewed_by TEXT", "variance_reviewed_at TEXT",
+    // Phase 1: challan-first (ad-hoc) DCs — no order behind them. dc_class links
+    // the DC to its number series; client_name/items_text/category/notes carry the
+    // detail an order would otherwise supply.
+    "ad_hoc INTEGER DEFAULT 0", "dc_class TEXT", "category TEXT",
+    "client_name TEXT", "items_text TEXT", "notes TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -1259,6 +1306,8 @@ export default {
       if (path==="/api/dc-series"          && method==="GET")  return handleListDCSeries(request,env);
       if (path==="/api/dc-series/start-fy" && method==="POST") return handleStartFYSeries(request,env);
       if (path==="/api/dc-series/allocate" && method==="POST") return handleAllocateDC(request,env);
+      if (path==="/api/delivery-challans/ad-hoc" && method==="POST") return handleCreateAdHocDC(request,env);
+      if (path==="/api/delivery-challans/ad-hoc" && method==="GET")  return handleListAdHocDCs(request,env);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);

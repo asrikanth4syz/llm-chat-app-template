@@ -689,6 +689,45 @@ describe("DC Number Series (Phase 0)", () => {
   });
 });
 
+describe("Ad-hoc DC (Phase 1)", () => {
+  it("creates a challan-first DC numbered from the FY series and lists it", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+
+    const res = await post("/api/delivery-challans/ad-hoc",
+      { category: "Consumables", client_name: "Indus Foods", items_text: "Water 20L ×40", delivery_person: "Ravi" }, adminToken);
+    expect(res.status).toBe(201);
+    const dc = await res.json() as { dc_number: string; class: string };
+    expect(dc.dc_number).toBe("700933");      // continues the 7xxxxx series
+    expect(dc.class).toBe("CONSUMABLE");
+
+    // Returnable-Sample draws from the 8xxxxx series.
+    const g = await (await post("/api/delivery-challans/ad-hoc",
+      { category: "Returnable-Sample", client_name: "Marina Retail", items_text: "Sampler ×6" }, adminToken)).json() as { dc_number: string; class: string };
+    expect(g.dc_number).toBe("80056");
+    expect(g.class).toBe("GIFTING");
+
+    const list = await (await get("/api/delivery-challans/ad-hoc", adminToken)).json() as Array<{dc_number:string;client_name:string}>;
+    expect(list.length).toBeGreaterThanOrEqual(2);
+    expect(list.some(d => d.dc_number === "700933" && d.client_name === "Indus Foods")).toBe(true);
+
+    // The row is stored as an ad-hoc challan with no order behind it.
+    const row = await env.DB.prepare("SELECT ad_hoc, order_id, dc_class FROM delivery_challans WHERE dc_number='700933'").first() as {ad_hoc:number;order_id:string;dc_class:string};
+    expect(row.ad_hoc).toBe(1);
+    expect(row.order_id).toBe("");
+    expect(row.dc_class).toBe("CONSUMABLE");
+  });
+
+  it("requires client + category and 409s when the FY series is not set up", async () => {
+    const noClient = await post("/api/delivery-challans/ad-hoc", { category: "Consumables" }, adminToken);
+    expect(noClient.status).toBe(400);
+    await env.DB.prepare("DELETE FROM dc_series").run();
+    const noSeries = await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "X" }, adminToken);
+    expect(noSeries.status).toBe(409);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
