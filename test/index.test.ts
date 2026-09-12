@@ -429,6 +429,37 @@ describe("Vendors", () => {
     expect(res.status).toBe(401);
   });
 
+  it("GET /api/vendors/paged — paginates, clamps, searches by brand/item, and returns meta", async () => {
+    const vdb = env.DB as D1Database;
+    for (let i = 1; i <= 5; i++) {
+      await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active,rating) VALUES (?,?,?,1,?)")
+        .bind("VPG-" + i, "PagedVendor " + i, "Beverages", 5 - i * 0.1).run();
+    }
+    await vdb.prepare("INSERT OR REPLACE INTO vendor_products (id,vendor_id,name) VALUES ('VPGP-1','VPG-3','Zephyr Cola 500ml')").run();
+
+    const p1 = await (await get("/api/vendors/paged?size=2&page=1&sort=name", adminToken)).json() as
+      { rows: Array<{id:string}>; total:number; page:number; pages:number; size:number; meta:{total_vendors:number;categories:string[];avg_on_time:number;at_risk:number} };
+    expect(p1.size).toBe(2);
+    expect(p1.rows.length).toBe(2);                       // only the page, not all
+    expect(p1.total).toBeGreaterThanOrEqual(5);
+    expect(p1.pages).toBeGreaterThanOrEqual(3);
+    expect(p1.meta.total_vendors).toBeGreaterThanOrEqual(5);
+    expect(Array.isArray(p1.meta.categories)).toBe(true);
+
+    // Page beyond the last is clamped to the last page.
+    const pLast = await (await get("/api/vendors/paged?size=2&page=999", adminToken)).json() as {page:number;pages:number};
+    expect(pLast.page).toBe(pLast.pages);
+
+    // Full-text search matches a catalogue item name via vendor_products.
+    const s = await (await get("/api/vendors/paged?q=zephyr", adminToken)).json() as {rows:Array<{id:string}>;total:number};
+    expect(s.total).toBeGreaterThanOrEqual(1);
+    expect(s.rows.some(r => r.id === "VPG-3")).toBe(true);
+  });
+
+  it("GET /api/vendors/paged — unauthenticated returns 401", async () => {
+    expect((await get("/api/vendors/paged")).status).toBe(401);
+  });
+
   it("POST /api/vendors — assigns a unique VDR-YYYY-NNNNN vendor code that increments", async () => {
     const r1 = await post("/api/vendors", { name: "Code Vendor A", category: "Beverages" }, adminToken);
     const r2 = await post("/api/vendors", { name: "Code Vendor B", category: "Beverages" }, adminToken);

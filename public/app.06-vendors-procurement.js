@@ -2,40 +2,39 @@
    VENDORS
    ============================================================ */
 async function renderVendors(el) {
-  const allVendors = await api('/vendors');
-  if (!allVendors) return;
-
-  // State for filtering
-  if (!APP._vendorSearch) APP._vendorSearch = '';
-  if (!APP._vendorCat) APP._vendorCat = '';
-  if (!APP._vendorLoc) APP._vendorLoc = '';
-  if (!APP._vendorShowInactive) APP._vendorShowInactive = false;
-
-  function applyFilters(list) {
-    const q = (APP._vendorSearch||'').toLowerCase();
-    const cat = APP._vendorCat||'';
-    const loc = (APP._vendorLoc||'').toLowerCase();
-    return list.filter(v => {
-      if (!APP._vendorShowInactive && v.active===0) return false;
-      if (q && !v.name.toLowerCase().includes(q) && !(v.category||'').toLowerCase().includes(q)) return false;
-      if (cat && !(v.category||'').split(',').map(s=>s.trim()).includes(cat)) return false;
-      if (loc && !(v.location||'').toLowerCase().includes(loc)) return false;
-      return true;
-    });
-  }
-
+  // State
+  if (APP._vendorSearch == null) APP._vendorSearch = '';
+  if (APP._vendorCat == null) APP._vendorCat = '';
+  if (APP._vendorLoc == null) APP._vendorLoc = '';
+  if (APP._vendorShowInactive == null) APP._vendorShowInactive = false;
   if (!APP._vendorView) APP._vendorView = 'table';
-  const vendors = applyFilters(allVendors);
-  const activeVendors = allVendors.filter(v=>v.active!==0);
-  // A vendor is "New" until it has at least one delivered PO — its 0% metrics are
-  // no-data, not failure, so they're excluded from the averages and the At-Risk count.
+  if (APP._vendorSort == null) APP._vendorSort = 'risk';
+  if (!APP._vendorPage) APP._vendorPage = 1;
+  const PAGE_SIZE = 50;
+
+  // Server-side page fetch — the directory scales to ~1,000+ vendors, so only the
+  // current page ships to the browser. The server filters, sorts and paginates,
+  // and returns directory-wide KPIs (meta) so the summary tiles stay stable.
+  const _p = new URLSearchParams({ page: APP._vendorPage, size: PAGE_SIZE, sort: APP._vendorSort || 'risk' });
+  if (APP._vendorSearch) _p.set('q', APP._vendorSearch);
+  if (APP._vendorCat) _p.set('cat', APP._vendorCat);
+  if (APP._vendorLoc) _p.set('loc', APP._vendorLoc);
+  if (APP._vendorShowInactive) _p.set('inactive', '1');
+  const data = await api('/vendors/paged?' + _p.toString());
+  if (!data) return;
+  const pageVendors = data.rows || [];
+  const meta = data.meta || {};
+  APP._vendorPage = data.page || 1;
+
+  // A vendor is "New" until it has at least one delivered PO — 0% metrics are
+  // no-data, not failure. Directory KPIs come from meta (whole active set).
   const hasHistory = v => (v.delivered_count||0) > 0;
-  const scored = activeVendors.filter(hasHistory);
-  const avgOnTime  = scored.length ? Math.round(scored.reduce((s,v)=>s+(v.on_time_rate||0),0)/scored.length) : 0;
-  const avgFill    = scored.length ? Math.round(scored.reduce((s,v)=>s+(v.fill_rate||0),0)/scored.length) : 0;
   const isAtRisk   = v => hasHistory(v) && ((v.on_time_rate||0)<75 || (v.fill_rate||0)<85);
-  const atRisk     = activeVendors.filter(isAtRisk).length;
-  const allCategories = [...new Set([...VENDOR_CATS, ...allVendors.flatMap(v=>(v.category||'').split(',').map(s=>s.trim())).filter(Boolean)])].sort();
+  const avgOnTime  = meta.avg_on_time || 0;
+  const avgFill    = meta.avg_fill || 0;
+  const atRisk     = meta.at_risk || 0;
+  const totalVendors = meta.total_vendors || 0;
+  const allCategories = [...new Set([...VENDOR_CATS, ...(meta.categories||[])])].sort();
   const inr = n => '₹' + (Number(n)||0).toLocaleString('en-IN', {maximumFractionDigits:0});
   const inrShort = n => { const x=Number(n)||0; return x>=1e7?'₹'+(x/1e7).toFixed(1)+'Cr':x>=1e5?'₹'+(x/1e5).toFixed(1)+'L':x>=1e3?'₹'+(x/1e3).toFixed(0)+'k':'₹'+x; };
   const ratingChip = v => `<span title="${(+v.rating||0).toFixed(1)} / 5" style="display:inline-flex;align-items:center;gap:3px;font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;color:var(--navy);background:var(--surface-2,#f1f3f7);border:1px solid var(--border);border-radius:6px;padding:2px 7px"><span style="color:var(--amber,#d97706)">★</span>${(+v.rating||0).toFixed(1)}</span>`;
@@ -168,7 +167,7 @@ async function renderVendors(el) {
   // FSSAI licence alert — food vendors whose licence has expired or lapses within 30 days.
   const _today = new Date().toISOString().slice(0,10);
   const _soon  = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
-  const fssaiFlagged = (allVendors||[]).filter(v => v.active!==0 && v.vendor_type==='food' && v.fssai_expiry && v.fssai_expiry <= _soon)
+  const fssaiFlagged = (meta.fssai_alerts||[]).filter(v => v.fssai_expiry && v.fssai_expiry <= _soon)
     .sort((a,b) => (a.fssai_expiry||'').localeCompare(b.fssai_expiry||''));
   const fssaiExpired = fssaiFlagged.filter(v => v.fssai_expiry < _today);
   const fssaiSoon    = fssaiFlagged.filter(v => v.fssai_expiry >= _today);
@@ -190,7 +189,7 @@ async function renderVendors(el) {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Vendor Directory</div>
-      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${activeVendors.length} active vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
+      <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${totalVendors} active vendors · avg on-time ${avgOnTime}% · avg fill ${avgFill}%</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-secondary" ${dataAct('navigate', 'procurement')}>View POs</button>
@@ -203,7 +202,7 @@ async function renderVendors(el) {
   <div style="background:var(--surface);border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <input type="text" id="vendor-search-q" placeholder="Search name, brand, item, phone, email, GSTIN…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      ${dataInput('filterVendorCards')}>
+      ${dataInput('vendorSearchInput')}>
     <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:var(--surface)"
       ${dataChangeEl('vendorSetCat')}>
       <option value="">All Categories</option>
@@ -211,7 +210,7 @@ async function renderVendors(el) {
     </select>
     <input type="text" id="vendor-search-loc" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
       style="flex:1;min-width:130px;max-width:200px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      ${dataInput('filterVendorCards')}>
+      ${dataInput('vendorLocInput')}>
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
     </label>
@@ -229,7 +228,7 @@ async function renderVendors(el) {
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:12px;margin-bottom:18px">
     <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Total Vendors</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeVendors.length}</div>
+      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${totalVendors}</div>
     </div>
     <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
       <div class="u-label2">Avg On-time Rate</div>
@@ -246,60 +245,47 @@ async function renderVendors(el) {
     </div>
   </div>
 
-  <!-- Vendor list — table (database) or cards, at-risk first then rating -->
-  <div id="vendor-no-match" style="text-align:center;padding:40px;color:var(--text-muted);display:${vendors.length===0?'block':'none'}">No vendors match your search.</div>
+  <!-- Vendor list — server-paged + server-sorted -->
+  <div id="vendor-no-match" style="text-align:center;padding:40px;color:var(--text-muted);display:${pageVendors.length===0?'block':'none'}">No vendors match your search.</div>
   <div id="vendor-list">
-    ${(() => {
-      const byRisk = (a,b)=> (isAtRisk(b)?1:0)-(isAtRisk(a)?1:0) || (b.rating||0)-(a.rating||0);
-      const cmp = {
-        risk:   byRisk,
-        name:   (a,b)=> (a.name||'').localeCompare(b.name||''),
-        rating: (a,b)=> (b.rating||0)-(a.rating||0),
-        ontime: (a,b)=> (b.on_time_rate||0)-(a.on_time_rate||0),
-        fill:   (a,b)=> (b.fill_rate||0)-(a.fill_rate||0),
-        spend:  (a,b)=> (b.spend||0)-(a.spend||0),
-        recent: (a,b)=> String(b.last_order||'').localeCompare(String(a.last_order||'')),
-      }[APP._vendorSort||'risk'] || byRisk;
-      const sorted = [...allVendors].sort(cmp);
-      return APP._vendorView==='cards'
-        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
-        : vendorTableHTML(sorted);
-    })()}
+    ${pageVendors.length === 0 ? '' : (APP._vendorView==='cards'
+      ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:stretch">${pageVendors.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
+      : vendorTableHTML(pageVendors))}
   </div>
+  ${vendorPagerHTML(data)}
   `;
-  APP._allVendors = allVendors;
-  filterVendorCards();
+  // After a debounced search/location re-render, restore focus + caret so typing
+  // is uninterrupted.
+  if (APP._vendorFocus) {
+    const inp = document.getElementById(APP._vendorFocus==='loc' ? 'vendor-search-loc' : 'vendor-search-q');
+    if (inp) { inp.focus(); const val = inp.value; try { inp.setSelectionRange(val.length, val.length); } catch {} }
+    APP._vendorFocus = null;
+  }
+  const clearBtn = document.getElementById('vendor-clear-btn');
+  if (clearBtn) clearBtn.style.display = (APP._vendorSearch||APP._vendorLoc||APP._vendorCat) ? '' : 'none';
 }
 
-function filterVendorCards() {
-  const q   = (document.getElementById('vendor-search-q')?.value||'').toLowerCase().trim();
-  const loc = (document.getElementById('vendor-search-loc')?.value||'').toLowerCase().trim();
-  const cat = APP._vendorCat||'';
-  APP._vendorSearch = q;
-  APP._vendorLoc    = loc;
-  let visible = 0;
-  document.querySelectorAll('#vendor-list [data-vname]').forEach(el => {
-    // The main search box matches the full vendor record — name, code, brand /
-    // item names, phone, email, GSTIN, PAN, location, address, terms, notes —
-    // via the data-vsearch blob (falls back to name/category if absent).
-    const blob = el.dataset.vsearch || (el.dataset.vname + ' ' + el.dataset.vcat);
-    const qMatch    = !q || blob.includes(q);
-    const locMatch  = !loc || el.dataset.vloc.includes(loc);
-    const catMatch  = !cat || el.dataset.vcat.includes(cat.toLowerCase());
-    const activeOk  = APP._vendorShowInactive || el.dataset.vactive !== '0';
-    const show = qMatch && locMatch && catMatch && activeOk;
-    el.style.display = show ? '' : 'none';
-    if (show) visible++;
-  });
-  const noMatch = document.getElementById('vendor-no-match');
-  if (noMatch) noMatch.style.display = visible === 0 ? 'block' : 'none';
-  const clearBtn = document.getElementById('vendor-clear-btn');
-  if (clearBtn) clearBtn.style.display = (q||loc||cat) ? '' : 'none';
+// Pager for the server-paged vendor directory. Prev / page x-of-y (+ total) / Next.
+function vendorPagerHTML(data) {
+  const total = data.total||0, page = data.page||1, pages = data.pages||1, size = data.size||50;
+  if (total === 0) return '';
+  const from = (page-1)*size + 1, to = Math.min(total, page*size);
+  const btn = (label, target, disabled) => `<button class="btn btn-secondary btn-sm" ${disabled?'disabled style="opacity:.45"':dataAct('vendorGoPage', target)}>${label}</button>`;
+  return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px">
+    <div style="font-size:.8rem;color:var(--text-muted)">Showing <b>${from}–${to}</b> of <b>${total}</b> vendors</div>
+    <div style="display:flex;align-items:center;gap:8px">
+      ${btn('‹ Prev', page-1, page<=1)}
+      <span style="font-size:.82rem;color:var(--text-muted)">Page <b>${page}</b> of <b>${pages}</b></span>
+      ${btn('Next ›', page+1, page>=pages)}
+    </div>
+  </div>`;
 }
+
 
 // Change the vendor directory sort order, then re-render (search state is preserved).
 function setVendorSort(el) {
   APP._vendorSort = el.value;
+  APP._vendorPage = 1;
   renderVendors(document.getElementById('main-content'));
 }
 

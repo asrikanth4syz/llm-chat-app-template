@@ -1134,8 +1134,9 @@ export default {
       if (path.match(/^\/api\/inventory\/[^/]+$/) && method==="PATCH") return handlePatchInventory(request,env,path);
 
       // Vendors
-      if (path==="/api/vendors"  && method==="GET")  return handleListVendors(request,env);
-      if (path==="/api/vendors"  && method==="POST") return handleAddVendor(request,env);
+      if (path==="/api/vendors"       && method==="GET")  return handleListVendors(request,env);
+      if (path==="/api/vendors/paged" && method==="GET")  return handleListVendorsPaged(request,env);
+      if (path==="/api/vendors"       && method==="POST") return handleAddVendor(request,env);
       if (path.match(/^\/api\/vendors\/[^/]+\/documents$/) && method==="GET") return handleListVendorDocuments(request,env,path);
       if (path.match(/^\/api\/vendors\/[^/]+\/products$/)  && method==="GET") return handleListVendorProducts(request,env,path);
       if (path.match(/^\/api\/vendors\/[^/]+$/) && method==="PATCH") return handlePatchVendor(request,env,path);
@@ -3015,6 +3016,108 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
     ) vp ON vp.vendor_id = v.id
     ORDER BY v.name`).all();
   return json(results);
+}
+
+// GET /api/vendors/paged — server-side paginated + sorted + searched vendor
+// directory, for scale (≈1,000+ vendors) where shipping the whole list to the
+// browser is wasteful. Query params: page, size, q (full-text across the vendor
+// record + catalogue names/SKUs), cat, loc, inactive=1, sort. Returns the page
+// rows plus directory-wide meta (KPIs, categories, FSSAI alerts) computed over
+// the full active set so the summary tiles stay stable across pages.
+async function handleListVendorsPaged(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const size = Math.min(200, Math.max(1, parseInt(url.searchParams.get("size") || "50", 10) || 50));
+  let page  = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
+  const q   = (url.searchParams.get("q") || "").trim().toLowerCase();
+  const cat = (url.searchParams.get("cat") || "").trim().toLowerCase();
+  const loc = (url.searchParams.get("loc") || "").trim().toLowerCase();
+  const includeInactive = url.searchParams.get("inactive") === "1";
+  const sort = url.searchParams.get("sort") || "risk";
+
+  // Enrichment CTE — same PO aggregates as the full list, so display + sorting
+  // (spend, delivered_count → at-risk) work on the paged rows.
+  const base = `WITH e AS (
+    SELECT v.*,
+      COALESCE(p.po_count,0) AS po_count,
+      COALESCE(p.delivered_count,0) AS delivered_count,
+      COALESCE(p.spend,0) AS spend,
+      p.last_order AS last_order
+    FROM vendors v
+    LEFT JOIN (
+      SELECT vendor_id, COUNT(*) AS po_count,
+        SUM(CASE WHEN status IN ('RECEIVED','INVOICED','CLOSED','PAID') THEN 1 ELSE 0 END) AS delivered_count,
+        SUM(grand_total) AS spend, MAX(created_at) AS last_order
+      FROM purchase_orders GROUP BY vendor_id
+    ) p ON p.vendor_id = v.id
+  )`;
+
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  if (!includeInactive) where.push("COALESCE(e.active,1)!=0");
+  if (cat) { where.push("LOWER(COALESCE(e.category,'')) LIKE ?"); binds.push(`%${cat}%`); }
+  if (loc) { where.push("LOWER(COALESCE(e.location,'')) LIKE ?"); binds.push(`%${loc}%`); }
+  if (q) {
+    const cols = ["name","vendor_code","category","location","address","contact_email",
+      "contact_phone","gstin","pan","payment_terms","notes"];
+    const ors = cols.map(c => `LOWER(COALESCE(e.${c},'')) LIKE ?`);
+    ors.push("EXISTS (SELECT 1 FROM vendor_products vp WHERE vp.vendor_id=e.id AND (LOWER(COALESCE(vp.name,'')) LIKE ? OR LOWER(COALESCE(vp.sku,'')) LIKE ?))");
+    where.push(`(${ors.join(" OR ")})`);
+    const like = `%${q}%`;
+    for (let i = 0; i < cols.length + 2; i++) binds.push(like);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const risk = "(CASE WHEN e.delivered_count>0 AND (COALESCE(e.on_time_rate,0)<75 OR COALESCE(e.fill_rate,0)<85) THEN 0 ELSE 1 END)";
+  const orderBy = ({
+    risk:   `${risk} ASC, COALESCE(e.rating,0) DESC`,
+    name:   "LOWER(COALESCE(e.name,'')) ASC",
+    rating: "COALESCE(e.rating,0) DESC",
+    ontime: "COALESCE(e.on_time_rate,0) DESC",
+    fill:   "COALESCE(e.fill_rate,0) DESC",
+    spend:  "e.spend DESC",
+    recent: "e.last_order DESC",
+  } as Record<string,string>)[sort] || `${risk} ASC, COALESCE(e.rating,0) DESC`;
+
+  const countRow = await env.DB.prepare(`${base} SELECT COUNT(*) AS n FROM e ${whereSql}`).bind(...binds).first() as {n:number}|null;
+  const total = Number(countRow?.n) || 0;
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (page > pages) page = pages;
+  const offset = (page - 1) * size;
+  const { results } = await env.DB.prepare(`${base} SELECT * FROM e ${whereSql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
+    .bind(...binds, size, offset).all();
+
+  // Directory-wide KPIs over the ACTIVE set (independent of the search filter).
+  const m = await env.DB.prepare(`${base} SELECT
+      COUNT(*) AS total_vendors,
+      SUM(CASE WHEN e.delivered_count>0 THEN 1 ELSE 0 END) AS scored,
+      SUM(CASE WHEN e.delivered_count>0 THEN COALESCE(e.on_time_rate,0) ELSE 0 END) AS sum_ontime,
+      SUM(CASE WHEN e.delivered_count>0 THEN COALESCE(e.fill_rate,0) ELSE 0 END) AS sum_fill,
+      SUM(CASE WHEN e.delivered_count>0 AND (COALESCE(e.on_time_rate,0)<75 OR COALESCE(e.fill_rate,0)<85) THEN 1 ELSE 0 END) AS at_risk
+    FROM e WHERE COALESCE(e.active,1)!=0`).first() as Record<string,number>|null;
+  const scored = Number(m?.scored) || 0;
+
+  const catRows = await env.DB.prepare("SELECT DISTINCT category FROM vendors WHERE category IS NOT NULL AND category!=''").all();
+  const categories = [...new Set((catRows.results as Array<{category:string}>)
+    .flatMap(r => String(r.category).split(",").map(s => s.trim())).filter(Boolean))].sort();
+
+  const soon = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+  const fssai = await env.DB.prepare(
+    "SELECT id,name,fssai_expiry,vendor_type FROM vendors WHERE COALESCE(active,1)!=0 AND vendor_type='food' AND fssai_expiry IS NOT NULL AND fssai_expiry<=? ORDER BY fssai_expiry"
+  ).bind(soon).all();
+
+  return json({
+    rows: results, total, page, pages, size,
+    meta: {
+      total_vendors: Number(m?.total_vendors) || 0,
+      avg_on_time: scored ? Math.round((Number(m?.sum_ontime) || 0) / scored) : 0,
+      avg_fill:    scored ? Math.round((Number(m?.sum_fill)   || 0) / scored) : 0,
+      at_risk:     Number(m?.at_risk) || 0,
+      categories,
+      fssai_alerts: fssai.results,
+    },
+  });
 }
 
 // POST /api/admin/purge-pos — super-admin only. Wipes every purchase order and

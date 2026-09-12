@@ -1547,8 +1547,15 @@ function toggle2FAEl(id, el) { toggle2FA(id, el.checked); }
 function previewCSVEl(tab, el) { previewCSV(el, tab); }
 function onScanCapturedEl(dcId, el) { onScanCaptured(el, dcId); }
 function toggleDisabledByValue(id, el) { const b = document.getElementById(id); if (b) b.disabled = !el.value; }
-function vendorToggleInactive(el) { APP._vendorShowInactive = el.checked; renderVendors(document.getElementById('main-content')); }
-function vendorSetCat(el) { APP._vendorCat = el.value; renderVendors(document.getElementById('main-content')); }
+function vendorToggleInactive(el) { APP._vendorShowInactive = el.checked; APP._vendorPage = 1; renderVendors(document.getElementById('main-content')); }
+function vendorSetCat(el) { APP._vendorCat = el.value; APP._vendorPage = 1; renderVendors(document.getElementById('main-content')); }
+// Server-side vendor directory: search / location filter re-query the server
+// (debounced) and reset to page 1. The re-render restores focus + caret to the
+// field the user is typing in (APP._vendorFocus), so typing is uninterrupted.
+function _vendorReload() { renderVendors(document.getElementById('main-content')); }
+function vendorSearchInput(el) { APP._vendorSearch = el.value; APP._vendorPage = 1; APP._vendorFocus = 'q'; clearTimeout(APP._vendorTimer); APP._vendorTimer = setTimeout(_vendorReload, 300); }
+function vendorLocInput(el) { APP._vendorLoc = el.value; APP._vendorPage = 1; APP._vendorFocus = 'loc'; clearTimeout(APP._vendorTimer); APP._vendorTimer = setTimeout(_vendorReload, 300); }
+function vendorGoPage(n) { APP._vendorPage = Math.max(1, n); renderVendors(document.getElementById('main-content')); }
 function sdSetClientFilter(el) { APP._sdClientFilter = el.value; navigate('service_desk'); }
 function moSearch(el) { APP._moSearch = el.value; moRender(); }
 function invSearch(el) { APP._invSearch = el.value.toLowerCase(); APP._invShowAll = false; refreshInvTable(); }
@@ -1589,9 +1596,8 @@ function whGoTab(tab) { const btns = document.querySelectorAll('#wh-tabs .tab-bt
 function quickNav(page) { closeTbMenus(); navigate(page); }
 function quickNavCSV() { closeTbMenus(); navigate('place_order'); setTimeout(() => showCSVUploadModal(), 400); }
 function clearVendorSearch() {
-  APP._vendorSearch = ''; APP._vendorCat = ''; APP._vendorLoc = '';
-  ['vendor-search-q', 'vendor-search-loc', 'vendor-search-cat'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
-  filterVendorCards();
+  APP._vendorSearch = ''; APP._vendorCat = ''; APP._vendorLoc = ''; APP._vendorPage = 1;
+  renderVendors(document.getElementById('main-content'));
 }
 function viewReportModalRange(key) { viewReport(key, document.getElementById('rpt-modal-from').value, document.getElementById('rpt-modal-to').value); }
 function hideCSVThenReview() { hideEl('csv-upload-modal'); switchOrderStep('review'); }
