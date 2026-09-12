@@ -69,7 +69,7 @@ async function renderVendors(el) {
           <div style="background:var(--border);height:6px;border-radius:3px;overflow:hidden"></div>
         </div>`;
     return `
-    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${topColor}">
+    <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${topColor};display:flex;flex-direction:column;height:100%">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:42px;height:42px;border-radius:10px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
@@ -104,7 +104,7 @@ async function renderVendors(el) {
         <span>${v.address||''}${(v.address&&v.map_pin)?' · ':''}${v.map_pin?`<a href="${mapsLink(v.map_pin,v.address)}" target="_blank" rel="noopener" style="color:var(--blue)">Map</a>`:''}</span>
       </div>`:''}
 
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:auto">
         <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
         <button class="btn btn-gold btn-sm" ${dataAct('editVendorById', _regVendor(v))}>Edit</button>
         <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
@@ -143,8 +143,13 @@ async function renderVendors(el) {
         <td style="padding:9px 12px;text-align:right;font-family:ui-monospace,monospace;font-size:.74rem;color:var(--text-muted)">${v.last_order?fmtDate(v.last_order):'—'}</td>
         <td style="padding:9px 12px">${status}</td>
         <td style="padding:9px 12px;text-align:right;white-space:nowrap">
-          <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
-          <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>PO</button>
+          <div style="display:inline-flex;gap:5px">
+            <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
+            <button class="btn btn-gold btn-sm" ${dataAct('editVendorById', _regVendor(v))}>Edit</button>
+            <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
+            <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>PO</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('openVendorFeedbackModal', v.id, v.name)}>Rate</button>
+          </div>
         </td></tr>`;
     }).join('');
     return `<div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.06)">
@@ -242,7 +247,7 @@ async function renderVendors(el) {
         return br - ar || (b.rating||0)-(a.rating||0);
       });
       return APP._vendorView==='cards'
-        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}">${vendorCard(v)}</div>`).join('')}</div>`
+        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
         : vendorTableHTML(sorted);
     })()}
   </div>
