@@ -143,8 +143,13 @@ async function renderVendors(el) {
         <td style="padding:9px 12px;text-align:right;font-family:ui-monospace,monospace;font-size:.74rem;color:var(--text-muted)">${v.last_order?fmtDate(v.last_order):'—'}</td>
         <td style="padding:9px 12px">${status}</td>
         <td style="padding:9px 12px;text-align:right;white-space:nowrap">
-          <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
-          <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>PO</button>
+          <div style="display:inline-flex;gap:5px">
+            <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
+            <button class="btn btn-gold btn-sm" ${dataAct('editVendorById', _regVendor(v))}>Edit</button>
+            <button class="btn btn-sm" style="background:${v.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${v.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleVendorActive', v.id, v.name, v.active===0?0:1)}>${v.active===0?'Enable':'Disable'}</button>
+            <button class="btn btn-gold btn-sm" ${dataAct('newPOForVendor', v.id, v.name)}>PO</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('openVendorFeedbackModal', v.id, v.name)}>Rate</button>
+          </div>
         </td></tr>`;
     }).join('');
     return `<div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.06)">
