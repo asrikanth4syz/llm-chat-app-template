@@ -210,7 +210,7 @@ async function renderVendors(el) {
       ${allCategories.map(c=>`<option value="${c}"${APP._vendorCat===c?' selected':''}>${c}</option>`).join('')}
     </select>
     <input type="text" id="vendor-search-loc" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
-      style="width:160px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
+      style="flex:1;min-width:130px;max-width:200px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
       ${dataInput('filterVendorCards')}>
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
@@ -222,8 +222,8 @@ async function renderVendors(el) {
     </div>
   </div>
 
-  <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+  <!-- Summary tiles — auto-fit so they wrap 4 → 2 → 1 as the screen narrows -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:12px;margin-bottom:18px">
     <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
       <div class="u-label2">Total Vendors</div>
       <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${activeVendors.length}</div>
@@ -252,7 +252,7 @@ async function renderVendors(el) {
         return br - ar || (b.rating||0)-(a.rating||0);
       });
       return APP._vendorView==='cards'
-        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
+        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
         : vendorTableHTML(sorted);
     })()}
   </div>
