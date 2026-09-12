@@ -187,6 +187,46 @@ These are DC Manager's constraints as a zero-backend tool, not features to inher
 
 ---
 
-## 12. Companion mock
+## 12. Feasibility verdict — build natively inside SmartPantry
+
+**Decision framing:** *do not* run DC Manager as a second tool or import it as-is. Build its capabilities as **native SmartPantry modules** on the existing challan spine. The single-file/localStorage/SHA-256 app is a deployment convenience for a zero-backend context — SmartPantry already has a stronger backend (D1), auth (JWT/RBAC) and challan data model, so "integration" here means **re-implementing the useful behaviours natively**, not embedding the other app.
+
+**Overall verdict: FEASIBLE, and low-to-moderate effort** — because ~70% of it is wiring SmartPantry data into new views, not new subsystems. The only genuinely new, data-sensitive piece is the DC-number series (Phase 0).
+
+### Effort & risk by phase (native build)
+
+| Phase | Native scope | Reuse | New build | Effort | Risk | Data migration |
+|---|---|---|---|---|---|---|
+| **0 · DC numbering** | `dc_series` registry, FY-aware category allocation, Start-FY wizard + banner, migrate 1,100 DCs | `nextDCNumber` seam, `app_config` flag pattern, dispatch flow | series table + allocator + admin UI | **M** | **Med** (numbering/migration) | **Yes** — 1,100 DCs + 59 clients, seed last-used |
+| **1 · DC Register** | Ad-hoc (no-order) DC, filters + pagination + CSV, DC-count badges | `delivery_challans`, `dc_items`, `dc_documents` (scans) | `order_id` nullable; list endpoint | **M** | Low | No |
+| **2 · Billing & Reminders** | Pending-Billing grouped view, 15/30-day tiers | `billed/billed_at`, `reminder_armed/*` columns | 2 read views | **S** | Low | No |
+| **3 · Samples & Recurring** | Returnable Sample Tracker; recurring→generate DC | `returns` table, `standing_orders` | tracker view; schedule→DC job | **M** | Low | No |
+| **4 · Route Planner** | Stop sequence + Maps links | client `map_pin` | sequencing UI | **S–M** | Low | No |
+
+*Effort key: S ≈ small, M ≈ medium (each phase ships independently).*
+
+### Why it's feasible (as SmartPantry-native)
+
+- **The spine already exists.** `delivery_challans` + `dc_items` + `dc_documents` + `returns` + `billed/reminder_*` columns cover most of modules 2–6 as *views over data we already store*.
+- **The numbering seam is a single function.** `nextDCNumber()` is the one place to swap the counter for the `dc_series` registry — contained, testable, and it reuses the exact atomic-counter pattern already proven by `dc_seq`/`po_seq`.
+- **No auth/storage rework.** SmartPantry's JWT + RBAC + D1 supersede DC Manager's SHA-256/localStorage; we map only the permission matrix.
+- **Migration is bounded and idempotent.** 1,100 DCs + 59 clients, seeded via the existing flag-guarded one-time-migration pattern; seed each series' last-used *before* allocating → zero collisions, zero renumbering.
+
+### Principal risks (and why they're manageable)
+
+1. **Numbering migration** — the one place to be careful; mitigated by seeding last-used from the real max and gating with an idempotent flag (Phase 0 only).
+2. **`order_id NOT NULL`** blocks challan-first DCs — a one-column change (Phase 1).
+3. **FY rollover on 1 April** — auto-detect active FY + hard-block with admin banner when no series (same UX DC Manager already validates in production).
+
+### Recommended way forward
+
+1. **Do Phase 0 first, in isolation** — it's the thing you asked to align, it's the only migration-sensitive piece, and it unblocks everything else. Ship it, migrate, verify the next DCs allocate as `700933` / `80056`, then pause.
+2. **Then layer Phases 1–2** (Register + Billing) — fast, low-risk, high daily value.
+3. **Phases 3–4** (Samples/Recurring, Route Planner) as capacity allows.
+4. Keep each phase a **separate, validated PR** (tsc + vitest + smoke), consistent with how this app already ships.
+
+**Bottom line:** building DC Manager natively into SmartPantry is feasible and mostly incremental. Phase 0 is the real engineering; the rest is presentation over data the app already owns. Recommend proceeding **Phase 0 first** when you're ready to build.
+
+## 13. Companion mock
 
 A visual mock of the two Phase-0 surfaces — **DC Number Series (FY)** config and the unified **DC Register** — is provided alongside this document, styled to SmartPantry's enterprise palette. It shows the series cards (start / last-used / active), the "Start FY Series" wizard, and category-aware allocation, so the numbering behaviour is reviewable before any build.
