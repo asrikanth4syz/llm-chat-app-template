@@ -128,12 +128,17 @@ async function renderVendors(el) {
           ? `<span style="font-size:.64rem;font-weight:700;color:var(--blue,#2563eb);background:#e8f0fb;border-radius:20px;padding:2px 9px">New</span>`
           : `<span style="font-size:.64rem;font-weight:700;color:var(--success);background:#dcfce7;border-radius:20px;padding:2px 9px">Healthy</span>`;
       const mono = 'font-family:ui-monospace,monospace;font-size:.8rem;font-variant-numeric:tabular-nums';
-      return `<tr data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}" style="border-bottom:1px solid var(--border)">
+      return `<tr data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="border-bottom:1px solid var(--border)">
         <td style="padding:9px 12px"><div style="display:flex;align-items:center;gap:10px">
           <div style="width:30px;height:30px;border-radius:7px;background:var(--navy);color:#fff;font-size:.66rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${initials}</div>
           <div style="min-width:0"><div style="font-weight:700;font-size:.84rem;color:var(--navy);white-space:nowrap">${h(v.name)}</div>
           <div style="font-family:ui-monospace,monospace;font-size:.62rem;color:var(--text-muted)">${v.vendor_code||''}${v.category?` · ${(v.category||'').split(',')[0].trim()}`:''}</div></div>
         </div></td>
+        <td style="padding:9px 12px;font-size:.76rem;line-height:1.35;white-space:nowrap">
+          ${v.contact_phone?`<div style="color:var(--text)"><a href="tel:${h(v.contact_phone)}" style="color:inherit;text-decoration:none">📞 ${h(v.contact_phone)}</a></div>`:''}
+          ${v.contact_email?`<div style="overflow:hidden;text-overflow:ellipsis;max-width:180px"><a href="mailto:${h(v.contact_email)}" style="color:var(--blue);text-decoration:none">✉ ${h(v.contact_email)}</a></div>`:''}
+          ${!v.contact_phone&&!v.contact_email?'<span style="color:var(--text-muted)">—</span>':''}
+        </td>
         <td style="padding:9px 12px;text-align:right">${cell(v.on_time_rate, hist)}</td>
         <td style="padding:9px 12px;text-align:right">${cell(v.fill_rate, hist)}</td>
         <td style="padding:9px 12px;text-align:right;${mono}">${v.avg_lead_days!=null&&v.avg_lead_days!==''?v.avg_lead_days+'d':'—'}</td>
@@ -153,8 +158,8 @@ async function renderVendors(el) {
         </td></tr>`;
     }).join('');
     return `<div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.06)">
-      <table style="width:100%;min-width:840px;border-collapse:collapse">
-        <thead><tr>${th('Vendor')}${th('On-time',1)}${th('Fill',1)}${th('Lead',1)}${th('Rating',1)}${th('Spend',1)}${th('POs',1)}${th('Last order',1)}${th('Status')}${th('')}</tr></thead>
+      <table style="width:100%;min-width:960px;border-collapse:collapse">
+        <thead><tr>${th('Vendor')}${th('Contact')}${th('On-time',1)}${th('Fill',1)}${th('Lead',1)}${th('Rating',1)}${th('Spend',1)}${th('POs',1)}${th('Last order',1)}${th('Status')}${th('')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -196,7 +201,7 @@ async function renderVendors(el) {
 
   <!-- Search & Filter bar -->
   <div style="background:var(--surface);border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-    <input type="text" id="vendor-search-q" placeholder="Search by name or brand…" value="${APP._vendorSearch||''}"
+    <input type="text" id="vendor-search-q" placeholder="Search name, brand, item, phone, email, GSTIN…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
       ${dataInput('filterVendorCards')}>
     <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:var(--surface)"
@@ -247,7 +252,7 @@ async function renderVendors(el) {
         return br - ar || (b.rating||0)-(a.rating||0);
       });
       return APP._vendorView==='cards'
-        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
+        ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
         : vendorTableHTML(sorted);
     })()}
   </div>
@@ -264,11 +269,15 @@ function filterVendorCards() {
   APP._vendorLoc    = loc;
   let visible = 0;
   document.querySelectorAll('#vendor-list [data-vname]').forEach(el => {
-    const nameMatch = !q || el.dataset.vname.includes(q) || el.dataset.vcat.includes(q);
+    // The main search box matches the full vendor record — name, code, brand /
+    // item names, phone, email, GSTIN, PAN, location, address, terms, notes —
+    // via the data-vsearch blob (falls back to name/category if absent).
+    const blob = el.dataset.vsearch || (el.dataset.vname + ' ' + el.dataset.vcat);
+    const qMatch    = !q || blob.includes(q);
     const locMatch  = !loc || el.dataset.vloc.includes(loc);
     const catMatch  = !cat || el.dataset.vcat.includes(cat.toLowerCase());
     const activeOk  = APP._vendorShowInactive || el.dataset.vactive !== '0';
-    const show = nameMatch && locMatch && catMatch && activeOk;
+    const show = qMatch && locMatch && catMatch && activeOk;
     el.style.display = show ? '' : 'none';
     if (show) visible++;
   });
@@ -282,6 +291,17 @@ function filterVendorCards() {
 function setVendorView(view) {
   APP._vendorView = view === 'cards' ? 'cards' : 'table';
   navigate('vendors');
+}
+
+// Lower-cased, HTML-attribute-safe search index for one vendor — every field a
+// user might type into the directory search box (name, code, category, brand /
+// item names + SKUs from the catalogue, phone, email, GSTIN, PAN, location,
+// address, payment terms, notes). Stored as data-vsearch on each row/card.
+function vendorSearchBlob(v) {
+  return h([v.name, v.vendor_code, v.category, v.location, v.address,
+    v.contact_email, v.contact_phone, v.gstin, v.pan, v.payment_terms,
+    v.notes, v.vendor_type, v.product_names, v.product_skus]
+    .filter(Boolean).join(' ').toLowerCase());
 }
 
 const VENDOR_CATS = ['Beverages & Snacks','Office Supplies','Hygiene & Cleaning','Office Furniture','Electronics','Dairy & Fresh','Dry Grocery','IT & Technology','Pantry Equipment','Stationery'];
