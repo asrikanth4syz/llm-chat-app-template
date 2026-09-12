@@ -1204,6 +1204,64 @@ async function dcStartFY() {
   navigate('procurement');
 }
 
+// ── Pending Billing for ad-hoc DCs (Phase 2) — grouped by client, 15/30-day tiers ──
+function dcBillingPanelHTML(data) {
+  if (!data) return '';
+  const rows = data.rows || [];
+  if (!rows.length) return `<div class="card" style="padding:14px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem">Pending Billing</div>
+    <div style="color:var(--text-muted);font-size:.84rem;margin-top:6px">No delivered DCs are awaiting an invoice. 🎉</div></div>`;
+  const dayBadge = d => {
+    const n = Number(d)||0;
+    const col = n>=30 ? ['var(--danger)','var(--danger-bg)'] : n>=15 ? ['var(--amber-text)','var(--warning-bg)'] : ['var(--text-muted)','var(--surface-2)'];
+    return `<span style="font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;color:${col[0]};background:${col[1]};border-radius:20px;padding:2px 9px">${n}d</span>`;
+  };
+  // Group by client.
+  const groups = {};
+  rows.forEach(r => { (groups[r.client_name||'—'] = groups[r.client_name||'—'] || []).push(r); });
+  const groupHTML = Object.keys(groups).sort().map(client => {
+    const gr = groups[client];
+    const worst = Math.max(...gr.map(r => Number(r.days_pending)||0));
+    return `<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;background:var(--surface-2)">
+        <div style="font-weight:700;font-size:.84rem;color:var(--navy)">${h(client)} <span style="font-weight:400;color:var(--text-muted)">· ${gr.length} DC${gr.length>1?'s':''}</span></div>
+        <div style="display:flex;align-items:center;gap:8px">${dayBadge(worst)}<button class="btn btn-secondary btn-sm" ${dataAct('dcRemindClient', client)}>Remind</button></div>
+      </div>
+      ${gr.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--border);font-size:.82rem">
+        <div><span style="font-family:ui-monospace,monospace;font-weight:700">${r.dc_number||'—'}</span> <span style="color:var(--text-muted)">· ${h(r.items_text||r.category||'—')}</span></div>
+        <div style="display:flex;align-items:center;gap:8px">${dayBadge(r.days_pending)}<button class="btn btn-gold btn-sm" ${dataAct('dcMarkBilled', r.id, r.dc_number)}>Mark Billed</button></div>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-weight:700;color:var(--navy);font-size:.95rem">Pending Billing <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· ${data.total} DC${data.total!==1?'s':''} awaiting invoice</span></div>
+      <div style="display:flex;gap:8px;font-size:.72rem">
+        ${data.critical?`<span style="font-weight:700;color:var(--danger);background:var(--danger-bg);border-radius:20px;padding:3px 10px">${data.critical} · 30+ days</span>`:''}
+        ${data.warning?`<span style="font-weight:700;color:var(--amber-text);background:var(--warning-bg);border-radius:20px;padding:3px 10px">${data.warning} · 15–30 days</span>`:''}
+      </div>
+    </div>
+    ${groupHTML}
+  </div>`;
+}
+async function dcMarkBilled(id, dcNo) {
+  const invoice_no = prompt('Invoice number for DC ' + dcNo + ':', 'INV-' + new Date().getFullYear() + '-');
+  if (!invoice_no || !invoice_no.trim()) return;
+  const invoice_date = prompt('Invoice date (YYYY-MM-DD):', new Date().toISOString().slice(0,10)) || '';
+  const res = await api('/dc-billing/' + id + '/bill', { method:'POST', body: JSON.stringify({ invoice_no: invoice_no.trim(), invoice_date: invoice_date.trim() }) });
+  if (!res) return;
+  showToast('DC ' + dcNo + ' marked billed', 'success');
+  navigate('procurement');
+}
+async function dcRemindClient(client) {
+  // Remind every pending DC for this client (best-effort; the register re-renders after).
+  const data = await api('/dc-billing/pending');
+  const ids = (data?.rows||[]).filter(r => (r.client_name||'—') === client).map(r => r.id);
+  if (!ids.length) { showToast('Nothing pending for ' + client, 'info'); return; }
+  for (const id of ids) await api('/dc-billing/' + id + '/remind', { method:'POST', body:'{}' });
+  showToast('Reminder sent for ' + ids.length + ' DC(s) · ' + client, 'success');
+}
+
 // ── Ad-hoc DC register + create form (Phase 1) ──
 function dcAdhocPanelHTML(list, dcSeries) {
   const rows = list || [];
@@ -1256,10 +1314,11 @@ async function dcCreateAdHoc() {
 
 async function renderProcurement(el) {
   const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
-  const [pos, vendors, dcSeries, dcAdhoc] = await Promise.all([
+  const [pos, vendors, dcSeries, dcAdhoc, dcBilling] = await Promise.all([
     api('/purchase-orders'), api('/vendors'),
     dcAdmin ? api('/dc-series') : Promise.resolve(null),
     dcAdmin ? api('/delivery-challans/ad-hoc') : Promise.resolve(null),
+    dcAdmin ? api('/dc-billing/pending') : Promise.resolve(null),
   ]);
   if (!pos) return;
 
@@ -1289,6 +1348,7 @@ async function renderProcurement(el) {
     `${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
+  ${dcAdmin ? dcBillingPanelHTML(dcBilling) : ''}
   ${dcAdmin ? dcAdhocPanelHTML(dcAdhoc, dcSeries) : ''}
 
   <!-- Status tiles -->

@@ -374,10 +374,64 @@ async function handleListAdHocDCs(request: Request, env: Env): Promise<Response>
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const { results } = await env.DB.prepare(
-    `SELECT id, dc_number, dc_class, category, client_name, items_text, status, dispatched_at, delivered_at, notes
+    `SELECT id, dc_number, dc_class, category, client_name, items_text, status, dispatched_at, delivered_at, notes,
+            COALESCE(billed,0) AS billed, billed_at, invoice_no, invoice_date
      FROM delivery_challans WHERE ad_hoc=1 ORDER BY dispatched_at DESC, dc_number DESC LIMIT 200`
   ).all();
   return json(results);
+}
+
+// GET /api/dc-billing/pending — ad-hoc DCs awaiting an invoice (Phase 2).
+// Returnable-Sample DCs are excluded (invoice N/A). days_pending drives the
+// 15-/30-day reminder tiers.
+async function handleListPendingBilling(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_number, dc_class, category, client_name, items_text, status, dispatched_at,
+            CAST(julianday('now') - julianday(dispatched_at) AS INTEGER) AS days_pending,
+            reminder_sent_at
+     FROM delivery_challans
+     WHERE ad_hoc=1 AND COALESCE(billed,0)=0 AND COALESCE(category,'')!='Returnable-Sample'
+     ORDER BY dispatched_at ASC`
+  ).all();
+  const rows = results as Array<Record<string, unknown>>;
+  const critical = rows.filter(r => Number(r.days_pending) >= 30).length;
+  const warning  = rows.filter(r => { const d = Number(r.days_pending); return d >= 15 && d < 30; }).length;
+  return json({ rows, total: rows.length, critical, warning });
+}
+
+// POST /api/delivery-challans/:id/bill — mark an ad-hoc DC billed with an invoice.
+async function handleBillAdHocDC(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON body" }, 400); }
+  const invoice_no = String(body.invoice_no || "").trim();
+  if (!invoice_no) return json({ error: "invoice_no is required" }, 400);
+  const invoice_date = String(body.invoice_date || "").trim() || new Date().toISOString().slice(0, 10);
+  const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=? AND ad_hoc=1").bind(id).first();
+  if (!dc) return json({ error: "DC not found" }, 404);
+  await env.DB.prepare(
+    "UPDATE delivery_challans SET billed=1, billed_at=datetime('now'), invoice_no=?, invoice_date=? WHERE id=?"
+  ).bind(invoice_no, invoice_date, id).run();
+  await audit(env, user, "BILL_DC", "delivery_challan", id, undefined, invoice_no);
+  return json({ ok: true, id, invoice_no, invoice_date });
+}
+
+// POST /api/delivery-challans/:id/remind — record a billing reminder (the email/
+// WhatsApp dispatch is a hook; here we stamp reminder_sent_at like the rest of
+// the app's reminder flow).
+async function handleRemindDC(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=? AND ad_hoc=1").bind(id).first();
+  if (!dc) return json({ error: "DC not found" }, 404);
+  await env.DB.prepare("UPDATE delivery_challans SET reminder_sent_at=datetime('now') WHERE id=?").bind(id).run();
+  await audit(env, user, "REMIND_DC", "delivery_challan", id);
+  return json({ ok: true, id });
 }
 
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
@@ -1077,7 +1131,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
     // the DC to its number series; client_name/items_text/category/notes carry the
     // detail an order would otherwise supply.
     "ad_hoc INTEGER DEFAULT 0", "dc_class TEXT", "category TEXT",
-    "client_name TEXT", "items_text TEXT", "notes TEXT"]) {
+    "client_name TEXT", "items_text TEXT", "notes TEXT",
+    // Phase 2: billing — invoice details recorded when a DC is marked billed.
+    "invoice_no TEXT", "invoice_date TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -1308,6 +1364,9 @@ export default {
       if (path==="/api/dc-series/allocate" && method==="POST") return handleAllocateDC(request,env);
       if (path==="/api/delivery-challans/ad-hoc" && method==="POST") return handleCreateAdHocDC(request,env);
       if (path==="/api/delivery-challans/ad-hoc" && method==="GET")  return handleListAdHocDCs(request,env);
+      if (path==="/api/dc-billing/pending"       && method==="GET")  return handleListPendingBilling(request,env);
+      { const m = path.match(/^\/api\/dc-billing\/([^/]+)\/bill$/);   if (m && method==="POST") return handleBillAdHocDC(request,env,m[1]); }
+      { const m = path.match(/^\/api\/dc-billing\/([^/]+)\/remind$/); if (m && method==="POST") return handleRemindDC(request,env,m[1]); }
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);

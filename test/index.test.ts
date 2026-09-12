@@ -728,6 +728,40 @@ describe("Ad-hoc DC (Phase 1)", () => {
   });
 });
 
+describe("DC Billing (Phase 2)", () => {
+  it("lists pending (excluding returnables), marks billed, and records reminders", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+
+    const c = await (await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "Indus", items_text: "Water" }, adminToken)).json() as { id: string };
+    // A returnable sample must NOT appear in pending billing (invoice N/A).
+    await post("/api/delivery-challans/ad-hoc", { category: "Returnable-Sample", client_name: "Marina", items_text: "Sampler" }, adminToken);
+
+    const pend = await (await get("/api/dc-billing/pending", adminToken)).json() as { rows: Array<{id:string;dc_number:string;days_pending:number}>; total:number };
+    expect(pend.rows.some(r => r.id === c.id)).toBe(true);
+    expect(pend.rows.some(r => r.dc_number === "80056")).toBe(false);
+    expect(typeof pend.rows.find(r => r.id === c.id)!.days_pending).toBe("number");
+
+    // Mark billed requires an invoice number.
+    expect((await post(`/api/dc-billing/${c.id}/bill`, {}, adminToken)).status).toBe(400);
+    expect((await post(`/api/dc-billing/${c.id}/bill`, { invoice_no: "INV-2026-1", invoice_date: "2026-09-12" }, adminToken)).status).toBe(200);
+
+    // Now removed from pending; billed flag + invoice recorded.
+    const pend2 = await (await get("/api/dc-billing/pending", adminToken)).json() as { rows: Array<{id:string}> };
+    expect(pend2.rows.some(r => r.id === c.id)).toBe(false);
+    const row = await env.DB.prepare("SELECT billed, invoice_no FROM delivery_challans WHERE id=?").bind(c.id).first() as { billed:number; invoice_no:string };
+    expect(row.billed).toBe(1);
+    expect(row.invoice_no).toBe("INV-2026-1");
+
+    // Reminder stamps reminder_sent_at.
+    const c2 = await (await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "Orbit", items_text: "Tea" }, adminToken)).json() as { id: string };
+    expect((await post(`/api/dc-billing/${c2.id}/remind`, {}, adminToken)).status).toBe(200);
+    const r2 = await env.DB.prepare("SELECT reminder_sent_at FROM delivery_challans WHERE id=?").bind(c2.id).first() as { reminder_sent_at:string|null };
+    expect(r2.reminder_sent_at).toBeTruthy();
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
