@@ -621,6 +621,74 @@ describe("Admin — purge all POs (test-data cleanup)", () => {
   });
 });
 
+describe("DC Number Series (Phase 0)", () => {
+  it("currentFY + dcClassForCategory map correctly", () => {
+    expect(currentFY(new Date("2026-09-12T00:00:00Z"))).toBe("2026-27"); // Apr–Mar FY
+    expect(currentFY(new Date("2027-02-15T00:00:00Z"))).toBe("2026-27"); // Jan–Mar → prior FY
+    expect(currentFY(new Date("2027-04-01T00:00:00Z"))).toBe("2027-28"); // 1 April rolls over
+    expect(dcClassForCategory("Consumables")).toBe("CONSUMABLE");
+    expect(dcClassForCategory("Non-Returnable")).toBe("CONSUMABLE");
+    expect(dcClassForCategory("Gifting")).toBe("GIFTING");
+    expect(dcClassForCategory("Returnable-Sample")).toBe("GIFTING");
+    expect(dcClassForCategory("whatever")).toBe("CONSUMABLE"); // fallback
+  });
+
+  it("migrateSeedDCSeries seeds the current FY once (guarded), continuing 700932 / 80055", async () => {
+    await env.DB.prepare("DELETE FROM dc_series").run();
+    await env.DB.prepare("DELETE FROM app_config WHERE key='dc_series_seeded'").run();
+    await migrateSeedDCSeries(env);
+    const fy = currentFY();
+    const rows = await env.DB.prepare("SELECT class,last_no,status FROM dc_series WHERE fy=? ORDER BY class").bind(fy).all();
+    expect(rows.results.length).toBe(2);
+    const cons = (rows.results as Array<Record<string,unknown>>).find(r => r.class === "CONSUMABLE")!;
+    const gift = (rows.results as Array<Record<string,unknown>>).find(r => r.class === "GIFTING")!;
+    expect(cons.last_no).toBe(700932);
+    expect(gift.last_no).toBe(80055);
+    const flag = await env.DB.prepare("SELECT value FROM app_config WHERE key='dc_series_seeded'").first() as {value:string};
+    expect(flag.value).toBe("1"); // guard set → won't re-run
+  });
+
+  it("GET /api/dc-series lists the active series + allocate issues category-aware numbers", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+
+    const list = await (await get("/api/dc-series", adminToken)).json() as {current_fy:string;needs_series:boolean;series:unknown[]};
+    expect(list.current_fy).toBe(fy);
+    expect(list.needs_series).toBe(false);
+
+    // Consumables + Non-Returnable share the 7xxxxx series and increment together.
+    const a1 = await (await post("/api/dc-series/allocate", { category: "Consumables" }, adminToken)).json() as {number:number;class:string};
+    expect(a1.number).toBe(700933);
+    expect(a1.class).toBe("CONSUMABLE");
+    const a2 = await (await post("/api/dc-series/allocate", { category: "Non-Returnable" }, adminToken)).json() as {number:number};
+    expect(a2.number).toBe(700934);
+
+    // Gifting + Returnable-Sample share the 8xxxxx series.
+    const g1 = await (await post("/api/dc-series/allocate", { category: "Gifting" }, adminToken)).json() as {number:number};
+    expect(g1.number).toBe(80056);
+    const g2 = await (await post("/api/dc-series/allocate", { category: "Returnable-Sample" }, adminToken)).json() as {number:number};
+    expect(g2.number).toBe(80057);
+  });
+
+  it("POST /api/dc-series/start-fy validates and (re)opens a series; allocate 409s with no active series", async () => {
+    const fy = currentFY();
+    const bad = await post("/api/dc-series/start-fy", { fy: "2026", consumable_start: 700001, gifting_start: 80001 }, adminToken);
+    expect(bad.status).toBe(400);
+
+    // No series for the current FY → allocate returns 409 (the "start series" prompt).
+    await env.DB.prepare("DELETE FROM dc_series").run();
+    const none = await post("/api/dc-series/allocate", { category: "Consumables" }, adminToken);
+    expect(none.status).toBe(409);
+
+    // Start the FY series, then allocation resumes from the configured start.
+    const ok = await post("/api/dc-series/start-fy", { fy, consumable_start: 700001, gifting_start: 80001 }, adminToken);
+    expect(ok.status).toBe(200);
+    const a = await (await post("/api/dc-series/allocate", { category: "Consumables" }, adminToken)).json() as {number:number};
+    expect(a.number).toBe(700001); // first DC of the series
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
@@ -942,6 +1010,7 @@ describe("Consolidated order report (by product)", () => {
 // Endpoint gating uses SELF; the core semantics are driven directly through the
 // exported runZohoSync with an INJECTED fetch (no live Zoho in CI).
 import { runZohoSync, mapZohoItem, migrateHsnTo6Digit, migrateBackfillAeratedHsn } from "../src/index";
+import { currentFY, dcClassForCategory, migrateSeedDCSeries } from "../src/index";
 
 // A deterministic Zoho stand-in: token POST + paginated GET items. Records every
 // call so a test can assert the app NEVER POSTs to the Zoho items endpoint.
