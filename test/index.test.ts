@@ -825,6 +825,38 @@ describe("DC Route Planner (Phase 4)", () => {
   });
 });
 
+describe("DC historical import (Phase 5)", () => {
+  it("imports DCs at their real numbers, advances the series, and skips duplicates", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+
+    const res = await post("/api/dc-import", { rows: [
+      { dc_number: "700950", category: "Consumables", client_name: "Nimbus", items_text: "Sugar", date: "2026-05-04", billed: "true", invoice_no: "INV-1" },
+      { dc_number: "80010", category: "Returnable-Sample", client_name: "Marina" },
+      { dc_number: "", category: "Consumables", client_name: "NoNum" },      // error — no dc_number
+    ] }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: number; failed: number };
+    expect(body.success).toBe(2);
+    expect(body.failed).toBe(1);
+
+    const row = await env.DB.prepare("SELECT ad_hoc, dc_class, billed, invoice_no FROM delivery_challans WHERE dc_number='700950'").first() as { ad_hoc:number; dc_class:string; billed:number; invoice_no:string };
+    expect(row.ad_hoc).toBe(1);
+    expect(row.dc_class).toBe("CONSUMABLE");
+    expect(row.billed).toBe(1);
+    expect(row.invoice_no).toBe("INV-1");
+
+    // Series advanced past the imported number → next consumable allocation is 700951.
+    const a = await (await post("/api/dc-series/allocate", { category: "Consumables" }, adminToken)).json() as { number: number };
+    expect(a.number).toBe(700951);
+
+    // A re-import of the same number is skipped (no overwrite).
+    const dup = await (await post("/api/dc-import", { rows: [{ dc_number: "700950", category: "Consumables", client_name: "Dup" }] }, adminToken)).json() as { skipped: number };
+    expect(dup.skipped).toBe(1);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════

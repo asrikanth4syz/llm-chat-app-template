@@ -597,6 +597,72 @@ async function handleCreateDCRoute(request: Request, env: Env): Promise<Response
   return json({ id, route_date: routeDate, delivery_person: deliveryPerson, status: "PLANNED", stops }, 201);
 }
 
+// POST /api/dc-import — bulk-import historical DCs at their real numbers (Phase 5).
+// Rows: { dc_number, category, client_name, items_text?, date?, delivery_person?,
+// invoice_no?, billed?, returned? }. Numbers are preserved (not allocated).
+// After import the active FY series' last_no is advanced past the largest
+// imported number per class, so new allocation continues without collision.
+async function handleImportDCs(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: { rows?: Record<string, unknown>[]; overwrite?: boolean };
+  try { body = await request.json() as typeof body; } catch { return json({ error: "Invalid JSON body" }, 400); }
+  const rows = body.rows;
+  if (!Array.isArray(rows) || !rows.length) return json({ error: "No rows provided" }, 400);
+
+  const existing = new Set<string>();
+  const ex = await env.DB.prepare("SELECT dc_number FROM delivery_challans WHERE dc_number IS NOT NULL").all();
+  for (const r of ex.results as Array<{dc_number:string}>) existing.add(String(r.dc_number));
+
+  let success = 0, skipped = 0;
+  const errors: string[] = [];
+  const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const dcNo = String(row.dc_number || "").trim();
+    if (!dcNo) { errors.push(`Row ${i + 1}: dc_number is required`); continue; }
+    const client = String(row.client_name || "").trim();
+    if (!client) { errors.push(`Row ${i + 1}: client_name is required`); continue; }
+    if (existing.has(dcNo)) {
+      if (!body.overwrite) { skipped++; continue; }
+      stmts.push(env.DB.prepare("DELETE FROM delivery_challans WHERE dc_number=? AND ad_hoc=1").bind(dcNo));
+    }
+    const category = String(row.category || "Consumables").trim();
+    const klass = dcClassForCategory(category);
+    const billed = (row.billed === true || String(row.billed).toLowerCase() === "true" || String(row.billed) === "1") ? 1 : 0;
+    const date = String(row.date || "").trim();
+    const returnedAt = (row.returned === true || String(row.returned).toLowerCase() === "true" || String(row.returned) === "1") ? new Date().toISOString() : null;
+    const id = `dc${uid().slice(0, 10)}`;
+    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO delivery_challans
+      (id, order_id, status, dc_number, ad_hoc, dc_class, category, client_name, items_text, driver_name,
+       dispatched_at, billed, invoice_no, sample_returned_at)
+      VALUES (?, '', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, billed ? "BILLED" : "DISPATCHED", dcNo, klass, category, client,
+        String(row.items_text || "").trim() || null, String(row.delivery_person || "").trim() || null,
+        date || new Date().toISOString(), billed, String(row.invoice_no || "").trim() || null, returnedAt));
+    existing.add(dcNo);
+    success++;
+  }
+  if (stmts.length) {
+    try { await env.DB.batch(stmts); }
+    catch (e) { return json({ error: `Import failed: ${String(e)}` }, 500); }
+  }
+
+  // Advance the active FY series past the largest imported number per class.
+  const fy = currentFY();
+  for (const klass of ["CONSUMABLE", "GIFTING"] as const) {
+    await env.DB.prepare(
+      `UPDATE dc_series SET last_no = MAX(last_no,
+         (SELECT COALESCE(MAX(CAST(dc_number AS INTEGER)),0) FROM delivery_challans WHERE ad_hoc=1 AND dc_class=?)),
+       updated_at=datetime('now')
+       WHERE fy=? AND class=? AND status='ACTIVE'`
+    ).bind(klass, fy, klass).run();
+  }
+  await audit(env, user, "IMPORT_DCS", "delivery_challan", "*", undefined, `${success} imported, ${skipped} skipped`);
+  return json({ success, skipped, failed: errors.length, errors });
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -1545,6 +1611,7 @@ export default {
       if (path==="/api/dc-routes/candidates" && method==="GET")  return handleListRouteCandidates(request,env);
       if (path==="/api/dc-routes"            && method==="GET")  return handleListDCRoutes(request,env);
       if (path==="/api/dc-routes"            && method==="POST") return handleCreateDCRoute(request,env);
+      if (path==="/api/dc-import"            && method==="POST") return handleImportDCs(request,env);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
