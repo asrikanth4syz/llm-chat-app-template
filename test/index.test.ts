@@ -506,6 +506,55 @@ describe("Vendors", () => {
       vendor_type: "food", fssai_licence: "10012345000123", fssai_expiry: "2027-01-01" }, adminToken);
     expect(ok.status).toBe(201);
   });
+
+  it("POST /api/import/vendors — imports compliance columns (GSTIN, PAN, FSSAI, vendor_type, notes) and auto-assigns a vendor_code", async () => {
+    const res = await post("/api/import/vendors", { rows: [{
+      name: "Import Compliance Co", category: "Beverages", vendor_type: "food",
+      registration_type: "registered", gstin: "27aapfu0939f1zv",
+      fssai_licence: "12345678901234", fssai_expiry: "2027-03-31",
+      payment_terms: "Net 30", contact_email: "imp@compliance.test",
+      visit_frequency: "Weekly", notes: "Cold-chain certified",
+    }] }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: number; warnings: string[] };
+    expect(body.success).toBe(1);
+    const v = (await (await get("/api/vendors", adminToken)).json() as Array<Record<string,unknown>>)
+      .find(x => x.name === "Import Compliance Co")!;
+    expect(v.gstin).toBe("27AAPFU0939F1ZV");
+    expect(v.pan).toBe("AAPFU0939F");               // derived from GSTIN
+    expect(v.vendor_type).toBe("food");
+    expect(v.fssai_licence).toBe("12345678901234");
+    expect(v.notes).toBe("Cold-chain certified");
+    expect(String(v.vendor_code)).toMatch(/^VDR-\d{4}-\d{5}$/);
+  });
+
+  it("POST /api/import/vendors — a bad GSTIN is lenient: vendor imports, field left blank, warning returned", async () => {
+    const res = await post("/api/import/vendors", { rows: [{
+      name: "Bad GST Import", category: "Grocery", gstin: "NOTAGSTIN",
+    }] }, adminToken);
+    const body = await res.json() as { success: number; warnings: string[] };
+    expect(body.success).toBe(1);
+    expect(body.warnings.length).toBeGreaterThanOrEqual(1);
+    const v = (await (await get("/api/vendors", adminToken)).json() as Array<Record<string,unknown>>)
+      .find(x => x.name === "Bad GST Import")!;
+    expect(v.gstin).toBeNull();
+  });
+
+  it("POST /api/import/vendors — matches by vendor_code and blank cells never overwrite existing data", async () => {
+    const vdb = env.DB as D1Database;
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,vendor_code,name,category,notes,active) VALUES ('VIMP-1','VDR-2099-00001','Round Trip Co','Grocery','keep me',1)").run();
+    // Re-upload with overwrite, same code but blank notes and a new phone.
+    const res = await post("/api/import/vendors", { overwrite: true, rows: [{
+      vendor_code: "VDR-2099-00001", name: "Round Trip Renamed", category: "Grocery",
+      contact_phone: "9000000000", notes: "",
+    }] }, adminToken);
+    expect(res.status).toBe(200);
+    const v = (await (await get("/api/vendors", adminToken)).json() as Array<Record<string,unknown>>)
+      .find(x => x.id === "VIMP-1")!;
+    expect(v.name).toBe("Round Trip Renamed");   // matched by code, updated in place
+    expect(v.contact_phone).toBe("9000000000");  // new value written
+    expect(v.notes).toBe("keep me");             // blank cell did NOT wipe existing note
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════

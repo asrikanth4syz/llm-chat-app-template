@@ -6237,25 +6237,35 @@ async function handleImportVendors(request: Request, env: Env): Promise<Response
   const { rows, overwrite = false } = body;
   if (!Array.isArray(rows) || !rows.length) return json({error:"No rows provided"}, 400);
 
-  // Build name→id map of existing vendors
-  const existingRes = await env.DB.prepare("SELECT id, name FROM vendors").all();
+  // Match existing vendors by vendor_code first (the stable business key), then
+  // by name (case-insensitive) — so a round-tripped export updates in place even
+  // after a rename.
+  const existingRes = await env.DB.prepare("SELECT id, name, vendor_code FROM vendors").all();
   const nameToId = new Map<string, string>();
+  const codeToId = new Map<string, string>();
   for (const v of existingRes.results) {
-    nameToId.set(String((v as Record<string,unknown>).name).trim().toLowerCase(), String((v as Record<string,unknown>).id));
+    const r = v as Record<string,unknown>;
+    nameToId.set(String(r.name).trim().toLowerCase(), String(r.id));
+    if (r.vendor_code) codeToId.set(String(r.vendor_code).trim().toLowerCase(), String(r.id));
   }
 
   let success = 0, skipped = 0;
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   const validRows: {row: Record<string,unknown>; idx: number; existingId: string|null}[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row.name || !String(row.name).trim()) { errors.push(`Row ${i+1}: name is required`); continue; }
-    const normName = String(row.name).trim().toLowerCase();
-    const existingId = nameToId.get(normName) || null;
+    const code = String(row.vendor_code || "").trim().toLowerCase();
+    const existingId = (code && codeToId.get(code)) || nameToId.get(String(row.name).trim().toLowerCase()) || null;
     if (existingId && !overwrite) { skipped++; continue; }
     validRows.push({row, idx: i, existingId});
   }
+
+  // Next vendor-code sequence for brand-new rows that don't supply their own.
+  let seq = await nextVendorSeq(env);
+  const year = new Date().getFullYear();
 
   const CHUNK = 200;
   for (let c = 0; c < validRows.length; c += CHUNK) {
@@ -6264,24 +6274,74 @@ async function handleImportVendors(request: Request, env: Env): Promise<Response
     const chunkIdxMap: number[] = [];
 
     for (const {row, idx, existingId} of chunk) {
+      const rowNo = idx + 1;
+      // Trimmed text cell → value, or null when blank (blank cells never
+      // overwrite existing data on update, so "amend later" stays safe).
+      const str = (k: string) => { const s = String(row[k] ?? "").trim(); return s === "" ? null : s; };
       const name     = String(row.name).trim();
       const category = String(row.category || "General").trim();
-      const email    = String(row.contact_email || row.email || "").trim();
-      const phone    = String(row.contact_phone || row.phone || "").trim();
-      const location = String(row.location || "").trim();
-      const address  = String(row.address || "").trim();
-      const lead     = Number(row.avg_lead_days) || 3;
-      const rating   = Math.min(5, Math.max(0, Number(row.rating) || 4.0));
+
+      // Compliance — lenient: a bad GSTIN / PAN / FSSAI is reported as a warning
+      // and that field left blank, but the vendor still imports.
+      let gstin: string|null = null, pan: string|null = null;
+      const tax = resolveTaxIds(row.gstin, row.pan);
+      if (tax.error) warnings.push(`Row ${rowNo}: ${tax.error} — GST/PAN left blank`);
+      else { gstin = tax.gstin; pan = tax.pan; }
+
+      const vtypeRaw = String(row.vendor_type || "").trim().toLowerCase().replace("-", "_");
+      const vendor_type = vtypeRaw === "food" ? "food" : vtypeRaw === "non_food" ? "non_food" : null;
+
+      const regRaw = String(row.registration_type || "").trim().toLowerCase();
+      let registration_type = regRaw === "registered" ? "registered" : regRaw === "unregistered" ? "unregistered" : null;
+      if (!registration_type && gstin) registration_type = "registered";
+
+      let fssai_licence: string|null = null;
+      const licRaw = String(row.fssai_licence || "").trim();
+      if (licRaw) {
+        if (/^\d{14}$/.test(licRaw)) fssai_licence = licRaw;
+        else warnings.push(`Row ${rowNo}: FSSAI licence must be 14 digits — left blank`);
+      }
+
+      const leadN   = str("avg_lead_days") != null ? Number(row.avg_lead_days) : NaN;
+      const ratingN = str("rating") != null ? Number(row.rating) : NaN;
+
+      // Column → value map. null = leave column untouched on update.
+      const map: Record<string, unknown> = {
+        name, category,
+        contact_email: str("contact_email") ?? str("email"),
+        contact_phone: str("contact_phone") ?? str("phone"),
+        location: str("location"), address: str("address"),
+        avg_lead_days: isNaN(leadN) ? null : leadN,
+        rating: isNaN(ratingN) ? null : Math.min(5, Math.max(0, ratingN)),
+        vendor_type, registration_type, gstin, pan,
+        fssai_licence, fssai_expiry: str("fssai_expiry"),
+        payment_terms: str("payment_terms"),
+        visit_frequency: str("visit_frequency"), visit_day: str("visit_day"),
+        notes: str("notes"),
+      };
 
       if (existingId) {
-        stmts.push(env.DB.prepare(
-          `UPDATE vendors SET name=?,category=?,contact_email=?,contact_phone=?,location=?,address=?,avg_lead_days=?,rating=? WHERE id=?`
-        ).bind(name, category, email, phone, location, address, lead, rating, existingId));
+        // Update only the columns that carry a value — blank cells never wipe
+        // existing data. name/category are always written (both are required).
+        const sets: string[] = [], vals: unknown[] = [];
+        for (const [col, val] of Object.entries(map)) {
+          if (col === "name" || col === "category" || val !== null) { sets.push(`${col}=?`); vals.push(val); }
+        }
+        vals.push(existingId);
+        stmts.push(env.DB.prepare(`UPDATE vendors SET ${sets.join(",")} WHERE id=?`).bind(...vals));
       } else {
         const newId = `V-${uid().slice(0,8).toUpperCase()}`;
+        const ins: Record<string, unknown> = {
+          vendor_code: str("vendor_code") || formatVendorCode(year, seq++),
+          ...map,
+          vendor_type: vendor_type || "non_food",
+          registration_type: registration_type || "unregistered",
+        };
+        const cols = ["id", ...Object.keys(ins)];
+        const vals = [newId, ...Object.values(ins)];
         stmts.push(env.DB.prepare(
-          `INSERT OR IGNORE INTO vendors (id,name,category,contact_email,contact_phone,location,address,avg_lead_days,rating) VALUES (?,?,?,?,?,?,?,?,?)`
-        ).bind(newId, name, category, email, phone, location, address, lead, rating));
+          `INSERT OR IGNORE INTO vendors (${cols.join(",")}) VALUES (${cols.map(()=>"?").join(",")})`
+        ).bind(...vals));
       }
       chunkIdxMap.push(idx);
     }
@@ -6304,7 +6364,7 @@ async function handleImportVendors(request: Request, env: Env): Promise<Response
     ).bind(jobId, "vendors", rows.length, success, errors.length, JSON.stringify(errors), user!.sub).run();
   } catch { /* non-fatal */ }
 
-  return json({success, skipped, failed: errors.length, errors});
+  return json({success, skipped, failed: errors.length, errors, warnings});
 }
 
 async function handleListImportJobs(request: Request, env: Env): Promise<Response> {
