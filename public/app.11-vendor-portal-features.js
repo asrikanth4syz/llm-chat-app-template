@@ -703,17 +703,23 @@ function showImportTab(tab, jobs) {
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-weight:700;font-size:.95rem;color:var(--navy)">Import Vendors</div>
-          <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers. Duplicates detected by vendor name (case-insensitive).</div>
+          <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Upload a CSV file — first row must be column headers. Matched by <code>vendor_code</code>, then vendor name (case-insensitive).</div>
         </div>
-        <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', 'vendors')}>⬇ Download Sample Template</button>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="btn btn-secondary btn-sm" ${dataAct('downloadCurrentVendors')}>⬇ Download Current Vendors</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('downloadSampleCSV', 'vendors')}>⬇ Download Sample Template</button>
+        </div>
       </div>
       <div style="padding:16px 20px">
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:#1e40af">
+          <b>Amend later:</b> <b>Download Current Vendors</b> exports every vendor in this exact column layout. Fill in the blank <code>gstin</code> / <code>fssai_licence</code> / <code>notes</code> columns in Excel and re-upload with <b>Overwrite</b> — rows are matched by <code>vendor_code</code> and <b>updated in place</b>. Blank cells never overwrite existing data, so a thin enrichment file is safe.
+        </div>
         <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.8rem">
-          <div style="font-weight:700;color:var(--navy);margin-bottom:4px">Columns <span style="font-weight:400;color:var(--text-muted)">(* required)</span></div>
-          <code style="color:var(--blue);word-break:break-all">name*, category*, contact_email, contact_phone, location, address, avg_lead_days, rating</code>
+          <div style="font-weight:700;color:var(--navy);margin-bottom:4px">Columns <span style="font-weight:400;color:var(--text-muted)">(only <b>name</b> &amp; <b>category</b> required — everything else optional)</span></div>
+          <code style="color:var(--blue);word-break:break-all">vendor_code, name*, category*, vendor_type (food/non_food), registration_type (registered/unregistered), gstin, pan, fssai_licence, fssai_expiry (YYYY-MM-DD), payment_terms, contact_email, contact_phone, location, address, avg_lead_days, rating, visit_frequency, visit_day, notes</code>
         </div>
         <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.8rem;color:var(--amber-text)">
-          <b>Duplicate handling:</b> If a vendor with the same name already exists, you can choose to skip it or overwrite it with the CSV data.
+          <b>Duplicate handling:</b> If a vendor already exists (by code or name), choose to skip it or overwrite it. <b>Compliance is lenient:</b> a bad GSTIN or FSSAI is flagged as a warning and left blank — the vendor still imports so you can correct it later.
         </div>
         <div class="form-group" style="margin-bottom:0">
           <label class="u-b600">Choose CSV file</label>
@@ -795,6 +801,21 @@ async function downloadCurrentInventory() {
   const header = INVENTORY_EXPORT_COLS.join(',');
   const body = items.map(it => INVENTORY_EXPORT_COLS.map(c => cell(it[c])).join(',')).join('\n');
   _downloadCSV('inventory-export', header + '\n' + body);
+}
+
+// Vendor import/export column order — shared by the sample template, the
+// "Download Current Vendors" export, and the server-side importer, so a file
+// round-trips: export → amend in Excel → re-import (matched by vendor_code).
+// Banking columns are intentionally excluded — payment-sensitive, form-only.
+const VENDOR_EXPORT_COLS = ['vendor_code','name','category','vendor_type','registration_type','gstin','pan','fssai_licence','fssai_expiry','payment_terms','contact_email','contact_phone','location','address','avg_lead_days','rating','visit_frequency','visit_day','notes'];
+async function downloadCurrentVendors() {
+  const vendors = await api('/vendors');
+  if (!vendors) return; // api() already surfaced the error
+  if (!vendors.length) { showToast('No vendors to export', 'info'); return; }
+  const cell = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const header = VENDOR_EXPORT_COLS.join(',');
+  const body = vendors.map(v => VENDOR_EXPORT_COLS.map(c => cell(v[c])).join(',')).join('\n');
+  _downloadCSV('vendors-export', header + '\n' + body);
 }
 
 // Proper RFC-4180 CSV parser — handles quoted fields, embedded commas, CRLF, UTF-8 BOM
@@ -930,7 +951,7 @@ async function previewVendorCSV(input) {
       return '<span style="background:var(--danger-soft-bg);color:#991b1b;border-radius:4px;padding:1px 7px;font-size:.72rem;font-weight:700">Invalid</span>';
     };
 
-    const dispCols = ['name','category','contact_email','contact_phone','location','avg_lead_days','rating'];
+    const dispCols = ['name','category','vendor_type','gstin','fssai_licence','contact_phone','location'];
     if (preview) preview.innerHTML =
       '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">' +
         '<span style="background:var(--success-soft-bg);color:#065f46;border-radius:6px;padding:4px 12px;font-size:.82rem;font-weight:700">' + newCount + ' New</span>' +
@@ -986,7 +1007,11 @@ async function submitVendorImport() {
     ? '<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;font-size:.8rem;color:#b91c1c"><b>Errors:</b><ul style="margin:6px 0 0 18px;padding:0">' +
       res.errors.map(function(err){return '<li>'+err+'</li>';}).join('') + '</ul></div>'
     : '';
-  if (preview) preview.innerHTML = summaryMsg + errorsHtml;
+  const warningsHtml = res.warnings && res.warnings.length
+    ? '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-top:10px;font-size:.8rem;color:var(--amber-text)"><b>Warnings</b> (imported, but these fields were left blank — correct and re-upload):<ul style="margin:6px 0 0 18px;padding:0">' +
+      res.warnings.map(function(w){return '<li>'+w+'</li>';}).join('') + '</ul></div>'
+    : '';
+  if (preview) preview.innerHTML = summaryMsg + errorsHtml + warningsHtml;
   window._vendorCsvRows = null;
   window._importJobs = null;
 }
@@ -995,12 +1020,14 @@ function downloadSampleCSV(tab) {
   const isInventory = tab === 'inventory';
   let csv, filename;
   if (tab === 'vendors') {
+    // Header order is identical to the Download Current Vendors export so files
+    // round-trip cleanly. Leave vendor_code blank for new vendors — the server
+    // assigns one. Example rows: a registered food vendor (GSTIN + FSSAI) and an
+    // unregistered non-food vendor.
     csv = [
-      'name,category,contact_email,contact_phone,location,address,avg_lead_days,rating',
-      'Fresh Farms Pvt Ltd,Produce,contact@freshfarms.in,9876543210,Mumbai,"123 Agri Park, Navi Mumbai",2,4.5',
-      'Dairy Direct Co,Dairy,info@dairydirect.in,9812345678,Pune,"45 Cold Chain Hub, Pune",1,4.8',
-      'Clean Supply Corp,Hygiene,sales@cleansupply.in,9900112233,Delhi,"Plot 7, Industrial Area, Delhi",3,4.2',
-      'Grain Masters Ltd,Grains & Staples,orders@grainmasters.in,9988776655,Ahmedabad,"Warehouse Block B, Ahmedabad",4,4.0',
+      VENDOR_EXPORT_COLS.join(','),
+      ',Fresh Farms Pvt Ltd,Produce,food,registered,29ABCDE1234F1ZW,ABCDE1234F,12345678901234,2027-03-31,Net 30,contact@freshfarms.in,9876543210,Mumbai,"123 Agri Park, Navi Mumbai",2,4.5,Weekly,Monday,Cold-chain certified',
+      ',Clean Supply Corp,Hygiene,non_food,unregistered,,,,,Net 15,sales@cleansupply.in,9900112233,Delhi,"Plot 7, Industrial Area, Delhi",3,4.2,Monthly,15,Prefers PO by email',
     ].join('\n');
     filename = 'vendors_sample.csv';
   } else if (isInventory) {
