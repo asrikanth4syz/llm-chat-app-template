@@ -1262,6 +1262,85 @@ async function dcRemindClient(client) {
   showToast('Reminder sent for ' + ids.length + ' DC(s) · ' + client, 'success');
 }
 
+// ── Sample Tracker (Phase 3) — returnable-sample DCs, out vs returned ──
+function dcSamplesPanelHTML(data) {
+  if (!data || !(data.total)) return '';
+  const rows = data.rows || [];
+  const kpi = (label, val, color) => `<div style="flex:1;min-width:110px;background:var(--surface-2);border-radius:8px;padding:10px 12px">
+    <div style="font-size:.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">${label}</div>
+    <div style="font-size:1.5rem;font-weight:800;color:${color||'var(--navy)'};line-height:1.1;margin-top:2px">${val}</div></div>`;
+  const dayBadge = (n, returned) => returned
+    ? '<span style="font-size:.64rem;font-weight:700;color:var(--success);background:var(--success-bg);border-radius:20px;padding:2px 9px">Returned</span>'
+    : `<span style="font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;color:${Number(n)>=30?'var(--danger)':'var(--text-muted)'};background:${Number(n)>=30?'var(--danger-bg)':'var(--surface-2)'};border-radius:20px;padding:2px 9px">${n}d out</span>`;
+  const body = rows.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--border);font-size:.82rem">
+      <div><span style="font-family:ui-monospace,monospace;font-weight:700">${r.dc_number||'—'}</span> · ${h(r.client_name||'—')} <span style="color:var(--text-muted)">· ${h(r.items_text||'—')}</span></div>
+      <div style="display:flex;align-items:center;gap:8px">${dayBadge(r.days_out, r.sample_returned_at)}${!r.sample_returned_at?`<button class="btn btn-secondary btn-sm" ${dataAct('dcReturnSample', r.id, r.dc_number)}>Mark Returned</button>`:''}</div>
+    </div>`).join('');
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:12px">Sample Tracker <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· returnable samples</span></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      ${kpi('Out', data.out, data.out?'var(--amber-text)':'var(--navy)')}
+      ${kpi('Returned', data.returned, 'var(--success)')}
+      ${kpi('Overdue 30+d', data.overdue, data.overdue?'var(--danger)':'var(--navy)')}
+    </div>
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">${body}</div>
+  </div>`;
+}
+async function dcReturnSample(id, dcNo) {
+  const res = await api('/dc-samples/' + id + '/return', { method:'POST', body:'{}' });
+  if (!res) return;
+  showToast('Sample ' + dcNo + ' marked returned', 'success');
+  navigate('procurement');
+}
+
+// ── Recurring DC schedules (Phase 3) ──
+function dcRecurringPanelHTML(list, dcSeries) {
+  const rows = list || [];
+  const needsSeries = dcSeries && dcSeries.needs_series;
+  const body = rows.length
+    ? rows.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--border);font-size:.82rem;${Number(s.active)!==1?'opacity:.55':''}">
+        <div><b>${h(s.client_name)}</b> <span style="color:var(--text-muted)">· ${s.category} · ${s.frequency}${s.delivery_person?' · '+h(s.delivery_person):''}</span>${s.last_generated_at?`<div style="font-size:.7rem;color:var(--text-muted)">Last generated ${fmtDate(s.last_generated_at)}</div>`:''}</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="btn btn-secondary btn-sm" ${dataAct('dcRecurringToggle', s.id, Number(s.active)===1?0:1)}>${Number(s.active)===1?'Pause':'Resume'}</button>
+          <button class="btn btn-gold btn-sm" ${dataAct('dcRecurringGenerate', s.id)} ${Number(s.active)!==1?'disabled style="opacity:.5"':''}>Generate DC</button>
+        </div>
+      </div>`).join('')
+    : '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.84rem">No recurring schedules yet.</div>';
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:12px">Recurring DC Schedules</div>
+    ${needsSeries ? '' : `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Client</label><input id="rec-client" placeholder="Client name" style="display:block;width:170px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Category</label><select id="rec-cat" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"><option>Consumables</option><option>Non-Returnable</option><option>Gifting</option><option>Returnable-Sample</option></select></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Frequency</label><select id="rec-freq" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"><option>Weekly</option><option>Biweekly</option><option>Monthly</option></select></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Items</label><input id="rec-items" placeholder="Optional" style="display:block;width:150px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('dcRecurringCreate')}>+ Add schedule</button>
+    </div>`}
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">${body}</div>
+  </div>`;
+}
+async function dcRecurringCreate() {
+  const client_name = document.getElementById('rec-client')?.value.trim();
+  const category = document.getElementById('rec-cat')?.value;
+  const frequency = document.getElementById('rec-freq')?.value;
+  const items_text = document.getElementById('rec-items')?.value.trim();
+  if (!client_name) { showToast('Client name is required', 'error'); return; }
+  const res = await api('/dc-recurring', { method:'POST', body: JSON.stringify({ client_name, category, frequency, items_text }) });
+  if (!res) return;
+  showToast('Schedule added', 'success');
+  navigate('procurement');
+}
+async function dcRecurringToggle(id, active) {
+  const res = await api('/dc-recurring/' + id, { method:'PATCH', body: JSON.stringify({ active }) });
+  if (!res) return;
+  navigate('procurement');
+}
+async function dcRecurringGenerate(id) {
+  const res = await api('/dc-recurring/' + id + '/generate', { method:'POST', body:'{}' });
+  if (!res) return;
+  showToast('DC ' + res.dc_number + ' generated', 'success');
+  navigate('procurement');
+}
+
 // ── Ad-hoc DC register + create form (Phase 1) ──
 function dcAdhocPanelHTML(list, dcSeries) {
   const rows = list || [];
@@ -1314,11 +1393,13 @@ async function dcCreateAdHoc() {
 
 async function renderProcurement(el) {
   const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
-  const [pos, vendors, dcSeries, dcAdhoc, dcBilling] = await Promise.all([
+  const [pos, vendors, dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring] = await Promise.all([
     api('/purchase-orders'), api('/vendors'),
     dcAdmin ? api('/dc-series') : Promise.resolve(null),
     dcAdmin ? api('/delivery-challans/ad-hoc') : Promise.resolve(null),
     dcAdmin ? api('/dc-billing/pending') : Promise.resolve(null),
+    dcAdmin ? api('/dc-samples') : Promise.resolve(null),
+    dcAdmin ? api('/dc-recurring') : Promise.resolve(null),
   ]);
   if (!pos) return;
 
@@ -1349,6 +1430,8 @@ async function renderProcurement(el) {
 
   ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
   ${dcAdmin ? dcBillingPanelHTML(dcBilling) : ''}
+  ${dcAdmin ? dcSamplesPanelHTML(dcSamples) : ''}
+  ${dcAdmin ? dcRecurringPanelHTML(dcRecurring, dcSeries) : ''}
   ${dcAdmin ? dcAdhocPanelHTML(dcAdhoc, dcSeries) : ''}
 
   <!-- Status tiles -->

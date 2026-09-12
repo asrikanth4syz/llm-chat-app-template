@@ -762,6 +762,40 @@ describe("DC Billing (Phase 2)", () => {
   });
 });
 
+describe("DC Samples + Recurring (Phase 3)", () => {
+  it("tracks returnable samples out → returned", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+    const s = await (await post("/api/delivery-challans/ad-hoc", { category: "Returnable-Sample", client_name: "Marina", items_text: "Sampler ×6" }, adminToken)).json() as { id: string };
+
+    const before = await (await get("/api/dc-samples", adminToken)).json() as { out:number; rows: Array<{id:string;sample_returned_at:string|null}> };
+    expect(before.out).toBeGreaterThanOrEqual(1);
+    expect(before.rows.some(r => r.id === s.id && !r.sample_returned_at)).toBe(true);
+
+    expect((await post(`/api/dc-samples/${s.id}/return`, {}, adminToken)).status).toBe(200);
+    const after = await (await get("/api/dc-samples", adminToken)).json() as { rows: Array<{id:string;sample_returned_at:string|null}> };
+    expect(after.rows.find(r => r.id === s.id)!.sample_returned_at).toBeTruthy();
+  });
+
+  it("recurring schedule generates an ad-hoc DC numbered from the series; pause blocks it", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+
+    expect((await post("/api/dc-recurring", { client_name: "Indus", category: "Consumables", frequency: "Daily" }, adminToken)).status).toBe(400);
+    const c = await (await post("/api/dc-recurring", { client_name: "Indus", category: "Consumables", frequency: "Weekly", items_text: "Water" }, adminToken)).json() as { id: string };
+
+    const gen = await (await post(`/api/dc-recurring/${c.id}/generate`, {}, adminToken)).json() as { dc_number: string };
+    expect(gen.dc_number).toBe("700933");
+    const row = await env.DB.prepare("SELECT ad_hoc, notes, client_name FROM delivery_challans WHERE dc_number='700933'").first() as { ad_hoc:number; notes:string; client_name:string };
+    expect(row.ad_hoc).toBe(1);
+    expect(row.notes).toContain("Auto-generated");
+    expect(row.client_name).toBe("Indus");
+
+    expect((await patch(`/api/dc-recurring/${c.id}`, { active: false }, adminToken)).status).toBe(200);
+    expect((await post(`/api/dc-recurring/${c.id}/generate`, {}, adminToken)).status).toBe(400); // paused
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
