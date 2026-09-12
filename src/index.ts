@@ -357,16 +357,10 @@ async function handleCreateAdHocDC(request: Request, env: Env): Promise<Response
   const notes = String(body.notes || "").trim();
   const delivery_person = String(body.delivery_person || "").trim();
 
-  const alloc = await allocateDCSeriesNumber(env, category);
-  if (alloc.error) return json({ error: alloc.error, needs_series: true, fy: alloc.fy }, 409);
-  const dcNo = String(alloc.number);
-  const id = `dc${uid().slice(0, 10)}`;
-  await env.DB.prepare(`INSERT INTO delivery_challans
-    (id, order_id, status, dc_number, ad_hoc, dc_class, category, client_name, items_text, notes, driver_name, dispatched_at)
-    VALUES (?, '', 'DISPATCHED', ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'))`)
-    .bind(id, dcNo, alloc.klass, category, client_name, items_text || null, notes || null, delivery_person || null).run();
-  await audit(env, user, "CREATE_ADHOC_DC", "delivery_challan", id, undefined, `${dcNo} · ${category}`);
-  return json({ id, dc_number: dcNo, class: alloc.klass, category, client_name, status: "DISPATCHED" }, 201);
+  const res = await insertAdHocDC(env, { category, client_name, items_text, notes, delivery_person });
+  if (res.error) return json({ error: res.error, needs_series: true, fy: res.fy }, 409);
+  await audit(env, user, "CREATE_ADHOC_DC", "delivery_challan", res.id!, undefined, `${res.dc_number} · ${category}`);
+  return json({ id: res.id, dc_number: res.dc_number, class: res.klass, category, client_name, status: "DISPATCHED" }, 201);
 }
 
 // GET /api/delivery-challans/ad-hoc — the ad-hoc DC register (most recent first).
@@ -432,6 +426,117 @@ async function handleRemindDC(request: Request, env: Env, id: string): Promise<R
   await env.DB.prepare("UPDATE delivery_challans SET reminder_sent_at=datetime('now') WHERE id=?").bind(id).run();
   await audit(env, user, "REMIND_DC", "delivery_challan", id);
   return json({ ok: true, id });
+}
+
+// Shared: allocate a series number and insert an ad-hoc DC. Used by the ad-hoc
+// create endpoint and by recurring-schedule generation.
+async function insertAdHocDC(env: Env, f: { category: string; client_name: string; items_text?: string; notes?: string; delivery_person?: string }):
+    Promise<{ id?: string; dc_number?: string; klass?: string; error?: string; fy?: string }> {
+  const alloc = await allocateDCSeriesNumber(env, f.category);
+  if (alloc.error) return { error: alloc.error, fy: alloc.fy };
+  const dcNo = String(alloc.number);
+  const id = `dc${uid().slice(0, 10)}`;
+  await env.DB.prepare(`INSERT INTO delivery_challans
+    (id, order_id, status, dc_number, ad_hoc, dc_class, category, client_name, items_text, notes, driver_name, dispatched_at)
+    VALUES (?, '', 'DISPATCHED', ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+    .bind(id, dcNo, alloc.klass, f.category, f.client_name, f.items_text || null, f.notes || null, f.delivery_person || null).run();
+  return { id, dc_number: dcNo, klass: alloc.klass };
+}
+
+// ── Sample Tracker (Phase 3) — returnable-sample DCs, out vs returned ──
+// GET /api/dc-samples — returnable ad-hoc DCs with days_out + returned status.
+async function handleListDCSamples(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_number, client_name, items_text, dispatched_at, sample_returned_at,
+            CAST(julianday('now') - julianday(dispatched_at) AS INTEGER) AS days_out
+     FROM delivery_challans
+     WHERE ad_hoc=1 AND category='Returnable-Sample'
+     ORDER BY (sample_returned_at IS NOT NULL), dispatched_at ASC`
+  ).all();
+  const rows = results as Array<Record<string, unknown>>;
+  const out = rows.filter(r => !r.sample_returned_at);
+  return json({
+    rows,
+    out: out.length,
+    returned: rows.length - out.length,
+    total: rows.length,
+    overdue: out.filter(r => Number(r.days_out) >= 30).length,
+  });
+}
+
+// POST /api/dc-samples/:id/return — mark a returnable sample as returned.
+async function handleReturnDCSample(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=? AND ad_hoc=1 AND category='Returnable-Sample'").bind(id).first();
+  if (!dc) return json({ error: "Sample DC not found" }, 404);
+  await env.DB.prepare("UPDATE delivery_challans SET sample_returned_at=datetime('now'), status='RETURNED' WHERE id=?").bind(id).run();
+  await audit(env, user, "RETURN_SAMPLE", "delivery_challan", id);
+  return json({ ok: true, id });
+}
+
+// ── Recurring DC schedules (Phase 3) ──
+const DC_FREQ = ["Weekly", "Biweekly", "Monthly"];
+// GET /api/dc-recurring — all schedules.
+async function handleListDCRecurring(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare("SELECT * FROM dc_recurring ORDER BY active DESC, created_at DESC").all();
+  return json(results);
+}
+// POST /api/dc-recurring — create a schedule.
+async function handleCreateDCRecurring(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON body" }, 400); }
+  const client_name = String(body.client_name || "").trim();
+  const category = String(body.category || "").trim();
+  const frequency = String(body.frequency || "").trim();
+  if (!client_name) return json({ error: "client_name is required" }, 400);
+  if (!category) return json({ error: "category is required" }, 400);
+  if (!DC_FREQ.includes(frequency)) return json({ error: "frequency must be Weekly, Biweekly or Monthly" }, 400);
+  const id = `rec${uid().slice(0, 9)}`;
+  await env.DB.prepare(
+    "INSERT INTO dc_recurring (id, client_name, category, frequency, delivery_person, items_text, created_by) VALUES (?,?,?,?,?,?,?)"
+  ).bind(id, client_name, category, frequency, String(body.delivery_person || "").trim() || null, String(body.items_text || "").trim() || null, user!.sub).run();
+  await audit(env, user, "CREATE_RECURRING_DC", "dc_recurring", id, undefined, `${client_name} · ${frequency}`);
+  return json({ id }, 201);
+}
+// PATCH /api/dc-recurring/:id — toggle active/paused.
+async function handlePatchDCRecurring(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { body = {}; }
+  const active = body.active ? 1 : 0;
+  const r = await env.DB.prepare("UPDATE dc_recurring SET active=? WHERE id=?").bind(active, id).run();
+  if (!r.meta || r.meta.changes === 0) return json({ error: "Schedule not found" }, 404);
+  return json({ ok: true, id, active });
+}
+// POST /api/dc-recurring/:id/generate — create an ad-hoc DC from the schedule.
+async function handleGenerateDCRecurring(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  const s = await env.DB.prepare("SELECT * FROM dc_recurring WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!s) return json({ error: "Schedule not found" }, 404);
+  if (Number(s.active) !== 1) return json({ error: "Schedule is paused" }, 400);
+  const res = await insertAdHocDC(env, {
+    category: String(s.category), client_name: String(s.client_name),
+    items_text: s.items_text ? String(s.items_text) : "",
+    delivery_person: s.delivery_person ? String(s.delivery_person) : "",
+    notes: "Auto-generated from recurring schedule",
+  });
+  if (res.error) return json({ error: res.error, needs_series: true, fy: res.fy }, 409);
+  await env.DB.prepare("UPDATE dc_recurring SET last_generated_at=datetime('now') WHERE id=?").bind(id).run();
+  await audit(env, user, "GENERATE_RECURRING_DC", "delivery_challan", res.id!, undefined, `${res.dc_number} from ${id}`);
+  return json({ id: res.id, dc_number: res.dc_number, class: res.klass }, 201);
 }
 
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
@@ -907,6 +1012,8 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     // DC Number Series (Phase 0) — FY-aware, per-category-class DC numbering.
     // class: CONSUMABLE (7xxxxx, Consumables + Non-Returnable) | GIFTING (8xxxxx, Gifting + Returnable-Sample).
     `CREATE TABLE IF NOT EXISTS dc_series ( fy TEXT NOT NULL, class TEXT NOT NULL, prefix INTEGER NOT NULL, start_no INTEGER NOT NULL, last_no INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (fy, class) );`,
+    // Phase 3: recurring DC schedules — a template that generates ad-hoc DCs on demand.
+    `CREATE TABLE IF NOT EXISTS dc_recurring ( id TEXT PRIMARY KEY, client_name TEXT NOT NULL, category TEXT NOT NULL, frequency TEXT NOT NULL, delivery_person TEXT, items_text TEXT, active INTEGER DEFAULT 1, last_generated_at TEXT, created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS delivery_returns ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT, qty_returned INTEGER NOT NULL DEFAULT 0, reason TEXT, staff_id TEXT, returned_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS delivery_routes ( id TEXT PRIMARY KEY, name TEXT NOT NULL, route_date TEXT NOT NULL, stops TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'PLANNED', created_by TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS dunning_events ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, client_id TEXT NOT NULL, order_id TEXT, action_taken TEXT NOT NULL, notes TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
@@ -1133,7 +1240,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
     "ad_hoc INTEGER DEFAULT 0", "dc_class TEXT", "category TEXT",
     "client_name TEXT", "items_text TEXT", "notes TEXT",
     // Phase 2: billing — invoice details recorded when a DC is marked billed.
-    "invoice_no TEXT", "invoice_date TEXT"]) {
+    "invoice_no TEXT", "invoice_date TEXT",
+    // Phase 3: returnable-sample lifecycle — stamped when the sample comes back.
+    "sample_returned_at TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -1367,6 +1476,12 @@ export default {
       if (path==="/api/dc-billing/pending"       && method==="GET")  return handleListPendingBilling(request,env);
       { const m = path.match(/^\/api\/dc-billing\/([^/]+)\/bill$/);   if (m && method==="POST") return handleBillAdHocDC(request,env,m[1]); }
       { const m = path.match(/^\/api\/dc-billing\/([^/]+)\/remind$/); if (m && method==="POST") return handleRemindDC(request,env,m[1]); }
+      if (path==="/api/dc-samples"   && method==="GET")  return handleListDCSamples(request,env);
+      { const m = path.match(/^\/api\/dc-samples\/([^/]+)\/return$/); if (m && method==="POST") return handleReturnDCSample(request,env,m[1]); }
+      if (path==="/api/dc-recurring"  && method==="GET")  return handleListDCRecurring(request,env);
+      if (path==="/api/dc-recurring"  && method==="POST") return handleCreateDCRecurring(request,env);
+      { const m = path.match(/^\/api\/dc-recurring\/([^/]+)\/generate$/); if (m && method==="POST") return handleGenerateDCRecurring(request,env,m[1]); }
+      { const m = path.match(/^\/api\/dc-recurring\/([^/]+)$/); if (m && method==="PATCH") return handlePatchDCRecurring(request,env,m[1]); }
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
