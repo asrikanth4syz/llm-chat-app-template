@@ -402,12 +402,18 @@ describe("Vendors", () => {
     // Two POs: one delivered (RECEIVED), one still SENT.
     await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total,created_at) VALUES ('PO-AG1','VAG-1','RECEIVED',12000,'2026-09-01')").run();
     await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total,created_at) VALUES ('PO-AG2','VAG-1','SENT',8000,'2026-09-05')").run();
+    // Two catalogue products — their names/SKUs feed the directory brand/item search.
+    await vdb.prepare("INSERT OR REPLACE INTO vendor_products (id,vendor_id,sku,name) VALUES ('VP-AG1','VAG-1','SKU-RB','Red Bull Energy 250ml')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO vendor_products (id,vendor_id,sku,name) VALUES ('VP-AG2','VAG-1',NULL,'Monster Green')").run();
     const list = await (await get("/api/vendors", adminToken)).json() as Array<Record<string, unknown>>;
     const v = list.find(x => x.id === "VAG-1")!;
     expect(v.po_count).toBe(2);
     expect(v.delivered_count).toBe(1);        // only the RECEIVED PO — drives the "New" rule
     expect(v.spend).toBe(20000);              // committed spend across both POs
     expect(v.last_order).toBe("2026-09-05");  // most recent
+    expect(String(v.product_names)).toContain("Red Bull Energy 250ml");  // brand/item search index
+    expect(String(v.product_names)).toContain("Monster Green");
+    expect(String(v.product_skus)).toContain("SKU-RB");
 
     // A vendor with no POs reports zeros / null (frontend renders these as "New").
     await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active) VALUES ('VAG-2','No PO Vendor','Beverages',1)").run();

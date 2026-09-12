@@ -2987,12 +2987,16 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
   const denied = requireUser(user); if (denied) return denied;
   // Enrich each vendor with purchase-order aggregates: committed spend, PO count,
   // delivered-PO count (drives the "New — no history" rule), and last order date.
+  // product_names / product_skus: a searchable blob of each vendor's catalogue
+  // (item + brand names, SKUs) so the directory search can match by brand/item.
   const {results} = await env.DB.prepare(`
     SELECT v.*,
       COALESCE(p.po_count,0)        AS po_count,
       COALESCE(p.delivered_count,0) AS delivered_count,
       COALESCE(p.spend,0)           AS spend,
-      p.last_order                  AS last_order
+      p.last_order                  AS last_order,
+      COALESCE(vp.product_names,'') AS product_names,
+      COALESCE(vp.product_skus,'')  AS product_skus
     FROM vendors v
     LEFT JOIN (
       SELECT vendor_id,
@@ -3002,6 +3006,12 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
         MAX(created_at)  AS last_order
       FROM purchase_orders GROUP BY vendor_id
     ) p ON p.vendor_id = v.id
+    LEFT JOIN (
+      SELECT vendor_id,
+        GROUP_CONCAT(name, ' ') AS product_names,
+        GROUP_CONCAT(COALESCE(sku,''), ' ') AS product_skus
+      FROM vendor_products GROUP BY vendor_id
+    ) vp ON vp.vendor_id = v.id
     ORDER BY v.name`).all();
   return json(results);
 }
