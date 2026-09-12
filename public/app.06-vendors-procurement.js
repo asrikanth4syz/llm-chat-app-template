@@ -1201,7 +1201,7 @@ async function dcStartFY() {
   const res = await api('/dc-series/start-fy', { method:'POST', body: JSON.stringify({ fy, consumable_start, gifting_start }) });
   if (!res) return;
   showToast('DC series activated for FY ' + fy, 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 
 // ── Pending Billing for ad-hoc DCs (Phase 2) — grouped by client, 15/30-day tiers ──
@@ -1251,7 +1251,7 @@ async function dcMarkBilled(id, dcNo) {
   const res = await api('/dc-billing/' + id + '/bill', { method:'POST', body: JSON.stringify({ invoice_no: invoice_no.trim(), invoice_date: invoice_date.trim() }) });
   if (!res) return;
   showToast('DC ' + dcNo + ' marked billed', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 async function dcRemindClient(client) {
   // Remind every pending DC for this client (best-effort; the register re-renders after).
@@ -1290,7 +1290,7 @@ async function dcReturnSample(id, dcNo) {
   const res = await api('/dc-samples/' + id + '/return', { method:'POST', body:'{}' });
   if (!res) return;
   showToast('Sample ' + dcNo + ' marked returned', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 
 // ── Route Planner (Phase 4) — sequence ad-hoc DCs into a delivery run ──
@@ -1337,7 +1337,7 @@ async function dcBuildRoute() {
   const res = await api('/dc-routes', { method:'POST', body: JSON.stringify({ dc_ids, route_date, delivery_person }) });
   if (!res) return;
   showToast('Route built · ' + (res.stops||[]).length + ' stops', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 
 // ── Recurring DC schedules (Phase 3) ──
@@ -1374,18 +1374,18 @@ async function dcRecurringCreate() {
   const res = await api('/dc-recurring', { method:'POST', body: JSON.stringify({ client_name, category, frequency, items_text }) });
   if (!res) return;
   showToast('Schedule added', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 async function dcRecurringToggle(id, active) {
   const res = await api('/dc-recurring/' + id, { method:'PATCH', body: JSON.stringify({ active }) });
   if (!res) return;
-  navigate('procurement');
+  navigate('dc_manager');
 }
 async function dcRecurringGenerate(id) {
   const res = await api('/dc-recurring/' + id + '/generate', { method:'POST', body:'{}' });
   if (!res) return;
   showToast('DC ' + res.dc_number + ' generated', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
 }
 
 // ── Ad-hoc DC register + create form (Phase 1) ──
@@ -1435,21 +1435,92 @@ async function dcCreateAdHoc() {
   const res = await api('/delivery-challans/ad-hoc', { method:'POST', body: JSON.stringify({ category, client_name, items_text, delivery_person }) });
   if (!res) return;
   showToast('DC ' + res.dc_number + ' created', 'success');
-  navigate('procurement');
+  navigate('dc_manager');
+}
+
+// ── DC Manager page (Phase 5) — all Delivery-Challan tools in one place ──
+async function renderDCManager(el) {
+  const [dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring, dcRouteCands, dcRoutes] = await Promise.all([
+    api('/dc-series'), api('/delivery-challans/ad-hoc'), api('/dc-billing/pending'),
+    api('/dc-samples'), api('/dc-recurring'), api('/dc-routes/candidates'), api('/dc-routes'),
+  ]);
+  if (!dcSeries) return;
+  el.innerHTML = `
+  ${pageHeader('DC Manager', 'Delivery-Challan lifecycle — numbering · billing · samples · routes · recurring', '')}
+  ${dcSeriesPanelHTML(dcSeries)}
+  ${dcBillingPanelHTML(dcBilling)}
+  ${dcSamplesPanelHTML(dcSamples)}
+  ${dcRoutePanelHTML(dcRouteCands, dcRoutes)}
+  ${dcRecurringPanelHTML(dcRecurring, dcSeries)}
+  ${dcImportPanelHTML()}
+  ${dcAdhocPanelHTML(dcAdhoc, dcSeries)}
+  `;
+}
+
+// ── Historical DC import (Phase 5) ──
+const DC_IMPORT_COLS = ['dc_number','category','client_name','items_text','date','delivery_person','invoice_no','billed','returned'];
+function dcImportPanelHTML() {
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div><div style="font-weight:700;color:var(--navy);font-size:.95rem">Import historical DCs</div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px">Load past challans at their real numbers. Duplicates (by DC number) are skipped unless overwrite is on. After import, the FY series continues past the highest imported number.</div></div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('dcImportTemplate')}>⬇ Download template</button>
+    </div>
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.8rem">
+      <b>Columns:</b> <code style="color:var(--blue);word-break:break-all">${DC_IMPORT_COLS.join(', ')}</code>
+      <div style="color:var(--text-muted);margin-top:4px"><code>category</code>: Consumables / Non-Returnable → 7xxxxx · Gifting / Returnable-Sample → 8xxxxx. <code>billed</code> / <code>returned</code>: true/false.</div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <input type="file" id="dc-import-file" accept=".csv,.txt" ${dataChangeEl('dcImportPreview')}>
+      <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted)"><input type="checkbox" id="dc-import-overwrite"> Overwrite existing</label>
+    </div>
+    <div id="dc-import-preview" style="margin-top:10px"></div>
+    <div id="dc-import-actions" style="display:none;margin-top:10px"><button class="btn btn-gold btn-sm" ${dataAct('dcImportSubmit')}>Import DCs</button> <span id="dc-import-count" style="font-size:.82rem;color:var(--text-muted)"></span></div>
+  </div>`;
+}
+function dcImportTemplate() {
+  const csv = [
+    DC_IMPORT_COLS.join(','),
+    '700100,Consumables,Nimbus Cafés,Sugar 1kg ×120,2026-05-04,Ravi,INV-2026-045,true,false',
+    '80010,Returnable-Sample,Marina Retail,Coffee sampler ×6,2026-05-06,Asha,,false,false',
+  ].join('\n');
+  _downloadCSV('dc_import_template', csv);
+}
+function dcImportPreview(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const parsed = parseCSVText(e.target.result);
+    if (parsed.length < 2) { showToast('CSV needs a header row + at least one data row', 'error'); return; }
+    const headers = parsed[0].map(x => x.trim().toLowerCase());
+    if (!headers.includes('dc_number')) { showToast('CSV must have a "dc_number" column', 'error'); return; }
+    const rows = parsed.slice(1).filter(r => r.some(c => c && c.trim())).map(vals => {
+      const o = {}; headers.forEach((hd, i) => { o[hd] = vals[i] !== undefined ? vals[i].trim() : ''; }); return o;
+    });
+    window._dcImportRows = rows;
+    const prev = document.getElementById('dc-import-preview');
+    const acts = document.getElementById('dc-import-actions');
+    const cnt = document.getElementById('dc-import-count');
+    if (prev) prev.innerHTML = `<div style="font-size:.82rem;color:var(--text-muted)">Parsed <b>${rows.length}</b> row(s). Sample: <span class="mono">${h((rows[0]?.dc_number)||'—')}</span> · ${h(rows[0]?.client_name||'—')}</div>`;
+    if (acts) acts.style.display = 'block';
+    if (cnt) cnt.textContent = rows.length + ' row(s) ready';
+  };
+  reader.readAsText(file);
+}
+async function dcImportSubmit() {
+  const rows = window._dcImportRows;
+  if (!rows || !rows.length) { showToast('No rows to import', 'error'); return; }
+  const overwrite = document.getElementById('dc-import-overwrite')?.checked || false;
+  const res = await api('/dc-import', { method:'POST', body: JSON.stringify({ rows, overwrite }) });
+  if (!res) return;
+  showToast(res.success + ' DC(s) imported' + (res.skipped?', '+res.skipped+' skipped':'') + (res.failed?', '+res.failed+' failed':''), res.failed?'error':'success');
+  window._dcImportRows = null;
+  navigate('dc_manager');
 }
 
 async function renderProcurement(el) {
-  const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
-  const [pos, vendors, dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring, dcRouteCands, dcRoutes] = await Promise.all([
-    api('/purchase-orders'), api('/vendors'),
-    dcAdmin ? api('/dc-series') : Promise.resolve(null),
-    dcAdmin ? api('/delivery-challans/ad-hoc') : Promise.resolve(null),
-    dcAdmin ? api('/dc-billing/pending') : Promise.resolve(null),
-    dcAdmin ? api('/dc-samples') : Promise.resolve(null),
-    dcAdmin ? api('/dc-recurring') : Promise.resolve(null),
-    dcAdmin ? api('/dc-routes/candidates') : Promise.resolve(null),
-    dcAdmin ? api('/dc-routes') : Promise.resolve(null),
-  ]);
+  const [pos, vendors] = await Promise.all([api('/purchase-orders'), api('/vendors')]);
   if (!pos) return;
 
   const byStatus = s => pos.filter(p=>p.status===s);
@@ -1473,16 +1544,11 @@ async function renderProcurement(el) {
   const purgeBtn = APP.user?.role === 'super_admin' && pos.length
     ? `<button class="btn btn-secondary" style="color:var(--danger);border-color:var(--danger-soft-bg)" ${dataAct('purgeAllPOs')} title="Delete every purchase order — test-data cleanup">🗑 Delete all POs</button>`
     : '';
+  const dcLink = ['super_admin','ops_admin'].includes(APP.user?.role)
+    ? `<button class="btn btn-secondary" ${dataAct('navigate','dc_manager')}>Open DC Manager →</button>` : '';
   el.innerHTML = `
   ${pageHeader('Procurement', `${totalOpen} open POs`,
-    `${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
-
-  ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
-  ${dcAdmin ? dcBillingPanelHTML(dcBilling) : ''}
-  ${dcAdmin ? dcSamplesPanelHTML(dcSamples) : ''}
-  ${dcAdmin ? dcRoutePanelHTML(dcRouteCands, dcRoutes) : ''}
-  ${dcAdmin ? dcRecurringPanelHTML(dcRecurring, dcSeries) : ''}
-  ${dcAdmin ? dcAdhocPanelHTML(dcAdhoc, dcSeries) : ''}
+    `${dcLink}${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
