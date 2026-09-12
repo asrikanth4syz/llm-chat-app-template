@@ -396,6 +396,28 @@ describe("Vendors", () => {
     expect(ok(res.status)).toBe(true);
   });
 
+  it("GET /api/vendors — enriches each vendor with PO aggregates (spend, po_count, delivered_count, last_order)", async () => {
+    const vdb = env.DB as D1Database;
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active) VALUES ('VAG-1','Aggregate Vendor','Beverages',1)").run();
+    // Two POs: one delivered (RECEIVED), one still SENT.
+    await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total,created_at) VALUES ('PO-AG1','VAG-1','RECEIVED',12000,'2026-09-01')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total,created_at) VALUES ('PO-AG2','VAG-1','SENT',8000,'2026-09-05')").run();
+    const list = await (await get("/api/vendors", adminToken)).json() as Array<Record<string, unknown>>;
+    const v = list.find(x => x.id === "VAG-1")!;
+    expect(v.po_count).toBe(2);
+    expect(v.delivered_count).toBe(1);        // only the RECEIVED PO — drives the "New" rule
+    expect(v.spend).toBe(20000);              // committed spend across both POs
+    expect(v.last_order).toBe("2026-09-05");  // most recent
+
+    // A vendor with no POs reports zeros / null (frontend renders these as "New").
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active) VALUES ('VAG-2','No PO Vendor','Beverages',1)").run();
+    const list2 = await (await get("/api/vendors", adminToken)).json() as Array<Record<string, unknown>>;
+    const v2 = list2.find(x => x.id === "VAG-2")!;
+    expect(v2.po_count).toBe(0);
+    expect(v2.delivered_count).toBe(0);
+    expect(v2.last_order).toBeNull();
+  });
+
   it("GET /api/vendors — unauthenticated returns 401", async () => {
     const res = await get("/api/vendors");
     expect(res.status).toBe(401);
