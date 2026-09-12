@@ -1144,8 +1144,72 @@ async function purgeAllPOs() {
   navigate('procurement');
 }
 
+// ── DC Number Series (Phase 0) admin panel — rendered on the Procurement page ──
+function dcSeriesPanelHTML(data) {
+  if (!data) return '';
+  const fy = data.current_fy || '';
+  const byClass = {};
+  (data.series||[]).forEach(s => { if (s.fy === fy) byClass[s.class] = s; });
+  const card = (cls, klr, label, share) => {
+    const s = byClass[cls];
+    const active = s && s.status === 'ACTIVE';
+    const next = active ? (Number(s.last_no)+1) : '—';
+    const count = active ? (Number(s.last_no)-Number(s.start_no)+1) : 0;
+    return `<div style="flex:1;min-width:220px;background:var(--surface);border:1px solid var(--border);border-left:4px solid ${klr};border-radius:10px;padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-family:ui-monospace,monospace;font-weight:700;font-size:.78rem;color:${klr}">${label}</span>
+        <span style="font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:2px 8px;${active?'color:var(--success);background:var(--success-bg)':'color:var(--danger);background:var(--danger-bg)'}">${active?'● Active':'Not set'}</span>
+      </div>
+      <div style="font-size:.66rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Next number</div>
+      <div style="font-family:ui-monospace,monospace;font-weight:700;font-size:1.7rem;color:var(--navy);line-height:1.1">${next}</div>
+      <div style="font-size:.7rem;color:var(--text-muted);margin-top:3px">${share}</div>
+      <div style="display:flex;gap:14px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border);font-size:.72rem;color:var(--text-muted)">
+        <span>Start <b style="font-family:ui-monospace,monospace;color:var(--text)">${s?s.start_no:'—'}</b></span>
+        <span>Last <b style="font-family:ui-monospace,monospace;color:var(--text)">${s?s.last_no:'—'}</b></span>
+        <span>DCs <b style="font-family:ui-monospace,monospace;color:var(--text)">${count}</b></span>
+      </div>
+    </div>`;
+  };
+  const warn = data.needs_series
+    ? `<div style="background:var(--warning-bg);border:1px solid #fcd9a5;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:.8rem;color:var(--amber-text)"><b>⚑ FY ${fy} has no active series.</b> DC numbering is blocked until you start it below.</div>`
+    : '';
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-weight:700;color:var(--navy);font-size:.95rem">DC Number Series <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· FY ${fy} · resets 1 April</span></div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('dcSeriesWizardToggle')}>Start / update FY series</button>
+    </div>
+    ${warn}
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${card('CONSUMABLE','#0e7c86','7xxxxx · CONSUMABLE','Consumables & Non-Returnable')}
+      ${card('GIFTING','#b06a12','8xxxxx · GIFTING','Gifting & Returnable-Sample')}
+    </div>
+    <div id="dc-series-wizard" hidden style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Financial year</label><input id="dc-fy" value="${fy}" style="width:120px;display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Consumables start (7xxxxx)</label><input id="dc-cons" type="number" value="${byClass.CONSUMABLE?byClass.CONSUMABLE.start_no:700001}" style="width:150px;display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Gifting start (8xxxxx)</label><input id="dc-gift" type="number" value="${byClass.GIFTING?byClass.GIFTING.start_no:80001}" style="width:150px;display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <button class="btn btn-primary btn-sm" ${dataAct('dcStartFY')}>Activate series</button>
+      <span style="font-size:.72rem;color:var(--text-muted);max-width:280px">Sets the starting number for each class. Existing DCs keep their numbers; new DCs continue from the last used.</span>
+    </div>
+  </div>`;
+}
+function dcSeriesWizardToggle() { const w = document.getElementById('dc-series-wizard'); if (w) w.hidden = !w.hidden; }
+async function dcStartFY() {
+  const fy = document.getElementById('dc-fy')?.value.trim();
+  const consumable_start = Number(document.getElementById('dc-cons')?.value);
+  const gifting_start = Number(document.getElementById('dc-gift')?.value);
+  if (!/^\d{4}-\d{2}$/.test(fy||'')) { showToast('Financial year must look like 2026-27', 'error'); return; }
+  const res = await api('/dc-series/start-fy', { method:'POST', body: JSON.stringify({ fy, consumable_start, gifting_start }) });
+  if (!res) return;
+  showToast('DC series activated for FY ' + fy, 'success');
+  navigate('procurement');
+}
+
 async function renderProcurement(el) {
-  const [pos, vendors] = await Promise.all([api('/purchase-orders'), api('/vendors')]);
+  const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
+  const [pos, vendors, dcSeries] = await Promise.all([
+    api('/purchase-orders'), api('/vendors'),
+    dcAdmin ? api('/dc-series') : Promise.resolve(null),
+  ]);
   if (!pos) return;
 
   const byStatus = s => pos.filter(p=>p.status===s);
@@ -1172,6 +1236,8 @@ async function renderProcurement(el) {
   el.innerHTML = `
   ${pageHeader('Procurement', `${totalOpen} open POs`,
     `${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
+
+  ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">

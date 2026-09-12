@@ -229,6 +229,115 @@ async function nextDCNumber(env: Env): Promise<string> {
   return `DCN-${String(n).padStart(5, "0")}`;
 }
 
+// ── DC Number Series (Phase 0) — FY-aware, per-category-class DC numbering ──
+// Indian financial year starts 1 April, so a date in Jan–Mar belongs to the FY
+// that began the previous April. Returned as e.g. "2026-27".
+function currentFY(d: Date = new Date()): string {
+  const y = d.getUTCFullYear();
+  const startY = d.getUTCMonth() >= 3 ? y : y - 1; // month 3 = April (0-indexed)
+  return `${startY}-${String((startY + 1) % 100).padStart(2, "0")}`;
+}
+// Category → series class. Consumables/Non-Returnable → 7xxxxx; Gifting/
+// Returnable-Sample → 8xxxxx. Unknown categories fall back to CONSUMABLE.
+const DC_CLASS_FOR_CATEGORY: Record<string, "CONSUMABLE" | "GIFTING"> = {
+  "consumables": "CONSUMABLE", "consumable": "CONSUMABLE",
+  "non-returnable": "CONSUMABLE", "non_returnable": "CONSUMABLE", "nonreturnable": "CONSUMABLE",
+  "gifting": "GIFTING", "gift": "GIFTING",
+  "returnable-sample": "GIFTING", "returnable_sample": "GIFTING", "returnable": "GIFTING", "sample": "GIFTING",
+};
+function dcClassForCategory(cat: unknown): "CONSUMABLE" | "GIFTING" {
+  return DC_CLASS_FOR_CATEGORY[String(cat || "").trim().toLowerCase()] || "CONSUMABLE";
+}
+// Allocate the next DC number for a category from the active FY series (atomic
+// increment). Returns { error } when no ACTIVE series exists for the current FY
+// — the caller surfaces this as the "Start FY series" prompt.
+async function allocateDCSeriesNumber(env: Env, category: unknown):
+    Promise<{ number?: number; fy: string; klass: "CONSUMABLE" | "GIFTING"; error?: string }> {
+  const fy = currentFY();
+  const klass = dcClassForCategory(category);
+  const upd = await env.DB.prepare(
+    "UPDATE dc_series SET last_no=last_no+1, updated_at=datetime('now') WHERE fy=? AND class=? AND status='ACTIVE'"
+  ).bind(fy, klass).run();
+  if (!upd.meta || upd.meta.changes === 0)
+    return { fy, klass, error: `No active DC series for FY ${fy} (${klass}). Start the FY series first.` };
+  const row = await env.DB.prepare("SELECT last_no FROM dc_series WHERE fy=? AND class=?").bind(fy, klass).first() as {last_no:number}|null;
+  return { number: Number(row?.last_no), fy, klass };
+}
+// One-time seed: create the current FY's two series, continuing the existing
+// external numbering (Consumables last 700932, Gifting last 80055) so the next
+// DCs allocate as 700933 / 80056. Runs once (app_config flag), like the other
+// runtime migrations.
+async function migrateSeedDCSeries(env: Env): Promise<void> {
+  try {
+    if ((await getConfig(env, "dc_series_seeded", "")) === "1") return;
+    const fy = currentFY();
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?,?,?,?,?,?)")
+        .bind(fy, "CONSUMABLE", 7, 700001, 700932, "ACTIVE"),
+      env.DB.prepare("INSERT OR IGNORE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?,?,?,?,?,?)")
+        .bind(fy, "GIFTING", 8, 80001, 80055, "ACTIVE"),
+    ]);
+    await setConfig(env, "dc_series_seeded", "1", "system");
+  } catch { /* non-fatal — retried next cold start until the flag is set */ }
+}
+
+const DC_SERIES_ADMIN = ["super_admin", "ops_admin"];
+
+// GET /api/dc-series — all configured series (newest FY first) + the current FY
+// and a needs_series flag (true when the current FY has no ACTIVE series yet).
+async function handleListDCSeries(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const fy = currentFY();
+  const { results } = await env.DB.prepare("SELECT * FROM dc_series ORDER BY fy DESC, class ASC").all();
+  const activeThisFY = (results as Array<Record<string,unknown>>).filter(r => r.fy === fy && r.status === "ACTIVE");
+  return json({ current_fy: fy, needs_series: activeThisFY.length < 2, series: results });
+}
+
+// POST /api/dc-series/start-fy — admin: open (or re-open) the two series for an FY
+// with the given start numbers. Any ACTIVE series for a DIFFERENT FY is closed
+// (rolling into the new year). Body: { fy, consumable_start, gifting_start }.
+async function handleStartFYSeries(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: { fy?: string; consumable_start?: unknown; gifting_start?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: "Invalid JSON body" }, 400); }
+
+  const fy = String(body.fy || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(fy)) return json({ error: "fy must look like 2026-27" }, 400);
+  const cStart = Math.trunc(Number(body.consumable_start));
+  const gStart = Math.trunc(Number(body.gifting_start));
+  if (!Number.isFinite(cStart) || cStart < 1) return json({ error: "consumable_start must be a positive number" }, 400);
+  if (!Number.isFinite(gStart) || gStart < 1) return json({ error: "gifting_start must be a positive number" }, 400);
+
+  await env.DB.batch([
+    // Close any active series from other years (this FY becomes the live one).
+    env.DB.prepare("UPDATE dc_series SET status='CLOSED', updated_at=datetime('now') WHERE fy!=? AND status='ACTIVE'").bind(fy),
+    env.DB.prepare(`INSERT INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?,?,?,?,?, 'ACTIVE')
+      ON CONFLICT(fy,class) DO UPDATE SET start_no=excluded.start_no, last_no=excluded.last_no, status='ACTIVE', updated_at=datetime('now')`)
+      .bind(fy, "CONSUMABLE", 7, cStart, cStart - 1),
+    env.DB.prepare(`INSERT INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?,?,?,?,?, 'ACTIVE')
+      ON CONFLICT(fy,class) DO UPDATE SET start_no=excluded.start_no, last_no=excluded.last_no, status='ACTIVE', updated_at=datetime('now')`)
+      .bind(fy, "GIFTING", 8, gStart, gStart - 1),
+  ]);
+  await audit(env, user, "START_FY_SERIES", "dc_series", fy, undefined, `C:${cStart} G:${gStart}`);
+  return json({ ok: true, fy });
+}
+
+// POST /api/dc-series/allocate — admin: allocate the next DC number for a
+// category from the active FY series. Body: { category }. 409 when no series.
+async function handleAllocateDC(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: { category?: unknown };
+  try { body = await request.json() as typeof body; } catch { body = {}; }
+  const res = await allocateDCSeriesNumber(env, body.category);
+  if (res.error) return json({ error: res.error, fy: res.fy, needs_series: true }, 409);
+  return json({ number: res.number, fy: res.fy, class: res.klass });
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -699,6 +808,9 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS client_inventory ( id INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT NOT NULL, category TEXT DEFAULT '', uom TEXT DEFAULT 'unit', qty_on_hand REAL DEFAULT 0, reorder_level REAL DEFAULT 0, last_received_qty REAL DEFAULT 0, last_received_at TEXT, last_consumed_at TEXT, updated_at TEXT DEFAULT (datetime('now')), UNIQUE(client_id, sku) );`,
     `CREATE TABLE IF NOT EXISTS dc_documents ( id INTEGER PRIMARY KEY AUTOINCREMENT, dc_id TEXT NOT NULL, doc_type TEXT NOT NULL, filename TEXT, mime_type TEXT, content_b64 TEXT NOT NULL, file_size INTEGER, uploaded_at TEXT DEFAULT (datetime('now')), uploaded_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS dc_items ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, name TEXT NOT NULL, qty_ordered INTEGER NOT NULL DEFAULT 0, qty_delivered INTEGER NOT NULL DEFAULT 0 );`,
+    // DC Number Series (Phase 0) — FY-aware, per-category-class DC numbering.
+    // class: CONSUMABLE (7xxxxx, Consumables + Non-Returnable) | GIFTING (8xxxxx, Gifting + Returnable-Sample).
+    `CREATE TABLE IF NOT EXISTS dc_series ( fy TEXT NOT NULL, class TEXT NOT NULL, prefix INTEGER NOT NULL, start_no INTEGER NOT NULL, last_no INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (fy, class) );`,
     `CREATE TABLE IF NOT EXISTS delivery_returns ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT, qty_returned INTEGER NOT NULL DEFAULT 0, reason TEXT, staff_id TEXT, returned_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS delivery_routes ( id TEXT PRIMARY KEY, name TEXT NOT NULL, route_date TEXT NOT NULL, stops TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'PLANNED', created_by TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS dunning_events ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, client_id TEXT NOT NULL, order_id TEXT, action_taken TEXT NOT NULL, notes TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
@@ -854,6 +966,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
   await migrateAeratedGst40(env); // aerated beverages (HSN-tagged) → 40% slab (once)
   await migrateGst28ItemsTo40(env); // reconcile all remaining 28% items → 40% (once)
   await migrateBackfillAeratedHsn(env); // tag 40% items lacking an HSN with 220210 (once)
+  await migrateSeedDCSeries(env); // seed the current FY's DC number series (once)
   await migrateSeedPasswords(env); // retire plaintext SEED: credentials
   try {
     const renames: [string, string][] = [
@@ -1063,6 +1176,7 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
 
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
+export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
@@ -1140,6 +1254,11 @@ export default {
       if (path.match(/^\/api\/vendors\/[^/]+\/documents$/) && method==="GET") return handleListVendorDocuments(request,env,path);
       if (path.match(/^\/api\/vendors\/[^/]+\/products$/)  && method==="GET") return handleListVendorProducts(request,env,path);
       if (path.match(/^\/api\/vendors\/[^/]+$/) && method==="PATCH") return handlePatchVendor(request,env,path);
+
+      // DC Number Series (Phase 0)
+      if (path==="/api/dc-series"          && method==="GET")  return handleListDCSeries(request,env);
+      if (path==="/api/dc-series/start-fy" && method==="POST") return handleStartFYSeries(request,env);
+      if (path==="/api/dc-series/allocate" && method==="POST") return handleAllocateDC(request,env);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
