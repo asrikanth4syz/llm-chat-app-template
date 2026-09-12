@@ -563,6 +563,33 @@ describe("Vendors", () => {
   });
 });
 
+describe("Admin — purge all POs (test-data cleanup)", () => {
+  it("POST /api/admin/purge-pos — requires confirm, then deletes every PO + line items", async () => {
+    const vdb = env.DB as D1Database;
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active) VALUES ('VP-1','Purge Vendor','Beverages',1)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total) VALUES ('PO-PURGE1','VP-1','SENT',5000)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO po_items (id,po_id,sku,name,qty,unit_price,total) VALUES ('PI-1','PO-PURGE1','SKU1','Item',2,100,200)").run();
+
+    // Without confirm the destructive action is refused and nothing is deleted.
+    const noConfirm = await post("/api/admin/purge-pos", {}, adminToken);
+    expect(noConfirm.status).toBe(400);
+    const stillThere = await vdb.prepare("SELECT COUNT(*) AS n FROM purchase_orders WHERE id='PO-PURGE1'").first() as {n:number};
+    expect(stillThere.n).toBe(1);
+
+    const res = await post("/api/admin/purge-pos", { confirm: true }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { deleted: number };
+    expect(body.deleted).toBeGreaterThanOrEqual(1);
+
+    const pos = await (await get("/api/purchase-orders", adminToken)).json() as unknown[];
+    expect(pos.length).toBe(0);                              // every PO gone
+    const items = await vdb.prepare("SELECT COUNT(*) AS n FROM po_items").first() as {n:number};
+    expect(items.n).toBe(0);                                 // and their line items
+    const seq = await vdb.prepare("SELECT value FROM app_config WHERE key='po_seq'").first() as {value:string}|null;
+    expect(seq?.value).toBe("0");                            // numbering reset → next PO is PO-00001
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════

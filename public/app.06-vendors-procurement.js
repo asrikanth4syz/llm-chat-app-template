@@ -117,7 +117,7 @@ async function renderVendors(el) {
   // Dense, comparison-first table view (the "database" view). Same New rule as the
   // cards: a vendor with no delivered PO shows "—", never a false 0%.
   function vendorTableHTML(list) {
-    const th = (label, right) => `<th style="text-align:${right?'right':'left'};padding:10px 12px;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);white-space:nowrap;position:sticky;top:0;background:var(--surface-2,#f1f3f7);border-bottom:1px solid var(--border)">${label}</th>`;
+    const th = (label, right, cls) => `<th class="${cls||''}" style="text-align:${right?'right':'left'};padding:10px 12px;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);white-space:nowrap;position:sticky;top:0;background:var(--surface-2,#f1f3f7);border-bottom:1px solid var(--border)">${label}</th>`;
     const cell = (rate, hist) => hist ? `<b style="color:${scoreColor(rate||0)}">${pct(rate||0)}</b>` : `<span style="color:var(--text-muted)">—</span>`;
     const rows = list.map(v => {
       const hist = hasHistory(v), risk = isAtRisk(v);
@@ -134,19 +134,19 @@ async function renderVendors(el) {
           <div style="min-width:0"><div style="font-weight:700;font-size:.84rem;color:var(--navy);white-space:nowrap">${h(v.name)}</div>
           <div style="font-family:ui-monospace,monospace;font-size:.62rem;color:var(--text-muted)">${v.vendor_code||''}${v.category?` · ${(v.category||'').split(',')[0].trim()}`:''}</div></div>
         </div></td>
-        <td style="padding:9px 12px;font-size:.76rem;line-height:1.35;white-space:nowrap">
+        <td class="vcol-contact" style="padding:9px 12px;font-size:.76rem;line-height:1.35;white-space:nowrap">
           ${v.contact_phone?`<div style="color:var(--text)"><a href="tel:${h(v.contact_phone)}" style="color:inherit;text-decoration:none">📞 ${h(v.contact_phone)}</a></div>`:''}
           ${v.contact_email?`<div style="overflow:hidden;text-overflow:ellipsis;max-width:180px"><a href="mailto:${h(v.contact_email)}" style="color:var(--blue);text-decoration:none">✉ ${h(v.contact_email)}</a></div>`:''}
           ${!v.contact_phone&&!v.contact_email?'<span style="color:var(--text-muted)">—</span>':''}
         </td>
-        <td style="padding:9px 12px;text-align:right">${cell(v.on_time_rate, hist)}</td>
-        <td style="padding:9px 12px;text-align:right">${cell(v.fill_rate, hist)}</td>
-        <td style="padding:9px 12px;text-align:right;${mono}">${v.avg_lead_days!=null&&v.avg_lead_days!==''?v.avg_lead_days+'d':'—'}</td>
+        <td class="vcol-ontime" style="padding:9px 12px;text-align:right">${cell(v.on_time_rate, hist)}</td>
+        <td class="vcol-fill" style="padding:9px 12px;text-align:right">${cell(v.fill_rate, hist)}</td>
+        <td class="vcol-lead" style="padding:9px 12px;text-align:right;${mono}">${v.avg_lead_days!=null&&v.avg_lead_days!==''?v.avg_lead_days+'d':'—'}</td>
         <td style="padding:9px 12px;text-align:right">${ratingChip(v)}</td>
-        <td style="padding:9px 12px;text-align:right;${mono};font-weight:700">${(v.po_count||0)>0?inrShort(v.spend):'—'}</td>
-        <td style="padding:9px 12px;text-align:right;${mono}">${v.po_count||0}</td>
-        <td style="padding:9px 12px;text-align:right;font-family:ui-monospace,monospace;font-size:.74rem;color:var(--text-muted)">${v.last_order?fmtDate(v.last_order):'—'}</td>
-        <td style="padding:9px 12px">${status}</td>
+        <td class="vcol-spend" style="padding:9px 12px;text-align:right;${mono};font-weight:700">${(v.po_count||0)>0?inrShort(v.spend):'—'}</td>
+        <td class="vcol-pos" style="padding:9px 12px;text-align:right;${mono}">${v.po_count||0}</td>
+        <td class="vcol-last" style="padding:9px 12px;text-align:right;font-family:ui-monospace,monospace;font-size:.74rem;color:var(--text-muted)">${v.last_order?fmtDate(v.last_order):'—'}</td>
+        <td class="vcol-status" style="padding:9px 12px">${status}</td>
         <td style="padding:9px 12px;text-align:right;white-space:nowrap">
           <div style="display:inline-flex;gap:5px">
             <button class="btn btn-secondary btn-sm" ${dataAct('viewVendorById', _regVendor(v))}>View</button>
@@ -158,8 +158,8 @@ async function renderVendors(el) {
         </td></tr>`;
     }).join('');
     return `<div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.06)">
-      <table style="width:100%;min-width:960px;border-collapse:collapse">
-        <thead><tr>${th('Vendor')}${th('Contact')}${th('On-time',1)}${th('Fill',1)}${th('Lead',1)}${th('Rating',1)}${th('Spend',1)}${th('POs',1)}${th('Last order',1)}${th('Status')}${th('')}</tr></thead>
+      <table class="vdt" style="width:100%;border-collapse:collapse">
+        <thead><tr>${th('Vendor')}${th('Contact',0,'vcol-contact')}${th('On-time',1,'vcol-ontime')}${th('Fill',1,'vcol-fill')}${th('Lead',1,'vcol-lead')}${th('Rating',1)}${th('Spend',1,'vcol-spend')}${th('POs',1,'vcol-pos')}${th('Last order',1,'vcol-last')}${th('Status',0,'vcol-status')}${th('')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -216,7 +216,10 @@ async function renderVendors(el) {
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
     </label>
     <button class="btn btn-secondary btn-sm" id="vendor-clear-btn" style="display:none" ${dataAct('clearVendorSearch')}>Clear</button>
-    <div style="display:inline-flex;background:var(--surface-2,#f1f3f7);border:1px solid var(--border);border-radius:8px;padding:2px;margin-left:auto">
+    <select id="vendor-sort" title="Sort vendors" style="margin-left:auto;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:var(--surface)" ${dataChangeEl('setVendorSort')}>
+      ${[['risk','At-risk first'],['name','Name A–Z'],['rating','Rating high→low'],['ontime','On-time high→low'],['fill','Fill high→low'],['spend','Spend high→low'],['recent','Most recent order']].map(([v,l])=>`<option value="${v}"${(APP._vendorSort||'risk')===v?' selected':''}>Sort: ${l}</option>`).join('')}
+    </select>
+    <div style="display:inline-flex;background:var(--surface-2,#f1f3f7);border:1px solid var(--border);border-radius:8px;padding:2px">
       <button class="btn btn-sm" style="border:none;background:${APP._vendorView!=='cards'?'var(--surface)':'transparent'};box-shadow:${APP._vendorView!=='cards'?'0 1px 2px rgba(0,0,0,.12)':'none'};color:var(--navy);font-size:.76rem;padding:5px 12px" ${dataAct('setVendorView','table')}>▤ Table</button>
       <button class="btn btn-sm" style="border:none;background:${APP._vendorView==='cards'?'var(--surface)':'transparent'};box-shadow:${APP._vendorView==='cards'?'0 1px 2px rgba(0,0,0,.12)':'none'};color:var(--navy);font-size:.76rem;padding:5px 12px" ${dataAct('setVendorView','cards')}>▦ Cards</button>
     </div>
@@ -247,10 +250,17 @@ async function renderVendors(el) {
   <div id="vendor-no-match" style="text-align:center;padding:40px;color:var(--text-muted);display:${vendors.length===0?'block':'none'}">No vendors match your search.</div>
   <div id="vendor-list">
     ${(() => {
-      const sorted = [...allVendors].sort((a,b)=>{
-        const ar = isAtRisk(a)?1:0, br = isAtRisk(b)?1:0;
-        return br - ar || (b.rating||0)-(a.rating||0);
-      });
+      const byRisk = (a,b)=> (isAtRisk(b)?1:0)-(isAtRisk(a)?1:0) || (b.rating||0)-(a.rating||0);
+      const cmp = {
+        risk:   byRisk,
+        name:   (a,b)=> (a.name||'').localeCompare(b.name||''),
+        rating: (a,b)=> (b.rating||0)-(a.rating||0),
+        ontime: (a,b)=> (b.on_time_rate||0)-(a.on_time_rate||0),
+        fill:   (a,b)=> (b.fill_rate||0)-(a.fill_rate||0),
+        spend:  (a,b)=> (b.spend||0)-(a.spend||0),
+        recent: (a,b)=> String(b.last_order||'').localeCompare(String(a.last_order||'')),
+      }[APP._vendorSort||'risk'] || byRisk;
+      const sorted = [...allVendors].sort(cmp);
       return APP._vendorView==='cards'
         ? `<div id="vendor-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:stretch">${sorted.map(v=>`<div data-vname="${(v.name||'').toLowerCase()}" data-vcat="${(v.category||'').toLowerCase()}" data-vloc="${(v.location||'').toLowerCase()}" data-vsearch="${vendorSearchBlob(v)}" data-vactive="${v.active===0?'0':'1'}" style="height:100%">${vendorCard(v)}</div>`).join('')}</div>`
         : vendorTableHTML(sorted);
@@ -285,6 +295,12 @@ function filterVendorCards() {
   if (noMatch) noMatch.style.display = visible === 0 ? 'block' : 'none';
   const clearBtn = document.getElementById('vendor-clear-btn');
   if (clearBtn) clearBtn.style.display = (q||loc||cat) ? '' : 'none';
+}
+
+// Change the vendor directory sort order, then re-render (search state is preserved).
+function setVendorSort(el) {
+  APP._vendorSort = el.value;
+  renderVendors(document.getElementById('main-content'));
 }
 
 // Switch the vendor directory between the table (database) view and cards, then re-render.
@@ -1132,6 +1148,16 @@ async function confirmDebitNote(poId) {
 /* ============================================================
    PROCUREMENT
    ============================================================ */
+// Super-admin: wipe every purchase order and its receipts / invoices / debit
+// notes, and reset PO numbering to PO-00001. Intended for clearing test data.
+async function purgeAllPOs() {
+  if (!confirm('Delete ALL purchase orders and their receipts, invoices and debit notes?\n\nThis clears test PO data and resets PO numbering to PO-00001. It cannot be undone.')) return;
+  const res = await api('/admin/purge-pos', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+  if (!res) return;
+  showToast('Deleted ' + (res.deleted || 0) + ' purchase order(s)', 'success');
+  navigate('procurement');
+}
+
 async function renderProcurement(el) {
   const [pos, vendors] = await Promise.all([api('/purchase-orders'), api('/vendors')]);
   if (!pos) return;
@@ -1153,9 +1179,13 @@ async function renderProcurement(el) {
     { key:'INVOICED',          label:'Invoiced',      icon:'🧾', color:'#6b7280', bg:'#f9fafb', urgent: false },
   ];
 
+  APP._poCount = pos.length;
+  const purgeBtn = APP.user?.role === 'super_admin' && pos.length
+    ? `<button class="btn btn-secondary" style="color:var(--danger);border-color:var(--danger-soft-bg)" ${dataAct('purgeAllPOs')} title="Delete every purchase order — test-data cleanup">🗑 Delete all POs</button>`
+    : '';
   el.innerHTML = `
   ${pageHeader('Procurement', `${totalOpen} open POs`,
-    `<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
+    `${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">

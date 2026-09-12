@@ -1144,6 +1144,7 @@ export default {
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
       if (path==="/api/purchase-orders"               && method==="POST")  return handleCreatePO(request,env);
       if (path==="/api/purchase-orders/from-demand"   && method==="POST")  return handlePOFromDemand(request,env);
+      if (path==="/api/admin/purge-pos"               && method==="POST")  return handlePurgePOs(request,env);
       if (path==="/api/sourcing/preview"              && method==="GET")   return handleSourcingPreview(request,env);
       if (path==="/api/po-approval-threshold"         && method==="GET")   return handlePOApprovalThreshold(request,env,"GET");
       if (path==="/api/po-approval-threshold"         && method==="PATCH") return handlePOApprovalThreshold(request,env,"PATCH");
@@ -3014,6 +3015,39 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
     ) vp ON vp.vendor_id = v.id
     ORDER BY v.name`).all();
   return json(results);
+}
+
+// POST /api/admin/purge-pos — super-admin only. Wipes every purchase order and
+// its dependent records (receipts, invoices, debit notes) and resets the PO
+// number sequence to 0 so numbering restarts at PO-00001. Delivery challans and
+// vendor feedback are kept but their now-dangling po_id references are cleared.
+// Intended for clearing test data; the destructive action is gated behind
+// role + an explicit {confirm:true} body.
+async function handlePurgePOs(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({error:"Forbidden — super admin only"}, 403);
+  let body: {confirm?: boolean};
+  try { body = await request.json() as {confirm?: boolean}; } catch { body = {}; }
+  if (body.confirm !== true) return json({error:"Confirmation required"}, 400);
+
+  const countRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM purchase_orders").first() as {n:number}|null;
+  const deleted = Number(countRow?.n) || 0;
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM grn_lines"),
+    env.DB.prepare("DELETE FROM grn_records"),
+    env.DB.prepare("DELETE FROM po_invoices"),
+    env.DB.prepare("DELETE FROM vendor_debit_notes"),
+    env.DB.prepare("DELETE FROM po_items"),
+    env.DB.prepare("UPDATE delivery_challans SET po_id=NULL WHERE po_id IS NOT NULL"),
+    env.DB.prepare("UPDATE vendor_feedback SET po_id=NULL, grn_id=NULL WHERE po_id IS NOT NULL OR grn_id IS NOT NULL"),
+    env.DB.prepare("DELETE FROM purchase_orders"),
+  ]);
+  await setConfig(env, "po_seq", "0", user!.sub); // next PO restarts at PO-00001
+
+  await audit(env, user, "PURGE", "purchase_orders", "*", `${deleted} PO(s)`);
+  return json({deleted});
 }
 
 // Validate a vendor's registration + food-safety compliance.
