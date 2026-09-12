@@ -1293,6 +1293,53 @@ async function dcReturnSample(id, dcNo) {
   navigate('procurement');
 }
 
+// ── Route Planner (Phase 4) — sequence ad-hoc DCs into a delivery run ──
+function dcRoutePanelHTML(candidates, routes) {
+  const cands = candidates || [];
+  const recent = routes || [];
+  const candBody = cands.length
+    ? cands.map(c=>`<label style="display:flex;align-items:center;gap:9px;padding:7px 12px;border-top:1px solid var(--border);font-size:.82rem;cursor:pointer">
+        <input type="checkbox" class="dc-route-pick" value="${c.id}">
+        <span style="font-family:ui-monospace,monospace;font-weight:700">${c.dc_number||'—'}</span>
+        <span>${h(c.client_name||'—')}</span>
+        <span style="color:var(--text-muted)">· ${h(c.items_text||c.category||'—')}</span>
+      </label>`).join('')
+    : '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.84rem">No DCs are out for delivery.</div>';
+  const routeCard = r => `<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 12px;background:var(--surface-2);font-size:.8rem">
+        <b>${fmtDate(r.route_date)}${r.delivery_person?' · '+h(r.delivery_person):''}</b>
+        <span style="color:var(--text-muted)">${(r.stops||[]).length} stops</span>
+      </div>
+      ${(r.stops||[]).map(s=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-top:1px solid var(--border);font-size:.8rem">
+        <span style="flex:none;width:20px;height:20px;border-radius:50%;background:var(--navy);color:#fff;display:grid;place-items:center;font-size:.66rem;font-weight:700">${s.seq}</span>
+        <span style="font-family:ui-monospace,monospace;font-weight:700">${s.dc_number||'—'}</span>
+        <span>${h(s.client||'—')}</span>
+        <span style="color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">· ${h(s.items||'')}</span>
+        <a href="${s.maps}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;flex:none">🧭 Navigate</a>
+      </div>`).join('')}
+    </div>`;
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:12px">Route Planner <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· sequence today's deliveries</span></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Route date</label><input id="route-date" type="date" value="${new Date().toISOString().slice(0,10)}" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Delivery person</label><input id="route-person" placeholder="Optional" style="display:block;width:160px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <button class="btn btn-gold btn-sm" ${dataAct('dcBuildRoute')}>Build route from selected</button>
+    </div>
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px">${candBody}</div>
+    ${recent.length ? `<div style="font-size:.78rem;font-weight:600;color:var(--navy);margin-bottom:6px">Recent routes</div>${recent.slice(0,4).map(routeCard).join('')}` : ''}
+  </div>`;
+}
+async function dcBuildRoute() {
+  const dc_ids = [...document.querySelectorAll('.dc-route-pick:checked')].map(el => el.value);
+  if (!dc_ids.length) { showToast('Select at least one DC', 'error'); return; }
+  const route_date = document.getElementById('route-date')?.value;
+  const delivery_person = document.getElementById('route-person')?.value.trim();
+  const res = await api('/dc-routes', { method:'POST', body: JSON.stringify({ dc_ids, route_date, delivery_person }) });
+  if (!res) return;
+  showToast('Route built · ' + (res.stops||[]).length + ' stops', 'success');
+  navigate('procurement');
+}
+
 // ── Recurring DC schedules (Phase 3) ──
 function dcRecurringPanelHTML(list, dcSeries) {
   const rows = list || [];
@@ -1393,13 +1440,15 @@ async function dcCreateAdHoc() {
 
 async function renderProcurement(el) {
   const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
-  const [pos, vendors, dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring] = await Promise.all([
+  const [pos, vendors, dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring, dcRouteCands, dcRoutes] = await Promise.all([
     api('/purchase-orders'), api('/vendors'),
     dcAdmin ? api('/dc-series') : Promise.resolve(null),
     dcAdmin ? api('/delivery-challans/ad-hoc') : Promise.resolve(null),
     dcAdmin ? api('/dc-billing/pending') : Promise.resolve(null),
     dcAdmin ? api('/dc-samples') : Promise.resolve(null),
     dcAdmin ? api('/dc-recurring') : Promise.resolve(null),
+    dcAdmin ? api('/dc-routes/candidates') : Promise.resolve(null),
+    dcAdmin ? api('/dc-routes') : Promise.resolve(null),
   ]);
   if (!pos) return;
 
@@ -1431,6 +1480,7 @@ async function renderProcurement(el) {
   ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
   ${dcAdmin ? dcBillingPanelHTML(dcBilling) : ''}
   ${dcAdmin ? dcSamplesPanelHTML(dcSamples) : ''}
+  ${dcAdmin ? dcRoutePanelHTML(dcRouteCands, dcRoutes) : ''}
   ${dcAdmin ? dcRecurringPanelHTML(dcRecurring, dcSeries) : ''}
   ${dcAdmin ? dcAdhocPanelHTML(dcAdhoc, dcSeries) : ''}
 

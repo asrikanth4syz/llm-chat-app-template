@@ -539,6 +539,64 @@ async function handleGenerateDCRecurring(request: Request, env: Env, id: string)
   return json({ id: res.id, dc_number: res.dc_number, class: res.klass }, 201);
 }
 
+// ── Route Planner (Phase 4) — order ad-hoc DCs into a delivery sequence ──
+function mapsLinkFor(query: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+// GET /api/dc-routes/candidates — ad-hoc DCs out for delivery (not delivered,
+// not returned) that can be added to a route.
+async function handleListRouteCandidates(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_number, client_name, items_text, category
+     FROM delivery_challans
+     WHERE ad_hoc=1 AND delivered_at IS NULL AND sample_returned_at IS NULL AND status!='CANCELLED'
+     ORDER BY dispatched_at ASC`
+  ).all();
+  return json(results);
+}
+// GET /api/dc-routes — recent planned routes (stops parsed).
+async function handleListDCRoutes(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare("SELECT * FROM dc_routes ORDER BY route_date DESC, created_at DESC LIMIT 50").all();
+  const rows = (results as Array<Record<string, unknown>>).map(r => ({ ...r, stops: JSON.parse(String(r.stops || "[]")) }));
+  return json(rows);
+}
+// POST /api/dc-routes — build a numbered stop sequence from selected ad-hoc DCs.
+async function handleCreateDCRoute(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_SERIES_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON body" }, 400); }
+  const dcIds = Array.isArray(body.dc_ids) ? (body.dc_ids as string[]) : [];
+  if (!dcIds.length) return json({ error: "Select at least one DC" }, 400);
+  const routeDate = String(body.route_date || "").trim() || new Date().toISOString().slice(0, 10);
+  const deliveryPerson = String(body.delivery_person || "").trim();
+
+  // Fetch the chosen DCs, preserving the caller's order as the stop sequence.
+  const placeholders = dcIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT id, dc_number, client_name, items_text FROM delivery_challans WHERE ad_hoc=1 AND id IN (${placeholders})`
+  ).bind(...dcIds).all();
+  const byId = new Map((results as Array<Record<string, unknown>>).map(r => [String(r.id), r]));
+  const stops = dcIds.filter(id => byId.has(id)).map((id, i) => {
+    const r = byId.get(id)!;
+    const client = String(r.client_name || "");
+    return { seq: i + 1, dc_id: id, dc_number: r.dc_number, client, items: r.items_text || "", maps: mapsLinkFor(client) };
+  });
+  if (!stops.length) return json({ error: "None of the selected DCs were found" }, 400);
+
+  const id = `rt${uid().slice(0, 10)}`;
+  await env.DB.prepare(
+    "INSERT INTO dc_routes (id, route_date, delivery_person, stops, status, created_by) VALUES (?,?,?,?,?,?)"
+  ).bind(id, routeDate, deliveryPerson || null, JSON.stringify(stops), "PLANNED", user!.sub).run();
+  await audit(env, user, "CREATE_DC_ROUTE", "dc_route", id, undefined, `${stops.length} stops`);
+  return json({ id, route_date: routeDate, delivery_person: deliveryPerson, status: "PLANNED", stops }, 201);
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -1014,6 +1072,8 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS dc_series ( fy TEXT NOT NULL, class TEXT NOT NULL, prefix INTEGER NOT NULL, start_no INTEGER NOT NULL, last_no INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (fy, class) );`,
     // Phase 3: recurring DC schedules — a template that generates ad-hoc DCs on demand.
     `CREATE TABLE IF NOT EXISTS dc_recurring ( id TEXT PRIMARY KEY, client_name TEXT NOT NULL, category TEXT NOT NULL, frequency TEXT NOT NULL, delivery_person TEXT, items_text TEXT, active INTEGER DEFAULT 1, last_generated_at TEXT, created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    // Phase 4: DC route planner — an ordered stop sequence for ad-hoc DCs on a day.
+    `CREATE TABLE IF NOT EXISTS dc_routes ( id TEXT PRIMARY KEY, route_date TEXT NOT NULL, delivery_person TEXT, stops TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'PLANNED', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS delivery_returns ( id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, sku TEXT NOT NULL, item_name TEXT, qty_returned INTEGER NOT NULL DEFAULT 0, reason TEXT, staff_id TEXT, returned_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS delivery_routes ( id TEXT PRIMARY KEY, name TEXT NOT NULL, route_date TEXT NOT NULL, stops TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'PLANNED', created_by TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS dunning_events ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, client_id TEXT NOT NULL, order_id TEXT, action_taken TEXT NOT NULL, notes TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
@@ -1482,6 +1542,9 @@ export default {
       if (path==="/api/dc-recurring"  && method==="POST") return handleCreateDCRecurring(request,env);
       { const m = path.match(/^\/api\/dc-recurring\/([^/]+)\/generate$/); if (m && method==="POST") return handleGenerateDCRecurring(request,env,m[1]); }
       { const m = path.match(/^\/api\/dc-recurring\/([^/]+)$/); if (m && method==="PATCH") return handlePatchDCRecurring(request,env,m[1]); }
+      if (path==="/api/dc-routes/candidates" && method==="GET")  return handleListRouteCandidates(request,env);
+      if (path==="/api/dc-routes"            && method==="GET")  return handleListDCRoutes(request,env);
+      if (path==="/api/dc-routes"            && method==="POST") return handleCreateDCRoute(request,env);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);

@@ -796,6 +796,35 @@ describe("DC Samples + Recurring (Phase 3)", () => {
   });
 });
 
+describe("DC Route Planner (Phase 4)", () => {
+  it("lists out-for-delivery candidates and builds a numbered stop sequence", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    const a = await (await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "Indus Foods", items_text: "Water" }, adminToken)).json() as { id: string; dc_number: string };
+    const b = await (await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "Orbit", items_text: "Tea" }, adminToken)).json() as { id: string; dc_number: string };
+
+    const cands = await (await get("/api/dc-routes/candidates", adminToken)).json() as Array<{id:string}>;
+    expect(cands.some(c => c.id === a.id)).toBe(true);
+    expect(cands.some(c => c.id === b.id)).toBe(true);
+
+    expect((await post("/api/dc-routes", { dc_ids: [] }, adminToken)).status).toBe(400);
+
+    const route = await (await post("/api/dc-routes", { dc_ids: [b.id, a.id], route_date: "2026-09-13", delivery_person: "Ravi" }, adminToken)).json() as
+      { id: string; stops: Array<{seq:number;dc_number:string;client:string;maps:string}> };
+    expect(route.stops.length).toBe(2);
+    expect(route.stops[0].seq).toBe(1);
+    expect(route.stops[0].dc_number).toBe(b.dc_number);      // caller's order preserved
+    expect(route.stops[1].dc_number).toBe(a.dc_number);
+    expect(route.stops[0].maps).toContain("google.com/maps");
+    expect(route.stops[0].maps).toContain("Orbit");
+
+    const list = await (await get("/api/dc-routes", adminToken)).json() as Array<{id:string;stops:unknown[]}>;
+    const saved = list.find(r => r.id === route.id)!;
+    expect(Array.isArray(saved.stops)).toBe(true);
+    expect(saved.stops.length).toBe(2);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
