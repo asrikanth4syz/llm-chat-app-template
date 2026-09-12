@@ -1204,11 +1204,62 @@ async function dcStartFY() {
   navigate('procurement');
 }
 
+// ── Ad-hoc DC register + create form (Phase 1) ──
+function dcAdhocPanelHTML(list, dcSeries) {
+  const rows = list || [];
+  const needsSeries = dcSeries && dcSeries.needs_series;
+  const clsChip = c => c==='GIFTING'
+    ? '<span style="font-family:ui-monospace,monospace;font-size:.62rem;font-weight:700;color:#b06a12;background:#faedda;border-radius:5px;padding:1px 6px">8xxxxx</span>'
+    : '<span style="font-family:ui-monospace,monospace;font-size:.62rem;font-weight:700;color:#0e7c86;background:#e0f2f3;border-radius:5px;padding:1px 6px">7xxxxx</span>';
+  const body = rows.length
+    ? rows.slice(0,8).map(d=>`<tr style="border-top:1px solid var(--border)">
+        <td style="padding:8px 12px;font-family:ui-monospace,monospace;font-weight:700">${d.dc_number||'—'}</td>
+        <td style="padding:8px 12px">${clsChip(d.dc_class)}</td>
+        <td style="padding:8px 12px">${h(d.client_name||'—')}</td>
+        <td style="padding:8px 12px;color:var(--text-muted)">${h(d.items_text||'—')}</td>
+        <td style="padding:8px 12px;color:var(--text-muted)">${d.category||'—'}</td>
+        <td style="padding:8px 12px"><span style="font-size:.64rem;font-weight:700;border-radius:20px;padding:2px 9px;background:var(--surface-2);color:var(--text-muted)">${d.status||'—'}</span></td>
+      </tr>`).join('')
+    : '<tr><td colspan="6" style="padding:18px;text-align:center;color:var(--text-muted);font-size:.84rem">No ad-hoc DCs yet.</td></tr>';
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:10px">Ad-hoc Delivery Challans <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· challan-first, numbered from the FY series</span></div>
+    ${needsSeries ? '<div style="background:var(--warning-bg);border:1px solid #fcd9a5;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:.8rem;color:var(--amber-text)">Start the FY series above before creating DCs.</div>' : `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Category</label>
+        <select id="adhoc-cat" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px">
+          <option>Consumables</option><option>Non-Returnable</option><option>Gifting</option><option>Returnable-Sample</option>
+        </select></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Client</label><input id="adhoc-client" placeholder="Client name" style="display:block;width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Items</label><input id="adhoc-items" placeholder="e.g. Water 20L ×40" style="display:block;width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Delivery person</label><input id="adhoc-person" placeholder="Optional" style="display:block;width:150px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <button class="btn btn-gold btn-sm" ${dataAct('dcCreateAdHoc')}>+ Create DC</button>
+    </div>`}
+    <div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">
+      <table style="width:100%;min-width:640px;border-collapse:collapse">
+        <thead><tr>${['DC No.','Class','Client','Items','Category','Status'].map(x=>`<th style="text-align:left;padding:9px 12px;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--surface-2)">${x}</th>`).join('')}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+async function dcCreateAdHoc() {
+  const category = document.getElementById('adhoc-cat')?.value;
+  const client_name = document.getElementById('adhoc-client')?.value.trim();
+  const items_text = document.getElementById('adhoc-items')?.value.trim();
+  const delivery_person = document.getElementById('adhoc-person')?.value.trim();
+  if (!client_name) { showToast('Client name is required', 'error'); return; }
+  const res = await api('/delivery-challans/ad-hoc', { method:'POST', body: JSON.stringify({ category, client_name, items_text, delivery_person }) });
+  if (!res) return;
+  showToast('DC ' + res.dc_number + ' created', 'success');
+  navigate('procurement');
+}
+
 async function renderProcurement(el) {
   const dcAdmin = ['super_admin','ops_admin'].includes(APP.user?.role);
-  const [pos, vendors, dcSeries] = await Promise.all([
+  const [pos, vendors, dcSeries, dcAdhoc] = await Promise.all([
     api('/purchase-orders'), api('/vendors'),
     dcAdmin ? api('/dc-series') : Promise.resolve(null),
+    dcAdmin ? api('/delivery-challans/ad-hoc') : Promise.resolve(null),
   ]);
   if (!pos) return;
 
@@ -1238,6 +1289,7 @@ async function renderProcurement(el) {
     `${purgeBtn}<button class="btn btn-gold" ${dataAct('newPOPickVendor')}>${iconPlus(14)} New PO</button>`)}
 
   ${dcAdmin ? dcSeriesPanelHTML(dcSeries) : ''}
+  ${dcAdmin ? dcAdhocPanelHTML(dcAdhoc, dcSeries) : ''}
 
   <!-- Status tiles -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
