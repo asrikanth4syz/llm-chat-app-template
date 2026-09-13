@@ -1448,6 +1448,7 @@ async function renderDCManager(el) {
   el.innerHTML = `
   ${pageHeader('DC Manager', 'Delivery-Challan lifecycle — numbering · billing · samples · routes · recurring', '')}
   ${dcSeriesPanelHTML(dcSeries)}
+  ${dcReportsPanelHTML()}
   ${dcBillingPanelHTML(dcBilling)}
   ${dcSamplesPanelHTML(dcSamples)}
   ${dcRoutePanelHTML(dcRouteCands, dcRoutes)}
@@ -1455,6 +1456,70 @@ async function renderDCManager(el) {
   ${dcImportPanelHTML()}
   ${dcAdhocPanelHTML(dcAdhoc, dcSeries)}
   `;
+}
+
+// ── DC Reports (Phase 6) — read-only, date-ranged, CSV-exportable ──
+const DC_REPORT_COLS = {
+  by_client: [['client_name','Client'],['total','Total'],['delivered','Delivered'],['billed','Billed'],['unbilled','Unbilled'],['samples','Samples']],
+  by_month:  [['month','Month'],['total','Total'],['billed','Billed'],['unbilled','Unbilled'],['samples','Samples']],
+  pending:   [['dc_number','DC No.'],['client_name','Client'],['category','Category'],['dispatched_at','Dispatched'],['days_pending','Days pending']],
+  range:     [['dc_number','DC No.'],['dc_class','Class'],['category','Category'],['client_name','Client'],['items_text','Items'],['status','Status'],['billed','Billed'],['invoice_no','Invoice'],['dispatched_at','Dispatched']],
+};
+function dcReportsPanelHTML() {
+  const today = new Date().toISOString().slice(0,10);
+  const from = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  return `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+    <div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:12px">Reports <span style="font-weight:400;color:var(--text-muted);font-size:.82rem">· read-only · export to CSV</span></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Report</label>
+        <select id="dc-rep-type" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px">
+          <option value="by_client">By Client</option>
+          <option value="by_month">By Month</option>
+          <option value="pending">Pending DCs (unbilled)</option>
+          <option value="range">All DCs (range)</option>
+        </select></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">From</label><input id="dc-rep-from" type="date" value="${from}" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">To</label><input id="dc-rep-to" type="date" value="${today}" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <button class="btn btn-gold btn-sm" ${dataAct('dcRunReport')}>Run report</button>
+      <button class="btn btn-secondary btn-sm" id="dc-rep-csv" style="display:none" ${dataAct('dcReportCSV')}>⬇ Download CSV</button>
+    </div>
+    <div id="dc-report-out" style="color:var(--text-muted);font-size:.84rem">Choose a report and date range, then Run.</div>
+  </div>`;
+}
+async function dcRunReport() {
+  const type = document.getElementById('dc-rep-type')?.value || 'by_client';
+  const from = document.getElementById('dc-rep-from')?.value || '';
+  const to = document.getElementById('dc-rep-to')?.value || '';
+  const out = document.getElementById('dc-report-out');
+  if (out) out.textContent = 'Running…';
+  const data = await api('/dc-reports?type=' + encodeURIComponent(type) + '&from=' + from + '&to=' + to);
+  if (!data) return;
+  const cols = DC_REPORT_COLS[data.type] || DC_REPORT_COLS.by_client;
+  const rows = data.rows || [];
+  window._dcReport = { type: data.type, cols, rows, from: data.from, to: data.to };
+  const csvBtn = document.getElementById('dc-rep-csv');
+  if (csvBtn) csvBtn.style.display = rows.length ? '' : 'none';
+  if (!out) return;
+  if (!rows.length) { out.innerHTML = '<div style="padding:14px 0;color:var(--text-muted)">No DCs in this range.</div>'; return; }
+  const fmtCell = (v, key) => {
+    if (key === 'dispatched_at' && v) return fmtDate(v);
+    if (key === 'billed') return Number(v) ? 'Yes' : '';
+    return h(v == null ? '' : String(v));
+  };
+  out.innerHTML = `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:6px">${rows.length} row(s) · ${h(data.from)} → ${h(data.to)}</div>
+    <div class="table-wrap" style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;max-height:420px;overflow-y:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:520px">
+      <thead><tr>${cols.map(c=>`<th style="text-align:left;padding:9px 12px;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);background:var(--surface-2);position:sticky;top:0">${c[1]}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(r=>`<tr style="border-top:1px solid var(--border)">${cols.map(c=>`<td style="padding:8px 12px;font-size:.82rem${['total','delivered','billed','unbilled','samples','days_pending'].includes(c[0])?';font-family:ui-monospace,monospace;text-align:right':''}">${fmtCell(r[c[0]], c[0])}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>`;
+}
+function dcReportCSV() {
+  const rep = window._dcReport;
+  if (!rep || !rep.rows.length) { showToast('Run a report first', 'info'); return; }
+  const esc = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+  const header = rep.cols.map(c => c[1]).join(',');
+  const body = rep.rows.map(r => rep.cols.map(c => esc(r[c[0]])).join(',')).join('\n');
+  _downloadCSV('dc_report_' + rep.type + '_' + rep.from + '_' + rep.to, header + '\n' + body);
 }
 
 // ── Historical DC import (Phase 5) ──

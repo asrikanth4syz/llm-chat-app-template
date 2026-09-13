@@ -663,6 +663,44 @@ async function handleImportDCs(request: Request, env: Env): Promise<Response> {
   return json({ success, skipped, failed: errors.length, errors });
 }
 
+// GET /api/dc-reports?type=&from=&to= — read-only DC reports over ad-hoc DCs,
+// scoped to a dispatched-date range. type: by_client | by_month | pending | range.
+async function handleDCReports(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const type = url.searchParams.get("type") || "by_client";
+  const to = (url.searchParams.get("to") || "").trim() || new Date().toISOString().slice(0, 10);
+  const from = (url.searchParams.get("from") || "").trim() || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const scope = "ad_hoc=1 AND date(dispatched_at) BETWEEN ? AND ?";
+  let sql: string;
+  if (type === "by_month") {
+    sql = `SELECT substr(dispatched_at,1,7) AS month, COUNT(*) AS total,
+      SUM(COALESCE(billed,0)) AS billed,
+      SUM(CASE WHEN COALESCE(billed,0)=0 AND COALESCE(category,'')!='Returnable-Sample' THEN 1 ELSE 0 END) AS unbilled,
+      SUM(CASE WHEN category='Returnable-Sample' THEN 1 ELSE 0 END) AS samples
+      FROM delivery_challans WHERE ${scope} GROUP BY month ORDER BY month`;
+  } else if (type === "pending") {
+    sql = `SELECT dc_number, client_name, category, dispatched_at,
+      CAST(julianday('now')-julianday(dispatched_at) AS INTEGER) AS days_pending
+      FROM delivery_challans WHERE ${scope} AND COALESCE(billed,0)=0 AND COALESCE(category,'')!='Returnable-Sample'
+      ORDER BY days_pending DESC`;
+  } else if (type === "range") {
+    sql = `SELECT dc_number, dc_class, category, client_name, items_text, status,
+      COALESCE(billed,0) AS billed, invoice_no, dispatched_at
+      FROM delivery_challans WHERE ${scope} ORDER BY dispatched_at DESC, dc_number DESC`;
+  } else { // by_client
+    sql = `SELECT client_name, COUNT(*) AS total,
+      SUM(CASE WHEN status IN ('DELIVERED','RETURNED','BILLED') OR COALESCE(billed,0)=1 THEN 1 ELSE 0 END) AS delivered,
+      SUM(COALESCE(billed,0)) AS billed,
+      SUM(CASE WHEN COALESCE(billed,0)=0 AND COALESCE(category,'')!='Returnable-Sample' THEN 1 ELSE 0 END) AS unbilled,
+      SUM(CASE WHEN category='Returnable-Sample' THEN 1 ELSE 0 END) AS samples
+      FROM delivery_challans WHERE ${scope} GROUP BY client_name ORDER BY total DESC`;
+  }
+  const { results } = await env.DB.prepare(sql).bind(from, to).all();
+  return json({ type, from, to, rows: results });
+}
+
 // ── Zoho Inventory sync (Gap 4b) ──────────────────────────────────────
 // Push our stock levels to Zoho Inventory ("Sync now"), and accept Zoho's
 // stock updates back via a webhook. Real API calls fire when an OAuth access
@@ -1612,6 +1650,7 @@ export default {
       if (path==="/api/dc-routes"            && method==="GET")  return handleListDCRoutes(request,env);
       if (path==="/api/dc-routes"            && method==="POST") return handleCreateDCRoute(request,env);
       if (path==="/api/dc-import"            && method==="POST") return handleImportDCs(request,env);
+      if (path==="/api/dc-reports"           && method==="GET")  return handleDCReports(request,env);
 
       // Purchase Orders
       if (path==="/api/purchase-orders"               && method==="GET")   return handleListPOs(request,env);
