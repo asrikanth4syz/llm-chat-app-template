@@ -857,6 +857,35 @@ describe("DC historical import (Phase 5)", () => {
   });
 });
 
+describe("DC Reports (Phase 6)", () => {
+  it("by_client / pending / range / by_month reports over a date range", async () => {
+    const fy = currentFY();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'CONSUMABLE',7,700001,700932,'ACTIVE')").bind(fy).run();
+    await env.DB.prepare("INSERT OR REPLACE INTO dc_series (fy,class,prefix,start_no,last_no,status) VALUES (?, 'GIFTING',8,80001,80055,'ACTIVE')").bind(fy).run();
+    const c1 = await (await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "RepCo", items_text: "Water" }, adminToken)).json() as { id: string };
+    await post("/api/delivery-challans/ad-hoc", { category: "Consumables", client_name: "RepCo", items_text: "Sugar" }, adminToken);
+    await post("/api/delivery-challans/ad-hoc", { category: "Returnable-Sample", client_name: "RepCo", items_text: "Sampler" }, adminToken);
+    await post(`/api/dc-billing/${c1.id}/bill`, { invoice_no: "INV-9" }, adminToken);
+
+    const from = "2000-01-01", to = "2999-12-31";
+    const byc = await (await get(`/api/dc-reports?type=by_client&from=${from}&to=${to}`, adminToken)).json() as { rows: Array<Record<string, number|string>> };
+    const rep = byc.rows.find(r => r.client_name === "RepCo")!;
+    expect(rep.total).toBe(3);
+    expect(rep.billed).toBe(1);
+    expect(rep.unbilled).toBe(1);   // the unbilled consumable (returnable excluded)
+    expect(rep.samples).toBe(1);
+
+    const pend = await (await get(`/api/dc-reports?type=pending&from=${from}&to=${to}`, adminToken)).json() as { rows: Array<{client_name:string}> };
+    expect(pend.rows.filter(r => r.client_name === "RepCo").length).toBe(1);
+
+    const range = await (await get(`/api/dc-reports?type=range&from=${from}&to=${to}`, adminToken)).json() as { rows: Array<{client_name:string}> };
+    expect(range.rows.filter(r => r.client_name === "RepCo").length).toBe(3);
+
+    const bym = await (await get(`/api/dc-reports?type=by_month&from=${from}&to=${to}`, adminToken)).json() as { rows: Array<{total:number}> };
+    expect(bym.rows.reduce((s, r) => s + Number(r.total), 0)).toBeGreaterThanOrEqual(3);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // CLIENTS — GST number (optional, 15 chars when present)
 // ════════════════════════════════════════════════════════════════════
