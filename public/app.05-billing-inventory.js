@@ -901,6 +901,13 @@ async function editInventoryItem(sku) {
   const liveSubs = Object.values(_invCache||{}).map(i => i.sub_category).filter(Boolean);
   const subs = [...new Set([...liveSubs, 'Normal','Healthy', item.sub_category].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const subOpts = subs.map(s => `<option value="${h(s)}" ${s===(item.sub_category||'Normal')?'selected':''}>${h(s)}</option>`).join('');
+  // Brand: a structured pick-list of brands already in the catalogue (+ this
+  // item's own) so the same brand isn't re-typed a dozen ways — reports group by
+  // brand. New brands are still allowed via "Add new brand".
+  const liveBrands = Object.values(_invCache||{}).map(i => i.brand).filter(Boolean);
+  const brands = [...new Set([...liveBrands, item.brand].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const brandOpts = `<option value="" ${!item.brand?'selected':''}>— None —</option>` +
+    brands.map(b => `<option value="${h(b)}" ${b===item.brand?'selected':''}>${h(b)}</option>`).join('');
   const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
   const uomOpts = uoms.map(u => `<option value="${u}" ${(item.uom||'unit')===u?'selected':''}>${u}</option>`).join('');
 
@@ -916,7 +923,9 @@ async function editInventoryItem(sku) {
     <div id="ei-tab-prod" class="ei-section">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="form-group" style="grid-column:1/-1"><label>Item Name *</label><input type="text" id="ei-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
-        <div class="form-group"><label>Brand</label><input type="text" id="ei-brand" value="${item.brand||''}"></div>
+        <div class="form-group"><label>Brand</label>
+          <select id="ei-brand" ${dataChange('eiNewToggle', 'brand')}>${brandOpts}<option value="__new__">➕ Add new brand…</option></select>
+          <input type="text" id="ei-brand-new" placeholder="Type the new brand name" style="display:none;margin-top:6px"></div>
         <div class="form-group"><label>Category</label>
           <select id="ei-cat" ${dataChange('eiNewToggle', 'cat')}>${catOpts}<option value="__new__">➕ Add new category…</option></select>
           <input type="text" id="ei-cat-new" placeholder="Type the new category name" style="display:none;margin-top:6px"></div>
@@ -1071,10 +1080,11 @@ function eiCatVal(kind) {
 async function saveInventoryItem(sku) {
   if (eiVal('ei-cat') === '__new__' && !eiCatVal('cat')) { showToast('Type the new category name first', 'error'); return; }
   if (eiVal('ei-subcat') === '__new__' && !eiCatVal('subcat')) { showToast('Type the new sub-category name first', 'error'); return; }
+  if (eiVal('ei-brand') === '__new__' && !eiCatVal('brand')) { showToast('Type the new brand name first', 'error'); return; }
   const body = {
     // Product ID
     name:           eiVal('ei-name'),
-    brand:          eiVal('ei-brand'),
+    brand:          eiCatVal('brand'),
     category:       eiCatVal('cat'),
     emoji:          eiVal('ei-emoji'),
     barcode:        eiVal('ei-barcode'),
