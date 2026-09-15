@@ -3169,6 +3169,21 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   const allowed = ORDER_FSM[order.status] || [];
   if (!allowed.includes(body.to)) return json({error:`Cannot transition from ${order.status} to ${body.to}`}, 400);
 
+  // An amendment awaiting approval is the CLIENT's decision. Ops/admin raised the
+  // change; only the client (approver or admin for that order's client) may
+  // approve it — so nobody can self-approve a change to a client's own order.
+  if (body.to === "APPROVED" && order.status === "PENDING_APPROVAL") {
+    const pendingAmend = await env.DB.prepare("SELECT 1 FROM order_amendments WHERE order_id=? AND revision=? LIMIT 1")
+      .bind(id, order.revision).first();
+    if (pendingAmend) {
+      const isClientApprover = ["client_admin", "client_approver"].includes(user!.role);
+      const sameClient = !user!.client_id || String(user!.client_id) === String(order.client_id);
+      if (!isClientApprover || !sameClient) {
+        return json({ error: "This change must be approved by the client — ops/admin cannot approve an amendment to a client's order." }, 403);
+      }
+    }
+  }
+
   await env.DB.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=?").bind(body.to, id).run();
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
     .bind(uid(), id, order.status, body.to, user!.sub, user!.name, body.note||null).run();

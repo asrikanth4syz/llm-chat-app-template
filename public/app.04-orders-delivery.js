@@ -401,7 +401,12 @@ function opsNextStep(order, orderDCs) {
   const step = (verb, why, owner, act) => ({ verb, why, owner, act });
   switch (s) {
     case 'PENDING_PRICING': return step('Set prices', 'Awaiting pricing before approval', 'Ops desk', dataActClose('repriceOrderModal', id));
-    case 'SUBMITTED': case 'PENDING_APPROVAL': return step('Approve order', 'Waiting for approval before fulfilment', 'Approvals', dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail'));
+    case 'SUBMITTED': case 'PENDING_APPROVAL': {
+      const pendingAmend = s==='PENDING_APPROVAL' && Number(order.revision||1)>1
+        && order.amendments && order.amendments[0] && Number(order.amendments[0].revision)===Number(order.revision);
+      if (pendingAmend) return step('Awaiting client approval', 'Order amended — the client must approve the change before fulfilment resumes', 'Client', '');
+      return step('Approve order', 'Waiting for approval before fulfilment', 'Approvals', dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail'));
+    }
     case 'APPROVED': return step('Acknowledge', 'Approved — start processing', 'Ops desk', dataActClose('advanceOrder', id, 'ACKNOWLEDGED', 'Order acknowledged — processing started'));
     case 'ACKNOWLEDGED': return step('Inventory check', 'Confirm stock availability', 'Ops desk', dataActClose('advanceOrder', id, 'INVENTORY_CHECK', 'Inventory check initiated'));
     case 'INVENTORY_CHECK': return step('Confirm stock', 'Mark stock available, or raise a PO', 'Ops desk', dataActClose('advanceOrder', id, 'READY_TO_PICK', 'Stock available — ready for picking'));
@@ -432,7 +437,9 @@ function orderStepperHtml(order, orderDCs) {
   const banner = next
     ? `<div class="onext">
          <div><div class="ol2">Next step</div><div class="ot">${h(next.verb)} <span class="m">· ${h(next.why)} · owner: ${h(next.owner)}</span></div></div>
-         <button class="btn btn-primary obtn" ${next.act}>${h(next.verb)} →</button>
+         ${next.act
+           ? `<button class="btn btn-primary obtn" ${next.act}>${h(next.verb)} →</button>`
+           : `<span class="badge badge-warning" style="padding:8px 12px">⏳ ${h(next.verb)}</span>`}
        </div>`
     : (order.status === 'CLOSED' ? `<div class="odone">✓ Order complete — delivered and closed.</div>` : '');
   return stepper + banner;
@@ -718,13 +725,18 @@ async function viewOrder(id) {
     (() => {
       const s = order.status;
       const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+      // A pending amendment must be approved by the client, not ops/admin.
+      const isPendingAmend = s==='PENDING_APPROVAL' && Number(order.revision||1)>1
+        && order.amendments && order.amendments[0] && Number(order.amendments[0].revision)===Number(order.revision);
       const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
+      if (isPendingAmend)
+        footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Awaiting client approval of the change</span>`);
       if (opsRole) {
         if (['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'].includes(s))
           footer.push(`<button class="btn btn-warning" ${dataActClose('amendOrderModal', id)}>✏️ Amend</button>`);
         if (s==='PENDING_PRICING')
           footer.push(`<button class="btn btn-gold" ${dataActClose('repriceOrderModal', id)}>💰 Set Prices</button>`);
-        if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
+        if (s==='SUBMITTED'||(s==='PENDING_APPROVAL'&&!isPendingAmend))
           footer.push(`<button class="btn btn-success" ${dataActClose('advanceOrder', id, 'APPROVED', 'Approved via order detail')}>✓ Approve</button>`);
         if (s==='APPROVED')
           footer.push(`<button class="btn btn-primary" ${dataActClose('advanceOrder', id, 'ACKNOWLEDGED', 'Order acknowledged — processing started')}>Acknowledge</button>`);

@@ -2779,3 +2779,36 @@ describe("Order amendment — client-visible diff & budget", () => {
     expect(d.budget.monthly_budget).toBe(500000);
   });
 });
+
+describe("Order amendment — only the client may approve the change", () => {
+  it("blocks ops/admin from approving an amended order, but lets the client approve", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind("AMD-6", "c1", "tst-admin", "APPROVED", 450, 81, 531, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("AMD-6-oi", "AMD-6", "SKU001", "Basmati Rice 5kg", 1, 450, 450).run();
+
+    // Ops amends -> order goes to PENDING_APPROVAL (rev 2)
+    const amend = await post("/api/orders/AMD-6/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 2, unit_price: 150 }],
+      reason: "swap",
+    }, adminToken);
+    expect(amend.status).toBe(200);
+
+    // Admin (super_admin) trying to approve the change is forbidden
+    const adminApprove = await post("/api/orders/AMD-6/transition", { to: "APPROVED", note: "admin self-approve" }, adminToken);
+    expect(adminApprove.status).toBe(403);
+
+    // The client (client_admin for c1) can approve the change
+    const clientApprove = await post("/api/orders/AMD-6/transition", { to: "APPROVED", note: "client approves change" }, clientToken);
+    expect(clientApprove.status).toBe(200);
+  });
+
+  it("still lets ops approve a normal (non-amended) pending order", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind("PA-1", "c1", "tst-admin", "PENDING_APPROVAL", 450, 81, 531, "Regular").run();
+    const res = await post("/api/orders/PA-1/transition", { to: "APPROVED", note: "ops approves above-threshold order" }, adminToken);
+    expect(res.status).toBe(200);
+  });
+});
