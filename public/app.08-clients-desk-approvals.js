@@ -433,6 +433,12 @@ async function manageClientCatalog(clientId, clientName) {
          ${assignedSkus.size > 0 ? `<button class="btn btn-sm" style="font-size:.72rem;padding:2px 10px;background:var(--danger-soft-bg);color:var(--danger);border:none" ${dataAct('removeAllCCItems')}>Remove All</button>` : ''}
        </div>
      </div>
+     ${assignedSkus.size > 0 ? `<div style="margin-bottom:8px">
+       <input id="cc-assigned-search" type="search" placeholder="Search assigned products by name or SKU…"
+         style="width:100%;padding:7px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.82rem;box-sizing:border-box"
+         ${dataInput('filterCCAssigned')}>
+       <div id="cc-assigned-nomatch" style="display:none;color:var(--text-muted);font-size:.8rem;padding:8px 2px">No assigned product matches your search.</div>
+     </div>` : ''}
      <div id="cc-assigned-list" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
        ${(assigned||[]).length === 0
          ? `<div class="cc-empty" style="color:var(--text-muted);font-size:.82rem;padding:12px;text-align:center">No products assigned yet. Search above or import a category.</div>`
@@ -440,6 +446,23 @@ async function manageClientCatalog(clientId, clientName) {
      </div>`,
     `<div style="font-size:.76rem;color:var(--text-muted);flex:1">Clients see only assigned products when placing orders.</div>
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Done</button>`);
+}
+
+// Filter the assigned-products list in place (by name / SKU). Hides rows rather
+// than re-rendering, so any in-progress price edit and scroll position survive.
+function filterCCAssigned() {
+  const q = (document.getElementById('cc-assigned-search')?.value || '').trim().toLowerCase();
+  const list = document.getElementById('cc-assigned-list');
+  if (!list) return;
+  let shown = 0;
+  [...list.children].forEach(row => {
+    if (row.classList && row.classList.contains('cc-empty')) return;
+    const match = !q || (row.textContent || '').toLowerCase().includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  const nomatch = document.getElementById('cc-assigned-nomatch');
+  if (nomatch) nomatch.style.display = (q && shown === 0) ? 'block' : 'none';
 }
 
 // Per-unit price maths shared by render + live recompute.

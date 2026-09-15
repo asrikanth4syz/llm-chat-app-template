@@ -729,8 +729,16 @@ async function viewOrder(id) {
       const isPendingAmend = s==='PENDING_APPROVAL' && Number(order.revision||1)>1
         && order.amendments && order.amendments[0] && Number(order.amendments[0].revision)===Number(order.revision);
       const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
-      if (isPendingAmend)
-        footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Awaiting client approval of the change</span>`);
+      if (isPendingAmend) {
+        const canClientApprove = ['client_admin','client_approver'].includes(APP.user?.role||'');
+        if (opsRole)
+          footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Awaiting client approval of the change</span>`);
+        else if (canClientApprove) {
+          footer.push(`<button class="btn btn-success" ${dataActClose('approveOrder', id)}>✓ Approve change</button>`);
+          footer.push(`<button class="btn btn-danger" ${dataActClose('rejectOrder', id)}>✕ Reject change</button>`);
+        } else
+          footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Pending your approver's review</span>`);
+      }
       if (opsRole) {
         if (['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'].includes(s))
           footer.push(`<button class="btn btn-warning" ${dataActClose('amendOrderModal', id)}>✏️ Amend</button>`);
