@@ -925,6 +925,9 @@ async function settingsTab(tab, btn) {
         <span class="badge ${z.mode==='live'?'badge-danger':'badge-info'}">${z.mode==='live'?'LIVE':'Dry-run'}</span>
       </div>
       <div class="card-body" style="display:grid;gap:16px;padding:20px">
+        <div class="alert alert-info" style="font-size:.82rem;margin-bottom:0">
+          ℹ️ Only the Zoho <b>API credentials</b> are Worker secrets (change those by redeploying). Everything on this card — <b>Enable/Disable</b>, <b>Mode</b>, and the <b>Sync now / Full reconcile</b> buttons — is controlled here and takes effect immediately, no redeploy needed.
+        </div>
         <div style="display:grid;gap:12px;padding:16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
             <div>
