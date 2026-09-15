@@ -900,11 +900,12 @@ async function submitReprice(id) {
    ============================================================ */
 function amendRowHTML(it) {
   const price = Number(it.unit_price) || 0;
-  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-price="${price}">
+  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}">
     <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div></td>
     <td><input type="number" min="1" step="1" class="amend-qty" value="${Number(it.qty)||1}" ${dataInput('amendRecalc')}
-      style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
-    <td style="text-align:right">${fmt(price)}</td>
+      style="width:66px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
+    <td><input type="number" min="0" step="0.01" class="amend-price" value="${price}" ${dataInput('amendRecalc')}
+      style="width:92px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
     <td style="text-align:right"><button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', it.sku)} title="Remove line">×</button></td>
   </tr>`;
 }
@@ -914,19 +915,21 @@ async function amendOrderModal(id) {
   if (!order) return;
   APP._amendInv = (inv || []).map(i => ({ sku: i.sku, name: i.name, unit_price: i.unit_price != null ? i.unit_price : (i.price || 0) }));
   const rows = (order.items || []).map(it => amendRowHTML(it)).join('');
-  const opts = APP._amendInv.map(i => `<option value="${h(i.sku)}">${h(i.name)}${i.sku ? ' (' + h(i.sku) + ')' : ''}</option>`).join('');
   openModal(`✏️ Amend Order ${id}`,
     `<div style="margin:0 0 12px;padding:9px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:.82rem;color:#9a3412">
        ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
      </div>
-     <table class="table" style="margin:0">
-       <thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit ₹</th><th></th></tr></thead>
+     <table class="table" style="margin:0;table-layout:auto;width:100%">
+       <thead><tr><th>Item</th><th style="text-align:right;width:74px">Qty</th><th style="text-align:right;width:100px">Unit ₹</th><th style="width:40px"></th></tr></thead>
        <tbody id="amend-body">${rows}</tbody>
      </table>
-     <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-       <select id="amend-add-sku" class="input" style="flex:1;font-size:.84rem">${opts}</select>
-       <input id="amend-add-qty" type="number" min="1" value="1" style="width:64px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.84rem">
-       <button class="btn btn-secondary btn-sm" ${dataAct('amendAddItem')}>+ Add / swap</button>
+     <div style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+       <div style="font-size:.78rem;font-weight:700;color:var(--navy);margin-bottom:6px">Add or swap a product</div>
+       <input id="amend-add-search" type="search" autocomplete="off" placeholder="Search catalogue by name or SKU…"
+         ${dataInput('amendSearchResults')}
+         style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem;box-sizing:border-box">
+       <div id="amend-search-results" style="display:none;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;background:var(--surface)"></div>
+       <div style="font-size:.72rem;color:var(--text-muted);margin-top:6px">Pick a product to add a line, then set its quantity and unit price.</div>
      </div>
      <label style="display:block;margin-top:12px;font-size:.82rem;font-weight:600">Reason for change <span style="color:var(--danger,#dc2626)">*</span>
        <textarea id="amend-reason" class="input" rows="2" placeholder="e.g. client swapped Product X for Product Y" style="width:100%;margin-top:4px"></textarea>
@@ -937,18 +940,34 @@ async function amendOrderModal(id) {
   amendRecalc();
 }
 
-function amendAddItem() {
-  const sel = document.getElementById('amend-add-sku');
-  const qi = document.getElementById('amend-add-qty');
-  const body = document.getElementById('amend-body');
-  if (!sel || !body) return;
-  const sku = sel.value;
-  const qty = Math.max(1, parseInt(qi && qi.value, 10) || 1);
+// Substring search over the whole catalogue (name OR SKU) — replaces the native
+// <select> whose type-ahead only matched the first character.
+function amendSearchResults() {
+  const q = (document.getElementById('amend-add-search')?.value || '').trim().toLowerCase();
+  const box = document.getElementById('amend-search-results');
+  if (!box) return;
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = (APP._amendInv || []).filter(i =>
+    (i.name || '').toLowerCase().includes(q) || (i.sku || '').toLowerCase().includes(q)).slice(0, 12);
+  box.style.display = 'block';
+  box.innerHTML = matches.length
+    ? matches.map(i => `<div ${dataAct('amendAddFromSearch', i.sku)}
+        style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;font-size:.83rem">
+        <span>${h(i.name)} <span class="u-subtiny" style="font-family:monospace;color:var(--text-muted)">${h(i.sku)||''}</span></span>
+        <span style="color:var(--text-muted)">${fmt(i.unit_price || 0)}</span></div>`).join('')
+    : `<div style="padding:8px 12px;font-size:.8rem;color:var(--text-muted)">No product matches "${h(q)}"</div>`;
+}
+
+function amendAddFromSearch(sku) {
   const item = (APP._amendInv || []).find(i => i.sku === sku);
-  if (!item) return;
-  const existing = body.querySelector(`.amend-row[data-sku="${(window.CSS && CSS.escape) ? CSS.escape(sku) : sku}"] .amend-qty`);
-  if (existing) existing.value = (parseInt(existing.value, 10) || 0) + qty;
-  else body.insertAdjacentHTML('beforeend', amendRowHTML({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price }));
+  const body = document.getElementById('amend-body');
+  if (!item || !body) return;
+  const esc = (window.CSS && CSS.escape) ? CSS.escape(sku) : sku;
+  const existing = body.querySelector(`.amend-row[data-sku="${esc}"] .amend-qty`);
+  if (existing) { existing.value = (parseInt(existing.value, 10) || 0) + 1; existing.focus(); }
+  else body.insertAdjacentHTML('beforeend', amendRowHTML({ sku: item.sku, name: item.name, qty: 1, unit_price: item.unit_price }));
+  const s = document.getElementById('amend-add-search'); if (s) s.value = '';
+  const box = document.getElementById('amend-search-results'); if (box) { box.style.display = 'none'; box.innerHTML = ''; }
   amendRecalc();
 }
 
@@ -963,7 +982,7 @@ function amendRecalc() {
   let sub = 0;
   document.querySelectorAll('.amend-row').forEach(r => {
     const q = parseInt(r.querySelector('.amend-qty')?.value, 10) || 0;
-    const p = parseFloat(r.dataset.price) || 0;
+    const p = parseFloat(r.querySelector('.amend-price')?.value) || 0;
     sub += q * p;
   });
   const el = document.getElementById('amend-total');
@@ -976,7 +995,7 @@ async function submitAmendOrder(id) {
   const items = [...document.querySelectorAll('.amend-row')].map(r => ({
     sku: r.dataset.sku, name: r.dataset.name,
     qty: parseInt(r.querySelector('.amend-qty')?.value, 10) || 0,
-    unit_price: parseFloat(r.dataset.price) || 0,
+    unit_price: parseFloat(r.querySelector('.amend-price')?.value) || 0,
   })).filter(i => i.sku && i.qty > 0);
   if (!items.length) { showToast('Add at least one item', 'error'); return; }
   const btn = document.querySelector('#modal-footer .btn-primary');

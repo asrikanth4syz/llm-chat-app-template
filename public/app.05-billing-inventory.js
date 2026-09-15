@@ -831,8 +831,8 @@ function invDetailHTML(item) {
       </div>
       <div>
         <div style="font-size:.72rem;font-weight:800;color:var(--warning);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Vendor Information</div>
-        ${invDetailRow('Primary Vendor', item.vendor_name||'—')}
-        ${invDetailRow('Secondary Vendor', item.secondary_vendor_name||'—')}
+        ${invDetailRow('Preferred Vendor (primary)', item.vendor_name||'—')}
+        ${invDetailRow('Backup Vendor (secondary)', item.secondary_vendor_name||'—')}
         ${invDetailRow('Vendor SKU', item.vendor_sku||'—')}
         ${invDetailRow('Lead Time (days)', item.vendor_lead_days||3)}
         ${invDetailRow('MOQ', item.vendor_moq||1)}
@@ -967,8 +967,8 @@ async function editInventoryItem(sku) {
     <div id="ei-tab-vendor" class="ei-section" style="display:none">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="form-group" style="grid-column:1/-1">
-          <label style="display:flex;justify-content:space-between;align-items:center">
-            Primary Vendor
+          <label style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span>⭐ Preferred Vendor <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">(primary — sourced first for auto-PO)</span></span>
             <button type="button" class="btn btn-secondary btn-sm" style="font-size:.72rem;padding:2px 10px" ${dataAct('toggleAddVendorInline')}>+ Add New Vendor</button>
           </label>
           <select id="ei-vendor"><option value="">— None —</option>${vendorOpts}</select>
