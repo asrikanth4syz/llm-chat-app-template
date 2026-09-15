@@ -653,29 +653,41 @@ async function processCSVUpload() {
   const headers = parsed[0].map(h => h.toLowerCase().trim());
   // Accept common header spellings so a client's own sheet still imports.
   const findCol = (names) => { for (const n of names) { const i = headers.indexOf(n); if (i !== -1) return i; } return -1; };
-  const skuIdx = findCol(['sku', 'sku code', 'item code', 'code', 'product code']);
-  const qtyIdx = findCol(['quantity', 'qty', 'order qty', 'order quantity', 'quantity required', 'qty required', 'req qty']);
-  if (skuIdx === -1 || qtyIdx === -1) {
-    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" (or "qty") columns.</div>'; return;
+  const skuIdx  = findCol(['sku', 'sku code', 'item code', 'code', 'product code']);
+  const nameIdx = findCol(['item name', 'name', 'product name', 'product', 'description', 'item', 'particulars']);
+  const qtyIdx  = findCol(['quantity', 'qty', 'order qty', 'order quantity', 'quantity required', 'qty required', 'req qty']);
+  if (qtyIdx === -1 || (skuIdx === -1 && nameIdx === -1)) {
+    if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have a "quantity" column and either a "SKU" or an "Item Name" column.</div>'; return;
   }
+  // Normalise for matching: lowercase, collapse whitespace. Lets a sheet with
+  // only item names (blank SKU column) still match the catalog.
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const catalog = APP._catalog || [];
   let imported = 0, blankQty = 0, notFound = [];
   for (let i = 1; i < parsed.length; i++) {
     const cols = parsed[i];
-    const sku = (cols[skuIdx] || '').trim();
-    if (!sku) continue; // truly empty row — ignore silently
+    const sku  = skuIdx  !== -1 ? (cols[skuIdx]  || '').trim() : '';
+    const name = nameIdx !== -1 ? (cols[nameIdx] || '').trim() : '';
+    if (!sku && !name) continue; // truly empty row — ignore silently
     // Tolerate quotes, spaces, thousands separators and unit suffixes ("2 kg",
     // "1,000"); keep decimals so UOM items (kg / litre) can be ordered fractionally.
     const qty = parseFloat(String(cols[qtyIdx] || '').replace(/,/g, '').replace(/[^0-9.\-]/g, ''));
     if (!isFinite(qty) || qty <= 0) { blankQty++; continue; }
-    const skuNorm = sku.toLowerCase();
-    const item = APP._catalog && APP._catalog.find(it => (it.sku || '').toLowerCase() === skuNorm);
-    if (!item) { notFound.push(sku); continue; }
-    const existing = APP.cart.find(c => (c.sku || '').toLowerCase() === skuNorm);
+    // Match by SKU when one is given, otherwise fall back to the item name.
+    let item = null;
+    if (sku)  item = catalog.find(it => norm(it.sku) === norm(sku));
+    if (!item && name) item = catalog.find(it => norm(it.name) === norm(name));
+    if (!item) { notFound.push(sku || name); continue; }
+    // Key by SKU when the item has one, otherwise by name — so a SKU-less
+    // catalog doesn't merge different items onto one blank-SKU cart line.
+    const keyOf = (o) => (o.sku && String(o.sku).trim()) ? 'sku:' + norm(o.sku) : 'name:' + norm(o.name);
+    const itemKey = keyOf(item);
+    const existing = APP.cart.find(c => keyOf(c) === itemKey);
     if (existing) existing.qty += qty;
     else APP.cart.push({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
-  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
+  const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">Not found in your catalog: ${notFound.join(', ')}</div>` : '';
   if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'var(--success-soft-bg)':'var(--amber-bg)'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'var(--amber-text)'}">
     <b>${imported} item(s) added to cart</b>${blankQty?`, ${blankQty} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
     ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
