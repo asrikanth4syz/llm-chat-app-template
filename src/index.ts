@@ -1474,7 +1474,7 @@ async function fixCategoryNames(env: Env): Promise<void> {
     "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT",
     "onboarding_status TEXT DEFAULT 'active'","vendor_code TEXT",
     "bank_account_name TEXT","bank_account_no TEXT","bank_ifsc TEXT","bank_name TEXT",
-    "bank_branch TEXT","upi_id TEXT","payment_terms TEXT"]) {
+    "bank_branch TEXT","upi_id TEXT","payment_terms TEXT","gst_filing_frequency TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE vendors ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   // Backfill a human-readable vendor code (VDR-YYYY-NNNNN) for any vendor missing one.
@@ -3933,12 +3933,13 @@ async function handleAddVendor(request: Request, env: Env): Promise<Response> {
   const id = `v${uid().slice(0,6)}`;
   const vendorCode = formatVendorCode(new Date().getFullYear(), await nextVendorSeq(env));
   const leadDays = body.avg_lead_days != null && body.avg_lead_days !== '' ? Number(body.avg_lead_days) : 3;
-  await env.DB.prepare("INSERT INTO vendors (id,vendor_code,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry,onboarding_status,bank_account_name,bank_account_no,bank_ifsc,bank_name,bank_branch,upi_id,payment_terms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  await env.DB.prepare("INSERT INTO vendors (id,vendor_code,name,category,location,address,map_pin,contact_email,contact_phone,avg_lead_days,notes,visit_frequency,visit_day,registration_type,gstin,pan,vendor_type,fssai_licence,fssai_expiry,onboarding_status,bank_account_name,bank_account_no,bank_ifsc,bank_name,bank_branch,upi_id,payment_terms,gst_filing_frequency) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .bind(id,vendorCode,body.name,body.category,body.location||'',body.address||'',body.map_pin||'',body.contact_email||null,body.contact_phone||null,
       isNaN(leadDays)?3:leadDays, body.notes||null, body.visit_frequency||null, body.visit_day||null,
       comp.registration_type, comp.gstin, comp.pan, comp.vendor_type, comp.fssai_licence, comp.fssai_expiry,
       status, body.bank_account_name||null, body.bank_account_no||null, body.bank_ifsc||null, body.bank_name||null,
-      body.bank_branch||null, body.upi_id||null, body.payment_terms||null).run();
+      body.bank_branch||null, body.upi_id||null, body.payment_terms||null,
+      (body.gst_filing_frequency==='Monthly'||body.gst_filing_frequency==='Quarterly')?body.gst_filing_frequency:null).run();
   const subErr = await saveVendorSubResources(env, id, body);
   if (subErr) return json({ error: subErr }, 400);
   await sendEmail(env, body.contact_email as string, "Welcome to Smart Pantry Vendor Portal",
@@ -3977,6 +3978,10 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
   }
   for (const c of ["bank_account_name","bank_account_no","bank_ifsc","bank_name","bank_branch","upi_id","payment_terms"]) {
     if (body[c] !== undefined) { fields.push(`${c}=?`); vals.push(body[c]||null); }
+  }
+  if (body.gst_filing_frequency !== undefined) {
+    const f = body.gst_filing_frequency;
+    fields.push("gst_filing_frequency=?"); vals.push((f==='Monthly'||f==='Quarterly')?f:null);
   }
   if (body.onboarding_status !== undefined && VENDOR_ONB_STATES.includes(String(body.onboarding_status))) {
     fields.push("onboarding_status=?"); vals.push(String(body.onboarding_status));

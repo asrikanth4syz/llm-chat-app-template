@@ -2812,3 +2812,31 @@ describe("Order amendment — only the client may approve the change", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("Vendor GST filing frequency", () => {
+  it("persists on create and can be updated", async () => {
+    const create = await post("/api/vendors", {
+      name: "GST Freq Vendor", category: "Grocery",
+      registration_type: "unregistered", vendor_type: "non_food",
+      gst_filing_frequency: "Monthly",
+    }, adminToken);
+    expect(create.status).toBe(201);
+    const { id } = await create.json() as { id: string };
+
+    const list = await get("/api/vendors", adminToken);
+    const vendors = await list.json() as Array<{ id: string; gst_filing_frequency: string }>;
+    expect(vendors.find(v => v.id === id)?.gst_filing_frequency).toBe("Monthly");
+
+    const upd = await patch(`/api/vendors/${id}`, { gst_filing_frequency: "Quarterly" }, adminToken);
+    expect(upd.status).toBe(200);
+    const list2 = await get("/api/vendors", adminToken);
+    const vendors2 = await list2.json() as Array<{ id: string; gst_filing_frequency: string }>;
+    expect(vendors2.find(v => v.id === id)?.gst_filing_frequency).toBe("Quarterly");
+
+    // An invalid value is rejected/normalised to null.
+    await patch(`/api/vendors/${id}`, { gst_filing_frequency: "Yearly" }, adminToken);
+    const list3 = await get("/api/vendors", adminToken);
+    const vendors3 = await list3.json() as Array<{ id: string; gst_filing_frequency: string | null }>;
+    expect(vendors3.find(v => v.id === id)?.gst_filing_frequency).toBeNull();
+  });
+});

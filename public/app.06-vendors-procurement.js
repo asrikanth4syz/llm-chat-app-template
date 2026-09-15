@@ -374,6 +374,15 @@ function vendorFormFields(prefix, v={}) {
           <div id="${prefix}-gstin-msg" style="font-size:.72rem;margin-top:4px;min-height:1em"></div>
         </div>
       </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label>GST Filing Frequency</label>
+          <select id="${prefix}-gstfreq">
+            ${['','Monthly','Quarterly'].map(f=>`<option value="${f}" ${(v.gst_filing_frequency||'')===f?'selected':''}>${f||'— Not set —'}</option>`).join('')}
+          </select>
+        </div>
+        <div></div>
+      </div>
     </div>
     <div id="${prefix}-food-fields" style="display:${v.vendor_type==='food'?'block':'none'}">
       <div class="grid-2">
@@ -736,6 +745,7 @@ function collectVendorForm(prefix) {
     notes: document.getElementById(`${prefix}-notes`)?.value?.trim() || null,
     registration_type: document.getElementById(`${prefix}-regtype`)?.value || 'unregistered',
     vendor_type: document.getElementById(`${prefix}-vtype`)?.value || 'non_food',
+    gst_filing_frequency: document.getElementById(`${prefix}-gstfreq`)?.value || null,
   };
 }
 
@@ -877,6 +887,7 @@ function vendorViewHTML(v, docs, products) {
           ${field('Rating', `${(+v.rating||0).toFixed(1)} / 5.0`)}
           ${field('Status', v.active===0?'<span class="u-danger">Disabled</span>':'<span style="color:var(--success)">Active</span>')}
           ${regd?field('GST number', `<span style="letter-spacing:.03em">${v.gstin||'—'}</span>`):''}
+          ${regd?field('GST filing frequency', v.gst_filing_frequency||'—'):''}
           ${regd?field('PAN', `<span style="letter-spacing:.03em">${v.pan||'—'}</span>`):''}
           ${food?field('FSSAI licence', `<span style="letter-spacing:.03em">${v.fssai_licence||'—'}</span>`):''}
           ${food?field('FSSAI expiry', `<span style="color:${fssaiExpired?'var(--danger)':fssaiExp?'var(--success)':'var(--text-muted)'}">${fssaiExp?fmtDate(fssaiExp)+(fssaiExpired?' ⚠ Expired':''):'—'}</span>`):''}
