@@ -561,6 +561,12 @@ async function submitAdhocOrder() {
 function showCSVUploadModal() {
   const m = document.getElementById('csv-upload-modal');
   if (m) m.style.display = 'flex';
+  // Clear any file / result left over from a previous upload so reopening the
+  // modal always starts blank (no stale filename showing in the picker).
+  const input = document.getElementById('csv-upload-input');
+  if (input) input.value = '';
+  const fb = document.getElementById('csv-import-feedback');
+  if (fb) fb.innerHTML = '';
 }
 
 function searchCatalog(q) {
@@ -645,27 +651,33 @@ async function processCSVUpload() {
   const parsed = parseCSVText(text);
   if (parsed.length < 2) { if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have a header row and at least one data row.</div>'; return; }
   const headers = parsed[0].map(h => h.toLowerCase().trim());
-  const skuIdx = headers.indexOf('sku');
-  const qtyIdx = headers.indexOf('quantity') !== -1 ? headers.indexOf('quantity') : headers.indexOf('qty');
+  // Accept common header spellings so a client's own sheet still imports.
+  const findCol = (names) => { for (const n of names) { const i = headers.indexOf(n); if (i !== -1) return i; } return -1; };
+  const skuIdx = findCol(['sku', 'sku code', 'item code', 'code', 'product code']);
+  const qtyIdx = findCol(['quantity', 'qty', 'order qty', 'order quantity', 'quantity required', 'qty required', 'req qty']);
   if (skuIdx === -1 || qtyIdx === -1) {
     if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have "sku" and "quantity" (or "qty") columns.</div>'; return;
   }
-  let imported = 0, skipped = 0, notFound = [];
+  let imported = 0, blankQty = 0, notFound = [];
   for (let i = 1; i < parsed.length; i++) {
     const cols = parsed[i];
     const sku = (cols[skuIdx] || '').trim();
-    const qty = parseInt(cols[qtyIdx], 10);
-    if (!sku || isNaN(qty) || qty < 1) { skipped++; continue; }
-    const item = APP._catalog && APP._catalog.find(it => it.sku === sku);
-    if (!item) { notFound.push(sku); skipped++; continue; }
-    const existing = APP.cart.find(c => c.sku === sku);
+    if (!sku) continue; // truly empty row — ignore silently
+    // Tolerate quotes, spaces, thousands separators and unit suffixes ("2 kg",
+    // "1,000"); keep decimals so UOM items (kg / litre) can be ordered fractionally.
+    const qty = parseFloat(String(cols[qtyIdx] || '').replace(/,/g, '').replace(/[^0-9.\-]/g, ''));
+    if (!isFinite(qty) || qty <= 0) { blankQty++; continue; }
+    const skuNorm = sku.toLowerCase();
+    const item = APP._catalog && APP._catalog.find(it => (it.sku || '').toLowerCase() === skuNorm);
+    if (!item) { notFound.push(sku); continue; }
+    const existing = APP.cart.find(c => (c.sku || '').toLowerCase() === skuNorm);
     if (existing) existing.qty += qty;
-    else APP.cart.push({ sku, name: item.name, qty, unit_price: item.unit_price });
+    else APP.cart.push({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price });
     imported++;
   }
   const notFoundNote = notFound.length ? `<div style="font-size:.78rem;margin-top:6px">SKUs not found in your catalog: ${notFound.join(', ')}</div>` : '';
   if(fb) fb.innerHTML = `<div style="padding:10px 14px;border-radius:8px;background:${imported?'var(--success-soft-bg)':'var(--amber-bg)'};border:1px solid ${imported?'#6ee7b7':'#fcd34d'};font-size:.84rem;color:${imported?'#065f46':'var(--amber-text)'}">
-    <b>${imported} item(s) added to cart</b>${skipped?`, ${skipped} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
+    <b>${imported} item(s) added to cart</b>${blankQty?`, ${blankQty} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
     ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
   </div>`;
   if (imported) refreshCartUI();

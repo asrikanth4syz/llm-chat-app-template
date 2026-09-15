@@ -2662,3 +2662,42 @@ describe("Standing order materialize", () => {
     expect(dup.status).toBe(409);
   });
 });
+
+describe("Contact / Book-a-demo lead capture", () => {
+  it("POST /api/contact is public and stores a lead (no auth needed)", async () => {
+    const res = await post("/api/contact", {
+      name: "Asha Rao", company: "Acme Foods", email: "asha@acme.test",
+      phone: "+91 90000 00000", scale: "1,000+ vendors", message: "Keen on DC numbering",
+    });
+    expect(res.status).toBe(200);
+    const d = await res.json() as { ok: boolean; id: string };
+    expect(d.ok).toBe(true);
+    expect(d.id).toBeTruthy();
+  });
+
+  it("POST /api/contact rejects a missing/invalid email (400)", async () => {
+    const noEmail = await post("/api/contact", { name: "No Email", company: "X" });
+    expect(noEmail.status).toBe(400);
+    const badEmail = await post("/api/contact", { name: "Bad", email: "not-an-email" });
+    expect(badEmail.status).toBe(400);
+  });
+
+  it("POST /api/contact rejects a missing name (400)", async () => {
+    const res = await post("/api/contact", { email: "someone@x.test" });
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /api/contact returns leads for an admin", async () => {
+    await post("/api/contact", { name: "Lead Two", company: "Beta", email: "lead2@beta.test" });
+    const res = await get("/api/contact", adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { submissions: Array<{ email: string }> };
+    expect(Array.isArray(d.submissions)).toBe(true);
+    expect(d.submissions.some(s => s.email === "lead2@beta.test")).toBe(true);
+  });
+
+  it("GET /api/contact is forbidden for a non-admin (403)", async () => {
+    const res = await get("/api/contact", clientToken);
+    expect(res.status).toBe(403);
+  });
+});

@@ -338,6 +338,41 @@ async function handleAllocateDC(request: Request, env: Env): Promise<Response> {
   return json({ number: res.number, fy: res.fy, class: res.klass });
 }
 
+// Roles allowed to read captured demo leads.
+const CONTACT_ADMIN = ["super_admin", "ops_admin"];
+
+// POST /api/contact — PUBLIC lead capture from the marketing landing page's
+// "Book a demo" form. No auth: anyone may submit. Body:
+// { name, company?, email, phone?, scale?, message?, source? }.
+async function handleCreateContact(request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON body" }, 400); }
+  const s = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+  const name = s(body.name, 120);
+  const email = s(body.email, 160);
+  const company = s(body.company, 160);
+  if (!name) return json({ error: "Name is required" }, 400);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "A valid email is required" }, 400);
+  const id = `ct${uid().slice(0, 12)}`;
+  await env.DB.prepare(
+    `INSERT INTO contact_submissions (id,name,company,email,phone,scale,message,source)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).bind(id, name, company || null, email, s(body.phone, 40) || null,
+         s(body.scale, 60) || null, s(body.message, 2000) || null, s(body.source, 40) || "landing").run();
+  return json({ ok: true, id });
+}
+
+// GET /api/contact — admin: list captured leads, newest first.
+async function handleListContacts(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CONTACT_ADMIN.includes(user!.role)) return json({ error: "Forbidden — admin only" }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM contact_submissions ORDER BY created_at DESC LIMIT 500"
+  ).all();
+  return json({ submissions: results });
+}
+
 // POST /api/delivery-challans/ad-hoc — Phase 1: create a challan-first DC (no
 // order behind it). Draws its number from the active FY series for the
 // category's class. Body: { category, client_name, items_text?, notes?,
@@ -1204,6 +1239,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS po_invoices ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_invoice_no TEXT, invoice_amount REAL DEFAULT 0, invoice_date TEXT, match_status TEXT DEFAULT 'PENDING', qty_variance REAL DEFAULT 0, amount_variance REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
+    `CREATE TABLE IF NOT EXISTS contact_submissions ( id TEXT PRIMARY KEY, name TEXT NOT NULL, company TEXT, email TEXT NOT NULL, phone TEXT, scale TEXT, message TEXT, source TEXT DEFAULT 'landing', status TEXT NOT NULL DEFAULT 'NEW', created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -1584,6 +1620,10 @@ export default {
       if (path==="/api/auth/me"         && method==="GET")  return handleMe(request,env);
       if (path==="/api/auth/otp/send"   && method==="POST") return handleOTPSend(request,env);
       if (path==="/api/auth/otp/verify" && method==="POST") return handleOTPVerify(request,env);
+
+      // Contact / "Book a demo" lead capture — POST is public, GET is admin-only.
+      if (path==="/api/contact"         && method==="POST") return handleCreateContact(request,env);
+      if (path==="/api/contact"         && method==="GET")  return handleListContacts(request,env);
 
       // Orders — specific paths must come before the wildcard /:id routes
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
