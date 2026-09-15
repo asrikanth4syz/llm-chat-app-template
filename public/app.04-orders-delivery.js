@@ -461,11 +461,15 @@ function amendmentSummaryHTML(order) {
       <span style="min-width:64px;font-weight:700;color:${color}">${tag}</span>
       <span style="flex:1">${h(name)}</span><span style="color:var(--text-muted)">${txt}</span></div>`;
   const rows = [];
-  before.forEach(i => { if (!aMap.has(i.sku)) rows.push(line('Removed', '#dc2626', i.name, `was ${i.qty}`)); });
+  before.forEach(i => { if (!aMap.has(i.sku)) rows.push(line('Removed', '#dc2626', i.name, `was qty ${i.qty} @ ${fmt(i.unit_price||0)}`)); });
   after.forEach(i => {
     const b = bMap.get(i.sku);
-    if (!b) rows.push(line('Added', '#0d9488', i.name, `qty ${i.qty}`));
-    else if (Number(b.qty) !== Number(i.qty)) rows.push(line('Qty', '#d97706', i.name, `${b.qty} → ${i.qty}`));
+    if (!b) { rows.push(line('Added', '#0d9488', i.name, `qty ${i.qty} @ ${fmt(i.unit_price||0)}`)); return; }
+    const qtyChg = Number(b.qty) !== Number(i.qty);
+    const priceChg = Number(b.unit_price||0) !== Number(i.unit_price||0);
+    if (qtyChg && priceChg) rows.push(line('Changed', '#d97706', i.name, `qty ${b.qty} → ${i.qty} · price ${fmt(b.unit_price||0)} → ${fmt(i.unit_price||0)}`));
+    else if (qtyChg) rows.push(line('Qty', '#d97706', i.name, `${b.qty} → ${i.qty}`));
+    else if (priceChg) rows.push(line('Price', '#d97706', i.name, `${fmt(b.unit_price||0)} → ${fmt(i.unit_price||0)}`));
   });
   if (!rows.length) rows.push(line('Changed', '#d97706', 'Line items updated', ''));
 
@@ -503,9 +507,11 @@ function amendmentSummaryHTML(order) {
       <span>Order value</span><span><span class="u-muted" style="text-decoration:line-through">${fmt(before_total)}</span> → <b>${fmt(after_total)}</b> <span style="color:${delta>0?'#dc2626':delta<0?'#0d9488':'var(--text-muted)'};font-size:.78rem">(${deltaTxt})</span></span>
     </div>
     ${budgetHtml}`;
-  const pendingNote = order.status === 'PENDING_APPROVAL'
-    ? '<span style="background:var(--amber-bg,#fef3c7);color:var(--warning,#d97706);border-radius:4px;padding:2px 7px;font-size:.72rem;font-weight:700">⏳ awaiting re-approval</span>' : '';
-  return orderSection(`✏️ Amendment (rev ${a.revision}) ${pendingNote}`, `${ams.length} change${ams.length>1?'s':''}`, body, true);
+  const statusNote = a.status === 'REJECTED'
+    ? '<span style="background:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 7px;font-size:.72rem;font-weight:700">✗ rejected — reverted</span>'
+    : order.status === 'PENDING_APPROVAL'
+      ? '<span style="background:var(--amber-bg,#fef3c7);color:var(--warning,#d97706);border-radius:4px;padding:2px 7px;font-size:.72rem;font-weight:700">⏳ awaiting re-approval</span>' : '';
+  return orderSection(`✏️ Amendment (rev ${a.revision}) ${statusNote}`, `${ams.length} change${ams.length>1?'s':''}`, body, true);
 }
 
 async function viewOrder(id) {
@@ -735,7 +741,7 @@ async function viewOrder(id) {
           footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Awaiting client approval of the change</span>`);
         else if (canClientApprove) {
           footer.push(`<button class="btn btn-success" ${dataActClose('approveOrder', id)}>✓ Approve change</button>`);
-          footer.push(`<button class="btn btn-danger" ${dataActClose('rejectOrder', id)}>✕ Reject change</button>`);
+          footer.push(`<button class="btn btn-danger" ${dataActClose('rejectAmendment', id)}>✕ Reject change</button>`);
         } else
           footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Pending your approver's review</span>`);
       }
@@ -1793,8 +1799,13 @@ function orderQueueActions(o) {
       btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
       break;
     case 'PENDING_APPROVAL':
-      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Client/ops approval')}>✓ Approve</button>`);
-      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
+      if ((o.revision||1) > 1) {
+        // An amended order can only be approved by the client — no ops approve.
+        btns.push(`<span class="badge badge-warning" style="font-size:.7rem">✏️ Amended · awaiting client</span>`);
+      } else {
+        btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Client/ops approval')}>✓ Approve</button>`);
+        btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
+      }
       break;
     case 'APPROVED':
       btns.push(`<button class="btn btn-primary btn-sm" ${dataAct('advanceOrder', o.id, 'ACKNOWLEDGED', 'Order acknowledged — processing started')}>Acknowledge</button>`);

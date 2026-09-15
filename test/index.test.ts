@@ -2840,3 +2840,44 @@ describe("Vendor GST filing frequency", () => {
     expect(vendors3.find(v => v.id === id)?.gst_filing_frequency).toBeNull();
   });
 });
+
+describe("Order amendment — reject reverts to previous version", () => {
+  it("client rejecting an amendment restores the prior line-set, total and status", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind("AMD-7", "c1", "tst-admin", "APPROVED", 450, 81, 531, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("AMD-7-oi", "AMD-7", "SKU001", "Basmati Rice 5kg", 1, 450, 450).run();
+
+    // Ops amends: swap to oil @150 x2 -> total 354, PENDING_APPROVAL rev2
+    const amend = await post("/api/orders/AMD-7/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 2, unit_price: 150 }],
+      reason: "price/product change",
+    }, adminToken);
+    expect(amend.status).toBe(200);
+
+    // Ops/admin cannot reject the change either
+    const adminReject = await post("/api/orders/AMD-7/amend-reject", {}, adminToken);
+    expect(adminReject.status).toBe(403);
+
+    // Client rejects -> reverts to previous version
+    const clientReject = await post("/api/orders/AMD-7/amend-reject", {}, clientToken);
+    expect(clientReject.status).toBe(200);
+    const rj = await clientReject.json() as { status: string; reverted: boolean };
+    expect(rj.status).toBe("APPROVED");
+    expect(rj.reverted).toBe(true);
+
+    const detail = await get("/api/orders/AMD-7", adminToken);
+    const d = await detail.json() as {
+      status: string; grand_total: number;
+      items: Array<{ sku: string; qty: number }>;
+      amendments: Array<{ status: string }>;
+    };
+    expect(d.status).toBe("APPROVED");
+    expect(d.grand_total).toBe(531);            // restored original total
+    expect(d.items.length).toBe(1);
+    expect(d.items[0].sku).toBe("SKU001");       // original item restored
+    expect(d.items[0].qty).toBe(1);
+    expect(d.amendments[0].status).toBe("REJECTED");
+  });
+});

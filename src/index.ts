@@ -1240,7 +1240,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS contact_submissions ( id TEXT PRIMARY KEY, name TEXT NOT NULL, company TEXT, email TEXT NOT NULL, phone TEXT, scale TEXT, message TEXT, source TEXT DEFAULT 'landing', status TEXT NOT NULL DEFAULT 'NEW', created_at TEXT DEFAULT (datetime('now')) );`,
-    `CREATE TABLE IF NOT EXISTS order_amendments ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL, actor_id TEXT, actor_name TEXT, reason TEXT NOT NULL, before_items TEXT, after_items TEXT, before_total REAL DEFAULT 0, after_total REAL DEFAULT 0, from_status TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS order_amendments ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL, actor_id TEXT, actor_name TEXT, reason TEXT NOT NULL, before_items TEXT, after_items TEXT, before_total REAL DEFAULT 0, after_total REAL DEFAULT 0, from_status TEXT, status TEXT NOT NULL DEFAULT 'APPLIED', created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -1508,6 +1508,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN revision INTEGER DEFAULT 1").run();
   } catch { /* column already exists */ }
+  try {
+    await env.DB.prepare("ALTER TABLE order_amendments ADD COLUMN status TEXT NOT NULL DEFAULT 'APPLIED'").run();
+  } catch { /* column already exists */ }
   for (const col of ["gstin TEXT", "pan TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE clients ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
@@ -1647,6 +1650,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend$/)         && method==="POST") return handleAmendOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
@@ -3141,7 +3145,7 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
     .bind(uid(), id, revision, user!.sub, user!.name, reason, beforeSnap, afterSnap, Number(order.grand_total) || 0, grand_total, fromStatus).run();
   await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
     .bind(uid(), id, fromStatus, "PENDING_APPROVAL", user!.sub, user!.name, `Amended (rev ${revision}) — ${reason}`).run();
-  await pushNotification(env, "ops_admin", `Order ${id} amended (rev ${revision}) — needs re-approval`);
+  await pushNotification(env, "client_approver", `Order ${id} was changed (rev ${revision}) — your approval is needed`);
   await audit(env, user, "AMEND", "order", id, fromStatus, `rev:${revision},total:${grand_total},reason:${reason.slice(0, 80)}`);
   return json({ id, status: "PENDING_APPROVAL", revision, grand_total });
 }
@@ -3154,6 +3158,55 @@ async function handleListAmendments(request: Request, env: Env, path: string): P
   const id = path.split("/").slice(-2)[0];
   const { results } = await env.DB.prepare("SELECT * FROM order_amendments WHERE order_id=? ORDER BY revision DESC").bind(id).all();
   return json({ amendments: results });
+}
+
+// POST /api/orders/:id/amend-reject — the client rejects a pending change and the
+// order REVERTS to the version before the amendment (line-set, totals, status),
+// rather than being cancelled. Client approver/admin for that client only.
+async function handleRejectAmendment(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  if (String(order.status) !== "PENDING_APPROVAL") return json({ error: "This order has no pending change to reject." }, 400);
+  const isClientApprover = ["client_admin", "client_approver"].includes(user!.role);
+  const sameClient = !user!.client_id || String(user!.client_id) === String(order.client_id);
+  if (!isClientApprover || !sameClient) return json({ error: "Only the client can reject this change." }, 403);
+
+  const amend = await env.DB.prepare("SELECT * FROM order_amendments WHERE order_id=? AND revision=? ORDER BY rowid DESC LIMIT 1")
+    .bind(id, order.revision).first() as Record<string, unknown> | null;
+  if (!amend) return json({ error: "No pending amendment to reject." }, 400);
+  let before: Array<{ sku: string; name: string; qty: number; unit_price: number }> = [];
+  try { before = JSON.parse(String(amend.before_items || "[]")); } catch { before = []; }
+
+  // Release the current (amended) reservations, drop the amended lines, then
+  // restore the pre-amendment line-set and re-reserve.
+  const { results: curItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
+  for (const it of curItems) {
+    await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(Number(it.qty) || 0, it.sku).run();
+  }
+  await env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id).run();
+  await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
+  let subtotal = 0;
+  for (const b of before) {
+    const qty = Number(b.qty) || 0, price = Number(b.unit_price) || 0;
+    subtotal += qty * price;
+    await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind(uid(), id, b.sku, b.name, qty, price, qty * price).run();
+    await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(qty, b.sku).run();
+  }
+  const gst = Math.round(subtotal * 0.18);
+  const grand_total = subtotal + gst;
+  const restoreStatus = String(amend.from_status || "APPROVED");
+  await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status=?, updated_at=datetime('now') WHERE id=?")
+    .bind(subtotal, gst, grand_total, restoreStatus, id).run();
+  await env.DB.prepare("UPDATE order_amendments SET status='REJECTED' WHERE id=?").bind(amend.id).run();
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, "PENDING_APPROVAL", restoreStatus, user!.sub, user!.name, `Change (rev ${order.revision}) rejected by client — reverted to previous version`).run();
+  await pushNotification(env, "ops_admin", `Order ${id}: client rejected the change — reverted to the previous version`);
+  await audit(env, user, "AMEND_REJECT", "order", id, "PENDING_APPROVAL", `rev:${order.revision},restored:${restoreStatus},total:${grand_total}`);
+  return json({ id, status: restoreStatus, reverted: true, revision: order.revision });
 }
 
 async function handleTransitionOrder(request: Request, env: Env, path: string): Promise<Response> {

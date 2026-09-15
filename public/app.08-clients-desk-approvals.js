@@ -1521,8 +1521,11 @@ async function renderApprovals(el) {
     </div>
     ${o.notes?`<div style="font-size:.78rem;color:var(--text-muted);background:#f8f9fa;padding:10px 12px;border-radius:8px;margin-bottom:14px">📝 ${o.notes}</div>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve & Submit</button>
-      <button class="btn btn-danger" ${dataAct('rejectOrder', o.id)}>✕ Reject</button>
+      ${(o.revision||1)>1
+        ? `<button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve change</button>
+           <button class="btn btn-danger" ${dataAct('rejectAmendment', o.id)}>✕ Reject change</button>`
+        : `<button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve & Submit</button>
+           <button class="btn btn-danger" ${dataAct('rejectOrder', o.id)}>✕ Reject</button>`}
       <button class="btn btn-secondary" ${dataAct('viewOrder', o.id)}>View Details</button>
     </div>
   </div>`).join('')}
@@ -1549,6 +1552,20 @@ async function renderApprovals(el) {
 async function approveOrder(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'APPROVED', note:'Approved by approver' }) });
   if (res) { showToast(`Order ${id} approved`); navigate('approvals'); }
+}
+
+// Reject a pending amendment — the order reverts to the version before the
+// change (it is NOT cancelled).
+function rejectAmendment(id) {
+  openModal(`Reject change on ${id}`,
+    `<div style="font-size:.88rem;color:var(--text-muted)">Rejecting the change reverts this order to the version approved before it was amended. The order is <b>not</b> cancelled.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep reviewing</button>
+     <button class="btn btn-danger" ${dataAct('confirmRejectAmendment', id)}>Reject change &amp; revert</button>`);
+}
+async function confirmRejectAmendment(id) {
+  const res = await api(`/orders/${id}/amend-reject`, { method:'POST', body: JSON.stringify({}) });
+  closeModal();
+  if (res && !res.error) { showToast(`Change rejected — order ${id} reverted to its previous version`); navigate('approvals'); }
 }
 
 function rejectOrder(id) {
