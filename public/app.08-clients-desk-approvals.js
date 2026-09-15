@@ -1481,12 +1481,15 @@ async function renderApprovals(el) {
   <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:20px;margin-bottom:14px;border-left:4px solid var(--amber)">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
       <div>
-        <div style="font-weight:800;font-size:1rem;color:var(--navy)">${o.id}</div>
+        <div style="font-weight:800;font-size:1rem;color:var(--navy)">${o.id}
+          ${(o.revision||1)>1?`<span style="background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:5px;padding:2px 7px;font-size:.68rem;font-weight:700;margin-left:6px">✏️ Amended · rev ${o.revision}</span>`:''}
+        </div>
         <div style="font-size:.76rem;color:var(--text-muted);margin-top:3px">
           Submitted ${fmtDate(o.created_at)}
           ${o.creator_name?' · by '+o.creator_name:''}
           ${!isApprover&&o.client_name?' · '+o.client_name:''}
         </div>
+        ${(o.revision||1)>1?`<div style="font-size:.76rem;color:#9a3412;margin-top:4px">This order was changed — <span ${dataAct('viewOrder', o.id)} style="color:#9a3412;font-weight:700;text-decoration:underline;cursor:pointer">review the changes &amp; budget impact</span> before approving.</div>`:''}
       </div>
       <div class="u-right">
         <div style="font-weight:800;font-size:1.2rem;color:var(--navy)">${fmt(o.grand_total)}</div>

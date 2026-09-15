@@ -438,6 +438,69 @@ function orderStepperHtml(order, orderDCs) {
   return stepper + banner;
 }
 
+// Renders the "what changed + budget impact" panel for an amended order that is
+// awaiting (re-)approval. Visible to ops and to the client approving the change.
+function amendmentSummaryHTML(order) {
+  const ams = (order && order.amendments) || [];
+  if (!ams.length) return '';
+  const a = ams[0];
+  let before = [], after = [];
+  try { before = JSON.parse(a.before_items || '[]'); } catch (_) {}
+  try { after = JSON.parse(a.after_items || '[]'); } catch (_) {}
+  const bMap = new Map(before.map(i => [i.sku, i]));
+  const aMap = new Map(after.map(i => [i.sku, i]));
+  const line = (tag, color, name, txt) =>
+    `<div style="display:flex;gap:8px;align-items:baseline;font-size:.82rem;padding:3px 0">
+      <span style="min-width:64px;font-weight:700;color:${color}">${tag}</span>
+      <span style="flex:1">${h(name)}</span><span style="color:var(--text-muted)">${txt}</span></div>`;
+  const rows = [];
+  before.forEach(i => { if (!aMap.has(i.sku)) rows.push(line('Removed', '#dc2626', i.name, `was ${i.qty}`)); });
+  after.forEach(i => {
+    const b = bMap.get(i.sku);
+    if (!b) rows.push(line('Added', '#0d9488', i.name, `qty ${i.qty}`));
+    else if (Number(b.qty) !== Number(i.qty)) rows.push(line('Qty', '#d97706', i.name, `${b.qty} → ${i.qty}`));
+  });
+  if (!rows.length) rows.push(line('Changed', '#d97706', 'Line items updated', ''));
+
+  const before_total = Number(a.before_total) || 0;
+  const after_total = Number(a.after_total) || 0;
+  const delta = after_total - before_total;
+  const deltaTxt = delta === 0 ? 'no change in value'
+    : `${delta > 0 ? '▲' : '▼'} ${fmt(Math.abs(delta))} ${delta > 0 ? 'more' : 'less'} than the previous version`;
+
+  // Budget impact (if the client has a monthly budget configured).
+  let budgetHtml = '';
+  const bud = order.budget;
+  if (bud && bud.monthly_budget) {
+    const monthly = Number(bud.monthly_budget) || 0;
+    const usedOther = Number(bud.used_excluding_this) || 0;
+    const projected = usedOther + after_total;
+    const pct = monthly ? Math.round((projected / monthly) * 100) : 0;
+    const over = projected > monthly;
+    const barColor = over ? 'var(--danger,#dc2626)' : pct >= 90 ? 'var(--danger,#dc2626)' : pct >= 70 ? 'var(--warning,#d97706)' : 'var(--success,#10b981)';
+    budgetHtml = `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border)">
+      <div style="font-size:.8rem;font-weight:700;color:var(--navy);margin-bottom:6px">Budget impact</div>
+      <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:5px">
+        <span class="u-muted">This order after change</span><b>${fmt(after_total)}</b></div>
+      <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:5px">
+        <span class="u-muted">Month-to-date incl. this order</span><b style="color:${barColor}">${fmt(projected)} / ${fmt(monthly)} (${pct}%)</b></div>
+      <div style="height:8px;background:var(--surface-2,#eef1f8);border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.min(100, pct)}%;background:${barColor}"></div></div>
+      ${over ? `<div style="font-size:.76rem;color:var(--danger,#dc2626);margin-top:6px">⚠️ This change puts the client over the monthly budget.</div>` : ''}
+    </div>`;
+  }
+
+  const body = `
+    <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">Reason: <b style="color:var(--navy)">${h(a.reason || '')}</b>${a.actor_name ? ` · by ${h(a.actor_name)}` : ''}</div>
+    ${rows.join('')}
+    <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:.84rem">
+      <span>Order value</span><span><span class="u-muted" style="text-decoration:line-through">${fmt(before_total)}</span> → <b>${fmt(after_total)}</b> <span style="color:${delta>0?'#dc2626':delta<0?'#0d9488':'var(--text-muted)'};font-size:.78rem">(${deltaTxt})</span></span>
+    </div>
+    ${budgetHtml}`;
+  const pendingNote = order.status === 'PENDING_APPROVAL'
+    ? '<span style="background:var(--amber-bg,#fef3c7);color:var(--warning,#d97706);border-radius:4px;padding:2px 7px;font-size:.72rem;font-weight:700">⏳ awaiting re-approval</span>' : '';
+  return orderSection(`✏️ Amendment (rev ${a.revision}) ${pendingNote}`, `${ams.length} change${ams.length>1?'s':''}`, body, true);
+}
+
 async function viewOrder(id) {
   const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
@@ -641,6 +704,7 @@ async function viewOrder(id) {
       </table>
       <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>`,
       true)}
+    ${amendmentSummaryHTML(order)}
     ${orderDCs.length ? orderSection('Deliveries', `${orderDCs.length} challan${orderDCs.length>1?'s':''}`, dcCards, true) : ''}
     ${order.history?.length ? orderSection('Timeline', `${order.history.length} event${order.history.length>1?'s':''}`,
       `<div style="display:grid;gap:6px">

@@ -568,7 +568,9 @@ async function pickOrderModal(orderId) {
         </tr>`).join('')}
       </tbody>
     </table>
-    <div style="display:flex;gap:8px;justify-content:flex-end">
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      ${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
+        ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
       <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
     </div>

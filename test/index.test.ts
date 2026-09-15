@@ -2755,3 +2755,27 @@ describe("Order amendment (post-approval change + re-approval)", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Order amendment — client-visible diff & budget", () => {
+  it("order detail exposes amendments and budget impact", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("UPDATE clients SET monthly_budget=? WHERE id=?").bind(500000, "c1").run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind("AMD-5", "c1", "tst-admin", "APPROVED", 450, 81, 531, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("AMD-5-oi", "AMD-5", "SKU001", "Basmati Rice 5kg", 1, 450, 450).run();
+
+    const amend = await post("/api/orders/AMD-5/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 3, unit_price: 150 }],
+      reason: "swapped for oil",
+    }, adminToken);
+    expect(amend.status).toBe(200);
+
+    const res = await get("/api/orders/AMD-5", adminToken);
+    const d = await res.json() as { revision: number; amendments: Array<{ reason: string }>; budget: { monthly_budget: number } };
+    expect(d.revision).toBe(2);
+    expect(d.amendments.length).toBe(1);
+    expect(d.amendments[0].reason).toContain("oil");
+    expect(d.budget.monthly_budget).toBe(500000);
+  });
+});

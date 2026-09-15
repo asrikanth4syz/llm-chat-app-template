@@ -2136,12 +2136,27 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first();
   if (!order) return json({error:"Not found"}, 404);
 
-  const [{results:items},{results:history},{results:comments}] = await Promise.all([
+  const [{results:items},{results:history},{results:comments},{results:amendments}] = await Promise.all([
     env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all(),
     env.DB.prepare("SELECT * FROM order_history WHERE order_id=? ORDER BY created_at").bind(id).all(),
     env.DB.prepare("SELECT * FROM order_comments WHERE order_id=? ORDER BY created_at").bind(id).all(),
+    env.DB.prepare("SELECT * FROM order_amendments WHERE order_id=? ORDER BY revision DESC").bind(id).all(),
   ]);
-  return json({...order, items, history, comments});
+  // Budget context (for showing the spend impact of an amendment on the client's
+  // monthly budget). Excludes this order from "used" so the impact is additive.
+  let budget: Record<string, unknown> | null = null;
+  const clientId = (order as Record<string, unknown>).client_id;
+  if (clientId) {
+    const b = await env.DB.prepare(
+      `SELECT monthly_budget,
+        (SELECT COALESCE(SUM(grand_total),0) FROM orders
+          WHERE client_id=? AND id!=? AND status NOT IN ('CANCELLED','DRAFT')
+          AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now')) AS used_excl
+       FROM clients WHERE id=?`
+    ).bind(clientId, id, clientId).first() as Record<string, unknown> | null;
+    if (b) budget = { monthly_budget: b.monthly_budget, used_excluding_this: b.used_excl };
+  }
+  return json({...order, items, history, comments, amendments, budget});
 }
 
 // ── Order lifecycle & pipeline (single-order timeline + control-tower board) ──
