@@ -2701,3 +2701,57 @@ describe("Contact / Book-a-demo lead capture", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Order amendment (post-approval change + re-approval)", () => {
+  const seedApproved = async (oid: string, status = "APPROVED") => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind(oid, "c1", "tst-admin", status, 450, 81, 531, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind(oid + "-oi", oid, "SKU001", "Basmati Rice 5kg", 1, 450, 450).run();
+  };
+
+  it("amends an approved order, recomputes totals and re-opens approval", async () => {
+    await seedApproved("AMD-1");
+    const res = await post("/api/orders/AMD-1/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 2, unit_price: 150 }],
+      reason: "Client swapped rice for oil",
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const d = await res.json() as { status: string; revision: number; grand_total: number };
+    expect(d.status).toBe("PENDING_APPROVAL");
+    expect(d.revision).toBe(2);
+    expect(d.grand_total).toBe(354); // 300 + 18% GST
+
+    const hist = await get("/api/orders/AMD-1/amendments", adminToken);
+    const h = await hist.json() as { amendments: Array<{ reason: string; after_total: number }> };
+    expect(h.amendments.length).toBe(1);
+    expect(h.amendments[0].reason).toContain("swapped");
+  });
+
+  it("requires a reason (400)", async () => {
+    await seedApproved("AMD-2");
+    const res = await post("/api/orders/AMD-2/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 1, unit_price: 150 }],
+    }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("blocks amendment once dispatch has started (400)", async () => {
+    await seedApproved("AMD-3", "IN_SHIPMENT");
+    const res = await post("/api/orders/AMD-3/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 1, unit_price: 150 }],
+      reason: "too late",
+    }, adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("is forbidden for a client role (403)", async () => {
+    await seedApproved("AMD-4");
+    const res = await post("/api/orders/AMD-4/amend", {
+      items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 1, unit_price: 150 }],
+      reason: "client cannot do this",
+    }, clientToken);
+    expect(res.status).toBe(403);
+  });
+});

@@ -656,6 +656,8 @@ async function viewOrder(id) {
       const opsRole = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
       const footer = [`<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`];
       if (opsRole) {
+        if (['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'].includes(s))
+          footer.push(`<button class="btn btn-warning" ${dataActClose('amendOrderModal', id)}>✏️ Amend</button>`);
         if (s==='PENDING_PRICING')
           footer.push(`<button class="btn btn-gold" ${dataActClose('repriceOrderModal', id)}>💰 Set Prices</button>`);
         if (s==='SUBMITTED'||s==='PENDING_APPROVAL')
@@ -804,6 +806,104 @@ async function submitReprice(id) {
   if (res) {
     showToast(`Order ${id} priced — ${res.status==='PENDING_APPROVAL'?'sent for approval':res.status==='APPROVED'?'auto-approved':'released to 4SYZ'}`);
     navigate('orders');
+  }
+}
+
+/* ============================================================
+   AMEND ORDER — change line items on an approved (pre-dispatch)
+   order. Any change re-opens approval (server resets to
+   PENDING_APPROVAL and clears picking).
+   ============================================================ */
+function amendRowHTML(it) {
+  const price = Number(it.unit_price) || 0;
+  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-price="${price}">
+    <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div></td>
+    <td><input type="number" min="1" step="1" class="amend-qty" value="${Number(it.qty)||1}" ${dataInput('amendRecalc')}
+      style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
+    <td style="text-align:right">${fmt(price)}</td>
+    <td style="text-align:right"><button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', it.sku)} title="Remove line">×</button></td>
+  </tr>`;
+}
+
+async function amendOrderModal(id) {
+  const [order, inv] = await Promise.all([api('/orders/' + id), api('/inventory')]);
+  if (!order) return;
+  APP._amendInv = (inv || []).map(i => ({ sku: i.sku, name: i.name, unit_price: i.unit_price != null ? i.unit_price : (i.price || 0) }));
+  const rows = (order.items || []).map(it => amendRowHTML(it)).join('');
+  const opts = APP._amendInv.map(i => `<option value="${h(i.sku)}">${h(i.name)}${i.sku ? ' (' + h(i.sku) + ')' : ''}</option>`).join('');
+  openModal(`✏️ Amend Order ${id}`,
+    `<div style="margin:0 0 12px;padding:9px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:.82rem;color:#9a3412">
+       ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
+     </div>
+     <table class="table" style="margin:0">
+       <thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit ₹</th><th></th></tr></thead>
+       <tbody id="amend-body">${rows}</tbody>
+     </table>
+     <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+       <select id="amend-add-sku" class="input" style="flex:1;font-size:.84rem">${opts}</select>
+       <input id="amend-add-qty" type="number" min="1" value="1" style="width:64px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.84rem">
+       <button class="btn btn-secondary btn-sm" ${dataAct('amendAddItem')}>+ Add / swap</button>
+     </div>
+     <label style="display:block;margin-top:12px;font-size:.82rem;font-weight:600">Reason for change <span style="color:var(--danger,#dc2626)">*</span>
+       <textarea id="amend-reason" class="input" rows="2" placeholder="e.g. client swapped Product X for Product Y" style="width:100%;margin-top:4px"></textarea>
+     </label>
+     <div class="cart-row cart-total" style="margin-top:12px"><span>Estimated total (incl. 18% GST)</span><span id="amend-total">${fmt(0)}</span></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('submitAmendOrder', id)}>Save &amp; Re-submit for Approval</button>`);
+  amendRecalc();
+}
+
+function amendAddItem() {
+  const sel = document.getElementById('amend-add-sku');
+  const qi = document.getElementById('amend-add-qty');
+  const body = document.getElementById('amend-body');
+  if (!sel || !body) return;
+  const sku = sel.value;
+  const qty = Math.max(1, parseInt(qi && qi.value, 10) || 1);
+  const item = (APP._amendInv || []).find(i => i.sku === sku);
+  if (!item) return;
+  const existing = body.querySelector(`.amend-row[data-sku="${(window.CSS && CSS.escape) ? CSS.escape(sku) : sku}"] .amend-qty`);
+  if (existing) existing.value = (parseInt(existing.value, 10) || 0) + qty;
+  else body.insertAdjacentHTML('beforeend', amendRowHTML({ sku: item.sku, name: item.name, qty, unit_price: item.unit_price }));
+  amendRecalc();
+}
+
+function amendRemoveRow(sku) {
+  const sel = (window.CSS && CSS.escape) ? CSS.escape(sku) : sku;
+  const row = document.querySelector(`.amend-row[data-sku="${sel}"]`);
+  if (row) row.remove();
+  amendRecalc();
+}
+
+function amendRecalc() {
+  let sub = 0;
+  document.querySelectorAll('.amend-row').forEach(r => {
+    const q = parseInt(r.querySelector('.amend-qty')?.value, 10) || 0;
+    const p = parseFloat(r.dataset.price) || 0;
+    sub += q * p;
+  });
+  const el = document.getElementById('amend-total');
+  if (el) el.textContent = fmt(Math.round(sub * 1.18));
+}
+
+async function submitAmendOrder(id) {
+  const reason = (document.getElementById('amend-reason')?.value || '').trim();
+  if (!reason) { showToast('Please enter a reason for the change', 'error'); return; }
+  const items = [...document.querySelectorAll('.amend-row')].map(r => ({
+    sku: r.dataset.sku, name: r.dataset.name,
+    qty: parseInt(r.querySelector('.amend-qty')?.value, 10) || 0,
+    unit_price: parseFloat(r.dataset.price) || 0,
+  })).filter(i => i.sku && i.qty > 0);
+  if (!items.length) { showToast('Add at least one item', 'error'); return; }
+  const btn = document.querySelector('#modal-footer .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const res = await api(`/orders/${id}/amend`, { method: 'POST', body: JSON.stringify({ items, reason }) });
+  closeModal();
+  if (res && !res.error) {
+    showToast(`Order ${id} amended (rev ${res.revision}) — sent for re-approval`);
+    navigate('orders');
+  } else if (res && res.error) {
+    showToast(res.error, 'error');
   }
 }
 

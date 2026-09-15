@@ -1240,6 +1240,7 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS vendor_debit_notes ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, vendor_id TEXT NOT NULL, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, reason TEXT, status TEXT DEFAULT 'OPEN', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS contact_submissions ( id TEXT PRIMARY KEY, name TEXT NOT NULL, company TEXT, email TEXT NOT NULL, phone TEXT, scale TEXT, message TEXT, source TEXT DEFAULT 'landing', status TEXT NOT NULL DEFAULT 'NEW', created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS order_amendments ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL, actor_id TEXT, actor_name TEXT, reason TEXT NOT NULL, before_items TEXT, after_items TEXT, before_total REAL DEFAULT 0, after_total REAL DEFAULT 0, from_status TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -1503,6 +1504,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
   } catch { /* ignore */ }
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
+  } catch { /* exists */ }
+  try {
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN revision INTEGER DEFAULT 1").run();
   } catch { /* column already exists */ }
   for (const col of ["gstin TEXT", "pan TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE clients ADD COLUMN ${col}`).run(); } catch { /* exists */ }
@@ -1642,6 +1646,8 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/lifecycle$/)    && method==="GET")  return handleOrderLifecycle(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/amend$/)         && method==="POST") return handleAmendOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/allocations$/)  && method==="GET")  return handleGetAllocations(request,env,path);
@@ -3044,6 +3050,95 @@ async function handleRepriceOrder(request: Request, env: Env, path: string): Pro
   await pushNotification(env, null, `Ad-hoc order ${id} priced → ${status.replace(/_/g," ")}`);
   await audit(env, user, "REPRICE", "order", id, "PENDING_PRICING", `status:${status},total:${grand_total}`);
   return json({id, status, grand_total});
+}
+
+// Roles allowed to amend an order after approval (internal ops only).
+const ORDER_AMEND_ROLES = ["super_admin", "ops_admin", "ops_manager", "procurement_manager"];
+// Order may be amended once approved and up until dispatch begins. After
+// IN_SHIPMENT (and CLOSED/CANCELLED) the goods are moving — cancel or handle
+// as a return/substitution instead.
+const ORDER_AMENDABLE = ["APPROVED", "ACKNOWLEDGED", "INVENTORY_CHECK", "VENDOR_PO_RAISED", "READY_TO_PICK", "PICKED", "QUALITY_CHECK"];
+
+// POST /api/orders/:id/amend — change the line items of an approved (pre-dispatch)
+// order. Any change re-opens approval: the order returns to PENDING_APPROVAL,
+// totals/GST are recomputed, stock reservations and any picked allocations are
+// reset (re-pick), and the before/after is recorded for audit.
+// Body: { items: [{sku,name,qty,unit_price,note?}], reason }.
+async function handleAmendOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!ORDER_AMEND_ROLES.includes(user!.role)) return json({ error: "Forbidden — ops only" }, 403);
+
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as {
+    items?: Array<{ sku: string; name: string; qty: number; unit_price: number; note?: string }>;
+    reason?: string;
+  };
+  const reason = String(body.reason || "").trim();
+  if (!reason) return json({ error: "A reason for the change is required" }, 400);
+  if (!body.items?.length) return json({ error: "At least one line item is required" }, 400);
+
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  if (!ORDER_AMENDABLE.includes(String(order.status))) {
+    return json({ error: `Order can no longer be amended (status ${order.status}) — dispatch has started or it is closed. Cancel or handle as a return instead.` }, 400);
+  }
+
+  // Normalise the incoming lines.
+  const newItems = body.items.map(i => ({
+    sku: String(i.sku || "").trim(),
+    name: String(i.name || "").trim(),
+    qty: Math.max(0, Number(i.qty) || 0),
+    unit_price: Math.max(0, Number(i.unit_price) || 0),
+    note: (i.note ? String(i.note) : null) as string | null,
+  })).filter(i => i.sku && i.qty > 0);
+  if (!newItems.length) return json({ error: "Every line needs a SKU and a quantity greater than zero" }, 400);
+
+  const { results: oldItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
+
+  const subtotal = newItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
+  const gst = Math.round(subtotal * 0.18);
+  const grand_total = subtotal + gst;
+  const fromStatus = String(order.status);
+  const revision = (Number(order.revision) || 1) + 1;
+
+  // Release the old reservations, drop the old lines and any picked allocations
+  // (a changed order must be re-picked), then write the new lines and reserve.
+  for (const it of oldItems) {
+    await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(Number(it.qty) || 0, it.sku).run();
+  }
+  await env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id).run();
+  await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
+  for (const it of newItems) {
+    await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), id, it.sku, it.name, it.qty, it.unit_price, it.qty * it.unit_price, it.note).run();
+    await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(it.qty, it.sku).run();
+  }
+
+  // Any change re-opens approval.
+  await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status='PENDING_APPROVAL', revision=?, updated_at=datetime('now') WHERE id=?")
+    .bind(subtotal, gst, grand_total, revision, id).run();
+
+  const beforeSnap = JSON.stringify(oldItems.map(i => ({ sku: i.sku, name: i.name, qty: i.qty, unit_price: i.unit_price })));
+  const afterSnap = JSON.stringify(newItems.map(i => ({ sku: i.sku, name: i.name, qty: i.qty, unit_price: i.unit_price })));
+  await env.DB.prepare(`INSERT INTO order_amendments (id,order_id,revision,actor_id,actor_name,reason,before_items,after_items,before_total,after_total,from_status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(uid(), id, revision, user!.sub, user!.name, reason, beforeSnap, afterSnap, Number(order.grand_total) || 0, grand_total, fromStatus).run();
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, fromStatus, "PENDING_APPROVAL", user!.sub, user!.name, `Amended (rev ${revision}) — ${reason}`).run();
+  await pushNotification(env, "ops_admin", `Order ${id} amended (rev ${revision}) — needs re-approval`);
+  await audit(env, user, "AMEND", "order", id, fromStatus, `rev:${revision},total:${grand_total},reason:${reason.slice(0, 80)}`);
+  return json({ id, status: "PENDING_APPROVAL", revision, grand_total });
+}
+
+// GET /api/orders/:id/amendments — amendment history for an order (ops only).
+async function handleListAmendments(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!ORDER_AMEND_ROLES.includes(user!.role)) return json({ error: "Forbidden — ops only" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const { results } = await env.DB.prepare("SELECT * FROM order_amendments WHERE order_id=? ORDER BY revision DESC").bind(id).all();
+  return json({ amendments: results });
 }
 
 async function handleTransitionOrder(request: Request, env: Env, path: string): Promise<Response> {
