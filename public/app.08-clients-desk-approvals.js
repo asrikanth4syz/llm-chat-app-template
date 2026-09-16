@@ -1522,11 +1522,10 @@ async function renderApprovals(el) {
     ${o.notes?`<div style="font-size:.78rem;color:var(--text-muted);background:#f8f9fa;padding:10px 12px;border-radius:8px;margin-bottom:14px">📝 ${o.notes}</div>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${(o.revision||1)>1
-        ? `<button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve change</button>
-           <button class="btn btn-danger" ${dataAct('rejectAmendment', o.id)}>✕ Reject change</button>`
+        ? `<button class="btn btn-primary" ${dataAct('viewOrder', o.id)}>🔍 Review changes &amp; approve</button>`
         : `<button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve & Submit</button>
-           <button class="btn btn-danger" ${dataAct('rejectOrder', o.id)}>✕ Reject</button>`}
-      <button class="btn btn-secondary" ${dataAct('viewOrder', o.id)}>View Details</button>
+           <button class="btn btn-danger" ${dataAct('rejectOrder', o.id)}>✕ Reject</button>
+           <button class="btn btn-secondary" ${dataAct('viewOrder', o.id)}>View Details</button>`}
     </div>
   </div>`).join('')}
 
