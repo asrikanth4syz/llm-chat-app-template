@@ -2881,3 +2881,29 @@ describe("Order amendment — reject reverts to previous version", () => {
     expect(d.amendments[0].status).toBe("REJECTED");
   });
 });
+
+describe("Amend restricted to the undelivered remainder", () => {
+  it("blocks reducing below / removing a part-delivered line, allows amending the balance", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES (?,?,?,?,?,?,?,?,1)")
+      .bind("AMD-8", "c1", "tst-admin", "PARTIALLY_CLOSED", 4500, 810, 5310, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("AMD-8-oi", "AMD-8", "SKU001", "Basmati Rice 5kg", 10, 450, 4500).run();
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty) VALUES (?,?,?,?)")
+      .bind("DC-8", "AMD-8", "DELIVERED", 4).run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("DC-8-i", "DC-8", "SKU001", "Basmati Rice 5kg", 10, 4).run();
+
+    // reduce below delivered (3 < 4) -> blocked
+    const below = await post("/api/orders/AMD-8/amend", { items: [{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 3, unit_price: 450 }], reason: "reduce" }, adminToken);
+    expect(below.status).toBe(400);
+
+    // remove the part-delivered line -> blocked
+    const removed = await post("/api/orders/AMD-8/amend", { items: [{ sku: "SKU002", name: "Refined Oil 1L", qty: 2, unit_price: 150 }], reason: "swap out" }, adminToken);
+    expect(removed.status).toBe(400);
+
+    // amend at/above delivered (6 >= 4) -> allowed
+    const ok = await post("/api/orders/AMD-8/amend", { items: [{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 6, unit_price: 450 }], reason: "trim to 6" }, adminToken);
+    expect(ok.status).toBe(200);
+  });
+});

@@ -906,24 +906,36 @@ async function submitReprice(id) {
    ============================================================ */
 function amendRowHTML(it) {
   const price = Number(it.unit_price) || 0;
-  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}">
-    <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div></td>
-    <td><input type="number" min="1" step="1" class="amend-qty" value="${Number(it.qty)||1}" ${dataInput('amendRecalc')}
+  const delivered = Number(it.delivered) || 0;
+  const minQty = delivered > 0 ? delivered : 1;
+  const startQty = Math.max(Number(it.qty) || 1, minQty);
+  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-delivered="${delivered}">
+    <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div>${delivered>0?`<div style="font-size:.68rem;color:var(--success,#0d9488);font-weight:600">${delivered} delivered · min qty ${delivered}</div>`:''}</td>
+    <td><input type="number" min="${minQty}" step="1" class="amend-qty" value="${startQty}" ${dataInput('amendRecalc')}
       style="width:66px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
     <td><input type="number" min="0" step="0.01" class="amend-price" value="${price}" ${dataInput('amendRecalc')}
       style="width:92px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
-    <td style="text-align:right"><button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', it.sku)} title="Remove line">×</button></td>
+    <td style="text-align:right">${delivered>0
+      ? `<span title="Part-delivered — this line can't be removed">🔒</span>`
+      : `<button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', it.sku)} title="Remove line">×</button>`}</td>
   </tr>`;
 }
 
 async function amendOrderModal(id) {
-  const [order, inv] = await Promise.all([api('/orders/' + id), api('/inventory')]);
+  const [order, inv, drill] = await Promise.all([
+    api('/orders/' + id), api('/inventory'),
+    api('/orders/' + id + '/drilldown').catch(() => null),
+  ]);
   if (!order) return;
   APP._amendInv = (inv || []).map(i => ({ sku: i.sku, name: i.name, unit_price: i.unit_price != null ? i.unit_price : (i.price || 0) }));
-  const rows = (order.items || []).map(it => amendRowHTML(it)).join('');
+  const deliveredMap = {};
+  if (drill && Array.isArray(drill.lines)) drill.lines.forEach(l => { deliveredMap[l.sku] = parseInt(l.qty_delivered) || 0; });
+  const anyDelivered = Object.values(deliveredMap).some(v => v > 0);
+  const rows = (order.items || []).map(it => amendRowHTML({ ...it, delivered: deliveredMap[it.sku] || 0 })).join('');
   openModal(`✏️ Amend Order ${id}`,
     `<div style="margin:0 0 12px;padding:9px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:.82rem;color:#9a3412">
        ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
+       ${anyDelivered?`<div style="margin-top:6px">📦 Part of this order is already delivered — you can only amend the <b>undelivered balance</b>. Delivered quantities are the minimum and their lines can't be removed.</div>`:''}
      </div>
      <table class="table" style="margin:0;table-layout:auto;width:100%">
        <thead><tr><th>Item</th><th style="text-align:right;width:74px">Qty</th><th style="text-align:right;width:100px">Unit ₹</th><th style="width:40px"></th></tr></thead>

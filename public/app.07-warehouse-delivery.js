@@ -526,36 +526,53 @@ async function confirmCreateDCFromPicklist(orderId) {
 }
 
 async function pickOrderModal(orderId) {
-  const [order, bins] = await Promise.all([
+  const [order, bins, drill] = await Promise.all([
     api(`/orders/${orderId}`),
-    api('/bin-locations').catch(()=>[])
+    api('/bin-locations').catch(()=>[]),
+    api(`/orders/${orderId}/drilldown`).catch(()=>null),
   ]);
-  const items = order?.items || [];
+  // Pick only the OUTSTANDING balance. On a replenishment pick (after a partial
+  // delivery) the drilldown gives ordered/delivered/due per line; fall back to
+  // the raw order lines (due = ordered) when the drilldown isn't available.
+  const lines = (drill && Array.isArray(drill.lines))
+    ? drill.lines.filter(l => (parseInt(l.qty_due)||0) > 0)
+        .map(l => ({ sku:l.sku, name:l.name, ordered:parseInt(l.qty_ordered)||0, delivered:parseInt(l.qty_delivered)||0, due:parseInt(l.qty_due)||0 }))
+    : (order?.items||[]).map(i => ({ sku:i.sku, name:i.name||i.item_name, ordered:parseInt(i.qty)||0, delivered:0, due:parseInt(i.qty)||0 }));
+  const anyDelivered = lines.some(l => l.delivered > 0);
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
-  const totalOrdered = (items||[]).reduce((n,i)=>n+(parseInt(i.qty)||0),0);
+  const totalDue = lines.reduce((n,l)=>n+(parseInt(l.due)||0),0);
   const clientName = order?.client_name || '';
+
+  if (!lines.length) {
+    openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`,
+      `<div style="padding:24px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">✅</div>Every ordered quantity has already been delivered — nothing left to pick.</div>`,
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+    return;
+  }
+
   openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
-      Enter qty actually picked (can be less than ordered) and select the bin location.
+      Enter qty actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
     </p>
-    <!-- Live picking tally: lines & qty picked vs what the system ordered, so the
-         picker can reconcile the manual count against system qty before confirming. -->
+    <!-- Live picking tally: lines & qty picked vs the outstanding due qty. -->
     <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 12px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
-      <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${items.length}</span></span>
-      <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalOrdered} ordered</span></span>
+      <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
+      <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
       <span id="ps-match" style="font-weight:600"></span>
     </div>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
+      <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th>${anyDelivered?'<th>Delivered</th>':''}<th>Due</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
       <tbody id="pick-items-body">
-        ${(items||[]).map(item=>`<tr>
-          <td><b>${item.name||item.item_name}</b></td>
+        ${lines.map(item=>`<tr>
+          <td><b>${item.name}</b></td>
           <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
-          <td class="u-muted">${item.qty}</td>
+          <td class="u-muted">${item.ordered}</td>
+          ${anyDelivered?`<td style="color:var(--success)">${item.delivered}</td>`:''}
+          <td><b>${item.due}</b></td>
           <td>
             <input type="number" class="form-control form-control-sm pick-qty"
-              data-sku="${item.sku}" data-name="${item.name||item.item_name}" data-ordered="${item.qty}"
-              value="${item.qty}" min="0" max="${item.qty}"
+              data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}"
+              value="${item.due}" min="0" max="${item.due}"
               style="width:72px;text-align:center"
               ${dataInputEl('onPickQty')}>
           </td>

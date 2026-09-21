@@ -3076,7 +3076,7 @@ const ORDER_AMEND_ROLES = ["super_admin", "ops_admin", "ops_manager", "procureme
 // Order may be amended once approved and up until dispatch begins. After
 // IN_SHIPMENT (and CLOSED/CANCELLED) the goods are moving — cancel or handle
 // as a return/substitution instead.
-const ORDER_AMENDABLE = ["APPROVED", "ACKNOWLEDGED", "INVENTORY_CHECK", "VENDOR_PO_RAISED", "READY_TO_PICK", "PICKED", "QUALITY_CHECK"];
+const ORDER_AMENDABLE = ["APPROVED", "ACKNOWLEDGED", "INVENTORY_CHECK", "VENDOR_PO_RAISED", "READY_TO_PICK", "PICKED", "QUALITY_CHECK", "PARTIALLY_CLOSED"];
 
 // POST /api/orders/:id/amend — change the line items of an approved (pre-dispatch)
 // order. Any change re-opens approval: the order returns to PENDING_APPROVAL,
@@ -3113,6 +3113,23 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   })).filter(i => i.sku && i.qty > 0);
   if (!newItems.length) return json({ error: "Every line needs a SKU and a quantity greater than zero" }, 400);
 
+  // Amend only the UNDELIVERED remainder: a line can never go below what has
+  // already been delivered, and a part-delivered line can't be removed.
+  const { results: delRows } = await env.DB.prepare(
+    `SELECT di.sku AS sku, SUM(di.qty_delivered) AS delivered
+       FROM delivery_challans dc JOIN dc_items di ON di.dc_id=dc.id
+      WHERE dc.order_id=? AND dc.status='DELIVERED'
+      GROUP BY di.sku`
+  ).bind(id).all() as { results: Array<{ sku: string; delivered: number }> };
+  const deliveredBySku: Record<string, number> = {};
+  for (const r of delRows) { const d = Number(r.delivered) || 0; if (d > 0) deliveredBySku[r.sku] = d; }
+  const newBySku = new Map(newItems.map(i => [i.sku, i]));
+  for (const [sku, delivered] of Object.entries(deliveredBySku)) {
+    const nl = newBySku.get(sku);
+    if (!nl) return json({ error: `Cannot remove a line that is already part-delivered (${sku}: ${delivered} delivered). You can only amend the undelivered balance.` }, 400);
+    if (nl.qty < delivered) return json({ error: `Cannot reduce ${nl.name || sku} to ${nl.qty} — ${delivered} already delivered. The amended quantity cannot go below what has shipped.` }, 400);
+  }
+
   const { results: oldItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
 
   const subtotal = newItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
@@ -3131,7 +3148,9 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   for (const it of newItems) {
     await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
       .bind(uid(), id, it.sku, it.name, it.qty, it.unit_price, it.qty * it.unit_price, it.note).run();
-    await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(it.qty, it.sku).run();
+    // Reserve only the still-to-deliver balance (delivered qty is already gone).
+    const toReserve = Math.max(0, it.qty - (deliveredBySku[it.sku] || 0));
+    if (toReserve > 0) await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(toReserve, it.sku).run();
   }
 
   // Any change re-opens approval.
