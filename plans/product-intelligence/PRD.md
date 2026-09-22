@@ -4,6 +4,12 @@ Status: **Draft for review** · Source spec: `4SYZ_Product_Intelligence_Feature_
 
 > This PRD distils the 26‑section 4SYZ spec into an implementation‑ready plan **mapped to the existing Smart Pantry codebase**. It is a planning artifact only — no feature code is built yet. A companion visual **mock** accompanies this PRD.
 
+## 0. Decisions locked (v1.1)
+1. **OCR / AI = own, in‑platform** (no third‑party SaaS; product data never leaves 4SYZ infra). Implementation: **Cloudflare Workers AI** vision/OCR model *or* **Tesseract (WASM)** behind one `extractProductDoc()` seam. Building an OCR engine from scratch is explicitly out of scope. **MVP ships with manual entry + document upload**; in‑platform OCR is wired in P0.2. A slow/large extract runs off the request path (queue or `waitUntil`).
+2. **Verification is done by `ops_admin`** — no new `product_verifier` role. Client roles never see internal verification screens.
+3. **Collections are rule‑driven** — a saved rule (`rule_json`, e.g. `attributes⊇[vegan] AND verified=true AND price≤X`) materialises the member list; the collection is labelled *rule‑driven* (with optional editorial pin/exclude later). No hand‑curated MVP.
+4. **Attributes = a projection of verified claims** (single source of truth). Certification evidence is **sourced against Indian FSSAI** first: store FSSAI **licence/registration number**, validity dates and the certificate doc; verification checks the number/expiry. Other certs (ISO, HACCP, Organic) are additional, but FSSAI is the primary Indian regulator hook.
+
 ---
 
 ## 1. Problem & goal
@@ -102,14 +108,27 @@ Extends the existing sidebar (`app.01`) and reuses the client‑catalogue modal 
 6. Expiry: a claim past `expiry_date` renders as **Verification Expired**, not Verified.
 7. Filters combine (AND across groups, OR within a group) and return correct facet counts.
 
-## 10. Risks / open questions (need your call)
-1. **AI provider**: Workers AI (in‑platform) vs external vision/OCR API? Affects cost, egress policy, latency. *(Recommend: pluggable seam; start with a stub + manual entry for MVP, wire a provider in P0.2.)*
-2. **Attribute vs claim** — are dietary "attributes" just claims of category=Dietary, or a separate faster‑path table? *(Recommend: attributes = a projection of verified Dietary claims; single source of truth.)*
-3. **Certifications** at brand level, product level, or both? Spec implies both. *(Recommend: both, `certifications` polymorphic on brand_id|sku.)*
-4. **New role** `product_verifier` — confirm it's distinct from `ops_admin`, or fold verification into an existing role.
-5. **Collections**: editorial hand‑pick vs rule‑driven — MVP scope? *(Recommend: hand‑pick in P1, rule engine in P2.)*
-6. **GST‑incl/excl display by role** already exists in the ladder — confirm reuse.
-7. Scale: catalogue size / images — R2 for images (bucket is scaffolded but unbound). *(Recommend enable R2 before bulk images.)*
+## 10. Risks / open questions
+Resolved (see §0): AI = own/in‑platform · verifier = `ops_admin` · collections = rule‑driven · attributes = verified‑claim projection · certs sourced against FSSAI.
+Still open / to watch:
+1. **OCR runtime cost & accuracy** — Workers AI vision vs Tesseract WASM: pick during P0.2 with a small bake‑off on real labels; keep the `extractProductDoc()` seam so the choice is swappable.
+2. **Async extraction** — long OCR must not block the request; needs a queue or `ctx.waitUntil` + a task row. Confirm Cloudflare Queues is acceptable (else `waitUntil` for MVP).
+3. **Images at scale** — enable the scaffolded **R2 bucket** before bulk product images (base64‑in‑D1 won't scale).
+4. **FSSAI validation depth** — MVP stores + expiry‑checks the licence number; live lookup against an FSSAI source is P2 and subject to egress policy.
+5. **GST‑incl/excl by role** already exists in the price ladder — reuse as‑is.
+
+## 12. P0 build plan (for sign‑off — not yet built)
+Additive, gated (`tsc` · `vitest` · `smoke`), one deploy per slice to the `llm` worker.
+
+| Slice | What ships | Key files |
+|---|---|---|
+| **P0.0 Schema** | `ensureFeatureTables` adds brands, product_content/nutrition/ingredients, ingredient_dict, product_attributes, claims, claim_evidence, claim_history, certifications (FSSAI fields), collections(+rule_json)/collection_items, verification_tasks, client_favourites, saved_filters. Inventory ALTERs (brand_id, product_type, pack_size, moq, lifecycle_status). No UI. | `src/index.ts` (+ `migrations/00xx_*.sql` for the test DB) |
+| **P0.1 Product master + read API** | Super‑admin product enrichment (ingredients/nutrition/attributes/pack/MOQ); `GET /api/catalog/products` (filters+facets) and `/products/:sku`; role filter hides cost/margin. | `src/index.ts`, `public/app.05-billing-inventory.js` |
+| **P0.2 Own OCR seam** | `extractProductDoc(doc)` → Workers AI/Tesseract; writes `ai_extracted`/`ai_screened` only, creates `verification_tasks`; runs off request path. Rule‑driven claim screening (config dictionaries: animal‑derived, preservatives, sweeteners). | `src/index.ts` |
+| **P0.3 Verification (ops_admin)** | Queue + claim review (approve/reject/request‑evidence/edit/reclassify), evidence viewer, FSSAI cert check, badge control, `claim_history` audit, expiry. Server rejects any AI‑set `verified`. | new `public/app.15-catalog.js`, `app.01` nav, `src/index.ts` |
+| **P0.4 Client catalogue** | Listing + filter drawer + product‑detail tabs + badges + add‑to‑order/favourite; reuses price‑ladder maths. (Compare + rule‑driven collections follow in P1.) | `public/app.15-catalog.js` |
+
+Acceptance criteria in §9 become the vitest suite. Estimated as ~5 reviewable slices; each is independently shippable.
 
 ## 11. Suggested build sequence (when approved)
 1. Schema + `ensureFeatureTables` migrations for brands/content/nutrition/ingredients/attributes/claims/evidence/certifications (no UI).
