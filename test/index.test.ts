@@ -2907,3 +2907,30 @@ describe("Amend restricted to the undelivered remainder", () => {
     expect(ok.status).toBe(200);
   });
 });
+
+// ── Product Intelligence & Brand Catalogue (P0.0 — schema) ────────────
+describe("Product Intelligence schema (P0.0)", () => {
+  it("creates the brand/claim/attribute tables and inventory enrichment columns", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT INTO brands (id,name,status) VALUES (?,?,?)").bind("BR-PI-1", "Yogabar", "approved").run();
+    await db.prepare("INSERT INTO claims (id,sku,category,label,status,ai_confidence) VALUES (?,?,?,?,?,?)")
+      .bind("CLM-PI-1", "SKU001", "dietary", "Vegan", "ai_screened", 0.94).run();
+    await db.prepare("INSERT INTO product_attributes (id,sku,attribute,status) VALUES (?,?,?,?)")
+      .bind("ATTR-PI-1", "SKU001", "vegan", "ai_extracted").run();
+    await db.prepare("INSERT INTO pi_rule_dict (id,dict,term) VALUES (?,?,?)").bind("RD-1", "animal_derived", "honey").run();
+
+    const brand = await db.prepare("SELECT name FROM brands WHERE id=?").bind("BR-PI-1").first<{ name: string }>();
+    expect(brand?.name).toBe("Yogabar");
+    const claim = await db.prepare("SELECT status FROM claims WHERE id=?").bind("CLM-PI-1").first<{ status: string }>();
+    expect(claim?.status).toBe("ai_screened");
+
+    // inventory enrichment columns exist (write + read back)
+    await db.prepare("UPDATE inventory SET brand_id=?, pack_size=?, moq=?, lifecycle_status=? WHERE sku=?")
+      .bind("BR-PI-1", "6 x 38g", 4, "published", "SKU001").run();
+    const inv = await db.prepare("SELECT brand_id, moq, lifecycle_status FROM inventory WHERE sku=?")
+      .bind("SKU001").first<{ brand_id: string; moq: number; lifecycle_status: string }>();
+    expect(inv?.brand_id).toBe("BR-PI-1");
+    expect(inv?.moq).toBe(4);
+    expect(inv?.lifecycle_status).toBe("published");
+  });
+});

@@ -1241,6 +1241,28 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS hsn_gst_rates ( hsn TEXT PRIMARY KEY, gst_rate REAL NOT NULL, description TEXT, updated_at TEXT DEFAULT (datetime('now')), updated_by TEXT );`,
     `CREATE TABLE IF NOT EXISTS contact_submissions ( id TEXT PRIMARY KEY, name TEXT NOT NULL, company TEXT, email TEXT NOT NULL, phone TEXT, scale TEXT, message TEXT, source TEXT DEFAULT 'landing', status TEXT NOT NULL DEFAULT 'NEW', created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE TABLE IF NOT EXISTS order_amendments ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL, actor_id TEXT, actor_name TEXT, reason TEXT NOT NULL, before_items TEXT, after_items TEXT, before_total REAL DEFAULT 0, after_total REAL DEFAULT 0, from_status TEXT, status TEXT NOT NULL DEFAULT 'APPLIED', created_at TEXT DEFAULT (datetime('now')) );`,
+    // ── Product Intelligence & Brand Catalogue (P0.0) ──────────────────────
+    // Rich product facts + AI-assisted claim extraction/screening + human
+    // verification. AI writes only ai_extracted/ai_screened; a 'verified' status
+    // is reachable only through a reviewer action (enforced in the handlers).
+    `CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT, logo_doc_id TEXT, story TEXT, origin TEXT, website TEXT, brand_type TEXT, status TEXT NOT NULL DEFAULT 'draft', sla_json TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_content ( sku TEXT PRIMARY KEY, description TEXT, usage TEXT, images_json TEXT DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_nutrition ( sku TEXT PRIMARY KEY, basis TEXT DEFAULT 'per 100g', calories REAL, protein REAL, carbs REAL, sugar REAL, fat REAL, fibre REAL, sodium REAL, source_ref TEXT, updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS product_ingredients ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, position INTEGER DEFAULT 0, raw_text TEXT NOT NULL, normalized_id TEXT, grp TEXT, allergen INTEGER DEFAULT 0, flags_json TEXT DEFAULT '[]' );`,
+    `CREATE TABLE IF NOT EXISTS ingredient_dict ( id TEXT PRIMARY KEY, canonical_name TEXT NOT NULL, synonyms_json TEXT DEFAULT '[]', allergen INTEGER DEFAULT 0, animal_derived INTEGER DEFAULT 0, category TEXT );`,
+    `CREATE TABLE IF NOT EXISTS product_attributes ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, attribute TEXT NOT NULL, value TEXT DEFAULT 'true', status TEXT NOT NULL DEFAULT 'ai_extracted', source TEXT, updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS claims ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, category TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ai_extracted', ai_confidence REAL, screened_result TEXT, reviewer_id TEXT, reviewer_name TEXT, reviewed_at TEXT, expiry_date TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS claim_evidence ( id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, doc_id TEXT, page_ref TEXT, extracted_text TEXT, extraction_date TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS claim_history ( id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, action TEXT NOT NULL, actor_id TEXT, actor_name TEXT, from_status TEXT, to_status TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS certifications ( id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'product', brand_id TEXT, sku TEXT, kind TEXT NOT NULL, number TEXT, issuer TEXT, valid_from TEXT, valid_to TEXT, doc_id TEXT, status TEXT NOT NULL DEFAULT 'unverified', created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS collections ( id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT, kind TEXT NOT NULL DEFAULT 'rule', rule_json TEXT, curated_by TEXT, published INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS collection_items ( collection_id TEXT NOT NULL, sku TEXT NOT NULL, pinned INTEGER DEFAULT 0, excluded INTEGER DEFAULT 0, PRIMARY KEY (collection_id, sku) );`,
+    `CREATE TABLE IF NOT EXISTS verification_tasks ( id TEXT PRIMARY KEY, task_type TEXT NOT NULL DEFAULT 'claim', sku TEXT, claim_id TEXT, priority TEXT DEFAULT 'normal', status TEXT NOT NULL DEFAULT 'open', assignee_id TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE TABLE IF NOT EXISTS client_favourites ( client_id TEXT NOT NULL, sku TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (client_id, sku) );`,
+    `CREATE TABLE IF NOT EXISTS saved_filters ( id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, query_json TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
+    // Config-driven screening dictionaries (animal_derived, preservative, sweetener…)
+    // so the rule library is editable, per spec §12.
+    `CREATE TABLE IF NOT EXISTS pi_rule_dict ( id TEXT PRIMARY KEY, dict TEXT NOT NULL, term TEXT NOT NULL, meta_json TEXT, active INTEGER DEFAULT 1 );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -1253,6 +1275,17 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     // soft-deactivated by the nightly reconcile; app-native/CSV SKUs are left alone.
     `ALTER TABLE inventory ADD COLUMN zoho_item_id TEXT`,
     `ALTER TABLE inventory ADD COLUMN zoho_synced_at TEXT`,
+    // Product Intelligence (P0.0): product-master enrichment columns.
+    `ALTER TABLE inventory ADD COLUMN brand_id TEXT`,
+    `ALTER TABLE inventory ADD COLUMN product_type TEXT`,
+    `ALTER TABLE inventory ADD COLUMN barcode_gtin TEXT`,
+    `ALTER TABLE inventory ADD COLUMN pack_size TEXT`,
+    `ALTER TABLE inventory ADD COLUMN units_per_carton INTEGER`,
+    `ALTER TABLE inventory ADD COLUMN moq INTEGER`,
+    `ALTER TABLE inventory ADD COLUMN case_config TEXT`,
+    `ALTER TABLE inventory ADD COLUMN serving_info TEXT`,
+    `ALTER TABLE inventory ADD COLUMN storage_info TEXT`,
+    `ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft'`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Seed the HSN→GST slab map when empty (mirrors migration 0037 so the mapping
