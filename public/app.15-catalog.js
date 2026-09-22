@@ -154,11 +154,20 @@ async function piEnrichSearch() {
   const q = document.getElementById('pi-sku-q')?.value || '';
   const box = document.getElementById('pi-sku-results'); if (!box) return;
   if (q.trim().length < 2) { box.innerHTML = ''; return; }
-  const data = await api('/catalog/products?q=' + encodeURIComponent(q));
-  const items = (data?.products || []).slice(0, 8);
+  box.innerHTML = '<div class="u-subtiny">Searching…</div>';
+  // Prefer the catalogue endpoint; fall back to the core inventory search so the
+  // picker works even if the catalogue overlay is unavailable.
+  let items = [];
+  const cat = await api('/catalog/products?q=' + encodeURIComponent(q));
+  if (cat && Array.isArray(cat.products) && cat.products.length) items = cat.products;
+  else {
+    const inv = await api('/inventory?q=' + encodeURIComponent(q));
+    if (Array.isArray(inv)) items = inv;
+  }
+  items = items.slice(0, 10);
+  if (!items.length) { box.innerHTML = `<div class="u-subtiny">No product matches “${h(q)}”.</div>`; return; }
   box.innerHTML = items.map(p => `<button class="btn btn-secondary btn-sm" style="justify-content:flex-start;text-align:left" ${dataAct('piEnrichPick', p.sku, p.name)}>
-      <b>${h(p.name)}</b> <span class="u-subtiny" style="font-family:monospace">${h(p.sku)}</span></button>`).join('')
-    || '<div class="u-subtiny">No match.</div>';
+      <b>${h(p.name || p.sku)}</b> <span class="u-subtiny" style="font-family:monospace">${h(p.sku)}</span></button>`).join('');
 }
 function piEnrichPick(sku, name) {
   APP._piSku = sku;

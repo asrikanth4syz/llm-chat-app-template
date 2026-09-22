@@ -444,11 +444,19 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   }
 
   const skus = results.map(r => String(r.sku));
-  const vattrs = await piVerifiedAttrs(env, skus);
-  const { results: vClaims } = skus.length ? await env.DB.prepare(
-    `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${skus.map(() => "?").join(",")})`
-  ).bind(...skus).all() as { results: { sku: string }[] } : { results: [] as { sku: string }[] };
-  const verifiedSet = new Set(vClaims.map(r => r.sku));
+  // Verified-claim / attribute overlays must never blank the catalogue: if those
+  // tables aren't present yet on a given DB, degrade to "no verified data".
+  let vattrs: Record<string, string[]> = {};
+  const verifiedSet = new Set<string>();
+  try {
+    vattrs = await piVerifiedAttrs(env, skus);
+    if (skus.length) {
+      const { results: vClaims } = await env.DB.prepare(
+        `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${skus.map(() => "?").join(",")})`
+      ).bind(...skus).all() as { results: { sku: string }[] };
+      for (const r of vClaims) verifiedSet.add(r.sku);
+    }
+  } catch { /* PI overlay tables not present yet — show products without badges */ }
 
   let products = results.map(r => {
     const sku = String(r.sku);
