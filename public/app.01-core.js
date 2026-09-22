@@ -182,6 +182,7 @@ const NAV = {
     { id:'vendors',             label:'Vendors',         icon:iconSupplier,  badge:null },
     { id:'inventory',           label:'Inventory',       icon:iconInventory, badge:null },
     { id:'warehouse',           label:'Warehouse',       icon:iconWarehouse, badge:null },
+    { id:'catalog',             label:'Product Intelligence', icon:iconInventory, badge:null },
     { section:'Clients' },
     { id:'clients',         label:'Clients',          icon:iconClients,  badge:null },
     { id:'service_desk',    label:'Service Desk',     icon:iconHeadset,  badge:null },
@@ -749,6 +750,8 @@ function canAccessPage(page) {
 }
 // Pages not in any sidebar nav that specific roles may still reach via buttons/menus.
 const ACTION_PAGES = {
+  // Product Intelligence: internal for ops; client-facing catalogue for client roles.
+  catalog:     ['super_admin', 'ops_admin', 'client_admin', 'client_approver', 'client_user'],
   settings:    ['super_admin', 'ops_admin'],
   place_order: ['super_admin', 'ops_admin', 'procurement_manager'],
   // Phase 2: Pipeline & Due Items are now tabs inside the "Orders" hub (page id
@@ -1050,6 +1053,7 @@ const PAGE_MAP = {
   next_actions: 'renderNextActions',
   over_delivery_audit: 'renderOverDeliveryAudit',
   zones: 'renderZonesPage',
+  catalog: 'renderCatalog',
 };
 
 // Phase 2: pages folded into a hub redirect to the hub on their tab, so every

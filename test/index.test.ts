@@ -3019,3 +3019,38 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     expect(forbidden.status).toBe(403);
   });
 });
+
+// ── Product Intelligence verification workflow (P0.3) ─────────────────
+describe("Product Intelligence verification workflow (P0.3)", () => {
+  it("requires evidence to verify, projects verified attribute, expires, and closes the task", async () => {
+    const created = await post("/api/inventory", { name: "PI Verify Test", category: "Snacks", unit_price: 100, stock: 20 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+    // High Protein → a review task (low confidence); Vegan (clean) → verifiable attribute
+    await post(`/api/catalog/products/${sku}/ai/extract`, { text: "High Protein. Vegan. Ingredients: Oats, Almonds." }, adminToken);
+    const det1 = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { claims: { id: string; label: string }[] };
+    const hp = det1.claims.find(c => c.label === "High Protein")!;
+    const vg = det1.claims.find(c => c.label === "Vegan")!;
+
+    // approve without evidence → blocked
+    expect((await post(`/api/claims/${hp.id}/approve`, {}, adminToken)).status).toBe(400);
+    // client cannot approve
+    expect((await post(`/api/claims/${hp.id}/approve`, { evidence_not_applicable: true }, clientToken)).status).toBe(403);
+
+    // add evidence + approve with a PAST expiry → published then rendered expired
+    await post(`/api/claims/${hp.id}/evidence`, { extracted_text: "10 g protein/bar", page_ref: "label-back p1" }, adminToken);
+    expect((await post(`/api/claims/${hp.id}/approve`, { expiry_date: "2000-01-01", note: "meets threshold" }, adminToken)).status).toBe(200);
+
+    // Vegan: evidence_not_applicable path → verified attribute projection
+    expect((await post(`/api/claims/${vg.id}/approve`, { evidence_not_applicable: true }, adminToken)).status).toBe(200);
+
+    const det2 = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as {
+      claims: { id: string; status: string }[]; attributes: { attribute: string; status: string }[];
+    };
+    expect(det2.claims.find(c => c.id === hp.id)!.status).toBe("expired");           // past-expiry verified → expired
+    expect(det2.attributes.some(a => a.attribute === "vegan" && a.status === "verified")).toBe(true); // projection
+
+    // both tasks closed → not in the open queue
+    const queue = await (await get("/api/verification/queue", adminToken)).json() as { tasks: { claim_id: string }[] };
+    expect(queue.tasks.some(t => t.claim_id === hp.id)).toBe(false);
+  });
+});

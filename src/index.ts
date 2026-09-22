@@ -423,7 +423,7 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
     where += ` AND i.sku IN (${skus.map(() => "?").join(",")})`; params.push(...skus);
   }
   if (attr) { where += " AND i.sku IN (SELECT sku FROM product_attributes WHERE status='verified' AND attribute=?)"; params.push(attr); }
-  if (verified) { where += " AND i.sku IN (SELECT DISTINCT sku FROM claims WHERE status='verified')"; }
+  if (verified) { where += " AND i.sku IN (SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')))"; }
 
   const { results } = await env.DB.prepare(
     `SELECT i.sku,i.name,i.category,i.brand,i.brand_id,i.unit_price,i.mrp,i.gst_rate,i.stock,i.reorder_level,
@@ -434,7 +434,7 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   const skus = results.map(r => String(r.sku));
   const vattrs = await piVerifiedAttrs(env, skus);
   const { results: vClaims } = skus.length ? await env.DB.prepare(
-    `SELECT DISTINCT sku FROM claims WHERE status='verified' AND sku IN (${skus.map(() => "?").join(",")})`
+    `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${skus.map(() => "?").join(",")})`
   ).bind(...skus).all() as { results: { sku: string }[] } : { results: [] as { sku: string }[] };
   const verifiedSet = new Set(vClaims.map(r => r.sku));
 
@@ -497,7 +497,11 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
     ).bind(...claimIds).all() as { results: Record<string, unknown>[] };
     for (const e of ev) (evidenceBy[String(e.claim_id)] = evidenceBy[String(e.claim_id)] || []).push(e);
   }
-  const claimsOut = claimRows.map(c => ({ ...c, evidence: evidenceBy[String(c.id)] || [] }));
+  const today = new Date().toISOString().slice(0, 10);
+  const claimsOut = claimRows.map(c => {
+    const expired = String(c.status) === "verified" && c.expiry_date && String(c.expiry_date) < today;
+    return { ...c, status: expired ? "expired" : c.status, evidence: evidenceBy[String(c.id)] || [] };
+  });
 
   // Role-filtered pricing block.
   const list = Number(inv.unit_price) || 0, mrp = Number(inv.mrp) || 0, gst = Number(inv.gst_rate) || 18;
@@ -715,6 +719,99 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
   }
   await audit(env, user, "ai_extract", "product", sku);
   return json({ ok: true, ingredients: extracted.ingredients.length, claims: out });
+}
+
+// ── P0.3: human verification workflow (super_admin / ops_admin) ─────────────
+async function piHist(env: Env, claimId: string, action: string, user: JWTPayload | null, from: string, to: string, note: string): Promise<void> {
+  await env.DB.prepare("INSERT INTO claim_history (id,claim_id,action,actor_id,actor_name,from_status,to_status,note) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(`ch${uid().slice(0, 12)}`, claimId, action, user?.sub || "system", user?.name || "System", from, to, note).run();
+}
+
+async function handleVerificationQueue(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results: tasks } = await env.DB.prepare(
+    `SELECT t.id AS task_id, t.priority, t.created_at,
+            c.id AS claim_id, c.sku, c.category, c.label, c.status AS claim_status, c.ai_confidence, c.screened_result,
+            i.name AS product_name, b.name AS brand_name
+       FROM verification_tasks t JOIN claims c ON t.claim_id=c.id
+       LEFT JOIN inventory i ON c.sku=i.sku LEFT JOIN brands b ON i.brand_id=b.id
+      WHERE t.status='open' ORDER BY CASE t.priority WHEN 'high' THEN 0 ELSE 1 END, t.created_at`
+  ).all();
+  const counts = {
+    conflicts: (tasks as Record<string, unknown>[]).filter(t => String(t.screened_result || "").startsWith("conflict")).length,
+    open: (tasks as unknown[]).length,
+  };
+  return json({ tasks, counts });
+}
+
+async function handleClaimApprove(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const claimId = decodeURIComponent(path.split("/").slice(-2)[0] || "");
+  const claim = await env.DB.prepare("SELECT * FROM claims WHERE id=?").bind(claimId).first() as Record<string, unknown> | null;
+  if (!claim) return json({ error: "Unknown claim" }, 404);
+  let b: Record<string, unknown> = {}; try { b = await request.json() as Record<string, unknown>; } catch { /* body optional */ }
+  const ev = await env.DB.prepare("SELECT COUNT(*) AS n FROM claim_evidence WHERE claim_id=?").bind(claimId).first() as { n: number };
+  if ((ev?.n || 0) === 0 && b.evidence_not_applicable !== true)
+    return json({ error: "Evidence required before publishing a verified claim" }, 400);
+  const expiry = b.expiry_date ? String(b.expiry_date) : null;
+  const from = String(claim.status);
+  await env.DB.prepare("UPDATE claims SET status='verified', reviewer_id=?, reviewer_name=?, reviewed_at=datetime('now'), expiry_date=? WHERE id=?")
+    .bind(user!.sub, user!.name || "", expiry, claimId).run();
+  await piHist(env, claimId, "approve", user, from, "verified", String(b.note || ""));
+  if (["dietary", "ingredient"].includes(String(claim.category))) {
+    await env.DB.prepare(`INSERT INTO product_attributes (id,sku,attribute,value,status,source,updated_at) VALUES (?,?,?, 'true','verified','claim', datetime('now'))`)
+      .bind(`att${uid().slice(0, 12)}`, String(claim.sku), String(claim.label).toLowerCase()).run();
+  }
+  await env.DB.prepare("UPDATE verification_tasks SET status='closed', updated_at=datetime('now') WHERE claim_id=?").bind(claimId).run();
+  await audit(env, user, "claim_approve", "claim", claimId);
+  return json({ ok: true });
+}
+
+async function handleClaimReject(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const claimId = decodeURIComponent(path.split("/").slice(-2)[0] || "");
+  const claim = await env.DB.prepare("SELECT status FROM claims WHERE id=?").bind(claimId).first() as { status: string } | null;
+  if (!claim) return json({ error: "Unknown claim" }, 404);
+  let b: Record<string, unknown> = {}; try { b = await request.json() as Record<string, unknown>; } catch { /* optional */ }
+  await env.DB.prepare("UPDATE claims SET status='rejected', reviewer_id=?, reviewer_name=?, reviewed_at=datetime('now') WHERE id=?")
+    .bind(user!.sub, user!.name || "", claimId).run();
+  await piHist(env, claimId, "reject", user, claim.status, "rejected", String(b.note || ""));
+  await env.DB.prepare("UPDATE verification_tasks SET status='closed', updated_at=datetime('now') WHERE claim_id=?").bind(claimId).run();
+  await audit(env, user, "claim_reject", "claim", claimId);
+  return json({ ok: true });
+}
+
+async function handleClaimRequestEvidence(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const claimId = decodeURIComponent(path.split("/").slice(-2)[0] || "");
+  const claim = await env.DB.prepare("SELECT status FROM claims WHERE id=?").bind(claimId).first() as { status: string } | null;
+  if (!claim) return json({ error: "Unknown claim" }, 404);
+  let b: Record<string, unknown> = {}; try { b = await request.json() as Record<string, unknown>; } catch { /* optional */ }
+  await env.DB.prepare("UPDATE claims SET status='evidence_requested' WHERE id=?").bind(claimId).run();
+  await piHist(env, claimId, "request_evidence", user, claim.status, "evidence_requested", String(b.note || ""));
+  await env.DB.prepare("UPDATE verification_tasks SET priority='high', updated_at=datetime('now') WHERE claim_id=?").bind(claimId).run();
+  return json({ ok: true });
+}
+
+async function handleClaimEvidence(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const claimId = decodeURIComponent(path.split("/").slice(-2)[0] || "");
+  if (!await env.DB.prepare("SELECT id FROM claims WHERE id=?").bind(claimId).first()) return json({ error: "Unknown claim" }, 404);
+  let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
+  await env.DB.prepare("INSERT INTO claim_evidence (id,claim_id,doc_id,page_ref,extracted_text) VALUES (?,?,?,?,?)")
+    .bind(`ce${uid().slice(0, 12)}`, claimId, String(b.doc_id || "") || null, String(b.page_ref || "") || null, String(b.extracted_text || "") || null).run();
+  await piHist(env, claimId, "add_evidence", user, "", "", String(b.page_ref || b.doc_id || ""));
+  return json({ ok: true });
 }
 
 // POST /api/delivery-challans/ad-hoc — Phase 1: create a challan-first DC (no
@@ -2028,6 +2125,11 @@ export default {
       if (path.match(/^\/api\/catalog\/products\/[^/]+$/)             && method==="GET")  return handleCatalogProduct(request,env,path);
       if (path==="/api/brands"           && method==="GET")  return handleListBrands(request,env);
       if (path==="/api/brands"           && method==="POST") return handleUpsertBrand(request,env);
+      if (path==="/api/verification/queue" && method==="GET") return handleVerificationQueue(request,env);
+      if (path.match(/^\/api\/claims\/[^/]+\/approve$/)          && method==="POST") return handleClaimApprove(request,env,path);
+      if (path.match(/^\/api\/claims\/[^/]+\/reject$/)           && method==="POST") return handleClaimReject(request,env,path);
+      if (path.match(/^\/api\/claims\/[^/]+\/request-evidence$/) && method==="POST") return handleClaimRequestEvidence(request,env,path);
+      if (path.match(/^\/api\/claims\/[^/]+\/evidence$/)         && method==="POST") return handleClaimEvidence(request,env,path);
 
       // Orders — specific paths must come before the wildcard /:id routes
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
