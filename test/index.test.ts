@@ -2988,3 +2988,34 @@ describe("Product Intelligence catalog + enrich (P0.1)", () => {
     expect(list.facets).toHaveProperty("category");
   });
 });
+
+// ── Product Intelligence AI extract + screening (P0.2) ────────────────
+describe("Product Intelligence AI extract + screening (P0.2)", () => {
+  it("screens a Vegan claim against animal-derived ingredients and never publishes verified", async () => {
+    const created = await post("/api/inventory", { name: "PI Screen Test", category: "Snacks", unit_price: 100, stock: 20 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    const res = await post(`/api/catalog/products/${sku}/ai/extract`, {
+      text: "Vegan. Ingredients: Oats, Milk solids, Sugar, Honey. High Protein.",
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { claims: { label: string; conflict: boolean; status: string }[]; ingredients: number };
+    expect(body.ingredients).toBeGreaterThan(0);
+    const vegan = body.claims.find(c => c.label === "Vegan");
+    expect(vegan).toBeDefined();
+    expect(vegan!.conflict).toBe(true);              // milk solids / honey → conflict
+    expect(vegan!.status).toBe("ai_screened");
+
+    // detail: claims exist but NONE is verified; attributes screened, not verified
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as {
+      claims: { label: string; status: string }[]; attributes: { attribute: string; status: string }[];
+    };
+    expect(det.claims.length).toBeGreaterThan(0);
+    expect(det.claims.every(c => c.status !== "verified")).toBe(true);
+    expect(det.attributes.every(a => a.status !== "verified")).toBe(true);
+
+    // client cannot run extraction
+    const forbidden = await post(`/api/catalog/products/${sku}/ai/extract`, { text: "Vegan" }, clientToken);
+    expect(forbidden.status).toBe(403);
+  });
+});

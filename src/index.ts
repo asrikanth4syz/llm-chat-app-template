@@ -604,6 +604,119 @@ async function handleUpsertBrand(request: Request, env: Env): Promise<Response> 
   return json({ ok: true, id });
 }
 
+// ── P0.2: own/in-platform extraction + rule-driven claim screening ──────────
+// extractProductDoc is the single OCR/vision seam. With a Workers AI binding it
+// can OCR a label image (own infra, no third-party SaaS); for MVP it accepts
+// pasted label TEXT. It NEVER publishes a verified claim.
+interface PiExtract { ingredients: string[]; claims: { category: string; label: string }[]; }
+
+const PI_CLAIM_LEXICON: { re: RegExp; category: string; label: string }[] = [
+  { re: /\bvegan\b/i, category: "dietary", label: "Vegan" },
+  { re: /\bvegetarian\b/i, category: "dietary", label: "Vegetarian" },
+  { re: /\bgluten[- ]?free\b/i, category: "dietary", label: "Gluten Free" },
+  { re: /\bdairy[- ]?free\b/i, category: "dietary", label: "Dairy Free" },
+  { re: /\begg[- ]?free\b/i, category: "dietary", label: "Egg Free" },
+  { re: /\bjain\b/i, category: "dietary", label: "Jain" },
+  { re: /\bno added sugar\b/i, category: "ingredient", label: "No Added Sugar" },
+  { re: /\bno artificial (?:colours?|colors?)\b/i, category: "ingredient", label: "No Artificial Colours" },
+  { re: /\bno artificial preservatives?\b/i, category: "ingredient", label: "No Artificial Preservatives" },
+  { re: /\bno palm oil\b/i, category: "ingredient", label: "No Palm Oil" },
+  { re: /\bhigh protein\b/i, category: "nutrition", label: "High Protein" },
+  { re: /\borganic\b/i, category: "certification", label: "Organic" },
+];
+
+function parseLabelText(text: string): PiExtract {
+  let ingredients: string[] = [];
+  const m = text.match(/ingredients?\s*[:\-]\s*([^\n.]*)/i);
+  if (m) ingredients = m[1].split(/[,;]/).map(s => s.replace(/\([^)]*\)/g, "").trim()).filter(Boolean).slice(0, 60);
+  const claims: { category: string; label: string }[] = [];
+  for (const c of PI_CLAIM_LEXICON) if (c.re.test(text)) claims.push({ category: c.category, label: c.label });
+  return { ingredients, claims };
+}
+
+async function extractProductDoc(env: Env, input: { text?: string; imageBase64?: string }): Promise<PiExtract> {
+  if (input.text && input.text.trim()) return parseLabelText(input.text);
+  const ai = (env as unknown as { AI?: { run: (m: string, o: unknown) => Promise<{ text?: string; description?: string }> } }).AI;
+  if (ai && input.imageBase64) {
+    try {
+      const bytes = Uint8Array.from(atob(input.imageBase64), c => c.charCodeAt(0));
+      const out = await ai.run("@cf/meta/llama-3.2-11b-vision-instruct", { image: [...bytes], prompt: "Transcribe all text on this product label verbatim." });
+      return parseLabelText(out.text || out.description || "");
+    } catch { /* fall through to empty */ }
+  }
+  return { ingredients: [], claims: [] };
+}
+
+// Deterministic, config-driven claim screening — advisory only, never a verdict.
+async function screenClaim(env: Env, _category: string, label: string, ingredients: string[]): Promise<{ result: string; conflict: boolean; confidence: number }> {
+  const lc = label.toLowerCase();
+  const ing = ingredients.map(i => i.toLowerCase());
+  const dictTerms = async (dict: string) => {
+    const { results } = await env.DB.prepare("SELECT term FROM pi_rule_dict WHERE dict=? AND active=1").bind(dict).all() as { results: { term: string }[] };
+    return results.map(r => r.term.toLowerCase());
+  };
+  const hit = (terms: string[]) => ing.find(i => terms.some(t => i.includes(t)));
+  if (lc === "vegan" || lc === "vegetarian" || lc === "dairy free" || lc === "egg free") {
+    const animal = await dictTerms("animal_derived");
+    const pool = lc === "dairy free" ? animal.filter(t => /milk|whey|casein|lactose|butter|ghee|cream/.test(t))
+      : lc === "egg free" ? animal.filter(t => /egg|albumin/.test(t)) : animal;
+    const bad = hit(pool);
+    if (bad) return { result: `conflict: '${bad}' is animal-derived`, conflict: true, confidence: 0.94 };
+    return { result: "no animal-derived ingredient detected", conflict: false, confidence: 0.8 };
+  }
+  if (lc === "no added sugar") {
+    const bad = hit(await dictTerms("sweetener"));
+    return { result: bad ? `review: '${bad}' present — cannot infer compliance` : "no added sweetener detected — needs review", conflict: false, confidence: 0.6 };
+  }
+  if (lc === "no artificial preservatives") {
+    const bad = hit(await dictTerms("preservative"));
+    if (bad) return { result: `conflict: '${bad}' is a listed preservative`, conflict: true, confidence: 0.9 };
+    return { result: "no listed preservative detected", conflict: false, confidence: 0.8 };
+  }
+  if (lc === "organic") return { result: "evidence required — needs a valid certificate", conflict: false, confidence: 0.5 };
+  return { result: "screened — needs human review", conflict: false, confidence: 0.55 };
+}
+
+// POST /api/catalog/products/:sku/ai/extract — own OCR/text extraction + screening.
+// Writes ai_extracted / ai_screened ONLY. A reviewer publishes 'verified' later.
+async function handleAiExtract(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-3)[0] || "");
+  if (!await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first()) return json({ error: "Unknown SKU" }, 404);
+  let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
+
+  const extracted = await extractProductDoc(env, { text: b.text as string, imageBase64: b.imageBase64 as string });
+  if (extracted.ingredients.length) {
+    await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
+    let pos = 0;
+    for (const raw of extracted.ingredients) {
+      const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(raw).first() as { id: string; allergen: number } | null;
+      await env.DB.prepare("INSERT INTO product_ingredients (id,sku,position,raw_text,normalized_id,allergen) VALUES (?,?,?,?,?,?)")
+        .bind(`ing${uid().slice(0, 12)}`, sku, pos++, raw, dict?.id ?? null, dict?.allergen ?? 0).run();
+    }
+  }
+  const out: { label: string; status: string; result: string; conflict: boolean; confidence: number }[] = [];
+  for (const c of extracted.claims) {
+    const scr = await screenClaim(env, c.category, c.label, extracted.ingredients);
+    const claimId = `clm${uid().slice(0, 12)}`;
+    await env.DB.prepare(`INSERT INTO claims (id,sku,category,label,status,ai_confidence,screened_result) VALUES (?,?,?,?, 'ai_screened', ?, ?)`)
+      .bind(claimId, sku, c.category, c.label, scr.confidence, scr.result).run();
+    if (c.category === "dietary" || c.category === "ingredient") {
+      await env.DB.prepare(`INSERT INTO product_attributes (id,sku,attribute,value,status,source) VALUES (?,?,?, 'true','ai_screened','ai')`)
+        .bind(`att${uid().slice(0, 12)}`, sku, c.label.toLowerCase()).run();
+    }
+    if (scr.conflict || scr.confidence < 0.75) {
+      await env.DB.prepare(`INSERT INTO verification_tasks (id,task_type,sku,claim_id,priority,status) VALUES (?, 'claim', ?, ?, ?, 'open')`)
+        .bind(`vt${uid().slice(0, 12)}`, sku, claimId, scr.conflict ? "high" : "normal").run();
+    }
+    out.push({ label: c.label, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
+  }
+  await audit(env, user, "ai_extract", "product", sku);
+  return json({ ok: true, ingredients: extracted.ingredients.length, claims: out });
+}
+
 // POST /api/delivery-challans/ad-hoc — Phase 1: create a challan-first DC (no
 // order behind it). Draws its number from the active FY series for the
 // category's class. Body: { category, client_name, items_text?, notes?,
@@ -1519,6 +1632,18 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft'`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  // Seed the editable claim-screening dictionaries once (deterministic ids →
+  // INSERT OR IGNORE is idempotent). Reviewers can add/disable terms later.
+  try {
+    const seed: [string, string][] = [
+      ...["milk", "milk solids", "whey", "casein", "lactose", "butter", "ghee", "cream", "egg", "albumin", "honey", "gelatin", "gelatine", "carmine", "shellac", "fish", "meat", "chicken"].map(t => ["animal_derived", t] as [string, string]),
+      ...["sodium benzoate", "potassium sorbate", "sulphur dioxide", "sodium nitrite", "bha", "bht", "tbhq", "calcium propionate"].map(t => ["preservative", t] as [string, string]),
+      ...["sugar", "cane sugar", "glucose syrup", "fructose", "corn syrup", "invert syrup", "aspartame", "sucralose", "honey"].map(t => ["sweetener", t] as [string, string]),
+    ];
+    for (const [dict, term] of seed) {
+      await env.DB.prepare("INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES (?,?,?,1)").bind(`${dict}:${term}`, dict, term).run();
+    }
+  } catch { /* non-fatal */ }
   // Seed the HSN→GST slab map when empty (mirrors migration 0037 so the mapping
   // exists even on DBs where later migrations were never applied). INSERT OR
   // IGNORE keeps any admin-managed edits intact.
@@ -1898,8 +2023,9 @@ export default {
 
       // Product Intelligence & Brand Catalogue (specific paths before wildcards)
       if (path==="/api/catalog/products" && method==="GET")  return handleCatalogList(request,env);
-      if (path.match(/^\/api\/catalog\/products\/[^/]+\/enrich$/) && method==="POST") return handleEnrichProduct(request,env,path);
-      if (path.match(/^\/api\/catalog\/products\/[^/]+$/)         && method==="GET")  return handleCatalogProduct(request,env,path);
+      if (path.match(/^\/api\/catalog\/products\/[^/]+\/enrich$/)     && method==="POST") return handleEnrichProduct(request,env,path);
+      if (path.match(/^\/api\/catalog\/products\/[^/]+\/ai\/extract$/) && method==="POST") return handleAiExtract(request,env,path);
+      if (path.match(/^\/api\/catalog\/products\/[^/]+$/)             && method==="GET")  return handleCatalogProduct(request,env,path);
       if (path==="/api/brands"           && method==="GET")  return handleListBrands(request,env);
       if (path==="/api/brands"           && method==="POST") return handleUpsertBrand(request,env);
 

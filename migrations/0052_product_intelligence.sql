@@ -30,3 +30,17 @@ ALTER TABLE inventory ADD COLUMN case_config TEXT;
 ALTER TABLE inventory ADD COLUMN serving_info TEXT;
 ALTER TABLE inventory ADD COLUMN storage_info TEXT;
 ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft';
+
+-- Seed editable claim-screening dictionaries (idempotent).
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:milk','animal_derived','milk',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:milk solids','animal_derived','milk solids',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:whey','animal_derived','whey',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:casein','animal_derived','casein',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:egg','animal_derived','egg',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:albumin','animal_derived','albumin',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:honey','animal_derived','honey',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('animal_derived:gelatin','animal_derived','gelatin',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('preservative:sodium benzoate','preservative','sodium benzoate',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('preservative:potassium sorbate','preservative','potassium sorbate',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('sweetener:sugar','sweetener','sugar',1);
+INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES ('sweetener:glucose syrup','sweetener','glucose syrup',1);
