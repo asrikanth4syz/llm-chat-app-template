@@ -373,6 +373,237 @@ async function handleListContacts(request: Request, env: Env): Promise<Response>
   return json({ submissions: results });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Product Intelligence & Brand Catalogue
+// ═══════════════════════════════════════════════════════════════════════════
+// Roles: verification/enrichment is done by super_admin + ops_admin (no separate
+// verifier role). Client roles see only their assigned catalogue + client price;
+// cost/margin never leave the server for them.
+const PI_ADMIN = ["super_admin", "ops_admin"];
+const PI_CLIENT_ROLES = ["client_admin", "client_user", "client_approver"];
+
+async function piVerifiedAttrs(env: Env, skus: string[]): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  if (!skus.length) return out;
+  const ph = skus.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT sku, attribute FROM product_attributes WHERE status='verified' AND sku IN (${ph})`
+  ).bind(...skus).all() as { results: { sku: string; attribute: string }[] };
+  for (const r of results) (out[r.sku] = out[r.sku] || []).push(r.attribute);
+  return out;
+}
+
+// GET /api/catalog/products — filterable catalogue + simple facets.
+async function handleCatalogList(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const url = new URL(request.url);
+  const q = url.searchParams.get("q");
+  const cat = url.searchParams.get("category");
+  const brandId = url.searchParams.get("brand_id");
+  const attr = url.searchParams.get("attribute");
+  const verified = url.searchParams.get("verified") === "1";
+  const pmin = parseFloat(url.searchParams.get("pmin") || "");
+  const pmax = parseFloat(url.searchParams.get("pmax") || "");
+  const avail = url.searchParams.get("availability");
+  const isClient = PI_CLIENT_ROLES.includes(user!.role);
+
+  const params: unknown[] = [];
+  let where = " WHERE i.active=1";
+  if (q)   { where += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+  if (cat) { where += " AND i.category=?"; params.push(cat); }
+  if (brandId) { where += " AND i.brand_id=?"; params.push(brandId); }
+
+  let priceMap: Record<string, number | null> = {};
+  if (isClient && user!.client_id) {
+    const { results: cc } = await env.DB.prepare("SELECT sku, client_price FROM client_catalog WHERE client_id=?")
+      .bind(user!.client_id).all() as { results: { sku: string; client_price: number | null }[] };
+    if (!cc.length) return json({ products: [], facets: {}, total: 0 });
+    const skus = cc.map(r => r.sku); priceMap = Object.fromEntries(cc.map(r => [r.sku, r.client_price]));
+    where += ` AND i.sku IN (${skus.map(() => "?").join(",")})`; params.push(...skus);
+  }
+  if (attr) { where += " AND i.sku IN (SELECT sku FROM product_attributes WHERE status='verified' AND attribute=?)"; params.push(attr); }
+  if (verified) { where += " AND i.sku IN (SELECT DISTINCT sku FROM claims WHERE status='verified')"; }
+
+  const { results } = await env.DB.prepare(
+    `SELECT i.sku,i.name,i.category,i.brand,i.brand_id,i.unit_price,i.mrp,i.gst_rate,i.stock,i.reorder_level,
+            i.pack_size,i.moq,i.emoji,i.cost_excl_gst,b.name AS brand_name,b.brand_type
+       FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id ${where} ORDER BY i.name LIMIT 500`
+  ).bind(...params).all() as { results: Record<string, unknown>[] };
+
+  const skus = results.map(r => String(r.sku));
+  const vattrs = await piVerifiedAttrs(env, skus);
+  const { results: vClaims } = skus.length ? await env.DB.prepare(
+    `SELECT DISTINCT sku FROM claims WHERE status='verified' AND sku IN (${skus.map(() => "?").join(",")})`
+  ).bind(...skus).all() as { results: { sku: string }[] } : { results: [] as { sku: string }[] };
+  const verifiedSet = new Set(vClaims.map(r => r.sku));
+
+  let products = results.map(r => {
+    const sku = String(r.sku);
+    const stock = Number(r.stock) || 0, reorder = Number(r.reorder_level) || 0;
+    const availability = stock <= 0 ? "out" : stock <= reorder ? "low" : "in";
+    const list = Number(r.unit_price) || 0;
+    const p: Record<string, unknown> = {
+      sku, name: r.name, category: r.category,
+      brand: r.brand_name || r.brand || null, brand_id: r.brand_id || null, brand_type: r.brand_type || null,
+      mrp: Number(r.mrp) || 0, gst_rate: Number(r.gst_rate) || 0, pack_size: r.pack_size || null, moq: r.moq || null,
+      emoji: r.emoji || "📦", stock, availability,
+      verified: verifiedSet.has(sku), attributes: vattrs[sku] || [],
+    };
+    if (isClient) { p.client_price = priceMap[sku] != null ? Number(priceMap[sku]) : list; p.list_price = list; }
+    else { p.list_price = list; p.cost_excl_gst = Number(r.cost_excl_gst) || 0; }
+    return p;
+  });
+  const priceOf = (p: Record<string, unknown>) => Number(isClient ? p.client_price : p.list_price) || 0;
+  if (Number.isFinite(pmin)) products = products.filter(p => priceOf(p) >= pmin);
+  if (Number.isFinite(pmax)) products = products.filter(p => priceOf(p) <= pmax);
+  if (avail) products = products.filter(p => p.availability === avail);
+
+  const facet = (key: string) => { const m: Record<string, number> = {}; for (const p of products) { const v = String((p as Record<string, unknown>)[key] ?? ""); if (v) m[v] = (m[v] || 0) + 1; } return m; };
+  return json({
+    products, total: products.length,
+    facets: { category: facet("category"), brand: facet("brand"), verified: products.filter(p => p.verified).length, availability: facet("availability") },
+  });
+}
+
+// GET /api/catalog/products/:sku — full product intelligence.
+async function handleCatalogProduct(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const sku = decodeURIComponent(path.split("/").pop() || "");
+  const isClient = PI_CLIENT_ROLES.includes(user!.role);
+
+  const inv = await env.DB.prepare(
+    `SELECT i.*, b.name AS brand_name, b.brand_type, b.origin AS brand_origin, b.story AS brand_story, b.status AS brand_status
+       FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id WHERE i.sku=?`
+  ).bind(sku).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Not found" }, 404);
+
+  const [content, nutrition, ingr, attrs, claims, certs] = await Promise.all([
+    env.DB.prepare("SELECT description,usage,images_json FROM product_content WHERE sku=?").bind(sku).first(),
+    env.DB.prepare("SELECT * FROM product_nutrition WHERE sku=?").bind(sku).first(),
+    env.DB.prepare("SELECT raw_text,grp,allergen,normalized_id FROM product_ingredients WHERE sku=? ORDER BY position").bind(sku).all(),
+    env.DB.prepare("SELECT attribute,value,status,source FROM product_attributes WHERE sku=? ORDER BY attribute").bind(sku).all(),
+    env.DB.prepare("SELECT * FROM claims WHERE sku=? ORDER BY created_at").bind(sku).all(),
+    env.DB.prepare("SELECT kind,number,issuer,valid_from,valid_to,status FROM certifications WHERE sku=? OR (scope='brand' AND brand_id=?)").bind(sku, inv.brand_id || "").all(),
+  ]);
+
+  const claimRows = (claims as { results: Record<string, unknown>[] }).results;
+  const claimIds = claimRows.map(c => String(c.id));
+  const evidenceBy: Record<string, unknown[]> = {};
+  if (claimIds.length) {
+    const { results: ev } = await env.DB.prepare(
+      `SELECT claim_id,doc_id,page_ref,extracted_text,extraction_date FROM claim_evidence WHERE claim_id IN (${claimIds.map(() => "?").join(",")})`
+    ).bind(...claimIds).all() as { results: Record<string, unknown>[] };
+    for (const e of ev) (evidenceBy[String(e.claim_id)] = evidenceBy[String(e.claim_id)] || []).push(e);
+  }
+  const claimsOut = claimRows.map(c => ({ ...c, evidence: evidenceBy[String(c.id)] || [] }));
+
+  // Role-filtered pricing block.
+  const list = Number(inv.unit_price) || 0, mrp = Number(inv.mrp) || 0, gst = Number(inv.gst_rate) || 18;
+  const pricing: Record<string, unknown> = { mrp, list_excl_gst: list, gst_rate: gst };
+  if (isClient && user!.client_id) {
+    const cc = await env.DB.prepare("SELECT client_price FROM client_catalog WHERE client_id=? AND sku=?").bind(user!.client_id, sku).first() as { client_price: number | null } | null;
+    pricing.client_excl_gst = cc?.client_price != null ? Number(cc.client_price) : list;
+  } else {
+    pricing.cost_excl_gst = Number(inv.cost_excl_gst) || 0;
+    delete inv.cost_excl_gst;
+  }
+  if (isClient) { delete inv.cost_excl_gst; delete inv.vendor_id; delete inv.secondary_vendor_id; }
+
+  return json({
+    product: inv, content: content || null, nutrition: nutrition || null,
+    ingredients: (ingr as { results: unknown[] }).results,
+    attributes: (attrs as { results: unknown[] }).results,
+    claims: claimsOut, certifications: (certs as { results: unknown[] }).results, pricing,
+  });
+}
+
+// POST /api/catalog/products/:sku/enrich — ops enriches the product master.
+// Manually-entered attributes are recorded as verified (the ops user is the
+// verifier), with source='manual'. AI paths never call this.
+async function handleEnrichProduct(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const sku = decodeURIComponent(path.split("/").slice(-2)[0] || "");
+  const exists = await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first();
+  if (!exists) return json({ error: "Unknown SKU" }, 404);
+  let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
+
+  // inventory master columns
+  const pack = (b.pack || {}) as Record<string, unknown>;
+  await env.DB.prepare(
+    `UPDATE inventory SET brand_id=COALESCE(?,brand_id), product_type=COALESCE(?,product_type), barcode_gtin=COALESCE(?,barcode_gtin),
+       pack_size=COALESCE(?,pack_size), units_per_carton=COALESCE(?,units_per_carton), moq=COALESCE(?,moq),
+       serving_info=COALESCE(?,serving_info), storage_info=COALESCE(?,storage_info), lifecycle_status=COALESCE(?,lifecycle_status) WHERE sku=?`
+  ).bind(pack.brand_id ?? null, pack.product_type ?? null, pack.barcode_gtin ?? null, pack.pack_size ?? null,
+         pack.units_per_carton ?? null, pack.moq ?? null, pack.serving_info ?? null, pack.storage_info ?? null,
+         pack.lifecycle_status ?? null, sku).run();
+
+  if (b.content) {
+    const c = b.content as Record<string, unknown>;
+    await env.DB.prepare(`INSERT INTO product_content (sku,description,usage,images_json,updated_at) VALUES (?,?,?,?,datetime('now'))
+      ON CONFLICT(sku) DO UPDATE SET description=excluded.description, usage=excluded.usage, images_json=excluded.images_json, updated_at=datetime('now')`)
+      .bind(sku, String(c.description ?? ""), String(c.usage ?? ""), JSON.stringify(c.images ?? [])).run();
+  }
+  if (b.nutrition) {
+    const n = b.nutrition as Record<string, unknown>;
+    const num = (v: unknown) => (v === "" || v == null ? null : Number(v));
+    await env.DB.prepare(`INSERT INTO product_nutrition (sku,basis,calories,protein,carbs,sugar,fat,fibre,sodium,source_ref,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+      ON CONFLICT(sku) DO UPDATE SET basis=excluded.basis,calories=excluded.calories,protein=excluded.protein,carbs=excluded.carbs,
+        sugar=excluded.sugar,fat=excluded.fat,fibre=excluded.fibre,sodium=excluded.sodium,source_ref=excluded.source_ref,updated_at=datetime('now')`)
+      .bind(sku, String(n.basis ?? "per 100g"), num(n.calories), num(n.protein), num(n.carbs), num(n.sugar), num(n.fat), num(n.fibre), num(n.sodium), String(n.source_ref ?? "manual")).run();
+  }
+  if (Array.isArray(b.ingredients)) {
+    await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
+    let pos = 0;
+    for (const raw of b.ingredients as unknown[]) {
+      const text = String(raw ?? "").trim(); if (!text) continue;
+      const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(text).first() as { id: string; allergen: number } | null;
+      await env.DB.prepare("INSERT INTO product_ingredients (id,sku,position,raw_text,normalized_id,allergen) VALUES (?,?,?,?,?,?)")
+        .bind(`ing${uid().slice(0, 12)}`, sku, pos++, text, dict?.id ?? null, dict?.allergen ?? 0).run();
+    }
+  }
+  if (Array.isArray(b.attributes)) {
+    for (const a of b.attributes as unknown[]) {
+      const attribute = String((a as Record<string, unknown>).attribute ?? a ?? "").trim().toLowerCase();
+      if (!attribute) continue;
+      await env.DB.prepare(`INSERT INTO product_attributes (id,sku,attribute,value,status,source,updated_at)
+        VALUES (?,?,?,?, 'verified','manual', datetime('now'))`)
+        .bind(`att${uid().slice(0, 12)}`, sku, attribute, "true").run();
+    }
+  }
+  await audit(env, user, "enrich", "product", sku);
+  return json({ ok: true });
+}
+
+async function handleListBrands(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results } = await env.DB.prepare("SELECT * FROM brands ORDER BY name").all();
+  return json({ brands: results });
+}
+
+async function handleUpsertBrand(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
+  const name = String(b.name ?? "").trim();
+  if (!name) return json({ error: "Brand name is required" }, 400);
+  const id = String(b.id ?? "").trim() || `br${uid().slice(0, 12)}`;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const status = ["draft", "review", "approved", "suspended", "archived"].includes(String(b.status)) ? String(b.status) : "draft";
+  await env.DB.prepare(`INSERT INTO brands (id,name,slug,story,origin,website,brand_type,status,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=excluded.slug,story=excluded.story,origin=excluded.origin,
+        website=excluded.website,brand_type=excluded.brand_type,status=excluded.status,updated_at=datetime('now')`)
+    .bind(id, name, slug, String(b.story ?? ""), String(b.origin ?? ""), String(b.website ?? ""), String(b.brand_type ?? ""), status).run();
+  return json({ ok: true, id });
+}
+
 // POST /api/delivery-challans/ad-hoc — Phase 1: create a challan-first DC (no
 // order behind it). Draws its number from the active FY series for the
 // category's class. Body: { category, client_name, items_text?, notes?,
@@ -1664,6 +1895,13 @@ export default {
       // Contact / "Book a demo" lead capture — POST is public, GET is admin-only.
       if (path==="/api/contact"         && method==="POST") return handleCreateContact(request,env);
       if (path==="/api/contact"         && method==="GET")  return handleListContacts(request,env);
+
+      // Product Intelligence & Brand Catalogue (specific paths before wildcards)
+      if (path==="/api/catalog/products" && method==="GET")  return handleCatalogList(request,env);
+      if (path.match(/^\/api\/catalog\/products\/[^/]+\/enrich$/) && method==="POST") return handleEnrichProduct(request,env,path);
+      if (path.match(/^\/api\/catalog\/products\/[^/]+$/)         && method==="GET")  return handleCatalogProduct(request,env,path);
+      if (path==="/api/brands"           && method==="GET")  return handleListBrands(request,env);
+      if (path==="/api/brands"           && method==="POST") return handleUpsertBrand(request,env);
 
       // Orders — specific paths must come before the wildcard /:id routes
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);

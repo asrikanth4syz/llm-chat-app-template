@@ -2934,3 +2934,57 @@ describe("Product Intelligence schema (P0.0)", () => {
     expect(inv?.lifecycle_status).toBe("published");
   });
 });
+
+// ── Product Intelligence catalog + enrich (P0.1) ──────────────────────
+describe("Product Intelligence catalog + enrich (P0.1)", () => {
+  it("upserts a brand, enriches a product, and returns role-filtered detail", async () => {
+    const br = await post("/api/brands", { name: "TestBrand PI", brand_type: "Indian Brand", status: "approved" }, adminToken);
+    expect(br.status).toBe(200);
+    const brandId = (await br.json() as { id: string }).id;
+
+    const enrich = await post("/api/catalog/products/SKU001/enrich", {
+      pack: { brand_id: brandId, moq: 6, pack_size: "5 kg", lifecycle_status: "published" },
+      nutrition: { basis: "per 100g", protein: 8, sugar: 1 },
+      ingredients: ["Rice", "Water"],
+      attributes: [{ attribute: "Vegan" }, { attribute: "Gluten Free" }],
+    }, adminToken);
+    expect(enrich.status).toBe(200);
+
+    // client cannot enrich
+    const forbidden = await post("/api/catalog/products/SKU001/enrich", { pack: { moq: 1 } }, clientToken);
+    expect(forbidden.status).toBe(403);
+
+    // admin detail exposes cost; verified attributes present
+    const adminDet = await (await get("/api/catalog/products/SKU001", adminToken)).json() as {
+      pricing: Record<string, unknown>; attributes: { attribute: string; status: string }[]; nutrition: { protein: number };
+    };
+    expect(adminDet.pricing.cost_excl_gst).toBeDefined();
+    expect(adminDet.attributes.some(a => a.attribute === "vegan" && a.status === "verified")).toBe(true);
+    expect(adminDet.nutrition.protein).toBe(8);
+
+    // client detail hides cost & vendor
+    const cliDet = await (await get("/api/catalog/products/SKU001", clientToken)).json() as {
+      pricing: Record<string, unknown>; product: Record<string, unknown>;
+    };
+    expect(cliDet.pricing.cost_excl_gst).toBeUndefined();
+    expect(cliDet.product.cost_excl_gst).toBeUndefined();
+    expect(cliDet.pricing.client_excl_gst).toBeDefined();
+  });
+
+  it("lists catalogue with facets and filters by a verified attribute", async () => {
+    // Self-contained: create an active product (the server assigns the SKU) so the
+    // active=1 catalogue filter can't flake on a SKU an earlier test deactivated.
+    const created = await post("/api/inventory", { name: "PI Vegan Test", category: "Snacks", unit_price: 120, stock: 50 }, adminToken);
+    const newSku = (await created.json() as { sku: string }).sku;
+    await post(`/api/catalog/products/${newSku}/enrich`, { attributes: [{ attribute: "Vegan" }] }, adminToken);
+    const list = await (await get("/api/catalog/products?attribute=vegan", adminToken)).json() as {
+      products: { sku: string; attributes: string[]; cost_excl_gst?: number }[]; facets: Record<string, unknown>;
+    };
+    expect(Array.isArray(list.products)).toBe(true);
+    const row = list.products.find(p => p.sku === newSku);
+    expect(row).toBeDefined();
+    expect(row!.attributes).toContain("vegan");
+    expect(row!.cost_excl_gst).toBeDefined();   // admin sees cost (0 when unset)
+    expect(list.facets).toHaveProperty("category");
+  });
+});
