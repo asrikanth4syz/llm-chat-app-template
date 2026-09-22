@@ -1086,25 +1086,23 @@ async function viewOrderDrilldown(orderId) {
     ? Math.round((summary.delivered_lines / summary.total_lines) * 100)
     : 0;
 
+  // Quantity totals (units) alongside the line-count totals, so Ordered / Delivered /
+  // Due can be read as "lines · qty" on one row each instead of split across tiles.
+  const ordQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_ordered)||0),0);
+  const delQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_delivered)||0),0);
+  const dueQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_due)||0),0);
+  const dueTone = (summary.due_lines>0||dueQty>0) ? 'var(--red)' : 'var(--text-muted)';
+  const cell = (v,align,color,extra) => `<div style="padding:11px 16px;border-top:1px solid var(--border);text-align:${align};font-weight:700;color:${color};${extra||''}">${v}</div>`;
+  const hcell = (v,align) => `<div style="padding:9px 16px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);background:var(--bg);text-align:${align}">${v}</div>`;
+
   const body = `
-  <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Line Items</div>
-      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.total_lines}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid #10b981">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Fully Delivered</div>
-      <div style="font-size:1.8rem;font-weight:800;color:#10b981;margin-top:4px">${summary.delivered_lines}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.due_lines>0?'var(--red)':'var(--gray-light)'}">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Lines Due</div>
-      <div style="font-size:1.8rem;font-weight:800;color:${summary.due_lines>0?'var(--red)':'var(--navy)'};margin-top:4px">${summary.due_lines}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${summary.no_delivery_lines>0?'var(--gray)':'var(--gray-light)'}">
-      <div style="font-size:.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">No Delivery</div>
-      <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${summary.no_delivery_lines}</div>
-      <div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">zero units received</div>
+  <!-- Ordered vs Delivered reconciliation: lines & qty, one row each for clarity -->
+  <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:18px">
+    <div style="display:grid;grid-template-columns:1fr auto auto;align-items:center">
+      ${hcell('','left')}${hcell('Lines','right')}${hcell('Qty','right')}
+      ${cell('Ordered','left','var(--navy)','')}${cell(summary.total_lines,'right','var(--navy)','min-width:82px')}${cell(ordQty,'right','var(--navy)','min-width:96px')}
+      ${cell('Delivered','left','#10b981','')}${cell(summary.delivered_lines,'right','#10b981','')}${cell(delQty,'right','#10b981','')}
+      ${cell('Due','left',dueTone,'')}${cell(summary.due_lines,'right',dueTone,'')}${cell(dueQty,'right',dueTone,'')}
     </div>
   </div>
 
