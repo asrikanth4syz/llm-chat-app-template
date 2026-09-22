@@ -1039,48 +1039,17 @@ async function viewOrderDrilldown(orderId) {
 
   const { order, lines, dcs, summary } = data;
 
-  const statusColor = s => ({
-    fully_delivered: '#10b981',
-    partial: '#f59e0b',
-    not_delivered: '#ef4444',
-  }[s] || '#6b7280');
-
-  const statusLabel = s => ({
-    fully_delivered: 'Delivered',
-    partial: 'Partial',
-    not_delivered: 'Not Delivered',
-  }[s] || s);
-
-  const lineRows = (lines||[]).map(l => {
-    const sc = statusColor(l.status);
-    return `<tr>
-      <td style="font-family:monospace;font-size:.8rem;color:var(--text-muted)">${l.sku}</td>
-      <td class="u-b600">${l.name||l.sku}</td>
-      <td class="u-right">${l.qty_ordered}</td>
-      <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
-      <td style="text-align:right;color:${l.qty_due>0?'var(--red)':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
-      <td class="u-right">${fmt(l.value_ordered)}</td>
-      <td style="text-align:right;color:#10b981;font-weight:600">${fmt(l.value_delivered)}</td>
-      <td style="text-align:right;color:${l.value_due>0?'var(--red)':'var(--text-muted)'}">${fmt(l.value_due)}</td>
-      <td><span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${sc}22;color:${sc}">${statusLabel(l.status)}</span></td>
-    </tr>`;
-  }).join('');
-
-  const dcRows = (dcs||[]).map(dc => {
-    const c = {DELIVERED:'#10b981',IN_TRANSIT:'#06b6d4',SCHEDULED:'#f59e0b',CANCELLED:'#ef4444'}[dc.status]||'#6b7280';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:8px;background:var(--bg);margin-bottom:6px;font-size:.83rem">
-      <div>
-        <span style="font-weight:700;color:var(--navy)">${dc.id}</span>
-        <span style="margin-left:8px;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${c}22;color:${c}">${dc.status}</span>
-      </div>
-      <div class="u-muted">
-        ${dc.driver_name?`${dc.driver_name} · `:''}${dc.vehicle_no||''}
-      </div>
-      <div class="u-b600">
-        ${dc.delivered_qty||0} delivered / ${dc.total_qty||0} dispatched
-      </div>
-    </div>`;
-  }).join('');
+  // Which challans delivered each SKU (for the "Delivered via" column) — only
+  // DELIVERED challans that actually recorded a qty for that line.
+  const deliveredVia = {};
+  (dcs||[]).forEach(dc => {
+    if (dc.status !== 'DELIVERED') return;
+    (dc.items||[]).forEach(it => {
+      const q = Number(it.qty_delivered) || 0;
+      if (q <= 0) return;
+      (deliveredVia[it.sku] = deliveredVia[it.sku] || []).push({ dc: dc.dc_number||dc.id, qty: q, date: dc.delivered_at });
+    });
+  });
 
   // Unit (qty) totals to sit alongside the line-count totals.
   const ordQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_ordered)||0),0);
@@ -1109,6 +1078,9 @@ async function viewOrderDrilldown(orderId) {
         <div style="color:#10b981;font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Del</span>${summary.delivered_lines} lines · ${delQty} qty</div>
       </div>
     </div>`;
+
+  // Stash for the By item / By challan toggle and the Excel / PDF exports.
+  APP._dd = { orderId, order, lines, dcs, summary, deliveredVia, ordQty, delQty, qtyRate, view: 'item' };
 
   const body = `
   <!-- Order header strip: client / dates / status / challans / ordered-vs-delivered -->
@@ -1150,36 +1122,150 @@ async function viewOrderDrilldown(orderId) {
     </div>
   </div>
 
-  <!-- Line items table -->
-  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Line Item Reconciliation</div>
-  <div style="overflow-x:auto;margin-bottom:16px">
-    <table class="table" style="font-size:.82rem">
-      <thead><tr>
-        <th>SKU</th><th>Item</th>
-        <th class="u-right">Ordered</th>
-        <th class="u-right">Delivered</th>
-        <th class="u-right">Due</th>
-        <th class="u-right">Ordered ₹</th>
-        <th class="u-right">Delivered ₹</th>
-        <th class="u-right">Due ₹</th>
-        <th>Status</th>
-      </tr></thead>
-      <tbody>${lineRows || '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
-    </table>
+  <!-- Reconciliation with By item / By challan toggle -->
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+    <div style="display:inline-flex;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">
+      <button class="dd-tab" data-ddview="item" ${dataAct('ddSetReconView','item')} style="border:0;border-radius:7px;padding:6px 14px;font-size:.82rem;font-weight:700;cursor:pointer;background:var(--surface);color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,.12)">By item</button>
+      <button class="dd-tab" data-ddview="challan" ${dataAct('ddSetReconView','challan')} style="border:0;border-radius:7px;padding:6px 14px;font-size:.82rem;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted)">By challan</button>
+    </div>
+    <div id="dd-recon-caption" style="font-weight:700;font-size:.88rem;color:var(--navy)">Line-item reconciliation <span style="font-weight:400;color:var(--text-muted)">— by item</span></div>
   </div>
-
-  ${dcs && dcs.length ? `
-  <!-- DCs for this order -->
-  <div style="font-weight:700;font-size:.88rem;color:var(--navy);margin-bottom:8px">Delivery Challans (${dcs.length})</div>
-  ${dcRows}
-  ` : ''}`;
+  <div id="dd-recon" style="margin-bottom:8px">${renderDDByItem()}</div>`;
 
   openModal(
     `Delivery Breakdown — ${orderId}${order.client_name?` · ${order.client_name}`:''}`,
     body,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
+     <button class="btn btn-secondary" ${dataAct('ddExportCSV')}>⬇ Excel</button>
+     <button class="btn btn-secondary" ${dataAct('ddExportPDF')}>⬇ PDF</button>
      <button class="btn btn-primary" ${dataActClose('viewOrder', orderId)}>Full Order View</button>`
   );
+}
+
+// ---- Delivery Breakdown: view toggle, renderers & exports -------------------
+function ddStatusColor(s) { return ({fully_delivered:'#10b981',partial:'#f59e0b',not_delivered:'#ef4444',over_delivered:'#7c3aed'}[s]||'#6b7280'); }
+function ddStatusLabel(s) { return ({fully_delivered:'Delivered',partial:'Partial',not_delivered:'Not Delivered',over_delivered:'Over-delivered'}[s]||s); }
+
+function renderDDByItem() {
+  const d = APP._dd; if (!d) return '';
+  const rows = (d.lines||[]).map(l => {
+    const via = d.deliveredVia[l.sku] || [];
+    const viaHtml = via.length
+      ? via.map(v=>`<div style="white-space:nowrap"><b style="color:var(--navy)">${h(v.dc)}</b> · ${v.qty} · <span style="color:var(--text-muted)">${v.date?fmtDate(v.date):'—'}</span></div>`).join('')
+      : '<span style="color:var(--text-muted)">—</span>';
+    const sc = ddStatusColor(l.status);
+    return `<tr>
+      <td><b>${h(l.name||l.sku)}</b><div class="u-subtiny" style="font-family:monospace">${h(l.sku)}</div></td>
+      <td class="u-right">${l.qty_ordered}</td>
+      <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
+      <td style="text-align:right;color:${l.qty_due>0?'var(--red)':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
+      <td class="u-right">${fmt(l.unit_price)}</td>
+      <td class="u-right">${fmt(l.value_ordered)}</td>
+      <td style="text-align:right;color:#10b981;font-weight:600">${fmt(l.value_delivered)}</td>
+      <td style="text-align:right;color:${l.value_due>0?'var(--red)':'var(--text-muted)'}">${fmt(l.value_due)}</td>
+      <td style="font-size:.78rem">${viaHtml}</td>
+      <td><span style="font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${sc}22;color:${sc}">${ddStatusLabel(l.status)}</span></td>
+    </tr>`;
+  }).join('');
+  return `<div style="overflow-x:auto"><table class="table" style="font-size:.82rem;margin:0">
+    <thead><tr>
+      <th>Item</th>
+      <th class="u-right">Ord</th><th class="u-right">Deliv</th><th class="u-right">Due</th>
+      <th class="u-right">Unit ₹</th><th class="u-right">Ordered ₹</th><th class="u-right">Delivered ₹</th><th class="u-right">Due ₹</th>
+      <th>Delivered via (challan · qty · date)</th><th>Status</th>
+    </tr></thead>
+    <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No line items found</td></tr>'}</tbody>
+  </table></div>`;
+}
+
+function renderDDByChallan() {
+  const d = APP._dd; if (!d) return '';
+  const dcs = d.dcs || [];
+  if (!dcs.length) return '<div style="text-align:center;color:var(--text-muted);padding:28px">No delivery challans raised for this order yet.</div>';
+  const c = s => ({DELIVERED:'#10b981',IN_TRANSIT:'#06b6d4',SCHEDULED:'#f59e0b',CANCELLED:'#ef4444'}[s]||'#6b7280');
+  return dcs.map(dc => {
+    const items = dc.items || [];
+    const tot = items.reduce((s,i)=>s+(Number(i.qty_delivered)||0),0);
+    return `<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px;background:var(--bg);flex-wrap:wrap">
+        <div><b style="color:var(--navy)">${h(dc.dc_number||dc.id)}</b>
+          <span style="margin-left:8px;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${c(dc.status)}22;color:${c(dc.status)}">${dc.status}</span>
+          ${dc.delivered_at?`<span style="margin-left:8px;font-size:.78rem;color:var(--text-muted)">${fmtDate(dc.delivered_at)}</span>`:''}
+        </div>
+        <div style="font-size:.82rem;color:var(--text-muted)">${dc.driver_name?h(dc.driver_name)+' · ':''}${dc.vehicle_no?h(dc.vehicle_no)+' · ':''}<b style="color:var(--navy)">${tot}</b> units</div>
+      </div>
+      <div style="overflow-x:auto"><table class="table" style="font-size:.82rem;margin:0">
+        <thead><tr><th>Item</th><th>SKU</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th></tr></thead>
+        <tbody>${items.map(i=>`<tr>
+          <td><b>${h(i.name||i.sku)}</b></td>
+          <td style="font-family:monospace;color:var(--text-muted)">${h(i.sku)}</td>
+          <td class="u-right">${i.qty_ordered!=null?i.qty_ordered:'—'}</td>
+          <td style="text-align:right;color:${Number(i.qty_delivered)>0?'#10b981':'var(--text-muted)'};font-weight:${Number(i.qty_delivered)>0?700:400}">${i.qty_delivered!=null?i.qty_delivered:0}</td>
+        </tr>`).join('')||'<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:16px">No items recorded on this challan</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+}
+
+function ddSetReconView(view) {
+  if (APP._dd) APP._dd.view = view;
+  const box = document.getElementById('dd-recon');
+  if (box) box.innerHTML = view==='challan' ? renderDDByChallan() : renderDDByItem();
+  const cap = document.getElementById('dd-recon-caption');
+  if (cap) cap.innerHTML = `Line-item reconciliation <span style="font-weight:400;color:var(--text-muted)">— by ${view}</span>`;
+  document.querySelectorAll('.dd-tab').forEach(b => {
+    const on = b.dataset.ddview === view;
+    b.style.background = on ? 'var(--surface)' : 'transparent';
+    b.style.color = on ? 'var(--navy)' : 'var(--text-muted)';
+    b.style.boxShadow = on ? '0 1px 3px rgba(0,0,0,.12)' : 'none';
+    b.style.fontWeight = on ? '700' : '600';
+  });
+}
+
+function ddExportCSV() {
+  const d = APP._dd; if (!d) { showToast('Open an order first', 'error'); return; }
+  const esc = v => { const s = String(v==null?'':v); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+  const head = ['SKU','Item','Ordered','Delivered','Due','Unit Price','Ordered Value','Delivered Value','Due Value','Delivered Via','Status'];
+  const body = (d.lines||[]).map(l => {
+    const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join(' | ');
+    return [l.sku,l.name,l.qty_ordered,l.qty_delivered,l.qty_due,l.unit_price,l.value_ordered,l.value_delivered,l.value_due,via,ddStatusLabel(l.status)].map(esc).join(',');
+  });
+  _downloadCSV(`delivery-breakdown-${d.orderId}`, [head.map(esc).join(','), ...body].join('\n'));
+}
+
+function ddLoadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+}
+
+async function ddExportPDF() {
+  const d = APP._dd; if (!d) { showToast('Open an order first', 'error'); return; }
+  showToast('Generating PDF…');
+  try {
+    if (!window.jspdf) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const { jsPDF } = window.jspdf;
+    if (!(jsPDF.API && jsPDF.API.autoTable)) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js');
+    const rupee = v => 'Rs ' + Number(v||0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    pdf.setFontSize(13); pdf.text(`Delivery Breakdown — ${d.orderId}`, 14, 14);
+    pdf.setFontSize(9); pdf.setTextColor(90);
+    pdf.text(`${d.order.client_name||''}`, 14, 20);
+    pdf.text(`Ordered: ${d.summary.total_lines} lines / ${d.ordQty} qty    Delivered: ${d.summary.delivered_lines} lines / ${d.delQty} qty    Completion: ${d.qtyRate}% of units`, 14, 25);
+    pdf.setTextColor(0);
+    pdf.autoTable({
+      startY: 30,
+      head: [['Item','SKU','Ord','Deliv','Due','Unit','Ordered','Delivered','Due','Delivered via','Status']],
+      body: (d.lines||[]).map(l => {
+        const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join('\n') || '—';
+        return [l.name, l.sku, l.qty_ordered, l.qty_delivered, l.qty_due, rupee(l.unit_price), rupee(l.value_ordered), rupee(l.value_delivered), rupee(l.value_due), via, ddStatusLabel(l.status)];
+      }),
+      styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
+      headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+      columnStyles: { 0: { cellWidth: 46 }, 9: { cellWidth: 40 } },
+    });
+    pdf.save(`delivery-breakdown-${d.orderId}.pdf`);
+  } catch (e) {
+    showToast('PDF generation failed: ' + (e && e.message ? e.message : e), 'error');
+  }
 }
 
 /* ============================================================
