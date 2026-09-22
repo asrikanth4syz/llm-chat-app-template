@@ -2987,6 +2987,15 @@ describe("Product Intelligence catalog + enrich (P0.1)", () => {
     expect(row!.cost_excl_gst).toBeDefined();   // admin sees cost (0 when unset)
     expect(list.facets).toHaveProperty("category");
   });
+
+  it("admin q-search returns a product by name (enrich search path)", async () => {
+    const c = await post("/api/inventory", { name: "ZZ Quicksearch Widget", category: "Snacks", unit_price: 55, stock: 9 }, adminToken);
+    const sku = (await c.json() as { sku: string }).sku;
+    const r = await get("/api/catalog/products?q=Quicksearch", adminToken);
+    expect(r.status).toBe(200);
+    const body = await r.json() as { products: { sku: string }[] };
+    expect(body.products.some(p => p.sku === sku)).toBe(true);
+  });
 });
 
 // ── Product Intelligence AI extract + screening (P0.2) ────────────────

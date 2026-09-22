@@ -425,11 +425,23 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   if (attr) { where += " AND i.sku IN (SELECT sku FROM product_attributes WHERE status='verified' AND attribute=?)"; params.push(attr); }
   if (verified) { where += " AND i.sku IN (SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')))"; }
 
-  const { results } = await env.DB.prepare(
-    `SELECT i.sku,i.name,i.category,i.brand,i.brand_id,i.unit_price,i.mrp,i.gst_rate,i.stock,i.reorder_level,
-            i.pack_size,i.moq,i.emoji,i.cost_excl_gst,b.name AS brand_name,b.brand_type
-       FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id ${where} ORDER BY i.name LIMIT 500`
-  ).bind(...params).all() as { results: Record<string, unknown>[] };
+  // Full select with brand join + enrichment columns; degrade gracefully to a
+  // base select if this DB predates some columns (prod self-heals via
+  // ensureFeatureTables, but legacy columns like i.brand/i.mrp were never added
+  // there — a missing column must not blank the catalogue).
+  let results: Record<string, unknown>[];
+  try {
+    ({ results } = await env.DB.prepare(
+      `SELECT i.sku,i.name,i.category,i.brand,i.brand_id,i.unit_price,i.mrp,i.gst_rate,i.stock,i.reorder_level,
+              i.pack_size,i.moq,i.emoji,i.cost_excl_gst,b.name AS brand_name,b.brand_type
+         FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id ${where} ORDER BY i.name LIMIT 500`
+    ).bind(...params).all() as { results: Record<string, unknown>[] });
+  } catch {
+    ({ results } = await env.DB.prepare(
+      `SELECT i.sku,i.name,i.category,i.unit_price,i.gst_rate,i.stock,i.reorder_level,i.emoji
+         FROM inventory i ${where} ORDER BY i.name LIMIT 500`
+    ).bind(...params).all() as { results: Record<string, unknown>[] });
+  }
 
   const skus = results.map(r => String(r.sku));
   const vattrs = await piVerifiedAttrs(env, skus);
