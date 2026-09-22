@@ -393,10 +393,57 @@ async function piVerifiedAttrs(env: Env, skus: string[]): Promise<Record<string,
   return out;
 }
 
+// Guaranteed, awaited schema self-heal for Product Intelligence. ensureFeatureTables
+// runs via a fire-and-forget waitUntil, so on some DBs the PI tables/columns may not
+// exist yet when a PI request lands. This creates them idempotently, once per isolate,
+// BEFORE the handler queries them — so a PI endpoint can never 500 on a missing table.
+let _piSchemaReady = false;
+async function ensurePiSchema(env: Env): Promise<void> {
+  if (_piSchemaReady) return;
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT, logo_doc_id TEXT, story TEXT, origin TEXT, website TEXT, brand_type TEXT, status TEXT NOT NULL DEFAULT 'draft', sla_json TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS product_content ( sku TEXT PRIMARY KEY, description TEXT, usage TEXT, images_json TEXT DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS product_nutrition ( sku TEXT PRIMARY KEY, basis TEXT DEFAULT 'per 100g', calories REAL, protein REAL, carbs REAL, sugar REAL, fat REAL, fibre REAL, sodium REAL, source_ref TEXT, updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS product_ingredients ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, position INTEGER DEFAULT 0, raw_text TEXT NOT NULL, normalized_id TEXT, grp TEXT, allergen INTEGER DEFAULT 0, flags_json TEXT DEFAULT '[]' )`,
+    `CREATE TABLE IF NOT EXISTS ingredient_dict ( id TEXT PRIMARY KEY, canonical_name TEXT NOT NULL, synonyms_json TEXT DEFAULT '[]', allergen INTEGER DEFAULT 0, animal_derived INTEGER DEFAULT 0, category TEXT )`,
+    `CREATE TABLE IF NOT EXISTS product_attributes ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, attribute TEXT NOT NULL, value TEXT DEFAULT 'true', status TEXT NOT NULL DEFAULT 'ai_extracted', source TEXT, updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS claims ( id TEXT PRIMARY KEY, sku TEXT NOT NULL, category TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ai_extracted', ai_confidence REAL, screened_result TEXT, reviewer_id TEXT, reviewer_name TEXT, reviewed_at TEXT, expiry_date TEXT, created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS claim_evidence ( id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, doc_id TEXT, page_ref TEXT, extracted_text TEXT, extraction_date TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS claim_history ( id TEXT PRIMARY KEY, claim_id TEXT NOT NULL, action TEXT NOT NULL, actor_id TEXT, actor_name TEXT, from_status TEXT, to_status TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS certifications ( id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'product', brand_id TEXT, sku TEXT, kind TEXT NOT NULL, number TEXT, issuer TEXT, valid_from TEXT, valid_to TEXT, doc_id TEXT, status TEXT NOT NULL DEFAULT 'unverified', created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS collections ( id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT, kind TEXT NOT NULL DEFAULT 'rule', rule_json TEXT, curated_by TEXT, published INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS collection_items ( collection_id TEXT NOT NULL, sku TEXT NOT NULL, pinned INTEGER DEFAULT 0, excluded INTEGER DEFAULT 0, PRIMARY KEY (collection_id, sku) )`,
+    `CREATE TABLE IF NOT EXISTS verification_tasks ( id TEXT PRIMARY KEY, task_type TEXT NOT NULL DEFAULT 'claim', sku TEXT, claim_id TEXT, priority TEXT DEFAULT 'normal', status TEXT NOT NULL DEFAULT 'open', assignee_id TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS client_favourites ( client_id TEXT NOT NULL, sku TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (client_id, sku) )`,
+    `CREATE TABLE IF NOT EXISTS saved_filters ( id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, query_json TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS pi_rule_dict ( id TEXT PRIMARY KEY, dict TEXT NOT NULL, term TEXT NOT NULL, meta_json TEXT, active INTEGER DEFAULT 1 )`,
+    `ALTER TABLE inventory ADD COLUMN brand_id TEXT`,
+    `ALTER TABLE inventory ADD COLUMN product_type TEXT`,
+    `ALTER TABLE inventory ADD COLUMN pack_size TEXT`,
+    `ALTER TABLE inventory ADD COLUMN units_per_carton INTEGER`,
+    `ALTER TABLE inventory ADD COLUMN moq INTEGER`,
+    `ALTER TABLE inventory ADD COLUMN barcode_gtin TEXT`,
+    `ALTER TABLE inventory ADD COLUMN serving_info TEXT`,
+    `ALTER TABLE inventory ADD COLUMN storage_info TEXT`,
+    `ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft'`,
+  ];
+  for (const s of stmts) { try { await env.DB.prepare(s).run(); } catch { /* exists / non-fatal */ } }
+  try {
+    const seed: [string, string][] = [
+      ...["milk", "milk solids", "whey", "casein", "lactose", "butter", "ghee", "cream", "egg", "albumin", "honey", "gelatin", "gelatine", "carmine", "shellac", "fish", "meat", "chicken"].map(t => ["animal_derived", t] as [string, string]),
+      ...["sodium benzoate", "potassium sorbate", "sulphur dioxide", "sodium nitrite", "bha", "bht", "tbhq", "calcium propionate"].map(t => ["preservative", t] as [string, string]),
+      ...["sugar", "cane sugar", "glucose syrup", "fructose", "corn syrup", "invert syrup", "aspartame", "sucralose", "honey"].map(t => ["sweetener", t] as [string, string]),
+    ];
+    for (const [dict, term] of seed) await env.DB.prepare("INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES (?,?,?,1)").bind(`${dict}:${term}`, dict, term).run();
+  } catch { /* non-fatal */ }
+  _piSchemaReady = true;
+}
+
 // GET /api/catalog/products — filterable catalogue + simple facets.
 async function handleCatalogList(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensurePiSchema(env);
   const url = new URL(request.url);
   const q = url.searchParams.get("q");
   const cat = url.searchParams.get("category");
@@ -2138,7 +2185,12 @@ export default {
       if (path==="/api/contact"         && method==="POST") return handleCreateContact(request,env);
       if (path==="/api/contact"         && method==="GET")  return handleListContacts(request,env);
 
-      // Product Intelligence & Brand Catalogue (specific paths before wildcards)
+      // Product Intelligence & Brand Catalogue (specific paths before wildcards).
+      // Guarantee the PI schema exists (awaited, once per isolate) before any PI
+      // handler runs — waitUntil-based self-heal can lag a fresh isolate.
+      if (path.startsWith("/api/catalog/") || path==="/api/brands" || path.startsWith("/api/verification/") || path.startsWith("/api/claims/")) {
+        await ensurePiSchema(env);
+      }
       if (path==="/api/catalog/products" && method==="GET")  return handleCatalogList(request,env);
       if (path.match(/^\/api\/catalog\/products\/[^/]+\/enrich$/)     && method==="POST") return handleEnrichProduct(request,env,path);
       if (path.match(/^\/api\/catalog\/products\/[^/]+\/ai\/extract$/) && method==="POST") return handleAiExtract(request,env,path);
