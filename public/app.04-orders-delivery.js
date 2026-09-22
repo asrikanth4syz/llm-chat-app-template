@@ -1082,54 +1082,71 @@ async function viewOrderDrilldown(orderId) {
     </div>`;
   }).join('');
 
-  const deliveryRate = summary.total_lines > 0
-    ? Math.round((summary.delivered_lines / summary.total_lines) * 100)
-    : 0;
-
-  // Quantity totals (units) alongside the line-count totals, so Ordered / Delivered /
-  // Due can be read as "lines · qty" on one row each instead of split across tiles.
+  // Unit (qty) totals to sit alongside the line-count totals.
   const ordQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_ordered)||0),0);
   const delQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_delivered)||0),0);
-  const dueQty = (lines||[]).reduce((s,l)=>s+(Number(l.qty_due)||0),0);
-  const dueTone = (summary.due_lines>0||dueQty>0) ? 'var(--red)' : 'var(--text-muted)';
-  const cell = (v,align,color,extra) => `<div style="padding:11px 16px;border-top:1px solid var(--border);text-align:${align};font-weight:700;color:${color};${extra||''}">${v}</div>`;
-  const hcell = (v,align) => `<div style="padding:9px 16px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);background:var(--bg);text-align:${align}">${v}</div>`;
+  // Completion is measured on quantity delivered vs ordered (units), not line count.
+  const qtyRate = ordQty > 0 ? Math.round(delQty / ordQty * 100) : 0;
+  const rateColor = qtyRate===100 ? '#10b981' : qtyRate>50 ? 'var(--amber)' : 'var(--red)';
+  // Most recent delivery date across this order's challans.
+  const delivDates = (dcs||[]).map(d=>d.delivered_at).filter(Boolean).sort();
+  const lastDeliv = delivDates.length ? delivDates[delivDates.length-1] : null;
+
+  // One header cell: small uppercase label over a value.
+  const hdCell = (label, value, last) => `
+    <div style="padding:14px 18px;min-width:0;${last?'':'border-right:1px solid var(--border)'}">
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">${label}</div>
+      <div style="font-weight:800;color:var(--navy);font-size:.98rem;line-height:1.3">${value}</div>
+    </div>`;
+
+  // The old "LINES · QTY  6/41 · 454/3458" cell was ambiguous — you couldn't tell which
+  // number was lines vs qty, or ordered vs delivered. Split it into two labelled rows.
+  const ordDelCell = `
+    <div style="padding:14px 18px;min-width:0">
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Ordered vs Delivered</div>
+      <div style="font-size:.86rem;line-height:1.55">
+        <div style="color:var(--navy);font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Ord</span>${summary.total_lines} lines · ${ordQty} qty</div>
+        <div style="color:#10b981;font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Del</span>${summary.delivered_lines} lines · ${delQty} qty</div>
+      </div>
+    </div>`;
 
   const body = `
-  <!-- Ordered vs Delivered reconciliation: lines & qty, one row each for clarity -->
-  <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:18px">
-    <div style="display:grid;grid-template-columns:1fr auto auto;align-items:center">
-      ${hcell('','left')}${hcell('Lines','right')}${hcell('Qty','right')}
-      ${cell('Ordered','left','var(--navy)','')}${cell(summary.total_lines,'right','var(--navy)','min-width:82px')}${cell(ordQty,'right','var(--navy)','min-width:96px')}
-      ${cell('Delivered','left','#10b981','')}${cell(summary.delivered_lines,'right','#10b981','')}${cell(delQty,'right','#10b981','')}
-      ${cell('Due','left',dueTone,'')}${cell(summary.due_lines,'right',dueTone,'')}${cell(dueQty,'right',dueTone,'')}
+  <!-- Order header strip: client / dates / status / challans / ordered-vs-delivered -->
+  <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:18px;background:var(--surface)">
+    <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr .7fr 1.3fr">
+      ${hdCell('Client', h(order.client_name||'—'))}
+      ${hdCell('Ordered Date', order.created_at?fmtDate(order.created_at):'—')}
+      ${hdCell('Delivered', lastDeliv?`${fmtDate(lastDeliv)} <span style="font-weight:500;color:var(--text-muted);font-size:.78rem">(last)</span>`:'<span style="color:var(--text-muted);font-weight:500">—</span>')}
+      ${hdCell('Status', statusBadge(order.status))}
+      ${hdCell('Challans', String((dcs||[]).length))}
+      ${ordDelCell}
+    </div>
+  </div>
+
+  <!-- Delivery completion (measured on units delivered vs ordered) -->
+  <div style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-size:.8rem;font-weight:700;color:var(--navy)">Delivery completion</span>
+      <span style="font-size:.8rem;font-weight:800;color:${rateColor}">${qtyRate}% · ${delQty} of ${ordQty} units</span>
+    </div>
+    <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden">
+      <div style="height:100%;width:${qtyRate}%;background:${rateColor};border-radius:4px;transition:width .4s"></div>
     </div>
   </div>
 
   <!-- Value summary row -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em">Ordered Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:var(--navy);margin-top:4px">${fmt(summary.total_ordered_value)}</div>
+    <div style="background:var(--bg);border-radius:8px;padding:14px;text-align:center">
+      <div style="font-size:.7rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em">Ordered Value</div>
+      <div style="font-size:1.35rem;font-weight:800;color:var(--navy);margin-top:4px">${fmt(summary.total_ordered_value)}</div>
     </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:#10b981;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Delivered Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:#10b981;margin-top:4px">${fmt(summary.total_delivered_value)}</div>
+    <div style="background:var(--bg);border-radius:8px;padding:14px;text-align:center">
+      <div style="font-size:.7rem;color:#10b981;font-weight:700;text-transform:uppercase;letter-spacing:.05em">Delivered Value</div>
+      <div style="font-size:1.35rem;font-weight:800;color:#10b981;margin-top:4px">${fmt(summary.total_delivered_value)}</div>
     </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;text-align:center">
-      <div style="font-size:.7rem;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};font-weight:600;text-transform:uppercase;letter-spacing:.05em">Due Value</div>
-      <div style="font-size:1.3rem;font-weight:800;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};margin-top:4px">${fmt(summary.total_due_value)}</div>
-    </div>
-  </div>
-
-  <!-- Delivery rate bar -->
-  <div style="margin-bottom:18px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-      <span style="font-size:.8rem;font-weight:700;color:var(--navy)">Delivery Completion</span>
-      <span style="font-size:.8rem;font-weight:800;color:${deliveryRate===100?'#10b981':deliveryRate>50?'var(--amber)':'var(--red)'}">${deliveryRate}%</span>
-    </div>
-    <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden">
-      <div style="height:100%;width:${deliveryRate}%;background:${deliveryRate===100?'#10b981':deliveryRate>50?'var(--amber)':'var(--red)'};border-radius:4px;transition:width .4s"></div>
+    <div style="background:var(--bg);border-radius:8px;padding:14px;text-align:center">
+      <div style="font-size:.7rem;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};font-weight:700;text-transform:uppercase;letter-spacing:.05em">Due Value</div>
+      <div style="font-size:1.35rem;font-weight:800;color:${summary.total_due_value>0?'var(--red)':'var(--text-muted)'};margin-top:4px">${fmt(summary.total_due_value)}</div>
     </div>
   </div>
 
@@ -1158,7 +1175,7 @@ async function viewOrderDrilldown(orderId) {
   ` : ''}`;
 
   openModal(
-    `Delivery Breakdown — ${orderId}`,
+    `Delivery Breakdown — ${orderId}${order.client_name?` · ${order.client_name}`:''}`,
     body,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
      <button class="btn btn-primary" ${dataActClose('viewOrder', orderId)}>Full Order View</button>`
