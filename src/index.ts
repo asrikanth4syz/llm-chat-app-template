@@ -537,6 +537,7 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
 async function handleCatalogProduct(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  try {
   const sku = decodeURIComponent(path.split("/").pop() || "");
   const isClient = PI_CLIENT_ROLES.includes(user!.role);
 
@@ -588,6 +589,7 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
     attributes: (attrs as { results: unknown[] }).results,
     claims: claimsOut, certifications: (certs as { results: unknown[] }).results, pricing,
   });
+  } catch (e) { return json({ error: "catalog-product: " + String(e && (e as Error).message || e) }, 500); }
 }
 
 // POST /api/catalog/products/:sku/enrich — ops enriches the product master.
@@ -758,6 +760,7 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
   if (!await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first()) return json({ error: "Unknown SKU" }, 404);
   let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
 
+  try {
   const extracted = await extractProductDoc(env, { text: b.text as string, imageBase64: b.imageBase64 as string });
   if (extracted.ingredients.length) {
     await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
@@ -786,6 +789,7 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
   }
   await audit(env, user, "ai_extract", "product", sku);
   return json({ ok: true, ingredients: extracted.ingredients.length, claims: out });
+  } catch (e) { return json({ error: "ai-extract: " + String(e && (e as Error).message || e) }, 500); }
 }
 
 // ── P0.3: human verification workflow (super_admin / ops_admin) ─────────────

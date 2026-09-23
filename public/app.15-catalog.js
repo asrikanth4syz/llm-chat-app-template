@@ -248,7 +248,8 @@ function catCard(p) {
 
 async function catOpenProduct(sku) {
   openModal('Loading…', `<div class="loading-state"><div class="spinner"></div></div>`, '');
-  const d = await api(`/catalog/products/${sku}`); if (!d) return;
+  const d = await api(`/catalog/products/${encodeURIComponent(sku)}`);
+  if (!d) { closeModal(); return; }   // api() already surfaced the error toast
   const p = d.product || {}, pr = d.pricing || {};
   const price = pr.client_excl_gst != null ? pr.client_excl_gst : pr.list_excl_gst;
   const attrs = (d.attributes || []).filter(a => a.status === 'verified');
