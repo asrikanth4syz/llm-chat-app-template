@@ -202,7 +202,7 @@ async function renderVendors(el) {
   <div style="background:var(--surface);border-radius:12px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <input type="text" id="vendor-search-q" placeholder="Search name, brand, item, phone, email, GSTIN…" value="${APP._vendorSearch||''}"
       style="flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      ${dataInput('vendorSearchInput')}>
+      ${dataInputEl('vendorSearchInput')}>
     <select id="vendor-search-cat" style="border:1.5px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.84rem;background:var(--surface)"
       ${dataChangeEl('vendorSetCat')}>
       <option value="">All Categories</option>
@@ -210,7 +210,7 @@ async function renderVendors(el) {
     </select>
     <input type="text" id="vendor-search-loc" placeholder="Filter by location…" value="${APP._vendorLoc||''}"
       style="flex:1;min-width:130px;max-width:200px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-size:.84rem"
-      ${dataInput('vendorLocInput')}>
+      ${dataInputEl('vendorLocInput')}>
     <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;color:var(--text-muted);cursor:pointer">
       <input type="checkbox" ${APP._vendorShowInactive?'checked':''} ${dataChangeEl('vendorToggleInactive')}> Show inactive
     </label>

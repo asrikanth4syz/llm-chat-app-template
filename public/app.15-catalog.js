@@ -298,16 +298,25 @@ function piShowExtract(sku, res, fromImage) {
                 <span class="badge" style="background:${bg};color:${fg}">${lbl}</span>
                 <span class="u-subtiny">${h(c.result)}</span></div>`; }).join('')}</div>` : '<div class="u-subtiny" style="margin-top:4px">No recognised claims in this text.</div>'}
           </div>`}
-        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:9px 12px;font-size:.8rem;color:#92600e;display:flex;gap:8px">
-          <span>🔒</span><span>All results are <b>AI-screened</b>, not published. A reviewer must approve each claim with evidence before clients can see it.</span>
-        </div>
+        ${nothing ? '' : (claims.length
+          ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:9px 12px;font-size:.8rem;color:#92600e;display:flex;gap:8px">
+              <span>🔒</span><span>The ${claims.length} claim${claims.length !== 1 ? 's are' : ' is'} <b>AI-screened</b>, not published — sent to the verification queue. A reviewer must approve each with evidence before clients can see it.</span>
+            </div>`
+          : `<div style="background:var(--surface-2,#f0f2f5);border-radius:9px;padding:9px 12px;font-size:.8rem;color:var(--navy);display:flex;gap:8px">
+              <span>✓</span><span>Ingredients saved. <b>No marketing claims</b> (e.g. “Vegan”, “No added sugar”, “High protein”) were found to screen — add any the pack makes to the text above and re-run.</span>
+            </div>`)}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Review in verification queue →</button>
+          ${claims.length ? `<button class="btn btn-primary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Review in verification queue →</button>` : ''}
           <button class="btn btn-secondary btn-sm" ${dataAct('catOpenProduct', sku)}>👁 Preview client view</button>
         </div>
       </div>
     </div>`;
-  showToast(nothing ? 'Nothing detected — check the pasted text' : `Screened ${claims.length} claim(s) — sent to verification`, nothing ? 'info' : 'success');
+  const toast = nothing
+    ? ['Nothing detected — check the pasted text', 'info']
+    : (claims.length
+      ? [`Screened ${claims.length} claim${claims.length !== 1 ? 's' : ''} — sent to verification`, 'success']
+      : [`Captured ${ings.length} ingredient${ings.length !== 1 ? 's' : ''} — no claims to screen`, 'success']);
+  showToast(toast[0], toast[1]);
 }
 
 /* ── Internal: rule-driven collections (auto-curated shelves) ───────────── */
