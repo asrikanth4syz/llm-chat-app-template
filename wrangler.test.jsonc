@@ -1,6 +1,15 @@
 /**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
+ * Test-only Wrangler config for the vitest worker pool.
+ *
+ * This mirrors wrangler.jsonc EXCEPT it omits the Workers AI ("ai") binding:
+ * the vitest-pool-workers runtime provisions AI via a *remote* proxy session,
+ * which requires an interactive `wrangler login` and therefore breaks the
+ * offline test run (and CI, which has no login for the test step). The label
+ * OCR seam degrades gracefully when env.AI is absent, so tests exercise that
+ * fallback. Production deploys use wrangler.jsonc, which keeps the AI binding.
+ *
+ * Keep binding-affecting keys (d1_databases, vars, assets, compatibility) in
+ * sync with wrangler.jsonc.
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -12,19 +21,8 @@
 		"binding": "ASSETS",
 		"directory": "./public"
 	},
-	// Workers AI — powers own-infra label OCR for Product Intelligence
-	// (extractProductDoc uses a vision model when env.AI is bound). No secret
-	// required; the binding is account-level.
-	"ai": {
-		"binding": "AI"
-	},
 	"observability": {
 		"enabled": true
-	},
-	"triggers": {
-		// "30 3 * * *": 03:30 UTC = 09:00 IST — daily delivery reminders + Zoho full reconcile.
-		// "0 */3 * * *": every 3 hours — Zoho Inventory delta pull (no-op until enabled).
-		"crons": ["30 3 * * *", "0 */3 * * *"]
 	},
 	"upload_source_maps": true,
 	"d1_databases": [
@@ -35,13 +33,6 @@
 			"migrations_dir": "./migrations"
 		}
 	],
-	// Document storage (#9): create the bucket, then uncomment to move vendor/DC
-	// document blobs out of D1 into R2. Unbound is safe — the app falls back to
-	// base64-in-D1 automatically (see docPut/docGet in src/index.ts).
-	//   wrangler r2 bucket create smart-pantry-docs
-	// "r2_buckets": [
-	//   { "binding": "DOCS", "bucket_name": "smart-pantry-docs" }
-	// ],
 	"vars": {
 		"JWT_SECRET": "smart-pantry-dev-secret-change-in-prod",
 		"APP_ENV": "development",

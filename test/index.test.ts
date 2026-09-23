@@ -3028,6 +3028,18 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     expect(forbidden.status).toBe(403);
   });
 
+  it("image OCR degrades gracefully when no AI binding is present", async () => {
+    const created = await post("/api/inventory", { name: "PI OCR Test", category: "Snacks", unit_price: 20, stock: 5 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+    // 1x1 png; the test worker has no AI binding, so OCR should report a clear,
+    // actionable error rather than a generic crash.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const res = await post(`/api/catalog/products/${sku}/ai/extract`, { imageBase64: png }, adminToken);
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/OCR/i);
+  });
+
   it("extracts a bare comma-list with no 'Ingredients:' keyword and strips ()/[] annotations", async () => {
     const created = await post("/api/inventory", { name: "PI Bare List", category: "Snacks", unit_price: 50, stock: 10 }, adminToken);
     const sku = (await created.json() as { sku: string }).sku;

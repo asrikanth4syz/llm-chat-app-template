@@ -1000,17 +1000,25 @@ function parseLabelText(text: string): PiExtract {
   return { ingredients, claims };
 }
 
-async function extractProductDoc(env: Env, input: { text?: string; imageBase64?: string }): Promise<PiExtract> {
-  if (input.text && input.text.trim()) return parseLabelText(input.text);
-  const ai = (env as unknown as { AI?: { run: (m: string, o: unknown) => Promise<{ text?: string; description?: string }> } }).AI;
-  if (ai && input.imageBase64) {
-    try {
-      const bytes = Uint8Array.from(atob(input.imageBase64), c => c.charCodeAt(0));
-      const out = await ai.run("@cf/meta/llama-3.2-11b-vision-instruct", { image: [...bytes], prompt: "Transcribe all text on this product label verbatim." });
-      return parseLabelText(out.text || out.description || "");
-    } catch { /* fall through to empty */ }
+async function extractProductDoc(env: Env, input: { text?: string; imageBase64?: string }): Promise<PiExtract & { ocrText: string }> {
+  if (input.text && input.text.trim()) return { ...parseLabelText(input.text), ocrText: input.text.trim() };
+  if (input.imageBase64) {
+    const ai = (env as unknown as { AI?: { run: (m: string, o: unknown) => Promise<{ response?: string; text?: string; description?: string }> } }).AI;
+    if (!ai) throw new Error("Label OCR is not available on this deployment — paste the label text instead.");
+    // Accept a raw base64 string or a data URL ("data:image/…;base64,XXXX").
+    const b64 = String(input.imageBase64).replace(/^data:[^;]+;base64,/, "");
+    let bytes: Uint8Array;
+    try { bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
+    catch { throw new Error("Could not read the image — try a clearer photo or paste the text."); }
+    const out = await ai.run("@cf/meta/llama-3.2-11b-vision-instruct", {
+      image: [...bytes],
+      prompt: "This is a photo of a packaged food label. Transcribe ALL visible text verbatim, especially the full ingredients list (keep it on one line starting with 'Ingredients:') and any dietary or marketing claims (e.g. Vegan, Vegetarian, Gluten Free, No Added Sugar, High Protein). Output plain text only.",
+      max_tokens: 800,
+    });
+    const ocrText = String(out.response || out.text || out.description || "").trim();
+    return { ...parseLabelText(ocrText), ocrText };
   }
-  return { ingredients: [], claims: [] };
+  return { ingredients: [], claims: [], ocrText: "" };
 }
 
 // Deterministic, config-driven claim screening — advisory only, never a verdict.
@@ -1077,7 +1085,7 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
     out.push({ label: c.label, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
   }
   await audit(env, user, "ai_extract", "product", sku);
-  return json({ ok: true, ingredients: extracted.ingredients.length, ingredientList: extracted.ingredients, claims: out });
+  return json({ ok: true, ingredients: extracted.ingredients.length, ingredientList: extracted.ingredients, claims: out, ocrText: extracted.ocrText });
   } catch (e) { return json({ error: "ai-extract: " + String(e && (e as Error).message || e) }, 500); }
 }
 

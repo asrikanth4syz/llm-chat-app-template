@@ -201,11 +201,31 @@ function piEnrichPick(sku, name) {
       </div>
       <textarea id="pi-label" class="input" rows="5" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"></textarea>
       <div class="u-subtiny" style="margin-top:5px">Tip: paste the whole ingredients line — brackets like “(INS 322)” are cleaned automatically. Claims such as “Vegan” or “No added sugar” are detected wherever they appear.</div>
-      <div style="display:flex;gap:8px;margin-top:11px">
+      <div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>
+        <span class="u-subtiny">or</span>
+        <button class="btn btn-secondary" ${dataAct('piPickImage')}>📷 Scan a label photo</button>
+        <input type="file" id="pi-image" accept="image/*" capture="environment" style="display:none" ${dataChange('piScanImage', sku)} data-el>
       </div>
       <div id="pi-extract-out" style="margin-top:13px"></div>
     </div>`;
+}
+function piPickImage() { document.getElementById('pi-image')?.click(); }
+async function piScanImage(sku, el) {
+  const file = el?.files?.[0]; if (!file) return;
+  const out = document.getElementById('pi-extract-out');
+  if (out) out.innerHTML = `<div class="u-subtiny">📷 Scanning label with on-platform OCR… this can take a few seconds.</div>`;
+  let dataUrl;
+  try { dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); }); }
+  catch { if (out) out.innerHTML = ''; showToast('Could not read that image', 'error'); return; }
+  const imageBase64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
+  const res = await api(`/catalog/products/${sku}/ai/extract`, { method: 'POST', body: JSON.stringify({ imageBase64 }) });
+  el.value = '';   // allow re-selecting the same file
+  if (!res) { if (out) out.innerHTML = ''; return; }
+  // Show the transcription in the textarea so the user can review/correct it.
+  const ta = document.getElementById('pi-label');
+  if (ta && res.ocrText) ta.value = res.ocrText;
+  piShowExtract(sku, res, true);
 }
 function piLoadExample() {
   const ta = document.getElementById('pi-label'); if (ta) { ta.value = PI_EXAMPLE; ta.focus(); }
@@ -216,21 +236,25 @@ async function piRunExtract(sku) {
   const out = document.getElementById('pi-extract-out');
   if (out) out.innerHTML = `<div class="u-subtiny">🧠 Reading label…</div>`;
   const res = await api(`/catalog/products/${sku}/ai/extract`, { method: 'POST', body: JSON.stringify({ text }) });
-  if (!out) return;
-  if (!res) { out.innerHTML = ''; return; }
-
+  if (!res) { if (out) out.innerHTML = ''; return; }
+  piShowExtract(sku, res, false);
+}
+function piShowExtract(sku, res, fromImage) {
+  const out = document.getElementById('pi-extract-out'); if (!out) return;
   const ings = res.ingredientList || [];
   const claims = res.claims || [];
   const clr = c => c.conflict ? ['#fbe4e2', '#dc2626', 'Conflict'] : (c.confidence >= 0.75 ? ['#fcecd6', '#d97706', 'Review'] : ['#fcecd6', '#d97706', 'Needs review']);
   const nothing = !ings.length && !claims.length;
+  const header = nothing ? '⚠ Nothing detected' : (fromImage ? '✓ Scanned from photo — here’s what AI read' : '✓ Step 3 — Here’s what AI read');
 
   out.innerHTML = `
     <div style="border:1px solid var(--border,#e5e8ee);border-radius:13px;overflow:hidden">
       <div style="background:${nothing ? '#fef3c7' : '#eef7f5'};padding:10px 14px;font-weight:700;color:var(--navy);font-size:.9rem;display:flex;align-items:center;gap:8px">
-        ${nothing ? '⚠ Nothing detected' : '✓ Step 3 — Here’s what AI read'}
+        ${header}
       </div>
       <div style="padding:13px 15px;display:flex;flex-direction:column;gap:14px">
-        ${nothing ? `<div class="u-subtiny">We couldn’t find an ingredient list or a recognised claim. Paste the pack’s ingredient line (comma-separated) and claim words like “Vegan”, “Gluten free” or “No added sugar”, then try again.</div>` : `
+        ${fromImage && res.ocrText ? `<div style="background:var(--surface-2,#f0f2f5);border-radius:9px;padding:9px 12px;font-size:.8rem;color:var(--navy)"><b>Transcribed text</b> (edit above &amp; re-run if needed):<div class="u-subtiny" style="margin-top:4px;white-space:pre-wrap">${h(res.ocrText)}</div></div>` : ''}
+        ${nothing ? `<div class="u-subtiny">We couldn’t find an ingredient list or a recognised claim. ${fromImage ? 'Try a sharper, well-lit photo of the ingredients panel, or paste the text above.' : 'Paste the pack’s ingredient line (comma-separated) and claim words like “Vegan”, “Gluten free” or “No added sugar”, then try again.'}</div>` : `
           <div>
             <div class="u-label">Ingredients &nbsp;<span style="color:var(--success,#0d9488)">${ings.length}</span></div>
             ${ings.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${ings.map(i => `<span style="background:var(--surface-2,#f0f2f5);border-radius:8px;padding:4px 9px;font-size:.78rem;color:var(--navy)">${h(i)}</span>`).join('')}</div>` : '<div class="u-subtiny" style="margin-top:4px">None found in this text.</div>'}
