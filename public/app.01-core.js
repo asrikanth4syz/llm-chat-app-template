@@ -269,6 +269,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { section:'Ordering' },
+    { id:'catalog',        label:'Catalogue',      icon:iconLayers,   badge:null },
     { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
     // Phase 2: "My Orders" is now a hub with a Track Delivery tab (#my_orders/tracking).
     { id:'my_orders',      label:'My Orders',      icon:iconOrders,    badge:null },
@@ -287,6 +288,7 @@ const NAV = {
     { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { id:'approvals',   label:'Pending Approvals',icon:iconApprove,badge:'!' },
     { section:'Ordering' },
+    { id:'catalog',       label:'Catalogue',      icon:iconLayers,   badge:null },
     { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
     { id:'my_orders',     label:'All Orders',     icon:iconOrders,   badge:null },
   ],
@@ -294,6 +296,7 @@ const NAV = {
     { section:'Home' },
     { id:'dashboard',        label:'Home',               icon:iconDashboard, badge:null },
     { section:'Ordering' },
+    { id:'catalog',     label:'Catalogue',     icon:iconLayers,   badge:null },
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
     { section:'My Store' },

@@ -357,6 +357,17 @@ function catTab(t, btn) {
 function p_or(d, k) { return d.product && d.product[k] != null ? d.product[k] : (d.pricing && d.pricing.gst_rate) || 18; }
 
 function catAddToOrder(sku) {
-  if (typeof addToCart === 'function') { addToCart(sku); showToast('Added to order'); }
-  else showToast('Open “Place Order” to add this product', 'info');
+  // Use the product detail already loaded into the modal for name/price/emoji.
+  const d = APP._catDetail || {};
+  const p = d.product || {}, pr = d.pricing || {};
+  if (String(p.sku || sku) !== String(sku)) { /* stale detail */ }
+  const price = pr.client_excl_gst != null ? pr.client_excl_gst : (pr.list_excl_gst != null ? pr.list_excl_gst : (p.unit_price || 0));
+  const name = p.name || sku;
+  APP.cart = APP.cart || [];
+  const existing = APP.cart.find(c => c.sku === sku);
+  if (existing) existing.qty += 1;
+  else APP.cart.push({ sku, name, qty: 1, unit_price: price, emoji: p.emoji || '📦' });
+  if (typeof persistCart === 'function') persistCart();
+  if (typeof closeModal === 'function') closeModal();
+  showToast(`${name} added to your order`, 'success');
 }
