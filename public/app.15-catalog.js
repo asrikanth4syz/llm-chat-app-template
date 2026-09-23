@@ -254,6 +254,7 @@ async function piRunExtract(sku) {
 
 /* ── Client: catalogue + product detail ────────────────────────────────── */
 async function renderCatalogClient(el) {
+  APP._compare = [];   // fresh selection each time the catalogue is opened
   el.innerHTML = `${pageHeader('Catalogue', 'Browse approved products — with human-verified claims')}
     <div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="cat-q" class="input" placeholder="Search products…" ${dataInput('catFilter')} style="flex:1;min-width:180px">
@@ -263,7 +264,8 @@ async function renderCatalogClient(el) {
         <option value="gluten free">Gluten Free</option><option value="jain">Jain</option>
       </select>
     </div>
-    <div id="cat-grid"><div class="loading-state"><div class="spinner"></div></div></div>`;
+    <div id="cat-grid"><div class="loading-state"><div class="spinner"></div></div></div>
+    <div id="cat-compare-bar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:60;display:none;align-items:center;gap:12px;background:var(--navy,#12324f);color:#fff;border-radius:30px;padding:10px 16px;box-shadow:0 6px 22px rgba(0,0,0,.25);font-size:.85rem"></div>`;
   catFilter();
 }
 async function catFilter() {
@@ -274,15 +276,117 @@ async function catFilter() {
   const attr = document.getElementById('cat-attr')?.value || ''; if (attr) qs.set('attribute', attr);
   const data = await api('/catalog/products?' + qs.toString());
   const items = data?.products || [];
-  if (!items.length) { grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No products</div><div class="empty-desc">Try clearing filters.</div></div>`; return; }
-  grid.innerHTML = `<div style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px">${items.length} product${items.length !== 1 ? 's' : ''}</div>
+  if (!items.length) { grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No products</div><div class="empty-desc">Try clearing filters.</div></div>`; renderCompareBar(); return; }
+  grid.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:.82rem;color:var(--text-muted)">${items.length} product${items.length !== 1 ? 's' : ''}</span>
+      <span class="u-subtiny" style="margin-left:auto">Tip: tap ⇄ Compare on 2–3 products</span>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px">${items.map(catCard).join('')}</div>`;
+  renderCompareBar();
+}
+
+/* ── Product comparison (client) ───────────────────────────────────────── */
+function catToggleCompare(sku, el) {
+  APP._compare = APP._compare || [];
+  const i = APP._compare.indexOf(sku);
+  let on;
+  if (i >= 0) { APP._compare.splice(i, 1); on = false; }
+  else {
+    if (APP._compare.length >= 3) { showToast('Compare up to 3 products', 'info'); return; }
+    APP._compare.push(sku); on = true;
+  }
+  // Update just this button in place (no refetch) + refresh the bar.
+  if (el) {
+    el.innerHTML = `⇄ ${on ? 'Added' : 'Compare'}`;
+    el.style.border = `1px solid ${on ? 'var(--success,#0d9488)' : 'var(--border,#e5e8ee)'}`;
+    el.style.background = on ? 'var(--success,#0d9488)' : 'rgba(255,255,255,.92)';
+    el.style.color = on ? '#fff' : 'var(--navy)';
+  }
+  renderCompareBar();
+}
+function catClearCompare() { APP._compare = []; catFilter(); }
+function renderCompareBar() {
+  const bar = document.getElementById('cat-compare-bar'); if (!bar) return;
+  const n = (APP._compare || []).length;
+  if (n < 2) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = `<span><b>${n}</b> selected</span>
+    <button class="btn btn-sm" style="background:#fff;color:var(--navy);font-weight:700" ${dataAct('catCompare')}>Compare →</button>
+    <button class="btn btn-sm" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)" ${dataAct('catClearCompare')}>Clear</button>`;
+}
+async function catCompare() {
+  const skus = (APP._compare || []).slice(0, 3);
+  if (skus.length < 2) { showToast('Select at least 2 products', 'info'); return; }
+  openModal('Compare products', `<div class="loading-state"><div class="spinner"></div></div>`, '');
+  const details = (await Promise.all(skus.map(s => api('/catalog/products/' + encodeURIComponent(s))))).filter(Boolean);
+  if (details.length < 2) { closeModal(); showToast('Could not load products to compare', 'error'); return; }
+  APP._compareDetails = details;   // cache so "Add to order" keeps real name/price
+
+  const cols = details.map(d => {
+    const p = d.product || {}, pr = d.pricing || {};
+    const allergens = [...new Set((d.ingredients || []).filter(i => i.allergen).map(i => i.raw_text))];
+    return {
+      sku: p.sku, name: p.name || p.sku, brand: p.brand_name || p.brand || '', emoji: p.emoji || '📦',
+      price: pr.client_excl_gst != null ? pr.client_excl_gst : pr.list_excl_gst,
+      mrp: p.mrp, pack: p.pack_size,
+      verified: (d.claims || []).filter(c => c.status === 'verified').map(c => c.label),
+      attrs: (d.attributes || []).filter(a => a.status === 'verified').map(a => a.attribute),
+      allergens, nutrition: d.nutrition || {},
+    };
+  });
+
+  const th = cols.map(c => `<th style="padding:10px 12px;text-align:left;vertical-align:top;min-width:150px;border-left:1px solid var(--border)">
+      <div style="font-size:1.5rem">${c.emoji}</div>
+      ${c.brand ? `<div style="font-size:.66rem;font-weight:800;color:var(--success,#0d9488);text-transform:uppercase">${h(c.brand)}</div>` : ''}
+      <div style="font-weight:700;color:var(--navy);font-size:.86rem;line-height:1.25">${h(c.name)}</div>
+    </th>`).join('');
+  const row = (label, render, opts = {}) => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:9px 12px;font-size:.76rem;color:var(--text-muted);font-weight:700;white-space:nowrap;vertical-align:top">${label}</td>
+      ${cols.map(c => `<td style="padding:9px 12px;font-size:.83rem;color:var(--navy);border-left:1px solid var(--border);vertical-align:top;${opts.td || ''}">${render(c)}</td>`).join('')}
+    </tr>`;
+  const chips = (arr, bg, fg) => arr.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${arr.map(x => `<span class="badge" style="background:${bg};color:${fg}">${h(x)}</span>`).join('')}</div>` : '<span class="u-subtiny">—</span>';
+  const nut = (k, unit) => row(k[0], c => c.nutrition[k[1]] != null ? `${c.nutrition[k[1]]}${unit || ''}` : '<span class="u-subtiny">—</span>');
+
+  openModal('Compare products', `
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="border-collapse:collapse;width:100%">
+        <thead><tr><th style="width:96px"></th>${th}</tr></thead>
+        <tbody>
+          ${row('Price', c => `<b style="font-size:1rem">${fmt(c.price)}</b>${c.mrp ? `<div class="u-subtiny" style="text-decoration:line-through">${fmt(c.mrp)}</div>` : ''}`)}
+          ${row('Pack', c => c.pack ? h(c.pack) : '<span class="u-subtiny">—</span>')}
+          ${row('✔ Verified claims', c => chips(c.verified, 'var(--verify-bg,#dff3ef)', 'var(--success,#0d9488)'))}
+          ${row('Dietary', c => chips(c.attrs, '#eef1f5', '#66738a'))}
+          ${row('⚠ Allergens', c => c.allergens.length ? chips(c.allergens, '#fbe4e2', '#dc2626') : '<span class="u-subtiny" style="color:var(--success,#0d9488)">None flagged</span>')}
+          ${nut(['Calories', 'calories'], '')}
+          ${nut(['Protein', 'protein'], ' g')}
+          ${nut(['Carbs', 'carbs'], ' g')}
+          ${nut(['Sugar', 'sugar'], ' g')}
+          ${nut(['Fat', 'fat'], ' g')}
+          ${nut(['Fibre', 'fibre'], ' g')}
+          ${nut(['Sodium', 'sodium'], ' mg')}
+          ${row('', c => `<button class="btn btn-primary btn-sm" ${dataAct('catAddToOrderFromCompare', c.sku)}>Add to order</button>`)}
+        </tbody>
+      </table>
+    </div>
+    <div class="u-subtiny" style="margin-top:8px">Nutrition is per the product's stated basis (usually per 100 g). Allergens are matched against the FSSAI major-allergen list.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+}
+function catAddToOrderFromCompare(sku) {
+  // Reuse the single-product add, sourcing name/price from the compare cache.
+  const d = (APP._compareDetails || []).find(x => String(x.product?.sku) === String(sku));
+  if (d) APP._catDetail = d;
+  catAddToOrder(sku);
 }
 function catCard(p) {
   const price = p.client_price != null ? p.client_price : p.list_price;
   const av = { in: ['var(--success,#0d9488)', 'In stock'], low: ['#d97706', 'Low stock'], out: ['var(--danger,#dc2626)', 'On order'] }[p.availability] || ['var(--text-muted)', ''];
+  const cmp = (APP._compare || []).includes(p.sku);
   return `<div class="card" style="padding:0;overflow:hidden;cursor:pointer" ${dataAct('catOpenProduct', p.sku)}>
-    <div style="aspect-ratio:16/10;display:grid;place-items:center;font-size:2.2rem;background:var(--surface-2,#f0f2f5)">${p.emoji || '📦'}</div>
+    <div style="position:relative">
+      <div style="aspect-ratio:16/10;display:grid;place-items:center;font-size:2.2rem;background:var(--surface-2,#f0f2f5)">${p.emoji || '📦'}</div>
+      <button ${dataActEl('catToggleCompare', p.sku)} data-stop title="Add to compare"
+        style="position:absolute;top:7px;right:7px;border:1px solid ${cmp ? 'var(--success,#0d9488)' : 'var(--border,#e5e8ee)'};background:${cmp ? 'var(--success,#0d9488)' : 'rgba(255,255,255,.92)'};color:${cmp ? '#fff' : 'var(--navy)'};border-radius:7px;font-size:.68rem;font-weight:800;padding:3px 7px;cursor:pointer;display:flex;align-items:center;gap:4px">⇄ ${cmp ? 'Added' : 'Compare'}</button>
+    </div>
     <div style="padding:11px 12px;display:flex;flex-direction:column;gap:5px">
       ${p.brand ? `<div style="font-size:.7rem;font-weight:800;letter-spacing:.03em;color:var(--success,#0d9488);text-transform:uppercase">${h(p.brand)}</div>` : ''}
       <div style="font-weight:700;font-size:.9rem;color:var(--navy);line-height:1.25">${h(p.name)}</div>
