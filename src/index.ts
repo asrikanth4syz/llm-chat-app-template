@@ -771,13 +771,46 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
     pricing.cost_excl_gst = Number(inv.cost_excl_gst) || 0;
     delete inv.cost_excl_gst;
   }
+  // Ops-only procurement block: cost/margin + who supplies this SKU and at what
+  // rate. Sourced from inventory cost + vendor_products; degrades to empty on any
+  // legacy-schema gap. Never sent to client roles.
+  let procurement: Record<string, unknown> | null = null;
+  if (!isClient) {
+    // The ops pricing branch above captured the cost into pricing.cost_excl_gst
+    // and then deleted it from inv, so read it back from pricing here.
+    const cost = Number(pricing.cost_excl_gst) || 0;
+    const margin = list > 0 ? Math.round(((list - cost) / list) * 1000) / 10 : null;
+    let vendors: Record<string, unknown>[] = [];
+    try {
+      vendors = await sAll(
+        `SELECT vp.vendor_id, v.name AS vendor_name, vp.rate, vp.moq, vp.lead_days, vp.status
+           FROM vendor_products vp LEFT JOIN vendors v ON vp.vendor_id=v.id
+          WHERE vp.sku=? ORDER BY vp.rate`, sku);
+    } catch { vendors = []; }
+    const primaryId = inv.vendor_id ? String(inv.vendor_id) : null;
+    const secondaryId = inv.secondary_vendor_id ? String(inv.secondary_vendor_id) : null;
+    const rated = vendors.map(v => Number(v.rate)).filter(r => r > 0);
+    const cheapest = rated.length ? Math.min(...rated) : null;
+    procurement = {
+      cost_excl_gst: cost, list_excl_gst: list, mrp, margin_pct: margin,
+      primary_vendor_id: primaryId, secondary_vendor_id: secondaryId,
+      vendors: vendors.map(v => ({
+        vendor_id: v.vendor_id, vendor_name: v.vendor_name || "—",
+        rate: Number(v.rate) || 0, moq: v.moq != null ? Number(v.moq) : null,
+        lead_days: v.lead_days != null ? Number(v.lead_days) : null, status: v.status || null,
+        primary: primaryId != null && String(v.vendor_id) === primaryId,
+        secondary: secondaryId != null && String(v.vendor_id) === secondaryId,
+        cheapest: cheapest != null && Number(v.rate) === cheapest,
+      })),
+    };
+  }
   if (isClient) { delete inv.cost_excl_gst; delete inv.vendor_id; delete inv.secondary_vendor_id; }
 
   return json({
     product: inv, content: content || null, nutrition: nutrition || null,
     ingredients: ingr,
     attributes: attrs,
-    claims: claimsOut, certifications: certs, pricing,
+    claims: claimsOut, certifications: certs, pricing, procurement,
   });
   } catch (e) { return json({ error: "catalog-product: " + String(e && (e as Error).message || e) }, 500); }
 }

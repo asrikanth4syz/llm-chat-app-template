@@ -553,6 +553,7 @@ async function catOpenProduct(sku) {
       <button class="tab-btn" ${dataActEl('catTab', 'nut')}>Nutrition</button>
       <button class="tab-btn" ${dataActEl('catTab', 'ing')}>Ingredients</button>
       <button class="tab-btn" ${dataActEl('catTab', 'clm')}>Claims</button>
+      ${d.procurement ? `<button class="tab-btn" ${dataActEl('catTab', 'prc')}>Procurement</button>` : ''}
     </div>
     <div id="cat-tab-body" style="min-height:80px"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
@@ -579,6 +580,8 @@ function catTab(t, btn) {
       ${c.screened_result ? `<div class="u-subtiny" style="margin-top:5px">${h(c.screened_result)}</div>` : ''}
       ${(c.evidence || []).length ? `<div class="u-subtiny" style="margin-top:4px;color:var(--success,#0d9488)">Evidence: ${c.evidence.map(e => h(e.page_ref || e.doc_id || 'attached')).join(', ')}</div>` : ''}
     </div>`).join('') : '<div class="u-subtiny">No claims yet.</div>';
+  } else if (t === 'prc') {
+    el.innerHTML = catProcurementHtml(d.procurement || {});
   } else {
     const c = d.content;
     el.innerHTML = `<p style="color:var(--text-muted);line-height:1.6;font-size:.9rem">${c && c.description ? h(c.description) : 'No description yet.'}</p>
@@ -586,6 +589,44 @@ function catTab(t, btn) {
   }
 }
 function p_or(d, k) { return d.product && d.product[k] != null ? d.product[k] : (d.pricing && d.pricing.gst_rate) || 18; }
+
+// Ops-only procurement view: cost/margin tiles + who supplies this SKU and at
+// what rate (primary/secondary/cheapest flagged).
+function catProcurementHtml(prc) {
+  const tile = (label, val, color) => `<div style="background:var(--surface-2,#f0f2f5);border-radius:10px;padding:10px 12px">
+      <div style="font-size:1.05rem;font-weight:800;color:${color || 'var(--navy)'}">${val}</div><div class="u-subtiny">${label}</div></div>`;
+  const marginColor = prc.margin_pct == null ? 'var(--text-muted)' : (prc.margin_pct >= 0 ? 'var(--success,#0d9488)' : 'var(--danger,#dc2626)');
+  const vendors = prc.vendors || [];
+  const flag = (v) => [
+    v.primary ? '<span class="badge" style="background:var(--verify-bg,#dff3ef);color:var(--success,#0d9488)">Primary</span>' : '',
+    v.secondary ? '<span class="badge" style="background:#eef1f5;color:#66738a">Secondary</span>' : '',
+    v.cheapest && vendors.length > 1 ? '<span class="badge" style="background:#fcecd6;color:#b45309">Lowest rate</span>' : '',
+  ].join(' ');
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;margin-bottom:14px">
+      ${tile('Cost (excl GST)', fmt(prc.cost_excl_gst || 0))}
+      ${tile('List (excl GST)', fmt(prc.list_excl_gst || 0))}
+      ${tile('MRP', prc.mrp ? fmt(prc.mrp) : '—')}
+      ${tile('Margin', prc.margin_pct == null ? '—' : prc.margin_pct + '%', marginColor)}
+    </div>
+    <div class="u-label" style="margin-bottom:6px">Vendor rates ${vendors.length ? `<span style="color:var(--text-muted)">${vendors.length}</span>` : ''}</div>
+    ${vendors.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:.83rem">
+      <thead><tr>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-muted);font-size:.72rem;font-weight:700">Vendor</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-muted);font-size:.72rem;font-weight:700">Rate</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-muted);font-size:.72rem;font-weight:700">MOQ</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-muted);font-size:.72rem;font-weight:700">Lead</th>
+      </tr></thead>
+      <tbody>${vendors.map(v => `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:7px 8px;color:var(--navy)"><b>${h(v.vendor_name || '—')}</b> ${flag(v)}</td>
+        <td style="padding:7px 8px;text-align:right;font-weight:700;color:var(--navy)">${v.rate ? fmt(v.rate) : '—'}</td>
+        <td style="padding:7px 8px;text-align:right">${v.moq != null ? v.moq : '—'}</td>
+        <td style="padding:7px 8px;text-align:right">${v.lead_days != null ? v.lead_days + 'd' : '—'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`
+      : `<div class="u-subtiny">No vendor rates on file for this product yet. Map vendors under Vendors → Products, or run a purchase order to populate rates.</div>`}
+    <div class="u-subtiny" style="margin-top:10px">Cost &amp; margin are from the product master; vendor rates from the vendor catalogue. Prices exclude GST.</div>`;
+}
 
 function catAddToOrder(sku) {
   // Use the product detail already loaded into the modal for name/price/emoji.

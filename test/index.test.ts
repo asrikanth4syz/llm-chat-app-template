@@ -3110,6 +3110,23 @@ describe("Product Intelligence collections (P1)", () => {
   });
 });
 
+// ── Product Intelligence procurement view (P1) ────────────────────────
+describe("Product Intelligence procurement view (P1)", () => {
+  it("returns an ops-only procurement block with cost + margin", async () => {
+    const created = await post("/api/inventory", { name: "PI Procure Test", category: "Snacks", unit_price: 100, cost_excl_gst: 60, mrp: 150, stock: 20 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as {
+      procurement: { cost_excl_gst: number; list_excl_gst: number; margin_pct: number; vendors: unknown[] } | null;
+    };
+    expect(det.procurement).not.toBeNull();
+    expect(det.procurement!.cost_excl_gst).toBe(60);
+    expect(det.procurement!.list_excl_gst).toBe(100);
+    expect(det.procurement!.margin_pct).toBe(40);   // (100-60)/100
+    expect(Array.isArray(det.procurement!.vendors)).toBe(true);
+  });
+});
+
 // ── Product Intelligence verification workflow (P0.3) ─────────────────
 describe("Product Intelligence verification workflow (P0.3)", () => {
   it("requires evidence to verify, projects verified attribute, expires, and closes the task", async () => {
