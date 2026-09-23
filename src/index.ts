@@ -426,6 +426,19 @@ async function ensurePiSchema(env: Env): Promise<void> {
     `ALTER TABLE inventory ADD COLUMN serving_info TEXT`,
     `ALTER TABLE inventory ADD COLUMN storage_info TEXT`,
     `ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft'`,
+    // A `brands` table may pre-date this feature (e.g. an earlier brand pick-list)
+    // with a minimal schema, so CREATE IF NOT EXISTS above is a no-op. Backfill the
+    // columns this module reads/writes so the join can't fail on a missing column.
+    `ALTER TABLE brands ADD COLUMN slug TEXT`,
+    `ALTER TABLE brands ADD COLUMN logo_doc_id TEXT`,
+    `ALTER TABLE brands ADD COLUMN story TEXT`,
+    `ALTER TABLE brands ADD COLUMN origin TEXT`,
+    `ALTER TABLE brands ADD COLUMN website TEXT`,
+    `ALTER TABLE brands ADD COLUMN brand_type TEXT`,
+    `ALTER TABLE brands ADD COLUMN status TEXT DEFAULT 'draft'`,
+    `ALTER TABLE brands ADD COLUMN sla_json TEXT`,
+    `ALTER TABLE brands ADD COLUMN created_at TEXT`,
+    `ALTER TABLE brands ADD COLUMN updated_at TEXT`,
   ];
   for (const s of stmts) { try { await env.DB.prepare(s).run(); } catch { /* exists / non-fatal */ } }
   try {
