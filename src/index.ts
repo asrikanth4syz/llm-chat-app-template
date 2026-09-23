@@ -492,6 +492,15 @@ async function ensurePiSchema(env: Env): Promise<void> {
     `ALTER TABLE certifications ADD COLUMN doc_id TEXT`,
     `ALTER TABLE certifications ADD COLUMN status TEXT DEFAULT 'unverified'`,
     `ALTER TABLE certifications ADD COLUMN created_at TEXT`,
+    `ALTER TABLE collections ADD COLUMN slug TEXT`,
+    `ALTER TABLE collections ADD COLUMN kind TEXT DEFAULT 'rule'`,
+    `ALTER TABLE collections ADD COLUMN rule_json TEXT`,
+    `ALTER TABLE collections ADD COLUMN curated_by TEXT`,
+    `ALTER TABLE collections ADD COLUMN published INTEGER DEFAULT 0`,
+    `ALTER TABLE collections ADD COLUMN created_at TEXT`,
+    `ALTER TABLE collections ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE collection_items ADD COLUMN pinned INTEGER DEFAULT 0`,
+    `ALTER TABLE collection_items ADD COLUMN excluded INTEGER DEFAULT 0`,
   ];
   for (const s of stmts) { try { await env.DB.prepare(s).run(); } catch { /* exists / non-fatal */ } }
   try {
@@ -588,16 +597,23 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   await ensurePiSchema(env);
-  const url = new URL(request.url);
-  const q = url.searchParams.get("q");
-  const cat = url.searchParams.get("category");
-  const brandId = url.searchParams.get("brand_id");
-  const attr = url.searchParams.get("attribute");
-  const verified = url.searchParams.get("verified") === "1";
-  const pmin = parseFloat(url.searchParams.get("pmin") || "");
-  const pmax = parseFloat(url.searchParams.get("pmax") || "");
-  const avail = url.searchParams.get("availability");
-  const isClient = PI_CLIENT_ROLES.includes(user!.role);
+  const out = await piCatalogQuery(env, user!, new URL(request.url).searchParams);
+  return json(out);
+}
+
+// Shared catalogue query: applies the same filters (q/category/brand_id/attribute/
+// verified/pmin/pmax/availability) used by the catalogue and by rule-driven
+// collections, returns products + facets, and is role-aware for pricing/scoping.
+async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): Promise<{ products: Record<string, unknown>[]; total: number; facets: Record<string, unknown> }> {
+  const q = sp.get("q");
+  const cat = sp.get("category");
+  const brandId = sp.get("brand_id");
+  const attr = sp.get("attribute");
+  const verified = sp.get("verified") === "1";
+  const pmin = parseFloat(sp.get("pmin") || "");
+  const pmax = parseFloat(sp.get("pmax") || "");
+  const avail = sp.get("availability");
+  const isClient = PI_CLIENT_ROLES.includes(user.role);
 
   const params: unknown[] = [];
   let where = " WHERE i.active=1";
@@ -606,10 +622,10 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   if (brandId) { where += " AND i.brand_id=?"; params.push(brandId); }
 
   let priceMap: Record<string, number | null> = {};
-  if (isClient && user!.client_id) {
+  if (isClient && user.client_id) {
     const { results: cc } = await env.DB.prepare("SELECT sku, client_price FROM client_catalog WHERE client_id=?")
-      .bind(user!.client_id).all() as { results: { sku: string; client_price: number | null }[] };
-    if (!cc.length) return json({ products: [], facets: {}, total: 0 });
+      .bind(user.client_id).all() as { results: { sku: string; client_price: number | null }[] };
+    if (!cc.length) return { products: [], facets: {}, total: 0 };
     const skus = cc.map(r => r.sku); priceMap = Object.fromEntries(cc.map(r => [r.sku, r.client_price]));
     where += ` AND i.sku IN (${skus.map(() => "?").join(",")})`; params.push(...skus);
   }
@@ -671,10 +687,10 @@ async function handleCatalogList(request: Request, env: Env): Promise<Response> 
   if (avail) products = products.filter(p => p.availability === avail);
 
   const facet = (key: string) => { const m: Record<string, number> = {}; for (const p of products) { const v = String((p as Record<string, unknown>)[key] ?? ""); if (v) m[v] = (m[v] || 0) + 1; } return m; };
-  return json({
+  return {
     products, total: products.length,
     facets: { category: facet("category"), brand: facet("brand"), verified: products.filter(p => p.verified).length, availability: facet("availability") },
-  });
+  };
 }
 
 // GET /api/catalog/products/:sku — full product intelligence.
@@ -848,6 +864,90 @@ async function handleUpsertBrand(request: Request, env: Env): Promise<Response> 
         website=excluded.website,brand_type=excluded.brand_type,status=excluded.status,updated_at=datetime('now')`)
     .bind(id, name, slug, String(b.story ?? ""), String(b.origin ?? ""), String(b.website ?? ""), String(b.brand_type ?? ""), status).run();
   return json({ ok: true, id });
+}
+
+// ── P1: rule-driven collections (auto-curated shelves) ──────────────────────
+// A collection stores a rule (JSON) whose keys map to the catalogue filters, so
+// "Vegan snacks" or "Under ₹50" resolve live against the catalogue. Ops curate
+// them; clients browse the published ones.
+const PI_COLLECTION_RULE_KEYS = ["attribute", "verified", "category", "brand_id", "q", "pmin", "pmax"] as const;
+function collectionRuleToParams(rule: Record<string, unknown>): URLSearchParams {
+  const sp = new URLSearchParams();
+  for (const k of PI_COLLECTION_RULE_KEYS) {
+    const v = rule[k];
+    if (v === undefined || v === null || v === "") continue;
+    if (k === "verified") { if (v === true || v === "1" || v === 1) sp.set("verified", "1"); }
+    else sp.set(k, String(v));
+  }
+  return sp;
+}
+function slugify(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
+
+// GET /api/collections — published for clients, all for ops (with resolved counts).
+async function handleListCollections(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const isAdmin = PI_ADMIN.includes(user!.role);
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id,name,slug,rule_json,published FROM collections ${isAdmin ? "" : "WHERE published=1"} ORDER BY name`
+    ).all() as { results: { id: string; name: string; slug: string; rule_json: string; published: number }[] };
+    const out = [];
+    for (const c of results.slice(0, 40)) {
+      let rule: Record<string, unknown> = {}; try { rule = JSON.parse(c.rule_json || "{}"); } catch { /* ignore */ }
+      let count = 0;
+      try { count = (await piCatalogQuery(env, user!, collectionRuleToParams(rule))).total; } catch { /* ignore */ }
+      out.push({ id: c.id, name: c.name, slug: c.slug, rule, published: !!c.published, count });
+    }
+    return json({ collections: out });
+  } catch (e) { return json({ error: "collections: " + String(e && (e as Error).message || e) }, 500); }
+}
+
+// GET /api/collections/:slug — resolve a collection to its products.
+async function handleResolveCollection(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const slug = decodeURIComponent(path.split("/").pop() || "");
+  try {
+    const col = await env.DB.prepare("SELECT id,name,slug,rule_json,published FROM collections WHERE slug=?").bind(slug).first() as { id: string; name: string; slug: string; rule_json: string; published: number } | null;
+    if (!col) return json({ error: "Not found" }, 404);
+    if (!col.published && !PI_ADMIN.includes(user!.role)) return json({ error: "Not found" }, 404);
+    let rule: Record<string, unknown> = {}; try { rule = JSON.parse(col.rule_json || "{}"); } catch { /* ignore */ }
+    const res = await piCatalogQuery(env, user!, collectionRuleToParams(rule));
+    // Apply curated overrides: drop excluded skus (pins are a future nicety).
+    let excluded: Set<string> = new Set();
+    try {
+      const { results } = await env.DB.prepare("SELECT sku FROM collection_items WHERE collection_id=? AND excluded=1").bind(col.id).all() as { results: { sku: string }[] };
+      excluded = new Set(results.map(r => r.sku));
+    } catch { /* no items table rows */ }
+    const products = excluded.size ? res.products.filter(p => !excluded.has(String(p.sku))) : res.products;
+    return json({ collection: { name: col.name, slug: col.slug, rule, published: !!col.published }, products, total: products.length });
+  } catch (e) { return json({ error: "collection: " + String(e && (e as Error).message || e) }, 500); }
+}
+
+// POST /api/collections — ops create/update a collection.
+async function handleUpsertCollection(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!PI_ADMIN.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
+  const name = String(b.name ?? "").trim();
+  if (!name) return json({ error: "Collection name is required" }, 400);
+  // Whitelist rule keys so a client can't inject arbitrary SQL params.
+  const rawRule = (b.rule || {}) as Record<string, unknown>;
+  const rule: Record<string, unknown> = {};
+  for (const k of PI_COLLECTION_RULE_KEYS) if (rawRule[k] !== undefined && rawRule[k] !== null && rawRule[k] !== "") rule[k] = rawRule[k];
+  const id = String(b.id ?? "").trim() || `col${uid().slice(0, 12)}`;
+  const slug = slugify(name);
+  const published = b.published === true || b.published === 1 ? 1 : 0;
+  try {
+    await env.DB.prepare(`INSERT INTO collections (id,name,slug,kind,rule_json,curated_by,published,updated_at)
+        VALUES (?,?,?,'rule',?,?,?,datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=excluded.slug,rule_json=excluded.rule_json,published=excluded.published,updated_at=datetime('now')`)
+      .bind(id, name, slug, JSON.stringify(rule), user!.sub || "", published).run();
+    await audit(env, user, "collection_upsert", "collection", id);
+    return json({ ok: true, id, slug });
+  } catch (e) { return json({ error: "collection-save: " + String(e && (e as Error).message || e) }, 500); }
 }
 
 // ── P0.2: own/in-platform extraction + rule-driven claim screening ──────────
@@ -2381,9 +2481,12 @@ export default {
       // Product Intelligence & Brand Catalogue (specific paths before wildcards).
       // Guarantee the PI schema exists (awaited, once per isolate) before any PI
       // handler runs — waitUntil-based self-heal can lag a fresh isolate.
-      if (path.startsWith("/api/catalog/") || path==="/api/brands" || path.startsWith("/api/verification/") || path.startsWith("/api/claims/")) {
+      if (path.startsWith("/api/catalog/") || path==="/api/brands" || path.startsWith("/api/verification/") || path.startsWith("/api/claims/") || path.startsWith("/api/collections")) {
         await ensurePiSchema(env);
       }
+      if (path==="/api/collections"      && method==="GET")  return handleListCollections(request,env);
+      if (path==="/api/collections"      && method==="POST") return handleUpsertCollection(request,env);
+      if (path.match(/^\/api\/collections\/[^/]+$/) && method==="GET") return handleResolveCollection(request,env,path);
       if (path==="/api/catalog/products" && method==="GET")  return handleCatalogList(request,env);
       if (path.match(/^\/api\/catalog\/products\/[^/]+\/enrich$/)     && method==="POST") return handleEnrichProduct(request,env,path);
       if (path.match(/^\/api\/catalog\/products\/[^/]+\/ai\/extract$/) && method==="POST") return handleAiExtract(request,env,path);

@@ -3067,6 +3067,37 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
   });
 });
 
+// ── Product Intelligence rule-driven collections (P1) ─────────────────
+describe("Product Intelligence collections (P1)", () => {
+  it("creates a rule-driven collection, resolves it, and gates publish + role", async () => {
+    const cat = "CollCat" + Math.random().toString(36).slice(2, 7);
+    const a = await post("/api/inventory", { name: "Coll A", category: cat, unit_price: 30, stock: 5 }, adminToken);
+    const b = await post("/api/inventory", { name: "Coll B", category: cat, unit_price: 40, stock: 5 }, adminToken);
+    const skuA = (await a.json() as { sku: string }).sku;
+    const skuB = (await b.json() as { sku: string }).sku;
+
+    // client cannot create collections
+    expect((await post("/api/collections", { name: "x", rule: { category: cat } }, clientToken)).status).toBe(403);
+
+    // ops creates a published, rule-driven collection
+    const made = await post("/api/collections", { name: "Cat Shelf", rule: { category: cat, pmax: 35 }, published: true }, adminToken);
+    expect(made.status).toBe(200);
+    const { slug } = await made.json() as { slug: string };
+
+    // resolve → only the ≤35 product matches the rule
+    const resolved = await (await get(`/api/collections/${slug}`, adminToken)).json() as { products: { sku: string }[] };
+    const skus = resolved.products.map(p => p.sku);
+    expect(skus).toContain(skuA);
+    expect(skus).not.toContain(skuB);   // 40 > pmax 35
+
+    // list includes it with a resolved count
+    const list = await (await get("/api/collections", adminToken)).json() as { collections: { slug: string; count: number; published: boolean }[] };
+    const row = list.collections.find(c => c.slug === slug);
+    expect(row?.count).toBe(1);
+    expect(row?.published).toBe(true);
+  });
+});
+
 // ── Product Intelligence verification workflow (P0.3) ─────────────────
 describe("Product Intelligence verification workflow (P0.3)", () => {
   it("requires evidence to verify, projects verified attribute, expires, and closes the task", async () => {

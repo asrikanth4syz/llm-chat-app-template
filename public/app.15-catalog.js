@@ -25,6 +25,7 @@ async function renderPIInternal(el) {
     <div class="tabs" id="pi-tabs" role="tablist">
       <button class="tab-btn active" ${dataActEl('piSwitchTab', 'queue')}>Verification queue</button>
       <button class="tab-btn" ${dataActEl('piSwitchTab', 'enrich')}>Enrich a product</button>
+      <button class="tab-btn" ${dataActEl('piSwitchTab', 'collections')}>Collections</button>
     </div>
     <div id="pi-body"><div class="loading-state"><div class="spinner"></div></div></div>`;
   piSwitchTab('queue', el.querySelector('#pi-tabs .tab-btn'));
@@ -35,6 +36,7 @@ function piSwitchTab(tab, btn) {
   if (btn) btn.classList.add('active');
   const body = document.getElementById('pi-body'); if (!body) return;
   if (tab === 'enrich') return piRenderEnrich(body);
+  if (tab === 'collections') return loadPICollections(body);
   return loadPIQueue(body);
 }
 
@@ -252,10 +254,79 @@ async function piRunExtract(sku) {
   showToast(nothing ? 'Nothing detected — check the pasted text' : `Screened ${claims.length} claim(s) — sent to verification`, nothing ? 'info' : 'success');
 }
 
+/* ── Internal: rule-driven collections (auto-curated shelves) ───────────── */
+const PI_DIET_OPTS = ['', 'vegan', 'vegetarian', 'gluten free', 'jain'];
+function piRuleSummary(rule) {
+  const bits = [];
+  if (rule.attribute) bits.push(rule.attribute);
+  if (rule.verified) bits.push('4SYZ Verified');
+  if (rule.category) bits.push(rule.category);
+  if (rule.pmax) bits.push('≤ ' + fmt(rule.pmax));
+  if (rule.pmin) bits.push('≥ ' + fmt(rule.pmin));
+  if (rule.q) bits.push('“' + rule.q + '”');
+  return bits.length ? bits.join(' · ') : 'All products';
+}
+async function loadPICollections(body) {
+  body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  const data = await api('/collections'); if (!data) return;
+  const cols = data.collections || [];
+  const dietSel = PI_DIET_OPTS.map(o => `<option value="${o}">${o ? o.replace(/\b\w/g, m => m.toUpperCase()) : 'Any dietary'}</option>`).join('');
+  body.innerHTML = `
+    <div class="card" style="padding:15px 17px;margin-bottom:14px">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:4px">New collection</div>
+      <div class="u-subtiny" style="margin-bottom:10px">A collection is a live shelf — products are matched by rule, so it stays current as the catalogue changes.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+        <div><label class="u-label">Name</label><input id="col-name" class="input" placeholder="e.g. Vegan snacks"></div>
+        <div><label class="u-label">Dietary</label><select id="col-attr" class="input">${dietSel}</select></div>
+        <div><label class="u-label">Category</label><input id="col-cat" class="input" placeholder="optional"></div>
+        <div><label class="u-label">Max price (₹)</label><input id="col-pmax" class="input" type="number" min="0" placeholder="optional"></div>
+      </div>
+      <label style="display:flex;gap:7px;align-items:center;font-size:.85rem;margin-top:10px"><input type="checkbox" id="col-verified"> 4SYZ Verified only</label>
+      <label style="display:flex;gap:7px;align-items:center;font-size:.85rem;margin-top:6px"><input type="checkbox" id="col-published" checked> Published (visible to clients)</label>
+      <div style="margin-top:11px"><button class="btn btn-primary" ${dataAct('piSaveCollection')}>Create collection</button></div>
+    </div>
+    <div style="font-weight:700;color:var(--navy);margin-bottom:8px">Existing collections</div>
+    ${cols.length ? `<div style="display:flex;flex-direction:column;gap:9px">${cols.map(piCollectionRow).join('')}</div>`
+      : `<div class="empty-state"><div class="empty-icon">🗂️</div><div class="empty-title">No collections yet</div><div class="empty-desc">Create one above.</div></div>`}`;
+}
+function piCollectionRow(c) {
+  return `<div class="card" style="padding:12px 15px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="flex:1;min-width:160px">
+      <div style="font-weight:700;color:var(--navy)">${h(c.name)} <span class="u-subtiny" style="font-weight:600">· ${c.count} product${c.count !== 1 ? 's' : ''}</span></div>
+      <div class="u-subtiny">${h(piRuleSummary(c.rule || {}))}</div>
+    </div>
+    <span class="badge" style="background:${c.published ? 'var(--verify-bg,#dff3ef)' : '#eef1f5'};color:${c.published ? 'var(--success,#0d9488)' : '#66738a'}">${c.published ? 'Published' : 'Draft'}</span>
+    <button class="btn btn-secondary btn-sm" ${dataAct('piToggleCollectionPublish', c.id, c.name, c.published ? 0 : 1, c.rule || {})}>${c.published ? 'Unpublish' : 'Publish'}</button>
+  </div>`;
+}
+async function piSaveCollection() {
+  const name = document.getElementById('col-name')?.value?.trim();
+  if (!name) { showToast('Give the collection a name', 'error'); return; }
+  const rule = {};
+  const attr = document.getElementById('col-attr')?.value; if (attr) rule.attribute = attr;
+  const cat = document.getElementById('col-cat')?.value?.trim(); if (cat) rule.category = cat;
+  const pmax = document.getElementById('col-pmax')?.value; if (pmax) rule.pmax = Number(pmax);
+  if (document.getElementById('col-verified')?.checked) rule.verified = true;
+  const published = !!document.getElementById('col-published')?.checked;
+  const res = await api('/collections', { method: 'POST', body: JSON.stringify({ name, rule, published }) });
+  if (!res) return;
+  showToast('Collection created', 'success');
+  loadPICollections(document.getElementById('pi-body'));
+}
+async function piToggleCollectionPublish(id, name, published, rule) {
+  // Carry the existing rule so the upsert doesn't wipe it.
+  const res = await api('/collections', { method: 'POST', body: JSON.stringify({ id, name, rule: rule || {}, published: !!published }) });
+  if (!res) return;
+  showToast(published ? 'Published' : 'Unpublished', 'success');
+  loadPICollections(document.getElementById('pi-body'));
+}
+
 /* ── Client: catalogue + product detail ────────────────────────────────── */
 async function renderCatalogClient(el) {
   APP._compare = [];   // fresh selection each time the catalogue is opened
+  APP._catCollection = null;
   el.innerHTML = `${pageHeader('Catalogue', 'Browse approved products — with human-verified claims')}
+    <div id="cat-collections" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
     <div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="cat-q" class="input" placeholder="Search products…" ${dataInput('catFilter')} style="flex:1;min-width:180px">
       <label style="font-size:.85rem;display:flex;gap:6px;align-items:center;white-space:nowrap"><input type="checkbox" id="cat-verified" ${dataChange('catFilter')}> 4SYZ Verified only</label>
@@ -267,8 +338,39 @@ async function renderCatalogClient(el) {
     <div id="cat-grid"><div class="loading-state"><div class="spinner"></div></div></div>
     <div id="cat-compare-bar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:60;display:none;align-items:center;gap:12px;background:var(--navy,#12324f);color:#fff;border-radius:30px;padding:10px 16px;box-shadow:0 6px 22px rgba(0,0,0,.25);font-size:.85rem"></div>`;
   catFilter();
+  catLoadCollections();
+}
+// Chip helper: on = active shelf.
+function catShelfChip(label, on, act, ...args) {
+  return `<button ${dataAct(act, ...args)} style="border:1px solid ${on ? 'var(--success,#0d9488)' : 'var(--border,#e5e8ee)'};background:${on ? 'var(--success,#0d9488)' : 'var(--surface,#fff)'};color:${on ? '#fff' : 'var(--navy)'};border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:700;cursor:pointer;white-space:nowrap">${label}</button>`;
+}
+async function catLoadCollections() {
+  const box = document.getElementById('cat-collections'); if (!box) return;
+  const data = await api('/collections');
+  const cols = (data?.collections || []).filter(c => c.count > 0);
+  if (!cols.length) { box.innerHTML = ''; return; }
+  box.innerHTML = catShelfChip('All products', !APP._catCollection, 'catShowAll')
+    + cols.map(c => catShelfChip(`${h(c.name)} <span style="opacity:.7">${c.count}</span>`, APP._catCollection === c.slug, 'catOpenCollection', c.slug, c.name)).join('');
+}
+function catShowAll() { APP._catCollection = null; catFilter(); catLoadCollections(); }
+async function catOpenCollection(slug, name) {
+  APP._catCollection = slug;
+  catLoadCollections();
+  const grid = document.getElementById('cat-grid'); if (!grid) return;
+  grid.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  const data = await api('/collections/' + encodeURIComponent(slug));
+  const items = data?.products || [];
+  grid.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-weight:700;color:var(--navy)">${h(name)}</span>
+      <span style="font-size:.82rem;color:var(--text-muted)">${items.length} product${items.length !== 1 ? 's' : ''}</span>
+      <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('catShowAll')}>← All products</button>
+    </div>
+    ${items.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px">${items.map(catCard).join('')}</div>`
+      : `<div class="empty-state"><div class="empty-icon">🗂️</div><div class="empty-title">Nothing in this collection yet</div></div>`}`;
+  renderCompareBar();
 }
 async function catFilter() {
+  APP._catCollection = null;   // a manual search/filter exits any active collection
   const grid = document.getElementById('cat-grid'); if (!grid) return;
   const qs = new URLSearchParams();
   const q = document.getElementById('cat-q')?.value || ''; if (q) qs.set('q', q);
@@ -276,6 +378,7 @@ async function catFilter() {
   const attr = document.getElementById('cat-attr')?.value || ''; if (attr) qs.set('attribute', attr);
   const data = await api('/catalog/products?' + qs.toString());
   const items = data?.products || [];
+  const collBox = document.getElementById('cat-collections'); if (collBox && collBox.innerHTML) catLoadCollections();
   if (!items.length) { grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No products</div><div class="empty-desc">Try clearing filters.</div></div>`; renderCompareBar(); return; }
   grid.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
       <span style="font-size:.82rem;color:var(--text-muted)">${items.length} product${items.length !== 1 ? 's' : ''}</span>
