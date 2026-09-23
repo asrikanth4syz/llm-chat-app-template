@@ -220,6 +220,10 @@ function piEnrichPick(sku, name) {
     </div>`;
   const panel = document.getElementById('pi-enrich-panel'); if (!panel) return;
   panel.innerHTML = `
+    <div class="card" style="padding:14px 17px;margin-bottom:12px" id="pi-type-card">
+      <div class="u-label" style="margin-bottom:6px">Product type</div>
+      <div id="pi-type"><div class="u-subtiny">Loading…</div></div>
+    </div>
     <div class="card" style="padding:15px 17px;border-top:3px solid var(--success,#0d9488)">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <label class="u-label" style="margin:0">Step 2 — Paste label text for <span style="color:var(--navy)">${h(name)}</span></label>
@@ -239,9 +243,43 @@ function piEnrichPick(sku, name) {
       </div>
       <div id="pi-extract-out" style="margin-top:13px"></div>
     </div>`;
-  // Bring Step 2 into view so the next action is visible without scrolling.
+  piLoadType(sku);
+  // Bring the panel into view so the next action is visible without scrolling.
   try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { panel.scrollIntoView(); }
   try { document.getElementById('pi-label')?.focus({ preventScroll: true }); } catch { /* older browsers */ }
+}
+// Ops product-type control: fetch the current type + AI suggestion, render a
+// dropdown (fixed vocabulary) + an "Accept suggestion" chip + Save.
+async function piLoadType(sku) {
+  const box = document.getElementById('pi-type'); if (!box) return;
+  const d = await api('/catalog/products/' + encodeURIComponent(sku));
+  const tm = (d && d.type_meta) || {};
+  const vocab = tm.type_vocab || [];
+  APP._piType = { sku, current: tm.product_type || '', suggested: tm.suggested_type || '' };
+  const opts = ['<option value="">— choose —</option>']
+    .concat(vocab.map(v => `<option value="${h(v)}" ${v === tm.product_type ? 'selected' : ''}>${h(v)}</option>`)).join('');
+  box.innerHTML = `
+    ${tm.suggested_type && !tm.product_type ? `<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--verify-bg,#dff3ef);border:1px solid #cde9e3;border-radius:9px;padding:8px 11px;margin-bottom:9px">
+        <span>🤖</span><span style="flex:1">Suggested: <b style="color:var(--navy)">${h(tm.suggested_type)}</b> <span class="u-subtiny">— from name &amp; ingredients</span></span>
+        <button class="btn btn-secondary btn-sm" ${dataAct('piAcceptType')}>Accept</button>
+      </div>` : ''}
+    <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+      <select id="pi-type-sel" class="input" style="min-width:210px">${opts}</select>
+      <button class="btn btn-primary btn-sm" ${dataAct('piSaveType', sku)}>Save type</button>
+      ${tm.product_type ? `<span class="u-subtiny" style="color:var(--success,#0d9488)">✓ Set to <b>${h(tm.product_type)}</b></span>` : '<span class="u-subtiny">Not set yet</span>'}
+    </div>`;
+}
+function piAcceptType() {
+  const sel = document.getElementById('pi-type-sel');
+  if (sel && APP._piType?.suggested) sel.value = APP._piType.suggested;
+}
+async function piSaveType(sku) {
+  const val = document.getElementById('pi-type-sel')?.value || '';
+  if (!val) { showToast('Choose a product type', 'error'); return; }
+  const res = await api('/catalog/products/' + encodeURIComponent(sku) + '/enrich', { method: 'POST', body: JSON.stringify({ product_type: val }) });
+  if (!res) return;
+  showToast('Product type saved', 'success');
+  piLoadType(sku);
 }
 function piPickImage() { document.getElementById('pi-image')?.click(); }
 async function piScanImage(sku, el) {
@@ -436,11 +474,12 @@ const CAT_DIET = [['vegan', 'Vegan'], ['vegetarian', 'Vegetarian'], ['gluten fre
 const CAT_VER = [['verified', '4SYZ Verified'], ['ai', 'AI Screened'], ['none', 'Not yet verified']];
 const CAT_AVAIL = [['in', 'In stock'], ['low', 'Low stock'], ['out', 'On order']];
 function catPrice(p) { return Number(p.client_price != null ? p.client_price : p.list_price) || 0; }
-function catNewFacet() { return { ver: new Set(), diet: new Set(), avail: new Set(), pmin: null, pmax: null }; }
+function catNewFacet() { return { type: new Set(), ver: new Set(), diet: new Set(), avail: new Set(), pmin: null, pmax: null }; }
 // Does product p satisfy a single facet option? Shared by sidebar + counts.
 function catOptTest(group, value, p) {
   if (group === 'ver') return value === 'verified' ? !!p.verified : value === 'ai' ? (p.screened && !p.verified) : (!p.verified && !p.screened);
   if (group === 'avail') return p.availability === value;
+  if (group === 'type') return (p.product_type || '') === value;
   return (p.attributes || []).includes(value);   // diet
 }
 function catInjectStyle() {
@@ -534,6 +573,7 @@ async function catLoadBase() {
 // A product matches the active facets, optionally ignoring one group (for counts).
 function catMatches(p, ignore) {
   const f = APP._catFacet;
+  if (ignore !== 'type' && f.type.size && !f.type.has(p.product_type || '')) return false;
   if (ignore !== 'ver' && f.ver.size) {
     const state = p.verified ? 'verified' : (p.screened ? 'ai' : 'none');
     if (!f.ver.has(state)) return false;
@@ -553,8 +593,11 @@ function catRenderSidebar() {
     return `<label class="cat-fopt"><input type="checkbox" class="cat-facet" data-group="${group}" value="${h(value)}" ${checked} ${dataChange('catFacetChange')}> ${label} <span class="ct" data-cc="${group}:${h(value)}">${cnt(group, value)}</span></label>`;
   };
   const grp = (title, rows) => rows.filter(Boolean).length ? `<h5>${title}</h5>${rows.filter(Boolean).join('')}` : '';
+  // Product types are dynamic — enumerate the ones actually present in the set.
+  const types = [...new Set(base.map(p => p.product_type).filter(Boolean))].sort();
   side.innerHTML = `
     <button class="cat-fclose" ${dataAct('catCloseFilters')}>✕ Close filters</button>
+    ${grp('Product type', types.map(t => opt('type', t, h(t))))}
     ${grp('Verification', CAT_VER.map(([v, l]) => opt('ver', v, l)))}
     ${grp('Dietary &amp; formulation', CAT_DIET.map(([v, l]) => opt('diet', v, l)))}
     ${grp('Availability', CAT_AVAIL.map(([v, l]) => opt('avail', v, l)))}
@@ -626,6 +669,7 @@ function catApply() {
   // active-filter chips
   const chips = [];
   const verL = { verified: '4SYZ Verified', ai: 'AI Screened', none: 'Not verified' };
+  f.type.forEach(v => chips.push(['type', v, v]));
   f.ver.forEach(v => chips.push(['ver', v, verL[v]]));
   f.diet.forEach(v => chips.push(['diet', v, (CAT_DIET.find(d => d[0] === v) || [v, v])[1]]));
   f.avail.forEach(v => chips.push(['avail', v, (CAT_AVAIL.find(a => a[0] === v) || [v, v])[1]]));
@@ -685,7 +729,7 @@ async function catCompare() {
     const pk = catParsePack(p.pack_size);
     return {
       sku: p.sku, name: p.name || p.sku, brand: p.brand_name || p.brand || '', emoji: p.emoji || '📦',
-      price, mrp: p.mrp, pack: p.pack_size,
+      product_type: p.product_type || '', price, mrp: p.mrp, pack: p.pack_size,
       per100: (pk.qty && Number(price)) ? Number(price) * 100 / pk.qty : null, unit: pk.unit,
       verified: (d.claims || []).filter(c => c.status === 'verified').map(c => c.label),
       attrs: (d.attributes || []).filter(a => a.status === 'verified').map(a => a.attribute),
@@ -697,6 +741,7 @@ async function catCompare() {
   const majUnit = Object.keys(unitCounts).sort((a, b) => unitCounts[b] - unitCounts[a])[0] || 'g';
   const anyPer100 = cols.some(c => c.per100 != null);
 
+  const mixedTypes = new Set(cols.map(c => c.product_type).filter(Boolean)).size > 1;
   const th = cols.map(c => `<th style="padding:10px 12px;text-align:left;vertical-align:top;min-width:150px;border-left:1px solid var(--border)">
       <div style="font-size:1.5rem">${c.emoji}</div>
       ${c.brand ? `<div style="font-size:.66rem;font-weight:800;color:var(--success,#0d9488);text-transform:uppercase">${h(c.brand)}</div>` : ''}
@@ -732,6 +777,7 @@ async function catCompare() {
         <thead><tr><th style="width:96px"></th>${th}</tr></thead>
         <tbody>
           ${row('Price', c => `<b style="font-size:1rem">${fmt(c.price)}</b>${c.mrp ? `<div class="u-subtiny" style="text-decoration:line-through">${fmt(c.mrp)}</div>` : ''}`, c => Number(c.price) || null, 'min')}
+          ${row('Type', c => c.product_type ? h(c.product_type) : '<span class="u-subtiny">—</span>')}
           ${row('Pack', c => c.pack ? h(c.pack) : '<span class="u-subtiny">—</span>')}
           ${anyPer100 ? row(`Price / 100 ${majUnit}`, c => c.per100 != null ? fmt(Math.round(c.per100 * 100) / 100) : '<span class="u-subtiny">—</span>', c => c.per100, 'min') : ''}
           ${row('✔ Verified claims', c => chips(c.verified, 'var(--verify-bg,#dff3ef)', 'var(--success,#0d9488)'))}
@@ -748,6 +794,7 @@ async function catCompare() {
         </tbody>
       </table>
     </div>
+    ${mixedTypes ? `<div class="u-subtiny" style="margin-top:8px;color:var(--warn,#d97706)">⚠ You're comparing different product types — per-100${majUnit === 'ml' ? ' ml' : ' g'} value is most meaningful within one type.</div>` : ''}
     <div class="u-subtiny" style="margin-top:8px">✓ marks the best value in a row (lowest price/sugar/sodium, highest protein/fibre). Per-100${majUnit === 'ml' ? ' ml' : ' g'} needs a parseable pack size. Nutrition is per the product's stated basis. Allergens use the FSSAI major-allergen list.</div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
@@ -782,7 +829,7 @@ function catCard(p) {
     <div style="padding:11px 12px;display:flex;flex-direction:column;gap:5px">
       ${p.brand ? `<div style="font-size:.7rem;font-weight:800;letter-spacing:.03em;color:var(--success,#0d9488);text-transform:uppercase">${h(p.brand)}</div>` : ''}
       <div style="font-weight:700;font-size:.9rem;color:var(--navy);line-height:1.25">${h(p.name)}</div>
-      ${p.pack_size ? `<div style="font-size:.75rem;color:var(--text-muted)">${h(p.pack_size)}</div>` : ''}
+      ${(p.product_type || p.pack_size) ? `<div style="font-size:.75rem;color:var(--text-muted)">${[p.product_type, p.pack_size].filter(Boolean).map(h).join(' · ')}</div>` : ''}
       <div style="display:flex;gap:4px;flex-wrap:wrap">
         ${p.verified ? PI_BADGE.verified : (p.screened ? PI_BADGE.ai_screened : '')}
         ${(p.attributes || []).slice(0, 2).map(a => `<span class="badge" style="background:#eef1f5;color:#66738a">${h(a)}</span>`).join('')}

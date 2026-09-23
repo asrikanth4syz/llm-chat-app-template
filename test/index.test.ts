@@ -3154,6 +3154,35 @@ describe("Product Intelligence collections (P1)", () => {
   });
 });
 
+// ── Product Intelligence product type (P1) ────────────────────────────
+describe("Product Intelligence product type (P1)", () => {
+  it("suggests a type, saves a valid one (rejects junk), and exposes it on the catalogue", async () => {
+    const created = await post("/api/inventory", { name: "Choco Protein Bar", category: "Snacks", unit_price: 60, stock: 10 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    // ops detail carries a suggestion + the vocabulary; not set yet
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as {
+      type_meta: { product_type: string | null; suggested_type: string | null; type_vocab: string[] };
+    };
+    expect(det.type_meta.product_type).toBeNull();
+    expect(det.type_meta.suggested_type).toBe("Bars & Energy");   // "bar" in the name
+    expect(det.type_meta.type_vocab).toContain("Bars & Energy");
+
+    // junk type is ignored (stays unset)
+    await post(`/api/catalog/products/${sku}/enrich`, { product_type: "Not A Real Type" }, adminToken);
+    let d2 = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { type_meta: { product_type: string | null } };
+    expect(d2.type_meta.product_type).toBeNull();
+
+    // a valid type saves and shows on the catalogue list
+    expect((await post(`/api/catalog/products/${sku}/enrich`, { product_type: "Bars & Energy" }, adminToken)).status).toBe(200);
+    d2 = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { type_meta: { product_type: string | null } };
+    expect(d2.type_meta.product_type).toBe("Bars & Energy");
+
+    const listed = await (await get(`/api/catalog/products?q=${encodeURIComponent("Choco Protein Bar")}`, adminToken)).json() as { products: { sku: string; product_type: string }[] };
+    expect(listed.products.find(p => p.sku === sku)?.product_type).toBe("Bars & Energy");
+  });
+});
+
 // ── Product Intelligence procurement view (P1) ────────────────────────
 describe("Product Intelligence procurement view (P1)", () => {
   it("returns an ops-only procurement block with cost + margin", async () => {

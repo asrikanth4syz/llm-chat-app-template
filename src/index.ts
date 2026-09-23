@@ -382,6 +382,35 @@ async function handleListContacts(request: Request, env: Env): Promise<Response>
 const PI_ADMIN = ["super_admin", "ops_admin"];
 const PI_CLIENT_ROLES = ["client_admin", "client_user", "client_approver"];
 
+// Controlled vocabulary for product type (v1). Kept fixed so the catalogue facet
+// stays clean; ops set it from a dropdown (AI only suggests).
+const PI_PRODUCT_TYPES = [
+  "Snacks", "Beverages", "Bars & Energy", "Bakery", "Confectionery", "Dairy",
+  "Breakfast & Cereal", "Staples & Grains", "Condiments & Sauces", "Spreads",
+  "Tea & Coffee", "Supplements",
+];
+// Heuristic suggestion from name + category + ingredients. Advisory only — ops
+// confirm before it is saved. First keyword match wins; falls back to Snacks.
+function suggestProductType(name: string, category: string, ingredients: string[]): string {
+  const s = `${name || ""} ${category || ""} ${(ingredients || []).join(" ")}`.toLowerCase();
+  const rules: [RegExp, string][] = [
+    [/\b(bar|energy|protein pop)\b/, "Bars & Energy"],
+    [/\b(cookie|biscuit|cracker|rusk)\b/, "Bakery"],
+    [/\b(chai|tea|coffee|brew)\b/, "Tea & Coffee"],
+    [/\b(juice|drink|panna|cola|soda|water|shake|smoothie)\b/, "Beverages"],
+    [/\b(popcorn|chips|nachos|makhana|namkeen|wafer)\b/, "Snacks"],
+    [/\b(yogurt|yoghurt|milk|cheese|paneer|curd|ghee|butter)\b/, "Dairy"],
+    [/\b(chocolate|toffee|candy|gum)\b/, "Confectionery"],
+    [/\b(muesli|granola|oats|cereal|flakes|poha)\b/, "Breakfast & Cereal"],
+    [/\b(atta|flour|rice|dal|pulse|grain|millet|quinoa)\b/, "Staples & Grains"],
+    [/\b(ketchup|sauce|chutney|pickle|masala|vinegar)\b/, "Condiments & Sauces"],
+    [/\b(jam|spread|honey|peanut butter|nutella)\b/, "Spreads"],
+    [/\b(protein powder|supplement|whey|vitamin|creatine)\b/, "Supplements"],
+  ];
+  for (const [re, t] of rules) if (re.test(s)) return t;
+  return "Snacks";
+}
+
 async function piVerifiedAttrs(env: Env, skus: string[]): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
   if (!skus.length) return out;
@@ -656,7 +685,7 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
   try {
     ({ results } = await env.DB.prepare(
       `SELECT i.sku,i.name,i.category,i.brand,i.brand_id,i.unit_price,i.mrp,i.gst_rate,i.stock,i.reorder_level,
-              i.pack_size,i.moq,i.emoji,i.cost_excl_gst,b.name AS brand_name,b.brand_type
+              i.pack_size,i.moq,i.emoji,i.cost_excl_gst,i.product_type,b.name AS brand_name,b.brand_type
          FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id ${where} ORDER BY i.name LIMIT 500`
     ).bind(...params).all() as { results: Record<string, unknown>[] });
   } catch {
@@ -698,6 +727,7 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
       sku, name: r.name, category: r.category,
       brand: r.brand_name || r.brand || null, brand_id: r.brand_id || null, brand_type: r.brand_type || null,
       mrp: Number(r.mrp) || 0, gst_rate: Number(r.gst_rate) || 0, pack_size: r.pack_size || null, moq: r.moq || null,
+      product_type: r.product_type || null,
       emoji: r.emoji || "📦", stock, availability,
       verified: verifiedSet.has(sku), screened: !verifiedSet.has(sku) && screenedSet.has(sku), attributes: vattrs[sku] || [],
     };
@@ -830,11 +860,21 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
   }
   if (isClient) { delete inv.cost_excl_gst; delete inv.vendor_id; delete inv.secondary_vendor_id; }
 
+  // Ops get an AI-suggested product type + the vocabulary to set it from.
+  let typeMeta: Record<string, unknown> | undefined;
+  if (!isClient) {
+    typeMeta = {
+      product_type: inv.product_type || null,
+      suggested_type: inv.product_type ? null : suggestProductType(String(inv.name || ""), String(inv.category || ""), ingr.map(i => String(i.raw_text || ""))),
+      type_vocab: PI_PRODUCT_TYPES,
+    };
+  }
+
   return json({
     product: inv, content: content || null, nutrition: nutrition || null,
     ingredients: ingr,
     attributes: attrs,
-    claims: claimsOut, certifications: certs, pricing, procurement,
+    claims: claimsOut, certifications: certs, pricing, procurement, type_meta: typeMeta || null,
   });
   } catch (e) { return json({ error: "catalog-product: " + String(e && (e as Error).message || e) }, 500); }
 }
@@ -854,11 +894,15 @@ async function handleEnrichProduct(request: Request, env: Env, path: string): Pr
   try {
   // inventory master columns
   const pack = (b.pack || {}) as Record<string, unknown>;
+  // product_type accepts a top-level or pack value, validated against the fixed
+  // vocabulary (an unknown value is ignored, keeping the facet clean).
+  const rawType = String(b.product_type ?? pack.product_type ?? "").trim();
+  const productType = PI_PRODUCT_TYPES.includes(rawType) ? rawType : null;
   await env.DB.prepare(
     `UPDATE inventory SET brand_id=COALESCE(?,brand_id), product_type=COALESCE(?,product_type), barcode_gtin=COALESCE(?,barcode_gtin),
        pack_size=COALESCE(?,pack_size), units_per_carton=COALESCE(?,units_per_carton), moq=COALESCE(?,moq),
        serving_info=COALESCE(?,serving_info), storage_info=COALESCE(?,storage_info), lifecycle_status=COALESCE(?,lifecycle_status) WHERE sku=?`
-  ).bind(pack.brand_id ?? null, pack.product_type ?? null, pack.barcode_gtin ?? null, pack.pack_size ?? null,
+  ).bind(pack.brand_id ?? null, productType, pack.barcode_gtin ?? null, pack.pack_size ?? null,
          pack.units_per_carton ?? null, pack.moq ?? null, pack.serving_info ?? null, pack.storage_info ?? null,
          pack.lifecycle_status ?? null, sku).run();
 
