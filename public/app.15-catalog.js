@@ -44,11 +44,18 @@ async function loadPIQueue(body) {
   body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
   const data = await api('/verification/queue'); if (!data) return;
   const tasks = data.tasks || [];
-  const conflicts = tasks.filter(t => String(t.screened_result || '').startsWith('conflict')).length;
+  const counts = data.counts || {};
+  const conflicts = counts.conflicts != null ? counts.conflicts : tasks.filter(t => String(t.screened_result || '').startsWith('conflict')).length;
   const kpi = (l, n, c) => `<div class="card" style="padding:14px 16px;border-top:3px solid ${c};margin-bottom:0">
       <div class="u-label">${l}</div><div style="font-size:1.9rem;font-weight:800;color:var(--navy);line-height:1">${n}</div></div>`;
+  const kpiRow = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+      ${kpi('Conflicts', conflicts, 'var(--danger,#dc2626)')}
+      ${kpi('Open claims', counts.open != null ? counts.open : tasks.length, 'var(--warning,#d97706)')}
+      ${kpi('Evidence requested', counts.evidence_requested || 0, '#0d9488')}
+      ${kpi('Verified · 7 days', counts.verified_this_week || 0, 'var(--success,#0d9488)')}
+    </div>`;
   if (!tasks.length) {
-    body.innerHTML = `<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">Queue clear</div>
+    body.innerHTML = `${kpiRow}<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">Queue clear</div>
       <div class="empty-desc">No claims awaiting verification.</div></div>`;
     return;
   }
@@ -56,9 +63,7 @@ async function loadPIQueue(body) {
   const bySku = {};
   tasks.forEach(t => { (bySku[t.sku] = bySku[t.sku] || { name: t.product_name, brand: t.brand_name, sku: t.sku, rows: [] }).rows.push(t); });
   body.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px">
-      ${kpi('Conflicts', conflicts, 'var(--danger)')}${kpi('Open claims', tasks.length, 'var(--warning)')}
-    </div>
+    ${kpiRow}
     <div class="note" style="background:#fdf0dc;color:#b45309;border-radius:11px;padding:11px 14px;font-size:.82rem;margin-bottom:14px">
       ℹ AI extracts &amp; screens. A claim shows <b>4SYZ Verified</b> only after you approve the evidence — AI never publishes a verification.
     </div>
@@ -611,11 +616,26 @@ function catTab(t, btn) {
     el.innerHTML = ing.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px">${ing.map(i => `<span style="background:var(--surface-2,#f0f2f5);border-radius:8px;padding:5px 10px;font-size:.8rem;${i.allergen ? 'color:var(--danger,#dc2626);font-weight:700' : ''}">${i.allergen ? '⚠ ' : ''}${h(i.raw_text)}</span>`).join('')}</div>` : '<div class="u-subtiny">No ingredients captured yet.</div>';
   } else if (t === 'clm') {
     const cl = d.claims || [];
-    el.innerHTML = cl.length ? cl.map(c => `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+    el.innerHTML = cl.length ? cl.map(c => {
+      const evid = (c.evidence || []).length
+        ? `<div class="u-subtiny" style="margin-top:4px;color:var(--success,#0d9488)">Evidence: ${c.evidence.map(e => h(e.page_ref || e.doc_id || 'attached')).join(', ')}</div>` : '';
+      // Provenance line for a human-reviewed claim: who approved it, when, and
+      // when the verification lapses (expired claims are flagged).
+      const prov = [];
+      if (c.reviewer_name) prov.push('Approved by <b>' + h(c.reviewer_name) + '</b>');
+      if (c.reviewed_at) prov.push(h(String(c.reviewed_at).slice(0, 10)));
+      const provLine = prov.length ? `<div class="u-subtiny" style="margin-top:4px">${prov.join(' · ')}</div>` : '';
+      let expiry = '';
+      if (c.expiry_date) {
+        const expired = c.status === 'expired' || String(c.expiry_date).slice(0, 10) < new Date().toISOString().slice(0, 10);
+        expiry = `<div class="u-subtiny" style="margin-top:4px;color:${expired ? 'var(--danger,#dc2626)' : 'var(--text-muted)'}">${expired ? '⚠ Verification expired' : 'Valid until'} ${h(String(c.expiry_date).slice(0, 10))}</div>`;
+      }
+      return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
       <div style="display:flex;gap:8px;align-items:center"><b>${h(c.label)}</b>${piBadge(c.status)}</div>
       ${c.screened_result ? `<div class="u-subtiny" style="margin-top:5px">${h(c.screened_result)}</div>` : ''}
-      ${(c.evidence || []).length ? `<div class="u-subtiny" style="margin-top:4px;color:var(--success,#0d9488)">Evidence: ${c.evidence.map(e => h(e.page_ref || e.doc_id || 'attached')).join(', ')}</div>` : ''}
-    </div>`).join('') : '<div class="u-subtiny">No claims yet.</div>';
+      ${evid}${provLine}${expiry}
+    </div>`;
+    }).join('') : '<div class="u-subtiny">No claims yet.</div>';
   } else if (t === 'prc') {
     el.innerHTML = catProcurementHtml(d.procurement || {});
   } else {

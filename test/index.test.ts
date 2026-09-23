@@ -3156,8 +3156,12 @@ describe("Product Intelligence verification workflow (P0.3)", () => {
     expect(det2.claims.find(c => c.id === hp.id)!.status).toBe("expired");           // past-expiry verified → expired
     expect(det2.attributes.some(a => a.attribute === "vegan" && a.status === "verified")).toBe(true); // projection
 
-    // both tasks closed → not in the open queue
-    const queue = await (await get("/api/verification/queue", adminToken)).json() as { tasks: { claim_id: string }[] };
+    // both tasks closed → not in the open queue; KPI counts are present
+    const queue = await (await get("/api/verification/queue", adminToken)).json() as {
+      tasks: { claim_id: string }[]; counts: { verified_this_week: number; evidence_requested: number };
+    };
     expect(queue.tasks.some(t => t.claim_id === hp.id)).toBe(false);
+    expect(typeof queue.counts.evidence_requested).toBe("number");
+    expect(queue.counts.verified_this_week).toBeGreaterThanOrEqual(1);  // Vegan just verified now
   });
 });

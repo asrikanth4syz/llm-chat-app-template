@@ -1159,9 +1159,20 @@ async function handleVerificationQueue(request: Request, env: Env): Promise<Resp
        LEFT JOIN inventory i ON c.sku=i.sku LEFT JOIN brands b ON i.brand_id=b.id
       WHERE t.status='open' ORDER BY CASE t.priority WHEN 'high' THEN 0 ELSE 1 END, t.created_at`
   ).all();
+  // Extra KPIs: how many claims are waiting on requested evidence, and how many
+  // were verified in the last 7 days (throughput). Both degrade to 0 on error.
+  let evidenceRequested = 0, verifiedThisWeek = 0;
+  try {
+    const er = await env.DB.prepare("SELECT COUNT(*) AS n FROM claims WHERE status='evidence_requested'").first() as { n: number } | null;
+    evidenceRequested = Number(er?.n) || 0;
+    const vw = await env.DB.prepare("SELECT COUNT(*) AS n FROM claims WHERE status='verified' AND reviewed_at >= datetime('now','-7 days')").first() as { n: number } | null;
+    verifiedThisWeek = Number(vw?.n) || 0;
+  } catch { /* legacy schema — leave at 0 */ }
   const counts = {
     conflicts: (tasks as Record<string, unknown>[]).filter(t => String(t.screened_result || "").startsWith("conflict")).length,
     open: (tasks as unknown[]).length,
+    evidence_requested: evidenceRequested,
+    verified_this_week: verifiedThisWeek,
   };
   return json({ tasks, counts });
 }
