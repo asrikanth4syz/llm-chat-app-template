@@ -555,10 +555,29 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
   const isClient = PI_CLIENT_ROLES.includes(user!.role);
 
   const inv = await env.DB.prepare(
-    `SELECT i.*, b.name AS brand_name, b.brand_type, b.origin AS brand_origin, b.story AS brand_story, b.status AS brand_status
-       FROM inventory i LEFT JOIN brands b ON i.brand_id=b.id WHERE i.sku=?`
+    `SELECT * FROM inventory WHERE sku=?`
   ).bind(sku).first() as Record<string, unknown> | null;
   if (!inv) return json({ error: "Not found" }, 404);
+
+  // Brand fields via a separate, guarded query. A legacy `brands` table may
+  // pre-date this feature with a partial schema (missing brand_type/story/etc.),
+  // and on some databases the idempotent ALTERs in ensurePiSchema don't take,
+  // so a hard JOIN selecting those columns would 500 the whole product view.
+  // Fetch them best-effort and degrade to no brand enrichment on any error.
+  if (inv.brand_id) {
+    try {
+      const b = await env.DB.prepare(
+        `SELECT name AS brand_name, brand_type, origin AS brand_origin, story AS brand_story, status AS brand_status FROM brands WHERE id=?`
+      ).bind(inv.brand_id).first() as Record<string, unknown> | null;
+      if (b) Object.assign(inv, b);
+    } catch {
+      // Fall back to just the brand name if that column at least exists.
+      try {
+        const b = await env.DB.prepare(`SELECT name AS brand_name FROM brands WHERE id=?`).bind(inv.brand_id).first() as Record<string, unknown> | null;
+        if (b) Object.assign(inv, b);
+      } catch { /* legacy brands schema — skip brand enrichment entirely */ }
+    }
+  }
 
   const [content, nutrition, ingr, attrs, claims, certs] = await Promise.all([
     env.DB.prepare("SELECT description,usage,images_json FROM product_content WHERE sku=?").bind(sku).first(),
