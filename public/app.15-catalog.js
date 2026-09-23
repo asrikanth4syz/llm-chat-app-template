@@ -594,6 +594,7 @@ async function catOpenProduct(sku) {
       <button class="tab-btn" ${dataActEl('catTab', 'nut')}>Nutrition</button>
       <button class="tab-btn" ${dataActEl('catTab', 'ing')}>Ingredients</button>
       <button class="tab-btn" ${dataActEl('catTab', 'clm')}>Claims</button>
+      ${(d.certifications || []).length ? `<button class="tab-btn" ${dataActEl('catTab', 'cert')}>Certifications</button>` : ''}
       ${d.procurement ? `<button class="tab-btn" ${dataActEl('catTab', 'prc')}>Procurement</button>` : ''}
     </div>
     <div id="cat-tab-body" style="min-height:80px"></div>`,
@@ -636,6 +637,8 @@ function catTab(t, btn) {
       ${evid}${provLine}${expiry}
     </div>`;
     }).join('') : '<div class="u-subtiny">No claims yet.</div>';
+  } else if (t === 'cert') {
+    el.innerHTML = catCertHtml(d.certifications || []);
   } else if (t === 'prc') {
     el.innerHTML = catProcurementHtml(d.procurement || {});
   } else {
@@ -645,6 +648,31 @@ function catTab(t, btn) {
   }
 }
 function p_or(d, k) { return d.product && d.product[k] != null ? d.product[k] : (d.pricing && d.pricing.gst_rate) || 18; }
+
+// Certifications & documents (FSSAI / ISO / organic etc.) with a validity badge.
+function catCertHtml(certs) {
+  if (!certs.length) return '<div class="u-subtiny">No certifications on file for this product yet.</div>';
+  const today = new Date().toISOString().slice(0, 10);
+  return certs.map(c => {
+    const to = c.valid_to ? String(c.valid_to).slice(0, 10) : '';
+    const expired = to && to < today;
+    const badge = expired
+      ? '<span class="badge" style="background:#fbe4e2;color:#dc2626">expired</span>'
+      : (c.status === 'verified'
+        ? '<span class="badge" style="background:var(--verify-bg,#dff3ef);color:var(--success,#0d9488)">✔ verified</span>'
+        : '<span class="badge" style="background:#eef1f5;color:#66738a">on file</span>');
+    const span = [c.valid_from ? String(c.valid_from).slice(0, 10) : '', to].filter(Boolean).join(' → ');
+    return `<div style="border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b style="color:var(--navy)">${h(c.kind || 'Certificate')}</b>${badge}
+        ${c.number ? `<span class="u-subtiny" style="font-family:monospace">${h(c.number)}</span>` : ''}
+      </div>
+      <div class="u-subtiny" style="margin-top:4px">
+        ${c.issuer ? 'Issuer: ' + h(c.issuer) : ''}${c.issuer && span ? ' · ' : ''}${span ? 'Valid ' + h(span) : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
 
 // Ops-only procurement view: cost/margin tiles + who supplies this SKU and at
 // what rate (primary/secondary/cheapest flagged).
