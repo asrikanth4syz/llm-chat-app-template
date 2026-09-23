@@ -505,6 +505,31 @@ async function ensurePiSchema(env: Env): Promise<void> {
   _piSchemaReady = true;
 }
 
+// A PI table may pre-date this feature with a partial schema, and the idempotent
+// ALTERs above don't always take on a pre-existing table. So writes go through
+// piInsert, which inserts only the columns that ACTUALLY exist on the table —
+// making the write path immune to a legacy/partial schema. Column lists are read
+// once per isolate (after ensurePiSchema has run its ALTERs).
+const _piCols: Record<string, Set<string>> = {};
+async function piTableCols(env: Env, table: string): Promise<Set<string>> {
+  if (_piCols[table]) return _piCols[table];
+  const cols = new Set<string>();
+  try {
+    const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all() as { results: { name: string }[] };
+    for (const r of results) cols.add(String(r.name));
+  } catch { /* table missing — leave empty */ }
+  _piCols[table] = cols;
+  return cols;
+}
+async function piInsert(env: Env, table: string, row: Record<string, unknown>): Promise<void> {
+  const cols = await piTableCols(env, table);
+  // If PRAGMA returned nothing (shouldn't happen post-ensure), fall back to all keys.
+  const keys = Object.keys(row).filter(k => !cols.size || cols.has(k));
+  if (!keys.length) return;
+  await env.DB.prepare(`INSERT INTO ${table} (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`)
+    .bind(...keys.map(k => row[k])).run();
+}
+
 // GET /api/catalog/products — filterable catalogue + simple facets.
 async function handleCatalogList(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
@@ -727,22 +752,19 @@ async function handleEnrichProduct(request: Request, env: Env, path: string): Pr
       .bind(sku, String(n.basis ?? "per 100g"), num(n.calories), num(n.protein), num(n.carbs), num(n.sugar), num(n.fat), num(n.fibre), num(n.sodium), String(n.source_ref ?? "manual")).run();
   }
   if (Array.isArray(b.ingredients)) {
-    await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
+    try { await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run(); } catch { /* legacy table */ }
     let pos = 0;
     for (const raw of b.ingredients as unknown[]) {
       const text = String(raw ?? "").trim(); if (!text) continue;
       const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(text).first() as { id: string; allergen: number } | null;
-      await env.DB.prepare("INSERT INTO product_ingredients (id,sku,position,raw_text,normalized_id,allergen) VALUES (?,?,?,?,?,?)")
-        .bind(`ing${uid().slice(0, 12)}`, sku, pos++, text, dict?.id ?? null, dict?.allergen ?? 0).run();
+      await piInsert(env, "product_ingredients", { id: `ing${uid().slice(0, 12)}`, sku, position: pos++, raw_text: text, normalized_id: dict?.id ?? null, allergen: dict?.allergen ?? 0 });
     }
   }
   if (Array.isArray(b.attributes)) {
     for (const a of b.attributes as unknown[]) {
       const attribute = String((a as Record<string, unknown>).attribute ?? a ?? "").trim().toLowerCase();
       if (!attribute) continue;
-      await env.DB.prepare(`INSERT INTO product_attributes (id,sku,attribute,value,status,source,updated_at)
-        VALUES (?,?,?,?, 'verified','manual', datetime('now'))`)
-        .bind(`att${uid().slice(0, 12)}`, sku, attribute, "true").run();
+      await piInsert(env, "product_attributes", { id: `att${uid().slice(0, 12)}`, sku, attribute, value: "true", status: "verified", source: "manual" });
     }
   }
   await audit(env, user, "enrich", "product", sku);
@@ -797,9 +819,29 @@ const PI_CLAIM_LEXICON: { re: RegExp; category: string; label: string }[] = [
 ];
 
 function parseLabelText(text: string): PiExtract {
+  // Strip bracketed annotations like "(INS 322)" / "[INS 500(ii)]" and trailing
+  // punctuation, so tokens read as clean ingredient names.
+  const clean = (s: string) => s
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/^[\s.·•\-]+|[\s.;:·•\-]+$/g, "")
+    .trim();
+  const tokenize = (src: string) => src.split(/[,;\n•|]/).map(clean)
+    .filter(s => s && s.length <= 60 && /[a-zA-Z]/.test(s));
+
   let ingredients: string[] = [];
-  const m = text.match(/ingredients?\s*[:\-]\s*([^\n.]*)/i);
-  if (m) ingredients = m[1].split(/[,;]/).map(s => s.replace(/\([^)]*\)/g, "").trim()).filter(Boolean).slice(0, 60);
+  // 1) An explicit "Ingredients:" / "Contains:" section wins — read to the next
+  //    blank line or the start of a nutrition/allergen/storage block.
+  const m = text.match(/(?:ingredients?|contains)\s*[:\-]\s*([\s\S]*?)(?:\n\s*\n|allergen|nutrition(?:al)?|best before|storage|manufactured|net (?:wt|weight)|$)/i);
+  if (m && m[1].trim()) ingredients = tokenize(m[1]);
+  // 2) No keyword — users often paste just the list. If the text is a
+  //    comma/newline-separated list of 2+ items, treat it as ingredients.
+  if (!ingredients.length) {
+    const parts = tokenize(text);
+    if (parts.length >= 2) ingredients = parts;
+  }
+  ingredients = ingredients.slice(0, 80);
+
   const claims: { category: string; label: string }[] = [];
   for (const c of PI_CLAIM_LEXICON) if (c.re.test(text)) claims.push({ category: c.category, label: c.label });
   return { ingredients, claims };
@@ -861,32 +903,28 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
   try {
   const extracted = await extractProductDoc(env, { text: b.text as string, imageBase64: b.imageBase64 as string });
   if (extracted.ingredients.length) {
-    await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run();
+    try { await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run(); } catch { /* legacy table */ }
     let pos = 0;
     for (const raw of extracted.ingredients) {
       const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(raw).first() as { id: string; allergen: number } | null;
-      await env.DB.prepare("INSERT INTO product_ingredients (id,sku,position,raw_text,normalized_id,allergen) VALUES (?,?,?,?,?,?)")
-        .bind(`ing${uid().slice(0, 12)}`, sku, pos++, raw, dict?.id ?? null, dict?.allergen ?? 0).run();
+      await piInsert(env, "product_ingredients", { id: `ing${uid().slice(0, 12)}`, sku, position: pos++, raw_text: raw, normalized_id: dict?.id ?? null, allergen: dict?.allergen ?? 0 });
     }
   }
   const out: { label: string; status: string; result: string; conflict: boolean; confidence: number }[] = [];
   for (const c of extracted.claims) {
     const scr = await screenClaim(env, c.category, c.label, extracted.ingredients);
     const claimId = `clm${uid().slice(0, 12)}`;
-    await env.DB.prepare(`INSERT INTO claims (id,sku,category,label,status,ai_confidence,screened_result) VALUES (?,?,?,?, 'ai_screened', ?, ?)`)
-      .bind(claimId, sku, c.category, c.label, scr.confidence, scr.result).run();
+    await piInsert(env, "claims", { id: claimId, sku, category: c.category, label: c.label, status: "ai_screened", ai_confidence: scr.confidence, screened_result: scr.result });
     if (c.category === "dietary" || c.category === "ingredient") {
-      await env.DB.prepare(`INSERT INTO product_attributes (id,sku,attribute,value,status,source) VALUES (?,?,?, 'true','ai_screened','ai')`)
-        .bind(`att${uid().slice(0, 12)}`, sku, c.label.toLowerCase()).run();
+      await piInsert(env, "product_attributes", { id: `att${uid().slice(0, 12)}`, sku, attribute: c.label.toLowerCase(), value: "true", status: "ai_screened", source: "ai" });
     }
     if (scr.conflict || scr.confidence < 0.75) {
-      await env.DB.prepare(`INSERT INTO verification_tasks (id,task_type,sku,claim_id,priority,status) VALUES (?, 'claim', ?, ?, ?, 'open')`)
-        .bind(`vt${uid().slice(0, 12)}`, sku, claimId, scr.conflict ? "high" : "normal").run();
+      await piInsert(env, "verification_tasks", { id: `vt${uid().slice(0, 12)}`, task_type: "claim", sku, claim_id: claimId, priority: scr.conflict ? "high" : "normal", status: "open" });
     }
     out.push({ label: c.label, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
   }
   await audit(env, user, "ai_extract", "product", sku);
-  return json({ ok: true, ingredients: extracted.ingredients.length, claims: out });
+  return json({ ok: true, ingredients: extracted.ingredients.length, ingredientList: extracted.ingredients, claims: out });
   } catch (e) { return json({ error: "ai-extract: " + String(e && (e as Error).message || e) }, 500); }
 }
 

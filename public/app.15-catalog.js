@@ -142,9 +142,22 @@ async function piAddEvidenceConfirm(claimId) {
 
 /* ── Internal: enrich (search a SKU → paste label → AI extract) ─────────── */
 async function piRenderEnrich(body) {
+  const step = (n, t, d) => `<div style="display:flex;gap:9px;align-items:flex-start">
+      <div style="flex:none;width:22px;height:22px;border-radius:50%;background:var(--navy,#12324f);color:#fff;font-size:.72rem;font-weight:800;display:grid;place-items:center">${n}</div>
+      <div><div style="font-weight:700;font-size:.82rem;color:var(--navy)">${t}</div><div class="u-subtiny">${d}</div></div>
+    </div>`;
   body.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;background:linear-gradient(180deg,#f7fafc,#fff)">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:10px;font-size:.9rem">How enrichment works</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
+        ${step(1, 'Pick a product', 'Search the master catalogue')}
+        ${step(2, 'Paste the label', 'Ingredients & claims — or scan an image')}
+        ${step(3, 'AI screens it', 'Advisory only — never auto-published')}
+        ${step(4, 'Verify & publish', 'A reviewer approves with evidence')}
+      </div>
+    </div>
     <div class="card" style="padding:14px 16px;margin-bottom:14px">
-      <label class="u-label">Find a product</label>
+      <label class="u-label">Step 1 — Find a product</label>
       <input id="pi-sku-q" class="input" placeholder="Search by name or SKU…" ${dataInput('piEnrichSearch')}>
       <div id="pi-sku-results" style="margin-top:8px;display:flex;flex-direction:column;gap:5px"></div>
     </div>
@@ -169,34 +182,74 @@ async function piEnrichSearch() {
   box.innerHTML = items.map(p => `<button class="btn btn-secondary btn-sm" style="justify-content:flex-start;text-align:left" ${dataAct('piEnrichPick', p.sku, p.name)}>
       <b>${h(p.name || p.sku)}</b> <span class="u-subtiny" style="font-family:monospace">${h(p.sku)}</span></button>`).join('');
 }
+const PI_EXAMPLE = 'Vegan. Gluten free. No added sugar.\nIngredients: Oats, Almonds, Dark chocolate (cocoa solids 55%), Dates, Sea salt.';
 function piEnrichPick(sku, name) {
   APP._piSku = sku;
   const panel = document.getElementById('pi-enrich-panel'); if (!panel) return;
   panel.innerHTML = `
     <div class="card" style="padding:15px 17px">
-      <div style="font-weight:700;color:var(--navy);margin-bottom:8px">${h(name)} <span class="u-subtiny" style="font-family:monospace">${h(sku)}</span></div>
-      <label class="u-label">Paste label text (ingredients + claims). Own OCR reads an image where available.</label>
-      <textarea id="pi-label" class="input" rows="4" placeholder="Vegan. Ingredients: Oats, Almonds, Dark chocolate… No added sugar."></textarea>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="btn btn-primary" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>
-        <button class="btn btn-secondary" ${dataAct('catOpenProduct', sku)}>View product</button>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="font-weight:700;color:var(--navy)">${h(name)}</div>
+        <span class="u-subtiny" style="font-family:monospace">${h(sku)}</span>
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('catOpenProduct', sku)}>👁 Preview client view</button>
       </div>
-      <div id="pi-extract-out" style="margin-top:12px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <label class="u-label">Step 2 — Paste label text</label>
+        <button class="linklike u-subtiny" style="background:none;border:none;color:var(--success,#0d9488);cursor:pointer" ${dataAct('piLoadExample')}>Load example</button>
+      </div>
+      <textarea id="pi-label" class="input" rows="5" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"></textarea>
+      <div class="u-subtiny" style="margin-top:5px">Tip: paste the whole ingredients line — brackets like “(INS 322)” are cleaned automatically. Claims such as “Vegan” or “No added sugar” are detected wherever they appear.</div>
+      <div style="display:flex;gap:8px;margin-top:11px">
+        <button class="btn btn-primary" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>
+      </div>
+      <div id="pi-extract-out" style="margin-top:13px"></div>
     </div>`;
+}
+function piLoadExample() {
+  const ta = document.getElementById('pi-label'); if (ta) { ta.value = PI_EXAMPLE; ta.focus(); }
 }
 async function piRunExtract(sku) {
   const text = document.getElementById('pi-label')?.value || '';
   if (!text.trim()) { showToast('Paste some label text first', 'error'); return; }
+  const out = document.getElementById('pi-extract-out');
+  if (out) out.innerHTML = `<div class="u-subtiny">🧠 Reading label…</div>`;
   const res = await api(`/catalog/products/${sku}/ai/extract`, { method: 'POST', body: JSON.stringify({ text }) });
-  const out = document.getElementById('pi-extract-out'); if (!out) return;
-  if (!res) return;
-  out.innerHTML = `<div class="note" style="background:#eef7f5;border-radius:10px;padding:10px 12px;font-size:.83rem">
-      Extracted <b>${res.ingredients}</b> ingredient(s), screened <b>${(res.claims || []).length}</b> claim(s) — all at <b>AI Screened</b>, none published.</div>
-    ${(res.claims || []).map(c => `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;font-size:.85rem">
-      <b>${h(c.label)}</b>${c.conflict ? '<span class="badge" style="background:#fbe4e2;color:#dc2626">conflict</span>' : '<span class="badge" style="background:#fcecd6;color:#d97706">review</span>'}
-      <span class="u-subtiny">${h(c.result)}</span></div>`).join('')}
-    <div style="margin-top:8px"><button class="btn btn-secondary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Go to verification queue →</button></div>`;
-  showToast('Screened — sent to the verification queue');
+  if (!out) return;
+  if (!res) { out.innerHTML = ''; return; }
+
+  const ings = res.ingredientList || [];
+  const claims = res.claims || [];
+  const clr = c => c.conflict ? ['#fbe4e2', '#dc2626', 'Conflict'] : (c.confidence >= 0.75 ? ['#fcecd6', '#d97706', 'Review'] : ['#fcecd6', '#d97706', 'Needs review']);
+  const nothing = !ings.length && !claims.length;
+
+  out.innerHTML = `
+    <div style="border:1px solid var(--border,#e5e8ee);border-radius:13px;overflow:hidden">
+      <div style="background:${nothing ? '#fef3c7' : '#eef7f5'};padding:10px 14px;font-weight:700;color:var(--navy);font-size:.9rem;display:flex;align-items:center;gap:8px">
+        ${nothing ? '⚠ Nothing detected' : '✓ Step 3 — Here’s what AI read'}
+      </div>
+      <div style="padding:13px 15px;display:flex;flex-direction:column;gap:14px">
+        ${nothing ? `<div class="u-subtiny">We couldn’t find an ingredient list or a recognised claim. Paste the pack’s ingredient line (comma-separated) and claim words like “Vegan”, “Gluten free” or “No added sugar”, then try again.</div>` : `
+          <div>
+            <div class="u-label">Ingredients &nbsp;<span style="color:var(--success,#0d9488)">${ings.length}</span></div>
+            ${ings.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${ings.map(i => `<span style="background:var(--surface-2,#f0f2f5);border-radius:8px;padding:4px 9px;font-size:.78rem;color:var(--navy)">${h(i)}</span>`).join('')}</div>` : '<div class="u-subtiny" style="margin-top:4px">None found in this text.</div>'}
+          </div>
+          <div>
+            <div class="u-label">Screened claims &nbsp;<span style="color:var(--success,#0d9488)">${claims.length}</span></div>
+            ${claims.length ? `<div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">${claims.map(c => { const [bg, fg, lbl] = clr(c); return `<div style="display:flex;gap:9px;align-items:center;font-size:.85rem">
+                <b style="color:var(--navy)">${h(c.label)}</b>
+                <span class="badge" style="background:${bg};color:${fg}">${lbl}</span>
+                <span class="u-subtiny">${h(c.result)}</span></div>`; }).join('')}</div>` : '<div class="u-subtiny" style="margin-top:4px">No recognised claims in this text.</div>'}
+          </div>`}
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:9px 12px;font-size:.8rem;color:#92600e;display:flex;gap:8px">
+          <span>🔒</span><span>All results are <b>AI-screened</b>, not published. A reviewer must approve each claim with evidence before clients can see it.</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Review in verification queue →</button>
+          <button class="btn btn-secondary btn-sm" ${dataAct('catOpenProduct', sku)}>👁 Preview client view</button>
+        </div>
+      </div>
+    </div>`;
+  showToast(nothing ? 'Nothing detected — check the pasted text' : `Screened ${claims.length} claim(s) — sent to verification`, nothing ? 'info' : 'success');
 }
 
 /* ── Client: catalogue + product detail ────────────────────────────────── */

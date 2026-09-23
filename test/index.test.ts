@@ -3027,6 +3027,24 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     const forbidden = await post(`/api/catalog/products/${sku}/ai/extract`, { text: "Vegan" }, clientToken);
     expect(forbidden.status).toBe(403);
   });
+
+  it("extracts a bare comma-list with no 'Ingredients:' keyword and strips ()/[] annotations", async () => {
+    const created = await post("/api/inventory", { name: "PI Bare List", category: "Snacks", unit_price: 50, stock: 10 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    // The exact shape a user pastes off a pack — no keyword, bracketed E-numbers.
+    const res = await post(`/api/catalog/products/${sku}/ai/extract`, {
+      text: "Emulsifier (INS 322 and INS 471), Raising Agent [INS 500(ii)], Rosemary Extract (INS 392)",
+    }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ingredients: number; ingredientList: string[] };
+    expect(body.ingredients).toBe(3);
+    expect(body.ingredientList).toEqual(["Emulsifier", "Raising Agent", "Rosemary Extract"]);
+
+    // and the detail view returns those captured ingredients
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { ingredients: { raw_text: string }[] };
+    expect(det.ingredients.map(i => i.raw_text)).toEqual(["Emulsifier", "Raising Agent", "Rosemary Extract"]);
+  });
 });
 
 // ── Product Intelligence verification workflow (P0.3) ─────────────────
