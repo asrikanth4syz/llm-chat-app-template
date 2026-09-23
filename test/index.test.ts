@@ -3023,6 +3023,13 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     expect(det.claims.every(c => c.status !== "verified")).toBe(true);
     expect(det.attributes.every(a => a.status !== "verified")).toBe(true);
 
+    // catalogue list flags the product as AI-screened (not verified) — powers the
+    // faceted-catalogue verification facet.
+    const listed = await (await get(`/api/catalog/products?q=${encodeURIComponent("PI Screen Test")}`, adminToken)).json() as { products: { sku: string; verified: boolean; screened: boolean }[] };
+    const row = listed.products.find(p => p.sku === sku);
+    expect(row?.screened).toBe(true);
+    expect(row?.verified).toBe(false);
+
     // client cannot run extraction
     const forbidden = await post(`/api/catalog/products/${sku}/ai/extract`, { text: "Vegan" }, clientToken);
     expect(forbidden.status).toBe(403);

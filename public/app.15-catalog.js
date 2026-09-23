@@ -350,24 +350,75 @@ async function piToggleCollectionPublish(id, name, published, rule) {
   loadPICollections(document.getElementById('pi-body'));
 }
 
-/* ── Client: catalogue + product detail ────────────────────────────────── */
+/* ── Client: faceted catalogue (B5) ─────────────────────────────────────
+   A base set is fetched once per search/collection; facets, sort and counts
+   are then applied client-side over that set (≤ 500 rows), so toggling a facet
+   never refetches. Counts are facet-aware (each option holds its own group out).
+   ──────────────────────────────────────────────────────────────────────── */
+const CAT_DIET = [['vegan', 'Vegan'], ['vegetarian', 'Vegetarian'], ['gluten free', 'Gluten Free'], ['jain', 'Jain'], ['no added sugar', 'No Added Sugar'], ['no artificial colours', 'No Artificial Colours']];
+const CAT_VER = [['verified', '4SYZ Verified'], ['ai', 'AI Screened'], ['none', 'Not yet verified']];
+const CAT_AVAIL = [['in', 'In stock'], ['low', 'Low stock'], ['out', 'On order']];
+function catPrice(p) { return Number(p.client_price != null ? p.client_price : p.list_price) || 0; }
+function catNewFacet() { return { ver: new Set(), diet: new Set(), avail: new Set(), pmin: null, pmax: null }; }
+// Does product p satisfy a single facet option? Shared by sidebar + counts.
+function catOptTest(group, value, p) {
+  if (group === 'ver') return value === 'verified' ? !!p.verified : value === 'ai' ? (p.screened && !p.verified) : (!p.verified && !p.screened);
+  if (group === 'avail') return p.availability === value;
+  return (p.attributes || []).includes(value);   // diet
+}
+function catInjectStyle() {
+  if (document.getElementById('cat-b5-style')) return;
+  const s = document.createElement('style'); s.id = 'cat-b5-style';
+  s.textContent = `
+    #cat-layout{display:grid;grid-template-columns:232px 1fr;gap:16px;align-items:start}
+    #cat-side{position:sticky;top:70px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 3px rgba(16,24,40,.08);padding:13px 14px}
+    #cat-side h5{font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin:14px 0 6px}
+    #cat-side h5:first-of-type{margin-top:0}
+    .cat-fopt{display:flex;align-items:center;gap:9px;font-size:.83rem;color:var(--navy);padding:3px 0;cursor:pointer}
+    .cat-fopt input{accent-color:var(--success,#0d9488);width:15px;height:15px;flex:none}
+    .cat-fopt .ct{margin-left:auto;color:var(--text-muted);font-size:.76rem;font-variant-numeric:tabular-nums}
+    .cat-fclose{display:none}
+    #cat-scrim{display:none}
+    @media(max-width:860px){
+      #cat-layout{grid-template-columns:1fr}
+      #cat-side{position:fixed;top:0;left:0;bottom:0;width:82%;max-width:320px;z-index:120;transform:translateX(-105%);transition:transform .25s ease;overflow:auto;border-radius:0}
+      #cat-side.open{transform:none}
+      .cat-fclose{display:block;width:100%;margin-bottom:10px;border:0;background:var(--surface-2,#f0f2f5);color:var(--navy);border-radius:9px;padding:9px;font-weight:800;cursor:pointer}
+      #cat-scrim.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:115}
+      #cat-filterbtn{display:inline-flex!important}
+    }`;
+  document.head.appendChild(s);
+}
 async function renderCatalogClient(el) {
-  APP._compare = [];   // fresh selection each time the catalogue is opened
+  APP._compare = [];
   APP._catCollection = null;
+  APP._catFacet = catNewFacet();
+  APP._catSort = 'rec';
+  APP._catBase = [];
+  catInjectStyle();
   el.innerHTML = `${pageHeader('Catalogue', 'Browse approved products — with human-verified claims')}
     <div id="cat-collections" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
-    <div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="cat-q" class="input" placeholder="Search products…" ${dataInput('catFilter')} style="flex:1;min-width:180px">
-      <label style="font-size:.85rem;display:flex;gap:6px;align-items:center;white-space:nowrap"><input type="checkbox" id="cat-verified" ${dataChange('catFilter')}> 4SYZ Verified only</label>
-      <select id="cat-attr" class="input" ${dataChange('catFilter')} style="max-width:170px">
-        <option value="">All dietary</option><option value="vegan">Vegan</option><option value="vegetarian">Vegetarian</option>
-        <option value="gluten free">Gluten Free</option><option value="jain">Jain</option>
-      </select>
+    <div id="cat-layout">
+      <aside id="cat-side"></aside>
+      <div>
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:12px">
+          <button id="cat-filterbtn" class="btn btn-secondary btn-sm" style="display:none" ${dataAct('catToggleFilters')}>⚙ Filters</button>
+          <input id="cat-q" class="input" placeholder="Search products…" ${dataInput('catSearch')} style="flex:1;min-width:170px">
+          <select id="cat-sort" class="input" ${dataChange('catSortChange')} style="max-width:190px">
+            <option value="rec">Sort: Recommended</option>
+            <option value="p_asc">Price: Low → High</option>
+            <option value="p_desc">Price: High → Low</option>
+            <option value="name">Name: A → Z</option>
+          </select>
+        </div>
+        <div id="cat-chips" style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:12px"></div>
+        <div id="cat-grid"><div class="loading-state"><div class="spinner"></div></div></div>
+      </div>
     </div>
-    <div id="cat-grid"><div class="loading-state"><div class="spinner"></div></div></div>
-    <div id="cat-compare-bar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:60;display:none;align-items:center;gap:12px;background:var(--navy,#12324f);color:#fff;border-radius:30px;padding:10px 16px;box-shadow:0 6px 22px rgba(0,0,0,.25);font-size:.85rem"></div>`;
-  catFilter();
+    <div id="cat-scrim" ${dataAct('catCloseFilters')}></div>
+    <div id="cat-compare-bar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:130;display:none;align-items:center;gap:12px;background:var(--navy,#12324f);color:#fff;border-radius:30px;padding:10px 16px;box-shadow:0 6px 22px rgba(0,0,0,.25);font-size:.85rem"></div>`;
   catLoadCollections();
+  await catLoadBase();
 }
 // Chip helper: on = active shelf.
 function catShelfChip(label, on, act, ...args) {
@@ -381,39 +432,123 @@ async function catLoadCollections() {
   box.innerHTML = catShelfChip('All products', !APP._catCollection, 'catShowAll')
     + cols.map(c => catShelfChip(`${h(c.name)} <span style="opacity:.7">${c.count}</span>`, APP._catCollection === c.slug, 'catOpenCollection', c.slug, c.name)).join('');
 }
-function catShowAll() { APP._catCollection = null; catFilter(); catLoadCollections(); }
-async function catOpenCollection(slug, name) {
-  APP._catCollection = slug;
-  catLoadCollections();
-  const grid = document.getElementById('cat-grid'); if (!grid) return;
-  grid.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
-  const data = await api('/collections/' + encodeURIComponent(slug));
-  const items = data?.products || [];
-  grid.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <span style="font-weight:700;color:var(--navy)">${h(name)}</span>
-      <span style="font-size:.82rem;color:var(--text-muted)">${items.length} product${items.length !== 1 ? 's' : ''}</span>
-      <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('catShowAll')}>← All products</button>
-    </div>
-    ${items.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px">${items.map(catCard).join('')}</div>`
-      : `<div class="empty-state"><div class="empty-icon">🗂️</div><div class="empty-title">Nothing in this collection yet</div></div>`}`;
-  renderCompareBar();
+function catShowAll() { APP._catCollection = null; catLoadCollections(); catLoadBase(); }
+async function catOpenCollection(slug) { APP._catCollection = slug; catLoadCollections(); catLoadBase(); }
+// Fetch the base set (a collection's products, or the search results) once.
+async function catLoadBase() {
+  const grid = document.getElementById('cat-grid'); if (grid) grid.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  let items = [];
+  if (APP._catCollection) {
+    const data = await api('/collections/' + encodeURIComponent(APP._catCollection));
+    items = data?.products || [];
+  } else {
+    const q = document.getElementById('cat-q')?.value || '';
+    const data = await api('/catalog/products?' + (q ? 'q=' + encodeURIComponent(q) : ''));
+    items = data?.products || [];
+  }
+  APP._catBase = items;
+  catRenderSidebar();
+  catApply();
 }
-async function catFilter() {
-  APP._catCollection = null;   // a manual search/filter exits any active collection
-  const grid = document.getElementById('cat-grid'); if (!grid) return;
-  const qs = new URLSearchParams();
-  const q = document.getElementById('cat-q')?.value || ''; if (q) qs.set('q', q);
-  if (document.getElementById('cat-verified')?.checked) qs.set('verified', '1');
-  const attr = document.getElementById('cat-attr')?.value || ''; if (attr) qs.set('attribute', attr);
-  const data = await api('/catalog/products?' + qs.toString());
-  const items = data?.products || [];
-  const collBox = document.getElementById('cat-collections'); if (collBox && collBox.innerHTML) catLoadCollections();
-  if (!items.length) { grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No products</div><div class="empty-desc">Try clearing filters.</div></div>`; renderCompareBar(); return; }
-  grid.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <span style="font-size:.82rem;color:var(--text-muted)">${items.length} product${items.length !== 1 ? 's' : ''}</span>
-      <span class="u-subtiny" style="margin-left:auto">Tip: tap ⇄ Compare on 2–3 products</span>
+// A product matches the active facets, optionally ignoring one group (for counts).
+function catMatches(p, ignore) {
+  const f = APP._catFacet;
+  if (ignore !== 'ver' && f.ver.size) {
+    const state = p.verified ? 'verified' : (p.screened ? 'ai' : 'none');
+    if (!f.ver.has(state)) return false;
+  }
+  if (ignore !== 'diet' && f.diet.size && ![...f.diet].every(d => (p.attributes || []).includes(d))) return false;
+  if (ignore !== 'avail' && f.avail.size && !f.avail.has(p.availability)) return false;
+  if (ignore !== 'price') { const pr = catPrice(p); if (f.pmin != null && pr < f.pmin) return false; if (f.pmax != null && pr > f.pmax) return false; }
+  return true;
+}
+function catRenderSidebar() {
+  const side = document.getElementById('cat-side'); if (!side) return;
+  const base = APP._catBase || [];
+  const cnt = (group, value) => base.filter(p => catMatches(p, group) && catOptTest(group, value, p)).length;
+  const opt = (group, value, label) => {
+    if (!base.some(p => catOptTest(group, value, p))) return '';   // hide options nothing has
+    const checked = APP._catFacet[group].has(value) ? 'checked' : '';
+    return `<label class="cat-fopt"><input type="checkbox" class="cat-facet" data-group="${group}" value="${h(value)}" ${checked} ${dataChange('catFacetChange')}> ${label} <span class="ct" data-cc="${group}:${h(value)}">${cnt(group, value)}</span></label>`;
+  };
+  const grp = (title, rows) => rows.filter(Boolean).length ? `<h5>${title}</h5>${rows.filter(Boolean).join('')}` : '';
+  side.innerHTML = `
+    <button class="cat-fclose" ${dataAct('catCloseFilters')}>✕ Close filters</button>
+    ${grp('Verification', CAT_VER.map(([v, l]) => opt('ver', v, l)))}
+    ${grp('Dietary &amp; formulation', CAT_DIET.map(([v, l]) => opt('diet', v, l)))}
+    ${grp('Availability', CAT_AVAIL.map(([v, l]) => opt('avail', v, l)))}
+    <h5>Price (₹ / pack)</h5>
+    <div style="display:flex;gap:7px;align-items:center">
+      <input id="cat-pmin" class="input" type="number" min="0" placeholder="min" value="${APP._catFacet.pmin ?? ''}" ${dataInput('catPriceChange')} style="width:100%">
+      <span style="color:var(--text-muted)">–</span>
+      <input id="cat-pmax" class="input" type="number" min="0" placeholder="max" value="${APP._catFacet.pmax ?? ''}" ${dataInput('catPriceChange')} style="width:100%">
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px">${items.map(catCard).join('')}</div>`;
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:14px" ${dataAct('catClearFilters')}>Clear all filters</button>`;
+}
+// Recompute facet counts in place (no rebuild) — used after a price keystroke so
+// the number inputs keep focus.
+function catUpdateCounts() {
+  const base = APP._catBase || [];
+  document.querySelectorAll('#cat-side .ct[data-cc]').forEach(span => {
+    const [group, value] = span.getAttribute('data-cc').split(':');
+    span.textContent = base.filter(p => catMatches(p, group) && catOptTest(group, value, p)).length;
+  });
+}
+function catPriceChange() {
+  const pmin = document.getElementById('cat-pmin')?.value; APP._catFacet.pmin = pmin === '' || pmin == null ? null : Number(pmin);
+  const pmax = document.getElementById('cat-pmax')?.value; APP._catFacet.pmax = pmax === '' || pmax == null ? null : Number(pmax);
+  catUpdateCounts();
+  catApply();
+}
+// Re-read facet state from the DOM, then re-render (called on any facet change).
+function catFacetChange() {
+  const f = catNewFacet();
+  document.querySelectorAll('.cat-facet:checked').forEach(i => f[i.dataset.group].add(i.value));
+  const pmin = document.getElementById('cat-pmin')?.value; f.pmin = pmin === '' || pmin == null ? null : Number(pmin);
+  const pmax = document.getElementById('cat-pmax')?.value; f.pmax = pmax === '' || pmax == null ? null : Number(pmax);
+  APP._catFacet = f;
+  catRenderSidebar();
+  catApply();
+}
+function catSortChange(el) { APP._catSort = (el && el.value) || document.getElementById('cat-sort')?.value || 'rec'; catApply(); }
+function catSearch() { APP._catCollection = null; catLoadCollections(); catLoadBase(); }
+function catClearFilters() {
+  APP._catFacet = catNewFacet();
+  catRenderSidebar(); catApply();
+}
+function catRemoveChip(group, value) {
+  const f = APP._catFacet;
+  if (group === 'price') { f.pmin = f.pmax = null; }
+  else f[group].delete(value);
+  catRenderSidebar(); catApply();
+}
+function catToggleFilters() { document.getElementById('cat-side')?.classList.add('open'); document.getElementById('cat-scrim')?.classList.add('open'); }
+function catCloseFilters() { document.getElementById('cat-side')?.classList.remove('open'); document.getElementById('cat-scrim')?.classList.remove('open'); }
+// Apply facets + sort to the base set and render grid + active-filter chips.
+function catApply() {
+  const grid = document.getElementById('cat-grid'); if (!grid) return;
+  const f = APP._catFacet;
+  let list = (APP._catBase || []).filter(p => catMatches(p));
+  const s = APP._catSort;
+  if (s === 'p_asc') list = list.slice().sort((a, b) => catPrice(a) - catPrice(b));
+  else if (s === 'p_desc') list = list.slice().sort((a, b) => catPrice(b) - catPrice(a));
+  else if (s === 'name') list = list.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  // active-filter chips
+  const chips = [];
+  const verL = { verified: '4SYZ Verified', ai: 'AI Screened', none: 'Not verified' };
+  f.ver.forEach(v => chips.push(['ver', v, verL[v]]));
+  f.diet.forEach(v => chips.push(['diet', v, (CAT_DIET.find(d => d[0] === v) || [v, v])[1]]));
+  f.avail.forEach(v => chips.push(['avail', v, (CAT_AVAIL.find(a => a[0] === v) || [v, v])[1]]));
+  if (f.pmin != null || f.pmax != null) chips.push(['price', '', `₹${f.pmin ?? 0}–${f.pmax ?? '∞'}`]);
+  const chipBox = document.getElementById('cat-chips');
+  if (chipBox) chipBox.innerHTML = chips.map(([g, v, l]) =>
+    `<button ${dataAct('catRemoveChip', g, v)} style="background:var(--verify-bg,#dff3ef);color:var(--success,#0d9488);border:0;border-radius:999px;padding:5px 11px;font-size:.74rem;font-weight:800;cursor:pointer">${h(l)} ✕</button>`).join('')
+    + `<span style="margin-left:auto;color:var(--text-muted);font-size:.82rem;font-weight:700">${list.length} product${list.length !== 1 ? 's' : ''}</span>`;
+
+  grid.innerHTML = list.length
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px">${list.map(catCard).join('')}</div>`
+    : `<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No products match</div><div class="empty-desc">Try clearing some filters.</div></div>`;
   renderCompareBar();
 }
 
@@ -436,7 +571,7 @@ function catToggleCompare(sku, el) {
   }
   renderCompareBar();
 }
-function catClearCompare() { APP._compare = []; catFilter(); }
+function catClearCompare() { APP._compare = []; if (typeof catApply === 'function') catApply(); renderCompareBar(); }
 function renderCompareBar() {
   const bar = document.getElementById('cat-compare-bar'); if (!bar) return;
   const n = (APP._compare || []).length;
@@ -560,7 +695,7 @@ function catCard(p) {
       <div style="font-weight:700;font-size:.9rem;color:var(--navy);line-height:1.25">${h(p.name)}</div>
       ${p.pack_size ? `<div style="font-size:.75rem;color:var(--text-muted)">${h(p.pack_size)}</div>` : ''}
       <div style="display:flex;gap:4px;flex-wrap:wrap">
-        ${p.verified ? PI_BADGE.verified : ''}
+        ${p.verified ? PI_BADGE.verified : (p.screened ? PI_BADGE.ai_screened : '')}
         ${(p.attributes || []).slice(0, 2).map(a => `<span class="badge" style="background:#eef1f5;color:#66738a">${h(a)}</span>`).join('')}
       </div>
       <div style="display:flex;align-items:baseline;gap:7px;margin-top:2px">

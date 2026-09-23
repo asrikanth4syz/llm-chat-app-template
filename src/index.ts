@@ -671,13 +671,21 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
   // tables aren't present yet on a given DB, degrade to "no verified data".
   let vattrs: Record<string, string[]> = {};
   const verifiedSet = new Set<string>();
+  const screenedSet = new Set<string>();
   try {
     vattrs = await piVerifiedAttrs(env, skus);
     if (skus.length) {
+      const inClause = skus.map(() => "?").join(",");
       const { results: vClaims } = await env.DB.prepare(
-        `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${skus.map(() => "?").join(",")})`
+        `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${inClause})`
       ).bind(...skus).all() as { results: { sku: string }[] };
       for (const r of vClaims) verifiedSet.add(r.sku);
+      // "AI screened" = has a screened/extracted claim not yet verified — powers
+      // the catalogue's verification facet (Verified / AI Screened / Not verified).
+      const { results: sClaims } = await env.DB.prepare(
+        `SELECT DISTINCT sku FROM claims WHERE status IN ('ai_screened','ai_extracted','evidence_requested') AND sku IN (${inClause})`
+      ).bind(...skus).all() as { results: { sku: string }[] };
+      for (const r of sClaims) screenedSet.add(r.sku);
     }
   } catch { /* PI overlay tables not present yet — show products without badges */ }
 
@@ -691,7 +699,7 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
       brand: r.brand_name || r.brand || null, brand_id: r.brand_id || null, brand_type: r.brand_type || null,
       mrp: Number(r.mrp) || 0, gst_rate: Number(r.gst_rate) || 0, pack_size: r.pack_size || null, moq: r.moq || null,
       emoji: r.emoji || "📦", stock, availability,
-      verified: verifiedSet.has(sku), attributes: vattrs[sku] || [],
+      verified: verifiedSet.has(sku), screened: !verifiedSet.has(sku) && screenedSet.has(sku), attributes: vattrs[sku] || [],
     };
     if (isClient) { p.client_price = priceMap[sku] != null ? Number(priceMap[sku]) : list; p.list_price = list; }
     else { p.list_price = list; p.cost_excl_gst = Number(r.cost_excl_gst) || 0; }
