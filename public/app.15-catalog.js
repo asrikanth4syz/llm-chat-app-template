@@ -334,7 +334,7 @@ function piRuleSummary(rule) {
 async function loadPICollections(body) {
   body.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
   const data = await api('/collections'); if (!data) return;
-  const cols = data.collections || [];
+  APP._piCollections = data.collections || [];
   const dietSel = PI_DIET_OPTS.map(o => `<option value="${o}">${o ? o.replace(/\b\w/g, m => m.toUpperCase()) : 'Any dietary'}</option>`).join('');
   body.innerHTML = `
     <div class="card" style="padding:15px 17px;margin-bottom:14px">
@@ -350,9 +350,36 @@ async function loadPICollections(body) {
       <label style="display:flex;gap:7px;align-items:center;font-size:.85rem;margin-top:6px"><input type="checkbox" id="col-published" checked> Published (visible to clients)</label>
       <div style="margin-top:11px"><button class="btn btn-primary" ${dataAct('piSaveCollection')}>Create collection</button></div>
     </div>
-    <div style="font-weight:700;color:var(--navy);margin-bottom:8px">Existing collections</div>
-    ${cols.length ? `<div style="display:flex;flex-direction:column;gap:9px">${cols.map(piCollectionRow).join('')}</div>`
-      : `<div class="empty-state"><div class="empty-icon">🗂️</div><div class="empty-title">No collections yet</div><div class="empty-desc">Create one above.</div></div>`}`;
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-weight:700;color:var(--navy)">Existing collections</div>
+      <div style="margin-left:auto;flex:0 1 260px;display:flex;align-items:center;gap:8px;border:1.5px solid var(--border);border-radius:10px;padding:7px 11px;background:var(--surface)">
+        <span style="opacity:.6">🔎</span>
+        <input id="pi-col-q" placeholder="Search collections…" ${dataInput('piCollectionSearch')} autocomplete="off" style="border:0;outline:0;background:transparent;flex:1;font-size:.86rem;color:var(--ink)">
+        <button id="pi-col-clear" ${dataAct('piCollectionClearSearch')} title="Clear" style="display:none;border:0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:.95rem;padding:0">✕</button>
+      </div>
+    </div>
+    <div id="pi-col-list"></div>`;
+  piRenderCollectionList('');
+}
+function piRenderCollectionList(q) {
+  const wrap = document.getElementById('pi-col-list'); if (!wrap) return;
+  const all = APP._piCollections || [];
+  const term = (q || '').trim().toLowerCase();
+  const cols = term ? all.filter(c => String(c.name || '').toLowerCase().includes(term)) : all;
+  wrap.innerHTML = cols.length
+    ? `<div style="display:flex;flex-direction:column;gap:9px">${cols.map(piCollectionRow).join('')}</div>`
+    : (all.length
+      ? `<div class="u-subtiny" style="padding:12px 0">No collection matches “${h(q)}”.</div>`
+      : `<div class="empty-state"><div class="empty-icon">🗂️</div><div class="empty-title">No collections yet</div><div class="empty-desc">Create one above.</div></div>`);
+}
+function piCollectionSearch() {
+  const q = document.getElementById('pi-col-q')?.value || '';
+  const x = document.getElementById('pi-col-clear'); if (x) x.style.display = q ? '' : 'none';
+  piRenderCollectionList(q);
+}
+function piCollectionClearSearch() {
+  const q = document.getElementById('pi-col-q'); if (q) { q.value = ''; q.focus(); }
+  piCollectionSearch();
 }
 function piCollectionRow(c) {
   return `<div class="card" style="padding:12px 15px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -439,7 +466,11 @@ async function renderCatalogClient(el) {
       <div>
         <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:12px">
           <button id="cat-filterbtn" class="btn btn-secondary btn-sm" style="display:none" ${dataAct('catToggleFilters')}>⚙ Filters</button>
-          <input id="cat-q" class="input" placeholder="Search products…" ${dataInput('catSearch')} style="flex:1;min-width:170px">
+          <div style="flex:1;min-width:170px;display:flex;align-items:center;gap:8px;border:1.5px solid var(--border);border-radius:10px;padding:8px 12px;background:var(--surface)">
+            <span style="opacity:.6">🔎</span>
+            <input id="cat-q" placeholder="Search products…" ${dataInput('catSearch')} autocomplete="off" style="border:0;outline:0;background:transparent;flex:1;font-size:.9rem;color:var(--ink)">
+            <button id="cat-q-clear" ${dataAct('catClearSearch')} title="Clear search" style="display:none;border:0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1;padding:0">✕</button>
+          </div>
           <select id="cat-sort" class="input" ${dataChange('catSortChange')} style="max-width:190px">
             <option value="rec">Sort: Recommended</option>
             <option value="p_asc">Price: Low → High</option>
@@ -547,7 +578,15 @@ function catFacetChange() {
   catApply();
 }
 function catSortChange(el) { APP._catSort = (el && el.value) || document.getElementById('cat-sort')?.value || 'rec'; catApply(); }
-function catSearch() { APP._catCollection = null; catLoadCollections(); catLoadBase(); }
+function catSearch() {
+  const q = document.getElementById('cat-q')?.value || '';
+  const x = document.getElementById('cat-q-clear'); if (x) x.style.display = q ? '' : 'none';
+  APP._catCollection = null; catLoadCollections(); catLoadBase();
+}
+function catClearSearch() {
+  const q = document.getElementById('cat-q'); if (q) { q.value = ''; q.focus(); }
+  catSearch();
+}
 function catClearFilters() {
   APP._catFacet = catNewFacet();
   catRenderSidebar(); catApply();

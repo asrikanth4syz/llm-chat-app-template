@@ -1070,9 +1070,13 @@ async function extractProductDoc(env: Env, input: { text?: string; imageBase64?:
     // LLaVA (Apache-2.0) needs no per-account license agreement, unlike the
     // Llama 3.2 vision model (which returns error 5016 until 'agree' is submitted
     // and carries an EU-domicile restriction we won't accept on the user's behalf).
+    // IMPORTANT: do NOT list example claim words in the prompt — the vision model
+    // will echo them into the transcription even when they aren't on the pack,
+    // producing false claims (e.g. a phantom "Vegan" that then conflicts with an
+    // ingredient). Ask only for a verbatim transcription of what is visible.
     const out = await ai.run("@cf/llava-hf/llava-1.5-7b-hf", {
       image: [...bytes],
-      prompt: "This is a photo of a packaged food label. Transcribe ALL visible text verbatim, especially the full ingredients list (start that line with 'Ingredients:') and any dietary or marketing claims (e.g. Vegan, Vegetarian, Gluten Free, No Added Sugar, High Protein). Output plain text only.",
+      prompt: "Transcribe only the text that is actually visible on this food-package label, exactly as printed. Put the ingredient list on one line beginning with 'Ingredients:'. Do not add, guess, or infer any words that are not clearly printed. Output plain text only.",
       max_tokens: 768,
     });
     const ocrText = String(out.response || out.text || out.description || "").trim();
