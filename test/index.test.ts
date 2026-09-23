@@ -3042,6 +3042,36 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     expect(forbidden.status).toBe(403);
   });
 
+  it("transcribeOnly returns a preview without persisting anything", async () => {
+    const created = await post("/api/inventory", { name: "PI Transcribe Test", category: "Snacks", unit_price: 50, stock: 10 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    const res = await post(`/api/catalog/products/${sku}/ai/extract`, { text: "Vegan. Ingredients: Oats, Milk solids.", transcribeOnly: true }, adminToken);
+    const body = await res.json() as { transcribed: boolean; claims: unknown[] };
+    expect(body.transcribed).toBe(true);
+    expect(body.claims.length).toBeGreaterThan(0);   // preview shows the screened claim
+
+    // ...but nothing was saved: the product has no claims yet.
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { claims: unknown[]; ingredients: unknown[] };
+    expect(det.claims.length).toBe(0);
+    expect(det.ingredients.length).toBe(0);
+  });
+
+  it("re-running extract REPLACES prior AI claims instead of accumulating", async () => {
+    const created = await post("/api/inventory", { name: "PI Rerun Test", category: "Snacks", unit_price: 50, stock: 10 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    await post(`/api/catalog/products/${sku}/ai/extract`, { text: "Vegan. Ingredients: Oats." }, adminToken);
+    let det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { claims: { label: string }[] };
+    expect(det.claims.map(c => c.label)).toContain("Vegan");
+
+    // Re-scan with different content — the stale "Vegan" claim must be gone.
+    await post(`/api/catalog/products/${sku}/ai/extract`, { text: "High Protein. Ingredients: Almonds." }, adminToken);
+    det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { claims: { label: string }[] };
+    expect(det.claims.map(c => c.label)).toContain("High Protein");
+    expect(det.claims.map(c => c.label)).not.toContain("Vegan");
+  });
+
   it("image OCR degrades gracefully when no AI binding is present", async () => {
     const created = await post("/api/inventory", { name: "PI OCR Test", category: "Snacks", unit_price: 20, stock: 5 }, adminToken);
     const sku = (await created.json() as { sku: string }).sku;

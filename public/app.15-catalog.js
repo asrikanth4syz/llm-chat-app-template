@@ -228,7 +228,8 @@ function piEnrichPick(sku, name) {
           <button class="linklike u-subtiny" style="background:none;border:none;color:var(--success,#0d9488);cursor:pointer;padding:0" ${dataAct('catOpenProduct', sku)}>👁 Preview</button>
         </div>
       </div>
-      <textarea id="pi-label" class="input" rows="5" style="margin-top:6px" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"></textarea>
+      <textarea id="pi-label" class="input" rows="5" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"
+        style="margin-top:6px;width:100%;min-height:120px;resize:vertical;border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:.88rem;line-height:1.5;color:var(--ink);background:var(--surface)"></textarea>
       <div class="u-subtiny" style="margin-top:5px">Tip: paste the whole ingredients line — brackets like “(INS 322)” are cleaned automatically. Claims such as “Vegan” or “No added sugar” are detected wherever they appear.</div>
       <div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>
@@ -251,12 +252,14 @@ async function piScanImage(sku, el) {
   try { dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); }); }
   catch { if (out) out.innerHTML = ''; showToast('Could not read that image', 'error'); return; }
   const imageBase64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
-  const res = await api(`/catalog/products/${sku}/ai/extract`, { method: 'POST', body: JSON.stringify({ imageBase64 }) });
+  // transcribeOnly: OCR fills the box for review; nothing is screened/saved until
+  // the user runs the text extract — so a mis-read word can't create a claim.
+  const res = await api(`/catalog/products/${sku}/ai/extract`, { method: 'POST', body: JSON.stringify({ imageBase64, transcribeOnly: true }) });
   el.value = '';   // allow re-selecting the same file
   if (!res) { if (out) out.innerHTML = ''; return; }
-  // Show the transcription in the textarea so the user can review/correct it.
+  // Put the transcription in the textarea so the user can review/correct it.
   const ta = document.getElementById('pi-label');
-  if (ta && res.ocrText) ta.value = res.ocrText;
+  if (ta && res.ocrText) { ta.value = res.ocrText; ta.focus(); }
   piShowExtract(sku, res, true);
 }
 function piLoadExample() {
@@ -277,7 +280,10 @@ function piShowExtract(sku, res, fromImage) {
   const claims = res.claims || [];
   const clr = c => c.conflict ? ['#fbe4e2', '#dc2626', 'Conflict'] : (c.confidence >= 0.75 ? ['#fcecd6', '#d97706', 'Review'] : ['#fcecd6', '#d97706', 'Needs review']);
   const nothing = !ings.length && !claims.length;
-  const header = nothing ? '⚠ Nothing detected' : (fromImage ? '✓ Scanned from photo — here’s what AI read' : '✓ Step 3 — Here’s what AI read');
+  const preview = res.transcribed === true;   // image scan: nothing saved yet
+  const header = nothing ? '⚠ Nothing detected'
+    : (preview ? '✓ Scanned — review, then screen'
+      : (fromImage ? '✓ Scanned from photo — here’s what AI read' : '✓ Step 3 — Here’s what AI read'));
 
   out.innerHTML = `
     <div style="border:1px solid var(--border,#e5e8ee);border-radius:13px;overflow:hidden">
@@ -298,24 +304,32 @@ function piShowExtract(sku, res, fromImage) {
                 <span class="badge" style="background:${bg};color:${fg}">${lbl}</span>
                 <span class="u-subtiny">${h(c.result)}</span></div>`; }).join('')}</div>` : '<div class="u-subtiny" style="margin-top:4px">No recognised claims in this text.</div>'}
           </div>`}
-        ${nothing ? '' : (claims.length
-          ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:9px 12px;font-size:.8rem;color:#92600e;display:flex;gap:8px">
-              <span>🔒</span><span>The ${claims.length} claim${claims.length !== 1 ? 's are' : ' is'} <b>AI-screened</b>, not published — sent to the verification queue. A reviewer must approve each with evidence before clients can see it.</span>
+        ${nothing ? '' : (preview
+          ? `<div style="background:#eef7f5;border:1px solid #cde9e3;border-radius:9px;padding:9px 12px;font-size:.8rem;color:var(--navy);display:flex;gap:8px">
+              <span>📝</span><span><b>Nothing saved yet.</b> This is a transcription of the photo — check it in the box above (delete anything the scan mis-read${claims.length ? `, e.g. a wrong claim like <b>${h(claims[0].label)}</b>` : ''}), then click <b>Run AI extract &amp; screen</b> to save.</span>
             </div>`
-          : `<div style="background:var(--surface-2,#f0f2f5);border-radius:9px;padding:9px 12px;font-size:.8rem;color:var(--navy);display:flex;gap:8px">
-              <span>✓</span><span>Ingredients saved. <b>No marketing claims</b> (e.g. “Vegan”, “No added sugar”, “High protein”) were found to screen — add any the pack makes to the text above and re-run.</span>
-            </div>`)}
+          : (claims.length
+            ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:9px 12px;font-size:.8rem;color:#92600e;display:flex;gap:8px">
+                <span>🔒</span><span>The ${claims.length} claim${claims.length !== 1 ? 's are' : ' is'} <b>AI-screened</b>, not published — sent to the verification queue. A reviewer must approve each with evidence before clients can see it.</span>
+              </div>`
+            : `<div style="background:var(--surface-2,#f0f2f5);border-radius:9px;padding:9px 12px;font-size:.8rem;color:var(--navy);display:flex;gap:8px">
+                <span>✓</span><span>Ingredients saved. <b>No marketing claims</b> (e.g. “Vegan”, “No added sugar”, “High protein”) were found to screen — add any the pack makes to the text above and re-run.</span>
+              </div>`))}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${claims.length ? `<button class="btn btn-primary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Review in verification queue →</button>` : ''}
+          ${preview
+            ? `<button class="btn btn-primary btn-sm" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>`
+            : (claims.length ? `<button class="btn btn-primary btn-sm" ${dataActEl('piSwitchTab', 'queue')}>Review in verification queue →</button>` : '')}
           <button class="btn btn-secondary btn-sm" ${dataAct('catOpenProduct', sku)}>👁 Preview client view</button>
         </div>
       </div>
     </div>`;
   const toast = nothing
     ? ['Nothing detected — check the pasted text', 'info']
-    : (claims.length
-      ? [`Screened ${claims.length} claim${claims.length !== 1 ? 's' : ''} — sent to verification`, 'success']
-      : [`Captured ${ings.length} ingredient${ings.length !== 1 ? 's' : ''} — no claims to screen`, 'success']);
+    : (preview
+      ? ['Scanned — review the text, then run extract to save', 'info']
+      : (claims.length
+        ? [`Screened ${claims.length} claim${claims.length !== 1 ? 's' : ''} — sent to verification`, 'success']
+        : [`Captured ${ings.length} ingredient${ings.length !== 1 ? 's' : ''} — no claims to screen`, 'success']));
   showToast(toast[0], toast[1]);
 }
 

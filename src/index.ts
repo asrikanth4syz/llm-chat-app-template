@@ -1125,28 +1125,47 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
   if (!await env.DB.prepare("SELECT sku FROM inventory WHERE sku=?").bind(sku).first()) return json({ error: "Unknown SKU" }, 404);
   let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
 
+  const transcribeOnly = b.transcribeOnly === true;
   try {
   const extracted = await extractProductDoc(env, { text: b.text as string, imageBase64: b.imageBase64 as string });
+
+  // Screen each detected claim (advisory only).
+  const out: { label: string; category: string; status: string; result: string; conflict: boolean; confidence: number }[] = [];
+  for (const c of extracted.claims) {
+    const scr = await screenClaim(env, c.category, c.label, extracted.ingredients);
+    out.push({ label: c.label, category: c.category, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
+  }
+
+  // Transcribe-only (image scan): return what was read WITHOUT persisting, so the
+  // user can review/correct the OCR text — and drop anything the vision model may
+  // have mis-read (e.g. a phantom "Vegan") — before it is screened and queued.
+  if (transcribeOnly) {
+    return json({ ok: true, transcribed: true, ingredients: extracted.ingredients.length, ingredientList: extracted.ingredients, claims: out, ocrText: extracted.ocrText });
+  }
+
+  // Persist — REPLACE prior AI-derived data for this SKU so a re-run doesn't
+  // accumulate stale/phantom claims. Human-verified/rejected claims are kept.
+  try { await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run(); } catch { /* legacy table */ }
+  try { await env.DB.prepare("DELETE FROM verification_tasks WHERE sku=? AND status='open'").bind(sku).run(); } catch { /* legacy */ }
+  try { await env.DB.prepare("DELETE FROM claims WHERE sku=? AND status IN ('ai_extracted','ai_screened')").bind(sku).run(); } catch { /* legacy */ }
+  try { await env.DB.prepare("DELETE FROM product_attributes WHERE sku=? AND source='ai'").bind(sku).run(); } catch { /* legacy */ }
+
   if (extracted.ingredients.length) {
-    try { await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run(); } catch { /* legacy table */ }
     let pos = 0;
     for (const raw of extracted.ingredients) {
       const dict = await piMatchIngredient(env, raw);
       await piInsert(env, "product_ingredients", { id: `ing${uid().slice(0, 12)}`, sku, position: pos++, raw_text: raw, normalized_id: dict?.id ?? null, allergen: dict?.allergen ?? 0 });
     }
   }
-  const out: { label: string; status: string; result: string; conflict: boolean; confidence: number }[] = [];
-  for (const c of extracted.claims) {
-    const scr = await screenClaim(env, c.category, c.label, extracted.ingredients);
+  for (const o of out) {
     const claimId = `clm${uid().slice(0, 12)}`;
-    await piInsert(env, "claims", { id: claimId, sku, category: c.category, label: c.label, status: "ai_screened", ai_confidence: scr.confidence, screened_result: scr.result });
-    if (c.category === "dietary" || c.category === "ingredient") {
-      await piInsert(env, "product_attributes", { id: `att${uid().slice(0, 12)}`, sku, attribute: c.label.toLowerCase(), value: "true", status: "ai_screened", source: "ai" });
+    await piInsert(env, "claims", { id: claimId, sku, category: o.category, label: o.label, status: "ai_screened", ai_confidence: o.confidence, screened_result: o.result });
+    if (o.category === "dietary" || o.category === "ingredient") {
+      await piInsert(env, "product_attributes", { id: `att${uid().slice(0, 12)}`, sku, attribute: o.label.toLowerCase(), value: "true", status: "ai_screened", source: "ai" });
     }
     // Every screened claim needs a human sign-off before it can be published,
     // so always open a verification task (conflicts/low-confidence get priority).
-    await piInsert(env, "verification_tasks", { id: `vt${uid().slice(0, 12)}`, task_type: "claim", sku, claim_id: claimId, priority: (scr.conflict || scr.confidence < 0.75) ? "high" : "normal", status: "open" });
-    out.push({ label: c.label, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
+    await piInsert(env, "verification_tasks", { id: `vt${uid().slice(0, 12)}`, task_type: "claim", sku, claim_id: claimId, priority: (o.conflict || o.confidence < 0.75) ? "high" : "normal", status: "open" });
   }
   await audit(env, user, "ai_extract", "product", sku);
   return json({ ok: true, ingredients: extracted.ingredients.length, ingredientList: extracted.ingredients, claims: out, ocrText: extracted.ocrText });
