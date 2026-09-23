@@ -398,8 +398,19 @@ async function piVerifiedAttrs(env: Env, skus: string[]): Promise<Record<string,
 // exist yet when a PI request lands. This creates them idempotently, once per isolate,
 // BEFORE the handler queries them — so a PI endpoint can never 500 on a missing table.
 let _piSchemaReady = false;
+// Bump when the PI DDL/seed below changes, so a fresh deploy re-applies it once.
+const PI_SCHEMA_VERSION = "2026-09-23a";
 async function ensurePiSchema(env: Env): Promise<void> {
   if (_piSchemaReady) return;
+  // Fast path: the heavy CREATE/ALTER/seed work below is ~70 D1 round-trips and
+  // would otherwise run on every cold isolate, making the first PI request slow.
+  // Once applied, stamp the version in pi_meta; subsequent cold isolates then do
+  // just two cheap queries and return.
+  try {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS pi_meta (key TEXT PRIMARY KEY, value TEXT)").run();
+    const row = await env.DB.prepare("SELECT value FROM pi_meta WHERE key='schema_version'").first() as { value?: string } | null;
+    if (row && row.value === PI_SCHEMA_VERSION) { _piSchemaReady = true; return; }
+  } catch { /* proceed to full ensure */ }
   const stmts = [
     `CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT, logo_doc_id TEXT, story TEXT, origin TEXT, website TEXT, brand_type TEXT, status TEXT NOT NULL DEFAULT 'draft', sla_json TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) )`,
     `CREATE TABLE IF NOT EXISTS product_content ( sku TEXT PRIMARY KEY, description TEXT, usage TEXT, images_json TEXT DEFAULT '[]', updated_at TEXT DEFAULT (datetime('now')) )`,
@@ -536,6 +547,11 @@ async function ensurePiSchema(env: Env): Promise<void> {
         .bind(`ing:${canonical}`, canonical, JSON.stringify(syn), 1, animal, category).run();
     }
   } catch { /* non-fatal */ }
+  // Stamp the applied version so cold isolates can take the fast path next time.
+  try {
+    await env.DB.prepare("INSERT INTO pi_meta (key,value) VALUES ('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(PI_SCHEMA_VERSION).run();
+  } catch { /* non-fatal — just means the next cold isolate re-applies */ }
   _piSchemaReady = true;
 }
 
@@ -1043,10 +1059,13 @@ async function extractProductDoc(env: Env, input: { text?: string; imageBase64?:
     let bytes: Uint8Array;
     try { bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
     catch { throw new Error("Could not read the image — try a clearer photo or paste the text."); }
-    const out = await ai.run("@cf/meta/llama-3.2-11b-vision-instruct", {
+    // LLaVA (Apache-2.0) needs no per-account license agreement, unlike the
+    // Llama 3.2 vision model (which returns error 5016 until 'agree' is submitted
+    // and carries an EU-domicile restriction we won't accept on the user's behalf).
+    const out = await ai.run("@cf/llava-hf/llava-1.5-7b-hf", {
       image: [...bytes],
-      prompt: "This is a photo of a packaged food label. Transcribe ALL visible text verbatim, especially the full ingredients list (keep it on one line starting with 'Ingredients:') and any dietary or marketing claims (e.g. Vegan, Vegetarian, Gluten Free, No Added Sugar, High Protein). Output plain text only.",
-      max_tokens: 800,
+      prompt: "This is a photo of a packaged food label. Transcribe ALL visible text verbatim, especially the full ingredients list (start that line with 'Ingredients:') and any dietary or marketing claims (e.g. Vegan, Vegetarian, Gluten Free, No Added Sugar, High Protein). Output plain text only.",
+      max_tokens: 768,
     });
     const ocrText = String(out.response || out.text || out.description || "").trim();
     return { ...parseLabelText(ocrText), ocrText };
@@ -1112,9 +1131,9 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
     if (c.category === "dietary" || c.category === "ingredient") {
       await piInsert(env, "product_attributes", { id: `att${uid().slice(0, 12)}`, sku, attribute: c.label.toLowerCase(), value: "true", status: "ai_screened", source: "ai" });
     }
-    if (scr.conflict || scr.confidence < 0.75) {
-      await piInsert(env, "verification_tasks", { id: `vt${uid().slice(0, 12)}`, task_type: "claim", sku, claim_id: claimId, priority: scr.conflict ? "high" : "normal", status: "open" });
-    }
+    // Every screened claim needs a human sign-off before it can be published,
+    // so always open a verification task (conflicts/low-confidence get priority).
+    await piInsert(env, "verification_tasks", { id: `vt${uid().slice(0, 12)}`, task_type: "claim", sku, claim_id: claimId, priority: (scr.conflict || scr.confidence < 0.75) ? "high" : "normal", status: "open" });
     out.push({ label: c.label, status: "ai_screened", result: scr.result, conflict: scr.conflict, confidence: scr.confidence });
   }
   await audit(env, user, "ai_extract", "product", sku);
