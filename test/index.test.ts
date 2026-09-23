@@ -396,6 +396,13 @@ describe("Vendors", () => {
     expect(ok(res.status)).toBe(true);
   });
 
+  it("GET /api/vendors/paged — q searches the directory and returns the match", async () => {
+    await post("/api/vendors", { name: "Zephyr Foods Search Co", category: "Snacks", contact_email: "z@search.test" }, adminToken);
+    const data = await (await get(`/api/vendors/paged?q=${encodeURIComponent("Zephyr Foods Search")}`, adminToken)).json() as { rows: { name: string }[]; total: number };
+    expect(data.total).toBeGreaterThanOrEqual(1);
+    expect(data.rows.some(r => r.name === "Zephyr Foods Search Co")).toBe(true);
+  });
+
   it("GET /api/vendors — enriches each vendor with PO aggregates (spend, po_count, delivered_count, last_order)", async () => {
     const vdb = env.DB as D1Database;
     await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,active) VALUES ('VAG-1','Aggregate Vendor','Beverages',1)").run();

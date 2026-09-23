@@ -4753,13 +4753,24 @@ async function handleListVendorsPaged(request: Request, env: Env): Promise<Respo
   if (cat) { where.push("LOWER(COALESCE(e.category,'')) LIKE ?"); binds.push(`%${cat}%`); }
   if (loc) { where.push("LOWER(COALESCE(e.location,'')) LIKE ?"); binds.push(`%${loc}%`); }
   if (q) {
+    // Only search columns that ACTUALLY exist — a legacy vendors table may lack
+    // some (notes/payment_terms/address/contact_*), and referencing a missing
+    // column would 500 the search while the unfiltered list still works.
+    const vcols = await piTableCols(env, "vendors");
     const cols = ["name","vendor_code","category","location","address","contact_email",
-      "contact_phone","gstin","pan","payment_terms","notes"];
-    const ors = cols.map(c => `LOWER(COALESCE(e.${c},'')) LIKE ?`);
-    ors.push("EXISTS (SELECT 1 FROM vendor_products vp WHERE vp.vendor_id=e.id AND (LOWER(COALESCE(vp.name,'')) LIKE ? OR LOWER(COALESCE(vp.sku,'')) LIKE ?))");
-    where.push(`(${ors.join(" OR ")})`);
+      "contact_phone","gstin","pan","payment_terms","notes"].filter(c => !vcols.size || vcols.has(c));
     const like = `%${q}%`;
-    for (let i = 0; i < cols.length + 2; i++) binds.push(like);
+    const ors = cols.map(c => `LOWER(COALESCE(e.${c},'')) LIKE ?`);
+    for (let i = 0; i < cols.length; i++) binds.push(like);
+    // Include the vendor's catalogue (names/SKUs) only if that table + columns exist.
+    const vp = await piTableCols(env, "vendor_products");
+    if (vp.has("vendor_id") && (vp.has("name") || vp.has("sku"))) {
+      const sub: string[] = [];
+      if (vp.has("name")) { sub.push("LOWER(COALESCE(vp.name,'')) LIKE ?"); binds.push(like); }
+      if (vp.has("sku"))  { sub.push("LOWER(COALESCE(vp.sku,'')) LIKE ?");  binds.push(like); }
+      ors.push(`EXISTS (SELECT 1 FROM vendor_products vp WHERE vp.vendor_id=e.id AND (${sub.join(" OR ")}))`);
+    }
+    if (ors.length) where.push(`(${ors.join(" OR ")})`);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 

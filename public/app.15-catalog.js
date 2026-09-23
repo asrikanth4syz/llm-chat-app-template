@@ -154,9 +154,9 @@ async function piRenderEnrich(body) {
       <div><div style="font-weight:700;font-size:.82rem;color:var(--navy)">${t}</div><div class="u-subtiny">${d}</div></div>
     </div>`;
   body.innerHTML = `
-    <div class="card" style="padding:14px 16px;margin-bottom:14px;background:linear-gradient(180deg,#f7fafc,#fff)">
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;background:linear-gradient(180deg,var(--surface-2,#f7fafc),var(--surface,#fff))">
       <div style="font-weight:700;color:var(--navy);margin-bottom:10px;font-size:.9rem">How enrichment works</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px" id="pi-steps">
         ${step(1, 'Pick a product', 'Search the master catalogue')}
         ${step(2, 'Paste the label', 'Ingredients & claims — or scan an image')}
         ${step(3, 'AI screens it', 'Advisory only — never auto-published')}
@@ -164,9 +164,13 @@ async function piRenderEnrich(body) {
       </div>
     </div>
     <div class="card" style="padding:14px 16px;margin-bottom:14px">
-      <label class="u-label">Step 1 — Find a product</label>
-      <input id="pi-sku-q" class="input" placeholder="Search by name or SKU…" ${dataInput('piEnrichSearch')}>
-      <div id="pi-sku-results" style="margin-top:8px;display:flex;flex-direction:column;gap:5px"></div>
+      <label class="u-label" style="display:block;margin-bottom:6px">Step 1 — Find a product</label>
+      <div style="display:flex;align-items:center;gap:8px;border:1.5px solid var(--border);border-radius:10px;padding:9px 12px;background:var(--surface)">
+        <span style="opacity:.6">🔎</span>
+        <input id="pi-sku-q" placeholder="Search by product name or SKU…" ${dataInput('piEnrichSearch')} autocomplete="off"
+          style="border:0;outline:0;background:transparent;flex:1;font-size:.9rem;color:var(--ink)">
+      </div>
+      <div id="pi-sku-results" style="margin-top:9px;display:flex;flex-direction:column;gap:6px"></div>
     </div>
     <div id="pi-enrich-panel"></div>`;
 }
@@ -184,27 +188,47 @@ async function piEnrichSearch() {
     const inv = await api('/inventory?q=' + encodeURIComponent(q));
     if (Array.isArray(inv)) items = inv;
   }
-  items = items.slice(0, 10);
+  items = items.slice(0, 12);
   if (!items.length) { box.innerHTML = `<div class="u-subtiny">No product matches “${h(q)}”.</div>`; return; }
-  box.innerHTML = items.map(p => `<button class="btn btn-secondary btn-sm" style="justify-content:flex-start;text-align:left" ${dataAct('piEnrichPick', p.sku, p.name)}>
-      <b>${h(p.name || p.sku)}</b> <span class="u-subtiny" style="font-family:monospace">${h(p.sku)}</span></button>`).join('');
+  const sel = APP._piSku;
+  box.innerHTML = items.map(p => {
+    const on = String(p.sku) === String(sel);
+    return `<button ${dataAct('piEnrichPick', p.sku, p.name)}
+      style="display:flex;align-items:center;gap:10px;text-align:left;width:100%;border:1px solid ${on ? 'var(--success,#0d9488)' : 'var(--border,#e5e8ee)'};background:${on ? 'var(--verify-bg,#dff3ef)' : 'var(--surface,#fff)'};border-radius:9px;padding:10px 12px;cursor:pointer">
+      <span style="font-size:1.1rem">${p.emoji || '📦'}</span>
+      <span style="flex:1"><b style="color:var(--navy)">${h(p.name || p.sku)}</b> <span class="u-subtiny" style="font-family:monospace">${h(p.sku)}</span></span>
+      <span style="color:var(--success,#0d9488);font-weight:800;font-size:.8rem;white-space:nowrap">${on ? '✓ Selected' : 'Select →'}</span>
+    </button>`;
+  }).join('');
 }
 const PI_EXAMPLE = 'Vegan. Gluten free. No added sugar.\nIngredients: Oats, Almonds, Dark chocolate (cocoa solids 55%), Dates, Sea salt.';
+function piEnrichReset() {
+  APP._piSku = null;
+  const panel = document.getElementById('pi-enrich-panel'); if (panel) panel.innerHTML = '';
+  const box = document.getElementById('pi-sku-results'); if (box) box.innerHTML = '';
+  const q = document.getElementById('pi-sku-q'); if (q) { q.value = ''; q.focus(); }
+}
 function piEnrichPick(sku, name) {
-  APP._piSku = sku;
+  APP._piSku = sku; APP._piName = name;
+  // Collapse the results list into a clear "selected" state, so it's obvious what
+  // was chosen and the long list gets out of the way.
+  const box = document.getElementById('pi-sku-results');
+  if (box) box.innerHTML = `<div style="display:flex;align-items:center;gap:10px;border:1.5px solid var(--success,#0d9488);background:var(--verify-bg,#dff3ef);border-radius:9px;padding:10px 12px">
+      <span style="color:var(--success,#0d9488);font-weight:800;white-space:nowrap">✓ Selected</span>
+      <span style="flex:1"><b style="color:var(--navy)">${h(name)}</b> <span class="u-subtiny" style="font-family:monospace">${h(sku)}</span></span>
+      <button class="btn btn-secondary btn-sm" ${dataAct('piEnrichReset')}>Change</button>
+    </div>`;
   const panel = document.getElementById('pi-enrich-panel'); if (!panel) return;
   panel.innerHTML = `
-    <div class="card" style="padding:15px 17px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div style="font-weight:700;color:var(--navy)">${h(name)}</div>
-        <span class="u-subtiny" style="font-family:monospace">${h(sku)}</span>
-        <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('catOpenProduct', sku)}>👁 Preview client view</button>
+    <div class="card" style="padding:15px 17px;border-top:3px solid var(--success,#0d9488)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <label class="u-label" style="margin:0">Step 2 — Paste label text for <span style="color:var(--navy)">${h(name)}</span></label>
+        <div style="display:flex;gap:12px;align-items:baseline">
+          <button class="linklike u-subtiny" style="background:none;border:none;color:var(--success,#0d9488);cursor:pointer;padding:0" ${dataAct('piLoadExample')}>Load example</button>
+          <button class="linklike u-subtiny" style="background:none;border:none;color:var(--success,#0d9488);cursor:pointer;padding:0" ${dataAct('catOpenProduct', sku)}>👁 Preview</button>
+        </div>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <label class="u-label">Step 2 — Paste label text</label>
-        <button class="linklike u-subtiny" style="background:none;border:none;color:var(--success,#0d9488);cursor:pointer" ${dataAct('piLoadExample')}>Load example</button>
-      </div>
-      <textarea id="pi-label" class="input" rows="5" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"></textarea>
+      <textarea id="pi-label" class="input" rows="5" style="margin-top:6px" placeholder="Paste the pack's ingredient list and any claims.\nExample:\n${h(PI_EXAMPLE)}"></textarea>
       <div class="u-subtiny" style="margin-top:5px">Tip: paste the whole ingredients line — brackets like “(INS 322)” are cleaned automatically. Claims such as “Vegan” or “No added sugar” are detected wherever they appear.</div>
       <div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" ${dataAct('piRunExtract', sku)}>🧠 Run AI extract &amp; screen</button>
@@ -214,6 +238,9 @@ function piEnrichPick(sku, name) {
       </div>
       <div id="pi-extract-out" style="margin-top:13px"></div>
     </div>`;
+  // Bring Step 2 into view so the next action is visible without scrolling.
+  try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { panel.scrollIntoView(); }
+  try { document.getElementById('pi-label')?.focus({ preventScroll: true }); } catch { /* older browsers */ }
 }
 function piPickImage() { document.getElementById('pi-image')?.click(); }
 async function piScanImage(sku, el) {
