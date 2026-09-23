@@ -439,6 +439,59 @@ async function ensurePiSchema(env: Env): Promise<void> {
     `ALTER TABLE brands ADD COLUMN sla_json TEXT`,
     `ALTER TABLE brands ADD COLUMN created_at TEXT`,
     `ALTER TABLE brands ADD COLUMN updated_at TEXT`,
+    // Other PI tables may likewise pre-date this feature (the earlier "Smart
+    // catalog") with a partial schema; backfill every column the read/write
+    // paths use. Each ALTER is idempotent (a duplicate-column error is swallowed
+    // by the per-statement try/catch below).
+    `ALTER TABLE product_content ADD COLUMN description TEXT`,
+    `ALTER TABLE product_content ADD COLUMN usage TEXT`,
+    `ALTER TABLE product_content ADD COLUMN images_json TEXT DEFAULT '[]'`,
+    `ALTER TABLE product_content ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE product_nutrition ADD COLUMN basis TEXT DEFAULT 'per 100g'`,
+    `ALTER TABLE product_nutrition ADD COLUMN calories REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN protein REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN carbs REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN sugar REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN fat REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN fibre REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN sodium REAL`,
+    `ALTER TABLE product_nutrition ADD COLUMN source_ref TEXT`,
+    `ALTER TABLE product_nutrition ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE product_ingredients ADD COLUMN position INTEGER DEFAULT 0`,
+    `ALTER TABLE product_ingredients ADD COLUMN normalized_id TEXT`,
+    `ALTER TABLE product_ingredients ADD COLUMN grp TEXT`,
+    `ALTER TABLE product_ingredients ADD COLUMN allergen INTEGER DEFAULT 0`,
+    `ALTER TABLE product_ingredients ADD COLUMN flags_json TEXT DEFAULT '[]'`,
+    `ALTER TABLE product_attributes ADD COLUMN attribute TEXT`,
+    `ALTER TABLE product_attributes ADD COLUMN value TEXT DEFAULT 'true'`,
+    `ALTER TABLE product_attributes ADD COLUMN status TEXT DEFAULT 'ai_extracted'`,
+    `ALTER TABLE product_attributes ADD COLUMN source TEXT`,
+    `ALTER TABLE product_attributes ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE claims ADD COLUMN category TEXT`,
+    `ALTER TABLE claims ADD COLUMN label TEXT`,
+    `ALTER TABLE claims ADD COLUMN status TEXT DEFAULT 'ai_extracted'`,
+    `ALTER TABLE claims ADD COLUMN ai_confidence REAL`,
+    `ALTER TABLE claims ADD COLUMN screened_result TEXT`,
+    `ALTER TABLE claims ADD COLUMN reviewer_id TEXT`,
+    `ALTER TABLE claims ADD COLUMN reviewer_name TEXT`,
+    `ALTER TABLE claims ADD COLUMN reviewed_at TEXT`,
+    `ALTER TABLE claims ADD COLUMN expiry_date TEXT`,
+    `ALTER TABLE claims ADD COLUMN created_at TEXT`,
+    `ALTER TABLE claim_evidence ADD COLUMN doc_id TEXT`,
+    `ALTER TABLE claim_evidence ADD COLUMN page_ref TEXT`,
+    `ALTER TABLE claim_evidence ADD COLUMN extracted_text TEXT`,
+    `ALTER TABLE claim_evidence ADD COLUMN extraction_date TEXT`,
+    `ALTER TABLE certifications ADD COLUMN scope TEXT DEFAULT 'product'`,
+    `ALTER TABLE certifications ADD COLUMN brand_id TEXT`,
+    `ALTER TABLE certifications ADD COLUMN sku TEXT`,
+    `ALTER TABLE certifications ADD COLUMN kind TEXT`,
+    `ALTER TABLE certifications ADD COLUMN number TEXT`,
+    `ALTER TABLE certifications ADD COLUMN issuer TEXT`,
+    `ALTER TABLE certifications ADD COLUMN valid_from TEXT`,
+    `ALTER TABLE certifications ADD COLUMN valid_to TEXT`,
+    `ALTER TABLE certifications ADD COLUMN doc_id TEXT`,
+    `ALTER TABLE certifications ADD COLUMN status TEXT DEFAULT 'unverified'`,
+    `ALTER TABLE certifications ADD COLUMN created_at TEXT`,
   ];
   for (const s of stmts) { try { await env.DB.prepare(s).run(); } catch { /* exists / non-fatal */ } }
   try {
@@ -579,22 +632,33 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
     }
   }
 
-  const [content, nutrition, ingr, attrs, claims, certs] = await Promise.all([
-    env.DB.prepare("SELECT description,usage,images_json FROM product_content WHERE sku=?").bind(sku).first(),
-    env.DB.prepare("SELECT * FROM product_nutrition WHERE sku=?").bind(sku).first(),
-    env.DB.prepare("SELECT raw_text,grp,allergen,normalized_id FROM product_ingredients WHERE sku=? ORDER BY position").bind(sku).all(),
-    env.DB.prepare("SELECT attribute,value,status,source FROM product_attributes WHERE sku=? ORDER BY attribute").bind(sku).all(),
-    env.DB.prepare("SELECT * FROM claims WHERE sku=? ORDER BY created_at").bind(sku).all(),
-    env.DB.prepare("SELECT kind,number,issuer,valid_from,valid_to,status FROM certifications WHERE sku=? OR (scope='brand' AND brand_id=?)").bind(sku, inv.brand_id || "").all(),
+  // Every enrichment table below may pre-date this feature (the earlier "Smart
+  // catalog") with a partial schema, so a hard SELECT of a column that isn't
+  // there would 500 the whole product view. Read each table best-effort and
+  // degrade to empty/null on any error, so the product always renders.
+  const sFirst = async (q: string, ...b: unknown[]): Promise<Record<string, unknown> | null> => {
+    try { return await env.DB.prepare(q).bind(...b).first() as Record<string, unknown> | null; } catch { return null; }
+  };
+  const sAll = async (q: string, ...b: unknown[]): Promise<Record<string, unknown>[]> => {
+    try { return (await env.DB.prepare(q).bind(...b).all() as { results: Record<string, unknown>[] }).results; } catch { return []; }
+  };
+
+  const [content, nutrition, ingr, attrs, claimRows, certs] = await Promise.all([
+    sFirst("SELECT description,usage,images_json FROM product_content WHERE sku=?", sku),
+    sFirst("SELECT * FROM product_nutrition WHERE sku=?", sku),
+    sAll("SELECT raw_text,grp,allergen,normalized_id FROM product_ingredients WHERE sku=? ORDER BY position", sku),
+    sAll("SELECT attribute,value,status,source FROM product_attributes WHERE sku=? ORDER BY attribute", sku),
+    sAll("SELECT * FROM claims WHERE sku=? ORDER BY created_at", sku),
+    sAll("SELECT kind,number,issuer,valid_from,valid_to,status FROM certifications WHERE sku=? OR (scope='brand' AND brand_id=?)", sku, inv.brand_id || ""),
   ]);
 
-  const claimRows = (claims as { results: Record<string, unknown>[] }).results;
   const claimIds = claimRows.map(c => String(c.id));
   const evidenceBy: Record<string, unknown[]> = {};
   if (claimIds.length) {
-    const { results: ev } = await env.DB.prepare(
-      `SELECT claim_id,doc_id,page_ref,extracted_text,extraction_date FROM claim_evidence WHERE claim_id IN (${claimIds.map(() => "?").join(",")})`
-    ).bind(...claimIds).all() as { results: Record<string, unknown>[] };
+    const ev = await sAll(
+      `SELECT claim_id,doc_id,page_ref,extracted_text,extraction_date FROM claim_evidence WHERE claim_id IN (${claimIds.map(() => "?").join(",")})`,
+      ...claimIds
+    );
     for (const e of ev) (evidenceBy[String(e.claim_id)] = evidenceBy[String(e.claim_id)] || []).push(e);
   }
   const today = new Date().toISOString().slice(0, 10);
@@ -617,9 +681,9 @@ async function handleCatalogProduct(request: Request, env: Env, path: string): P
 
   return json({
     product: inv, content: content || null, nutrition: nutrition || null,
-    ingredients: (ingr as { results: unknown[] }).results,
-    attributes: (attrs as { results: unknown[] }).results,
-    claims: claimsOut, certifications: (certs as { results: unknown[] }).results, pricing,
+    ingredients: ingr,
+    attributes: attrs,
+    claims: claimsOut, certifications: certs, pricing,
   });
   } catch (e) { return json({ error: "catalog-product: " + String(e && (e as Error).message || e) }, 500); }
 }
@@ -636,6 +700,7 @@ async function handleEnrichProduct(request: Request, env: Env, path: string): Pr
   if (!exists) return json({ error: "Unknown SKU" }, 404);
   let b: Record<string, unknown>; try { b = await request.json() as Record<string, unknown>; } catch { return json({ error: "Invalid JSON" }, 400); }
 
+  try {
   // inventory master columns
   const pack = (b.pack || {}) as Record<string, unknown>;
   await env.DB.prepare(
@@ -682,6 +747,7 @@ async function handleEnrichProduct(request: Request, env: Env, path: string): Pr
   }
   await audit(env, user, "enrich", "product", sku);
   return json({ ok: true });
+  } catch (e) { return json({ error: "enrich: " + String(e && (e as Error).message || e) }, 500); }
 }
 
 async function handleListBrands(request: Request, env: Env): Promise<Response> {
