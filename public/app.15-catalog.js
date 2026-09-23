@@ -452,51 +452,87 @@ async function catCompare() {
   const cols = details.map(d => {
     const p = d.product || {}, pr = d.pricing || {};
     const allergens = [...new Set((d.ingredients || []).filter(i => i.allergen).map(i => i.raw_text))];
+    const price = pr.client_excl_gst != null ? pr.client_excl_gst : pr.list_excl_gst;
+    const pk = catParsePack(p.pack_size);
     return {
       sku: p.sku, name: p.name || p.sku, brand: p.brand_name || p.brand || '', emoji: p.emoji || '📦',
-      price: pr.client_excl_gst != null ? pr.client_excl_gst : pr.list_excl_gst,
-      mrp: p.mrp, pack: p.pack_size,
+      price, mrp: p.mrp, pack: p.pack_size,
+      per100: (pk.qty && Number(price)) ? Number(price) * 100 / pk.qty : null, unit: pk.unit,
       verified: (d.claims || []).filter(c => c.status === 'verified').map(c => c.label),
       attrs: (d.attributes || []).filter(a => a.status === 'verified').map(a => a.attribute),
       allergens, nutrition: d.nutrition || {},
     };
   });
+  // Majority pack unit (for the per-100 row label); default grams.
+  const unitCounts = {}; cols.forEach(c => { if (c.unit) unitCounts[c.unit] = (unitCounts[c.unit] || 0) + 1; });
+  const majUnit = Object.keys(unitCounts).sort((a, b) => unitCounts[b] - unitCounts[a])[0] || 'g';
+  const anyPer100 = cols.some(c => c.per100 != null);
 
   const th = cols.map(c => `<th style="padding:10px 12px;text-align:left;vertical-align:top;min-width:150px;border-left:1px solid var(--border)">
       <div style="font-size:1.5rem">${c.emoji}</div>
       ${c.brand ? `<div style="font-size:.66rem;font-weight:800;color:var(--success,#0d9488);text-transform:uppercase">${h(c.brand)}</div>` : ''}
       <div style="font-weight:700;color:var(--navy);font-size:.86rem;line-height:1.25">${h(c.name)}</div>
     </th>`).join('');
-  const row = (label, render, opts = {}) => `<tr style="border-top:1px solid var(--border)">
+  // A row with optional "best value" highlighting. valFn returns a comparable
+  // number (or null) per column; dir picks whether min or max wins. The winning
+  // cell(s) are highlighted only when 2+ columns are comparable.
+  const bestOf = (valFn, dir) => {
+    const nums = cols.map(valFn).filter(v => v != null && isFinite(v));
+    if (nums.length < 2) return null;
+    return dir === 'max' ? Math.max(...nums) : Math.min(...nums);
+  };
+  const row = (label, render, valFn, dir) => {
+    const target = valFn ? bestOf(valFn, dir) : null;
+    return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:9px 12px;font-size:.76rem;color:var(--text-muted);font-weight:700;white-space:nowrap;vertical-align:top">${label}</td>
-      ${cols.map(c => `<td style="padding:9px 12px;font-size:.83rem;color:var(--navy);border-left:1px solid var(--border);vertical-align:top;${opts.td || ''}">${render(c)}</td>`).join('')}
+      ${cols.map(c => {
+        const v = valFn ? valFn(c) : null;
+        const win = target != null && v != null && isFinite(v) && v === target;
+        const winCss = win ? 'background:var(--verify-bg,#dff3ef);color:var(--success,#0d9488);font-weight:800' : '';
+        return `<td style="padding:9px 12px;font-size:.83rem;color:var(--navy);border-left:1px solid var(--border);vertical-align:top;${winCss}">${render(c)}${win ? ' ✓' : ''}</td>`;
+      }).join('')}
     </tr>`;
+  };
   const chips = (arr, bg, fg) => arr.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${arr.map(x => `<span class="badge" style="background:${bg};color:${fg}">${h(x)}</span>`).join('')}</div>` : '<span class="u-subtiny">—</span>';
-  const nut = (k, unit) => row(k[0], c => c.nutrition[k[1]] != null ? `${c.nutrition[k[1]]}${unit || ''}` : '<span class="u-subtiny">—</span>');
+  const num = (c, k) => (c.nutrition[k] != null && isFinite(Number(c.nutrition[k]))) ? Number(c.nutrition[k]) : null;
+  const nut = (label, key, unit, dir) => row(label, c => c.nutrition[key] != null ? `${c.nutrition[key]}${unit || ''}` : '<span class="u-subtiny">—</span>', dir ? (c => num(c, key)) : null, dir);
 
   openModal('Compare products', `
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
       <table style="border-collapse:collapse;width:100%">
         <thead><tr><th style="width:96px"></th>${th}</tr></thead>
         <tbody>
-          ${row('Price', c => `<b style="font-size:1rem">${fmt(c.price)}</b>${c.mrp ? `<div class="u-subtiny" style="text-decoration:line-through">${fmt(c.mrp)}</div>` : ''}`)}
+          ${row('Price', c => `<b style="font-size:1rem">${fmt(c.price)}</b>${c.mrp ? `<div class="u-subtiny" style="text-decoration:line-through">${fmt(c.mrp)}</div>` : ''}`, c => Number(c.price) || null, 'min')}
           ${row('Pack', c => c.pack ? h(c.pack) : '<span class="u-subtiny">—</span>')}
+          ${anyPer100 ? row(`Price / 100 ${majUnit}`, c => c.per100 != null ? fmt(Math.round(c.per100 * 100) / 100) : '<span class="u-subtiny">—</span>', c => c.per100, 'min') : ''}
           ${row('✔ Verified claims', c => chips(c.verified, 'var(--verify-bg,#dff3ef)', 'var(--success,#0d9488)'))}
           ${row('Dietary', c => chips(c.attrs, '#eef1f5', '#66738a'))}
           ${row('⚠ Allergens', c => c.allergens.length ? chips(c.allergens, '#fbe4e2', '#dc2626') : '<span class="u-subtiny" style="color:var(--success,#0d9488)">None flagged</span>')}
-          ${nut(['Calories', 'calories'], '')}
-          ${nut(['Protein', 'protein'], ' g')}
-          ${nut(['Carbs', 'carbs'], ' g')}
-          ${nut(['Sugar', 'sugar'], ' g')}
-          ${nut(['Fat', 'fat'], ' g')}
-          ${nut(['Fibre', 'fibre'], ' g')}
-          ${nut(['Sodium', 'sodium'], ' mg')}
+          ${nut('Calories', 'calories', '')}
+          ${nut('Protein', 'protein', ' g', 'max')}
+          ${nut('Carbs', 'carbs', ' g')}
+          ${nut('Sugar', 'sugar', ' g', 'min')}
+          ${nut('Fat', 'fat', ' g')}
+          ${nut('Fibre', 'fibre', ' g', 'max')}
+          ${nut('Sodium', 'sodium', ' mg', 'min')}
           ${row('', c => `<button class="btn btn-primary btn-sm" ${dataAct('catAddToOrderFromCompare', c.sku)}>Add to order</button>`)}
         </tbody>
       </table>
     </div>
-    <div class="u-subtiny" style="margin-top:8px">Nutrition is per the product's stated basis (usually per 100 g). Allergens are matched against the FSSAI major-allergen list.</div>`,
+    <div class="u-subtiny" style="margin-top:8px">✓ marks the best value in a row (lowest price/sugar/sodium, highest protein/fibre). Per-100${majUnit === 'ml' ? ' ml' : ' g'} needs a parseable pack size. Nutrition is per the product's stated basis. Allergens use the FSSAI major-allergen list.</div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+}
+// Parse a pack-size string into a total quantity + unit, e.g. "6 × 38 g" → 228 g,
+// "Pack 150 g" → 150 g, "1 kg" → 1000 g. Returns {qty:null} when not parseable.
+function catParsePack(s) {
+  if (!s) return { qty: null, unit: null };
+  const str = String(s).toLowerCase();
+  const norm = (q, u) => { if (u === 'kg') return { qty: q * 1000, unit: 'g' }; if (u === 'l') return { qty: q * 1000, unit: 'ml' }; return { qty: q, unit: u }; };
+  let m = str.match(/(\d+(?:\.\d+)?)\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*(kg|g|ml|l)\b/);
+  if (m) return norm(parseFloat(m[1]) * parseFloat(m[2]), m[3]);
+  m = str.match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l)\b/);
+  if (m) return norm(parseFloat(m[1]), m[2]);
+  return { qty: null, unit: null };
 }
 function catAddToOrderFromCompare(sku) {
   // Reuse the single-product add, sourcing name/price from the compare cache.
