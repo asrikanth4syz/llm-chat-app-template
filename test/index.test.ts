@@ -3045,6 +3045,26 @@ describe("Product Intelligence AI extract + screening (P0.2)", () => {
     const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { ingredients: { raw_text: string }[] };
     expect(det.ingredients.map(i => i.raw_text)).toEqual(["Emulsifier", "Raising Agent", "Rosemary Extract"]);
   });
+
+  it("validates ingredients against the FSSAI allergen dictionary (synonym match)", async () => {
+    const created = await post("/api/inventory", { name: "PI Allergen Test", category: "Snacks", unit_price: 60, stock: 10 }, adminToken);
+    const sku = (await created.json() as { sku: string }).sku;
+
+    await post(`/api/catalog/products/${sku}/ai/extract`, {
+      text: "Oats, Milk Solids, Maida, Sugar, Cashew, Sea salt",
+    }, adminToken);
+
+    const det = await (await get(`/api/catalog/products/${sku}`, adminToken)).json() as { ingredients: { raw_text: string; allergen: number }[] };
+    const flag = (name: string) => det.ingredients.find(i => i.raw_text === name)?.allergen;
+    // milk (via "Milk Solids"), gluten (via "Maida"), tree nut (via "Cashew"), gluten (Oats)
+    expect(flag("Milk Solids")).toBe(1);
+    expect(flag("Maida")).toBe(1);
+    expect(flag("Cashew")).toBe(1);
+    expect(flag("Oats")).toBe(1);
+    // plain, non-allergen items are not flagged
+    expect(flag("Sugar")).toBe(0);
+    expect(flag("Sea salt")).toBe(0);
+  });
 });
 
 // ── Product Intelligence verification workflow (P0.3) ─────────────────

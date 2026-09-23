@@ -502,7 +502,60 @@ async function ensurePiSchema(env: Env): Promise<void> {
     ];
     for (const [dict, term] of seed) await env.DB.prepare("INSERT OR IGNORE INTO pi_rule_dict (id,dict,term,active) VALUES (?,?,?,1)").bind(`${dict}:${term}`, dict, term).run();
   } catch { /* non-fatal */ }
+  // ingredient_dict — India FSSAI (Labelling & Display Regulations, 2020) major
+  // allergen groups, each with common label synonyms so real ingredient lines
+  // match. [canonical, category, animal_derived, synonyms].
+  try {
+    const idict: [string, string, number, string[]][] = [
+      ["milk", "milk", 1, ["milk solids", "milk powder", "skimmed milk", "whey", "whey protein", "casein", "caseinate", "lactose", "butter", "ghee", "cream", "cheese", "curd", "khoya", "paneer", "milk fat", "milk chocolate"]],
+      ["egg", "egg", 1, ["egg powder", "albumin", "albumen", "egg white", "egg yolk", "ovalbumin", "lecithin (egg)"]],
+      ["fish", "fish", 1, ["fish oil", "anchovy", "cod", "tuna", "sardine", "fish sauce"]],
+      ["crustacean", "crustacean", 1, ["prawn", "shrimp", "crab", "lobster", "krill"]],
+      ["peanut", "peanut", 0, ["groundnut", "groundnut oil", "peanut butter", "arachis oil", "moongphali"]],
+      ["tree nuts", "tree_nut", 0, ["almond", "badam", "cashew", "kaju", "walnut", "akhrot", "pistachio", "pista", "hazelnut", "pecan", "macadamia", "brazil nut"]],
+      ["wheat", "gluten", 0, ["gluten", "maida", "atta", "wheat flour", "refined wheat flour", "semolina", "suji", "rava", "durum", "spelt"]],
+      ["barley", "gluten", 0, ["malt", "malt extract", "barley malt", "pearl barley"]],
+      ["rye", "gluten", 0, []],
+      ["oats", "gluten", 0, ["rolled oats", "oat flour"]],
+      ["soybean", "soy", 0, ["soy", "soya", "soy lecithin", "soya lecithin", "soy protein", "soya flour", "tofu", "edamame"]],
+      ["sesame", "sesame", 0, ["til", "sesame seed", "sesame oil", "tahini"]],
+      ["mustard", "mustard", 0, ["sarson", "mustard seed", "mustard oil", "rai"]],
+      ["added sulphites", "sulphite", 0, ["sulphur dioxide", "sulfur dioxide", "sodium metabisulphite", "sodium metabisulfite", "potassium metabisulphite", "sodium sulphite", "ins 220", "ins 223", "ins 224"]],
+    ];
+    for (const [canonical, category, animal, syn] of idict) {
+      await env.DB.prepare("INSERT OR IGNORE INTO ingredient_dict (id,canonical_name,synonyms_json,allergen,animal_derived,category) VALUES (?,?,?,?,?,?)")
+        .bind(`ing:${canonical}`, canonical, JSON.stringify(syn), 1, animal, category).run();
+    }
+  } catch { /* non-fatal */ }
   _piSchemaReady = true;
+}
+
+// Match a raw ingredient string against the FSSAI allergen dictionary by whole-word
+// synonym/canonical match (so "Milk Solids" → milk, "Maida" → wheat/gluten). Cached
+// per isolate. Returns the dict id + allergen flag, or null if nothing matches.
+let _idictCache: { id: string; allergen: number; terms: string[] }[] | null = null;
+async function piMatchIngredient(env: Env, raw: string): Promise<{ id: string; allergen: number } | null> {
+  if (!_idictCache) {
+    try {
+      const { results } = await env.DB.prepare("SELECT id,canonical_name,synonyms_json,allergen FROM ingredient_dict").all() as { results: { id: string; canonical_name: string; synonyms_json: string; allergen: number }[] };
+      _idictCache = results.map(r => {
+        let syn: string[] = []; try { syn = JSON.parse(r.synonyms_json || "[]"); } catch { /* ignore */ }
+        // Longest terms first so "milk solids" wins over "milk".
+        const terms = [r.canonical_name, ...syn].map(t => String(t).toLowerCase()).filter(Boolean).sort((a, b) => b.length - a.length);
+        return { id: r.id, allergen: Number(r.allergen) || 0, terms };
+      });
+    } catch { _idictCache = []; }
+  }
+  const hay = ` ${raw.toLowerCase()} `;
+  for (const e of _idictCache) {
+    for (const t of e.terms) {
+      // whole-word / phrase match, tolerant of surrounding punctuation
+      if (new RegExp(`(^|[^a-z])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(hay)) {
+        return { id: e.id, allergen: e.allergen };
+      }
+    }
+  }
+  return null;
 }
 
 // A PI table may pre-date this feature with a partial schema, and the idempotent
@@ -756,7 +809,7 @@ async function handleEnrichProduct(request: Request, env: Env, path: string): Pr
     let pos = 0;
     for (const raw of b.ingredients as unknown[]) {
       const text = String(raw ?? "").trim(); if (!text) continue;
-      const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(text).first() as { id: string; allergen: number } | null;
+      const dict = await piMatchIngredient(env, text);
       await piInsert(env, "product_ingredients", { id: `ing${uid().slice(0, 12)}`, sku, position: pos++, raw_text: text, normalized_id: dict?.id ?? null, allergen: dict?.allergen ?? 0 });
     }
   }
@@ -906,7 +959,7 @@ async function handleAiExtract(request: Request, env: Env, path: string): Promis
     try { await env.DB.prepare("DELETE FROM product_ingredients WHERE sku=?").bind(sku).run(); } catch { /* legacy table */ }
     let pos = 0;
     for (const raw of extracted.ingredients) {
-      const dict = await env.DB.prepare("SELECT id,allergen FROM ingredient_dict WHERE lower(canonical_name)=lower(?)").bind(raw).first() as { id: string; allergen: number } | null;
+      const dict = await piMatchIngredient(env, raw);
       await piInsert(env, "product_ingredients", { id: `ing${uid().slice(0, 12)}`, sku, position: pos++, raw_text: raw, normalized_id: dict?.id ?? null, allergen: dict?.allergen ?? 0 });
     }
   }
