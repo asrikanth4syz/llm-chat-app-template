@@ -1038,6 +1038,15 @@ button { font-family: var(--font); cursor: pointer; }
   .table-cards-2up tbody { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
   .table-cards-2up tbody tr { margin: 0; }
 }
+/* Order cards (mobile) adopt the concept's status accent bar + a touch more
+   lift, keyed to --accent set per row. Theme-safe (uses tokens). */
+@media (max-width: 768px) {
+  .table-cards-2up tbody tr {
+    border-left: 4px solid var(--accent, var(--border));
+    box-shadow: 0 2px 10px rgba(16,40,50,.07);
+  }
+  .table-cards-2up .card-title-cell b { color: var(--navy); font-size: .96rem; letter-spacing: -.01em; }
+}
 
 /* ═══════════════════════════════════════════════════════════
    VENDOR DIRECTORY TABLE — fluid width that never forces a desktop

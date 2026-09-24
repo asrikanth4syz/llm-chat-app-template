@@ -240,7 +240,7 @@ async function renderMyOrders(el) {
               ${(o.items||[]).length>4?`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
             </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--surface-2);border-radius:8px">📝 ${o.notes}</div>` : ''}
 
-            ${o.need_by_date ? `<div style="padding:6px 12px;background:#fff8f8;border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid var(--red-soft-bg)">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
+            ${o.need_by_date ? `<div style="padding:6px 12px;background:var(--red-soft-bg);border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid var(--red-soft-bg)">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
             ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'var(--success-bg)'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'var(--red-soft-bg)':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
             ${isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
 
@@ -583,7 +583,7 @@ async function viewOrder(id) {
     : `<tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>`;
 
   const itemsTableRows = (order.items||[]).map(i => {
-    const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:#b45309;background:var(--warning-bg);border:1px solid #fde68a;border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
+    const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:var(--amber-text);background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
     if (qtyMode === 'delivered') {
       const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
       const short = d.due > 0;
@@ -712,7 +712,7 @@ async function viewOrder(id) {
           }
         </div>
       </div>
-      ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fefce8;border-radius:8px;border:1px solid #fef08a;font-size:.875rem"><span style="font-weight:700;color:#854d0e">📝 Client Note:</span> <span style="color:#713f12">${h(order.notes)}</span></div>` : ''}
+      ${order.notes ? `<div style="margin-top:10px;padding:10px 12px;background:var(--amber-bg);border-radius:8px;border:1px solid var(--gold-border);font-size:.875rem;color:var(--amber-text)"><span style="font-weight:700">📝 Client Note:</span> <span>${h(order.notes)}</span></div>` : ''}
       ${order.order_image ? `<div style="margin-top:10px"><div style="font-weight:700;font-size:.8rem;color:var(--navy);margin-bottom:6px">📷 Attached Photo</div><a href="${order.order_image}" target="_blank"><img src="${order.order_image}" style="max-height:140px;max-width:100%;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" title="Click to open full size"></a></div>` : ''}
     </div>
     ${meterHtml}
@@ -873,7 +873,7 @@ async function repriceOrderModal(id) {
     </tr>`).join('');
   openModal(`💰 Price Ad-hoc Order ${id}`,
     `<p class="u-muted" style="margin-top:0;font-size:.85rem">Enter the unit price (₹, ex-GST) for each requested item. On save, 18% GST is added and the order enters the normal approval &amp; delivery flow.</p>
-     ${order.notes ? `<div style="margin-bottom:12px;padding:8px 10px;background:#fefce8;border:1px solid #fef08a;border-radius:8px;font-size:.82rem"><b>Client note:</b> ${h(order.notes)}</div>` : ''}
+     ${order.notes ? `<div style="margin-bottom:12px;padding:8px 10px;background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:8px;font-size:.82rem;color:var(--amber-text)"><b>Client note:</b> ${h(order.notes)}</div>` : ''}
      <table class="table" style="margin:0">
        <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price (₹)</th></tr></thead>
        <tbody>${rows}</tbody>
@@ -944,7 +944,7 @@ async function amendOrderModal(id) {
   const anyDelivered = Object.values(deliveredMap).some(v => v > 0);
   const rows = (order.items || []).map(it => amendRowHTML({ ...it, delivered: deliveredMap[it.sku] || 0 })).join('');
   openModal(`✏️ Amend Order ${id}`,
-    `<div style="margin:0 0 12px;padding:9px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:.82rem;color:#9a3412">
+    `<div style="margin:0 0 12px;padding:9px 12px;background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:8px;font-size:.82rem;color:var(--amber-text)">
        ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
        ${anyDelivered?`<div style="margin-top:6px">📦 Part of this order is already delivered — you can only amend the <b>undelivered balance</b>. Delivered quantities are the minimum and their lines can't be removed.</div>`:''}
      </div>
@@ -1529,7 +1529,15 @@ async function renderOrderQueue(el) {
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
       const todayStr = new Date().toISOString().slice(0,10);
-      return `<tr style="${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
+      // Status-keyed accent bar (mobile card view) — adopted from the concept:
+      // a quick colour cue per lifecycle phase, using theme tokens so it works
+      // in light and dark.
+      const accent = ['CANCELLED','REJECTED'].includes(o.status) ? 'var(--text-light)'
+        : ['PENDING_APPROVAL','SUBMITTED'].includes(o.status) ? 'var(--warning)'
+        : ['IN_SHIPMENT','PARTIALLY_CLOSED'].includes(o.status) ? 'var(--violet)'
+        : ['CLOSED','DELIVERED'].includes(o.status) ? 'var(--success)'
+        : 'var(--blue)';
+      return `<tr style="--accent:${accent};${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
         <td class="card-title-cell">
           <b>${o.id}</b>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'var(--warning)'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
@@ -2003,7 +2011,7 @@ async function inventoryShortageModal(orderId) {
        <thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Unit cost (₹)</th></tr></thead>
        <tbody>${itemRows || '<tr><td colspan="3" class="u-empty">No line items on this order</td></tr>'}</tbody>
      </table>
-     <div style="margin-top:10px;padding:9px 12px;background:var(--warning-bg,#fffbeb);border:1px solid #fde68a;border-radius:8px;color:#92400e;font-size:.8rem">
+     <div style="margin-top:10px;padding:9px 12px;background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:8px;color:var(--amber-text);font-size:.8rem">
        ⚠ Unit costs are pre-filled from the order's list price. Set each line to the <b>vendor's quoted cost</b> before raising the PO.
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
