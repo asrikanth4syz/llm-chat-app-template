@@ -3959,6 +3959,26 @@ async function handleClearCart(request: Request, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+// GST is per-item — each product carries its own slab (0/5/12/18/28/40%). Look
+// the rates up from the catalogue (never trust a client-sent rate) and sum the
+// tax line by line, so a mixed-rate order is never billed at a flat 18%. Items
+// whose SKU has no stored rate fall back to 18%.
+async function computeOrderGst(env: Env, items: Array<{ sku: string; qty: number; unit_price: number }>): Promise<number> {
+  const rateMap: Record<string, number> = {};
+  const skus = [...new Set(items.map(i => i.sku).filter(Boolean))];
+  for (const part of chunkSkus(skus)) {
+    const ph = part.map(() => "?").join(",");
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT sku, gst_rate FROM inventory WHERE sku IN (${ph})`
+      ).bind(...part).all() as { results: { sku: string; gst_rate: number | null }[] };
+      for (const r of results) if (r.gst_rate != null) rateMap[r.sku] = Number(r.gst_rate);
+    } catch { /* missing rows/column — fall back to 18% below */ }
+  }
+  const rateOf = (sku: string) => { const r = rateMap[sku]; return (r == null || isNaN(r)) ? 18 : r; };
+  return Math.round(items.reduce((s, i) => s + i.qty * i.unit_price * rateOf(i.sku) / 100, 0));
+}
+
 async function handleCreateOrder(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
@@ -3987,7 +4007,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
   const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price, 0);
-  const gst = Math.round(subtotal*0.18);
+  const gst = await computeOrderGst(env, body.items);
   const grand_total = subtotal+gst;
 
   // Save as draft — skip approval rules, return early status
@@ -4068,14 +4088,16 @@ async function handleRepriceOrder(request: Request, env: Env, path: string): Pro
   const priceMap = new Map(body.prices.map(p => [p.id, Math.max(0, Number(p.unit_price) || 0)]));
   const {results: items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as {results: Record<string,unknown>[]};
   let subtotal = 0;
+  const gstLines: Array<{ sku: string; qty: number; unit_price: number }> = [];
   for (const it of items) {
     const price = priceMap.has(it.id as string) ? priceMap.get(it.id as string)! : (it.unit_price as number);
     const total = (it.qty as number) * price;
     subtotal += total;
+    gstLines.push({ sku: String(it.sku || ""), qty: Number(it.qty) || 0, unit_price: price });
     await env.DB.prepare("UPDATE order_items SET unit_price=?, total=? WHERE id=?").bind(price, total, it.id).run();
   }
   if (subtotal <= 0) return json({error:"Enter a price greater than zero for at least one line"}, 400);
-  const gst = Math.round(subtotal * 0.18);
+  const gst = await computeOrderGst(env, gstLines);
   const grand_total = subtotal + gst;
 
   // Now that the order has a value, run the same approval rules a catalogue order sees.
@@ -4161,7 +4183,7 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   const { results: oldItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
 
   const subtotal = newItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
-  const gst = Math.round(subtotal * 0.18);
+  const gst = await computeOrderGst(env, newItems);
   const grand_total = subtotal + gst;
   const fromStatus = String(order.status);
   const revision = (Number(order.revision) || 1) + 1;
@@ -4236,14 +4258,16 @@ async function handleRejectAmendment(request: Request, env: Env, path: string): 
   await env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
   let subtotal = 0;
+  const gstLines: Array<{ sku: string; qty: number; unit_price: number }> = [];
   for (const b of before) {
     const qty = Number(b.qty) || 0, price = Number(b.unit_price) || 0;
     subtotal += qty * price;
+    gstLines.push({ sku: String(b.sku || ""), qty, unit_price: price });
     await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
       .bind(uid(), id, b.sku, b.name, qty, price, qty * price).run();
     await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(qty, b.sku).run();
   }
-  const gst = Math.round(subtotal * 0.18);
+  const gst = await computeOrderGst(env, gstLines);
   const grand_total = subtotal + gst;
   const restoreStatus = String(amend.from_status || "APPROVED");
   await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status=?, updated_at=datetime('now') WHERE id=?")

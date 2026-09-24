@@ -181,7 +181,7 @@ function oiOrderView() {
 function oiRailHTML() {
   const cart = APP.cart || [];
   const subtotal = cart.reduce((s,i) => s + i.qty * i.unit_price, 0);
-  const gst = Math.round(subtotal * 0.18);
+  const gst = cartGst(); // per-item GST (see app.03) — not a flat 18%
   return `<div class="card" style="position:sticky;top:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <div style="font-weight:800;color:var(--navy);font-size:.95rem">Your order</div>
@@ -195,7 +195,7 @@ function oiRailHTML() {
       </div>`).join('') + `
       <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;font-size:.85rem">
         <div style="display:flex;justify-content:space-between;color:var(--text-muted)"><span>Subtotal</span><span class="tnum">${fmt(subtotal)}</span></div>
-        <div style="display:flex;justify-content:space-between;color:var(--text-muted)"><span>GST (18%)</span><span class="tnum">${fmt(gst)}</span></div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)"><span>${cartGstLabel()}</span><span class="tnum">${fmt(gst)}</span></div>
         <div style="display:flex;justify-content:space-between;font-weight:850;font-size:1.05rem;border-top:1px solid var(--border);padding-top:10px;margin-top:4px"><span>Total</span><span class="tnum">${fmt(subtotal+gst)}</span></div>
       </div>
       <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" ${dataAct('reviewPlaceOrder')}>Review &amp; place order</button>

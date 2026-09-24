@@ -1013,6 +1013,29 @@ describe("Orders", () => {
     expect(body.status).toBe("DRAFT");
   });
 
+  it("POST /api/orders — GST is summed per item across mixed slabs, not a flat 18%", async () => {
+    const db = env.DB as D1Database;
+    // Two products on different GST slabs (5% and 40%).
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)")
+      .bind("GSTA", "GST Item A", "Grocery", 1000, 50, 1, 5).run();
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)")
+      .bind("GSTB", "GST Item B", "Beverages", 1000, 50, 1, 40).run();
+    const res = await post("/api/orders", {
+      client_id: "c1",
+      items: [
+        { sku: "GSTA", name: "GST Item A", qty: 2, unit_price: 1000 }, // 2000 @ 5%  = 100
+        { sku: "GSTB", name: "GST Item B", qty: 1, unit_price: 1000 }, // 1000 @ 40% = 400
+      ],
+    }, opsToken);
+    expect(ok(res.status)).toBe(true);
+    const { id } = await res.json() as { id: string };
+    const row = await db.prepare("SELECT subtotal,gst,grand_total FROM orders WHERE id=?").bind(id).first() as { subtotal: number; gst: number; grand_total: number };
+    expect(Number(row.subtotal)).toBe(3000);
+    expect(Number(row.gst)).toBe(500);         // 100 + 400 — NOT a flat 3000*0.18 = 540
+    expect(Number(row.grand_total)).toBe(3500);
+    await db.prepare("DELETE FROM inventory WHERE sku IN ('GSTA','GSTB')").run();
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

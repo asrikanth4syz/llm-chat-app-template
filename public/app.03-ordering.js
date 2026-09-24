@@ -284,7 +284,7 @@ function refreshCartReviewUI() {
   });
 
   const total = APP.cart.reduce((s,i) => s + i.qty * i.unit_price, 0);
-  const gst   = Math.round(total * 0.18);
+  const gst   = cartGst();
   const grand = total + gst;
   const count = APP.cart.reduce((s,i) => s + i.qty, 0);
 
@@ -326,7 +326,7 @@ function refreshCartReviewUI() {
   if (summaryEl) {
     summaryEl.innerHTML = `
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span class="u-muted">GST (18%)</span><span>${fmt(gst)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span class="u-muted">${cartGstLabel()}</span><span>${fmt(gst)}</span></div>
       <div style="display:flex;justify-content:space-between;padding-top:12px;border-top:2px solid var(--border);font-weight:800;font-size:1.05rem"><span>Total</span><span style="color:var(--navy)">${fmt(grand)}</span></div>
       ${grand > 100000 ? `<div class="alert alert-warning" style="margin-top:12px;font-size:.8rem">⚠️ Amount exceeds ₹1L — approval required</div>` : ''}
       <div id="budget-bar-wrap" style="margin-top:12px;display:none">
@@ -1054,10 +1054,29 @@ async function orderMoreItem(sku, name) {
   navigate('place_order');
 }
 
+// GST is per-item — each product carries its own slab (0/5/12/18/28/40%).
+// Look the rate up from the live catalogue by SKU (falling back to any rate on
+// the cart line, then 18% only as a last resort) and sum the tax line by line,
+// so the summary reflects the real mix instead of assuming a flat 18%.
+function _gstRateForCartLine(line) {
+  const ci = (APP._catalog || []).find(c => c.sku === line.sku);
+  const r = ci && ci.gst_rate != null ? ci.gst_rate : line.gst_rate;
+  return (r == null || isNaN(Number(r))) ? 18 : Number(r);
+}
+function cartGst() {
+  return Math.round(APP.cart.reduce((s, i) => s + i.qty * i.unit_price * _gstRateForCartLine(i) / 100, 0));
+}
+// "GST (18%)" only when every line truly shares one rate; otherwise a plain
+// "GST" label, since a single percentage would misrepresent a mixed cart.
+function cartGstLabel() {
+  const rates = [...new Set(APP.cart.map(_gstRateForCartLine))];
+  return rates.length === 1 ? `GST (${rates[0]}%)` : 'GST';
+}
+
 function refreshCartUI() {
   persistCart();
   const total = APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0);
-  const gst   = Math.round(total * 0.18);
+  const gst   = cartGst();
   const grand = total + gst;
   const count = APP.cart.reduce((s, i) => s + i.qty, 0);
 
