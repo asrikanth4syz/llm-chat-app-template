@@ -1540,12 +1540,10 @@ async function renderOrderQueue(el) {
         <td data-label="Status">${statusBadge(o.status)}</td>
         <td data-label="Type">${orderTypeBadge(o.order_type||'Regular')}</td>
         <td data-label="Items" class="u-center">
-          <span style="font-weight:700;font-size:.88rem">${o.item_count||0}</span>
-          <span style="font-size:.72rem;color:var(--text-muted)"> items</span>
+          <span class="oq-numunit"><b>${o.item_count||0}</b> items</span>
         </td>
         <td data-label="Total Qty" class="u-center">
-          <span style="font-weight:700;font-size:.88rem">${o.total_qty||0}</span>
-          <span style="font-size:.72rem;color:var(--text-muted)"> units</span>
+          <span class="oq-numunit"><b>${o.total_qty||0}</b> units</span>
         </td>
         <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td data-label="Actions">${orderQueueActions(o)}</td>
@@ -1588,7 +1586,7 @@ async function renderOrderQueue(el) {
         <div id="oq-tabs">${oqTabsHtml()}</div>
       </div>
       <div class="table-wrap">
-        <table class="table table-cards" style="margin:0">
+        <table class="table table-cards table-cards-2up" style="margin:0">
           <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${oqTableHtml(APP._oqStatusTab)}
         </table>
@@ -1635,7 +1633,7 @@ function switchOQMainTab(tab) {
         <div id="oq-tabs">${APP._oqTabsHtml?APP._oqTabsHtml():''}</div>
       </div>
       <div class="table-wrap">
-        <table class="table table-cards" style="margin:0">
+        <table class="table table-cards table-cards-2up" style="margin:0">
           <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
         </table>

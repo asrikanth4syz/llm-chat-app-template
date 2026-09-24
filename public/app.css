@@ -1026,6 +1026,19 @@ button { font-family: var(--font); cursor: pointer; }
   .table-cards td[data-label] > * { text-align: right; }
 }
 
+/* A figure and its unit kept together ("12 items") so the number never splits
+   from its label under the card layout's space-between, and reads as one value
+   right-aligned with the other columns. Works in the desktop table too. */
+.oq-numunit { font-size: .72rem; color: var(--text-muted); white-space: nowrap; }
+.oq-numunit b { font-size: .88rem; color: var(--navy); font-weight: 700; }
+
+/* Wide phones / small tablets: two cards per row instead of one full-width card
+   stretched across the viewport, so the label→value gap stays comfortable. */
+@media (min-width: 600px) and (max-width: 768px) {
+  .table-cards-2up tbody { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+  .table-cards-2up tbody tr { margin: 0; }
+}
+
 /* ═══════════════════════════════════════════════════════════
    VENDOR DIRECTORY TABLE — fluid width that never forces a desktop
    horizontal scrollbar. Secondary columns drop out progressively as the
