@@ -911,7 +911,7 @@ async function editInventoryItem(sku) {
   const uoms = ['unit','piece','pack','case','kg','gram','litre','ml','dozen','box','bag','roll','sheet'];
   const uomOpts = uoms.map(u => `<option value="${u}" ${(item.uom||'unit')===u?'selected':''}>${u}</option>`).join('');
 
-  openModal(`Edit Item — ${sku}`,
+  openModal(`Edit Item — ${item.name} · ${sku}`,
     `<!-- Section tabs -->
     <div style="display:flex;gap:6px;border-bottom:2px solid var(--border);margin-bottom:16px;padding-bottom:10px">
       ${[['prod','Product ID','#1F3864'],['pack','Packing Details','#7c3aed'],['price','Pricing','#059669'],['vendor','Vendor Info','#d97706']].map(([id,label,color])=>
