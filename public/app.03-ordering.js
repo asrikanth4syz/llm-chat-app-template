@@ -837,6 +837,40 @@ async function loadStandingOrders() {
     </tbody></table></div></div>`;
 }
 
+// Case size & suggested minimum order quantity come straight from the item
+// master (Units per Case, MOQ) — no new data entry. A case chip only shows when
+// a real case size (>1) is set; MOQ falls back to the vendor MOQ when no PI MOQ
+// is recorded.
+function _caseQty(item) { const n = Number(item.units_per_case) || 0; return n > 1 ? n : 0; }
+// MOQ of 1 (the default) is not a real minimum — only surface it when > 1.
+function _moqOf(item)   { const n = Number(item.moq) || Number(item.vendor_moq) || 0; return n > 1 ? n : 0; }
+// A soft nudge (never a hard block): flags a below-minimum quantity, celebrates
+// full cases, and otherwise states the suggested minimum.
+function _moqHintHtml(item, qty) {
+  const moq = _moqOf(item), cq = _caseQty(item);
+  if (moq && qty > 0 && qty < moq) return `<span class="moq-warn">Below minimum — add ${moq - qty} more</span>`;
+  if (cq && qty > 0 && qty % cq === 0) { const n = qty / cq; return `<span class="moq-ok">✓ ${n} full case${n > 1 ? 's' : ''}</span>`; }
+  if (moq && qty === 0) return `Suggested min ${moq}`;
+  if (moq) return `Min ${moq} ✓`;
+  return '&nbsp;';
+}
+// One tap adds exactly one case-worth of units to the line.
+function addCase(sku) {
+  const item = (APP._catalog || []).find(c => c.sku === sku);
+  if (!item) return;
+  changeQty(sku, _caseQty(item) || 1, item.unit_price ?? item.client_price ?? 0);
+}
+// Refresh the per-item MOQ hint in place after any quantity change (the qty
+// handlers update the input value but don't re-render the card).
+function updateMoqHint(sku) {
+  const el = document.getElementById('moq-' + sku);
+  if (!el) return;
+  const item = (APP._catalog || []).find(c => c.sku === sku);
+  if (!item) return;
+  const qty = APP.cart.find(c => c.sku === sku)?.qty || 0;
+  el.innerHTML = _moqHintHtml(item, qty);
+}
+
 function renderCatalogItems(items) {
   if (!items.length) return `<div style="padding:32px;text-align:center;color:var(--text-muted);grid-column:1/-1">No items match your search</div>`;
   const view = APP._catalogView || 'tile';
@@ -844,19 +878,23 @@ function renderCatalogItems(items) {
 
   if (view === 'list') {
     return `<div style="background:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden">
-      <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:8px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
+      <div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 132px':'2fr 1fr 80px 90px 132px'};gap:0;padding:8px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">
         <div>Item</div><div>Category</div>${isClient?'':'<div>Stock</div>'}<div>Price</div><div class="u-center">Quantity</div>
       </div>
       ${items.map(item => {
         const inCart = APP.cart.find(c => c.sku === item.sku);
         const qty = inCart ? inCart.qty : 0;
         const lowStock = item.stock <= item.reorder_level;
-        return `<div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 110px':'2fr 1fr 80px 90px 110px'};gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" data-hover>
+        return `<div style="display:grid;grid-template-columns:${isClient?'2fr 1fr 90px 132px':'2fr 1fr 80px 90px 132px'};gap:0;padding:10px 16px;border-bottom:1px solid var(--border);align-items:center;transition:background .12s" data-hover>
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <div style="font-size:1.4rem;flex-shrink:0">${item.emoji||'📦'}</div>
             <div style="min-width:0">
               <div style="font-weight:600;font-size:.88rem;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h(item.name)}</div>
               <div class="u-muted-xs">${item.sku}${item.brand?' · '+item.brand:''}</div>
+              ${(_caseQty(item)||_moqOf(item))?`<div class="pack-row" style="justify-content:flex-start;margin:4px 0 0">
+                ${_caseQty(item)?`<span class="pack-chip pack-chip-case" title="Units per case">📦 Case ${_caseQty(item)}</span>`:''}
+                ${_moqOf(item)?`<span class="pack-chip pack-chip-moq" title="Suggested minimum order quantity">⬇ Min ${_moqOf(item)}</span>`:''}
+              </div>`:''}
             </div>
           </div>
           <div style="font-size:.8rem;color:var(--text-muted)">${item.category}${item.sub_category&&item.sub_category!=='Normal'?'<br><span style="font-size:.7rem;color:#10b981;font-weight:600">'+item.sub_category+'</span>':''}</div>
@@ -867,12 +905,16 @@ function renderCatalogItems(items) {
             <span>${fmt(item.unit_price)}</span>
             ${item.client_price!=null?`<span style="font-size:.6rem;background:var(--blue-light);color:#1d4ed8;padding:1px 6px;border-radius:8px;font-weight:600;white-space:nowrap">Your Price</span>`:''}
           </div>
-          <div style="display:flex;align-items:center;justify-content:center;gap:6px">
-            <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">−</button>
-            <input type="number" class="qty-input" id="qty-${item.sku}" min="0" step="1" value="${qty}" inputmode="numeric"
-              data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
-              ${dataChangeVal('setQty', item.sku)} ${dataEnterEl('_blurEl')} data-selectall>
-            <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">+</button>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+            <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+              <button class="qty-btn" ${dataActEl('changeQty', item.sku, -1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">−</button>
+              <input type="number" class="qty-input" id="qty-${item.sku}" min="0" step="1" value="${qty}" inputmode="numeric"
+                data-name="${item.name.replace(/"/g,'&quot;')}" aria-label="Quantity for ${h(item.name)}"
+                ${dataChangeVal('setQty', item.sku)} ${dataEnterEl('_blurEl')} data-selectall>
+              <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)} style="width:26px;height:26px;border-radius:50%">+</button>
+            </div>
+            ${_caseQty(item)?`<span class="case-link" ${dataAct('addCase', item.sku)}>＋ case (${_caseQty(item)})</span>`:''}
+            ${(_caseQty(item)||_moqOf(item))?`<div class="moq-hint" id="moq-${item.sku}" style="text-align:center;margin:0">${_moqHintHtml(item, qty)}</div>`:''}
           </div>
         </div>`;
       }).join('')}
@@ -896,6 +938,11 @@ function renderCatalogItems(items) {
         ${item.uom?`<span style="font-size:.7rem;color:var(--text-muted)">/${item.uom}</span>`:''}
       </div>
       ${item.client_price!=null?`<div style="font-size:.67rem;background:var(--blue-light);color:#1d4ed8;padding:1px 7px;border-radius:10px;display:inline-block;margin-bottom:6px">Your Price</div>`:'<div style="margin-bottom:6px"></div>'}
+      ${(_caseQty(item)||_moqOf(item))?`<div class="pack-row">
+        ${_caseQty(item)?`<span class="pack-chip pack-chip-case" title="Units per case">📦 Case = ${_caseQty(item)}</span>`:''}
+        ${_moqOf(item)?`<span class="pack-chip pack-chip-moq" title="Suggested minimum order quantity">⬇ Min ${_moqOf(item)}</span>`:''}
+      </div>`:''}
+      ${(_caseQty(item)||_moqOf(item))?`<div class="moq-hint" id="moq-${item.sku}">${_moqHintHtml(item, qty)}</div>`:''}
       ${isClient?'':`<div class="catalog-stock ${lowStock?'text-danger':''}" style="margin-bottom:10px">
         ${lowStock?'⚠️ ':''}Stock: ${item.stock}
       </div>`}
@@ -906,6 +953,7 @@ function renderCatalogItems(items) {
           ${dataChangeVal('setQty', item.sku)} ${dataEnterEl('_blurEl')} data-selectall>
         <button class="qty-btn" ${dataActEl('changeQty', item.sku, 1, item.unit_price)}>+</button>
       </div>
+      ${_caseQty(item)?`<button class="case-btn" ${dataAct('addCase', item.sku)}>＋ Add a case (${_caseQty(item)})</button>`:''}
     </div>`;
   }).join('');
 }
@@ -938,6 +986,7 @@ function changeQty(sku, delta, price, btnOrName) {
   const qtyEl = document.getElementById('qty-' + sku);
   const newQty = APP.cart.find(c => c.sku === sku)?.qty || 0;
   if (qtyEl) { if (qtyEl.tagName === 'INPUT') qtyEl.value = newQty; else qtyEl.textContent = newQty; }
+  updateMoqHint(sku);
   refreshCartUI();
 }
 
@@ -958,6 +1007,7 @@ function setQty(sku, value) {
   }
   const el = document.getElementById('qty-' + sku);
   if (el && el.tagName === 'INPUT') el.value = APP.cart.find(c => c.sku === sku)?.qty || 0;
+  updateMoqHint(sku);
   refreshCartUI();
 }
 

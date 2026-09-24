@@ -732,6 +732,21 @@ button { font-family: var(--font); cursor: pointer; }
 .qty-input:focus { border-color: var(--primary); }
 .qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
+/* Case quantity & suggested MOQ on the Place Order catalogue.
+   Case/MOQ facts read straight from the item master; the MOQ hint is a soft
+   nudge, and "Add a case" adds one case-worth of units in a single tap. */
+.pack-row { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; margin: 6px 0 3px; }
+.pack-chip { display: inline-flex; align-items: center; gap: 4px; font-size: .66rem; font-weight: 700; padding: 2px 8px; border-radius: 20px; white-space: nowrap; line-height: 1.6; }
+.pack-chip-case { background: var(--blue-light); color: #1d4ed8; }
+.pack-chip-moq  { background: var(--gold-bg, #fef3c7); color: var(--gold); }
+.moq-hint { font-size: .68rem; color: var(--text-muted); margin: 0 0 8px; min-height: 1em; line-height: 1.4; }
+.moq-hint .moq-warn { color: var(--danger); font-weight: 700; }
+.moq-hint .moq-ok   { color: #059669; font-weight: 600; }
+.case-btn { width: 100%; margin-top: 8px; border: 1.5px solid var(--navy); background: var(--surface); color: var(--navy); border-radius: 8px; padding: 6px 8px; font-size: .73rem; font-weight: 700; cursor: pointer; transition: background .15s, color .15s; }
+.case-btn:hover { background: var(--navy); color: #fff; }
+.case-link { font-size: .7rem; color: var(--navy); font-weight: 700; cursor: pointer; }
+.case-link:hover { text-decoration: underline; }
+
 /* Order detail (Option B — progressive disclosure) */
 .ord-meter { margin: 0 0 16px; }
 .ord-meter-bar { height: 9px; border-radius: 5px; background: var(--surface-2); overflow: hidden; display: flex; }

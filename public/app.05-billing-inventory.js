@@ -1248,8 +1248,16 @@ async function sendCriticalAlerts(btn) {
 }
 
 function renderAddItem() {
+  // Brand pick-list of brands already in the catalogue, plus an inline
+  // "add new brand" so a brand missing from the list can be created right here.
+  const brands = [...new Set(Object.values(_invCache || {}).map(i => i.brand).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const brandOpts = '<option value="">— None —</option>' + brands.map(b => `<option value="${h(b)}">${h(b)}</option>`).join('');
   openModal('Add New Item to Catalogue',
     `<div class="form-group"><label>Item Name</label><input type="text" id="item-name" placeholder="e.g. Organic Green Tea"></div>
+     <div class="form-group"><label>Brand</label>
+       <select id="item-brand" ${dataChange('aiNewBrandToggle')}>${brandOpts}<option value="__new__">➕ Add new brand…</option></select>
+       <input type="text" id="item-brand-new" placeholder="Type the new brand name" style="display:none;margin-top:6px">
+     </div>
      <div class="form-group"><label>Category</label>
        <select id="item-cat"><option>Beverages</option><option>Snacks</option><option>Hygiene</option><option>Stationery</option><option>Office</option></select>
      </div>
@@ -1262,9 +1270,23 @@ function renderAddItem() {
      <button class="btn btn-primary" ${dataAct('saveNewItem')}>Add Item</button>`);
 }
 
+// Toggle the inline "new brand" text box on the Add Item modal.
+function aiNewBrandToggle() {
+  const sel = document.getElementById('item-brand'), inp = document.getElementById('item-brand-new');
+  if (!sel || !inp) return;
+  const on = sel.value === '__new__';
+  inp.style.display = on ? '' : 'none';
+  if (on) inp.focus();
+}
 async function saveNewItem() {
+  const brandSel = document.getElementById('item-brand');
+  const brand = brandSel?.value === '__new__'
+    ? (document.getElementById('item-brand-new')?.value || '').trim()
+    : (brandSel?.value || '');
+  if (brandSel?.value === '__new__' && !brand) { showToast('Type the new brand name first', 'error'); return; }
   const body = {
     name: document.getElementById('item-name').value,
+    brand,
     category: document.getElementById('item-cat').value,
     unit_price: +document.getElementById('item-price').value,
     stock: +document.getElementById('item-stock').value,
