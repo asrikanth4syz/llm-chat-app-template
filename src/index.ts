@@ -2950,7 +2950,10 @@ export default {
       return withSecurityHeaders(await route());
     } catch (err) {
       console.error(err);
-      return withSecurityHeaders(json({error:"Internal server error"}, 500));
+      // TEMP DIAGNOSTIC: surface the real error + path so a production 500 can be
+      // pinpointed without log access. Revert to a generic message once fixed.
+      const msg = String((err && (err as Error).message) || err);
+      return withSecurityHeaders(json({ error: `500 ${new URL(request.url).pathname}: ${msg}` }, 500));
     }
   },
 } satisfies ExportedHandler<Env>;
