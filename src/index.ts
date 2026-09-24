@@ -411,14 +411,25 @@ function suggestProductType(name: string, category: string, ingredients: string[
   return "Snacks";
 }
 
+// D1 caps bound parameters at ~100 per query; keep any SKU IN(...) list well
+// under that so a large catalogue never trips "too many SQL variables".
+const D1_IN_CHUNK = 90;
+function chunkSkus(skus: string[]): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < skus.length; i += D1_IN_CHUNK) out.push(skus.slice(i, i + D1_IN_CHUNK));
+  return out;
+}
+
 async function piVerifiedAttrs(env: Env, skus: string[]): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
   if (!skus.length) return out;
-  const ph = skus.map(() => "?").join(",");
-  const { results } = await env.DB.prepare(
-    `SELECT sku, attribute FROM product_attributes WHERE status='verified' AND sku IN (${ph})`
-  ).bind(...skus).all() as { results: { sku: string; attribute: string }[] };
-  for (const r of results) (out[r.sku] = out[r.sku] || []).push(r.attribute);
+  for (const part of chunkSkus(skus)) {
+    const ph = part.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT sku, attribute FROM product_attributes WHERE status='verified' AND sku IN (${ph})`
+    ).bind(...part).all() as { results: { sku: string; attribute: string }[] };
+    for (const r of results) (out[r.sku] = out[r.sku] || []).push(r.attribute);
+  }
   return out;
 }
 
@@ -671,8 +682,10 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
     const { results: cc } = await env.DB.prepare("SELECT sku, client_price FROM client_catalog WHERE client_id=?")
       .bind(user.client_id).all() as { results: { sku: string; client_price: number | null }[] };
     if (!cc.length) return { products: [], facets: {}, total: 0 };
-    const skus = cc.map(r => r.sku); priceMap = Object.fromEntries(cc.map(r => [r.sku, r.client_price]));
-    where += ` AND i.sku IN (${skus.map(() => "?").join(",")})`; params.push(...skus);
+    priceMap = Object.fromEntries(cc.map(r => [r.sku, r.client_price]));
+    // Sub-select (one bound param) rather than one placeholder per SKU — a large
+    // catalogue would otherwise exceed D1's ~100 bound-variable limit.
+    where += ` AND i.sku IN (SELECT sku FROM client_catalog WHERE client_id=?)`; params.push(user.client_id);
   }
   if (attr) { where += " AND i.sku IN (SELECT sku FROM product_attributes WHERE status='verified' AND attribute=?)"; params.push(attr); }
   if (verified) { where += " AND i.sku IN (SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')))"; }
@@ -703,17 +716,19 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
   const screenedSet = new Set<string>();
   try {
     vattrs = await piVerifiedAttrs(env, skus);
-    if (skus.length) {
-      const inClause = skus.map(() => "?").join(",");
+    // Chunk the SKU IN(...) lists so a >100-item catalogue page never trips
+    // D1's ~100 bound-variable limit (which would blank every badge).
+    for (const part of chunkSkus(skus)) {
+      const inClause = part.map(() => "?").join(",");
       const { results: vClaims } = await env.DB.prepare(
         `SELECT DISTINCT sku FROM claims WHERE status='verified' AND (expiry_date IS NULL OR expiry_date >= date('now')) AND sku IN (${inClause})`
-      ).bind(...skus).all() as { results: { sku: string }[] };
+      ).bind(...part).all() as { results: { sku: string }[] };
       for (const r of vClaims) verifiedSet.add(r.sku);
       // "AI screened" = has a screened/extracted claim not yet verified — powers
       // the catalogue's verification facet (Verified / AI Screened / Not verified).
       const { results: sClaims } = await env.DB.prepare(
         `SELECT DISTINCT sku FROM claims WHERE status IN ('ai_screened','ai_extracted','evidence_requested') AND sku IN (${inClause})`
-      ).bind(...skus).all() as { results: { sku: string }[] };
+      ).bind(...part).all() as { results: { sku: string }[] };
       for (const r of sClaims) screenedSet.add(r.sku);
     }
   } catch { /* PI overlay tables not present yet — show products without badges */ }
@@ -2950,10 +2965,7 @@ export default {
       return withSecurityHeaders(await route());
     } catch (err) {
       console.error(err);
-      // TEMP DIAGNOSTIC: surface the real error + path so a production 500 can be
-      // pinpointed without log access. Revert to a generic message once fixed.
-      const msg = String((err && (err as Error).message) || err);
-      return withSecurityHeaders(json({ error: `500 ${new URL(request.url).pathname}: ${msg}` }, 500));
+      return withSecurityHeaders(json({ error: "Internal server error" }, 500));
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -4435,10 +4447,11 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
         "SELECT sku, client_price FROM client_catalog WHERE client_id=?"
       ).bind(user!.client_id).all() as {results: {sku:string; client_price:number|null}[]};
       if (catalogRows.length > 0) {
-        const catalogSkus = catalogRows.map(r => r.sku);
-        const ph = catalogSkus.map(() => '?').join(',');
-        baseFilter += ` AND i.sku IN (${ph})`;
-        params.push(...catalogSkus);
+        // Filter to the client's catalogue with a sub-select (one bound param),
+        // not one placeholder per SKU — a large catalogue would otherwise blow
+        // D1's ~100 bound-variable limit ("too many SQL variables").
+        baseFilter += ` AND i.sku IN (SELECT sku FROM client_catalog WHERE client_id=?)`;
+        params.push(user!.client_id);
 
         // After fetching, overlay per-client prices onto the results
         const priceMap = Object.fromEntries(catalogRows.map(r => [r.sku, r.client_price]));

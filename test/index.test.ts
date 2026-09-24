@@ -131,6 +131,14 @@ beforeAll(async () => {
   adminToken = await login("admin@sp.test", "admin123");
   clientToken = await login("client@sp.test", "client123");
   opsToken    = await login("ops@sp.test",    "ops123");
+
+  // Warm the Product Intelligence schema (idempotent self-heal that seeds the
+  // FSSAI ingredient_dict) here in setup so the seeded dictionary is part of the
+  // baseline every test rolls back to. Otherwise the FIRST test to touch a PI
+  // endpoint seeds the dict but flips the module-level `_piSchemaReady` guard —
+  // and since isolated-storage rolls that test's writes back while the JS flag
+  // persists, later PI tests would fast-path past seeding and see an empty dict.
+  await get("/api/catalog/products", adminToken);
 });
 
 // ════════════════════════════════════════════════════════════════════
@@ -1462,6 +1470,37 @@ describe("Client Catalog", () => {
     const skus = body.map(i => i.sku);
     expect(skus).toContain("SKU001");
     expect(skus).toContain("SKU002");
+  });
+
+  it("GET /api/inventory + /api/catalog/products — client catalogue > 100 SKUs does not blow D1's bound-variable limit", async () => {
+    // Regression: the client filter used to inline one bound param per catalogue
+    // SKU (i.sku IN (?,?,…)), which trips D1's ~100 variable cap ("too many SQL
+    // variables") once a client's catalogue grows large. Seed 150 SKUs and assert
+    // both the ordering inventory endpoint and the PI catalogue endpoint stay 200.
+    const db = env.DB as D1Database;
+    for (let i = 0; i < 150; i++) {
+      const sku = `BULK${String(i).padStart(3, "0")}`;
+      await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active) VALUES (?,?,?,?,?,?)")
+        .bind(sku, `Bulk Item ${i}`, "Grocery", 100 + i, 20, 1).run();
+      await db.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)")
+        .bind("c1", sku, "tst-admin").run();
+    }
+
+    const inv = await get("/api/inventory", clientToken);
+    expect(inv.status).toBe(200);
+    const invBody = await inv.json() as Array<{ sku: string }>;
+    // Client sees only their (now large) catalogue, and it comes back intact.
+    expect(invBody.length).toBeGreaterThanOrEqual(150);
+    expect(invBody.map(i => i.sku)).toContain("BULK149");
+
+    const cat = await get("/api/catalog/products", clientToken);
+    expect(cat.status).toBe(200);
+    const catBody = await cat.json() as { products: Array<{ sku: string }>; total: number };
+    expect(catBody.total).toBeGreaterThanOrEqual(100);
+
+    // Restore c1's catalogue to its seeded state so later tests see only SKU001/002.
+    await db.prepare("DELETE FROM client_catalog WHERE sku LIKE 'BULK%'").run();
+    await db.prepare("DELETE FROM inventory WHERE sku LIKE 'BULK%'").run();
   });
 
   it("DELETE /api/clients/c1/catalog/SKU002 — removes SKU and verifies absence", async () => {
