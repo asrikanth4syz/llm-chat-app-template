@@ -1439,7 +1439,7 @@ async function renderOrderQueue(el) {
       {type:'Ad-Hoc',  color:'#d97706',       icon:'⚡'},
     ];
     return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-bottom:12px">
       <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" ${dataAct('switchOQMainTab', 'orders')}>
         <div class="u-label">Active Orders</div>
         <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
@@ -1461,7 +1461,7 @@ async function renderOrderQueue(el) {
         <div class="u-sub">in warehouse queue</div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
       ${typeCfg.map(({type,color,icon})=>{
         const cnt = byType(type).length;
         const val = byType(type).reduce((s,o)=>s+(o.grand_total||0),0);
