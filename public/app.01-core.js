@@ -1436,7 +1436,9 @@ function openModal(title, body, footer = '') {
   modal.setAttribute('aria-labelledby', 'modal-title');
   modal.tabIndex = -1;
   overlay.classList.remove('hidden');
-  overlay.onclick = e => { if (e.target === overlay) requestCloseModal(); };
+  // Outside-click no longer dismisses the modal — it closes only via the ✕
+  // button (or Esc), so a half-filled form isn't lost by an accidental click.
+  overlay.onclick = null;
   document.removeEventListener('keydown', _modalKeydown, true);
   document.addEventListener('keydown', _modalKeydown, true);
   setTimeout(() => {

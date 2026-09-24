@@ -551,47 +551,47 @@ async function pickOrderModal(orderId) {
   }
 
   openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
-    <p style="color:var(--text-muted);margin-bottom:12px">
-      Enter qty actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
+    <p style="color:var(--text-muted);margin:0 0 12px;font-size:.86rem">
+      Enter the quantity actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
     </p>
     <!-- Live picking tally: lines & qty picked vs the outstanding due qty. -->
-    <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 12px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
+    <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
       <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
       <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
-      <span id="ps-match" style="font-weight:600"></span>
+      <span id="ps-match" style="font-weight:600;margin-left:auto"></span>
     </div>
-    <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>Item Name</th><th>SKU</th><th>Ordered</th>${anyDelivered?'<th>Delivered</th>':''}<th>Due</th><th>Qty to Pick</th><th>Bin Location</th></tr></thead>
-      <tbody id="pick-items-body">
-        ${lines.map(item=>`<tr>
-          <td><b>${item.name}</b></td>
-          <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
-          <td class="u-muted">${item.ordered}</td>
-          ${anyDelivered?`<td style="color:var(--success)">${item.delivered}</td>`:''}
-          <td><b>${item.due}</b></td>
-          <td>
-            <input type="number" class="form-control form-control-sm pick-qty"
-              data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}"
-              value="${item.due}" min="0" max="${item.due}"
-              style="width:72px;text-align:center"
-              ${dataInputEl('onPickQty')}>
-          </td>
-          <td>
-            <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
-              <option value="">— select bin —</option>
-              ${binOptions}
-            </select>
-          </td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-      ${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
-        ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
-      <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-      <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
+      <table class="table" style="margin:0">
+        <thead><tr><th>Item Name</th><th>SKU</th><th class="u-center">Ordered</th>${anyDelivered?'<th class="u-center">Delivered</th>':''}<th class="u-center">Due</th><th class="u-center">Qty to Pick</th><th>Bin Location</th></tr></thead>
+        <tbody id="pick-items-body">
+          ${lines.map(item=>`<tr>
+            <td><b style="color:var(--navy)">${item.name}</b></td>
+            <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
+            <td class="u-center u-muted">${item.ordered}</td>
+            ${anyDelivered?`<td class="u-center" style="color:var(--success)">${item.delivered}</td>`:''}
+            <td class="u-center"><b>${item.due}</b></td>
+            <td class="u-center">
+              <input type="number" class="form-control form-control-sm pick-qty"
+                data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}"
+                value="${item.due}" min="0" max="${item.due}"
+                style="width:72px;text-align:center;margin:0 auto"
+                ${dataInputEl('onPickQty')}>
+            </td>
+            <td>
+              <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
+                <option value="">— select bin —</option>
+                ${binOptions}
+              </select>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
     </div>
-  `);
+  `,
+    `${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
+      ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
+    <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+    <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>`);
   updatePickSummary(); // seed the tally from the pre-filled (=ordered) quantities
 }
 

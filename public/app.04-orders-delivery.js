@@ -668,7 +668,14 @@ async function viewOrder(id) {
     ? trackerHtml
     : (isOpsRole ? orderStepperHtml(order, orderDCs) : trackerHtml);
 
-  openModal(`Order ${id}`,
+  // Order summary figures for the header subtitle and the totals block.
+  const lineCount   = (order.items||[]).length;
+  const totalQty    = (order.items||[]).reduce((s,i)=>s+(Number(i.qty)||0),0);
+  const subtotalAmt = order.subtotal != null ? Number(order.subtotal) : (order.items||[]).reduce((s,i)=>s+(Number(i.qty)||0)*(Number(i.unit_price)||0),0);
+  const grandAmt    = order.grand_total != null ? Number(order.grand_total) : subtotalAmt;
+  const gstAmt      = order.gst != null ? Number(order.gst) : Math.max(0, grandAmt - subtotalAmt);
+
+  openModal(`Order ${id}${order.client_name ? ' · ' + order.client_name : ''}`,
     `<div style="margin-bottom:16px">
       ${topFlow}
       <!-- Row 1: status / type / client / date -->
@@ -710,12 +717,16 @@ async function viewOrder(id) {
     </div>
     ${meterHtml}
     ${orderSection('Line items',
-      qtyMode==='delivered' ? 'delivered qty' : qtyMode==='picked' ? '⚠ picked qty' : `${(order.items||[]).length} items`,
+      `${lineCount} line${lineCount!==1?'s':''} · ${totalQty} unit${totalQty!==1?'s':''}${qtyMode==='delivered'?' · delivered view':qtyMode==='picked'?' · ⚠ picked view':''}`,
       `<table class="table" style="margin:0">
         <thead>${itemsTableHeader}</thead>
         <tbody>${itemsTableRows}</tbody>
       </table>
-      <div class="cart-row cart-total" style="margin-top:12px"><span>Grand Total</span><span>${fmt(order.grand_total)}</span></div>`,
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;justify-content:space-between;font-size:.88rem;color:var(--text-muted)"><span>Subtotal (before tax)</span><span>${fmt(subtotalAmt)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:.88rem;color:var(--text-muted)"><span>GST</span><span>${fmt(gstAmt)}</span></div>
+        <div class="cart-row cart-total" style="display:flex;justify-content:space-between;border-top:2px solid var(--border);padding-top:8px;font-weight:800"><span>Grand Total (incl. tax)</span><span>${fmt(grandAmt)}</span></div>
+      </div>`,
       true)}
     ${amendmentSummaryHTML(order)}
     ${orderDCs.length ? orderSection('Deliveries', `${orderDCs.length} challan${orderDCs.length>1?'s':''}`, dcCards, true) : ''}
