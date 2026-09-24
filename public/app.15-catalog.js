@@ -257,10 +257,10 @@ async function piLoadType(sku) {
   const vocab = tm.type_vocab || [];
   APP._piType = { sku, current: tm.product_type || '', suggested: tm.suggested_type || '' };
   const opts = ['<option value="">— choose —</option>']
-    .concat(vocab.map(v => `<option value="${h(v)}" ${v === tm.product_type ? 'selected' : ''}>${h(v)}</option>`)).join('');
+    .concat(vocab.map(v => `<option value="${h(v)}" ${v === tm.product_type ? 'selected' : ''}>${piTypeIcon(v)} ${h(v)}</option>`)).join('');
   box.innerHTML = `
     ${tm.suggested_type && !tm.product_type ? `<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--verify-bg,#dff3ef);border:1px solid #cde9e3;border-radius:9px;padding:8px 11px;margin-bottom:9px">
-        <span>🤖</span><span style="flex:1">Suggested: <b style="color:var(--navy)">${h(tm.suggested_type)}</b> <span class="u-subtiny">— from name &amp; ingredients</span></span>
+        <span>🤖</span><span style="flex:1">Suggested: ${piTypeIcon(tm.suggested_type)} <b style="color:var(--navy)">${h(tm.suggested_type)}</b> <span class="u-subtiny">— from name &amp; ingredients</span></span>
         <button class="btn btn-secondary btn-sm" ${dataAct('piAcceptType')}>Accept</button>
       </div>` : ''}
     <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
@@ -473,6 +473,17 @@ async function piToggleCollectionPublish(id, name, published, rule) {
 const CAT_DIET = [['vegan', 'Vegan'], ['vegetarian', 'Vegetarian'], ['gluten free', 'Gluten Free'], ['jain', 'Jain'], ['no added sugar', 'No Added Sugar'], ['no artificial colours', 'No Artificial Colours']];
 const CAT_VER = [['verified', '4SYZ Verified'], ['ai', 'AI Screened'], ['none', 'Not yet verified']];
 const CAT_AVAIL = [['in', 'In stock'], ['low', 'Low stock'], ['out', 'On order']];
+// A representative icon per product type — assigned to a product's card when it
+// has no custom emoji, and shown beside the type in facets/enrich.
+const PI_TYPE_ICON = {
+  'Snacks': '🍿', 'Beverages': '🥤', 'Bars & Energy': '🍫', 'Bakery': '🍪',
+  'Confectionery': '🍬', 'Dairy': '🥛', 'Breakfast & Cereal': '🥣',
+  'Staples & Grains': '🌾', 'Condiments & Sauces': '🥫', 'Spreads': '🍯',
+  'Tea & Coffee': '☕', 'Supplements': '💊',
+};
+function piTypeIcon(t) { return PI_TYPE_ICON[t] || '📦'; }
+// The best icon for a product card: its own emoji if set, else the type icon.
+function catProductIcon(p) { return (p.emoji && p.emoji !== '📦') ? p.emoji : piTypeIcon(p.product_type); }
 function catPrice(p) { return Number(p.client_price != null ? p.client_price : p.list_price) || 0; }
 function catNewFacet() { return { type: new Set(), ver: new Set(), diet: new Set(), avail: new Set(), pmin: null, pmax: null }; }
 // Does product p satisfy a single facet option? Shared by sidebar + counts.
@@ -524,7 +535,7 @@ async function renderCatalogClient(el) {
             <input id="cat-q" placeholder="Search products…" ${dataInput('catSearch')} autocomplete="off" style="border:0;outline:0;background:transparent;flex:1;font-size:.9rem;color:var(--ink)">
             <button id="cat-q-clear" ${dataAct('catClearSearch')} title="Clear search" style="display:none;border:0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1;padding:0">✕</button>
           </div>
-          <select id="cat-sort" class="input" ${dataChange('catSortChange')} style="max-width:190px">
+          <select id="cat-sort" ${dataChange('catSortChange')} style="border:1.5px solid var(--border);border-radius:10px;padding:9px 12px;background:var(--surface);color:var(--ink);font-size:.86rem;font-weight:600;max-width:200px;cursor:pointer">
             <option value="rec">Sort: Recommended</option>
             <option value="p_asc">Price: Low → High</option>
             <option value="p_desc">Price: High → Low</option>
@@ -597,7 +608,7 @@ function catRenderSidebar() {
   const types = [...new Set(base.map(p => p.product_type).filter(Boolean))].sort();
   side.innerHTML = `
     <button class="cat-fclose" ${dataAct('catCloseFilters')}>✕ Close filters</button>
-    ${grp('Product type', types.map(t => opt('type', t, h(t))))}
+    ${grp('Product type', types.map(t => opt('type', t, piTypeIcon(t) + ' ' + h(t))))}
     ${grp('Verification', CAT_VER.map(([v, l]) => opt('ver', v, l)))}
     ${grp('Dietary &amp; formulation', CAT_DIET.map(([v, l]) => opt('diet', v, l)))}
     ${grp('Availability', CAT_AVAIL.map(([v, l]) => opt('avail', v, l)))}
@@ -822,7 +833,7 @@ function catCard(p) {
   const cmp = (APP._compare || []).includes(p.sku);
   return `<div class="card" style="padding:0;overflow:hidden;cursor:pointer" ${dataAct('catOpenProduct', p.sku)}>
     <div style="position:relative">
-      <div style="aspect-ratio:16/10;display:grid;place-items:center;font-size:2.2rem;background:var(--surface-2,#f0f2f5)">${p.emoji || '📦'}</div>
+      <div style="aspect-ratio:16/10;display:grid;place-items:center;font-size:2.2rem;background:var(--surface-2,#f0f2f5)">${catProductIcon(p)}</div>
       <button ${dataActEl('catToggleCompare', p.sku)} data-stop title="Add to compare"
         style="position:absolute;top:7px;right:7px;border:1px solid ${cmp ? 'var(--success,#0d9488)' : 'var(--border,#e5e8ee)'};background:${cmp ? 'var(--success,#0d9488)' : 'rgba(255,255,255,.92)'};color:${cmp ? '#fff' : 'var(--navy)'};border-radius:7px;font-size:.68rem;font-weight:800;padding:3px 7px;cursor:pointer;display:flex;align-items:center;gap:4px">⇄ ${cmp ? 'Added' : 'Compare'}</button>
     </div>
@@ -852,7 +863,7 @@ async function catOpenProduct(sku) {
   const badges = `${(d.claims || []).some(c => c.status === 'verified') ? PI_BADGE.verified : ''}
     ${attrs.map(a => `<span class="badge" style="background:#eef1f5;color:#66738a">${h(a.attribute)}</span>`).join('')}`;
   APP._catDetail = d;
-  openModal(`${p.emoji || '📦'} ${h(p.name || sku)}`, `
+  openModal(`${catProductIcon(p)} ${h(p.name || sku)}`, `
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       ${p.brand_name ? `<span style="font-size:.72rem;font-weight:800;color:var(--success,#0d9488);text-transform:uppercase">${h(p.brand_name)}</span>` : ''}
       ${p.pack_size ? `<span class="u-subtiny">${h(p.pack_size)}</span>` : ''}
