@@ -139,7 +139,7 @@ async function renderPlaceOrder(el) {
           <div style="flex:1">
             <div style="font-weight:700;font-size:.88rem;color:var(--amber-text);margin-bottom:4px">Upload the filled CSV</div>
             <div style="font-size:.78rem;color:#78350f;margin-bottom:10px">Items with a quantity will be added to your cart. Review and place the order.</div>
-            <input type="file" id="csv-upload-input" accept=".csv" style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:var(--surface)">
+            <input type="file" id="csv-upload-input" accept=".csv" ${dataChange('csvResetImport')} style="display:block;padding:7px 10px;border:1.5px solid #fcd34d;border-radius:6px;width:100%;box-sizing:border-box;font-size:.82rem;background:var(--surface)">
           </div>
         </div>
       </div>
@@ -147,7 +147,7 @@ async function renderPlaceOrder(el) {
       <div id="csv-import-feedback" style="margin-bottom:14px"></div>
 
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" ${dataAct('processCSVUpload')} style="flex:1">Import to Cart</button>
+        <button class="btn btn-primary" id="csv-import-btn" ${dataAct('processCSVUpload')} style="flex:1">Import to Cart</button>
         <button class="btn btn-secondary" ${dataAct('hideEl', 'csv-upload-modal')}>Cancel</button>
       </div>
     </div>
@@ -567,6 +567,7 @@ function showCSVUploadModal() {
   if (input) input.value = '';
   const fb = document.getElementById('csv-import-feedback');
   if (fb) fb.innerHTML = '';
+  csvResetImport(); // clear any prior import lock so a new upload starts fresh
 }
 
 function searchCatalog(q) {
@@ -647,6 +648,15 @@ async function processCSVUpload() {
   const fb = document.getElementById('csv-import-feedback');
   if (!input || !input.files.length) { if(fb) fb.innerHTML = '<div class="alert alert-warning">Please select a CSV file.</div>'; return; }
   const file = input.files[0];
+  const btn = document.getElementById('csv-import-btn');
+  // Guard against a double-click / re-click importing the same spreadsheet twice
+  // (which would double every line's quantity). A given file imports exactly once;
+  // choosing a different file clears this and allows a fresh import.
+  const sig = `${file.name}:${file.size}:${file.lastModified}`;
+  if (input.dataset.importedSig === sig) {
+    if (fb) fb.innerHTML = '<div style="padding:10px 14px;border-radius:8px;background:var(--amber-bg);border:1px solid #fcd34d;font-size:.84rem;color:var(--amber-text)">This spreadsheet is already in your cart. Pick a different file to import again, or review your order.</div>';
+    return;
+  }
   const text = await file.text();
   const parsed = parseCSVText(text);
   if (parsed.length < 2) { if(fb) fb.innerHTML = '<div class="alert alert-danger">CSV must have a header row and at least one data row.</div>'; return; }
@@ -692,7 +702,24 @@ async function processCSVUpload() {
     <b>${imported} item(s) added to cart</b>${blankQty?`, ${blankQty} row(s) skipped (blank or 0 qty)`:''}.${notFoundNote}
     ${imported?`<div style="margin-top:10px"><button class="btn btn-primary btn-sm" ${dataAct('hideCSVThenReview')}>Review &amp; Place Order →</button></div>`:''}
   </div>`;
-  if (imported) refreshCartUI();
+  if (imported) {
+    // Mark this file imported and lock the Import button so a second click can't
+    // re-add the same items. A new file selection re-enables it (csvResetImport).
+    input.dataset.importedSig = sig;
+    if (btn) { btn.disabled = true; btn.textContent = 'Imported ✓'; }
+    refreshCartUI();
+  }
+}
+
+// Reset the import guard when a different file is chosen (or the modal reopened),
+// so a fresh spreadsheet can be imported.
+function csvResetImport() {
+  const input = document.getElementById('csv-upload-input');
+  const btn = document.getElementById('csv-import-btn');
+  const fb = document.getElementById('csv-import-feedback');
+  if (input) delete input.dataset.importedSig;
+  if (btn) { btn.disabled = false; btn.textContent = 'Import to Cart'; }
+  if (fb) fb.innerHTML = '';
 }
 
 async function loadQuickReorder() {
