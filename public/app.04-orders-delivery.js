@@ -1772,7 +1772,7 @@ async function oqLoadItems() {
               return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
             }).map(r=>{
               const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
-              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
+              const rowBg=ss==='oos'?'background:var(--danger-bg)':ss==='short'?'background:var(--warning-bg)':'';
               return `<tr style="${rowBg}">
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
                 <td><b>${h(r.item_name)}</b></td>
@@ -1822,7 +1822,7 @@ async function oqLoadItems() {
           </div>
         </div>
         ${needPO.length>0?`
-        <div style="padding:10px 16px;background:#fef3cd;border-bottom:1px solid var(--amber);font-size:.8rem;color:var(--amber-text)">
+        <div style="padding:10px 16px;background:var(--amber-bg);border-bottom:1px solid var(--amber);font-size:.8rem;color:var(--amber-text)">
           <b>Consolidated PO needed:</b> ${needPO.map(r=>`${r.item_name} × ${r.ordered_qty-r.stock}`).join(' · ')}
         </div>`:''}
         <div class="table-wrap">
@@ -1833,7 +1833,7 @@ async function oqLoadItems() {
               return (sa==='oos'?0:sa==='short'?1:2)-(sb==='oos'?0:sb==='short'?1:2);
             }).map(r=>{
               const ss=stockStatus(r); const gap=Math.max(0,r.ordered_qty-r.stock);
-              const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
+              const rowBg=ss==='oos'?'background:var(--danger-bg)':ss==='short'?'background:var(--warning-bg)':'';
               return `<tr style="${rowBg}">
                 <td style="font-size:.8rem">${r.brand||'—'}</td>
                 <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
@@ -1864,7 +1864,7 @@ async function oqLoadItems() {
           <thead><tr><th>Brand</th><th>SKU</th><th>Item</th><th>Order</th><th>Client</th><th>Qty</th><th>Stock</th><th>Gap</th><th>Vendor</th><th>Status</th></tr></thead>
           <tbody>${sorted.map(r=>{
             const ss=stockStatus(r); const gap=r.ordered_qty-r.stock;
-            const rowBg=ss==='oos'?'background:#fff5f5':ss==='short'?'background:var(--warning-bg)':'';
+            const rowBg=ss==='oos'?'background:var(--danger-bg)':ss==='short'?'background:var(--warning-bg)':'';
             return `<tr style="${rowBg}">
               <td style="font-size:.8rem">${r.brand||'—'}</td>
               <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>

@@ -507,7 +507,7 @@ async function switchFulfilTab(tab, btn) {
       </div>
       <div class="table-wrap"><table class="table">
         <thead><tr><th>Brand</th><th>Item</th><th>SKU</th><th>Due Qty</th><th>Current Stock</th><th>Suggested PO Qty</th><th>Vendor</th><th>Actions</th></tr></thead>
-        <tbody>${data.sort((a,b)=>(b.due_qty||0)-(a.due_qty||0)).map(r=>`<tr style="${r.current_stock<(r.due_qty||0)?'background:#fff5f5':''}">
+        <tbody>${data.sort((a,b)=>(b.due_qty||0)-(a.due_qty||0)).map(r=>`<tr style="${r.current_stock<(r.due_qty||0)?'background:var(--danger-bg)':''}">
           <td>${h(r.brand_name)}</td>
           <td><b>${h(r.item_name)}</b></td>
           <td style="font-size:.78rem;color:var(--text-muted)">${r.sku}</td>
@@ -1273,7 +1273,7 @@ async function renderConsolidatedDue(el) {
         <thead><tr><th>Client</th><th>Zone</th><th>Order</th><th>Order Date</th><th>Item</th><th>Ordered</th><th>Delivered</th><th>Due</th><th>Age</th></tr></thead>
         <tbody>${data.length ? data.sort((a,b)=>(b.days_overdue||0)-(a.days_overdue||0)).map(r=>{
           const daysColor = r.days_overdue>7?'var(--danger)':r.days_overdue>3?'var(--warning)':'var(--text)';
-          return `<tr style="${r.days_overdue>7?'background:#fff5f5':''}">
+          return `<tr style="${r.days_overdue>7?'background:var(--danger-bg)':''}">
             <td><b>${h(r.client_name)}</b></td>
             <td><span class="badge badge-secondary">${r.zone||'—'}</span></td>
             <td style="font-size:.82rem">${r.order_id}</td>
