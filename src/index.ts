@@ -2402,6 +2402,14 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE order_items ADD COLUMN item_note TEXT").run();
   } catch { /* column already exists */ }
+  // Per-line delivery status (opt-in, per client). line_status: on_track | delayed
+  // | partial | substituted; line_eta a date; delay_reason a short tag; line_note
+  // an ops→client note (distinct from item_note, which is the client's own remark).
+  for (const col of ["line_status TEXT", "line_eta TEXT", "delay_reason TEXT", "line_note TEXT"]) {
+    try { await env.DB.prepare(`ALTER TABLE order_items ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
+  // Per-client feature flag: show per-item delivery status/ETA to this client.
+  try { await env.DB.prepare("ALTER TABLE clients ADD COLUMN delay_tracking_enabled INTEGER DEFAULT 0").run(); } catch { /* exists */ }
   try {
     await env.DB.prepare("ALTER TABLE client_inventory ADD COLUMN is_critical INTEGER DEFAULT 0").run();
   } catch { /* column already exists */ }
@@ -2668,6 +2676,7 @@ export default {
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);
       if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
       if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
+      if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path==="/api/pipeline"               && method==="GET")  return handlePipeline(request,env);
@@ -3164,7 +3173,7 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
   if (denied) return denied;
   const id = path.split("/").pop()!;
 
-  const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,u.name as creator_name
+  const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,c.delay_tracking_enabled AS client_delay_tracking,u.name as creator_name
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first();
   if (!order) return json({error:"Not found"}, 404);
 
@@ -3189,6 +3198,34 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
     if (b) budget = { monthly_budget: b.monthly_budget, used_excluding_this: b.used_excl };
   }
   return json({...order, items, history, comments, amendments, budget});
+}
+
+// PATCH /api/orders/:id/items/:itemId/delay — set a per-line delivery status/ETA/
+// reason that the client can see. Ops/warehouse only, and only when the order's
+// client has per-item delivery updates enabled (delay_tracking_enabled=1).
+const LINE_DELAY_STATUSES = ["on_track", "delayed", "partial", "substituted"];
+async function handleSetOrderItemDelay(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (isExternalRole(user!.role)) return json({ error: "Forbidden" }, 403); // clients can't set their own line status
+  const parts = path.split("/"); // ['', 'api', 'orders', <id>, 'items', <itemId>, 'delay']
+  const orderId = parts[3], itemId = parts[5];
+  const order = await env.DB.prepare(
+    "SELECT o.id AS id, c.delay_tracking_enabled AS flag FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
+  ).bind(orderId).first() as { id?: string; flag?: number } | null;
+  if (!order?.id) return json({ error: "Order not found" }, 404);
+  if (Number(order.flag) !== 1) return json({ error: "Per-item delivery updates are not enabled for this client." }, 403);
+  const body = await request.json() as Record<string, unknown>;
+  const status = LINE_DELAY_STATUSES.includes(String(body.line_status)) ? String(body.line_status) : "on_track";
+  const eta    = body.line_eta ? String(body.line_eta).slice(0, 10) : null;
+  const reason = body.delay_reason ? String(body.delay_reason).slice(0, 80) : null;
+  const note   = body.line_note ? String(body.line_note).slice(0, 200) : null;
+  const res = await env.DB.prepare(
+    "UPDATE order_items SET line_status=?, line_eta=?, delay_reason=?, line_note=? WHERE id=? AND order_id=?"
+  ).bind(status, eta, reason, note, itemId, orderId).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: "Line item not found" }, 404);
+  await audit(env, user, "UPDATE", "order_item", itemId, undefined, `delay:${status}${eta?`@${eta}`:""}${reason?` (${reason})`:""}`);
+  return json({ ok: true });
 }
 
 // ── Order lifecycle & pipeline (single-order timeline + control-tower board) ──
@@ -6240,6 +6277,7 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
     fields.push("pan=?");   vals.push(pan);
   }
   if (body.active             !== undefined) { fields.push("active=?");             vals.push(body.active); }
+  if (body.delay_tracking_enabled !== undefined) { fields.push("delay_tracking_enabled=?"); vals.push(body.delay_tracking_enabled ? 1 : 0); }
   if (!fields.length) return json({error:"Nothing to update"}, 400);
   vals.push(id);
   await env.DB.prepare(`UPDATE clients SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();

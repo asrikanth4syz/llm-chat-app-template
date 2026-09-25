@@ -967,6 +967,13 @@ function clientFormFields(prefix, c={}) {
     <div class="grid-2">
       <div class="form-group"><label>Monthly Budget (₹)</label><input type="number" id="${prefix}-budget" value="${c.monthly_budget||500000}"></div>
       <div class="form-group"><label>Approval Threshold (₹)</label><input type="number" id="${prefix}-threshold" value="${c.approval_threshold||100000}"></div>
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0">
+        <input type="checkbox" id="${prefix}-delaytrack" ${c.delay_tracking_enabled?'checked':''} style="width:16px;height:16px;flex-shrink:0">
+        <span style="font-weight:600">Per-item delivery updates
+          <span style="font-size:.72rem;color:var(--text-muted);font-weight:400">— when a line is delayed, show this client the per-item status, ETA &amp; reason</span></span>
+      </label>
     </div>`;
 }
 
@@ -1061,6 +1068,10 @@ async function saveClient() {
   body.gstin = tax.gstin; body.pan = tax.pan;
   const res = await api('/clients', { method:'POST', body: JSON.stringify(body) });
   if (!res) return;
+  // Per-item delivery updates default off; opt in via a follow-up PATCH if ticked.
+  if (document.getElementById('cl-delaytrack')?.checked && res.id) {
+    await api('/clients/' + res.id, { method:'PATCH', body: JSON.stringify({ delay_tracking_enabled: 1 }) }).catch(()=>{});
+  }
   closeModal();
   showToast('Client added'); navigate('clients');
 }
@@ -1115,6 +1126,7 @@ async function saveEditClient(id) {
     map_pin: document.getElementById('ecl-mappin').value.trim(),
     monthly_budget: +document.getElementById('ecl-budget').value,
     approval_threshold: +document.getElementById('ecl-threshold').value,
+    delay_tracking_enabled: document.getElementById('ecl-delaytrack')?.checked ? 1 : 0,
   };
   if (!body.name) { showToast('Company name required','error'); return; }
   const tax = readTaxIds('ecl');

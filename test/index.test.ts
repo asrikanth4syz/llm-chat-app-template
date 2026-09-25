@@ -1036,6 +1036,45 @@ describe("Orders", () => {
     await db.prepare("DELETE FROM inventory WHERE sku IN ('GSTA','GSTB')").run();
   });
 
+  it("per-item delivery status — gated by client flag, ops-only, client-visible", async () => {
+    const db = env.DB as D1Database;
+    // Place an order for c1 with one line.
+    const created = await post("/api/orders", {
+      client_id: "c1", save_as_draft: true,
+      items: [{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 5, unit_price: 450 }],
+    }, opsToken);
+    const orderId = (await created.json() as { id: string }).id;
+    const itemId = (await db.prepare("SELECT id FROM order_items WHERE order_id=? LIMIT 1").bind(orderId).first() as { id: string }).id;
+    const delayPath = `/api/orders/${orderId}/items/${itemId}/delay`;
+    const payload = { line_status: "delayed", line_eta: "2026-09-30", delay_reason: "Vendor stock delay", line_note: "offering Daawat" };
+
+    // Flag OFF (default): the endpoint refuses.
+    await patch("/api/clients/c1", { delay_tracking_enabled: 0 }, adminToken);
+    expect((await patch(delayPath, payload, opsToken)).status).toBe(403);
+
+    // Enable for c1, then ops can set the line status.
+    await patch("/api/clients/c1", { delay_tracking_enabled: 1 }, adminToken);
+    const set = await patch(delayPath, payload, opsToken);
+    expect(set.status).toBe(200);
+
+    // Client cannot set their own line status even when enabled.
+    expect((await patch(delayPath, payload, clientToken)).status).toBe(403);
+
+    // Stored + surfaced on the order (incl. the client-visible flag).
+    const detail = await (await get(`/api/orders/${orderId}`, opsToken)).json() as {
+      client_delay_tracking: number; items: Array<{ id: string; line_status: string; line_eta: string; delay_reason: string; line_note: string }>;
+    };
+    expect(Number(detail.client_delay_tracking)).toBe(1);
+    const line = detail.items.find(i => i.id === itemId)!;
+    expect(line.line_status).toBe("delayed");
+    expect(line.line_eta).toBe("2026-09-30");
+    expect(line.delay_reason).toBe("Vendor stock delay");
+    expect(line.line_note).toBe("offering Daawat");
+
+    // Restore default so later tests are unaffected.
+    await patch("/api/clients/c1", { delay_tracking_enabled: 0 }, adminToken);
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

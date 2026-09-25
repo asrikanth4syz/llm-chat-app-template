@@ -514,6 +514,63 @@ function amendmentSummaryHTML(order) {
   return orderSection(`✏️ Amendment (rev ${a.revision}) ${statusNote}`, `${ams.length} change${ams.length>1?'s':''}`, body, true);
 }
 
+// Read-only per-item delivery chip (shown to ops AND client). Nothing renders for
+// an unset or on-track line, so it's invisible unless a real delay is flagged.
+function lineDelayChip(i) {
+  const s = i && i.line_status;
+  if (!s || s === 'on_track') return '';
+  const map = {
+    delayed:     ['🟠 Delayed',     'var(--danger)',       'var(--danger-bg)'],
+    partial:     ['🟡 Partial',     'var(--amber-text)',   'var(--amber-bg)'],
+    substituted: ['🟣 Substituted', 'var(--purple,#7c3aed)','var(--purple-bg,#ede9fe)'],
+  };
+  const m = map[s]; if (!m) return '';
+  const [label, color, bg] = m;
+  const eta = i.line_eta ? ` · ETA ${fmtDate(i.line_eta)}` : '';
+  const detail = (i.delay_reason || i.line_note)
+    ? `<div style="font-size:.7rem;color:var(--amber-text);margin-top:2px">${[i.delay_reason, i.line_note].filter(Boolean).map(h).join(' — ')}</div>`
+    : '';
+  return `<div style="margin-top:3px"><span style="display:inline-block;font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:20px;background:${bg};color:${color}">${label}${eta}</span>${detail}</div>`;
+}
+
+// Ops modal to set a line's delivery status / ETA / reason (client-visible).
+function orderItemDelayModal(itemId) {
+  const order = APP._viewOrder; if (!order) return;
+  const it = (order.items || []).find(x => String(x.id) === String(itemId)); if (!it) return;
+  const st = it.line_status || 'on_track';
+  const seg = (val, lbl) => `<button type="button" class="oid-seg${st===val?' on':''}" data-val="${val}" ${dataActEl('oidPickStatus', val)}>${lbl}</button>`;
+  const reasons = ['Vendor stock delay','Logistics','Quality re-check','Substitution offered','Other'];
+  openModal(`Delivery status — ${h(it.name)}`,
+    `<input type="hidden" id="oid-status" value="${st}">
+     <div class="form-group"><label>Line status</label>
+       <div style="display:flex;flex-wrap:wrap;gap:6px">
+         ${seg('on_track','🟢 On track')}${seg('delayed','🟠 Delayed')}${seg('partial','🟡 Partial')}${seg('substituted','🟣 Substituted')}
+       </div>
+     </div>
+     <div class="form-group"><label>New ETA for this item</label><input type="date" id="oid-eta" value="${it.line_eta||''}"></div>
+     <div class="form-group"><label>Reason (shown to client)</label>
+       <select id="oid-reason"><option value="">— none —</option>${reasons.map(r=>`<option ${it.delay_reason===r?'selected':''}>${r}</option>`).join('')}</select></div>
+     <div class="form-group"><label>Short note to client (optional)</label>
+       <input type="text" id="oid-note" maxlength="200" value="${(it.line_note||'').replace(/"/g,'&quot;')}" placeholder="e.g. India Gate short; offering Daawat"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveOrderItemDelay', itemId)}>Save · client sees it</button>`);
+}
+function oidPickStatus(val) {
+  const inp = document.getElementById('oid-status'); if (inp) inp.value = val;
+  document.querySelectorAll('.oid-seg').forEach(b => b.classList.toggle('on', b.dataset.val === val));
+}
+async function saveOrderItemDelay(itemId) {
+  const order = APP._viewOrder; if (!order) return;
+  const body = {
+    line_status:  document.getElementById('oid-status')?.value || 'on_track',
+    line_eta:     document.getElementById('oid-eta')?.value || null,
+    delay_reason: document.getElementById('oid-reason')?.value || null,
+    line_note:    document.getElementById('oid-note')?.value?.trim() || null,
+  };
+  const res = await api(`/orders/${order.id}/items/${itemId}/delay`, { method:'PATCH', body: JSON.stringify(body) });
+  if (res) { closeModal(); showToast('Delivery status updated — client can see it'); viewOrder(order.id); }
+}
+
 async function viewOrder(id) {
   const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
@@ -582,13 +639,21 @@ async function viewOrder(id) {
     ? `<tr><th>Item</th><th>Ordered</th><th>Picked</th><th>Unit</th><th>Total</th></tr>`
     : `<tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>`;
 
+  // Per-item delivery status (opt-in per client). Ops (with the client enabled)
+  // can flag a line; the chip that results is visible to everyone incl. the client.
+  const canFlagDelay = !['client_admin','client_user','client_approver'].includes(APP.user?.role||'') && Number(order.client_delay_tracking) === 1;
+  const delayCell = (i) => {
+    let out = lineDelayChip(i);
+    if (canFlagDelay) out += `<div style="margin-top:4px"><button class="btn btn-secondary btn-sm" style="padding:3px 9px;font-size:.7rem" ${dataAct('orderItemDelayModal', i.id)}>⏱ ${i.line_status && i.line_status!=='on_track' ? 'Edit status' : 'Flag / ETA'}</button></div>`;
+    return out;
+  };
   const itemsTableRows = (order.items||[]).map(i => {
     const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:var(--amber-text);background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
     if (qtyMode === 'delivered') {
       const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
       const short = d.due > 0;
       return `<tr>
-        <td>${h(i.name)}${noteHtml}</td>
+        <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
         <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
@@ -599,14 +664,14 @@ async function viewOrder(id) {
       const picked = allocMap[i.sku];
       const isShort = picked !== undefined && picked < i.qty;
       return `<tr>
-        <td>${h(i.name)}${noteHtml}</td>
+        <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
         <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
     }
-    return `<tr><td>${h(i.name)}${noteHtml}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
+    return `<tr><td>${h(i.name)}${noteHtml}${delayCell(i)}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
   }).join('');
 
   const commentsHtml = `
@@ -668,6 +733,7 @@ async function viewOrder(id) {
     ? trackerHtml
     : (isOpsRole ? orderStepperHtml(order, orderDCs) : trackerHtml);
 
+  APP._viewOrder = order; // available to the per-item delay modal
   // Order summary figures for the header subtitle and the totals block.
   const lineCount   = (order.items||[]).length;
   const totalQty    = (order.items||[]).reduce((s,i)=>s+(Number(i.qty)||0),0);

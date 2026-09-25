@@ -747,6 +747,10 @@ button { font-family: var(--font); cursor: pointer; }
 .case-link { font-size: .7rem; color: var(--navy); font-weight: 700; cursor: pointer; }
 .case-link:hover { text-decoration: underline; }
 
+/* Segmented status picker in the per-item delivery-status modal. */
+.oid-seg { border: 1.5px solid var(--border); background: var(--surface); color: var(--text-muted); border-radius: 8px; padding: 6px 11px; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.oid-seg.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+
 /* Order detail (Option B — progressive disclosure) */
 .ord-meter { margin: 0 0 16px; }
 .ord-meter-bar { height: 9px; border-radius: 5px; background: var(--surface-2); overflow: hidden; display: flex; }
