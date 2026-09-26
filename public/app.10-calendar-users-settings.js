@@ -968,7 +968,7 @@ async function settingsTab(tab, btn) {
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
           <div style="font-size:.8rem;color:var(--text-muted)">
-            ${z.last_sync_at ? `Last run: <b>${fmtDate(z.last_sync_at)}</b>` : 'Never synced'}
+            ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
           </div>
         </div>
@@ -978,8 +978,8 @@ async function settingsTab(tab, btn) {
           ${/auth:/i.test(String(z.last_result.error)) ? `<div style="margin-top:4px;color:var(--text-muted)">An <code>auth:</code> error means Zoho rejected the token refresh — check <code>ZOHO_CLIENT_ID</code>/<code>ZOHO_CLIENT_SECRET</code>/<code>ZOHO_REFRESH_TOKEN</code> and that <code>ZOHO_DC</code> matches your Zoho region (in / com / eu / com.au).</div>` : ''}
         </div>` : ''}
         <div style="font-size:.78rem;color:var(--text-muted);display:flex;flex-wrap:wrap;gap:12px">
-          <span>Cursor: <b>${z.cursor_utc ? fmtDate(z.cursor_utc) : '—'}</b></span>
-          <span>Last full reconcile: <b>${z.last_full_at ? fmtDate(z.last_full_at) : 'never'}</b>${z.last_full_stale ? ' <span class="badge badge-warning">stale &gt;48h</span>' : ''}</span>
+          <span>Cursor: <b>${z.cursor_utc ? fmtDateTime(z.cursor_utc) : '—'}</b></span>
+          <span>Last full reconcile: <b>${z.last_full_at ? fmtDateTime(z.last_full_at) : 'never'}</b>${z.last_full_stale ? ' <span class="badge badge-warning">stale &gt;48h</span>' : ''}</span>
         </div>
 
         ${(z.recent_log||[]).length ? `
@@ -987,7 +987,7 @@ async function settingsTab(tab, btn) {
           <table class="table" style="margin:0">
             <thead><tr><th>When</th><th>Run</th><th>Fetched</th><th>Written</th><th>Failed</th></tr></thead>
             <tbody>${z.recent_log.map(l=>`<tr>
-              <td style="font-size:.8rem;color:var(--text-muted)">${fmtDate(l.created_at)}</td>
+              <td style="font-size:.8rem;color:var(--text-muted)">${fmtDateTime(l.created_at)}</td>
               <td style="font-size:.8rem">${h(String(l.type||'').replace(/^zoho-sync-?/,'') || 'sync')}</td>
               <td>${l.total ?? 0}</td>
               <td>${l.success_count ?? 0}</td>

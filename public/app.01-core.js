@@ -1349,6 +1349,11 @@ function fmtDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
 }
+// Date + time — for logs/audit trails where the clock time matters (e.g. sync history).
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true });
+}
 
 function statusBadge(s) {
   const map = {
