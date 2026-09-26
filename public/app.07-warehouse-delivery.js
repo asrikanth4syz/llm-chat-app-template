@@ -511,10 +511,15 @@ function createDCFromPicklist(orderId) {
 }
 
 async function confirmCreateDCFromPicklist(orderId) {
-  const res = await api(`/orders/${orderId}/transition`, {
-    method: 'POST',
-    body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
-  });
+  if (APP._dcCreating) return; // guard against a double-click firing two dispatches
+  APP._dcCreating = true;
+  let res;
+  try {
+    res = await api(`/orders/${orderId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ to: 'IN_SHIPMENT', note: 'Items picked — dispatched to delivery' })
+    });
+  } finally { APP._dcCreating = false; }
   closeModal();
   if (!res) return;
   showToast(`Order ${orderId} dispatched — DC created`);
@@ -1286,15 +1291,20 @@ async function confirmDispatch(dcId) {
   const staff_id               = document.getElementById('dp-staff').value;
   const scheduled_time         = document.getElementById('dp-time').value;
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
+  if (APP._dcDispatching) return; // guard against a double-click double-dispatching
+  APP._dcDispatching = true;
   // One atomic dispatch call carries every logistics field — no follow-up PATCH.
-  const res = await api('/delivery-challans/' + dcId + '/dispatch', {
-    method:'POST',
-    body: JSON.stringify({
-      vehicle_no, driver_name, driver_phone,
-      staff_id: staff_id||null, scheduled_time: scheduled_time||null,
-      expected_delivery_date: expected_delivery_date||null
-    })
-  });
+  let res;
+  try {
+    res = await api('/delivery-challans/' + dcId + '/dispatch', {
+      method:'POST',
+      body: JSON.stringify({
+        vehicle_no, driver_name, driver_phone,
+        staff_id: staff_id||null, scheduled_time: scheduled_time||null,
+        expected_delivery_date: expected_delivery_date||null
+      })
+    });
+  } finally { APP._dcDispatching = false; }
   closeModal();
   if (!res) return;
   showToast(`DC ${dcId} dispatched — in transit`);

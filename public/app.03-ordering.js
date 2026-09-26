@@ -292,7 +292,10 @@ function refreshCartReviewUI() {
   if (itemsEl) {
     itemsEl.innerHTML = APP.cart.length === 0
       ? `<div class="u-empty-lg">Cart is empty — <a href="#" ${dataAct('switchOrderStep', 'catalogue')} data-prevent>browse catalogue</a></div>`
-      : APP.cart.map(item => `
+      : `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 18px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">
+          <span>Item</span>
+          <span style="display:flex;align-items:center;gap:8px"><span style="min-width:96px;text-align:center">Qty</span><span style="min-width:64px;text-align:right">Amount</span><span style="width:22px"></span></span>
+        </div>` + APP.cart.map(item => `
         <div style="padding:12px 18px;border-bottom:1px solid var(--border)">
           <div style="display:flex;align-items:center;gap:12px">
             <div style="width:38px;height:38px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0">${item.emoji||'📦'}</div>
@@ -325,7 +328,7 @@ function refreshCartReviewUI() {
   const summaryEl = document.getElementById('review-summary');
   if (summaryEl) {
     summaryEl.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${count} item${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:.88rem"><span class="u-muted">${APP.cart.length} line${APP.cart.length!==1?'s':''} · ${count} unit${count!==1?'s':''}</span><span>${fmt(total)}</span></div>
       <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:.88rem"><span class="u-muted">${cartGstLabel()}</span><span>${fmt(gst)}</span></div>
       <div style="display:flex;justify-content:space-between;padding-top:12px;border-top:2px solid var(--border);font-weight:800;font-size:1.05rem"><span>Total</span><span style="color:var(--navy)">${fmt(grand)}</span></div>
       ${grand > 100000 ? `<div class="alert alert-warning" style="margin-top:12px;font-size:.8rem">⚠️ Amount exceeds ₹1L — approval required</div>` : ''}

@@ -4345,7 +4345,17 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     }
   }
 
-  await env.DB.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=?").bind(body.to, id).run();
+  // Atomic compare-and-swap on the status: only the call that actually flips the
+  // order does the side effects (history, reservation release, DC creation). A
+  // concurrent double-click or a network retry finds the status already changed →
+  // 0 rows updated → returns the current state WITHOUT creating a duplicate
+  // challan. Without this, two fast "Dispatch" clicks each created a DC.
+  const swap = await env.DB.prepare("UPDATE orders SET status=?,updated_at=datetime('now') WHERE id=? AND status=?")
+    .bind(body.to, id, order.status).run();
+  if (!swap.meta || swap.meta.changes === 0) {
+    const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
+    return json({ id, status: cur?.status || body.to, deduped: true });
+  }
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
     .bind(uid(), id, order.status, body.to, user!.sub, user!.name, body.note||null).run();
 
@@ -5512,6 +5522,7 @@ async function handleGetDC(request: Request, env: Env, path: string): Promise<Re
 async function handleBillDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","finance_admin"].includes(user!.role)) return json({ error: "Only finance/ops may bill a delivery challan" }, 403);
   const id = path.split("/").slice(-2)[0];
   await env.DB.prepare("UPDATE delivery_challans SET billed=1,billed_at=datetime('now') WHERE id=?").bind(id).run();
   const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;

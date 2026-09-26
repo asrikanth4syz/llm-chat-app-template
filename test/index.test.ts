@@ -1075,6 +1075,24 @@ describe("Orders", () => {
     await patch("/api/clients/c1", { delay_tracking_enabled: 0 }, adminToken);
   });
 
+  it("dispatch transition is idempotent — a repeated click creates only ONE delivery challan", async () => {
+    const db = env.DB as D1Database;
+    const oid = "TST-SHIP-DEDUP";
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(oid, "c1", "tst-ops", "QUALITY_CHECK", 2250, 405, 2655, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("tst-ship-oi1", oid, "SKU001", "Basmati Rice 5kg", 5, 450, 2250).run();
+    // Fire the same dispatch transition twice at once (double-click / retry).
+    await Promise.all([
+      post(`/api/orders/${oid}/transition`, { to: "IN_SHIPMENT" }, opsToken),
+      post(`/api/orders/${oid}/transition`, { to: "IN_SHIPMENT" }, opsToken),
+    ]);
+    const dc = await db.prepare("SELECT COUNT(*) c FROM delivery_challans WHERE order_id=?").bind(oid).first() as { c: number };
+    expect(Number(dc.c)).toBe(1); // exactly one challan, not two
+    await db.prepare("DELETE FROM dc_items WHERE dc_id IN (SELECT id FROM delivery_challans WHERE order_id=?)").bind(oid).run();
+    await db.prepare("DELETE FROM delivery_challans WHERE order_id=?").bind(oid).run();
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

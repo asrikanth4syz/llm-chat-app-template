@@ -37,6 +37,7 @@ async function renderDCBilling(el) {
   if (!dcs) return;
   const unbilled = dcs.filter(d => d.status==='DELIVERED' && !d.billed);
   const billed   = dcs.filter(d => d.billed);
+  const canBill  = ['super_admin','ops_admin','finance_admin'].includes(APP.user?.role);
   if (!APP._financeTab) APP._financeTab = 'dc_tracker';
 
   function agingBadge(dc) {
@@ -95,7 +96,7 @@ async function renderDCBilling(el) {
               <td><b>${fmt(dc.order_value)}</b></td>
               <td>${fmtDate(dc.delivered_at||dc.dispatched_at)}</td>
               <td>${agingBadge(dc)}</td>
-              <td><button class="btn btn-gold btn-sm" ${dataAct('billDC', dc.id)}>Bill DC</button></td>
+              <td>${canBill ? `<button class="btn btn-gold btn-sm" ${dataAct('billDC', dc.id)}>Bill DC</button>` : `<span style="font-size:.72rem;color:var(--text-muted)" title="Billing is handled by Finance / Ops">View only</span>`}</td>
             </tr>`).join('')||'<tr><td colspan="7" class="u-empty">All DCs are billed</td></tr>'}
             </tbody>
           </table>

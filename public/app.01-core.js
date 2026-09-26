@@ -238,10 +238,13 @@ const NAV = {
   ],
   warehouse: [
     { section:'Home' },
-    { id:'dashboard',   label:'Home',          icon:iconDashboard, badge:null },
+    { id:'dashboard',        label:'Home',        icon:iconDashboard, badge:null },
+    { section:'Fulfilment' },
+    { id:'fulfilment',       label:'Pick & Pack', icon:iconFulfil,    badge:'!' },
+    { id:'consolidated_due', label:'Due Items',   icon:iconClock,     badge:null },
     { section:'Inventory' },
-    { id:'warehouse',   label:'Warehouse',     icon:iconWarehouse, badge:null },
-    { id:'inventory',   label:'Inventory',     icon:iconInventory, badge:null },
+    { id:'warehouse',        label:'Warehouse',   icon:iconWarehouse, badge:null },
+    { id:'inventory',        label:'Inventory',   icon:iconInventory, badge:null },
   ],
   delivery: [
     { section:'Home' },
