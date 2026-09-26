@@ -2077,9 +2077,10 @@ async function handleZohoInvWebhook(request: Request, env: Env): Promise<Respons
 }
 
 // ── Notification helper ───────────────────────────────────────────────
-async function pushNotification(env: Env, userRole: string | null, message: string): Promise<void> {
-  await env.DB.prepare("INSERT INTO notifications (id,user_role,message) VALUES (?,?,?)")
-    .bind(uid(), userRole, message).run().catch(()=>{});
+async function pushNotification(env: Env, userRole: string | null, message: string, userId: string | null = null): Promise<void> {
+  // userId set → private to that one person; else falls back to role/broadcast.
+  await env.DB.prepare("INSERT INTO notifications (id,user_role,message,user_id) VALUES (?,?,?,?)")
+    .bind(uid(), userId ? null : userRole, message, userId).run().catch(()=>{});
 }
 
 // ── Auto-reorder (Gap 8) ──────────────────────────────────────────────
@@ -2410,6 +2411,10 @@ async function fixCategoryNames(env: Env): Promise<void> {
   }
   // Per-client feature flag: show per-item delivery status/ETA to this client.
   try { await env.DB.prepare("ALTER TABLE clients ADD COLUMN delay_tracking_enabled INTEGER DEFAULT 0").run(); } catch { /* exists */ }
+  // Per-user notification targeting. A notification with user_id set is private to
+  // that one person (e.g. "your order moved to PICKED" for the actor who moved it);
+  // when user_id is NULL the older user_role/broadcast rules apply.
+  try { await env.DB.prepare("ALTER TABLE notifications ADD COLUMN user_id TEXT").run(); } catch { /* exists */ }
   try {
     await env.DB.prepare("ALTER TABLE client_inventory ADD COLUMN is_critical INTEGER DEFAULT 0").run();
   } catch { /* column already exists */ }
@@ -4402,7 +4407,9 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     }
   }
 
-  await pushNotification(env, null, `Order ${id} → ${body.to.replace(/_/g," ")}`);
+  // Private to the actor who moved the order — an order-status change is a
+  // confirmation for the person performing it, not a broadcast to every login.
+  await pushNotification(env, null, `Order ${id} → ${body.to.replace(/_/g," ")}`, user!.sub);
   await audit(env, user, "TRANSITION", "order", id, order.status, body.to);
   return json({id, status: body.to});
 }
@@ -6692,15 +6699,18 @@ async function handlePatchProfile(request: Request, env: Env): Promise<Response>
 async function handleListNotifications(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT * FROM notifications WHERE user_role IS NULL OR user_role=? ORDER BY created_at DESC LIMIT 20")
-    .bind(user!.role).all();
+  // Visible if it's addressed to me personally, OR it's not personal and matches
+  // my role / is a broadcast. A personal note (user_id set) never leaks to others.
+  const {results} = await env.DB.prepare(
+    "SELECT * FROM notifications WHERE user_id=? OR (user_id IS NULL AND (user_role IS NULL OR user_role=?)) ORDER BY created_at DESC LIMIT 20")
+    .bind(user!.sub, user!.role).all();
   return json(results);
 }
 
 async function handleReadAllNotifications(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  await env.DB.prepare("UPDATE notifications SET read_flag=1 WHERE user_role IS NULL OR user_role=?").bind(user!.role).run();
+  await env.DB.prepare("UPDATE notifications SET read_flag=1 WHERE user_id=? OR (user_id IS NULL AND (user_role IS NULL OR user_role=?))").bind(user!.sub, user!.role).run();
   return json({ok:true});
 }
 

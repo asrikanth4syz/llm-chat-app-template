@@ -1093,6 +1093,25 @@ describe("Orders", () => {
     await db.prepare("DELETE FROM delivery_challans WHERE order_id=?").bind(oid).run();
   });
 
+  it("order-status-change notification is private to the actor, not broadcast to every login", async () => {
+    const db = env.DB as D1Database;
+    const oid = "TST-NOTIF-PRIV";
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(oid, "c1", "tst-ops", "APPROVED", 1000, 180, 1180, "Regular").run();
+    // ops moves the order forward — this fires the generic status-change notice.
+    const tr = await post(`/api/orders/${oid}/transition`, { to: "ACKNOWLEDGED" }, opsToken);
+    expect(tr.status).toBe(200);
+    const seenBy = async (token: string) => {
+      const r = await get("/api/notifications", token);
+      const list = await r.json() as { message: string }[];
+      return list.some(n => (n.message || "").includes(oid));
+    };
+    expect(await seenBy(opsToken)).toBe(true);    // the actor sees their own status change
+    expect(await seenBy(adminToken)).toBe(false); // a different login does NOT
+    expect(await seenBy(clientToken)).toBe(false);
+    await db.prepare("DELETE FROM notifications WHERE message LIKE ?").bind(`%${oid}%`).run();
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

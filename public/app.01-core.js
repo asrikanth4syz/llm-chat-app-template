@@ -1492,6 +1492,12 @@ function dataActEl(fn, ...args) {
 function dataActClose(fn, ...args) {
   return `${dataAct(fn, ...args)} data-close`;
 }
+// Actions currently running. A write action (one whose handler returns a Promise)
+// is keyed by name+args and stays here until it settles, so a second click on the
+// same action while it's in flight is a no-op. This is the app-wide guarantee that
+// a double-click / double-tap / impatient retry can never place two orders, cut two
+// picklists, or fire two dispatches — regardless of which button triggered it.
+const _actInFlight = new Set();
 function _dispatchAct(e) {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -1499,12 +1505,23 @@ function _dispatchAct(e) {
   if (typeof fn !== 'function') return;
   if (el.hasAttribute('data-prevent')) e.preventDefault();
   if (el.hasAttribute('data-stop')) e.stopPropagation();
-  if (el.hasAttribute('data-close')) closeModal(); // matches inline "closeModal();fn()"
-  if (el.hasAttribute('data-tbclose')) closeTbMenus(); // matches "closeTbMenus();fn()"
   let args = [];
   if (el.dataset.args) { try { args = JSON.parse(el.dataset.args); } catch { /* ignore */ } }
-  if (el.hasAttribute('data-el')) fn(...args, el); // pass the element as the trailing arg
-  else fn(...args);
+  const key = el.dataset.act + ':' + (el.dataset.args || '');
+  if (_actInFlight.has(key)) return; // same action already running — ignore the repeat click
+  if (el.hasAttribute('data-close')) closeModal(); // matches inline "closeModal();fn()"
+  if (el.hasAttribute('data-tbclose')) closeTbMenus(); // matches "closeTbMenus();fn()"
+  const ret = el.hasAttribute('data-el') ? fn(...args, el) : fn(...args);
+  // Only async handlers (the write flows) get locked; sync UI actions run freely.
+  if (ret && typeof ret.then === 'function') {
+    _actInFlight.add(key);
+    const wasDisabled = el.disabled;
+    try { el.disabled = true; el.setAttribute('aria-busy', 'true'); } catch { /* non-button */ }
+    Promise.resolve(ret).finally(() => {
+      _actInFlight.delete(key);
+      try { el.disabled = wasDisabled; el.removeAttribute('aria-busy'); } catch { /* detached */ }
+    });
+  }
 }
 document.addEventListener('click', _dispatchAct);
 // Keyboard activation for the sidebar rows (role="button" divs): Enter/Space
