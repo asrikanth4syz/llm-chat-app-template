@@ -2022,6 +2022,9 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
   // How many rows Zoho has actually written to (live mode stamps zoho_synced_at).
   // 0 after a "full" run means the run was dry-run (or writes aren't landing).
   const zohoStamped = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE zoho_synced_at IS NOT NULL").first() as {n:number}|null;
+  // Active items NOT owned by Zoho (legacy seed / manual). With Zoho as the single
+  // source of truth these are candidates to retire so the catalogue mirrors Zoho.
+  const nonZohoActive = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").first() as {n:number}|null;
   let recent: unknown[] = [];
   try {
     const { results } = await env.DB.prepare(
@@ -2043,6 +2046,7 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
     last_sync_at: lastSync || null,
     item_count: itemCount?.n || 0,
     zoho_stamped_count: zohoStamped?.n || 0,
+    non_zoho_active_count: nonZohoActive?.n || 0,
     recent_log: recent,
   });
 }
@@ -2080,6 +2084,26 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   // body's `status` + `errors[]`, so the operator UI can show the real Zoho message.
   // A non-2xx here made the browser's api() helper drop the detail and show a bare "Error".
   return json(result);
+}
+
+// Retire (soft-deactivate) every active item NOT owned by Zoho, so the catalogue
+// mirrors Zoho exactly (Zoho = single source of truth). Guarded: refuses unless a
+// Live sync has actually stamped items, so it can never wipe the catalogue when Zoho
+// data hasn't loaded. Deactivates (active=0), never hard-deletes — order history and
+// references stay intact, and it's reversible.
+async function handleZohoPurgeNonZoho(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const stamped = await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL").first() as { n: number } | null;
+  if (!stamped || stamped.n === 0) {
+    return json({ error: "No Zoho-owned items yet — run a LIVE full reconcile first. Refusing so the catalogue isn't wiped." }, 409);
+  }
+  const before = await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").first() as { n: number } | null;
+  const res = await env.DB.prepare("UPDATE inventory SET active=0 WHERE active=1 AND zoho_synced_at IS NULL").run();
+  const deactivated = (res.meta?.changes as number) ?? (before?.n ?? 0);
+  await audit(env, user, "UPDATE", "inventory", "purge_non_zoho", undefined, `deactivated ${deactivated} non-Zoho items`);
+  return json({ ok: true, deactivated, zoho_owned: stamped.n });
 }
 
 // Read-only catalogue lookup for diagnosing "synced but not visible". Ignores the
@@ -2941,6 +2965,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env,ctx);
       if (path==="/api/integrations/zoho-inventory/connect" && method==="POST") return handleZohoInvConnect(request,env);
       if (path==="/api/inventory/lookup"                    && method==="GET")  return handleInventoryLookup(request,env);
+      if (path==="/api/integrations/zoho-inventory/purge-non-zoho" && method==="POST") return handleZohoPurgeNonZoho(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)

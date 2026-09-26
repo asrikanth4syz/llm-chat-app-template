@@ -946,7 +946,7 @@ async function settingsTab(tab, btn) {
                 <option value="live" ${z.mode==='live'?'selected':''}>Live (writes stock)</option>
               </select>
             </label>
-            <span style="color:var(--text-muted)">${z.item_count ?? 0} active items · <b>${z.zoho_stamped_count ?? 0}</b> stamped by Zoho</span>
+            <span style="color:var(--text-muted)">${z.item_count ?? 0} active · <b>${z.zoho_stamped_count ?? 0}</b> Zoho-owned · <b style="color:${(z.non_zoho_active_count ?? 0) > 0 ? 'var(--warning)' : 'inherit'}">${z.non_zoho_active_count ?? 0}</b> non-Zoho</span>
           </div>
           ${!z.configured ? `<div style="font-size:.76rem;color:var(--text-muted)">
             ${(z.missing_secrets && z.missing_secrets.length)
@@ -977,6 +977,7 @@ async function settingsTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
+          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Retire ${z.non_zoho_active_count} non-Zoho item${z.non_zoho_active_count === 1 ? '' : 's'}</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
@@ -1458,6 +1459,21 @@ async function zohoInvLookup() {
     <div style="margin-top:6px;color:var(--text-muted);font-size:.75rem">
       <b>Inactive</b> → hidden from listings (item is inactive in Zoho). <b>In client catalogues = 0</b> → present in master Inventory but not on any client's order screen until assigned to that client.
     </div>`;
+}
+
+// Retire (deactivate) every active item Zoho doesn't own, so the catalogue mirrors
+// Zoho. Guarded server-side against wiping the catalogue when no Zoho items exist.
+async function zohoPurgeNonZoho() {
+  const res0 = await api('/integrations/zoho-inventory/status');
+  const n = res0?.non_zoho_active_count ?? 0;
+  const owned = res0?.zoho_stamped_count ?? 0;
+  if (n === 0) { showToast('No non-Zoho items to retire', 'info'); _zohoReloadIntegrations(); return; }
+  if (owned === 0) { showToast('Run a LIVE full reconcile first — no Zoho-owned items yet', 'error'); return; }
+  if (!confirm(`Deactivate ${n} item${n===1?'':'s'} that Zoho does not own, so the catalogue mirrors Zoho?\n\nThese are legacy/seed/manual items (not synced from Zoho). They will be set inactive (hidden), not deleted — order history is preserved and it can be reversed. Zoho-owned items (${owned}) are untouched.`)) return;
+  const res = await api('/integrations/zoho-inventory/purge-non-zoho', { method: 'POST', body: JSON.stringify({}) });
+  if (!res) return;
+  showToast(`Retired ${res.deactivated} non-Zoho item${res.deactivated===1?'':'s'}. Catalogue now mirrors Zoho (${res.zoho_owned} owned).`);
+  _zohoReloadIntegrations();
 }
 
 async function zohoInvSyncNow() {
