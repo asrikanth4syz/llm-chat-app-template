@@ -948,7 +948,11 @@ async function settingsTab(tab, btn) {
             </label>
             <span style="color:var(--text-muted)">${z.item_count ?? 0} active items</span>
           </div>
-          ${!z.configured ? `<div style="font-size:.76rem;color:var(--text-muted)">Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_INVENTORY_ORG_ID</code> and <code>ZOHO_DC</code> as Worker secrets, then enable dry-run to verify the field mapping before going live.</div>` : ''}
+          ${!z.configured ? `<div style="font-size:.76rem;color:var(--text-muted)">
+            ${(z.missing_secrets && z.missing_secrets.length)
+              ? `<div style="margin-bottom:4px">Missing Worker secret${z.missing_secrets.length>1?'s':''}: ${z.missing_secrets.map(s=>`<code style="color:var(--danger)">${h(s)}</code>`).join(', ')}</div>`
+              : ''}
+            Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_INVENTORY_ORG_ID</code> and <code>ZOHO_DC</code> as Worker <b>secrets</b> (not vars), then enable dry-run to verify the field mapping before going live.</div>` : ''}
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">

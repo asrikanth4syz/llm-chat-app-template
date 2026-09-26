@@ -47,12 +47,12 @@
 		"APP_ENV": "development",
 		"EMAIL_FROM": "noreply@smartpantry.4syz.com",
 		"MAILCHANNELS_ENABLED": "false",
-		"ZOHO_BOOKS_ORG_ID": "",
-		"ZOHO_BOOKS_CLIENT_ID": "",
-		"ZOHO_BOOKS_WEBHOOK_SECRET": "",
-		"ZOHO_INVENTORY_ORG_ID": "",
-		"ZOHO_ACCESS_TOKEN": "",
-		"ZOHO_INVENTORY_WEBHOOK_SECRET": "",
+		// Zoho credentials are Worker SECRETS, not vars. They are intentionally NOT
+		// declared here: a plaintext var with the same name is re-applied (as "") on
+		// every `wrangler deploy`, which would wipe the secret and make the sync read
+		// as "not configured" after each push. Set them with `wrangler secret put …`
+		// (ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO_INVENTORY_ORG_ID,
+		// optional ZOHO_DC / ZOHO_INVENTORY_WEBHOOK_SECRET) so they persist across deploys.
 		"TWILIO_ACCOUNT_SID": "",
 		"TWILIO_AUTH_TOKEN": "",
 		"TWILIO_FROM_NUMBER": "",

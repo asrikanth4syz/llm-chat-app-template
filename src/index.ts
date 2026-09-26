@@ -1732,8 +1732,19 @@ class ZohoAuthError extends Error {}
 
 const _zSleep = (ms: number) => new Promise<void>(r => setTimeout(r, Math.min(ms, ZOHO_SYNC.RETRY_CAP_MS)));
 function zohoDc(env: Env): string { return (env.ZOHO_DC || "in").trim(); }
+// Which required Zoho secrets are missing/blank (names only — never the values).
+// An empty-string plaintext var reads as falsy here, so a value wiped by a deploy
+// is correctly reported as missing.
+function zohoMissingSecrets(env: Env): string[] {
+  const miss: string[] = [];
+  if (!env.ZOHO_CLIENT_ID)     miss.push("ZOHO_CLIENT_ID");
+  if (!env.ZOHO_CLIENT_SECRET) miss.push("ZOHO_CLIENT_SECRET");
+  if (!env.ZOHO_REFRESH_TOKEN) miss.push("ZOHO_REFRESH_TOKEN");
+  if (!env.ZOHO_INVENTORY_ORG_ID && !env.ZOHO_BOOKS_ORG_ID) miss.push("ZOHO_INVENTORY_ORG_ID");
+  return miss;
+}
 function zohoConfigured(env: Env): boolean {
-  return !!(env.ZOHO_CLIENT_ID && env.ZOHO_CLIENT_SECRET && env.ZOHO_REFRESH_TOKEN && (env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID));
+  return zohoMissingSecrets(env).length === 0;
 }
 // Offset-bearing ISO → UTC epoch seconds (Date.parse honours the offset). 0 if unparseable.
 function toEpoch(v: unknown): number { const t = Date.parse(String(v ?? "")); return Number.isFinite(t) ? Math.floor(t/1000) : 0; }
@@ -1859,7 +1870,8 @@ async function runZohoSync(
     r.status = "disabled"; return r; // no job row for a disabled no-op (avoids log spam)
   }
   r.mode = opts.mode || ((await getConfig(env, "zoho_sync_mode", "dryrun")) === "live" ? "live" : "dryrun");
-  if (!zohoConfigured(env)) { r.status = "not_configured"; r.errors.push("Zoho secrets not configured"); await logSyncJob(env, r, actor); return r; }
+  const missing = zohoMissingSecrets(env);
+  if (missing.length) { r.status = "not_configured"; r.errors.push(`Zoho secrets not configured — missing: ${missing.join(", ")}`); await logSyncJob(env, r, actor); return r; }
 
   // AC7: atomic non-overlap lock (CAS on app_config). Value = "<epoch>:<token>".
   const now = Math.floor(Date.now()/1000);
@@ -2008,6 +2020,7 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
   return json({
     direction: "zoho→app (one-way, Model A)",
     configured: zohoConfigured(env),
+    missing_secrets: zohoMissingSecrets(env), // names only — helps diagnose "not configured"
     enabled,
     mode,
     cursor_epoch: cursorEpoch || null,
