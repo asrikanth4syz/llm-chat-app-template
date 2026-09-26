@@ -963,6 +963,11 @@ async function settingsTab(tab, btn) {
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
           </div>
         </div>
+        ${z.last_result && z.last_result.status === 'error' && z.last_result.error ? `
+        <div style="background:var(--danger-bg);border:1px solid var(--danger);border-radius:8px;padding:8px 12px;font-size:.8rem;color:var(--danger)">
+          <b>Last sync failed:</b> ${h(String(z.last_result.error))}
+          ${/auth:/i.test(String(z.last_result.error)) ? `<div style="margin-top:4px;color:var(--text-muted)">An <code>auth:</code> error means Zoho rejected the token refresh — check <code>ZOHO_CLIENT_ID</code>/<code>ZOHO_CLIENT_SECRET</code>/<code>ZOHO_REFRESH_TOKEN</code> and that <code>ZOHO_DC</code> matches your Zoho region (in / com / eu / com.au).</div>` : ''}
+        </div>` : ''}
         <div style="font-size:.78rem;color:var(--text-muted);display:flex;flex-wrap:wrap;gap:12px">
           <span>Cursor: <b>${z.cursor_utc ? fmtDate(z.cursor_utc) : '—'}</b></span>
           <span>Last full reconcile: <b>${z.last_full_at ? fmtDate(z.last_full_at) : 'never'}</b>${z.last_full_stale ? ' <span class="badge badge-warning">stale &gt;48h</span>' : ''}</span>

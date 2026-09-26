@@ -1849,6 +1849,7 @@ async function logSyncJob(env: Env, r: ZohoSyncResult, actor: string): Promise<v
     await setConfig(env, "zoho_last_result", JSON.stringify({
       status: r.status, scope: r.scope, mode: r.mode, total: r.total,
       written: r.written, deactivated: r.deactivated, failed: r.failed, at: new Date().toISOString(),
+      error: r.status === "error" ? (r.errors[0] || "unknown error") : "", // first reason for the operator UI
     }), actor);
     await setConfig(env, "zoho_last_sync_at", new Date().toISOString(), actor);
   } catch { /* non-fatal */ }
@@ -2063,8 +2064,10 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
     return json({ status: "started", scope: "full", async: true });
   }
   const result = await runZohoSync(env, { full: false, mode, actor: user!.sub });
-  const code = result.status === "skipped" ? 409 : result.status === "error" ? 500 : 200;
-  return json(result, code);
+  // Always 200: the outcome (ok / error / skipped / not_configured) is carried in the
+  // body's `status` + `errors[]`, so the operator UI can show the real Zoho message.
+  // A non-2xx here made the browser's api() helper drop the detail and show a bare "Error".
+  return json(result);
 }
 
 // Inbound: Zoho pushes stock changes → update our inventory stock levels.
