@@ -952,7 +952,16 @@ async function settingsTab(tab, btn) {
             ${(z.missing_secrets && z.missing_secrets.length)
               ? `<div style="margin-bottom:4px">Missing Worker secret${z.missing_secrets.length>1?'s':''}: ${z.missing_secrets.map(s=>`<code style="color:var(--danger)">${h(s)}</code>`).join(', ')}</div>`
               : ''}
-            Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_REFRESH_TOKEN</code>, <code>ZOHO_INVENTORY_ORG_ID</code> and <code>ZOHO_DC</code> as Worker <b>secrets</b> (not vars), then enable dry-run to verify the field mapping before going live.</div>` : ''}
+            Set <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code>, <code>ZOHO_INVENTORY_ORG_ID</code> and <code>ZOHO_DC</code> as Worker <b>secrets</b> (not vars). For <code>ZOHO_REFRESH_TOKEN</code>, use <b>Connect Zoho</b> below — it's easier than the manual exchange.</div>` : ''}
+        </div>
+
+        <div style="display:grid;gap:8px;padding:14px 16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="font-weight:600;font-size:.85rem">🔗 Connect Zoho (get a refresh token)</div>
+          <div style="font-size:.76rem;color:var(--text-muted)">In the Zoho API console (<code>api-console.zoho.&lt;your DC&gt;</code>) open your Self Client → <b>Generate Code</b> (scope <code>ZohoInventory.items.READ</code>, 10-min expiry) → paste the code here. We exchange it server-side with your configured client id/secret and <code>ZOHO_DC</code>, then store the refresh token. The code expires in minutes — paste it right away.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="zoho-code" class="input" placeholder="Paste authorization code (1000.xxxx…)" style="flex:1;min-width:220px;font-size:.82rem">
+            <button class="btn btn-primary btn-sm" ${dataAct('zohoInvConnect')}>Connect</button>
+          </div>
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1391,6 +1400,24 @@ function _zohoReport(res) {
   if (res.status === 'error') { showToast(`Sync error: ${(res.errors && res.errors[0]) || 'see run log'}`); return; }
   const m = res.mode === 'dryrun' ? ' (dry-run, nothing written)' : '';
   showToast(`Pull ${res.scope}: ${res.written} written · ${res.deactivated||0} deactivated · ${res.failed||0} failed${m}`);
+}
+
+// Server-side authorization-code → refresh-token exchange. The operator pastes the
+// short grant code; the Worker does the exchange with the configured client id/secret
+// + ZOHO_DC and stores the refresh token, so no manual curl / DC juggling is needed.
+async function zohoInvConnect() {
+  const el = document.getElementById('zoho-code');
+  const code = (el?.value || '').trim();
+  if (!code) { showToast('Paste the Zoho authorization code first', 'error'); return; }
+  const res = await api('/integrations/zoho-inventory/connect', { method: 'POST', body: JSON.stringify({ code }) });
+  if (!res) return;
+  if (res.ok) {
+    if (el) el.value = '';
+    showToast(`Zoho connected (dc=${res.dc}) — refresh token stored. Run a dry-run to verify.`);
+    _zohoReloadIntegrations();
+  } else {
+    showToast(`Connect failed${res.dc ? ` (dc=${res.dc})` : ''}: ${res.error || 'unknown error'}`, 'error');
+  }
 }
 
 async function zohoInvSyncNow() {

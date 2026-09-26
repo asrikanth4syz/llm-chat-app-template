@@ -1732,19 +1732,27 @@ class ZohoAuthError extends Error {}
 
 const _zSleep = (ms: number) => new Promise<void>(r => setTimeout(r, Math.min(ms, ZOHO_SYNC.RETRY_CAP_MS)));
 function zohoDc(env: Env): string { return (env.ZOHO_DC || "in").trim(); }
+// The refresh token may come from the ZOHO_REFRESH_TOKEN secret OR from one stored
+// by the in-app "Connect Zoho" flow (server-side authorization-code exchange). The
+// secret wins when present.
+async function zohoRefreshToken(env: Env): Promise<string> {
+  const s = (env.ZOHO_REFRESH_TOKEN || "").trim();
+  if (s) return s;
+  return (await getConfig(env, "zoho_refresh_token", "")).trim();
+}
 // Which required Zoho secrets are missing/blank (names only — never the values).
 // An empty-string plaintext var reads as falsy here, so a value wiped by a deploy
 // is correctly reported as missing.
-function zohoMissingSecrets(env: Env): string[] {
+async function zohoMissingSecrets(env: Env): Promise<string[]> {
   const miss: string[] = [];
   if (!env.ZOHO_CLIENT_ID)     miss.push("ZOHO_CLIENT_ID");
   if (!env.ZOHO_CLIENT_SECRET) miss.push("ZOHO_CLIENT_SECRET");
-  if (!env.ZOHO_REFRESH_TOKEN) miss.push("ZOHO_REFRESH_TOKEN");
+  if (!(await zohoRefreshToken(env))) miss.push("ZOHO_REFRESH_TOKEN");
   if (!env.ZOHO_INVENTORY_ORG_ID && !env.ZOHO_BOOKS_ORG_ID) miss.push("ZOHO_INVENTORY_ORG_ID");
   return miss;
 }
-function zohoConfigured(env: Env): boolean {
-  return zohoMissingSecrets(env).length === 0;
+async function zohoConfigured(env: Env): Promise<boolean> {
+  return (await zohoMissingSecrets(env)).length === 0;
 }
 // Offset-bearing ISO → UTC epoch seconds (Date.parse honours the offset). 0 if unparseable.
 function toEpoch(v: unknown): number { const t = Date.parse(String(v ?? "")); return Number.isFinite(t) ? Math.floor(t/1000) : 0; }
@@ -1759,7 +1767,7 @@ async function zohoGetToken(env: Env, fetchImpl: FetchImpl, force = false): Prom
     if (cached && exp - ZOHO_SYNC.TOKEN_SKEW_SEC > now) return cached;
   }
   const body = new URLSearchParams({
-    refresh_token: env.ZOHO_REFRESH_TOKEN || "",
+    refresh_token: await zohoRefreshToken(env),
     client_id: env.ZOHO_CLIENT_ID || "",
     client_secret: env.ZOHO_CLIENT_SECRET || "",
     grant_type: "refresh_token",
@@ -1871,7 +1879,7 @@ async function runZohoSync(
     r.status = "disabled"; return r; // no job row for a disabled no-op (avoids log spam)
   }
   r.mode = opts.mode || ((await getConfig(env, "zoho_sync_mode", "dryrun")) === "live" ? "live" : "dryrun");
-  const missing = zohoMissingSecrets(env);
+  const missing = await zohoMissingSecrets(env);
   if (missing.length) { r.status = "not_configured"; r.errors.push(`Zoho secrets not configured — missing: ${missing.join(", ")}`); await logSyncJob(env, r, actor); return r; }
 
   // AC7: atomic non-overlap lock (CAS on app_config). Value = "<epoch>:<token>".
@@ -2020,8 +2028,8 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
   const nowEpoch = Math.floor(Date.now()/1000);
   return json({
     direction: "zoho→app (one-way, Model A)",
-    configured: zohoConfigured(env),
-    missing_secrets: zohoMissingSecrets(env), // names only — helps diagnose "not configured"
+    configured: await zohoConfigured(env),
+    missing_secrets: await zohoMissingSecrets(env), // names only — helps diagnose "not configured"
     enabled,
     mode,
     cursor_epoch: cursorEpoch || null,
@@ -2068,6 +2076,52 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   // body's `status` + `errors[]`, so the operator UI can show the real Zoho message.
   // A non-2xx here made the browser's api() helper drop the detail and show a bare "Error".
   return json(result);
+}
+
+// Exchange a Zoho authorization code (grant token) for a refresh token, server-side,
+// using the already-configured client id/secret and DC. This removes the fiddly manual
+// curl step: the operator pastes the short code from the Zoho API console and we store
+// the resulting refresh token. Always 200 — success or the verbatim Zoho error code
+// (e.g. invalid_code / invalid_client), which is a diagnostic, not a secret.
+async function handleZohoInvConnect(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as { code?: string };
+  const code = String(body.code || "").trim();
+  if (!code) return json({ ok: false, error: "Paste the Zoho authorization code first." });
+  if (!env.ZOHO_CLIENT_ID || !env.ZOHO_CLIENT_SECRET) {
+    return json({ ok: false, error: "Set the ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET secrets first." });
+  }
+  const dc = zohoDc(env);
+  const form = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: env.ZOHO_CLIENT_ID || "",
+    client_secret: env.ZOHO_CLIENT_SECRET || "",
+    code,
+  });
+  let data: { refresh_token?: string; access_token?: string; expires_in?: number; error?: string } = {};
+  try {
+    const res = await fetch(`https://accounts.zoho.${dc}/oauth/v2/token`, {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString(),
+    });
+    data = await res.json().catch(() => ({})) as typeof data;
+  } catch (e) {
+    return json({ ok: false, dc, error: `Network error contacting accounts.zoho.${dc}: ${String(e)}` });
+  }
+  if (!data.refresh_token) {
+    // invalid_code → code expired/reused; invalid_client → client id/secret wrong for this DC.
+    return json({ ok: false, dc, error: data.error || "Zoho did not return a refresh_token — the code may be expired/used, or ZOHO_DC may not match your Zoho region." });
+  }
+  await setConfig(env, "zoho_refresh_token", String(data.refresh_token), user!.sub);
+  // Prime the access-token cache so the first sync doesn't need an extra refresh.
+  if (data.access_token) {
+    const now = Math.floor(Date.now() / 1000);
+    await setConfig(env, "zoho_token", String(data.access_token), "system");
+    await setConfig(env, "zoho_token_exp", String(now + (data.expires_in || 3600)), "system");
+  }
+  await audit(env, user, "UPDATE", "integration", "zoho_inventory", undefined, `connected via authorization code (dc=${dc})`);
+  return json({ ok: true, dc });
 }
 
 // Inbound: Zoho pushes stock changes → update our inventory stock levels.
@@ -2856,6 +2910,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/status"  && method==="GET")  return handleZohoInvStatus(request,env);
       if (path==="/api/integrations/zoho-inventory/toggle"  && method==="POST") return handleZohoInvToggle(request,env);
       if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env,ctx);
+      if (path==="/api/integrations/zoho-inventory/connect" && method==="POST") return handleZohoInvConnect(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
@@ -7393,7 +7448,7 @@ async function handleGetSettings(request: Request, env: Env): Promise<Response> 
     otp_enabled: env.OTP_ENABLED === "true",
     mailchannels_enabled: env.MAILCHANNELS_ENABLED === "true",
     zoho_configured: !!(env.ZOHO_BOOKS_ORG_ID && env.ZOHO_BOOKS_CLIENT_ID),
-    zoho_inventory_configured: zohoConfigured(env),
+    zoho_inventory_configured: await zohoConfigured(env),
     zoho_inventory_enabled: (await getConfig(env, "zoho_sync_enabled", "0")) === "1",
     twilio_configured: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN),
     msg91_configured: !!env.MSG91_AUTH_KEY,
