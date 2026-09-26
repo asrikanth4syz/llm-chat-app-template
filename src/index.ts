@@ -1814,7 +1814,7 @@ async function zohoFetchPage(
 // set, so a partial payload never blanks a column. `null`+reason for a blank sku.
 function mapZohoItem(z: Record<string, unknown>): { row: Record<string, unknown>; modifiedEpoch: number } | { error: string } {
   const sku = String(z.sku ?? "").trim();
-  if (!sku) return { error: "blank sku" };
+  if (!sku) return { error: `no SKU in Zoho${z.name ? ` — "${String(z.name).slice(0, 60)}"` : ""} (item skipped; the sync keys on SKU)` };
   const row: Record<string, unknown> = { sku };
   const put = (col: string, val: unknown) => { if (val !== undefined && val !== null && String(val).trim() !== "") row[col] = val; };
   put("zoho_item_id", z.item_id);

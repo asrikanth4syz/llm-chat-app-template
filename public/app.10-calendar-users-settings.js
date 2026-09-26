@@ -992,7 +992,7 @@ async function settingsTab(tab, btn) {
               <td>${l.total ?? 0}</td>
               <td>${l.success_count ?? 0}</td>
               <td>${(l.failed_count ?? 0) > 0 ? `<span style="color:var(--danger,#dc2626)">${l.failed_count}</span>` : '0'}</td>
-            </tr>`).join('')}</tbody>
+            </tr>${(l.failed_count ?? 0) > 0 && l.errors ? `<tr><td colspan="5" style="font-size:.74rem;color:var(--text-muted);background:var(--danger-bg);padding:6px 10px">${(()=>{try{const e=JSON.parse(l.errors);const arr=Array.isArray(e)?e:[];return arr.slice(0,6).map(x=>'• '+h(String(x))).join('<br>')+(arr.length>6?`<br>…and ${arr.length-6} more`:'');}catch{return h(String(l.errors));}})()}</td></tr>`:''}`).join('')}</tbody>
           </table>
         </div>` : ''}
       </div>
