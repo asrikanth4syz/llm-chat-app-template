@@ -2019,6 +2019,9 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
   const lastResultRaw = await getConfig(env, "zoho_last_result", "");
   const lastSync = await getConfig(env, "zoho_last_sync_at", "");
   const itemCount = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=1").first() as {n:number}|null;
+  // How many rows Zoho has actually written to (live mode stamps zoho_synced_at).
+  // 0 after a "full" run means the run was dry-run (or writes aren't landing).
+  const zohoStamped = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE zoho_synced_at IS NOT NULL").first() as {n:number}|null;
   let recent: unknown[] = [];
   try {
     const { results } = await env.DB.prepare(
@@ -2039,6 +2042,7 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
     last_result: lastResultRaw ? (() => { try { return JSON.parse(lastResultRaw); } catch { return lastResultRaw; } })() : null,
     last_sync_at: lastSync || null,
     item_count: itemCount?.n || 0,
+    zoho_stamped_count: zohoStamped?.n || 0,
     recent_log: recent,
   });
 }

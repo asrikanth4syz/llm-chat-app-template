@@ -946,7 +946,7 @@ async function settingsTab(tab, btn) {
                 <option value="live" ${z.mode==='live'?'selected':''}>Live (writes stock)</option>
               </select>
             </label>
-            <span style="color:var(--text-muted)">${z.item_count ?? 0} active items</span>
+            <span style="color:var(--text-muted)">${z.item_count ?? 0} active items · <b>${z.zoho_stamped_count ?? 0}</b> stamped by Zoho</span>
           </div>
           ${!z.configured ? `<div style="font-size:.76rem;color:var(--text-muted)">
             ${(z.missing_secrets && z.missing_secrets.length)
