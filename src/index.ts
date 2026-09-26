@@ -2078,6 +2078,31 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   return json(result);
 }
 
+// Read-only catalogue lookup for diagnosing "synced but not visible". Ignores the
+// active=1 filter the normal listing applies, and reports whether the SKU is in any
+// client catalogue — the two reasons a freshly-synced item may not show up.
+async function handleInventoryLookup(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const q = (new URL(request.url).searchParams.get("q") || "").trim();
+  if (!q) return json({ error: "q (SKU or name) required" }, 400);
+  const like = `%${q}%`;
+  const { results } = await env.DB.prepare(
+    `SELECT sku,name,active,category,unit_price,mrp,stock,zoho_item_id,zoho_synced_at
+       FROM inventory WHERE name LIKE ? OR sku LIKE ? OR CAST(zoho_item_id AS TEXT) LIKE ?
+       ORDER BY name LIMIT 25`
+  ).bind(like, like, like).all();
+  const rows = results as Record<string, unknown>[];
+  for (const r of rows) {
+    try {
+      const c = await env.DB.prepare("SELECT COUNT(*) n FROM client_catalog WHERE sku=?").bind(String(r.sku)).first() as { n: number } | null;
+      r.client_catalog_count = c?.n ?? 0;
+    } catch { r.client_catalog_count = null; }
+  }
+  return json({ q, count: rows.length, rows });
+}
+
 // Exchange a Zoho authorization code (grant token) for a refresh token, server-side,
 // using the already-configured client id/secret and DC. This removes the fiddly manual
 // curl step: the operator pastes the short code from the Zoho API console and we store
@@ -2911,6 +2936,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/toggle"  && method==="POST") return handleZohoInvToggle(request,env);
       if (path==="/api/integrations/zoho-inventory/sync"    && method==="POST") return handleZohoInvSync(request,env,ctx);
       if (path==="/api/integrations/zoho-inventory/connect" && method==="POST") return handleZohoInvConnect(request,env);
+      if (path==="/api/inventory/lookup"                    && method==="GET")  return handleInventoryLookup(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)

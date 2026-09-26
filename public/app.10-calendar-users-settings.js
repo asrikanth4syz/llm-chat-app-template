@@ -964,6 +964,16 @@ async function settingsTab(tab, btn) {
           </div>
         </div>
 
+        <div style="display:grid;gap:8px;padding:14px 16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="font-weight:600;font-size:.85rem">🔎 Verify a synced item</div>
+          <div style="font-size:.76rem;color:var(--text-muted)">Search the app catalogue by SKU, name or Zoho item id — including inactive items — to see whether a Zoho item actually landed, and why it may not be visible (inactive, or not in any client catalogue).</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="zoho-lookup" class="input" placeholder="e.g. Adukule Butter Chakli" style="flex:1;min-width:220px;font-size:.82rem">
+            <button class="btn btn-secondary btn-sm" ${dataAct('zohoInvLookup')}>Look up</button>
+          </div>
+          <div id="zoho-lookup-result" style="font-size:.8rem"></div>
+        </div>
+
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
@@ -1418,6 +1428,36 @@ async function zohoInvConnect() {
   } else {
     showToast(`Connect failed${res.dc ? ` (dc=${res.dc})` : ''}: ${res.error || 'unknown error'}`, 'error');
   }
+}
+
+// Read-only diagnostic: shows whether a Zoho item is in the app catalogue and why it
+// may be hidden (inactive, or not assigned to any client catalogue).
+async function zohoInvLookup() {
+  const q = (document.getElementById('zoho-lookup')?.value || '').trim();
+  const box = document.getElementById('zoho-lookup-result');
+  if (!q) { showToast('Enter a SKU or name to look up', 'error'); return; }
+  if (box) box.innerHTML = 'Searching…';
+  const res = await api('/inventory/lookup?q=' + encodeURIComponent(q));
+  if (!res) { if (box) box.innerHTML = ''; return; }
+  if (!res.rows || !res.rows.length) {
+    if (box) box.innerHTML = `<div style="color:var(--danger)">No match in the app catalogue for “${h(q)}”. It was not inserted — most likely the item has no <b>SKU</b> in Zoho (the sync keys on SKU), or wasn't returned by Zoho's items API.</div>`;
+    return;
+  }
+  const rowsHtml = res.rows.map(r => `<tr>
+    <td style="font-size:.78rem"><b>${h(String(r.sku ?? '—'))}</b></td>
+    <td style="font-size:.78rem">${h(String(r.name ?? '—'))}</td>
+    <td>${Number(r.active) === 1 ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
+    <td style="font-size:.78rem">${h(String(r.category ?? '—'))}</td>
+    <td style="text-align:center">${(r.client_catalog_count ?? 0) > 0 ? `<span class="badge badge-info">${r.client_catalog_count}</span>` : '<span style="color:var(--text-muted)">0</span>'}</td>
+    <td style="font-size:.75rem;color:var(--text-muted)">${r.zoho_synced_at ? fmtDateTime(r.zoho_synced_at) : '—'}</td>
+  </tr>`).join('');
+  if (box) box.innerHTML = `
+    <table class="table" style="margin:6px 0 0"><thead><tr>
+      <th>SKU</th><th>Name</th><th>Status</th><th>Category</th><th>In client catalogues</th><th>Synced</th>
+    </tr></thead><tbody>${rowsHtml}</tbody></table>
+    <div style="margin-top:6px;color:var(--text-muted);font-size:.75rem">
+      <b>Inactive</b> → hidden from listings (item is inactive in Zoho). <b>In client catalogues = 0</b> → present in master Inventory but not on any client's order screen until assigned to that client.
+    </div>`;
 }
 
 async function zohoInvSyncNow() {
