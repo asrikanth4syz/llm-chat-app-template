@@ -1141,6 +1141,18 @@ describe("Orders", () => {
     await db.prepare("DELETE FROM inventory WHERE sku IN ('SEED-MRG1','ZOHO-MRG1')").run();
   });
 
+  it("assign-zoho-catalog bulk-assigns active Zoho items to a client", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,active,zoho_synced_at) VALUES (?,?,?,?,1,?)")
+      .bind("ZASG-1", "Zoho Assign Item", "Snacks", 50, "2026-09-27T00:00:00Z").run();
+    const res = await post("/api/clients/c1/assign-zoho-catalog", {}, adminToken);
+    expect(res.status).toBe(200);
+    const row = await db.prepare("SELECT 1 FROM client_catalog WHERE client_id='c1' AND sku='ZASG-1'").first();
+    expect(row).toBeTruthy();
+    await db.prepare("DELETE FROM client_catalog WHERE sku='ZASG-1'").run();
+    await db.prepare("DELETE FROM inventory WHERE sku='ZASG-1'").run();
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

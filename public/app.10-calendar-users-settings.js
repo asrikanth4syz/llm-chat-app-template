@@ -981,13 +981,24 @@ async function settingsTab(tab, btn) {
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔍 Preview matches</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<label style="display:flex;align-items:center;gap:5px;font-size:.78rem">Match:<select id="zoho-merge-score" class="input" style="padding:2px 6px;font-size:.78rem"><option value="1">Exact name</option><option value="0.8">≥ 80%</option><option value="0.6">≥ 60%</option></select></label><button class="btn btn-primary" ${dataAct('zohoMergeApplyDry')}>🔗 Step 1 · Map client-assigned</button>` : ''}
-          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Step 2 · Retire seed-only</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 ? `<label style="display:flex;align-items:center;gap:4px;font-size:.76rem"><input type="checkbox" id="zoho-purge-assigned"> incl. demo assignments</label><button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Step 2 · Retire non-Zoho</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
           </div>
         </div>
         <div id="zoho-merge-result" style="font-size:.8rem"></div>
+        <div style="display:grid;gap:8px;padding:14px 16px;background:var(--bg);border-radius:10px;border:1px solid var(--border)">
+          <div style="font-weight:600;font-size:.85rem">🗂️ Assign Zoho catalogue to a client</div>
+          <div style="font-size:.76rem;color:var(--text-muted)">After clearing demo items, give a client the full real catalogue — assigns every active Zoho-owned item to the selected client (skips ones already assigned).</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="zoho-assign-client" class="input" style="min-width:200px;font-size:.82rem">
+              <option value="">Select client…</option>
+              ${(st.clients||[]).map(c=>`<option value="${h(String(c.id))}">${h(String(c.name||c.id))}</option>`).join('')}
+            </select>
+            <button class="btn btn-primary btn-sm" ${dataAct('zohoAssignCatalog')}>Assign all Zoho items</button>
+          </div>
+        </div>
         ${z.last_result && z.last_result.status === 'error' && z.last_result.error ? `
         <div style="background:var(--danger-bg);border:1px solid var(--danger);border-radius:8px;padding:8px 12px;font-size:.8rem;color:var(--danger)">
           <b>Last sync failed:</b> ${h(String(z.last_result.error))}
@@ -1585,16 +1596,31 @@ async function zohoMergePreview() {
 // Retire (deactivate) every active item Zoho doesn't own, so the catalogue mirrors
 // Zoho. Guarded server-side against wiping the catalogue when no Zoho items exist.
 async function zohoPurgeNonZoho() {
+  const includeAssigned = !!document.getElementById('zoho-purge-assigned')?.checked;
   const res0 = await api('/integrations/zoho-inventory/status');
   const n = res0?.non_zoho_active_count ?? 0;
   const owned = res0?.zoho_stamped_count ?? 0;
   if (n === 0) { showToast('No non-Zoho items to retire', 'info'); _zohoReloadIntegrations(); return; }
   if (owned === 0) { showToast('Run a LIVE full reconcile first — no Zoho-owned items yet', 'error'); return; }
-  if (!confirm(`Deactivate ${n} item${n===1?'':'s'} that Zoho does not own, so the catalogue mirrors Zoho?\n\nThese are legacy/seed/manual items (not synced from Zoho). They will be set inactive (hidden), not deleted — order history is preserved and it can be reversed. Zoho-owned items (${owned}) are untouched.`)) return;
-  const res = await api('/integrations/zoho-inventory/purge-non-zoho', { method: 'POST', body: JSON.stringify({}) });
+  const extra = includeAssigned
+    ? '\n\n⚠️ "incl. demo assignments" is ON — this also REMOVES the client-catalogue entries that point at these items (demo assignments). Re-assign clients from the Zoho catalogue afterwards.'
+    : '\n\nItems still assigned to a client are KEPT (uncheck-safe).';
+  if (!confirm(`Deactivate ${n} non-Zoho item${n===1?'':'s'} so the catalogue mirrors Zoho?${extra}\n\nItems are set inactive (not deleted) — reversible. Zoho-owned items (${owned}) are untouched.`)) return;
+  const res = await api('/integrations/zoho-inventory/purge-non-zoho', { method: 'POST', body: JSON.stringify({ includeAssigned }) });
   if (!res) return;
-  showToast(`Retired ${res.deactivated} non-Zoho item${res.deactivated===1?'':'s'}. Catalogue now mirrors Zoho (${res.zoho_owned} owned).`);
+  showToast(`Retired ${res.deactivated} non-Zoho item${res.deactivated===1?'':'s'}${res.cleared_demo_assignments?` · cleared ${res.cleared_demo_assignments} demo assignment${res.cleared_demo_assignments===1?'':'s'}`:''}${res.kept_still_assigned?` · kept ${res.kept_still_assigned} still-assigned`:''}.`);
   _zohoReloadIntegrations();
+}
+
+// Bulk-assign the whole Zoho catalogue to a client.
+async function zohoAssignCatalog() {
+  const clientId = document.getElementById('zoho-assign-client')?.value || '';
+  const clientName = document.getElementById('zoho-assign-client')?.selectedOptions?.[0]?.textContent || clientId;
+  if (!clientId) { showToast('Select a client first', 'error'); return; }
+  if (!confirm(`Assign every active Zoho item to "${clientName}"? Items already on their list are skipped.`)) return;
+  const res = await api(`/clients/${clientId}/assign-zoho-catalog`, { method: 'POST', body: JSON.stringify({}) });
+  if (!res) return;
+  showToast(`Assigned ${res.added} Zoho item${res.added===1?'':'s'} to ${clientName}`, 'success');
 }
 
 async function zohoInvSyncNow() {

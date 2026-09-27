@@ -2299,15 +2299,22 @@ async function handleZohoPurgeNonZoho(request: Request, env: Env): Promise<Respo
   if (!stamped || stamped.n === 0) {
     return json({ error: "No Zoho-owned items yet — run a LIVE full reconcile first. Refusing so the catalogue isn't wiped." }, 409);
   }
-  // Skip seed items still referenced by a client catalogue — those must be mapped
-  // (Step 1) first, never silently removed from under a client.
+  const body = await request.json().catch(() => ({})) as { includeAssigned?: boolean };
   const stillAssigned = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL AND sku IN (SELECT sku FROM client_catalog)");
+  let clearedAssignments = 0;
+  if (body.includeAssigned) {
+    // Demo assignments: drop the client_catalog rows that point at non-Zoho items,
+    // then deactivate ALL non-Zoho items (assigned included).
+    const del = await env.DB.prepare("DELETE FROM client_catalog WHERE sku IN (SELECT sku FROM inventory WHERE active=1 AND zoho_synced_at IS NULL)").run();
+    clearedAssignments = (del.meta?.changes as number) ?? 0;
+  }
+  // includeAssigned → retire everything non-Zoho; otherwise skip still-assigned items.
   const res = await env.DB.prepare(
-    "UPDATE inventory SET active=0 WHERE active=1 AND zoho_synced_at IS NULL AND sku NOT IN (SELECT sku FROM client_catalog)"
+    "UPDATE inventory SET active=0 WHERE active=1 AND zoho_synced_at IS NULL" + (body.includeAssigned ? "" : " AND sku NOT IN (SELECT sku FROM client_catalog)")
   ).run();
   const deactivated = (res.meta?.changes as number) ?? 0;
-  await audit(env, user, "UPDATE", "inventory", "purge_non_zoho", undefined, `deactivated ${deactivated} seed-only items; kept ${stillAssigned} still-assigned`);
-  return json({ ok: true, deactivated, kept_still_assigned: stillAssigned, zoho_owned: stamped.n });
+  await audit(env, user, "UPDATE", "inventory", "purge_non_zoho", undefined, `deactivated ${deactivated} non-Zoho items; cleared ${clearedAssignments} demo assignments; kept ${body.includeAssigned ? 0 : stillAssigned} still-assigned`);
+  return json({ ok: true, deactivated, cleared_demo_assignments: clearedAssignments, kept_still_assigned: body.includeAssigned ? 0 : stillAssigned, zoho_owned: stamped.n });
 }
 
 // Read-only catalogue lookup for diagnosing "synced but not visible". Ignores the
@@ -3106,6 +3113,7 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="POST")   return handleAddClientCatalogItems(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/assign-zoho-catalog$/) && method==="POST") return handleAssignZohoCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="PATCH")  return handlePatchClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="DELETE") return handleRemoveClientCatalogItem(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+$/) && method==="PATCH") return handlePatchClient(request,env,path);
@@ -6687,6 +6695,28 @@ async function handlePatchClientCatalogItem(request: Request, env: Env, path: st
     .bind(body.client_price ?? null, clientId, sku).run();
   await audit(env, user, "UPDATE", "client_catalog", clientId, sku, `client_price:${body.client_price}`);
   return json({ok: true, client_price: body.client_price ?? null});
+}
+
+// Bulk-assign the whole Zoho catalogue (active, Zoho-owned items) to one client, so a
+// client can see the full real catalogue after the demo assignments are cleared.
+// Optional { category } narrows it. One INSERT…SELECT → no bind-limit issues.
+async function handleAssignZohoCatalog(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const clientId = path.split("/")[3];
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
+  if (!client) return json({ error: "Unknown client" }, 404);
+  const body = await request.json().catch(() => ({})) as { category?: string };
+  const cat = (body.category || "").trim();
+  const stamped = await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL AND active=1").first() as { n: number } | null;
+  if (!stamped || stamped.n === 0) return json({ error: "No Zoho-owned items — run a LIVE full reconcile first." }, 409);
+  const where = "zoho_synced_at IS NOT NULL AND active=1" + (cat ? " AND category=?" : "");
+  const stmt = env.DB.prepare(`INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) SELECT ?, sku, ? FROM inventory WHERE ${where}`);
+  const res = await (cat ? stmt.bind(clientId, user!.sub, cat) : stmt.bind(clientId, user!.sub)).run();
+  const added = (res.meta?.changes as number) ?? 0;
+  await audit(env, user, "UPDATE", "client_catalog", clientId, undefined, `bulk-assigned ${added} Zoho items${cat ? ` (category ${cat})` : ""}`);
+  return json({ ok: true, added, client_id: clientId, category: cat || null });
 }
 
 async function handleAddClientCatalogItems(request: Request, env: Env, path: string): Promise<Response> {
