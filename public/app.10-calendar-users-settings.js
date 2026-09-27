@@ -978,7 +978,7 @@ async function settingsTab(tab, btn) {
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
           <button class="btn btn-secondary" ${dataAct('zohoTestFetch')}>🩺 Test Zoho fetch</button>
-          ${(z.zoho_stamped_count ?? 0) > (z.item_count ?? 0) ? `<button class="btn btn-success" ${dataAct('zohoReactivateAll')}>✅ Activate all Zoho items</button>` : ''}
+          <button class="btn btn-success" ${dataAct('zohoReactivateAll')}>✅ Activate all Zoho items</button>
           <button class="btn btn-secondary" ${dataAct('zohoExportClientCatalog')}>⬇ Backup client lists (CSV)</button>
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔍 Preview matches</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
