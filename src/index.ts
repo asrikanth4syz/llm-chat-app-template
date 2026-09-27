@@ -2040,6 +2040,8 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
   // Active items NOT owned by Zoho (legacy seed / manual). With Zoho as the single
   // source of truth these are candidates to retire so the catalogue mirrors Zoho.
   const nonZohoActive = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").first() as {n:number}|null;
+  // Inactive, non-Zoho rows — hidden legacy/demo items that can be permanently deleted.
+  const inactiveNonZoho = await env.DB.prepare("SELECT COUNT(*) as n FROM inventory WHERE active=0 AND zoho_synced_at IS NULL").first() as {n:number}|null;
   let recent: unknown[] = [];
   try {
     const { results } = await env.DB.prepare(
@@ -2062,6 +2064,7 @@ async function handleZohoInvStatus(request: Request, env: Env): Promise<Response
     item_count: itemCount?.n || 0,
     zoho_stamped_count: zohoStamped?.n || 0,
     non_zoho_active_count: nonZohoActive?.n || 0,
+    inactive_non_zoho_count: inactiveNonZoho?.n || 0,
     recent_log: recent,
   });
 }
@@ -2099,6 +2102,25 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   // body's `status` + `errors[]`, so the operator UI can show the real Zoho message.
   // A non-2xx here made the browser's api() helper drop the detail and show a bare "Error".
   return json(result);
+}
+
+// Permanently delete inactive, non-Zoho rows (the hidden legacy/demo catalogue), so
+// the inventory table holds only Zoho items. Never touches active or Zoho-owned rows,
+// and cleans up any stale client_catalog references to the deleted SKUs. Guarded to
+// refuse when no Zoho items exist (so it can't run before the import).
+async function handleZohoDeleteInactiveNonZoho(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const stamped = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL");
+  if (stamped === 0) return json({ error: "No Zoho-owned items yet — run a LIVE full reconcile first. Refusing." }, 409);
+  const toDelete = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE active=0 AND zoho_synced_at IS NULL");
+  // Clear any lingering per-client references to these SKUs first, then delete the rows.
+  await env.DB.prepare("DELETE FROM client_catalog WHERE sku IN (SELECT sku FROM inventory WHERE active=0 AND zoho_synced_at IS NULL)").run().catch(() => {});
+  const res = await env.DB.prepare("DELETE FROM inventory WHERE active=0 AND zoho_synced_at IS NULL").run();
+  const deleted = (res.meta?.changes as number) ?? toDelete;
+  await audit(env, user, "DELETE", "inventory", "delete_inactive_non_zoho", undefined, `deleted ${deleted} inactive non-Zoho items`);
+  return json({ ok: true, deleted });
 }
 
 // Directly re-activate every Zoho-owned row (active=1). For recovering items that a
@@ -3264,6 +3286,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
       if (path==="/api/integrations/zoho-inventory/test-fetch"     && method==="GET")  return handleZohoTestFetch(request,env);
       if (path==="/api/integrations/zoho-inventory/reactivate-all" && method==="POST") return handleZohoReactivateAll(request,env);
+      if (path==="/api/integrations/zoho-inventory/delete-inactive-nonzoho" && method==="POST") return handleZohoDeleteInactiveNonZoho(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 

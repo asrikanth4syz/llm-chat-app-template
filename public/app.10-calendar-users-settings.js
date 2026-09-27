@@ -984,6 +984,7 @@ async function settingsTab(tab, btn) {
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<label style="display:flex;align-items:center;gap:5px;font-size:.78rem">Match:<select id="zoho-merge-score" class="input" style="padding:2px 6px;font-size:.78rem"><option value="1">Exact name</option><option value="0.8">≥ 80%</option><option value="0.6">≥ 60%</option></select></label><button class="btn btn-primary" ${dataAct('zohoMergeApplyDry')}>🔗 Step 1 · Map client-assigned</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 ? `<label style="display:flex;align-items:center;gap:4px;font-size:.76rem"><input type="checkbox" id="zoho-purge-assigned"> incl. demo assignments</label><button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Step 2 · Retire non-Zoho</button>` : ''}
+          ${(z.inactive_non_zoho_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoDeleteInactiveNonZoho')}>🗑 Delete ${z.inactive_non_zoho_count} inactive non-Zoho</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
@@ -1623,6 +1624,15 @@ async function zohoAssignCatalog() {
   const res = await api(`/clients/${clientId}/assign-zoho-catalog`, { method: 'POST', body: JSON.stringify({}) });
   if (!res) return;
   showToast(`Assigned ${res.added} Zoho item${res.added===1?'':'s'} to ${clientName}`, 'success');
+}
+
+// Permanently delete inactive, non-Zoho items (the hidden legacy/demo catalogue).
+async function zohoDeleteInactiveNonZoho() {
+  if (!confirm('Permanently DELETE all inactive non-Zoho items?\n\nThese are hidden legacy/demo products (not synced from Zoho). This cannot be undone. Active items and Zoho-owned items are untouched.')) return;
+  const r = await api('/integrations/zoho-inventory/delete-inactive-nonzoho', { method: 'POST', body: JSON.stringify({}) });
+  if (!r) return;
+  showToast(`Deleted ${r.deleted} inactive non-Zoho item${r.deleted===1?'':'s'}`, 'success');
+  _zohoReloadIntegrations();
 }
 
 // Directly activate every Zoho-owned item (fixes rows left inactive by a prior cleanup).
