@@ -2008,8 +2008,10 @@ async function countStaleZohoSkus(env: Env, runStamp: string): Promise<number> {
 }
 async function countExistingSkus(env: Env, skus: string[]): Promise<number> {
   let n = 0;
-  for (let c = 0; c < skus.length; c += 200) {
-    const part = skus.slice(c, c+200); if (!part.length) break;
+  // Chunk by D1_IN_CHUNK (≤100 bound vars per query) — an IN() list larger than that
+  // throws "too many SQL variables".
+  for (let c = 0; c < skus.length; c += D1_IN_CHUNK) {
+    const part = skus.slice(c, c + D1_IN_CHUNK); if (!part.length) break;
     const ph = part.map(() => '?').join(',');
     n += await scalarCount(env, `SELECT COUNT(*) AS n FROM inventory WHERE sku IN (${ph})`, part);
   }
@@ -8579,11 +8581,16 @@ async function upsertInventoryRows(
   const SPEC = { ...INVENTORY_UPSERT_SPEC, ...(opts.extraSpec || {}) };
   const COLS = Object.keys(SPEC);
 
-  // Which SKUs already exist (chunked IN() to respect bind limits).
+  // Which SKUs already exist. MUST chunk by D1_IN_CHUNK (≤100 bound vars per query):
+  // an IN() list of 200 throws "too many SQL variables", and if that throw is
+  // swallowed, existingSkus comes back empty, every row is treated as new →
+  // INSERT OR IGNORE silently skips rows whose SKU already exists (they are never
+  // updated, re-stamped, or re-activated). That is exactly the "3197 written but only
+  // a handful persisted" bug.
   const existingSkus = new Set<string>();
   const allSkus = rows.map(v => String(v.row.sku));
-  for (let c = 0; c < allSkus.length; c += 200) {
-    const part = allSkus.slice(c, c + 200);
+  for (let c = 0; c < allSkus.length; c += D1_IN_CHUNK) {
+    const part = allSkus.slice(c, c + D1_IN_CHUNK);
     const ph = part.map(() => '?').join(',');
     try {
       const res = await env.DB.prepare(`SELECT sku FROM inventory WHERE sku IN (${ph})`).bind(...part).all();

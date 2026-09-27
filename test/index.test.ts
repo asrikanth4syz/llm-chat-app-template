@@ -1141,6 +1141,21 @@ describe("Orders", () => {
     await db.prepare("DELETE FROM inventory WHERE sku IN ('SEED-MRG1','ZOHO-MRG1')").run();
   });
 
+  it("bulk import updates existing SKUs beyond the 90-var IN() chunk (upsert regression)", async () => {
+    const db = env.DB as D1Database;
+    const N = 120; // > D1_IN_CHUNK (90): the existing-SKU lookup must chunk, not throw
+    const seed: D1PreparedStatement[] = [];
+    for (let i = 0; i < N; i++) seed.push(db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,active) VALUES (?,?,?,?,1)").bind(`BULKUP-${i}`, `Old ${i}`, "Snacks", 10));
+    await db.batch(seed);
+    const rows = Array.from({ length: N }, (_, i) => ({ sku: `BULKUP-${i}`, name: `New ${i}`, category: "Snacks", unit_price: 20 }));
+    const res = await post("/api/import/inventory", rows, adminToken);
+    expect(res.status).toBe(200);
+    // A row well past the 90th must have been UPDATED, not silently ignored.
+    const row = await db.prepare("SELECT name FROM inventory WHERE sku='BULKUP-119'").first() as { name: string };
+    expect(row.name).toBe("New 119");
+    await db.prepare("DELETE FROM inventory WHERE sku LIKE 'BULKUP-%'").run();
+  });
+
   it("assign-zoho-catalog bulk-assigns active Zoho items to a client", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,active,zoho_synced_at) VALUES (?,?,?,?,1,?)")
