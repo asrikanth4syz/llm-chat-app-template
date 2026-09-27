@@ -2117,7 +2117,38 @@ async function handleZohoMergePreview(request: Request, env: Env): Promise<Respo
     else ambiguous++;
   }
   const assigned = await scalarCount(env, "SELECT COUNT(*) AS n FROM client_catalog WHERE sku IN (SELECT sku FROM inventory WHERE active=1 AND zoho_synced_at IS NULL)");
-  return json({ non_zoho: seed.length, zoho_owned: zoho.length, matched_unique: matched, ambiguous, unmatched_seed: unmatched, client_assignments_on_non_zoho: assigned, sample });
+
+  // Focus on the subset that actually matters: the DISTINCT seed items clients are
+  // assigned to. For each, exact-match to a Zoho item; for the unmatched, suggest the
+  // closest Zoho item by token overlap so we can judge whether they exist in Zoho
+  // under a different name (→ manual mapping) or genuinely aren't in Zoho at all.
+  const assignedSeed = (await env.DB.prepare(
+    "SELECT DISTINCT i.sku, i.name FROM inventory i JOIN client_catalog cc ON cc.sku=i.sku WHERE i.active=1 AND i.zoho_synced_at IS NULL"
+  ).all()).results as { sku: string; name: string }[];
+  const zohoTok = zoho.map(z => ({ sku: z.sku, name: z.name, toks: new Set(normNameForMatch(z.name).split(" ").filter(Boolean)) }));
+  let aMatched = 0, aUnmatched = 0;
+  const aSample: { seed_sku: string; seed_name: string; candidate_sku: string | null; candidate_name: string | null; score: number }[] = [];
+  for (const s of assignedSeed) {
+    const hit = zmap.get(normNameForMatch(s.name));
+    if (hit && hit.length === 1) { aMatched++; continue; }
+    aUnmatched++;
+    if (aSample.length < 40) {
+      const stoks = new Set(normNameForMatch(s.name).split(" ").filter(Boolean));
+      let best: typeof zohoTok[number] | null = null, bestScore = 0;
+      for (const z of zohoTok) {
+        let inter = 0; for (const t of stoks) if (z.toks.has(t)) inter++;
+        const uni = stoks.size + z.toks.size - inter;
+        const score = uni ? inter / uni : 0;
+        if (score > bestScore) { bestScore = score; best = z; }
+      }
+      aSample.push({ seed_sku: s.sku, seed_name: s.name, candidate_sku: best?.sku ?? null, candidate_name: best?.name ?? null, score: Math.round(bestScore * 100) / 100 });
+    }
+  }
+  return json({
+    non_zoho: seed.length, zoho_owned: zoho.length, matched_unique: matched, ambiguous, unmatched_seed: unmatched,
+    client_assignments_on_non_zoho: assigned, sample,
+    assigned_distinct: assignedSeed.length, assigned_matched: aMatched, assigned_unmatched: aUnmatched, assigned_sample: aSample,
+  });
 }
 
 // Retire (soft-deactivate) every active item NOT owned by Zoho, so the catalogue

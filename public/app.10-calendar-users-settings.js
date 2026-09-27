@@ -1485,7 +1485,20 @@ async function zohoMergePreview() {
         <span><b>${r.client_assignments_on_non_zoho}</b> client assignments on seed items</span>
       </div>
       ${sample ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Seed item</th><th>Seed SKU</th><th>Matches Zoho SKU</th></tr></thead><tbody>${sample}</tbody></table>` : ''}
-      <div style="margin-top:8px;font-size:.76rem;color:var(--text-muted)">If the sample mapping looks correct, tell me and I'll enable <b>Apply merge</b>: it re-points each client's assignment from the seed SKU to the matched Zoho SKU (keeping their price) and retires only the duplicate seed rows — client lists stay intact.</div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="font-weight:600;margin-bottom:4px">Client-assigned items (the part that must be preserved)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem">
+          <span><b>${r.assigned_distinct ?? 0}</b> distinct items clients use</span>
+          <span><b style="color:var(--success)">${r.assigned_matched ?? 0}</b> exist in Zoho (auto-mappable)</span>
+          <span><b style="color:var(--warning)">${r.assigned_unmatched ?? 0}</b> not found in Zoho by name</span>
+        </div>
+        ${(r.assigned_sample || []).length ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Client-assigned seed item</th><th>Closest Zoho item</th><th>Match</th></tr></thead><tbody>${(r.assigned_sample||[]).map(a=>`<tr>
+          <td style="font-size:.76rem">${h(String(a.seed_name))} <span style="color:var(--text-muted)">(${h(String(a.seed_sku))})</span></td>
+          <td style="font-size:.76rem;color:var(--text-muted)">${a.candidate_name?`${h(String(a.candidate_name))} (${h(String(a.candidate_sku))})`:'—'}</td>
+          <td style="font-size:.76rem;color:${a.score>=0.6?'var(--success)':a.score>=0.3?'var(--warning)':'var(--danger)'}">${Math.round((a.score||0)*100)}%</td>
+        </tr>`).join('')}</tbody></table>` : ''}
+      </div>
+      <div style="margin-top:8px;font-size:.76rem;color:var(--text-muted)">Only exact-name matches auto-merge safely. The "closest Zoho item" column is a fuzzy suggestion for the ones that don't match — a high % likely means the same product under a different name; a low % likely means it isn't in Zoho. Send me these numbers and I'll recommend the right path.</div>
     </div>`;
 }
 
