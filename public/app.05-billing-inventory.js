@@ -477,8 +477,10 @@ async function confirmBillDC(id) {
 let _invCache = {};
 
 async function renderInventory(el) {
-  const inv = await api('/inventory');
+  const showInactive = !!APP._invShowInactive;
+  const inv = await api('/inventory' + (showInactive ? '?all=1' : ''));
   if (!inv) return;
+  const inactiveCount = inv.filter(i => Number(i.active) === 0).length;
   _invCache = {};
   inv.forEach(i => { _invCache[i.sku] = i; });
   APP._invFilter = APP._invFilter || 'All';
@@ -550,7 +552,7 @@ async function renderInventory(el) {
           <input type="checkbox" ${checked?'checked':''} ${dataChangeEl('invToggleSelect', item.sku)} style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
         </td>
         <td><span style="font-size:1.1rem">${item.emoji||'📦'}</span> <b style="font-size:.82rem">${item.sku}</b>${item.is_critical?'<span style="margin-left:4px;background:var(--danger);color:#fff;border-radius:4px;padding:1px 5px;font-size:.65rem;font-weight:800;vertical-align:middle">CRITICAL</span>':''}</td>
-        <td><b>${h(item.name)}</b>${item.brand?`<div class="u-muted-xs">${h(item.brand)}</div>`:''}</td>
+        <td><b>${h(item.name)}</b>${Number(item.active)===0?' <span style="background:var(--text-muted);color:#fff;border-radius:4px;padding:1px 5px;font-size:.62rem;font-weight:800;vertical-align:middle">INACTIVE</span>':''}${item.brand?`<div class="u-muted-xs">${h(item.brand)}</div>`:''}</td>
         <td style="font-size:.82rem">${item.category}${item.sub_category?`<div style="font-size:.68rem;font-weight:600;color:${item.sub_category==='Healthy'?'var(--success-strong)':'var(--gray)'};margin-top:1px">${item.sub_category}</div>`:''}</td>
         <td style="font-size:.78rem;color:var(--text-muted)">${item.uom||'unit'}</td>
         <td style="font-weight:700">${fmt(item.unit_price)}</td>
@@ -582,6 +584,8 @@ async function renderInventory(el) {
     `${['super_admin','ops_admin','finance_admin','procurement_manager'].includes(APP.user?.role)
         ? `<button class="btn btn-secondary" ${dataAct('recalcGstFromHsn')} title="Recompute every item's GST slab from its HSN code">↻ Recalc GST from HSN</button>
            <button class="btn btn-secondary" ${dataAct('assignAeratedHsn')} title="Stamp HSN 220210 on 40% items missing an HSN (GST 2.0 aerated/sugary drinks)">⊕ Assign HSN to 40% items</button>` : ''}
+     ${['super_admin','ops_admin'].includes(APP.user?.role)
+        ? `<button class="btn ${showInactive?'btn-primary':'btn-secondary'}" ${dataAct('toggleInvInactive')} title="Include inactive items in the list">${showInactive?`✓ Showing inactive${inactiveCount?` (${inactiveCount})`:''}`:'Show inactive'}</button>` : ''}
      <button class="btn btn-secondary" ${dataAct('renderAddItem')}>${iconPlus(14)} Add Item</button>`)}
 
   <!-- KPI tiles — icon-chip style, responsive -->
@@ -1083,6 +1087,12 @@ function eiCatVal(kind) {
   if (v !== '__new__') return v;
   return (document.getElementById('ei-'+kind+'-new')?.value || '').trim();
 }
+// Toggle inclusion of inactive items in the Inventory list (super/ops only).
+function toggleInvInactive() {
+  APP._invShowInactive = !APP._invShowInactive;
+  navigate('inventory');
+}
+
 async function saveInventoryItem(sku) {
   if (eiVal('ei-cat') === '__new__' && !eiCatVal('cat')) { showToast('Type the new category name first', 'error'); return; }
   if (eiVal('ei-subcat') === '__new__' && !eiCatVal('subcat')) { showToast('Type the new sub-category name first', 'error'); return; }

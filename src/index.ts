@@ -1925,8 +1925,13 @@ async function runZohoSync(
       }
       buffered.push(...pg.items);
       total = pg.total || total;
-      hasMore = pg.hasMore;
       page++;
+      // Robust pagination: Zoho sometimes omits page_context.total/has_more_page
+      // (seen as "Total: —"), which would stop the pager after one page. Keep going
+      // while Zoho signals more OR the page came back full; stop only on a partial or
+      // empty page. This guarantees all items are fetched regardless of those fields.
+      hasMore = pg.hasMore || pg.items.length >= ZOHO_SYNC.PER_PAGE;
+      if (pg.items.length === 0) hasMore = false;
     }
     const fetchComplete = !capHit; // every page fetched without error
     r.total = buffered.length;
@@ -4911,13 +4916,16 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
   const q = url.searchParams.get("q");
   const cat = url.searchParams.get("category");
 
-  const params: string[] = [];
-  let baseFilter = " WHERE i.active=1";
-  if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
-  if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
-
   // Client-role users see only their assigned catalog, with per-client prices applied
   const isClientRole = ['client_admin','client_user','client_approver'].includes(user!.role);
+  // Super/ops may request inactive items too (?all=1) — e.g. to find & re-activate
+  // items a cleanup hid. Clients always see active-only.
+  const includeInactive = url.searchParams.get("all") === "1" && !isClientRole;
+
+  const params: string[] = [];
+  let baseFilter = includeInactive ? " WHERE 1=1" : " WHERE i.active=1";
+  if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
+  if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
   if (isClientRole && user!.client_id) {
     try {
       const {results: catalogRows} = await env.DB.prepare(
