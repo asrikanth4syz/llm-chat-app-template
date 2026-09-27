@@ -977,12 +977,14 @@ async function settingsTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
-          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Retire ${z.non_zoho_active_count} non-Zoho item${z.non_zoho_active_count === 1 ? '' : 's'}</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔗 Preview merge to Zoho</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Retire ${z.non_zoho_active_count} unmatched</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
           </div>
         </div>
+        <div id="zoho-merge-result" style="font-size:.8rem"></div>
         ${z.last_result && z.last_result.status === 'error' && z.last_result.error ? `
         <div style="background:var(--danger-bg);border:1px solid var(--danger);border-radius:8px;padding:8px 12px;font-size:.8rem;color:var(--danger)">
           <b>Last sync failed:</b> ${h(String(z.last_result.error))}
@@ -1458,6 +1460,32 @@ async function zohoInvLookup() {
     </tr></thead><tbody>${rowsHtml}</tbody></table>
     <div style="margin-top:6px;color:var(--text-muted);font-size:.75rem">
       <b>Inactive</b> → hidden from listings (item is inactive in Zoho). <b>In client catalogues = 0</b> → present in master Inventory but not on any client's order screen until assigned to that client.
+    </div>`;
+}
+
+// Read-only: preview how well seed items match Zoho items by name, so we can merge
+// (re-point client assignments to the Zoho item) without breaking client catalogues.
+async function zohoMergePreview() {
+  const box = document.getElementById('zoho-merge-result');
+  if (box) box.innerHTML = 'Matching seed items to Zoho items…';
+  const r = await api('/integrations/zoho-inventory/merge-preview');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  const sample = (r.sample || []).map(s => `<tr>
+    <td style="font-size:.76rem">${h(String(s.seed_name))}</td>
+    <td style="font-size:.76rem;color:var(--text-muted)">${h(String(s.seed_sku))}</td>
+    <td style="font-size:.76rem;color:var(--success)">→ ${h(String(s.zoho_sku))}</td>
+  </tr>`).join('');
+  if (box) box.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:6px">
+      <div style="font-weight:600;margin-bottom:6px">Merge preview (nothing changed)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem">
+        <span><b style="color:var(--success)">${r.matched_unique}</b> seed items uniquely match a Zoho item</span>
+        <span><b style="color:var(--warning)">${r.ambiguous}</b> ambiguous (same name → several Zoho items)</span>
+        <span><b>${r.unmatched_seed}</b> unmatched (no Zoho twin)</span>
+        <span><b>${r.client_assignments_on_non_zoho}</b> client assignments on seed items</span>
+      </div>
+      ${sample ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Seed item</th><th>Seed SKU</th><th>Matches Zoho SKU</th></tr></thead><tbody>${sample}</tbody></table>` : ''}
+      <div style="margin-top:8px;font-size:.76rem;color:var(--text-muted)">If the sample mapping looks correct, tell me and I'll enable <b>Apply merge</b>: it re-points each client's assignment from the seed SKU to the matched Zoho SKU (keeping their price) and retires only the duplicate seed rows — client lists stay intact.</div>
     </div>`;
 }
 

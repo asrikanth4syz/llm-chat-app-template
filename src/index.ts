@@ -2086,6 +2086,40 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   return json(result);
 }
 
+// Normalise a product name for matching a seed item to its Zoho twin: lower-case,
+// strip a trailing/inline "MRP <n>" tag (Zoho names carry "… -MRP 95"), reduce
+// punctuation to spaces, collapse whitespace.
+function normNameForMatch(s: unknown): string {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[-–—]?\s*mrp\s*[-:]?\s*\d+(\.\d+)?/gi, " ") // drop "MRP 95" / "-MRP95"
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// Read-only: how well the non-Zoho (seed) items match Zoho-owned items by normalised
+// name. Lets us confirm a safe merge before re-pointing any client assignments.
+async function handleZohoMergePreview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const seed = (await env.DB.prepare("SELECT sku,name FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").all()).results as { sku: string; name: string }[];
+  const zoho = (await env.DB.prepare("SELECT sku,name FROM inventory WHERE zoho_synced_at IS NOT NULL").all()).results as { sku: string; name: string }[];
+  const zmap = new Map<string, string[]>();
+  for (const z of zoho) { const k = normNameForMatch(z.name); if (k) { if (!zmap.has(k)) zmap.set(k, []); zmap.get(k)!.push(z.sku); } }
+  let matched = 0, ambiguous = 0, unmatched = 0;
+  const sample: { seed_sku: string; seed_name: string; zoho_sku: string }[] = [];
+  for (const s of seed) {
+    const hit = zmap.get(normNameForMatch(s.name));
+    if (!hit) unmatched++;
+    else if (hit.length === 1) { matched++; if (sample.length < 12) sample.push({ seed_sku: s.sku, seed_name: s.name, zoho_sku: hit[0] }); }
+    else ambiguous++;
+  }
+  const assigned = await scalarCount(env, "SELECT COUNT(*) AS n FROM client_catalog WHERE sku IN (SELECT sku FROM inventory WHERE active=1 AND zoho_synced_at IS NULL)");
+  return json({ non_zoho: seed.length, zoho_owned: zoho.length, matched_unique: matched, ambiguous, unmatched_seed: unmatched, client_assignments_on_non_zoho: assigned, sample });
+}
+
 // Retire (soft-deactivate) every active item NOT owned by Zoho, so the catalogue
 // mirrors Zoho exactly (Zoho = single source of truth). Guarded: refuses unless a
 // Live sync has actually stamped items, so it can never wipe the catalogue when Zoho
@@ -2966,6 +3000,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/connect" && method==="POST") return handleZohoInvConnect(request,env);
       if (path==="/api/inventory/lookup"                    && method==="GET")  return handleInventoryLookup(request,env);
       if (path==="/api/integrations/zoho-inventory/purge-non-zoho" && method==="POST") return handleZohoPurgeNonZoho(request,env);
+      if (path==="/api/integrations/zoho-inventory/merge-preview"  && method==="GET")  return handleZohoMergePreview(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
