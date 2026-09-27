@@ -1650,9 +1650,11 @@ async function zohoTestFetch() {
         <span>DC <b>${h(String(r.dc||'—'))}</b></span>
         <span>Org id set: <b>${r.org_id_set ? 'yes' : 'NO'}</b></span>
         <span>Zoho code: <b>${r.zoho_code ?? '—'}</b></span>
-        <span>Items: <b>${r.item_count ?? '—'}</b></span>
-        <span>Total: <b>${r.total ?? '—'}</b></span>
+        <span>Pages fetched: <b>${r.pages_fetched ?? '—'}</b></span>
+        <span>Total items fetched: <b style="color:${(r.total_items_fetched??0)>500?'var(--success)':'var(--warning)'}">${r.total_items_fetched ?? r.item_count ?? '—'}</b></span>
+        <span>page_context.total: <b>${r.first_page_total_field ?? '—'}</b></span>
       </div>
+      ${Array.isArray(r.page_counts) && r.page_counts.length ? `<div style="margin-top:4px;font-size:.74rem;color:var(--text-muted)">Per-page: ${r.page_counts.join(', ')}</div>` : ''}
       ${r.zoho_message ? `<div style="margin-top:6px;font-size:.8rem;color:var(--danger)">Zoho: ${h(String(r.zoho_message))}</div>` : ''}
       ${r.error ? `<div style="margin-top:6px;font-size:.8rem;color:var(--danger)">Error (${h(String(r.stage||''))}): ${h(String(r.error))}</div>` : ''}
       ${rows ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Name</th><th>SKU</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : ''}

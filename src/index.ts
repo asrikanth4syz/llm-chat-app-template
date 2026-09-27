@@ -2125,24 +2125,43 @@ async function handleZohoTestFetch(request: Request, env: Env): Promise<Response
   let token: string;
   try { token = await zohoGetToken(env, fetch, true); }
   catch (e) { return json({ ok: false, stage: "token", dc, org_id_set: !!orgId, error: e instanceof ZohoAuthError ? e.message : String(e) }); }
-  const qs = new URLSearchParams({ organization_id: orgId, per_page: "5", page: "1" });
-  let res: Response, data: Record<string, unknown>;
+  // Page through the whole catalogue exactly as the sync would (per_page=200,
+  // robust stop) and report the true fetchable count + per-page sizes, so a
+  // truncated import is visible. Read-only.
+  const PER = ZOHO_SYNC.PER_PAGE;
+  const pageCounts: number[] = [];
+  let totalItems = 0, page = 1, firstStatus = 0, zohoCode: unknown = null, zohoMsg: unknown = null;
+  const firstSample: { sku: unknown; name: unknown; status: unknown }[] = [];
+  let firstTotal: unknown = null;
   try {
-    res = await fetch(`https://www.zohoapis.${dc}/inventory/v1/items?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
-    data = await res.json().catch(() => ({})) as Record<string, unknown>;
-  } catch (e) { return json({ ok: false, stage: "fetch", dc, org_id_set: !!orgId, error: String(e) }); }
-  const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : [];
-  const pc = (data.page_context || {}) as Record<string, unknown>;
+    while (page <= ZOHO_SYNC.MAX_PAGES_PER_RUN) {
+      const qs = new URLSearchParams({ organization_id: orgId, per_page: String(PER), page: String(page) });
+      const res = await fetch(`https://www.zohoapis.${dc}/inventory/v1/items?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+      if (page === 1) { firstStatus = res.status; zohoCode = data.code ?? null; zohoMsg = data.message ?? null; firstTotal = (data.page_context as Record<string, unknown> | undefined)?.total ?? null; }
+      const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : [];
+      if (page === 1) for (const z of items.slice(0, 5)) firstSample.push({ sku: z.sku ?? null, name: z.name ?? null, status: z.status ?? null });
+      pageCounts.push(items.length);
+      totalItems += items.length;
+      const pc = (data.page_context || {}) as Record<string, unknown>;
+      const more = !!pc.has_more_page || items.length >= PER;
+      page++;
+      if (!more || items.length === 0) break;
+    }
+  } catch (e) { return json({ ok: false, stage: "fetch", dc, org_id_set: !!orgId, error: String(e), fetched_so_far: totalItems, page_counts: pageCounts }); }
   return json({
-    ok: res.ok && (data.code === 0 || data.code === undefined),
-    http_status: res.status,
+    ok: totalItems > 0,
+    http_status: firstStatus,
     dc, org_id_set: !!orgId,
-    zoho_code: data.code ?? null,
-    zoho_message: data.message ?? null,
-    item_count: items.length,
-    total: pc.total ?? null,
-    has_more: pc.has_more_page ?? null,
-    sample: items.slice(0, 5).map(z => ({ sku: z.sku ?? null, name: z.name ?? null, status: z.status ?? null })),
+    zoho_code: zohoCode, zoho_message: zohoMsg,
+    per_page: PER,
+    pages_fetched: pageCounts.length,
+    total_items_fetched: totalItems,
+    page_counts: pageCounts,
+    first_page_total_field: firstTotal,
+    item_count: pageCounts[0] ?? 0,
+    total: totalItems,
+    sample: firstSample,
   });
 }
 
