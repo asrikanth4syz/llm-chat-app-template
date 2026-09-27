@@ -2137,6 +2137,52 @@ async function handleZohoReactivateAll(request: Request, env: Env): Promise<Resp
   return json({ ok: true, reactivated, zoho_total: total });
 }
 
+// Read-only report: fetch the whole Zoho feed and find SKUs shared by more than one
+// item (they collapse into one app row, since the catalogue keys on SKU) plus blank-SKU
+// items (skipped). Explains why app rows < Zoho items.
+async function handleZohoDuplicateSkus(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  let token: string;
+  try { token = await zohoGetToken(env, fetch); }
+  catch (e) { return json({ ok: false, error: e instanceof ZohoAuthError ? e.message : String(e) }); }
+  const counts = new Map<string, { count: number; names: string[] }>();
+  let blank = 0, total = 0, page = 1, reAuthed = false;
+  while (page <= ZOHO_SYNC.MAX_PAGES_PER_RUN) {
+    let pg;
+    try { pg = await zohoFetchPage(env, token, page, 0, fetch); }
+    catch (e) {
+      if (e instanceof ZohoAuthError && !reAuthed) { token = await zohoGetToken(env, fetch, true); reAuthed = true; continue; }
+      return json({ ok: false, error: String(e), fetched_so_far: total });
+    }
+    for (const z of pg.items) {
+      total++;
+      const sku = String((z as Record<string, unknown>).sku ?? "").trim();
+      if (!sku) { blank++; continue; }
+      const e = counts.get(sku) || { count: 0, names: [] };
+      e.count++; if (e.names.length < 6) e.names.push(String((z as Record<string, unknown>).name ?? ""));
+      counts.set(sku, e);
+    }
+    const more = pg.hasMore || pg.items.length >= ZOHO_SYNC.PER_PAGE;
+    page++;
+    if (!more || pg.items.length === 0) break;
+  }
+  const dups = [...counts.entries()].filter(([, v]) => v.count > 1)
+    .map(([sku, v]) => ({ sku, count: v.count, names: v.names })).sort((a, b) => b.count - a.count);
+  const duplicateExtraItems = dups.reduce((s, d) => s + (d.count - 1), 0);
+  return json({
+    ok: true,
+    total_items: total,
+    distinct_skus: counts.size,
+    blank_sku_count: blank,
+    duplicate_sku_groups: dups.length,
+    duplicate_extra_items: duplicateExtraItems, // items lost to collapse (total = distinct + extras + blanks)
+    expected_app_rows: counts.size,
+    sample: dups.slice(0, 60),
+  });
+}
+
 // One-shot diagnostic: fetch page 1 of Zoho items directly and report exactly what
 // Zoho returns (HTTP status, Zoho's own code/message, item count, sample) — never
 // writes. Explains a "0 fetched" full reconcile (auth scope, wrong org, plan, etc.).
@@ -3285,6 +3331,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/merge-apply"    && method==="POST") return handleZohoMergeApply(request,env,);
       if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
       if (path==="/api/integrations/zoho-inventory/test-fetch"     && method==="GET")  return handleZohoTestFetch(request,env);
+      if (path==="/api/integrations/zoho-inventory/duplicate-skus" && method==="GET")  return handleZohoDuplicateSkus(request,env);
       if (path==="/api/integrations/zoho-inventory/reactivate-all" && method==="POST") return handleZohoReactivateAll(request,env);
       if (path==="/api/integrations/zoho-inventory/delete-inactive-nonzoho" && method==="POST") return handleZohoDeleteInactiveNonZoho(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);

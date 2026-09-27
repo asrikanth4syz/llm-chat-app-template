@@ -978,6 +978,7 @@ async function settingsTab(tab, btn) {
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
           <button class="btn btn-secondary" ${dataAct('zohoTestFetch')}>🩺 Test Zoho fetch</button>
+          <button class="btn btn-secondary" ${dataAct('zohoDuplicateSkus')}>🔁 Duplicate SKU report</button>
           <button class="btn btn-success" ${dataAct('zohoReactivateAll')}>✅ Activate all Zoho items</button>
           <button class="btn btn-secondary" ${dataAct('zohoExportClientCatalog')}>⬇ Backup client lists (CSV)</button>
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔍 Preview matches</button>` : ''}
@@ -1642,6 +1643,33 @@ async function zohoReactivateAll() {
   if (!r) return;
   showToast(`Re-activated ${r.reactivated} item${r.reactivated===1?'':'s'} · ${r.zoho_total} Zoho items now active`, 'success');
   _zohoReloadIntegrations();
+}
+
+// Report Zoho SKUs shared by >1 item (they collapse into one app row) + blank SKUs.
+async function zohoDuplicateSkus() {
+  const box = document.getElementById('zoho-merge-result');
+  if (box) box.innerHTML = 'Scanning Zoho for duplicate SKUs…';
+  const r = await api('/integrations/zoho-inventory/duplicate-skus');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  if (!r.ok) { if (box) box.innerHTML = `<div style="color:var(--danger)">Report failed: ${h(String(r.error||'unknown'))}</div>`; return; }
+  const rows = (r.sample || []).map(d => `<tr>
+    <td style="font-size:.78rem"><b>${h(String(d.sku))}</b></td>
+    <td style="font-size:.78rem;color:var(--danger)">${d.count}×</td>
+    <td style="font-size:.76rem;color:var(--text-muted)">${(d.names||[]).map(n=>h(String(n))).join(' · ')}</td>
+  </tr>`).join('');
+  if (box) box.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:6px">
+      <div style="font-weight:600;margin-bottom:6px">Zoho SKU report</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem">
+        <span>Zoho items: <b>${r.total_items}</b></span>
+        <span>Distinct SKUs: <b style="color:var(--success)">${r.distinct_skus}</b></span>
+        <span>Duplicate SKU groups: <b style="color:var(--warning)">${r.duplicate_sku_groups}</b></span>
+        <span>Items lost to duplicates: <b>${r.duplicate_extra_items}</b></span>
+        <span>Blank SKUs: <b>${r.blank_sku_count}</b></span>
+      </div>
+      <div style="margin-top:6px;font-size:.76rem;color:var(--text-muted)">${r.total_items} items = ${r.distinct_skus} distinct SKUs + ${r.duplicate_extra_items} duplicate + ${r.blank_sku_count} blank. App holds one row per distinct SKU (≈ ${r.expected_app_rows}). Fix duplicates by giving each item a unique SKU in Zoho.</div>
+      ${rows ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>SKU</th><th>Count</th><th>Items sharing it</th></tr></thead><tbody>${rows}</tbody></table>` : '<div style="margin-top:6px;color:var(--success)">No duplicate SKUs — every Zoho item has a unique SKU.</div>'}
+    </div>`;
 }
 
 // Diagnostic: show exactly what Zoho's items API returns right now.
