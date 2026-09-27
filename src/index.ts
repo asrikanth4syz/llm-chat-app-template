@@ -2094,6 +2094,20 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   return json(result);
 }
 
+// Directly re-activate every Zoho-owned row (active=1). For recovering items that a
+// prior cleanup left inactive without re-running a full sync. Zoho-owned = the row was
+// synced from Zoho (zoho_synced_at set), and Zoho's list only returns active items.
+async function handleZohoReactivateAll(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const res = await env.DB.prepare("UPDATE inventory SET active=1 WHERE zoho_synced_at IS NOT NULL AND active=0").run();
+  const reactivated = (res.meta?.changes as number) ?? 0;
+  const total = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE zoho_synced_at IS NOT NULL");
+  await audit(env, user, "UPDATE", "inventory", "zoho_reactivate_all", undefined, `reactivated ${reactivated} of ${total} Zoho items`);
+  return json({ ok: true, reactivated, zoho_total: total });
+}
+
 // One-shot diagnostic: fetch page 1 of Zoho items directly and report exactly what
 // Zoho returns (HTTP status, Zoho's own code/message, item count, sample) — never
 // writes. Explains a "0 fetched" full reconcile (auth scope, wrong org, plan, etc.).
@@ -3223,6 +3237,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/merge-apply"    && method==="POST") return handleZohoMergeApply(request,env,);
       if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
       if (path==="/api/integrations/zoho-inventory/test-fetch"     && method==="GET")  return handleZohoTestFetch(request,env);
+      if (path==="/api/integrations/zoho-inventory/reactivate-all" && method==="POST") return handleZohoReactivateAll(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 

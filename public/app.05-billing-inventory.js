@@ -936,6 +936,11 @@ async function editInventoryItem(sku) {
         <div class="form-group"><label>Emoji / Icon</label><input type="text" id="ei-emoji" value="${item.emoji||'📦'}" maxlength="2"></div>
         <div class="form-group"><label>Barcode / EAN</label><input type="text" id="ei-barcode" value="${item.barcode||''}"></div>
         <div class="form-group"><label>Expiry Date</label><input type="date" id="ei-expiry" value="${item.expiry_date||''}"></div>
+        <div class="form-group"><label>Status</label>
+          <select id="ei-active">
+            <option value="1" ${Number(item.active)!==0?'selected':''}>Active (visible & orderable)</option>
+            <option value="0" ${Number(item.active)===0?'selected':''}>Inactive (hidden)</option>
+          </select></div>
       </div>
     </div>
 
@@ -1091,6 +1096,7 @@ async function saveInventoryItem(sku) {
     barcode:        eiVal('ei-barcode'),
     sub_category:   eiCatVal('subcat'),
     expiry_date:    eiVal('ei-expiry') || null,
+    active:         eiVal('ei-active') === '0' ? 0 : 1,
     // Packing
     uom:            eiVal('ei-uom'),
     pack_size:      eiVal('ei-packsize',true),
