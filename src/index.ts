@@ -1736,9 +1736,13 @@ function zohoDc(env: Env): string { return (env.ZOHO_DC || "in").trim(); }
 // by the in-app "Connect Zoho" flow (server-side authorization-code exchange). The
 // secret wins when present.
 async function zohoRefreshToken(env: Env): Promise<string> {
-  const s = (env.ZOHO_REFRESH_TOKEN || "").trim();
-  if (s) return s;
-  return (await getConfig(env, "zoho_refresh_token", "")).trim();
+  // Prefer the token minted by the in-app Connect flow (stored in config): it is the
+  // managed, self-healing path, so re-Connecting always fixes an invalid/expired token
+  // even when a stale ZOHO_REFRESH_TOKEN secret is present. The env secret is the
+  // fallback for when Connect has never been used.
+  const stored = (await getConfig(env, "zoho_refresh_token", "")).trim();
+  if (stored) return stored;
+  return (env.ZOHO_REFRESH_TOKEN || "").trim();
 }
 // Which required Zoho secrets are missing/blank (names only — never the values).
 // An empty-string plaintext var reads as falsy here, so a value wiped by a deploy
