@@ -2086,6 +2086,39 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   return json(result);
 }
 
+// One-shot diagnostic: fetch page 1 of Zoho items directly and report exactly what
+// Zoho returns (HTTP status, Zoho's own code/message, item count, sample) — never
+// writes. Explains a "0 fetched" full reconcile (auth scope, wrong org, plan, etc.).
+async function handleZohoTestFetch(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const dc = zohoDc(env);
+  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID || "";
+  let token: string;
+  try { token = await zohoGetToken(env, fetch, true); }
+  catch (e) { return json({ ok: false, stage: "token", dc, org_id_set: !!orgId, error: e instanceof ZohoAuthError ? e.message : String(e) }); }
+  const qs = new URLSearchParams({ organization_id: orgId, per_page: "5", page: "1" });
+  let res: Response, data: Record<string, unknown>;
+  try {
+    res = await fetch(`https://www.zohoapis.${dc}/inventory/v1/items?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+    data = await res.json().catch(() => ({})) as Record<string, unknown>;
+  } catch (e) { return json({ ok: false, stage: "fetch", dc, org_id_set: !!orgId, error: String(e) }); }
+  const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : [];
+  const pc = (data.page_context || {}) as Record<string, unknown>;
+  return json({
+    ok: res.ok && (data.code === 0 || data.code === undefined),
+    http_status: res.status,
+    dc, org_id_set: !!orgId,
+    zoho_code: data.code ?? null,
+    zoho_message: data.message ?? null,
+    item_count: items.length,
+    total: pc.total ?? null,
+    has_more: pc.has_more_page ?? null,
+    sample: items.slice(0, 5).map(z => ({ sku: z.sku ?? null, name: z.name ?? null, status: z.status ?? null })),
+  });
+}
+
 // Backup export: every client-catalogue assignment with its price and item details,
 // so the current per-client lists can be saved before any reconciliation.
 async function handleClientCatalogExport(request: Request, env: Env): Promise<Response> {
@@ -3181,6 +3214,7 @@ export default {
       if (path==="/api/integrations/zoho-inventory/merge-preview"  && method==="GET")  return handleZohoMergePreview(request,env);
       if (path==="/api/integrations/zoho-inventory/merge-apply"    && method==="POST") return handleZohoMergeApply(request,env,);
       if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
+      if (path==="/api/integrations/zoho-inventory/test-fetch"     && method==="GET")  return handleZohoTestFetch(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 

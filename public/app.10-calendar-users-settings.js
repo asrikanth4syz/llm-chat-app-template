@@ -977,6 +977,7 @@ async function settingsTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
+          <button class="btn btn-secondary" ${dataAct('zohoTestFetch')}>🩺 Test Zoho fetch</button>
           <button class="btn btn-secondary" ${dataAct('zohoExportClientCatalog')}>⬇ Backup client lists (CSV)</button>
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔍 Preview matches</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
@@ -1621,6 +1622,31 @@ async function zohoAssignCatalog() {
   const res = await api(`/clients/${clientId}/assign-zoho-catalog`, { method: 'POST', body: JSON.stringify({}) });
   if (!res) return;
   showToast(`Assigned ${res.added} Zoho item${res.added===1?'':'s'} to ${clientName}`, 'success');
+}
+
+// Diagnostic: show exactly what Zoho's items API returns right now.
+async function zohoTestFetch() {
+  const box = document.getElementById('zoho-merge-result');
+  if (box) box.innerHTML = 'Calling Zoho items API…';
+  const r = await api('/integrations/zoho-inventory/test-fetch');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  const okColor = r.ok ? 'var(--success)' : 'var(--danger)';
+  const rows = (r.sample || []).map(s => `<tr><td style="font-size:.76rem">${h(String(s.name ?? '—'))}</td><td style="font-size:.76rem">${h(String(s.sku ?? '—'))}</td><td style="font-size:.76rem">${h(String(s.status ?? '—'))}</td></tr>`).join('');
+  if (box) box.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:6px">
+      <div style="font-weight:600;margin-bottom:6px;color:${okColor}">Zoho items API — ${r.ok ? 'OK' : 'problem'}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:.8rem">
+        <span>HTTP <b>${r.http_status ?? r.stage ?? '—'}</b></span>
+        <span>DC <b>${h(String(r.dc||'—'))}</b></span>
+        <span>Org id set: <b>${r.org_id_set ? 'yes' : 'NO'}</b></span>
+        <span>Zoho code: <b>${r.zoho_code ?? '—'}</b></span>
+        <span>Items: <b>${r.item_count ?? '—'}</b></span>
+        <span>Total: <b>${r.total ?? '—'}</b></span>
+      </div>
+      ${r.zoho_message ? `<div style="margin-top:6px;font-size:.8rem;color:var(--danger)">Zoho: ${h(String(r.zoho_message))}</div>` : ''}
+      ${r.error ? `<div style="margin-top:6px;font-size:.8rem;color:var(--danger)">Error (${h(String(r.stage||''))}): ${h(String(r.error))}</div>` : ''}
+      ${rows ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Name</th><th>SKU</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    </div>`;
 }
 
 async function zohoInvSyncNow() {
