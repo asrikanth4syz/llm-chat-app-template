@@ -1112,6 +1112,35 @@ describe("Orders", () => {
     await db.prepare("DELETE FROM notifications WHERE message LIKE ?").bind(`%${oid}%`).run();
   });
 
+  it("Zoho merge-apply re-points a client assignment from the seed SKU to the matched Zoho twin", async () => {
+    const db = env.DB as D1Database;
+    // A seed item (non-Zoho) and its Zoho twin sharing a normalised name, plus a
+    // client assignment sitting on the seed SKU.
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,active) VALUES (?,?,?,?,1)")
+      .bind("SEED-MRG1", "Widget Alpha MRP 10", "Snacks", 100).run();
+    await db.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,active,zoho_item_id,zoho_synced_at) VALUES (?,?,?,?,1,?,?)")
+      .bind("ZOHO-MRG1", "Widget Alpha", "Snacks", 120, "zid-mrg-1", "2026-09-27T00:00:00Z").run();
+    await db.prepare("INSERT OR IGNORE INTO client_catalog (client_id,sku,added_by) VALUES (?,?,?)")
+      .bind("c1", "SEED-MRG1", "tst").run();
+
+    const res = await post("/api/integrations/zoho-inventory/merge-apply", { dryRun: false, scope: "assigned", minScore: 1 }, adminToken);
+    expect(res.status).toBe(200);
+
+    // The client now points at the Zoho SKU; the seed assignment is gone.
+    const moved = await db.prepare("SELECT 1 FROM client_catalog WHERE client_id='c1' AND sku='ZOHO-MRG1'").first();
+    expect(moved).toBeTruthy();
+    const old = await db.prepare("SELECT 1 FROM client_catalog WHERE client_id='c1' AND sku='SEED-MRG1'").first();
+    expect(old).toBeFalsy();
+    // The seed duplicate is deactivated, the Zoho row untouched.
+    const seedRow = await db.prepare("SELECT active FROM inventory WHERE sku='SEED-MRG1'").first() as { active: number };
+    expect(Number(seedRow.active)).toBe(0);
+    const zohoRow = await db.prepare("SELECT active FROM inventory WHERE sku='ZOHO-MRG1'").first() as { active: number };
+    expect(Number(zohoRow.active)).toBe(1);
+
+    await db.prepare("DELETE FROM client_catalog WHERE sku IN ('SEED-MRG1','ZOHO-MRG1')").run();
+    await db.prepare("DELETE FROM inventory WHERE sku IN ('SEED-MRG1','ZOHO-MRG1')").run();
+  });
+
   it("GET /api/orders — returns order list", async () => {
     const res = await get("/api/orders", opsToken);
     expect(res.status).toBe(200);

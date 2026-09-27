@@ -2092,15 +2092,22 @@ async function handleClientCatalogExport(request: Request, env: Env): Promise<Re
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
-  const { results } = await env.DB.prepare(`
+  const baseSelect = (priceCol: string) => `
     SELECT c.name AS client_name, cc.client_id, cc.sku,
-           i.name AS item_name, cc.client_price, i.unit_price AS list_price,
+           i.name AS item_name, ${priceCol} AS client_price, i.unit_price AS list_price,
            i.category, i.active,
            CASE WHEN i.zoho_synced_at IS NOT NULL THEN 1 ELSE 0 END AS zoho_owned
       FROM client_catalog cc
       LEFT JOIN clients c   ON c.id  = cc.client_id
       LEFT JOIN inventory i ON i.sku = cc.sku
-     ORDER BY c.name, i.name`).all();
+     ORDER BY c.name, i.name`;
+  let results: unknown[];
+  try {
+    results = (await env.DB.prepare(baseSelect("cc.client_price")).all()).results;
+  } catch {
+    // client_price column not present in this DB — fall back to the list price.
+    results = (await env.DB.prepare(baseSelect("NULL")).all()).results;
+  }
   return json({ count: results.length, rows: results });
 }
 
@@ -2211,11 +2218,79 @@ async function handleZohoMergePreview(request: Request, env: Env): Promise<Respo
   });
 }
 
+// Step 1 of the reconciliation: map seed items to their Zoho twin BY NAME and adopt
+// the Zoho identity for each client assignment — re-point client_catalog from the seed
+// SKU to the matched Zoho SKU (keeping the client's price), then deactivate the seed
+// duplicate. Defaults to scope=assigned (only items clients actually use) and a
+// dry-run, so nothing changes until the operator approves. minScore < 1 enables fuzzy
+// token-overlap matching; a match must clear minScore AND beat the runner-up by a
+// margin, so an ambiguous name is never silently mis-mapped.
+async function handleZohoMergeApply(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as { dryRun?: boolean; minScore?: number; scope?: string };
+  const dryRun = body.dryRun !== false; // safe default: preview
+  const minScore = typeof body.minScore === "number" ? Math.max(0, Math.min(1, body.minScore)) : 1;
+  const scope = body.scope === "all" ? "all" : "assigned";
+
+  const zoho = (await env.DB.prepare("SELECT sku,name FROM inventory WHERE zoho_synced_at IS NOT NULL").all()).results as { sku: string; name: string }[];
+  if (!zoho.length) return json({ error: "No Zoho-owned items — run a LIVE full reconcile first." }, 409);
+  const exact = new Map<string, string[]>();
+  const idx = new Map<string, number[]>();
+  const zTok: string[][] = zoho.map((z, i) => {
+    const k = normNameForMatch(z.name);
+    if (k) { if (!exact.has(k)) exact.set(k, []); exact.get(k)!.push(z.sku); }
+    const t = [...new Set(k.split(" ").filter(Boolean))];
+    for (const tok of t) { if (!idx.has(tok)) idx.set(tok, []); idx.get(tok)!.push(i); }
+    return t;
+  });
+
+  const seed = (scope === "assigned"
+    ? (await env.DB.prepare("SELECT DISTINCT i.sku,i.name FROM inventory i JOIN client_catalog cc ON cc.sku=i.sku WHERE i.active=1 AND i.zoho_synced_at IS NULL").all())
+    : (await env.DB.prepare("SELECT sku,name FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").all())
+  ).results as { sku: string; name: string }[];
+
+  const pairs: { seed_sku: string; seed_name: string; zoho_sku: string; score: number }[] = [];
+  const skipped: { seed_sku: string; seed_name: string; reason: string }[] = [];
+  for (const s of seed) {
+    const k = normNameForMatch(s.name);
+    const ex = exact.get(k);
+    if (ex && ex.length === 1) { pairs.push({ seed_sku: s.sku, seed_name: s.name, zoho_sku: ex[0], score: 1 }); continue; }
+    if (ex && ex.length > 1) { skipped.push({ seed_sku: s.sku, seed_name: s.name, reason: "ambiguous exact name" }); continue; }
+    if (minScore >= 1) { skipped.push({ seed_sku: s.sku, seed_name: s.name, reason: "no exact match" }); continue; }
+    const stoks = [...new Set(k.split(" ").filter(Boolean))];
+    const tally = new Map<number, number>();
+    for (const tok of stoks) { const post = idx.get(tok); if (!post || post.length > 800) continue; for (const zi of post) tally.set(zi, (tally.get(zi) || 0) + 1); }
+    let bi = -1, best = 0, second = 0;
+    for (const [zi, inter] of tally) { const uni = stoks.length + zTok[zi].length - inter; const sc = uni ? inter / uni : 0; if (sc > best) { second = best; best = sc; bi = zi; } else if (sc > second) second = sc; }
+    if (bi >= 0 && best >= minScore && (best - second) >= 0.05) pairs.push({ seed_sku: s.sku, seed_name: s.name, zoho_sku: zoho[bi].sku, score: Math.round(best * 100) / 100 });
+    else skipped.push({ seed_sku: s.sku, seed_name: s.name, reason: bi < 0 ? "no candidate" : `below threshold/ambiguous (best ${Math.round(best * 100) / 100})` });
+  }
+
+  if (dryRun) {
+    return json({ dryRun: true, scope, minScore, to_map: pairs.length, to_skip: skipped.length, pairs: pairs.slice(0, 300), skipped_sample: skipped.slice(0, 60) });
+  }
+
+  let mapped = 0, repointed = 0, deactivated = 0;
+  for (const p of pairs) {
+    const up = await env.DB.prepare("UPDATE OR IGNORE client_catalog SET sku=? WHERE sku=?").bind(p.zoho_sku, p.seed_sku).run();
+    repointed += (up.meta?.changes as number) || 0;
+    await env.DB.prepare("DELETE FROM client_catalog WHERE sku=?").bind(p.seed_sku).run(); // clear any leftover seed rows a client already had as the Zoho SKU
+    const de = await env.DB.prepare("UPDATE inventory SET active=0 WHERE sku=? AND zoho_synced_at IS NULL").bind(p.seed_sku).run();
+    deactivated += (de.meta?.changes as number) || 0;
+    mapped++;
+  }
+  await audit(env, user, "UPDATE", "inventory", "zoho_merge_apply", undefined, `scope=${scope} minScore=${minScore} mapped=${mapped} repointed=${repointed} deactivated=${deactivated}`);
+  return json({ ok: true, scope, minScore, mapped, repointed_assignments: repointed, seed_deactivated: deactivated, skipped: skipped.length });
+}
+
 // Retire (soft-deactivate) every active item NOT owned by Zoho, so the catalogue
 // mirrors Zoho exactly (Zoho = single source of truth). Guarded: refuses unless a
 // Live sync has actually stamped items, so it can never wipe the catalogue when Zoho
 // data hasn't loaded. Deactivates (active=0), never hard-deletes — order history and
-// references stay intact, and it's reversible.
+// references stay intact, and it's reversible. Skips seed items STILL referenced by a
+// client catalogue, so an unmatched-but-assigned item is never silently removed.
 async function handleZohoPurgeNonZoho(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -2224,11 +2299,15 @@ async function handleZohoPurgeNonZoho(request: Request, env: Env): Promise<Respo
   if (!stamped || stamped.n === 0) {
     return json({ error: "No Zoho-owned items yet — run a LIVE full reconcile first. Refusing so the catalogue isn't wiped." }, 409);
   }
-  const before = await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").first() as { n: number } | null;
-  const res = await env.DB.prepare("UPDATE inventory SET active=0 WHERE active=1 AND zoho_synced_at IS NULL").run();
-  const deactivated = (res.meta?.changes as number) ?? (before?.n ?? 0);
-  await audit(env, user, "UPDATE", "inventory", "purge_non_zoho", undefined, `deactivated ${deactivated} non-Zoho items`);
-  return json({ ok: true, deactivated, zoho_owned: stamped.n });
+  // Skip seed items still referenced by a client catalogue — those must be mapped
+  // (Step 1) first, never silently removed from under a client.
+  const stillAssigned = await scalarCount(env, "SELECT COUNT(*) AS n FROM inventory WHERE active=1 AND zoho_synced_at IS NULL AND sku IN (SELECT sku FROM client_catalog)");
+  const res = await env.DB.prepare(
+    "UPDATE inventory SET active=0 WHERE active=1 AND zoho_synced_at IS NULL AND sku NOT IN (SELECT sku FROM client_catalog)"
+  ).run();
+  const deactivated = (res.meta?.changes as number) ?? 0;
+  await audit(env, user, "UPDATE", "inventory", "purge_non_zoho", undefined, `deactivated ${deactivated} seed-only items; kept ${stillAssigned} still-assigned`);
+  return json({ ok: true, deactivated, kept_still_assigned: stillAssigned, zoho_owned: stamped.n });
 }
 
 // Read-only catalogue lookup for diagnosing "synced but not visible". Ignores the
@@ -3092,6 +3171,7 @@ export default {
       if (path==="/api/inventory/lookup"                    && method==="GET")  return handleInventoryLookup(request,env);
       if (path==="/api/integrations/zoho-inventory/purge-non-zoho" && method==="POST") return handleZohoPurgeNonZoho(request,env);
       if (path==="/api/integrations/zoho-inventory/merge-preview"  && method==="GET")  return handleZohoMergePreview(request,env);
+      if (path==="/api/integrations/zoho-inventory/merge-apply"    && method==="POST") return handleZohoMergeApply(request,env,);
       if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);

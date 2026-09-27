@@ -978,9 +978,10 @@ async function settingsTab(tab, btn) {
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
           <button class="btn btn-secondary" ${dataAct('zohoExportClientCatalog')}>⬇ Backup client lists (CSV)</button>
-          ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔗 Preview merge to Zoho</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔍 Preview matches</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
-          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Retire ${z.non_zoho_active_count} unmatched</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<label style="display:flex;align-items:center;gap:5px;font-size:.78rem">Match:<select id="zoho-merge-score" class="input" style="padding:2px 6px;font-size:.78rem"><option value="1">Exact name</option><option value="0.8">≥ 80%</option><option value="0.6">≥ 60%</option></select></label><button class="btn btn-primary" ${dataAct('zohoMergeApplyDry')}>🔗 Step 1 · Map client-assigned</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Step 2 · Retire seed-only</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
             ${z.last_result ? ` · ${h(`${z.last_result.scope||''} ${z.last_result.mode||''}: ${z.last_result.written??0} written, ${z.last_result.deactivated??0} deactivated, ${z.last_result.failed??0} failed`)}` : ''}
@@ -1463,6 +1464,42 @@ async function zohoInvLookup() {
     <div style="margin-top:6px;color:var(--text-muted);font-size:.75rem">
       <b>Inactive</b> → hidden from listings (item is inactive in Zoho). <b>In client catalogues = 0</b> → present in master Inventory but not on any client's order screen until assigned to that client.
     </div>`;
+}
+
+// Step 1 — dry-run the client-assigned merge at the chosen confidence, show pairs.
+async function zohoMergeApplyDry() {
+  const minScore = parseFloat(document.getElementById('zoho-merge-score')?.value || '1');
+  const box = document.getElementById('zoho-merge-result');
+  if (box) box.innerHTML = 'Matching client-assigned items…';
+  const r = await api('/integrations/zoho-inventory/merge-apply', { method: 'POST', body: JSON.stringify({ dryRun: true, scope: 'assigned', minScore }) });
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  const pairs = (r.pairs || []).slice(0, 60).map(p => `<tr>
+    <td style="font-size:.76rem">${h(String(p.seed_name))} <span style="color:var(--text-muted)">(${h(String(p.seed_sku))})</span></td>
+    <td style="font-size:.76rem;color:var(--success)">→ ${h(String(p.zoho_sku))}</td>
+    <td style="font-size:.76rem">${Math.round((p.score||0)*100)}%</td>
+  </tr>`).join('');
+  if (box) box.innerHTML = `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:6px">
+      <div style="font-weight:600;margin-bottom:6px">Step 1 preview — client-assigned items (nothing changed)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem">
+        <span><b style="color:var(--success)">${r.to_map}</b> will map to a Zoho item</span>
+        <span><b style="color:var(--warning)">${r.to_skip}</b> skipped (no confident match)</span>
+        <span>confidence: <b>${Math.round((r.minScore||1)*100)}%</b></span>
+      </div>
+      ${pairs ? `<table class="table" style="margin:8px 0 0"><thead><tr><th>Client-assigned seed item</th><th>Maps to Zoho SKU</th><th>Score</th></tr></thead><tbody>${pairs}</tbody></table>` : '<div style="margin-top:6px;color:var(--text-muted)">No confident matches at this level — try a lower threshold or map the rest manually.</div>'}
+      ${r.to_map > 0 ? `<div style="margin-top:10px"><button class="btn btn-primary" ${dataAct('zohoMergeApplyRun')}>✅ Apply ${r.to_map} mapping${r.to_map===1?'':'s'} (re-point client assignments)</button></div>` : ''}
+      <div style="margin-top:8px;font-size:.75rem;color:var(--text-muted)">Apply re-points each client's assignment from the seed SKU to the matched Zoho SKU (price kept) and deactivates the seed duplicate. Skipped items stay untouched.</div>
+    </div>`;
+}
+
+// Step 1 — actually apply (re-point assignments + deactivate seed dupes).
+async function zohoMergeApplyRun() {
+  const minScore = parseFloat(document.getElementById('zoho-merge-score')?.value || '1');
+  if (!confirm(`Apply the client-assigned merge at ${Math.round(minScore*100)}% confidence?\n\nThis re-points client assignments to the matched Zoho SKUs (keeping prices) and deactivates the seed duplicates. Skipped items are left as-is. Reversible (seed rows are deactivated, not deleted).`)) return;
+  const r = await api('/integrations/zoho-inventory/merge-apply', { method: 'POST', body: JSON.stringify({ dryRun: false, scope: 'assigned', minScore }) });
+  if (!r) return;
+  showToast(`Mapped ${r.mapped} item${r.mapped===1?'':'s'} · re-pointed ${r.repointed_assignments} assignment${r.repointed_assignments===1?'':'s'} · ${r.seed_deactivated} seed rows retired`, 'success');
+  _zohoReloadIntegrations();
 }
 
 // Shared: turn an array of objects into a CSV string + trigger a download.
