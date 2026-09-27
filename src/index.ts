@@ -2086,6 +2086,66 @@ async function handleZohoInvSync(request: Request, env: Env, ctx: ExecutionConte
   return json(result);
 }
 
+// Backup export: every client-catalogue assignment with its price and item details,
+// so the current per-client lists can be saved before any reconciliation.
+async function handleClientCatalogExport(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(`
+    SELECT c.name AS client_name, cc.client_id, cc.sku,
+           i.name AS item_name, cc.client_price, i.unit_price AS list_price,
+           i.category, i.active,
+           CASE WHEN i.zoho_synced_at IS NOT NULL THEN 1 ELSE 0 END AS zoho_owned
+      FROM client_catalog cc
+      LEFT JOIN clients c   ON c.id  = cc.client_id
+      LEFT JOIN inventory i ON i.sku = cc.sku
+     ORDER BY c.name, i.name`).all();
+  return json({ count: results.length, rows: results });
+}
+
+// Name-match preview: for every active seed item, the closest Zoho item by token
+// overlap (inverted index, common tokens capped) — proposes which Zoho SKU/id each
+// seed item would adopt. Read-only; nothing is written.
+async function handleZohoNameMatch(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  const seed = (await env.DB.prepare("SELECT sku,name FROM inventory WHERE active=1 AND zoho_synced_at IS NULL").all()).results as { sku: string; name: string }[];
+  const zoho = (await env.DB.prepare("SELECT sku,name,zoho_item_id FROM inventory WHERE zoho_synced_at IS NOT NULL").all()).results as { sku: string; name: string; zoho_item_id: string | null }[];
+  const idx = new Map<string, number[]>();
+  const zTok: string[][] = zoho.map((z, i) => {
+    const t = [...new Set(normNameForMatch(z.name).split(" ").filter(Boolean))];
+    for (const tok of t) { if (!idx.has(tok)) idx.set(tok, []); idx.get(tok)!.push(i); }
+    return t;
+  });
+  const rows: { seed_sku: string; seed_name: string; zoho_sku: string | null; zoho_item_id: string | null; zoho_name: string | null; score: number }[] = [];
+  for (const s of seed) {
+    const stoks = [...new Set(normNameForMatch(s.name).split(" ").filter(Boolean))];
+    const tally = new Map<number, number>();
+    for (const tok of stoks) {
+      const post = idx.get(tok);
+      if (!post || post.length > 800) continue; // skip absent or too-common (non-discriminative) tokens
+      for (const zi of post) tally.set(zi, (tally.get(zi) || 0) + 1);
+    }
+    let bi = -1, best = 0;
+    for (const [zi, inter] of tally) {
+      const uni = stoks.length + zTok[zi].length - inter;
+      const sc = uni ? inter / uni : 0;
+      if (sc > best) { best = sc; bi = zi; }
+    }
+    rows.push({
+      seed_sku: s.sku, seed_name: s.name,
+      zoho_sku: bi >= 0 ? zoho[bi].sku : null,
+      zoho_item_id: bi >= 0 ? (zoho[bi].zoho_item_id ?? null) : null,
+      zoho_name: bi >= 0 ? zoho[bi].name : null,
+      score: Math.round(best * 100) / 100,
+    });
+  }
+  rows.sort((a, b) => b.score - a.score);
+  return json({ count: rows.length, rows });
+}
+
 // Normalise a product name for matching a seed item to its Zoho twin: lower-case,
 // strip a trailing/inline "MRP <n>" tag (Zoho names carry "… -MRP 95"), reduce
 // punctuation to spaces, collapse whitespace.
@@ -3032,6 +3092,8 @@ export default {
       if (path==="/api/inventory/lookup"                    && method==="GET")  return handleInventoryLookup(request,env);
       if (path==="/api/integrations/zoho-inventory/purge-non-zoho" && method==="POST") return handleZohoPurgeNonZoho(request,env);
       if (path==="/api/integrations/zoho-inventory/merge-preview"  && method==="GET")  return handleZohoMergePreview(request,env);
+      if (path==="/api/integrations/zoho-inventory/name-match"     && method==="GET")  return handleZohoNameMatch(request,env);
+      if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)

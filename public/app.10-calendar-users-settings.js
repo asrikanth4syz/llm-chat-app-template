@@ -977,7 +977,9 @@ async function settingsTab(tab, btn) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" ${dataAct('zohoInvSyncNow')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🔄 Sync now (delta)</button>
           <button class="btn btn-secondary" ${dataAct('zohoInvFullReconcile')} ${z.enabled ? '' : 'disabled title="Enable sync first"'}>🌙 Full reconcile</button>
+          <button class="btn btn-secondary" ${dataAct('zohoExportClientCatalog')}>⬇ Backup client lists (CSV)</button>
           ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoMergePreview')}>🔗 Preview merge to Zoho</button>` : ''}
+          ${(z.non_zoho_active_count ?? 0) > 0 && (z.zoho_stamped_count ?? 0) > 0 ? `<button class="btn btn-secondary" ${dataAct('zohoDownloadNameMatch')}>⬇ Name-match (CSV)</button>` : ''}
           ${(z.non_zoho_active_count ?? 0) > 0 ? `<button class="btn btn-danger" ${dataAct('zohoPurgeNonZoho')} ${(z.zoho_stamped_count ?? 0) > 0 ? '' : 'disabled title="Run a Live full reconcile first"'}>🧹 Retire ${z.non_zoho_active_count} unmatched</button>` : ''}
           <div style="font-size:.8rem;color:var(--text-muted)">
             ${z.last_sync_at ? `Last run: <b>${fmtDateTime(z.last_sync_at)}</b>` : 'Never synced'}
@@ -1461,6 +1463,47 @@ async function zohoInvLookup() {
     <div style="margin-top:6px;color:var(--text-muted);font-size:.75rem">
       <b>Inactive</b> → hidden from listings (item is inactive in Zoho). <b>In client catalogues = 0</b> → present in master Inventory but not on any client's order screen until assigned to that client.
     </div>`;
+}
+
+// Shared: turn an array of objects into a CSV string + trigger a download.
+function _csvDownload(filename, header, rows) {
+  const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const body = rows.map(r => r.map(esc).join(',')).join('\n');
+  const csv = header.map(esc).join(',') + '\n' + body;
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
+// Backup every client's assigned items + prices, grouped by client name.
+async function zohoExportClientCatalog() {
+  const res = await api('/reports/client-catalog-export');
+  if (!res) return;
+  const rows = (res.rows || []).map(r => [
+    r.client_name || r.client_id || '', r.client_id || '', r.sku || '', r.item_name || '',
+    r.client_price != null ? Number(r.client_price).toFixed(2) : '',
+    r.list_price != null ? Number(r.list_price).toFixed(2) : '',
+    r.category || '', Number(r.active) === 1 ? 'Active' : 'Inactive', Number(r.zoho_owned) === 1 ? 'Yes' : 'No',
+  ]);
+  _csvDownload(`client-catalogues-backup-${new Date().toISOString().slice(0,10)}.csv`,
+    ['Client', 'Client ID', 'SKU', 'Item Name', 'Client Price', 'List Price', 'Category', 'Status', 'Zoho Owned'], rows);
+  showToast(`Backed up ${res.count} client assignment${res.count===1?'':'s'}`, 'success');
+}
+
+// Download the proposed seed→Zoho name match (best candidate + score) for review.
+async function zohoDownloadNameMatch() {
+  showToast('Building name-match…', 'info');
+  const res = await api('/integrations/zoho-inventory/name-match');
+  if (!res) return;
+  const rows = (res.rows || []).map(r => [
+    r.seed_sku || '', r.seed_name || '', r.zoho_sku || '', r.zoho_item_id || '', r.zoho_name || '',
+    Math.round((r.score || 0) * 100) + '%',
+  ]);
+  _csvDownload(`zoho-name-match-${new Date().toISOString().slice(0,10)}.csv`,
+    ['Seed SKU', 'Seed Name', 'Proposed Zoho SKU', 'Zoho Item ID', 'Zoho Name', 'Match %'], rows);
+  showToast(`Name-match for ${res.count} seed item${res.count===1?'':'s'} downloaded`, 'success');
 }
 
 // Read-only: preview how well seed items match Zoho items by name, so we can merge
