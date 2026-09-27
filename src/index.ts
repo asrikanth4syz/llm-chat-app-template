@@ -1837,8 +1837,12 @@ function mapZohoItem(z: Record<string, unknown>): { row: Record<string, unknown>
     const factor = WEIGHT_UNITS[String(z.weight_unit ?? "g").toLowerCase().trim()];
     if (factor) row["weight_grams"] = Math.round(Number(z.weight) * factor); // else skip ambiguous unit
   }
-  if (z.status !== undefined && z.status !== null && String(z.status).trim() !== "")
-    row["active"] = String(z.status).toLowerCase() === "active" ? 1 : 0;
+  // Zoho's items list returns active items by default, so any item we fetched is
+  // active unless Zoho explicitly marks it inactive. Always set `active` (default 1)
+  // so a re-sync re-activates rows a prior cleanup deactivated — never leave it unset,
+  // or the upsert's UPDATE would keep a stale active=0.
+  const st = z.status !== undefined && z.status !== null ? String(z.status).trim().toLowerCase() : "";
+  row["active"] = (st && st !== "active") ? 0 : 1;
   return { row, modifiedEpoch: toEpoch(z.last_modified_time) };
 }
 
