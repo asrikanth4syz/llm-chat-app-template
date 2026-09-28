@@ -2,9 +2,17 @@
 
 **Product:** SmartPantry ERP (Cloudflare Workers + D1 + vanilla-JS SPA)
 **Module:** Finance → Receivables (AR) + Payment Reminders
-**Moniker:** `003-finance-ar` · **Doc:** PRD v1.0 · **Date:** 2026-09-28
+**Moniker:** `003-finance-ar` · **Doc:** PRD v1.1 · **Date:** 2026-09-28
 **Status:** DRAFT for review (no code yet)
-**Companion docs:** `plan.md` (build plan), `context.md` (architecture decision)
+**Companion docs:** `plan.md` (build plan), `context.md` (architecture decision), `PRD-review.md`
+(architect review that this v1.1 answers)
+
+> **v1.1 changelog** — folds in the architect review (`PRD-review.md`) and two operator decisions:
+> **(a) email transport = Google Workspace / Gmail API** (see §10a); **(b) reminders = one
+> consolidated statement per customer, driven by credit terms + due dates** (see §7). Also promotes
+> the review's required data-model additions (credit notes, payment allocation, dispute/PTP,
+> suppression log, integer money) into §6, and reclassifies Books write-back / AR payment plumbing /
+> the email sender as **net-new, not reuse**.
 **Source references:** `payment_reminders.html` (Feature Specification v1.1 — 8 core / 46 sub-features),
 `Payment_Reminders_Feature_List_1.docx`, `tools.4syz.com/ReceivableOS.html` (not reachable from the
 build environment; feature set taken from the two attachments, which mirror it).
@@ -132,34 +140,48 @@ Builds on the tables already specified in `plan.md`. All new tables self-heal vi
 `fixCategoryNames` / `ensureFeatureTables`. Amounts REAL, paise-rounded. **Provenance columns**
 (`zoho_*_id`, `zoho_synced_at`) on every mirrored table — same pattern as `inventory.zoho_item_id`.
 
+> **Money is stored as INTEGER minor units (paise), not REAL** (review AD-1). REAL drifts under
+> `exchange_rate` multiplication. Format to rupees on read only. Balances are always **derived**
+> (`total − amount_paid − credited`), never hand-set.
+
 ### 6.1 Mirrored from Books (read model)
 ```
-ar_invoices    id, zoho_invoice_id, number(=transaction_number), client_id, order_id, dc_id,
-               date, due_date, payment_expected_date, subtotal, gst, total, amount_paid, balance,
-               currency_code, exchange_rate, late_fee, entity_id, status(open|partial|paid|overdue|void),
-               age_bucket, reminders_sent, zoho_synced_at
-fin_payments   id, direction(in), zoho_payment_id, party_type(client), party_id,
-               doc_type(invoice), doc_id, amount, date, method, ref, zoho_synced_at
+ar_invoices     id, zoho_invoice_id, number(=transaction_number), client_id, order_id, dc_id,
+                date, due_date, payment_expected_date, subtotal, gst, total, amount_paid, credited,
+                balance, currency_code, exchange_rate, late_fee, entity_id,
+                status(open|partial|paid|overdue|void), age_bucket, cycle_token, zoho_synced_at
+ar_credit_notes id, zoho_creditnote_id, number, client_id, invoice_id, amount, date, reason,
+                zoho_synced_at                                        -- review DR-1
+fin_payments    id, direction(in), zoho_payment_id, party_type(client), party_id, amount, date,
+                method, ref, unapplied_amount, zoho_synced_at         -- payment header
+fin_allocations id, payment_id, doc_type(invoice), doc_id, amount    -- review DR-2 (one payment
+                → many invoices; leftover → payment.unapplied_amount)
+ar_clients      client_id, zoho_contact_id, name, email, phone, credit_days(INT), currency_code,
+                dunning_opt_out, zoho_synced_at                       -- customer/contact mirror
 ```
+`credit_days` (net terms) is mirrored from the Books contact's `payment_terms` and drives the due-date
+and dunning-tier logic in §7. `cycle_token` = hash(due_date+total) so a re-issued/edited invoice
+restarts its ladder (review AD-6). `balance` is derived, never trusted from a partial Books payload.
 `ar_invoices` carries **exactly the reference schema fields** so templates and rules port 1:1:
 `due_date, payment_expected_date, age(→age_bucket), customer_id(→client_id), customer_name(join),
 status, balance, transaction_number(→number), amount/total, currency_code, exchange_rate, entity_id,
 reminders_sent, late_fee`.
 
-### 6.2 Reminder engine (new, app-owned)
+### 6.2 Reminder engine (new, app-owned) — **keyed per customer, not per invoice**
 ```
-reminder_rules   id, workflow(default|vip|disputed|partial), tier, offset_days(±from due_date or
-                 payment_expected_date), channel(in_app|email|whatsapp|sms), template_id, attach_pdf,
-                 tone, active
+reminder_rules   id, workflow(default|vip|disputed), tier, min_overdue_days, tone, attach_pdf,
+                 channel_priority(json e.g. ["email","in_app"]), active
 reminder_templates id, name, lang, subject, body(merge-tag markup), conditional_blocks(json)
-reminder_log     id, invoice_id, transaction_number, client_id, workflow, tier, channel,
-                 status(queued|sent|delivered|opened|failed|cancelled), sent_at, note
-reminder_holds   id, client_id|invoice_id, kind(negotiation|dispute|opt_out), channel|null,
-                 set_by, set_at, cleared_at
+reminder_runs    id, client_id, tier, run_at, channel, status(sent|failed|suppressed),
+                 gmail_message_id, suppressed_reason, invoice_ids(json), total_outstanding
+reminder_holds   id, client_id|invoice_id, kind(negotiation|dispute|opt_out|ptp),
+                 ptp_date, channel|null, set_by, set_at, cleared_at   -- review DR-5
 ```
-Idempotency keys: a reminder is unique on `(invoice_id, tier, channel)` per due-cycle — the send loop
-never double-sends (reuses the CAS/idempotency pattern). `reminders_sent` is derived from
-`reminder_log`, mirrored back to `ar_invoices` for display.
+A **reminder is one consolidated statement per customer per tier per due-cycle** (see §7), not one row
+per invoice. `reminder_runs` records exactly which `invoice_ids` a statement covered and — critically —
+**why a run was suppressed** (paid / hold / opt-out / throttle / no-email) so collectors can see the
+engine's non-sends (review DR-8). Idempotency: unique on `(client_id, tier, cycle_batch)`; the send
+loop never double-sends and re-reads status at send time (see §8, review CF-4).
 
 ### 6.3 Merge tags (from AR mirror)
 `{{customer_name}} {{transaction_number}} {{due_date}} {{balance}} {{amount}} {{currency_code}}`
@@ -168,43 +190,67 @@ from the joined `ar_invoices` + client row; `{{pay_now_link}}` empty until the g
 
 ---
 
-## 7. Reminder / dunning engine
+## 7. Reminder / dunning engine — consolidated statement per customer
 
-### Schedule (seeded defaults, editable)
-| Tier | Offset | Workflow stage | Tone | PDF |
-|---|---|---|---|---|
-| Pre-due 1 | T−7 | — | Early friendly notice | no |
-| Pre-due 2 | T−3 | — | Polite reminder | no |
-| On-due | T+0 | Stage 1 (polite) | Assumes oversight | no |
-| Overdue | T+7 | Stage 2 (firm) | Clear urgency, balance highlighted | **yes** |
-| Final | T+30 | Stage 3 (final) | Formal, references late fee + escalation | **yes** |
+**Decision (operator):** the unit of reminding is **one consolidated statement per customer**, not one
+email per invoice. Timing and tone are driven by each customer's **credit terms** (`credit_days`) and
+the **due dates** of their open invoices.
 
-Offsets are relative to `due_date` **or** `payment_expected_date` (custom trigger builder). Rules are
-data, not code — a new tier is a row, not a deploy.
+### How a customer's tier is chosen
+1. Due date for each invoice = Books `due_date` (fallback: `date + credit_days`).
+2. Compute `overdue_days` per open invoice; the customer's **worst (max) overdue_days** across their
+   open invoices selects the tier below.
+3. Send **one** statement listing **all** the customer's open invoices (each with its own due date,
+   age, amount) + total outstanding + one Pay-Now (§8b). Tone/attachment come from the selected tier.
+
+| Tier | Selected when worst invoice is… | Tone | PDF statement |
+|---|---|---|---|
+| Pre-due | −7…−1 days (approaching, per credit terms) | Early friendly notice | no |
+| On-due | due today (0) | Polite | no |
+| Overdue-1 | +1…+15 overdue | Firm, balance highlighted | **yes** |
+| Overdue-2 | +16…+30 overdue | Formal, references terms | **yes** |
+| Final | +30 overdue | Final notice, escalation path | **yes** |
+
+Tiers are `reminder_rules` rows (editable, no deploy). `min_overdue_days` defines the ladder.
 
 ### Controls (from reference)
-- **Send-time window:** dispatch only within business hours / client time zone.
-- **Cadence throttle:** cap reminders per client per week (anti-fatigue / anti-spam).
-- **Channel priority + fallback:** try preferred channel; fall back on failure/no-open.
-- **Per-channel opt-out:** unsubscribe one channel without disabling all reminders.
-- **Workflow branching:** VIP / disputed / partial-paid routed to gentler or separate ladders.
-- **Conditional content blocks:** show/hide email sections by age / balance / history.
+- **Cadence throttle:** at most one statement per customer per **N days** (default 7) — because we
+  consolidate, throttle is naturally per-customer. **Precedence (review DR-4): the Final tier is
+  exempt from throttle**; all other tiers obey it.
+- **Send-time window:** dispatch within business hours; timezone-aware windowing is a follow-up
+  (needs ≥ hourly cron — review CF-5). First slice sends within a fixed daily send-hour.
+- **Per-channel opt-out** and **dunning_opt_out** (whole-customer) honoured; **dispute/negotiation/PTP
+  holds** suppress the statement (PTP suppresses until `ptp_date`).
+- **Workflow branching:** VIP / disputed routed to gentler templates.
+- **Conditional content blocks:** show/hide statement sections by worst-age / total-balance.
 
 ### Execution
-Runs on the **existing Cloudflare cron** (`scheduled`) — the same 3-hourly tick inventory/Books sync
-uses. Each run: recompute aging (F4) → select invoices whose tier is due and not yet sent (respect
-holds, throttle, window) → render template → send via channel adapter (`sendEmail` /
-`pushNotification` now; WhatsApp/SMS adapters later) → write `reminder_log`. Ships **disabled**; first
-rollout is a **dry-run** that logs what *would* send without sending.
+Runs on the **existing Cloudflare cron** (`scheduled`, `index.ts:3105`). Each run: recompute aging
+(F4) for all open AR → **group open invoices by customer** → for each customer not held/opted-out/
+throttled, pick the tier (above) → render **one** statement template with merge data → send via Gmail
+API (§10a) + in-app (`pushNotification`) → write one `reminder_runs` row (sent **or** `suppressed` with
+reason). Ships **disabled**; first rollout is a **dry-run** that renders statements and resolves
+recipients but sends nothing, so we catch missing emails before go-live.
 
 ---
 
 ## 8. Auto-pause & payment matching (reference feature 08)
 
-The safety feature that prevents chasing paid invoices:
-- **Real-time status watch:** when a mirrored payment (or Books webhook `handleZohoWebhook`
-  "Payment received…") moves an invoice to `paid`/`matched`, **cancel all pending reminders** for that
-  `transaction_number` — including any already queued for this cron tick (**pipeline purge**).
+> **Prerequisite (review CF-2):** the only existing payment-received path, `handleZohoWebhook`
+> (`index.ts:7940-7946`), updates **`purchase_orders`** (AP) by `invoice_number` and notifies role
+> `finance_admin` — it touches **no AR** and would mis-map a customer payment onto a PO. It must be
+> **fixed** to branch customer-vs-vendor payments and target `ar_invoices`/`fin_payments`. This is a
+> **P3.1 task, not an "extend."** Auto-pause also requires the AR payment mirror to exist first.
+
+The safety feature that prevents chasing paid invoices (batch model — there is no durable queue,
+review CF-4):
+- **Status re-read at send time:** immediately before dispatching a customer's statement in a cron
+  tick, re-read live invoice status; drop any invoice that cleared and **skip the whole statement** if
+  the customer now owes nothing. This is the batch-model equivalent of the reference's "pipeline
+  purge" — no separate queue to purge.
+- **On payment mirror / webhook:** when a mirrored payment (or the fixed `handleZohoWebhook`) moves an
+  invoice to `paid`, recompute the customer's balance; if fully settled, no further statements select
+  them.
 - **Partial payment:** update `balance`, keep the invoice open, **reschedule** remaining tiers for the
   outstanding portion only.
 - **Payment confirmation:** optional thank-you/receipt email on confirmation.
@@ -231,7 +277,7 @@ Read (finance/ops; client scoped to self):
 - `GET /api/finance/ar/summary` — outstanding + aging buckets + DSO.
 - `GET /api/finance/ar/client/:id` — statement.
 - `GET /api/finance/reminders/rules` — dunning ladder + templates.
-- `GET /api/finance/reminders/log` — send/audit log.
+- `GET /api/finance/reminders/runs` — statement send/suppression log (`reminder_runs`, incl. reasons).
 
 Write (`finance_admin`/`super_admin`):
 - `POST /api/finance/reminders/rules` — edit tiers/templates/branches.
@@ -263,6 +309,36 @@ inventory bug we already fixed — do not repeat).
 
 ---
 
+## 10a. Email transport — Google Workspace / Gmail API (operator decision)
+
+The current `sendEmail` (MailChannels, `index.ts:138-153`) is fire-and-forget, error-swallowing, no
+attachments, and MailChannels' free Workers route is discontinued (review CF-3). **Replaced with the
+Gmail API** on the operator's Google Workspace. Cloudflare Workers cannot open raw SMTP sockets, so
+this is the **REST API**, not SMTP relay:
+
+- **Auth:** a Google **service account** with **domain-wide delegation**, impersonating a sending
+  mailbox (e.g. `ar@<domain>`). The Worker signs an **RS256 JWT** with WebCrypto
+  (`crypto.subtle.importKey`/`sign` — already used for our HMAC/PBKDF2 today, `index.ts:8,33`),
+  exchanges it for an access token, and calls
+  `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send`. Scope
+  `https://www.googleapis.com/auth/gmail.send`.
+- **Secrets (Worker secrets, never committed):** `GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`,
+  `GMAIL_SENDER` (impersonated mailbox). Delegation is authorised once in Google Admin console.
+- **Attachments:** build an RFC-822 MIME multipart, base64url-encode, send via `messages.send` →
+  **PDF statement/invoice attach works** (resolves the reference features 03/05 attachment gap).
+- **Send status:** `messages.send` returns a Gmail `messageId` → `reminder_runs.status='sent'` is
+  now **reliable** (unlike the swallowed MailChannels call). A non-2xx or thrown error →
+  `status='failed'`, which triggers the in-app fallback per `channel_priority`.
+- **Honest limits (scope-setting):** Gmail API gives a trustworthy *accepted-by-Gmail* signal but
+  **does not** push delivered/opened/bounce webhooks like a transactional ESP.
+  - *Opens* — optional tracking pixel served by our Worker; **follow-up, not v1**.
+  - *Bounces* — arrive as Mailer-Daemon replies to the sending mailbox; programmatic bounce
+    detection = a later mailbox-scan job. **v1 hard-bounce handling is manual** (collector marks a
+    bad address); the reference's "delivery receipts (delivered/opened/failed)" downgrades to
+    **"send-accepted + failed-on-API-error"** for v1.
+  - Gmail Workspace send caps (~2,000 recipients/day/user) comfortably exceed our client count;
+    consolidation (§7) keeps volume to ~one email per customer per cycle.
+
 ## 11. Open questions — resolved by the reference material
 
 The three questions left open in `plan.md` are answered by the reference spec:
@@ -271,20 +347,29 @@ The three questions left open in `plan.md` are answered by the reference spec:
    order/DC id; **manual-link fallback** for unmatched. → *Resolved: reference_number + manual
    fallback.*
 2. **Reminder channels.** Reference wants **Email, SMS, WhatsApp, in-app**. → *Resolved: ship
-   email + in-app now (existing infra); model channel-priority/fallback/opt-out now; add WhatsApp/SMS
-   adapters (MSG91/Twilio stubs) in a follow-up. No architectural change needed later.*
+   **email (Gmail API, §10a) + in-app** now; model channel-priority/fallback/opt-out now. SMS/WhatsApp
+   are **net-new transactional integrations, not adapter wiring** (review CF-6: `sendSMS` is an MSG91
+   OTP flow only; no WhatsApp exists; WhatsApp needs Meta/BSP template approval) — a later milestone.*
 3. **Currency.** Reference is **multi-currency** (`currency_code`, `exchange_rate`, multi-currency
    checkout). → *Resolved: store & display `currency_code`/`exchange_rate` from Books from day one;
    reminders and Pay-Now default to the invoice's own currency; INR is the primary operating currency.*
 
-### New decisions to confirm before build
-- **D1 — Late fees:** surface `late_fee` **from Books** only in this slice (no in-app fee computation),
-  to avoid a second source of truth. In-app accrual rules (flat/%/daily interest, grace, exemptions,
-  updated-invoice PDF) come later *only if* Books can't express them. **Recommend: surface-only now.**
-- **D2 — PDF invoice attach:** generate from mirrored invoice data, or fetch the Books-rendered PDF?
-  **Recommend: fetch Books PDF** (authoritative, no divergence).
-- **D3 — Pay Now:** include the link only if a gateway link already exists; otherwise defer feature 06
-  entirely to a later milestone.
+### Decisions now made (v1.1)
+- **Email transport = Google Workspace / Gmail API** (operator). See §10a. Replaces MailChannels.
+- **Consolidation = one statement per customer, driven by credit terms + due dates** (operator).
+  See §7. Final-notice tier exempt from the cadence throttle.
+- **D1 — Late fees:** surface `late_fee` **from Books** only in this slice (no in-app fee computation).
+- **D2 — PDF:** attach the **Books-rendered PDF** (authoritative), fetched via the Books API; fall
+  back to a generated statement PDF if the Books PDF is unavailable.
+- **D3 — Pay Now:** include the link only if a gateway link already exists; otherwise defer feature 06.
+
+### Still open (need operator input before P3.1 build)
+- **O1 — Sending mailbox:** which Google Workspace address sends statements (`ar@`, `accounts@`,
+  `billing@`?) and is domain-wide delegation approvable in Admin console by the operator?
+- **O2 — Credit terms source:** are net terms reliably on the Books **customer** record
+  (`payment_terms`), or per-invoice only? Determines whether `ar_clients.credit_days` is a clean mirror.
+- **O3 — Cron cadence:** OK to add an **hourly** cron trigger (needed for send-hour windowing), or
+  keep the current 3-hourly tick and accept a fixed daily send pass?
 
 ---
 
@@ -293,14 +378,20 @@ The three questions left open in `plan.md` are answered by the reference spec:
 Reconciled with `plan.md` (F1–F4 foundation still applies). This slice reorders to deliver
 collection value first:
 
-1. **F1–F4** — Books client, generic idempotent mirror upsert (chunked by 90), cron wiring (ships
-   disabled), pure aging/status function. *(from plan.md)*
-2. **P3.1 — AR mirror + Receivables cockpit** — invoices/payments/customers mirrored, aging, order/DC
-   linkage, unlinked panel, client statement.
-3. **P3.4′ — Payment Reminders (brought forward)** — rules/templates/log tables, dunning ladder,
-   cron send loop (dry-run first), auto-pause + holds, email + in-app.
-4. *(then, per plan.md)* P3.2 AP → P3.3 full 3-way reconciliation → P3.5 finance dashboard; plus the
-   deferred reminder channels (WhatsApp/SMS), Pay-Now gateway, and in-app late-fee rules as follow-ups.
+1. **F1–F4 (+contacts, +integer money)** — Books client, generic idempotent mirror upsert (chunked by
+   90), **contacts/customer mirror first** (so invoices link — review AD-3), integer-minor-unit money
+   helper (AD-1), cron wiring (ships disabled), pure aging/status/tier function.
+2. **P3.1a — AR mirror + correct balances** — invoices + payments + **payment allocation** +
+   **credit notes** mirrored; **`handleZohoWebhook` fixed** to target AR (CF-2); aging; order/DC
+   linkage + unlinked panel; Receivables cockpit + client statement.
+3. **P3.1b — Email-delivery foundation** — Gmail API sender (§10a): RS256 JWT, `messages.send`,
+   MIME attachments, status-returning; replaces MailChannels for finance email.
+4. **P3.4′ — Payment Reminders (consolidated)** — rules/templates/`reminder_runs`, credit-terms-driven
+   ladder, cron send loop (dry-run first), **consolidated statement per customer**, status re-read
+   auto-pause, holds/PTP, suppression logging. Email + in-app only.
+5. *(then, per plan.md)* P3.2 AP → P3.3 full 3-way reconciliation → P3.5 finance dashboard; plus
+   deferred: WhatsApp/SMS channels, timezone send-windows, open-tracking pixel + bounce-scan, Pay-Now
+   gateway, in-app late-fee computation.
 
 Each step ships behind `tsc --noEmit` + `vitest` + smoke, role-gated, `?v=` bumped on changed public
 files, deployed through the existing GitHub Actions loop.
@@ -322,16 +413,29 @@ files, deployed through the existing GitHub Actions loop.
 
 ## 14. Acceptance criteria (this slice)
 
-- Books invoices/payments/customers mirror into `ar_invoices`/`fin_payments` idempotently; re-sync is
-  a no-op; > 90 existing ids update correctly (chunked).
+- Books invoices/payments/customers/**credit notes** mirror into the AR tables idempotently; re-sync
+  is a no-op; > 90 existing ids update correctly (chunked by 90).
+- **Balances are correct under real AR:** a credit note reduces balance/aging; a **lump-sum payment
+  allocates across multiple invoices** with any remainder tracked as `unapplied_amount`; money is
+  integer paise with no rounding drift.
 - Receivables page shows correct outstanding, aging buckets, DSO; every invoice links to its order/DC
   or appears in the unlinked panel.
-- Dunning ladder seeded with the 5 default tiers; editing a tier changes behaviour without a deploy.
-- A reminder renders with live merge data; live preview matches what sends.
-- Dry-run logs the exact set that *would* send and sends nothing; enabling sends via email + in-app.
-- Marking an invoice paid/matched (payment mirror or webhook) cancels all its pending reminders,
-  including any queued this tick; partial pay reschedules the remainder.
-- Negotiation pause, dispute hold, and per-channel opt-out each suppress reminders as specified.
+- **`handleZohoWebhook` routes a customer payment to AR** (not `purchase_orders`) and to the right
+  invoice(s).
+- Dunning ladder seeded from `reminder_rules`; editing a tier changes behaviour without a deploy.
+- A **consolidated statement per customer** renders with live merge data (all open invoices + total);
+  live preview matches what sends; tier is chosen by the customer's worst overdue invoice vs credit
+  terms; the **Final tier ignores the throttle**, all others obey it.
+- Gmail API send returns a `messageId` persisted to `reminder_runs.status='sent'`; an API error →
+  `status='failed'` → in-app fallback fires; a PDF statement attaches successfully.
+- Dry-run renders statements + resolves recipients and sends nothing; a customer with **no email** is
+  flagged, not silently skipped.
+- Status re-read at send time drops cleared invoices; a fully-paid customer is not sent a statement.
+- Negotiation pause, dispute hold, **PTP snooze until `ptp_date`**, per-channel opt-out, and whole-
+  customer `dunning_opt_out` each suppress the statement — and **every suppression is logged with its
+  reason**.
 - Client sees only their own statement; no role can send AP data to a client.
+- DSO and aging match the pinned formulas (unit-tested pure function); a Books-edited invoice
+  (`cycle_token` change) restarts its ladder; a voided invoice sends nothing.
 - All money/reminder writes are idempotent and appear in the audit log.
 ```

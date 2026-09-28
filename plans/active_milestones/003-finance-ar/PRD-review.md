@@ -5,6 +5,15 @@ architecture · **Date:** 2026-09-28
 **Subject:** `PRD-receivables-reminders.md` v1.0
 **Method:** claims cross-checked against `src/index.ts` (read-only). Findings cite `file:line`.
 
+> **Resolution (2026-09-28):** `PRD-receivables-reminders.md` **v1.1** folds in this review —
+> email transport switched to Gmail API (CF-3), webhook fix made a P3.1 task (CF-2), Books write-back
+> reclassified net-new (CF-1), "pipeline purge" redefined as send-time re-read (CF-4), channels
+> re-scoped (CF-6), and the model gaps added (credit notes DR-1, payment allocation DR-2, dispute/PTP
+> DR-5, suppression log DR-8, integer money AD-1, cycle token AD-6, contacts-first AD-3).
+> Consolidation decided: **one statement per customer, credit-terms-driven** (DR-3), Final tier
+> exempt from throttle (DR-4). Remaining to pin at build time: O1 sending mailbox, O2 credit-terms
+> source, O3 cron cadence (see PRD §11).
+
 ## Verdict
 **Strategy: strong. Feasibility claims: oversold. Domain model: incomplete.**
 The Books-as-SoR / mirror-and-overlay decision is right and the phasing instinct (reminders-first) is
