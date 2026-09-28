@@ -114,18 +114,24 @@ New **Finance** nav section (role-gated). This slice ships two pages plus a clie
     lacks).
 - **Unlinked invoices panel:** Books invoices with no matched order/DC, with a manual-link action.
 - **Filters:** client, status (open/partial/overdue/paid/void), aging bucket, currency.
-- **Row actions:** view statement, send reminder now, pause/resume, flag dispute, open in Books.
+- **"Follow-up due" worklist:** customers the daily pass flagged for an **overdue** statement
+  (Overdue-1/2/Final). Each row: customer, worst-overdue days, total outstanding, tier, last-mailed
+  date, and a **"Send follow-up"** button — disabled with "eligible in N days" until `min_gap_days`
+  clears (override = explicit audited confirm). This is where all overdue mail is human-triggered.
+- **Row actions:** view statement, preview follow-up, pause/resume (negotiation), flag dispute, set
+  promise-to-pay (PTP), open in Books.
 - CSV export (reuse `_csvDownload`).
 
 ### 5.2 Payment Reminders (finance)
-- **Rules board:** the dunning ladder as editable tiers (offset days, tone/template, channel,
-  attach-PDF y/n, active toggle). Seeded defaults = reference tiers (§7).
-- **Template editor:** merge-tag palette (§6), **live preview** rendered with a real overdue invoice,
-  conditional blocks (show/hide by age / balance / history).
-- **Workflow branches:** default / VIP / disputed / partial-paid, each pointing at a template set.
-- **Send log / audit:** every reminder — invoice, tier, channel, sent_at, delivered/opened/failed,
-  the actor (or "system").
-- **Manual controls:** "send now", "pause customer (negotiation)", "hold (dispute)".
+- **Rules board:** the dunning ladder as editable tiers — `min_overdue_days`, **`send_mode`
+  (auto/manual)**, `min_gap_days`, tone/template, attach-PDF, active. Seeded defaults = §7 table
+  (Pre-due/On-due auto; overdue manual).
+- **Template editor:** merge-tag palette (§6), **live preview** rendered with a real customer's open
+  invoices, conditional blocks (show/hide by worst-age / total-balance).
+- **Workflow branches:** default / VIP / disputed, each pointing at a template set.
+- **Run log / audit:** every `reminder_runs` row — customer, tier, channel, run_at, status
+  (**sent / failed / suppressed** + reason), Gmail message id, the actor ("system" for auto,
+  collector name for manual), and the `invoice_ids` the statement covered.
 - **Global switch:** reminders enabled/disabled (ships **disabled**, dry-run first — like inventory).
 
 ### 5.3 Client statement (client_*)
@@ -169,8 +175,8 @@ reminders_sent, late_fee`.
 
 ### 6.2 Reminder engine (new, app-owned) — **keyed per customer, not per invoice**
 ```
-reminder_rules   id, workflow(default|vip|disputed), tier, min_overdue_days, tone, attach_pdf,
-                 channel_priority(json e.g. ["email","in_app"]), active
+reminder_rules   id, workflow(default|vip|disputed), tier, min_overdue_days, send_mode(auto|manual),
+                 min_gap_days(default 5), tone, attach_pdf, channel_priority(json), active
 reminder_templates id, name, lang, subject, body(merge-tag markup), conditional_blocks(json)
 reminder_runs    id, client_id, tier, run_at, channel, status(sent|failed|suppressed),
                  gmail_message_id, suppressed_reason, invoice_ids(json), total_outstanding
@@ -179,7 +185,7 @@ reminder_holds   id, client_id|invoice_id, kind(negotiation|dispute|opt_out|ptp)
 ```
 A **reminder is one consolidated statement per customer per tier per due-cycle** (see §7), not one row
 per invoice. `reminder_runs` records exactly which `invoice_ids` a statement covered and — critically —
-**why a run was suppressed** (paid / hold / opt-out / throttle / no-email) so collectors can see the
+**why a run was suppressed** (paid / hold / opt-out / gap-not-elapsed / no-email) so collectors see the
 engine's non-sends (review DR-8). Idempotency: unique on `(client_id, tier, cycle_batch)`; the send
 loop never double-sends and re-reads status at send time (see §8, review CF-4).
 
@@ -203,34 +209,48 @@ the **due dates** of their open invoices.
 3. Send **one** statement listing **all** the customer's open invoices (each with its own due date,
    age, amount) + total outstanding + one Pay-Now (§8b). Tone/attachment come from the selected tier.
 
-| Tier | Selected when worst invoice is… | Tone | PDF statement |
-|---|---|---|---|
-| Pre-due | −7…−1 days (approaching, per credit terms) | Early friendly notice | no |
-| On-due | due today (0) | Polite | no |
-| Overdue-1 | +1…+15 overdue | Firm, balance highlighted | **yes** |
-| Overdue-2 | +16…+30 overdue | Formal, references terms | **yes** |
-| Final | +30 overdue | Final notice, escalation path | **yes** |
+| Tier | Selected when worst invoice is… | Tone | PDF | **Send mode** |
+|---|---|---|---|---|
+| Pre-due | −7…−1 days (approaching, per credit terms) | Early friendly notice | no | **auto** |
+| On-due | due today (0) | Polite | no | **auto** |
+| Overdue-1 | +1…+15 overdue | Firm, balance highlighted | **yes** | **collector-initiated** |
+| Overdue-2 | +16…+30 overdue | Formal, references terms | **yes** | **collector-initiated** |
+| Final | +30 overdue | Final notice, escalation path | **yes** | **collector-initiated** |
 
-Tiers are `reminder_rules` rows (editable, no deploy). `min_overdue_days` defines the ladder.
+Tiers are `reminder_rules` rows (editable, no deploy). `min_overdue_days` defines the ladder;
+`send_mode(auto|manual)` per tier defines the posture below.
+
+### Send posture (operator decision O3) — auto up to on-due, then assisted
+- **Automatic:** the daily cron sends **only Pre-due and On-due** statements, unattended.
+- **Collector-initiated:** every **overdue** tier (Overdue-1/2, Final) is **not auto-sent**. The cron
+  instead marks the customer **"follow-up due"** on the Receivables worklist; a collector reviews and
+  clicks **"Send follow-up"** to dispatch. **Nothing overdue leaves without a human.**
+- **Minimum gap:** after any mail to a customer, the next mail (auto or manual) is blocked until
+  `min_gap_days` (default **5**) have elapsed. The worklist shows "eligible in N days"; the manual
+  send button is disabled until the gap clears (override requires an explicit, audited confirm).
 
 ### Controls (from reference)
-- **Cadence throttle:** at most one statement per customer per **N days** (default 7) — because we
-  consolidate, throttle is naturally per-customer. **Precedence (review DR-4): the Final tier is
-  exempt from throttle**; all other tiers obey it.
-- **Send-time window:** dispatch within business hours; timezone-aware windowing is a follow-up
-  (needs ≥ hourly cron — review CF-5). First slice sends within a fixed daily send-hour.
+- **Min-gap (replaces the fixed weekly throttle):** ≤ one mail per customer every `min_gap_days`
+  (default 5). Applies to auto and manual alike — the gap is the guardrail, the collector is the
+  trigger for overdue mails.
+- **Send-time:** one daily cron pass at a fixed send-hour; timezone-aware windowing is a follow-up
+  (needs ≥ hourly cron — review CF-5).
 - **Per-channel opt-out** and **dunning_opt_out** (whole-customer) honoured; **dispute/negotiation/PTP
-  holds** suppress the statement (PTP suppresses until `ptp_date`).
+  holds** suppress both auto and manual sends (PTP suppresses until `ptp_date`).
 - **Workflow branching:** VIP / disputed routed to gentler templates.
 - **Conditional content blocks:** show/hide statement sections by worst-age / total-balance.
 
 ### Execution
-Runs on the **existing Cloudflare cron** (`scheduled`, `index.ts:3105`). Each run: recompute aging
-(F4) for all open AR → **group open invoices by customer** → for each customer not held/opted-out/
-throttled, pick the tier (above) → render **one** statement template with merge data → send via Gmail
-API (§10a) + in-app (`pushNotification`) → write one `reminder_runs` row (sent **or** `suppressed` with
-reason). Ships **disabled**; first rollout is a **dry-run** that renders statements and resolves
-recipients but sends nothing, so we catch missing emails before go-live.
+Runs on the **Cloudflare cron** (`scheduled`, `index.ts:3105`) **once daily**. Each pass: recompute
+aging (F4) for all open AR → **group open invoices by customer** → pick the tier (table above):
+- `send_mode=auto` (Pre-due, On-due) and customer eligible (not held/opted-out, gap cleared) → render
+  **one** statement, send via Gmail API (§10a) + in-app, write a `sent` `reminder_runs` row;
+- `send_mode=manual` (overdue) → write/refresh a **"follow-up due"** marker (no send) for the collector.
+
+Manual follow-ups dispatch via `POST /api/finance/reminders/send-followup` (collector action) — same
+render + Gmail send + `reminder_runs` write, gated by gap + holds. Ships **disabled**; first rollout is
+a **dry-run** that renders statements and resolves recipients but sends nothing, so we catch missing
+emails before go-live.
 
 ---
 
@@ -278,12 +298,17 @@ Read (finance/ops; client scoped to self):
 - `GET /api/finance/ar/client/:id` — statement.
 - `GET /api/finance/reminders/rules` — dunning ladder + templates.
 - `GET /api/finance/reminders/runs` — statement send/suppression log (`reminder_runs`, incl. reasons).
+- `GET /api/finance/reminders/followups-due` — customers the daily pass flagged for a **manual**
+  overdue follow-up (worklist for §5.1), each with gap-eligibility.
+- `GET /api/finance/reminders/preview?client_id=` — rendered statement (subject + body + covered
+  invoices) for the send-follow-up confirm screen; no send.
 
 Write (`finance_admin`/`super_admin`):
 - `POST /api/finance/reminders/rules` — edit tiers/templates/branches.
-- `POST /api/finance/reminders/run` — manual trigger (respects dry-run flag).
-- `POST /api/finance/reminders/send-now` — one invoice, one tier.
-- `POST /api/finance/ar/:id/hold` — pause / dispute / opt-out (kind in body).
+- `POST /api/finance/reminders/run` — manual trigger of the **daily auto pass** (respects dry-run).
+- `POST /api/finance/reminders/send-followup` — **collector-initiated** overdue statement for one
+  customer; gated by `min_gap_days` + holds; `force:true` (audited) overrides the gap.
+- `POST /api/finance/ar/:id/hold` — pause / dispute / opt-out / **ptp** (kind + optional ptp_date in body).
 - `POST /api/finance/ar/:id/link` — manual order/DC link for an unlinked invoice.
 - `POST /api/integrations/zoho-books/sync` — mirror invoices/payments/customers (reuses Zoho client).
 
@@ -363,13 +388,14 @@ The three questions left open in `plan.md` are answered by the reference spec:
   back to a generated statement PDF if the Books PDF is unavailable.
 - **D3 — Pay Now:** include the link only if a gateway link already exists; otherwise defer feature 06.
 
-### Still open (need operator input before P3.1 build)
-- **O1 — Sending mailbox:** which Google Workspace address sends statements (`ar@`, `accounts@`,
-  `billing@`?) and is domain-wide delegation approvable in Admin console by the operator?
-- **O2 — Credit terms source:** are net terms reliably on the Books **customer** record
-  (`payment_terms`), or per-invoice only? Determines whether `ar_clients.credit_days` is a clean mirror.
-- **O3 — Cron cadence:** OK to add an **hourly** cron trigger (needed for send-hour windowing), or
-  keep the current 3-hourly tick and accept a fixed daily send pass?
+### Decisions made (v1.1, cont.)
+- **O1 — Sending mailbox = `accounts@4syz.com`** (impersonated by the service account; `GMAIL_SENDER`).
+- **O2 — Credit terms are per customer** → `ar_clients.credit_days` is a clean per-customer mirror
+  (from the Books contact); no per-invoice terms handling needed.
+- **O3 — Daily send pass, and a human-in-the-loop follow-up posture** (see §7 "Send posture"):
+  the cron runs **once daily**; the system **auto-sends only up to the on-due mail**; every **overdue
+  follow-up is collector-initiated** (a person clicks "Send follow-up"), with a **minimum gap** since
+  the last mail enforced. No hourly cron / timezone windowing in this slice.
 
 ---
 
@@ -402,9 +428,9 @@ files, deployed through the existing GitHub Actions loop.
 
 | Risk | Mitigation |
 |---|---|
-| Reminder sent for a paid invoice | Auto-pause + pipeline purge (§8); dry-run first; idempotent send keys. |
+| Reminder sent for a paid invoice | Send-time status re-read (§8); dry-run first; idempotent send keys. |
 | Two sources of truth for money | Mirror-only; balances derived from Books; no in-app ledger/fee compute (D1). |
-| Over-chasing / spam flags | Cadence throttle, send-window, per-channel opt-out, dispute/negotiation holds. |
+| Over-chasing / spam flags | Auto only up to on-due; overdue mail is collector-initiated; `min_gap_days` (5) between mails; per-channel opt-out; dispute/negotiation/PTP holds. |
 | D1 "too many SQL variables" on bulk id lookups | Chunk by `D1_IN_CHUNK=90` (already-fixed inventory bug; regression test). |
 | Client sees another client's AR | Strict role scoping; client endpoints filter to `client_id` = caller. |
 | Books partial payload blanks a total | Never blank a field on partial payload (F2 rule); balances always derived. |
@@ -425,7 +451,10 @@ files, deployed through the existing GitHub Actions loop.
 - Dunning ladder seeded from `reminder_rules`; editing a tier changes behaviour without a deploy.
 - A **consolidated statement per customer** renders with live merge data (all open invoices + total);
   live preview matches what sends; tier is chosen by the customer's worst overdue invoice vs credit
-  terms; the **Final tier ignores the throttle**, all others obey it.
+  terms.
+- **Send posture holds:** the daily pass auto-sends **only** Pre-due/On-due; every overdue tier is
+  flagged "follow-up due" and sent **only** by a collector via `send-followup`; a mail within
+  `min_gap_days` of the last is blocked (button disabled) unless force-overridden (audited).
 - Gmail API send returns a `messageId` persisted to `reminder_runs.status='sent'`; an API error →
   `status='failed'` → in-app fallback fires; a PDF statement attaches successfully.
 - Dry-run renders statements + resolves recipients and sends nothing; a customer with **no email** is
