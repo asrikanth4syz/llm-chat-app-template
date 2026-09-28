@@ -75,13 +75,14 @@ merged by one agent), never dispatched to concurrent worktrees (plan-validation
 "safe to run at once."*
 
 ### Group 1 — Foundations (parallel; pure/isolated units)
-- [ ] **1.A Aging/tier/DSO pure module** — `src/index.ts` (new pure functions) + `test/index.test.ts`.
-      No I/O; takes explicit IST `today`.
-- [ ] **1.B Money helpers** — `src/index.ts` (`toPaise`/`fromPaise`/`formatMoney`) + tests. Integer
-      minor units only.
-- [ ] **1.C IST date helpers** — `src/index.ts` (`istToday()`, `daysBetweenIST(a,b)`) + tests.
-- [ ] **1.D Schema self-heal** — extend `ensureFeatureTables`/`fixCategoryNames` with the AR tables
-      (§6 + §15). Additive `CREATE TABLE IF NOT EXISTS` / `ALTER … ADD COLUMN` guarded like existing.
+- [x] **1.A Aging/tier/DSO pure module** — `src/index.ts` (`agingBucket`/`selectTier`/`computeDSO`) +
+      tests. No I/O; explicit IST `today`. ✅ done (commit pending).
+- [x] **1.B Money helpers** — `src/index.ts` (`toPaise`/`fromPaise`/`formatMoney`) + tests. Integer
+      minor units only. ✅ done.
+- [x] **1.C IST date helpers** — `src/index.ts` (`istToday()`, `daysBetweenIST`, `overdueDays`) +
+      tests. ✅ done.
+- [x] **1.D Schema self-heal** — `ensureArSchema(env)` (owns all AR/reminder CREATEs + unique index +
+      audit-column ALTERs + config defaults), invoked from `ensureFeatureTables`. ✅ done.
 
 ### Group 2 — Books client + mirror (depends on 1.B/1.C/1.D)
 - [ ] **2.A Books fetch client** — `booksFetch(entity,{page,modifiedSince})` generalising

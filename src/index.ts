@@ -2766,6 +2766,47 @@ async function ensureFeatureTables(env: Env): Promise<void> {
         ('482369',18,'Paper articles (napkins, tissues)'),('960810',18,'Pens (ball point)')`
     ).run();
   } catch { /* table missing / non-fatal */ }
+  // Phase 3 Finance (003-finance-ar): AR mirror + reminder tables self-heal here
+  // too, so a cold isolate on the cron path has them. The fetch path additionally
+  // awaits ensureArSchema before any /api/finance handler (see route()).
+  await ensureArSchema(env);
+}
+
+// ── Phase 3 Finance schema (003-finance-ar, Slice 1 Group 1.D) ─────────
+// Task 1.D OWNS every AR/reminder CREATE + the reminder_runs unique index and
+// audit columns (Task 5.A only seeds/ALTERs — never CREATEs — per plan
+// `schema-ownership-overlap-1d-5a`). Idempotent: CREATE IF NOT EXISTS + guarded
+// ALTER; errors swallowed. Money columns are INTEGER paise (PRD §15); only
+// exchange_rate is REAL (a ratio, not money).
+async function ensureArSchema(env: Env): Promise<void> {
+  const stmts: string[] = [
+    `CREATE TABLE IF NOT EXISTS ar_clients ( client_id TEXT PRIMARY KEY, zoho_contact_id TEXT, name TEXT, email TEXT, phone TEXT, credit_days INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', dunning_opt_out INTEGER DEFAULT 0, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ar_invoices ( id TEXT PRIMARY KEY, zoho_invoice_id TEXT, number TEXT, client_id TEXT, order_id TEXT, dc_id TEXT, date TEXT, due_date TEXT, payment_expected_date TEXT, subtotal INTEGER DEFAULT 0, gst INTEGER DEFAULT 0, total INTEGER DEFAULT 0, amount_paid INTEGER DEFAULT 0, credited INTEGER DEFAULT 0, late_fee INTEGER DEFAULT 0, balance INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', exchange_rate REAL DEFAULT 1, entity_id TEXT, status TEXT DEFAULT 'open', age_bucket TEXT, cycle_token TEXT, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ar_credit_notes ( id TEXT PRIMARY KEY, zoho_creditnote_id TEXT, number TEXT, client_id TEXT, invoice_id TEXT, amount INTEGER DEFAULT 0, date TEXT, reason TEXT, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS fin_payments ( id TEXT PRIMARY KEY, direction TEXT DEFAULT 'in', zoho_payment_id TEXT, party_type TEXT DEFAULT 'client', party_id TEXT, amount INTEGER DEFAULT 0, date TEXT, method TEXT, ref TEXT, unapplied_amount INTEGER DEFAULT 0, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS fin_allocations ( id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, doc_type TEXT DEFAULT 'invoice', doc_id TEXT NOT NULL, amount INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS credit_allocations ( id TEXT PRIMARY KEY, credit_note_id TEXT NOT NULL, invoice_id TEXT NOT NULL, amount INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS reminder_rules ( id TEXT PRIMARY KEY, workflow TEXT DEFAULT 'default', tier TEXT NOT NULL, min_overdue_days INTEGER NOT NULL, send_mode TEXT DEFAULT 'manual', min_gap_days INTEGER DEFAULT 5, tone TEXT, attach_pdf INTEGER DEFAULT 0, channel_priority TEXT DEFAULT '["email","in_app"]', active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS reminder_templates ( id TEXT PRIMARY KEY, name TEXT NOT NULL, lang TEXT DEFAULT 'en', subject TEXT, body TEXT, conditional_blocks TEXT DEFAULT '[]' );`,
+    `CREATE TABLE IF NOT EXISTS reminder_runs ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, tier TEXT NOT NULL, cycle_batch TEXT NOT NULL, run_at TEXT DEFAULT (datetime('now')), channel TEXT, status TEXT NOT NULL, gmail_message_id TEXT, suppressed_reason TEXT, invoice_ids TEXT DEFAULT '[]', total_outstanding TEXT DEFAULT '{}', actor TEXT, workflow TEXT DEFAULT 'default', forced INTEGER DEFAULT 0, recipient_email TEXT );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_runs_cycle ON reminder_runs (client_id, tier, cycle_batch);`,
+    `CREATE TABLE IF NOT EXISTS reminder_holds ( id TEXT PRIMARY KEY, client_id TEXT, invoice_id TEXT, kind TEXT NOT NULL, ptp_date TEXT, channel TEXT, set_by TEXT, set_at TEXT DEFAULT (datetime('now')), cleared_at TEXT );`,
+  ];
+  // Guarded column adds — for a DB whose reminder_runs predates the audit columns
+  // (idempotent; "duplicate column" is swallowed). Never rely on CREATE to add these.
+  const alters: string[] = [
+    `ALTER TABLE reminder_runs ADD COLUMN cycle_batch TEXT`,
+    `ALTER TABLE reminder_runs ADD COLUMN actor TEXT`,
+    `ALTER TABLE reminder_runs ADD COLUMN workflow TEXT DEFAULT 'default'`,
+    `ALTER TABLE reminder_runs ADD COLUMN forced INTEGER DEFAULT 0`,
+    `ALTER TABLE reminder_runs ADD COLUMN recipient_email TEXT`,
+  ];
+  for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  // Config defaults — reminders ship OFF and stay disabled until backfill completes.
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('reminders_mode','off')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('initial_backfill_complete','0')").run();
+  } catch { /* app_config may not exist yet on a bare DB */ }
 }
 
 // One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
@@ -3096,9 +3137,113 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
   return { gstin: g.gstin, pan };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance (003-finance-ar) — Slice 1 foundations (pure, no I/O)
+// All functions here are deterministic and unit-tested in isolation; see
+// PRD §15 "Locked specification decisions" for the pinned rules they encode.
+// ══════════════════════════════════════════════════════════════════════
+
+// Reminder send cadence (PRD §15). Business clock is IST (UTC+5:30, no DST).
+// 08:00 IST = 02:30 UTC. SEND_CRON must stay byte-identical to the wrangler.jsonc
+// trigger — a drift test (Group 5) reads wrangler.jsonc and asserts this literal.
+const SEND_HOUR_IST = 8;
+const SEND_CRON = "30 2 * * *";
+// Batch bound for the daily reminder pass (continuation cursor across ticks).
+const MAX_CUSTOMERS_PER_RUN = 200;
+
+// ── IST civil-date helpers (PRD §15: single clock = Asia/Kolkata) ──────
+// India has no DST, so a fixed +05:30 offset is exact. `now` is injectable
+// so the aging/tier logic is deterministic and unit-testable.
+function istToday(now: Date = new Date()): string {
+  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+// Whole civil days between two YYYY-MM-DD dates (b − a). Positive if b is later.
+function daysBetweenIST(fromDate: string, toDate: string): number {
+  const a = Date.parse(fromDate + "T00:00:00Z");
+  const b = Date.parse(toDate + "T00:00:00Z");
+  if (Number.isNaN(a) || Number.isNaN(b)) return NaN;
+  return Math.round((b - a) / 86400000);
+}
+// Days a due invoice is overdue relative to `today` (IST civil dates).
+// ≤0 ⇒ not yet due; ≥1 ⇒ overdue by that many days.
+function overdueDays(dueDate: string, today: string): number {
+  return daysBetweenIST(dueDate, today);
+}
+
+// ── Money: INTEGER minor units (paise). NEVER REAL (PRD §15). ──────────
+// Parse a rupee string/number to integer paise without float drift.
+function toPaise(x: string | number | null | undefined): number {
+  if (x === null || x === undefined || x === "") return 0;
+  const s = String(x).trim();
+  const neg = s.startsWith("-");
+  const cleaned = s.replace(/[^0-9.]/g, "");
+  if (cleaned === "" || cleaned === ".") return 0;
+  const [rupees = "0", paiseRaw = ""] = cleaned.split(".");
+  const paise = (paiseRaw + "00").slice(0, 2);
+  const val = (parseInt(rupees || "0", 10) * 100) + parseInt(paise || "0", 10);
+  return neg ? -val : val;
+}
+// Render integer paise back to a plain "1234.56" rupee string (no symbol).
+function fromPaise(p: number): string {
+  const neg = p < 0;
+  const a = Math.abs(Math.trunc(p));
+  return (neg ? "-" : "") + Math.floor(a / 100) + "." + String(a % 100).padStart(2, "0");
+}
+// Display-only formatting (float here is fine — it never re-enters storage).
+function formatMoney(paise: number, currency = "INR"): string {
+  try {
+    return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(paise / 100);
+  } catch {
+    return `${currency} ${fromPaise(paise)}`;
+  }
+}
+
+// ── Aging, tier selection, DSO (PRD §15 pinned formulas) ───────────────
+// Half-open buckets from due_date: Current(≤0) / 1–30 / 31–60 / 61–90 / 91+.
+function agingBucket(dueDate: string, today: string): "current" | "1-30" | "31-60" | "61-90" | "91+" {
+  const od = overdueDays(dueDate, today);
+  if (od <= 0) return "current";
+  if (od <= 30) return "1-30";
+  if (od <= 60) return "31-60";
+  if (od <= 90) return "61-90";
+  return "91+";
+}
+// A dunning-ladder rule: the lowest worst-overdue-days at which the tier applies.
+interface TierRule { tier: string; min_overdue_days: number; }
+// Seeded default ladder (PRD §7). Pre-due window opens at −7; On-due at 0.
+const DEFAULT_TIER_RULES: TierRule[] = [
+  { tier: "pre-due", min_overdue_days: -7 },
+  { tier: "on-due", min_overdue_days: 0 },
+  { tier: "overdue-1", min_overdue_days: 1 },
+  { tier: "overdue-2", min_overdue_days: 16 },
+  { tier: "final", min_overdue_days: 31 },
+];
+// Select the HIGHEST tier whose min_overdue_days ≤ worst (PRD §15). Returns
+// null when the customer's worst invoice is still further out than pre-due.
+function selectTier(worstOverdueDays: number, rules: TierRule[] = DEFAULT_TIER_RULES): string | null {
+  let best: TierRule | null = null;
+  for (const r of rules) {
+    if (r.min_overdue_days <= worstOverdueDays && (best === null || r.min_overdue_days > best.min_overdue_days)) {
+      best = r;
+    }
+  }
+  return best ? best.tier : null;
+}
+// Days Sales Outstanding (PRD §15): (open AR ÷ trailing-N-day credit sales) × N.
+// Divide-by-zero guarded → 0. Inputs are paise; the ratio is unitless so the
+// paise cancel. `days` defaults to the pinned 90-day window.
+function computeDSO(openARPaise: number, creditSales90Paise: number, days = 90): number {
+  if (!creditSales90Paise || creditSales90Paise <= 0) return 0;
+  return (openARPaise / creditSales90Paise) * days;
+}
+
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
+// Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
+export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
+         agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
+         SEND_CRON };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges

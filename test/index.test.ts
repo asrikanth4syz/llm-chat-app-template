@@ -1,5 +1,10 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, it, expect, beforeAll } from "vitest";
+// Phase 3 Finance (003-finance-ar) Slice 1 — pure foundations under test.
+import {
+  istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
+  agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES, SEND_CRON,
+} from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -3430,5 +3435,153 @@ describe("Product Intelligence verification workflow (P0.3)", () => {
     expect(queue.tasks.some(t => t.claim_id === hp.id)).toBe(false);
     expect(typeof queue.counts.evidence_requested).toBe("number");
     expect(queue.counts.verified_this_week).toBeGreaterThanOrEqual(1);  // Vegan just verified now
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance (003-finance-ar) — Slice 1, Group 1 (foundations)
+// Pure functions + schema self-heal. Encodes the PRD §15 pinned rules.
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ar/1.C ist date helpers", () => {
+  it("istToday returns the IST civil date, crossing the 18:30 UTC boundary", () => {
+    // 18:45 UTC → 00:15 IST next day
+    expect(istToday(new Date("2026-03-10T18:45:00Z"))).toBe("2026-03-11");
+    // 18:15 UTC → 23:45 IST same day
+    expect(istToday(new Date("2026-03-10T18:15:00Z"))).toBe("2026-03-10");
+    // exactly midnight UTC → 05:30 IST same day
+    expect(istToday(new Date("2026-03-10T00:00:00Z"))).toBe("2026-03-10");
+  });
+  it("daysBetweenIST counts whole civil days (signed)", () => {
+    expect(daysBetweenIST("2026-03-01", "2026-03-31")).toBe(30);
+    expect(daysBetweenIST("2026-03-31", "2026-03-01")).toBe(-30);
+    expect(daysBetweenIST("2026-03-10", "2026-03-10")).toBe(0);
+  });
+  it("overdueDays is due→today (positive when overdue)", () => {
+    expect(overdueDays("2026-03-10", "2026-03-10")).toBe(0);
+    expect(overdueDays("2026-03-10", "2026-03-11")).toBe(1);
+    expect(overdueDays("2026-03-10", "2026-03-05")).toBe(-5);
+  });
+});
+
+describe("finance-ar/1.B money helpers", () => {
+  it("toPaise parses rupee strings/numbers to integer paise, no drift", () => {
+    expect(toPaise("1234.56")).toBe(123456);
+    expect(toPaise("1234")).toBe(123400);
+    expect(toPaise("0.05")).toBe(5);
+    expect(toPaise("₹1,234.56")).toBe(123456);
+    expect(toPaise(1234.5)).toBe(123450);
+    expect(toPaise("-10.10")).toBe(-1010);
+    expect(toPaise(null)).toBe(0);
+    expect(toPaise("")).toBe(0);
+    expect(Number.isInteger(toPaise("99.99"))).toBe(true);
+  });
+  it("fromPaise round-trips and pads", () => {
+    expect(fromPaise(123456)).toBe("1234.56");
+    expect(fromPaise(5)).toBe("0.05");
+    expect(fromPaise(-1010)).toBe("-10.10");
+    expect(fromPaise(toPaise("789.00"))).toBe("789.00");
+  });
+  it("summing 10k paise amounts is exact (no float drift)", () => {
+    let sum = 0;
+    for (let i = 0; i < 10000; i++) sum += toPaise("0.01");
+    expect(sum).toBe(10000);             // 10000 × ₹0.01 = ₹100.00 exactly
+    expect(fromPaise(sum)).toBe("100.00");
+  });
+  it("formatMoney renders a currency string without re-entering storage", () => {
+    expect(typeof formatMoney(123456, "INR")).toBe("string");
+    expect(formatMoney(123456, "INR")).toContain("1,234.56");
+  });
+});
+
+describe("finance-ar/1.A aging + tier + DSO", () => {
+  const T = "2026-06-30"; // today
+  it("aging buckets are disjoint half-open from due_date", () => {
+    expect(agingBucket(T, T)).toBe("current");                 // due today = current
+    expect(agingBucket("2026-07-05", T)).toBe("current");      // not yet due
+    expect(agingBucket("2026-06-29", T)).toBe("1-30");         // 1 overdue
+    expect(agingBucket("2026-05-31", T)).toBe("1-30");         // 30 overdue
+    expect(agingBucket("2026-05-30", T)).toBe("31-60");        // 31 overdue
+    expect(agingBucket("2026-04-30", T)).toBe("61-90");        // 61 overdue
+    expect(agingBucket("2026-03-31", T)).toBe("91+");          // 91 overdue
+  });
+  it("bucket boundaries: 30→1-30, 31→31-60, 60→31-60, 61→61-90, 90→61-90, 91→91+", () => {
+    const day = (od: number) => { const d = new Date(Date.parse(T + "T00:00:00Z") - od * 86400000); return d.toISOString().slice(0, 10); };
+    expect(agingBucket(day(30), T)).toBe("1-30");
+    expect(agingBucket(day(31), T)).toBe("31-60");
+    expect(agingBucket(day(60), T)).toBe("31-60");
+    expect(agingBucket(day(61), T)).toBe("61-90");
+    expect(agingBucket(day(90), T)).toBe("61-90");
+    expect(agingBucket(day(91), T)).toBe("91+");
+  });
+  it("selectTier picks the highest tier whose min_overdue_days ≤ worst", () => {
+    expect(selectTier(-8)).toBeNull();          // further out than pre-due window
+    expect(selectTier(-3)).toBe("pre-due");
+    expect(selectTier(-1)).toBe("pre-due");
+    expect(selectTier(0)).toBe("on-due");
+    expect(selectTier(1)).toBe("overdue-1");
+    expect(selectTier(15)).toBe("overdue-1");
+    expect(selectTier(16)).toBe("overdue-2");
+    expect(selectTier(30)).toBe("overdue-2");
+    expect(selectTier(31)).toBe("final");
+    expect(selectTier(400)).toBe("final");
+  });
+  it("DEFAULT_TIER_RULES matches the PRD §7 ladder", () => {
+    expect(DEFAULT_TIER_RULES.map(r => r.tier)).toEqual(["pre-due", "on-due", "overdue-1", "overdue-2", "final"]);
+  });
+  it("computeDSO = (openAR/creditSales)*days, guarded against divide-by-zero", () => {
+    expect(computeDSO(90000, 90000, 90)).toBe(90);   // one full window's sales outstanding
+    expect(computeDSO(45000, 90000, 90)).toBe(45);
+    expect(computeDSO(10000, 0, 90)).toBe(0);        // no sales → 0, no NaN
+    expect(computeDSO(0, 90000, 90)).toBe(0);
+  });
+});
+
+describe("finance-ar/1.D schema self-heal", () => {
+  it("SEND_CRON is the 08:00 IST (02:30 UTC) daily expression", () => {
+    expect(SEND_CRON).toBe("30 2 * * *");
+  });
+  it("ensureArSchema creates the AR + reminder tables idempotently", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await ensureArSchema(env); // re-run must be a no-op (no throw)
+    const names = ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments",
+      "fin_allocations", "credit_allocations", "reminder_rules", "reminder_templates",
+      "reminder_runs", "reminder_holds"];
+    for (const n of names) {
+      const row = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(n).first();
+      expect(row, `table ${n} should exist`).toBeTruthy();
+    }
+  });
+  it("reminder_runs carries cycle_batch + audit columns and money columns are INTEGER", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const cols = (await db.prepare("PRAGMA table_info(reminder_runs)").all()).results as Array<{ name: string }>;
+    const colNames = cols.map(c => c.name);
+    for (const c of ["cycle_batch", "actor", "workflow", "forced", "recipient_email"]) {
+      expect(colNames, `reminder_runs.${c}`).toContain(c);
+    }
+    const invCols = (await db.prepare("PRAGMA table_info(ar_invoices)").all()).results as Array<{ name: string; type: string }>;
+    for (const money of ["subtotal", "gst", "total", "amount_paid", "credited", "late_fee", "balance"]) {
+      const col = invCols.find(c => c.name === money)!;
+      expect(col.type.toUpperCase(), `ar_invoices.${money} affinity`).toBe("INTEGER");
+    }
+  });
+  it("enforces the reminder_runs (client_id,tier,cycle_batch) unique index", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('rr1','cX','final','b1','sent')").run();
+    let threw = false;
+    try {
+      await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('rr2','cX','final','b1','sent')").run();
+    } catch { threw = true; }
+    expect(threw, "duplicate (client_id,tier,cycle_batch) must violate the unique index").toBe(true);
+  });
+  it("defaults reminders to OFF and backfill-incomplete", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const mode = await db.prepare("SELECT value FROM app_config WHERE key='reminders_mode'").first() as { value: string } | null;
+    const bf = await db.prepare("SELECT value FROM app_config WHERE key='initial_backfill_complete'").first() as { value: string } | null;
+    expect(mode?.value).toBe("off");
+    expect(bf?.value).toBe("0");
   });
 });
