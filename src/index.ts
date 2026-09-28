@@ -3504,8 +3504,135 @@ async function recomputeArBalances(env: Env): Promise<void> {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 4: Gmail transport (Google Workspace)
+// Cloudflare Workers cannot open SMTP, so this is the Gmail REST API with a
+// service-account JWT (domain-wide delegation, impersonating GMAIL_SENDER).
+// RS256 signing needs a PKCS8 key: the existing crypto.subtle usage is all
+// HMAC 'raw' keys — a private RSA key must be PEM→DER decoded first.
+// ══════════════════════════════════════════════════════════════════════
+class GmailAuthError extends Error {}
+
+// base64url (no padding) from raw bytes / from a UTF-8 string.
+function _b64urlFromBytes(bytes: Uint8Array): string {
+  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function _b64url(str: string): string { return _b64urlFromBytes(new TextEncoder().encode(str)); }
+// Standard base64 (with padding) of a UTF-8 string, CRLF-wrapped at 76 cols for MIME bodies.
+function _b64std(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/(.{76})/g, "$1\r\n");
+}
+// PEM (possibly with escaped \n) → DER bytes for crypto.subtle.importKey('pkcs8', …).
+function _pemToDer(pem: string): Uint8Array {
+  const body = pem.replace(/\\n/g, "\n").replace(/-----BEGIN [^-]+-----/, "").replace(/-----END [^-]+-----/, "").replace(/\s+/g, "");
+  const bin = atob(body); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function gmailMissingSecrets(env: Env): string[] {
+  const miss: string[] = [];
+  if (!env.GOOGLE_SA_EMAIL) miss.push("GOOGLE_SA_EMAIL");
+  if (!env.GOOGLE_SA_PRIVATE_KEY) miss.push("GOOGLE_SA_PRIVATE_KEY");
+  if (!env.GMAIL_SENDER) miss.push("GMAIL_SENDER");
+  return miss;
+}
+
+// 4.A — mint (or reuse cached) a Gmail access token via the SA JWT-bearer flow.
+// Caches to app_config with a 120s skew. A token-exchange/key failure throws
+// GmailAuthError (a distinct, operator-alertable state, not a per-recipient failure).
+async function gmailGetToken(env: Env, fetchImpl: FetchImpl, force = false): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (!force) {
+    const cached = await getConfig(env, "gmail_token", "");
+    const exp = parseInt(await getConfig(env, "gmail_token_exp", "0"), 10) || 0;
+    if (cached && exp - 120 > now) return cached;
+  }
+  const miss = gmailMissingSecrets(env);
+  if (miss.length) throw new GmailAuthError(`Gmail not configured: ${miss.join(", ")}`);
+  const header = _b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = _b64url(JSON.stringify({
+    iss: (env.GOOGLE_SA_EMAIL || "").trim(),
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    aud: "https://oauth2.googleapis.com/token",
+    sub: (env.GMAIL_SENDER || "").trim(),      // impersonated mailbox (domain-wide delegation)
+    iat: now, exp: now + 3600,
+  }));
+  const signingInput = `${header}.${claim}`;
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey("pkcs8", _pemToDer(env.GOOGLE_SA_PRIVATE_KEY || "").buffer as ArrayBuffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  } catch (e) { throw new GmailAuthError(`invalid service-account key: ${String(e)}`); }
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signingInput));
+  const jwt = `${signingInput}.${_b64urlFromBytes(new Uint8Array(sig))}`;
+  const res = await fetchImpl("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }).toString(),
+  });
+  const data = await res.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
+  if (!res.ok || !data.access_token) throw new GmailAuthError(data.error_description || data.error || `gmail token exchange failed (${res.status})`);
+  await setConfig(env, "gmail_token", data.access_token, "system");
+  await setConfig(env, "gmail_token_exp", String(now + (data.expires_in || 3600)), "system");
+  return data.access_token;
+}
+
+interface GmailAttachment { filename: string; contentType: string; contentBase64: string; }
+interface GmailSendOpts { to: string; subject: string; html?: string; text?: string; attachment?: GmailAttachment; }
+
+// RFC-2047 encode a Subject only when it carries non-ASCII (keeps ASCII subjects readable).
+function _mimeSubject(s: string): string {
+  return /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${btoa(unescape(encodeURIComponent(s)))}?=` : s;
+}
+function _buildMime(from: string, o: GmailSendOpts): string {
+  const bodyType = o.html ? "text/html" : "text/plain";
+  const body = o.html || o.text || "";
+  const base = [`From: ${from}`, `To: ${o.to}`, `Subject: ${_mimeSubject(o.subject)}`, "MIME-Version: 1.0"];
+  let msg: string;
+  if (o.attachment) {
+    const b = "bnd_" + Math.random().toString(36).slice(2);
+    msg = [
+      ...base, `Content-Type: multipart/mixed; boundary="${b}"`, "",
+      `--${b}`, `Content-Type: ${bodyType}; charset="UTF-8"`, "Content-Transfer-Encoding: base64", "", _b64std(body), "",
+      `--${b}`, `Content-Type: ${o.attachment.contentType}; name="${o.attachment.filename}"`,
+      `Content-Disposition: attachment; filename="${o.attachment.filename}"`, "Content-Transfer-Encoding: base64", "",
+      o.attachment.contentBase64.replace(/\s+/g, ""), "", `--${b}--`, "",
+    ].join("\r\n");
+  } else {
+    msg = [...base, `Content-Type: ${bodyType}; charset="UTF-8"`, "Content-Transfer-Encoding: base64", "", _b64std(body), ""].join("\r\n");
+  }
+  return _b64url(msg);
+}
+
+// 4.B — send one message. Returns a typed result (never throws): a token/config
+// problem is kind:'auth' (whole system dark → alert), a non-2xx send is kind:'send'
+// (per-recipient). Re-mints once on a 401. Supports a base64 attachment (PDF).
+type GmailSendResult = { ok: true; messageId: string } | { ok: false; error: string; kind: "auth" | "send" };
+async function gmailSend(env: Env, opts: GmailSendOpts, fetchImpl: FetchImpl = fetch): Promise<GmailSendResult> {
+  const from = (env.GMAIL_SENDER || "").trim();
+  let token: string;
+  try { token = await gmailGetToken(env, fetchImpl); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e), kind: "auth" }; }
+  const raw = _buildMime(from, opts);
+  const send = (tok: string) => fetchImpl("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { "Authorization": `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw }),
+  });
+  let res = await send(token);
+  if (res.status === 401) {
+    try { token = await gmailGetToken(env, fetchImpl, true); }
+    catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e), kind: "auth" }; }
+    res = await send(token);
+  }
+  const data = await res.json().catch(() => ({})) as { id?: string; error?: { message?: string } };
+  if (!res.ok || !data.id) return { ok: false, error: (data.error && data.error.message) || `gmail send HTTP ${res.status}`, kind: "send" };
+  return { ok: true, messageId: data.id };
+}
+
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
+export { gmailGetToken, gmailSend, gmailMissingSecrets };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };

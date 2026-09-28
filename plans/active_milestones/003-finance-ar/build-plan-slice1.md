@@ -108,10 +108,12 @@ merged by one agent), never dispatched to concurrent worktrees (plan-validation
       + `index.html` `?v=`. Smoke ACL green. ✅ done. *(Named app.16, not app.11 — 11 is taken.)*
 
 ### Group 4 — Gmail transport (depends on Group 1; parallel with Group 3)
-- [ ] **4.A Google SA JWT + token** — RS256 sign via `crypto.subtle`, exchange, **cache to expiry +
-      single-flight refresh + re-mint on 401 once**; distinct auth-failure state.
-- [ ] **4.B `gmailSend`** — build RFC-822 MIME (+ base64url), optional attachment; returns
-      `{ok, messageId} | {ok:false, error}`.
+- [x] **4.A Google SA JWT + token** — `gmailGetToken`: `_pemToDer` → `importKey('pkcs8',
+      RSASSA-PKCS1-v1_5)` → JWT-bearer exchange; cached to `app_config` with 120s skew; `GmailAuthError`
+      as the distinct auth-failure state. Verified against a real generated key. ✅ done.
+- [x] **4.B `gmailSend`** — RFC-822 MIME (+ base64url `raw`), optional base64 PDF attachment
+      (multipart/mixed), re-mint once on 401; returns `{ok,messageId}|{ok:false,error,kind:'auth'|'send'}`
+      (never throws). ✅ done.
 
 ### Group 5 — Dunning engine (depends on Groups 2,3,4) — **internally sequential: 5.A → 5.B → 5.C → {5.D, 5.E}**
 > (plan-validation `group5-internal-sequential`: 5.B needs 5.A's schema; 5.C needs 5.B `buildStatement`

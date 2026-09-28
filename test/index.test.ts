@@ -10,6 +10,8 @@ import {
   booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
   mapBooksCreditNote, runBooksSync,
 } from "../src/index";
+// Slice 1, Group 4 — Gmail transport.
+import { gmailGetToken, gmailSend } from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -3797,5 +3799,124 @@ describe("finance-ar/3.B webhook routes customer payment to AR, not purchase_ord
   it("an unknown invoice is a safe no-op", async () => {
     const res = await post("/api/integrations/zoho/webhook", { event_type: "invoice.payment_received", data: { invoice_number: "does-not-exist" } });
     expect(res.status).toBe(200);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 4 (Gmail transport)
+// Uses a REAL generated RSA key so the PEM→DER + RS256 sign path is exercised
+// (the plan-validation `gmail-rs256-pem-decode-omitted` first-domino finding).
+// ══════════════════════════════════════════════════════════════════════
+let _testPem = "";
+let _testPubKey: CryptoKey;
+beforeAll(async () => {
+  const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+  let bin = ""; for (let i = 0; i < pkcs8.length; i++) bin += String.fromCharCode(pkcs8[i]);
+  _testPem = "-----BEGIN PRIVATE KEY-----\n" + btoa(bin).replace(/(.{64})/g, "$1\n") + "\n-----END PRIVATE KEY-----\n";
+  _testPubKey = kp.publicKey;
+});
+function gmailEnv(pem = _testPem) {
+  return { ...(env as Record<string, unknown>), GOOGLE_SA_EMAIL: "sa@proj.iam.gserviceaccount.com", GOOGLE_SA_PRIVATE_KEY: pem, GMAIL_SENDER: "accounts@4syz.com" } as unknown as typeof env;
+}
+async function clearGmailTokenCache() {
+  await (env.DB as D1Database).prepare("DELETE FROM app_config WHERE key IN ('gmail_token','gmail_token_exp')").run();
+}
+function b64urlDecode(s: string): string { return atob(s.replace(/-/g, "+").replace(/_/g, "/")); }
+
+describe("finance-ar/4.A gmailGetToken (RS256 SA JWT)", () => {
+  it("signs a valid RS256 JWT from a real PEM and returns the access token", async () => {
+    await clearGmailTokenCache();
+    let captured = "";
+    let tokenCalls = 0;
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com/token")) {
+        tokenCalls++;
+        captured = new URLSearchParams(String(init?.body)).get("assertion") || "";
+        return new Response(JSON.stringify({ access_token: "gtok-1", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const tok = await gmailGetToken(gmailEnv(), impl);
+    expect(tok).toBe("gtok-1");
+    // The JWT verifies against the generated public key, and carries the right claims.
+    const [h64, c64, s64] = captured.split(".");
+    const sig = Uint8Array.from(b64urlDecode(s64), c => c.charCodeAt(0));
+    const okSig = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", _testPubKey, sig, new TextEncoder().encode(`${h64}.${c64}`));
+    expect(okSig).toBe(true);
+    const claims = JSON.parse(b64urlDecode(c64));
+    expect(claims.sub).toBe("accounts@4syz.com");
+    expect(claims.scope).toContain("gmail.send");
+    // Second call is served from cache — no new token exchange.
+    await gmailGetToken(gmailEnv(), impl);
+    expect(tokenCalls).toBe(1);
+  });
+  it("throws a distinct auth error for a bad key (not a per-recipient failure)", async () => {
+    await clearGmailTokenCache();
+    let threw = false;
+    try { await gmailGetToken(gmailEnv("-----BEGIN PRIVATE KEY-----\nnot-base64!!\n-----END PRIVATE KEY-----"), (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch); }
+    catch { threw = true; }
+    expect(threw).toBe(true);
+  });
+});
+
+describe("finance-ar/4.B gmailSend", () => {
+  function sendMock(sendStatus: number, sendBody: unknown, opts: { first401?: boolean } = {}) {
+    const state = { rawSent: "", tokenCalls: 0, sendCalls: 0 };
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("oauth2.googleapis.com/token")) { state.tokenCalls++; return new Response(JSON.stringify({ access_token: `gtok-${state.tokenCalls}`, expires_in: 3600 }), { status: 200 }); }
+      if (u.includes("gmail.googleapis.com")) {
+        state.sendCalls++;
+        state.rawSent = (JSON.parse(String(init?.body)) as { raw: string }).raw;
+        if (opts.first401 && state.sendCalls === 1) return new Response("{}", { status: 401 });
+        return new Response(JSON.stringify(sendBody), { status: sendStatus });
+      }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    return { impl, state };
+  }
+  it("sends an HTML message and returns the Gmail messageId", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-1" });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Statement", html: "<b>Due &amp; owing</b>" }, impl);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.messageId).toBe("msg-1");
+    const raw = b64urlDecode(state.rawSent);
+    expect(raw).toContain("To: x@y.test");
+    expect(raw).toContain("Subject: Statement");
+    expect(raw).toContain("From: accounts@4syz.com");
+  });
+  it("attaches a PDF as multipart/mixed", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-2" });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Inv", text: "see attached", attachment: { filename: "INV-1.pdf", contentType: "application/pdf", contentBase64: btoa("PDFDATA") } }, impl);
+    expect(r.ok).toBe(true);
+    const raw = b64urlDecode(state.rawSent);
+    expect(raw).toContain("multipart/mixed");
+    expect(raw).toContain('filename="INV-1.pdf"');
+  });
+  it("re-mints the token once on a 401 then succeeds", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-3" }, { first401: true });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Hi", text: "hi" }, impl);
+    expect(r.ok).toBe(true);
+    expect(state.tokenCalls).toBe(2);  // initial + forced re-mint
+    expect(state.sendCalls).toBe(2);
+  });
+  it("returns kind:'send' on a non-2xx and kind:'auth' when unconfigured", async () => {
+    await clearGmailTokenCache();
+    const { impl } = sendMock(400, { error: { message: "Bad Request" } });
+    const bad = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Hi", text: "hi" }, impl);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.kind).toBe("send");
+    // Missing GMAIL secrets → auth kind, and NO send call is attempted.
+    await clearGmailTokenCache(); // drop any token cached by the case above (cache short-circuits config)
+    let sendAttempted = false;
+    const impl2 = (async (url: string | URL) => { if (String(url).includes("gmail.googleapis.com")) sendAttempted = true; return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+    const noAuth = await gmailSend(env, { to: "x@y.test", subject: "Hi", text: "hi" }, impl2);
+    expect(noAuth.ok).toBe(false);
+    if (!noAuth.ok) expect(noAuth.kind).toBe("auth");
+    expect(sendAttempted).toBe(false);
   });
 });
