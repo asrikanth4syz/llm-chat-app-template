@@ -19,3 +19,13 @@
   - *Moniker:* `002-zoho-inventory-sync`
   - *Spec:* `plans/active_milestones/002-zoho-inventory-sync/spec.md`
   - *Context:* `plans/active_milestones/002-zoho-inventory-sync/context.md`
+
+- [ ] **Milestone 3: Phase 3 — Finance (Receivables & Payables)** — STATUS: PLANNED
+  - *Description:* AP/AR cockpit over Zoho Books as the accounting system of record. App mirrors
+    invoices/bills/payments from Books (idempotent, provenance-stamped like inventory) and adds the
+    operational overlay Books lacks: order/DC/PO linkage, aging buckets, a reconciliation/exception
+    queue, and reminders/dunning on the existing cron + notification + email infra. AR first, then
+    AP, then reconciliation + dunning + finance dashboard. No in-app GL/GST-filing (Books owns it).
+  - *Moniker:* `003-finance-ar`
+  - *Plan:* `plans/active_milestones/003-finance-ar/plan.md`
+  - *Context:* `plans/active_milestones/003-finance-ar/context.md`
