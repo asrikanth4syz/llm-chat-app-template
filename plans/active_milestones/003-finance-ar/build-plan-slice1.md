@@ -119,17 +119,19 @@ merged by one agent), never dispatched to concurrent worktrees (plan-validation
 > (plan-validation `group5-internal-sequential`: 5.B needs 5.A's schema; 5.C needs 5.B `buildStatement`
 > + 4.B `gmailSend` + 5.A's unique index; 5.D and 5.E both call 5.C `sendStatement`. Only 5.D & 5.E
 > are mutually parallel, and only after 5.C lands.)
-- [ ] **5.A `reminder_*` schema + seed rules** — tables incl. `cycle_batch`,
-      `UNIQUE(client_id,tier,cycle_batch)`, audit columns; seed the 5 tiers (§7).
-- [ ] **5.B Statement builder** — group open invoices by customer, exclude invoice-scope disputes/
-      settled, per-currency subtotals, tier by highest `min_overdue_days≤worst`, render merge tags
-      (account-level + per-invoice block).
-- [ ] **5.C Send core (atomic)** — reserve `reminder_runs` (`sending`) → gmailSend → `sent`/`failed`;
-      gap check on last `sent`; holds/opt-out/PTP suppression + logging; `reminders_mode` honoured.
-- [ ] **5.D Cron pass** — gate on `SEND_CRON`; auto tiers only; `MAX_CUSTOMERS_PER_RUN` + cursor; skip
-      unless `initial_backfill_complete`.
-- [ ] **5.E Follow-up endpoints + Reminders SPA** — `followups-due`, `preview`, `send-followup`
-      (force bounds), `rules`, `runs`; Reminders page + worklist.
+- [x] **5.A `reminder_*` schema + seed rules** — tables/index/columns owned by 1.D; `seedReminderRules`
+      seeds the 5 tiers idempotently (auto pre-due/on-due, manual overdue). ✅ done.
+- [x] **5.B Statement builder** — `buildStatement`: excludes settled, per-currency subtotals (never
+      blended), tier by highest `min_overdue_days≤worst`, `cycle_batch` = digest of covered tokens. ✅.
+- [x] **5.C Send core (atomic)** — `sendStatement`: opt-out/hold/PTP suppression (force never overrides),
+      re-read at send time, min-gap (+24h force floor), reserve `reminder_runs('sending')` before
+      `gmailSend` → `sent`/`failed`; `off`/`dry_run`/`live` honoured; every suppression logged. ✅.
+- [x] **5.D Cron pass** — `runReminderPass` gated on `SEND_CRON` (whole scheduled() dispatch), auto
+      tiers only, `MAX_CUSTOMERS_PER_RUN`, skips unless `initial_backfill_complete`. `SEND_CRON` added
+      to wrangler.jsonc. ✅.
+- [x] **5.E Follow-up endpoints + Reminders SPA** — `followups-due`/`preview`/`send-followup`/`run`/
+      `rules`/`runs` + `ar/:id/hold` (finance-gated; force bounds; PTP ≤60d); `renderReminders` worklist
+      page (`financeSendFollowup`/`financeRunReminders`), nav wired for platform/ops/finance. ✅.
 
 ## 📝 Step-by-Step Implementation Details
 

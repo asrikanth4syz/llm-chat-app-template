@@ -100,6 +100,78 @@ async function renderReceivables(main) {
     ${_financeInvoiceTable(invoices, true)}`;
 }
 
+// ── Reminders (finance/ops): follow-up-due worklist + run log ──────────
+// Collector-initiated overdue follow-ups (Send button, gated by min-gap on the
+// server) plus the recent reminder_runs audit. Auto tiers are sent by the cron.
+async function renderReminders(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading reminders…</p></div>`;
+  const [rules, due, runs] = await Promise.all([
+    api('/finance/reminders/rules'), api('/finance/reminders/followups-due'), api('/finance/reminders/runs')]);
+  if (!rules || !due || !runs) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load reminders.</div>`; return; }
+  const mode = rules.mode || 'off';
+  const followups = due.followups || [];
+  const rows = followups.map(f => {
+    const amt = Object.entries(f.total_outstanding || {}).map(([c, v]) => _fmtPaise(v, c)).join(', ');
+    const status = f.opt_out ? 'Opted out' : f.hold ? ('Hold: ' + f.hold) : !f.email ? 'No email'
+      : f.eligible ? 'Eligible' : ('Eligible in ' + f.eligible_in_days + 'd');
+    const btn = f.eligible
+      ? `<button class="btn btn-primary" ${dataAct('financeSendFollowup', f.client_id)}>Send follow-up</button>`
+      : `<button class="btn btn-secondary" disabled title="${h(status)}">Send follow-up</button>`;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 12px">${h(f.name || f.client_id)}</td>
+      <td style="padding:8px 12px">${h(f.tier)}</td>
+      <td style="padding:8px 12px;text-align:right">${h(String(f.worst_overdue_days))}</td>
+      <td style="padding:8px 12px;text-align:right">${h(amt)}</td>
+      <td style="padding:8px 12px">${h(status)}</td>
+      <td style="padding:8px 12px">${btn}</td></tr>`;
+  }).join('');
+  const runRows = (runs.runs || []).slice(0, 50).map(r => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 12px">${h((r.run_at || '').replace('T', ' ').slice(0, 16))}</td>
+      <td style="padding:6px 12px">${h(r.client_id)}</td>
+      <td style="padding:6px 12px">${h(r.tier)}</td>
+      <td style="padding:6px 12px">${h(r.status)}${r.suppressed_reason ? ' — ' + h(r.suppressed_reason) : ''}</td>
+      <td style="padding:6px 12px">${h(r.actor || '')}${r.forced ? ' (forced)' : ''}</td></tr>`).join('');
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0">Payment Reminders</h2>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" ${dataAct('financeRunReminders')}>Run auto pass</button>
+        <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button>
+      </div>
+    </div>
+    <div class="card" style="padding:12px 16px;margin-bottom:16px">
+      Mode: <strong>${h(mode)}</strong> ${mode === 'off' ? '— reminders are disabled (no mail is sent).' : mode === 'dry_run' ? '— dry run: statements are logged, nothing is sent.' : '— live sending.'}
+    </div>
+    <h3 style="margin:0 0 10px">Follow-ups Due (${followups.length})</h3>
+    ${followups.length ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+        <th style="padding:8px 12px">Client</th><th style="padding:8px 12px">Tier</th>
+        <th style="padding:8px 12px;text-align:right">Overdue (d)</th><th style="padding:8px 12px;text-align:right">Outstanding</th>
+        <th style="padding:8px 12px">Status</th><th style="padding:8px 12px"></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<div class="card" style="padding:20px;color:var(--muted)">No overdue customers awaiting a follow-up.</div>`}
+    <h3 style="margin:18px 0 10px">Recent Runs</h3>
+    ${runRows ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+        <th style="padding:6px 12px">When</th><th style="padding:6px 12px">Client</th><th style="padding:6px 12px">Tier</th>
+        <th style="padding:6px 12px">Status</th><th style="padding:6px 12px">By</th></tr></thead>
+      <tbody>${runRows}</tbody></table></div>`
+      : `<div class="card" style="padding:20px;color:var(--muted)">No reminder runs yet.</div>`}`;
+}
+
+// Collector action: send an overdue follow-up (server enforces gap + holds).
+async function financeSendFollowup(clientId) {
+  if (!confirm('Send a follow-up statement to this customer now?')) return;
+  const r = await api('/finance/reminders/send-followup', { method: 'POST', body: JSON.stringify({ client_id: clientId }) });
+  if (r) { showToast('Follow-up: ' + (r.status || 'done') + (r.reason ? ' (' + r.reason + ')' : ''), r.status === 'sent' ? 'success' : 'info'); renderReminders(document.getElementById('main-content')); }
+}
+async function financeRunReminders() {
+  if (!confirm('Run the automatic reminder pass now?')) return;
+  const r = await api('/finance/reminders/run', { method: 'POST', body: JSON.stringify({}) });
+  if (r) { showToast('Auto pass: ' + r.status + ' · sent ' + (r.sent || 0) + ' · suppressed ' + (r.suppressed || 0), 'info'); renderReminders(document.getElementById('main-content')); }
+}
+
 // Client statement: the caller's own outstanding invoices (server forces scope).
 async function renderMyStatement(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading statement…</p></div>`;

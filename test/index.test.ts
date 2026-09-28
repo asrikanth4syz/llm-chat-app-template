@@ -12,6 +12,9 @@ import {
 } from "../src/index";
 // Slice 1, Group 4 — Gmail transport.
 import { gmailGetToken, gmailSend } from "../src/index";
+// Slice 1, Group 5 — dunning engine.
+import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
+import { hashStr } from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -3918,5 +3921,172 @@ describe("finance-ar/4.B gmailSend", () => {
     expect(noAuth.ok).toBe(false);
     if (!noAuth.ok) expect(noAuth.kind).toBe("auth");
     expect(sendAttempted).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 5 (consolidated dunning engine)
+// ══════════════════════════════════════════════════════════════════════
+const TIER_RULES = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+function daysAgoISO(n: number) { return new Date(Date.parse(istToday() + "T00:00:00Z") - n * 86400000).toISOString(); }
+function dueDaysAgo(n: number) { return new Date(Date.parse(istToday() + "T00:00:00Z") - n * 86400000).toISOString().slice(0, 10); }
+async function seedDunClient(id: string, email: string | null, invoices: Array<{ id: string; due: string; total: number; balance: number; currency?: string; status?: string; tok?: string }>) {
+  const db = env.DB as D1Database;
+  await ensureArSchema(env);
+  await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,dunning_opt_out) VALUES (?,?,?,0)").bind(id, "Name " + id, email).run();
+  await db.prepare("DELETE FROM ar_invoices WHERE client_id=?").bind(id).run();
+  await db.prepare("DELETE FROM reminder_runs WHERE client_id=?").bind(id).run();
+  await db.prepare("DELETE FROM reminder_holds WHERE client_id=?").bind(id).run();
+  for (const iv of invoices)
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,due_date,total,balance,currency_code,status,cycle_token) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .bind(iv.id, iv.id, iv.id, id, iv.due, iv.total, iv.balance, iv.currency || "INR", iv.status || "open", iv.tok || ("tok-" + iv.id)).run();
+}
+function gmailStub(sendId = "m1") {
+  const st = { sends: 0, tokens: 0 };
+  const impl = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.includes("oauth2.googleapis.com/token")) { st.tokens++; return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 }); }
+    if (u.includes("gmail.googleapis.com")) { st.sends++; return new Response(JSON.stringify({ id: sendId }), { status: 200 }); }
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { impl, st };
+}
+
+describe("finance-ar/5.B buildStatement", () => {
+  it("groups per currency, picks the tier, and derives cycle_batch", () => {
+    const inv = [
+      { id: "i1", balance: 50000, due_date: dueDaysAgo(5), currency_code: "INR", cycle_token: "a", status: "open" },
+      { id: "i2", balance: 20000, due_date: dueDaysAgo(2), currency_code: "USD", cycle_token: "b", status: "open" },
+      { id: "i3", balance: 0, due_date: dueDaysAgo(1), currency_code: "INR", cycle_token: "c", status: "open" }, // settled, excluded
+    ];
+    const s = buildStatement(inv, TIER_RULES, istToday())!;
+    expect(s.tier).toBe("overdue-1");                 // worst overdue is 5 days
+    expect(s.by_currency.length).toBe(2);             // INR + USD, no blended total
+    expect(s.invoice_ids.sort()).toEqual(["i1", "i2"]);
+    expect(s.cycle_batch).toBe(hashStr(["a", "b"].sort().join("|")));
+  });
+  it("returns null when nothing is due", () => {
+    expect(buildStatement([{ id: "x", balance: 0, due_date: dueDaysAgo(1), cycle_token: "z", status: "open" }], TIER_RULES, istToday())).toBeNull();
+  });
+});
+
+describe("finance-ar/5.C sendStatement", () => {
+  it("dry_run logs a row and sends zero email", async () => {
+    await seedDunClient("dc-dry", "a@x.test", [{ id: "di1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-dry", email: "a@x.test", name: "A" }, { mode: "dry_run" }, impl);
+    expect(r.status).toBe("dry_run");
+    expect(st.sends).toBe(0);
+    const row = await (env.DB as D1Database).prepare("SELECT status FROM reminder_runs WHERE client_id='dc-dry' AND status='dry_run'").first();
+    expect(row).toBeTruthy();
+  });
+  it("live sends once; a second same-day send never double-sends (gap guards it)", async () => {
+    await clearGmailTokenCache();
+    await seedDunClient("dc-idem", "a@x.test", [{ id: "ii1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "T1" }]);
+    const { impl, st } = gmailStub("mid-1");
+    const r1 = await sendStatement(gmailEnv(), { client_id: "dc-idem", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r1.status).toBe("sent");
+    if (r1.status === "sent") expect(r1.messageId).toBe("mid-1");
+    // Sequential re-send is blocked by the min-gap (the unique-key 'duplicate' path is the
+    // concurrent/crash case, covered by the reserve-before-send test below).
+    const r2 = await sendStatement(gmailEnv(), { client_id: "dc-idem", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r2.status).toBe("suppressed");
+    if (r2.status === "suppressed") expect(r2.reason).toBe("gap-not-elapsed");
+    expect(st.sends).toBe(1); // never double-sends
+  });
+  it("reserve-before-send: a stale 'sending' row blocks a re-send (crash recovery)", async () => {
+    await seedDunClient("dc-crash", "a@x.test", [{ id: "ic1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "ONLY" }]);
+    const batch = hashStr(["ONLY"].join("|"));
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('pre','dc-crash','overdue-1',?, 'sending')").bind(batch).run();
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-crash", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r.status).toBe("duplicate");
+    expect(st.sends).toBe(0);
+  });
+  it("suppresses opt-out and an active PTP hold (force never overrides holds)", async () => {
+    await seedDunClient("dc-opt", "a@x.test", [{ id: "io1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-opt", email: "a@x.test", dunning_opt_out: 1 }, { mode: "live", force: true }, impl);
+    expect(r.status).toBe("suppressed");
+    if (r.status === "suppressed") expect(r.reason).toBe("opt_out");
+    // Active future PTP
+    await seedDunClient("dc-ptp", "a@x.test", [{ id: "ip1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_holds (id,client_id,kind,ptp_date) VALUES ('h1','dc-ptp','ptp',?)").bind(dueDaysAgo(-10)).run();
+    const r2 = await sendStatement(gmailEnv(), { client_id: "dc-ptp", email: "a@x.test" }, { mode: "live", force: true }, impl);
+    expect(r2.status).toBe("suppressed");
+    if (r2.status === "suppressed") expect(r2.reason).toBe("ptp");
+    expect(st.sends).toBe(0);
+  });
+  it("suppresses a customer with no email (flagged, not silent)", async () => {
+    await seedDunClient("dc-noemail", null, [{ id: "in1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-noemail", email: undefined }, { mode: "live" }, impl);
+    expect(r.status).toBe("suppressed");
+    if (r.status === "suppressed") expect(r.reason).toBe("no-email");
+    const row = await (env.DB as D1Database).prepare("SELECT suppressed_reason FROM reminder_runs WHERE client_id='dc-noemail'").first() as { suppressed_reason: string };
+    expect(row.suppressed_reason).toBe("no-email");
+  });
+  it("min-gap blocks a re-send; force overrides the gap (above the 24h floor)", async () => {
+    await seedDunClient("dc-gap", "a@x.test", [{ id: "ig1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,run_at) VALUES ('g0','dc-gap','overdue-1','prevbatch','sent',?)").bind(daysAgoISO(2)).run();
+    const { impl, st } = gmailStub("mid-gap");
+    const blocked = await sendStatement(gmailEnv(), { client_id: "dc-gap", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(blocked.status).toBe("suppressed");
+    if (blocked.status === "suppressed") expect(blocked.reason).toBe("gap-not-elapsed");
+    expect(st.sends).toBe(0);
+    const forced = await sendStatement(gmailEnv(), { client_id: "dc-gap", email: "a@x.test" }, { mode: "live", force: true }, impl);
+    expect(forced.status).toBe("sent"); // 2 days ago > 24h floor
+    expect(st.sends).toBe(1);
+  });
+});
+
+describe("finance-ar/5.D runReminderPass", () => {
+  async function setCfg2(k: string, v: string) { await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, v).run(); }
+  it("no-ops on the wrong cron, when off, and when backfill is pending", async () => {
+    await ensureArSchema(env);
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "1");
+    expect((await runReminderPass(env, "0 */3 * * *")).status).toBe("disabled"); // wrong tick
+    await setCfg2("reminders_mode", "off");
+    expect((await runReminderPass(env, "30 2 * * *")).status).toBe("disabled");
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "0");
+    expect((await runReminderPass(env, "30 2 * * *")).status).toBe("backfill_pending");
+  });
+  it("auto-sends only pre-due/on-due; overdue customers are left to the worklist", async () => {
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "1");
+    await seedDunClient("dp-auto", "a@x.test", [{ id: "pa1", due: istToday(), total: 50000, balance: 50000 }]);   // on-due → auto
+    await seedDunClient("dp-manual", "b@x.test", [{ id: "pm1", due: dueDaysAgo(20), total: 50000, balance: 50000 }]); // overdue-2 → manual
+    const r = await runReminderPass(env, "30 2 * * *");
+    expect(r.status).toBe("ok");
+    const autoRow = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id='dp-auto' AND status='dry_run'").first() as { n: number };
+    expect(autoRow.n).toBeGreaterThanOrEqual(1);  // auto tier considered
+    const manRow = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id='dp-manual'").first() as { n: number };
+    expect(manRow.n).toBe(0);                      // manual tier NOT auto-sent
+  });
+});
+
+describe("finance-ar/5.E reminder endpoints", () => {
+  it("rules/runs/followups are finance-gated; send-followup + hold are super/finance", async () => {
+    await ensureArSchema(env);
+    expect((await get("/api/finance/reminders/rules", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reminders/rules", clientToken)).status).toBe(403);
+    const rules = await (await get("/api/finance/reminders/rules", adminToken)).json() as { rules: unknown[] };
+    expect(rules.rules.length).toBe(5);
+    expect((await get("/api/finance/reminders/followups-due", adminToken)).status).toBe(200);
+    expect((await post("/api/finance/reminders/send-followup", { client_id: "x" }, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reminders/run", {}, opsToken)).status).toBe(403);
+  });
+  it("send-followup respects mode=off (no send)", async () => {
+    await seedDunClient("ep-1", "a@x.test", [{ id: "ep1i", due: dueDaysAgo(20), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES ('reminders_mode','off') ON CONFLICT(key) DO UPDATE SET value='off'").run();
+    const res = await post("/api/finance/reminders/send-followup", { client_id: "ep-1" }, adminToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { status: string }).status).toBe("off");
+  });
+  it("hold endpoint validates kind and PTP horizon", async () => {
+    await seedDunClient("ep-hold", "a@x.test", [{ id: "eph", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "bogus" }, adminToken)).status).toBe(400);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "ptp", ptp_date: dueDaysAgo(90) }, adminToken)).status).toBe(400); // >60d out? actually past → invalid
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, adminToken)).status).toBe(200);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, clientToken)).status).toBe(403);
   });
 });

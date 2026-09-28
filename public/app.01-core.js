@@ -190,6 +190,7 @@ const NAV = {
     { section:'Billing & Finance' },
     { id:'dc_billing',      label:'Billing',          icon:iconBilling,  badge:'!' },
     { id:'receivables',     label:'Receivables',      icon:iconBilling,  badge:null },
+    { id:'reminders',       label:'Payment Reminders',icon:iconMail,     badge:null },
     { id:'dunning',         label:'Dunning',          icon:iconMail,     badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconWallet,   badge:null },
     { section:'Reports & Insights' },
@@ -221,6 +222,7 @@ const NAV = {
     { section:'Billing & Finance' },
     { id:'dc_billing',          label:'Billing',          icon:iconBilling,   badge:'!' },
     { id:'receivables',         label:'Receivables',      icon:iconBilling,   badge:null },
+    { id:'reminders',           label:'Payment Reminders',icon:iconBell,      badge:null },
     { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconHeadset,   badge:null },
     { section:'Alerts & Exceptions' },
@@ -268,6 +270,7 @@ const NAV = {
     { section:'Billing & Finance' },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
     { id:'receivables', label:'Receivables',   icon:iconBilling,   badge:null },
+    { id:'reminders',   label:'Payment Reminders', icon:iconMail,  badge:null },
     { section:'Reports & Insights' },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
   ],
@@ -1072,6 +1075,7 @@ const PAGE_MAP = {
   // Phase 3 Finance (003-finance-ar): Receivables cockpit (finance/ops/super) and
   // the client-facing statement (client_*).
   receivables: 'renderReceivables',
+  reminders: 'renderReminders',
   my_statement: 'renderMyStatement',
 };
 

@@ -2807,6 +2807,7 @@ async function ensureArSchema(env: Env): Promise<void> {
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('reminders_mode','off')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('initial_backfill_complete','0')").run();
   } catch { /* app_config may not exist yet on a bare DB */ }
+  await seedReminderRules(env); // 5.A dunning ladder (idempotent)
 }
 
 // One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
@@ -3630,9 +3631,192 @@ async function gmailSend(env: Env, opts: GmailSendOpts, fetchImpl: FetchImpl = f
   return { ok: true, messageId: data.id };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 5: consolidated dunning engine
+// One statement per customer. Auto (cron) sends only pre-due/on-due; overdue
+// tiers are collector-initiated. Reserve-before-send idempotency on
+// (client_id,tier,cycle_batch); holds/opt-out/PTP suppress; min-gap guardrail.
+// ══════════════════════════════════════════════════════════════════════
+const REMINDER_RULE_SEED: Array<{ id: string; tier: string; min: number; mode: "auto" | "manual"; pdf: number; tone: string }> = [
+  { id: "rule:pre-due", tier: "pre-due", min: -7, mode: "auto", pdf: 0, tone: "Early friendly notice" },
+  { id: "rule:on-due", tier: "on-due", min: 0, mode: "auto", pdf: 0, tone: "Polite reminder" },
+  { id: "rule:overdue-1", tier: "overdue-1", min: 1, mode: "manual", pdf: 1, tone: "Firm — balance highlighted" },
+  { id: "rule:overdue-2", tier: "overdue-2", min: 16, mode: "manual", pdf: 1, tone: "Formal — references terms" },
+  { id: "rule:final", tier: "final", min: 31, mode: "manual", pdf: 1, tone: "Final notice — escalation path" },
+];
+const REMINDER_MIN_GAP_DAYS = 5;
+
+// 5.A — seed the dunning ladder once (idempotent on deterministic id).
+async function seedReminderRules(env: Env): Promise<void> {
+  for (const r of REMINDER_RULE_SEED) {
+    try {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO reminder_rules (id,workflow,tier,min_overdue_days,send_mode,min_gap_days,tone,attach_pdf,active) VALUES (?,?,?,?,?,?,?,?,1)"
+      ).bind(r.id, "default", r.tier, r.min, r.mode, REMINDER_MIN_GAP_DAYS, r.tone, r.pdf).run();
+    } catch { /* table missing on a bare DB — non-fatal */ }
+  }
+}
+
+interface StatementResult {
+  tier: string; cycle_batch: string; worst_overdue_days: number; invoice_ids: string[];
+  by_currency: Array<{ currency: string; outstanding: number; invoices: Record<string, unknown>[] }>;
+}
+
+// 5.B — build ONE consolidated statement for a customer's currently-open invoices.
+// Pure: settled (balance≤0) and void invoices are already excluded by the caller's
+// query + this filter. Tier = highest rule whose min_overdue_days ≤ worst overdue.
+// cycle_batch = digest of the sorted covered cycle_tokens (a Books edit → new batch).
+function buildStatement(invoices: Record<string, unknown>[], tierRules: TierRule[], today: string): StatementResult | null {
+  const open = invoices.filter(i => Number(i.balance || 0) > 0 && i.status !== "void");
+  if (!open.length) return null;
+  let worst = -Infinity;
+  for (const i of open) { const od = i.due_date ? overdueDays(String(i.due_date), today) : 0; if (od > worst) worst = od; }
+  const tier = selectTier(worst, tierRules);
+  if (!tier) return null; // still further out than the pre-due window
+  const byCur: Record<string, { currency: string; outstanding: number; invoices: Record<string, unknown>[] }> = {};
+  for (const i of open) {
+    const c = String(i.currency_code || "INR");
+    (byCur[c] = byCur[c] || { currency: c, outstanding: 0, invoices: [] });
+    byCur[c].outstanding += Number(i.balance || 0);
+    byCur[c].invoices.push(i);
+  }
+  const tokens = open.map(i => String(i.cycle_token || "")).sort();
+  return { tier, cycle_batch: hashStr(tokens.join("|")), worst_overdue_days: worst, invoice_ids: open.map(i => String(i.id)), by_currency: Object.values(byCur) };
+}
+
+// Active hold (force never overrides these). A PTP is active only until its date.
+async function reminderHoldActive(env: Env, clientId: string, today: string): Promise<string | null> {
+  const { results } = await env.DB.prepare(
+    "SELECT kind, ptp_date FROM reminder_holds WHERE client_id=? AND cleared_at IS NULL"
+  ).bind(clientId).all();
+  for (const h of (results || []) as Array<{ kind: string; ptp_date: string | null }>) {
+    if (h.kind === "ptp") { if (!h.ptp_date || h.ptp_date >= today) return "ptp"; /* expired PTP no longer suppresses */ }
+    else return h.kind; // dispute | negotiation | opt_out
+  }
+  return null;
+}
+// Whole IST days since the last successfully-SENT email (failed/suppressed/dry_run don't count).
+async function lastSentDaysAgo(env: Env, clientId: string, today: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    "SELECT run_at FROM reminder_runs WHERE client_id=? AND status='sent' ORDER BY run_at DESC LIMIT 1"
+  ).bind(clientId).first() as { run_at: string } | null;
+  if (!row || !row.run_at) return null;
+  return daysBetweenIST(String(row.run_at).slice(0, 10), today);
+}
+
+function _reminderSubject(tier: string, s: StatementResult): string {
+  const cur = s.by_currency[0];
+  const amt = cur ? _fmtMoneyServer(cur.outstanding, cur.currency) : "";
+  if (tier === "pre-due") return `Upcoming payment reminder — ${amt} due`;
+  if (tier === "on-due") return `Payment due today — ${amt}`;
+  if (tier === "final") return `Final notice — ${amt} overdue`;
+  return `Payment overdue — ${amt}`;
+}
+function _fmtMoneyServer(paise: number, currency = "INR"): string {
+  try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format((paise || 0) / 100); }
+  catch { return `${currency} ${fromPaise(paise)}`; }
+}
+function _reminderHtml(client: { name?: string }, tier: string, s: StatementResult): string {
+  const lines = s.by_currency.map(c => {
+    const rows = c.invoices.map(i => `<tr><td>${String(i.number || i.id)}</td><td>${String(i.due_date || "")}</td><td style="text-align:right">${_fmtMoneyServer(Number(i.balance || 0), c.currency)}</td></tr>`).join("");
+    return `<p><strong>${c.currency}</strong> — outstanding ${_fmtMoneyServer(c.outstanding, c.currency)}</p><table>${rows}</table>`;
+  }).join("");
+  return `<p>Dear ${client.name || "Customer"},</p><p>This is a ${tier.replace("-", " ")} reminder for the following open invoices:</p>${lines}<p>Please arrange payment at your earliest convenience.</p>`;
+}
+
+interface SendOpts { mode: "off" | "dry_run" | "live"; force?: boolean; actor?: string; }
+type SendResult = { status: "sent"; messageId: string } | { status: "dry_run" | "duplicate" | "failed"; reason?: string; error?: string } | { status: "suppressed"; reason: string } | { status: "off" };
+
+// 5.C — the atomic send core. Order: suppression checks → build → reserve row
+// (real cycle_batch) BEFORE the Gmail call → send → mark sent/failed. A crash after
+// Gmail accepts leaves a 'sending' row that blocks a re-send on the unique key.
+async function sendStatement(env: Env, client: { client_id: string; name?: string; email?: string; dunning_opt_out?: number }, opts: SendOpts, fetchImpl: FetchImpl = fetch): Promise<SendResult> {
+  const today = istToday();
+  const actor = opts.actor || "system";
+  if (opts.mode === "off") return { status: "off" };
+  const logSup = async (reason: string, batch: string) => {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,suppressed_reason,actor,recipient_email) VALUES (?,?,?,?,?,?,?,?)"
+    ).bind(uid(), client.client_id, "-", `${batch}#sup#${uid()}`, "suppressed", reason, actor, client.email || null).run();
+  };
+  // Holds / opt-out — force NEVER overrides these.
+  if (client.dunning_opt_out) { await logSup("opt_out", "x"); return { status: "suppressed", reason: "opt_out" }; }
+  const hold = await reminderHoldActive(env, client.client_id, today);
+  if (hold) { await logSup(hold, "x"); return { status: "suppressed", reason: hold }; }
+  // Re-read live open invoices at send time (drops any that cleared).
+  const { results } = await env.DB.prepare(
+    "SELECT id,number,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'"
+  ).bind(client.client_id).all();
+  const tierRules = REMINDER_RULE_SEED.map(r => ({ tier: r.tier, min_overdue_days: r.min }));
+  const stmt = buildStatement((results || []) as Record<string, unknown>[], tierRules, today);
+  if (!stmt) { await logSup("settled", "x"); return { status: "suppressed", reason: "settled" }; }
+  if (!client.email) { await logSup("no-email", stmt.cycle_batch); return { status: "suppressed", reason: "no-email" }; }
+  // Min-gap (force overrides, but never the 24h hard floor).
+  const daysAgo = await lastSentDaysAgo(env, client.client_id, today);
+  if (daysAgo !== null && daysAgo < REMINDER_MIN_GAP_DAYS) {
+    if (!opts.force) { await logSup("gap-not-elapsed", stmt.cycle_batch); return { status: "suppressed", reason: "gap-not-elapsed" }; }
+    if (daysAgo < 1) { await logSup("gap-floor-24h", stmt.cycle_batch); return { status: "suppressed", reason: "gap-floor-24h" }; }
+  }
+  const totalOut = JSON.stringify(Object.fromEntries(stmt.by_currency.map(c => [c.currency, c.outstanding])));
+  if (opts.mode === "dry_run") {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,invoice_ids,total_outstanding,actor,recipient_email,forced) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(uid(), client.client_id, stmt.tier, `${stmt.cycle_batch}#dry#${uid()}`, "dry_run", JSON.stringify(stmt.invoice_ids), totalOut, actor, client.email, opts.force ? 1 : 0).run();
+    return { status: "dry_run" };
+  }
+  // LIVE: reserve the idempotency slot (real cycle_batch) BEFORE sending.
+  const rowId = uid();
+  try {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,invoice_ids,total_outstanding,actor,recipient_email,forced) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(rowId, client.client_id, stmt.tier, stmt.cycle_batch, "sending", JSON.stringify(stmt.invoice_ids), totalOut, actor, client.email, opts.force ? 1 : 0).run();
+  } catch { return { status: "duplicate" }; } // unique(client,tier,cycle_batch) → already sent/sending
+  const res = await gmailSend(env, { to: client.email, subject: _reminderSubject(stmt.tier, stmt), html: _reminderHtml(client, stmt.tier, stmt) }, fetchImpl);
+  if (res.ok) {
+    await env.DB.prepare("UPDATE reminder_runs SET status='sent', gmail_message_id=?, channel='email' WHERE id=?").bind(res.messageId, rowId).run();
+    await audit(env, null, "AR_REMINDER_SENT", "ar_client", client.client_id, undefined, stmt.tier);
+    return { status: "sent", messageId: res.messageId };
+  }
+  await env.DB.prepare("UPDATE reminder_runs SET status='failed', suppressed_reason=?, channel='email' WHERE id=?").bind(res.error, rowId).run();
+  return { status: "failed", error: res.error };
+}
+
+// 5.D — the daily auto pass. Gated to the SEND_CRON tick by scheduled(). Auto-sends
+// ONLY pre-due/on-due; overdue tiers are surfaced to collectors (computed live by the
+// followups-due endpoint), never auto-sent. Ships behind reminders_mode + backfill gate.
+interface ReminderPassResult { status: "ok" | "disabled" | "backfill_pending"; mode: string; considered: number; sent: number; dry_run: number; suppressed: number; }
+async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fetch): Promise<ReminderPassResult> {
+  await ensureArSchema(env);
+  const mode = await getConfig(env, "reminders_mode", "off");
+  const r: ReminderPassResult = { status: "ok", mode, considered: 0, sent: 0, dry_run: 0, suppressed: 0 };
+  if (cron !== SEND_CRON) { r.status = "disabled"; return r; }               // wrong tick → no-op
+  if (mode === "off") { r.status = "disabled"; return r; }
+  if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1") { r.status = "backfill_pending"; return r; }
+  const today = istToday();
+  const autoTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "auto").map(x => x.tier));
+  const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+  const { results } = await env.DB.prepare(
+    `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
+     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>0 AND i.status!='void')
+     LIMIT ${MAX_CUSTOMERS_PER_RUN}`
+  ).all();
+  for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
+    const inv = (await env.DB.prepare("SELECT id,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
+    if (!stmt || !autoTiers.has(stmt.tier)) continue;    // manual (overdue) tiers → collector worklist, not auto
+    r.considered++;
+    const out = await sendStatement(env, c, { mode: mode as SendOpts["mode"], actor: "system" }, fetchImpl);
+    if (out.status === "sent") r.sent++;
+    else if (out.status === "dry_run") r.dry_run++;
+    else if (out.status === "suppressed") r.suppressed++;
+  }
+  return r;
+}
+
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
 export { gmailGetToken, gmailSend, gmailMissingSecrets };
+export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
@@ -3645,6 +3829,14 @@ export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
+      // The SEND_CRON tick runs ONLY the reminder pass; every other registered
+      // trigger runs the existing delivery/inventory work. Gating the whole
+      // dispatch stops the added trigger from re-firing the other jobs.
+      if ((controller.cron || "") === SEND_CRON) {
+        try { await runReminderPass(env, controller.cron || ""); }
+        catch (e) { console.error("reminder pass cron error:", String(e)); }
+        return;
+      }
       await fixCategoryNames(env); // make sure columns/tables exist first
       await runDeliveryReminders(env);
       // Zoho Inventory pull (milestone 002). Disabled + dry-run by default, so this
@@ -3884,7 +4076,14 @@ export default {
       if (path==="/api/finance/ar/invoices" && method==="GET") return handleArInvoices(request,env);
       if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
+      if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
+      if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
+      if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
+      if (path==="/api/finance/reminders/followups-due"&& method==="GET")  return handleFollowupsDue(request,env);
+      if (path==="/api/finance/reminders/preview"      && method==="GET")  return handleReminderPreview(request,env);
+      if (path==="/api/finance/reminders/send-followup"&& method==="POST") return handleSendFollowup(request,env);
+      if (path==="/api/finance/reminders/run"          && method==="POST") return handleReminderRun(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
       if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
@@ -8572,6 +8771,117 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   const body = await request.json().catch(() => ({})) as { full?: boolean };
   const result = await runBooksSync(env, { full: !!body.full });
   return json(result);
+}
+
+// ── Group 5.E: reminder endpoints ─────────────────────────────────────
+const FIN_WRITE_ROLES = ["super_admin", "finance_admin"];
+async function _arClient(env: Env, id: string): Promise<{ client_id: string; name?: string; email?: string; dunning_opt_out?: number } | null> {
+  return env.DB.prepare("SELECT client_id, name, email, dunning_opt_out FROM ar_clients WHERE client_id=?").bind(id).first();
+}
+
+async function handleReminderRules(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare("SELECT id,tier,min_overdue_days,send_mode,min_gap_days,tone,attach_pdf,active FROM reminder_rules ORDER BY min_overdue_days").all();
+  return json({ rules: results || [], mode: await getConfig(env, "reminders_mode", "off") });
+}
+
+async function handleReminderRuns(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT id,client_id,tier,status,suppressed_reason,gmail_message_id,actor,forced,recipient_email,invoice_ids,total_outstanding,run_at FROM reminder_runs ORDER BY run_at DESC LIMIT 200"
+  ).all();
+  return json({ runs: results || [] });
+}
+
+// Customers whose worst-overdue tier is collector-initiated (manual) — the worklist.
+async function handleFollowupsDue(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const manualTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "manual").map(x => x.tier));
+  const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+  const { results } = await env.DB.prepare(
+    `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
+     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>0 AND i.status!='void') LIMIT ${MAX_CUSTOMERS_PER_RUN}`
+  ).all();
+  const due: Record<string, unknown>[] = [];
+  for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
+    const inv = (await env.DB.prepare("SELECT id,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
+    if (!stmt || !manualTiers.has(stmt.tier)) continue;
+    const hold = await reminderHoldActive(env, c.client_id, today);
+    const daysAgo = await lastSentDaysAgo(env, c.client_id, today);
+    const eligibleInDays = daysAgo === null ? 0 : Math.max(0, REMINDER_MIN_GAP_DAYS - daysAgo);
+    due.push({
+      client_id: c.client_id, name: c.name, email: c.email, tier: stmt.tier,
+      worst_overdue_days: stmt.worst_overdue_days,
+      total_outstanding: Object.fromEntries(stmt.by_currency.map(x => [x.currency, x.outstanding])),
+      hold: hold || null, opt_out: !!c.dunning_opt_out,
+      eligible: !hold && !c.dunning_opt_out && !!c.email && eligibleInDays === 0,
+      eligible_in_days: eligibleInDays,
+    });
+  }
+  return json({ followups: due });
+}
+
+// Render a statement for the confirm screen — no send, any mode.
+async function handleReminderPreview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const id = new URL(request.url).searchParams.get("client_id") || "";
+  const client = await _arClient(env, id);
+  if (!client) return json({ error: "Unknown client" }, 404);
+  const today = istToday();
+  const inv = (await env.DB.prepare("SELECT id,number,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(id).all()).results || [];
+  const stmt = buildStatement(inv as Record<string, unknown>[], REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min })), today);
+  if (!stmt) return json({ nothing_due: true });
+  return json({ client_id: id, tier: stmt.tier, subject: _reminderSubject(stmt.tier, stmt), html: _reminderHtml(client, stmt.tier, stmt), invoice_ids: stmt.invoice_ids });
+}
+
+// Collector-initiated overdue send. super/finance. force overrides gap only (§15).
+async function handleSendFollowup(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as { client_id?: string; force?: boolean };
+  const client = await _arClient(env, String(body.client_id || ""));
+  if (!client) return json({ error: "Unknown client" }, 404);
+  const mode = (await getConfig(env, "reminders_mode", "off")) as SendOpts["mode"];
+  const result = await sendStatement(env, client, { mode, force: !!body.force, actor: user!.sub });
+  return json({ mode, ...result });
+}
+
+// Manual trigger of the daily auto pass. super/finance.
+async function handleReminderRun(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await runReminderPass(env, SEND_CRON));
+}
+
+// Set or clear a hold on a client (negotiation/dispute/opt_out/ptp). super/finance.
+async function handleArHold(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const clientId = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const body = await request.json().catch(() => ({})) as { kind?: string; ptp_date?: string; clear?: boolean };
+  if (body.clear) {
+    await env.DB.prepare("UPDATE reminder_holds SET cleared_at=datetime('now') WHERE client_id=? AND cleared_at IS NULL").bind(clientId).run();
+    await audit(env, user, "AR_HOLD_CLEAR", "ar_client", clientId, undefined, undefined);
+    return json({ ok: true, cleared: true });
+  }
+  const kind = String(body.kind || "");
+  if (!["negotiation", "dispute", "opt_out", "ptp"].includes(kind)) return json({ error: "Invalid hold kind" }, 400);
+  if (kind === "ptp" && body.ptp_date) {
+    const today = istToday();
+    const days = daysBetweenIST(today, body.ptp_date);
+    if (Number.isNaN(days) || days < 0 || days > 60) return json({ error: "ptp_date must be within 60 days and not in the past" }, 400);
+  }
+  await env.DB.prepare("INSERT INTO reminder_holds (id,client_id,kind,ptp_date,set_by) VALUES (?,?,?,?,?)")
+    .bind(uid(), clientId, kind, kind === "ptp" ? (body.ptp_date || null) : null, user!.sub).run();
+  if (kind === "opt_out") await env.DB.prepare("UPDATE ar_clients SET dunning_opt_out=1 WHERE client_id=?").bind(clientId).run();
+  await audit(env, user, "AR_HOLD_SET", "ar_client", clientId, undefined, kind);
+  return json({ ok: true, kind });
 }
 
 async function handleZohoWebhook(request: Request, env: Env): Promise<Response> {
