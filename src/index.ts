@@ -3751,6 +3751,14 @@ export default {
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
 
+      // Phase 3 Finance — Receivables (003-finance-ar). Await the AR schema before
+      // any finance handler so a cold isolate never races the waitUntil self-heal.
+      if (path.startsWith("/api/finance/") || path==="/api/integrations/zoho-books/sync") await ensureArSchema(env);
+      if (path==="/api/finance/ar/invoices" && method==="GET") return handleArInvoices(request,env);
+      if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
+      if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
+      if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
+
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
       if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
       if (path==="/api/reports/brand-procurement"    && method==="GET") return handleRptBrandProcurement(request,env);
@@ -8343,6 +8351,102 @@ async function handleSaveSettings(request: Request, env: Env): Promise<Response>
 // Gap 4: ZOHO BOOKS WEBHOOK
 // ════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 3: AR read API + webhook AR-routing
+// ══════════════════════════════════════════════════════════════════════
+const FIN_FULL_ROLES = ["super_admin", "ops_admin", "finance_admin"];
+
+// Days-until-due for the "due this week" KPI (0..7 inclusive, not yet overdue).
+function _dueWithinDays(due: string, today: string, n: number): boolean {
+  const d = daysBetweenIST(today, due); // positive = due in the future
+  return d >= 0 && d <= n;
+}
+
+// GET /api/finance/ar/invoices — finance/ops only (clients use /ar/client/:id).
+async function handleArInvoices(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
+  const client = url.searchParams.get("client"); if (client) { where.push("client_id=?"); bind.push(client); }
+  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging");
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, client_id, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
+  ).bind(...bind).all();
+  let rows = (results || []) as Record<string, unknown>[];
+  if (aging) rows = rows.filter(r => r.age_bucket === aging);
+  return json({ invoices: rows });
+}
+
+// Per-currency AR summary + aging + DSO. finance/ops only.
+async function handleArSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json({ by_currency: await _arSummaryRows(env, null) });
+}
+
+// GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
+// client_* caller sees ONLY its own (403 on any other id) — per §15 IDOR rule.
+async function handleArClientStatement(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const full = FIN_FULL_ROLES.includes(user!.role);
+  const isClient = user!.role.startsWith("client_");
+  if (!full && !isClient) return json({ error: "Forbidden" }, 403);
+  if (isClient && id !== (user!.client_id || "")) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY due_date`
+  ).bind(id).all();
+  return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
+}
+
+// Shared per-currency aggregation. `clientId` null = all clients (finance view).
+async function _arSummaryRows(env: Env, clientId: string | null): Promise<Record<string, unknown>[]> {
+  const today = istToday();
+  const where = clientId ? "client_id=? AND status != 'void'" : "status != 'void'";
+  const bind = clientId ? [clientId] : [];
+  const { results } = await env.DB.prepare(
+    `SELECT currency_code, balance, total, due_date, date FROM ar_invoices WHERE ${where}`
+  ).bind(...bind).all();
+  const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
+  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _sales90: number }> = {};
+  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
+    const cur = r.currency_code || "INR";
+    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _sales90: 0 });
+    const bal = r.balance || 0;
+    if (bal > 0) {
+      a.outstanding += bal;
+      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+      a.buckets[bucket] += bal;
+      if (bucket !== "current") a.overdue += bal;
+      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    }
+    if (r.date && r.date >= cutoff90) a._sales90 += (r.total || 0);
+  }
+  return Object.values(acc).map(a => ({
+    currency: a.currency, outstanding: a.outstanding, overdue: a.overdue,
+    due_this_week: a.due_this_week, buckets: a.buckets,
+    dso: Math.round(computeDSO(a.outstanding, a._sales90) * 10) / 10,
+  }));
+}
+
+// POST /api/integrations/zoho-books/sync — manual mirror. finance/super only;
+// ships DISABLED (books_sync_enabled='0') → no-op, like the inventory rollout.
+async function handleBooksSync(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return json({ status: "disabled" });
+  const body = await request.json().catch(() => ({})) as { full?: boolean };
+  const result = await runBooksSync(env, { full: !!body.full });
+  return json(result);
+}
+
 async function handleZohoWebhook(request: Request, env: Env): Promise<Response> {
   const secret = request.headers.get("X-Zoho-Webhook-Secret");
   if (env.ZOHO_BOOKS_WEBHOOK_SECRET && secret !== env.ZOHO_BOOKS_WEBHOOK_SECRET) {
@@ -8351,13 +8455,22 @@ async function handleZohoWebhook(request: Request, env: Env): Promise<Response> 
   const body = await request.json() as Record<string,unknown>;
   const event = body.event_type as string;
 
+  // Customer-invoice payment → Accounts RECEIVABLE (never purchase_orders/AP).
+  // The webhook only flags + recomputes; the delta mirror carries the amounts.
   if (event === "invoice.payment_received") {
-    const invoiceId = (body.data as Record<string,string>)?.invoice_number;
-    if (invoiceId) {
-      await env.DB.prepare("UPDATE purchase_orders SET status='PAID',updated_at=datetime('now') WHERE id=?").bind(invoiceId).run();
-      await pushNotification(env, "finance_admin", `Payment received for invoice ${invoiceId} via Zoho Books`);
-      await audit(env, null, "ZOHO_PAYMENT", "purchase_order", invoiceId, "INVOICED", "PAID");
+    await ensureArSchema(env);
+    const d = (body.data as Record<string, unknown>) || {};
+    const invNo = String(d.invoice_number ?? "").trim();
+    const invId = String(d.invoice_id ?? "").trim();
+    const inv = await env.DB.prepare(
+      "SELECT id FROM ar_invoices WHERE (?<>'' AND id=?) OR (?<>'' AND number=?) LIMIT 1"
+    ).bind(invId, invId, invNo, invNo).first() as { id: string } | null;
+    if (inv) {
+      await recomputeArBalances(env);
+      await pushNotification(env, "finance_admin", `Payment received for invoice ${invNo || invId} (AR) via Zoho Books`);
+      await audit(env, null, "ZOHO_AR_PAYMENT", "ar_invoice", inv.id, undefined, "payment_received");
     }
+    // No matching AR invoice → safe no-op. There is no AP bill-payment webhook.
   }
   return json({ok:true});
 }

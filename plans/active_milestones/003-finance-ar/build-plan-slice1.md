@@ -97,11 +97,15 @@ merged by one agent), never dispatched to concurrent worktrees (plan-validation
       on an uncapped full pass. ✅ done.
 
 ### Group 3 — AR read API + cockpit (depends on Group 2)
-- [ ] **3.A AR read endpoints** — `/ar/invoices`, `/ar/summary`, `/ar/client/:id` with **forced
-      client scoping** (§15 IDOR).
-- [ ] **3.B Webhook fix** — branch `handleZohoWebhook` customer-vs-vendor; customer payment → AR.
-- [ ] **3.C Receivables SPA page** — KPI row, per-currency aging, drill to order/DC, unlinked panel.
-      New `public/app.11-finance.js` + nav wiring in `app.01-core.js` + `index.html` `?v=`.
+- [x] **3.A AR read endpoints** — `handleArInvoices`/`handleArSummary`/`handleArClientStatement`
+      (finance/super only for list+summary; client_* forced to own id, 403 no-data otherwise) +
+      `handleBooksSync` (super/finance, ships disabled). Awaited `ensureArSchema` guard. ✅ done.
+- [x] **3.B Webhook fix** — `handleZohoWebhook` `invoice.payment_received` now routes to AR (recompute
+      + notify) and NEVER touches `purchase_orders`; unknown invoice = safe no-op. ✅ done.
+- [x] **3.C Receivables SPA** — `public/app.16-finance.js` (`renderReceivables` cockpit +
+      `renderMyStatement` client view, per-currency KPIs/aging, `financeRefresh` global); `receivables`
+      wired into platform/ops/finance navs, `my_statement` into client/approver/client_user; PAGE_MAP
+      + `index.html` `?v=`. Smoke ACL green. ✅ done. *(Named app.16, not app.11 — 11 is taken.)*
 
 ### Group 4 — Gmail transport (depends on Group 1; parallel with Group 3)
 - [ ] **4.A Google SA JWT + token** — RS256 sign via `crypto.subtle`, exchange, **cache to expiry +

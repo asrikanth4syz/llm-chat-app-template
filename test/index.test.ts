@@ -3731,3 +3731,71 @@ describe("finance-ar/2.D runBooksSync orchestrator", () => {
     expect(r.status).toBe("not_configured");
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 3 (AR read API + webhook AR-routing)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ar/3.A AR read endpoints + IDOR scoping", () => {
+  beforeAll(async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    // Two clients' invoices — tst-client's client_id is 'c1'.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,amount_paid,credited,balance,currency_code,status,age_bucket) VALUES ('ai-c1','ai-c1','INV-C1','c1','2026-06-01','2026-06-30',100000,0,0,100000,'INR','open','1-30')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,amount_paid,credited,balance,currency_code,status,age_bucket) VALUES ('ai-c2','ai-c2','INV-C2','c2','2026-06-01','2026-06-30',200000,0,0,200000,'INR','open','1-30')").run();
+  });
+  it("finance/super can list all invoices; a client_* token is 403 on /ar/invoices", async () => {
+    expect((await get("/api/finance/ar/invoices", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ar/invoices", opsToken)).status).toBe(403);   // ops_manager is unprivileged in this app
+    expect((await get("/api/finance/ar/invoices", clientToken)).status).toBe(403);
+    const body = await (await get("/api/finance/ar/invoices", adminToken)).json() as { invoices: { id: string }[] };
+    expect(body.invoices.some(i => i.id === "ai-c1")).toBe(true);
+    expect(body.invoices.some(i => i.id === "ai-c2")).toBe(true);
+  });
+  it("a client sees ONLY its own statement and is 403 (no data) on another client's", async () => {
+    const own = await get("/api/finance/ar/client/c1", clientToken);
+    expect(own.status).toBe(200);
+    const ob = await own.json() as { invoices: { client_id?: string; id: string }[] };
+    expect(ob.invoices.every(i => i.id === "ai-c1")).toBe(true);   // only c1's invoice
+    const other = await get("/api/finance/ar/client/c2", clientToken);
+    expect(other.status).toBe(403);
+    const otherBody = await other.json() as { invoices?: unknown };
+    expect(otherBody.invoices).toBeUndefined();                    // no data leaked in the body
+  });
+  it("finance can read any client's statement; summary is per-currency with DSO", async () => {
+    expect((await get("/api/finance/ar/client/c2", adminToken)).status).toBe(200);
+    const sum = await (await get("/api/finance/ar/summary", adminToken)).json() as { by_currency: { currency: string; outstanding: number; dso: number }[] };
+    const inr = sum.by_currency.find(c => c.currency === "INR")!;
+    expect(inr).toBeTruthy();
+    expect(inr.outstanding).toBeGreaterThanOrEqual(300000);        // c1 + c2 outstanding
+    expect(typeof inr.dso).toBe("number");
+    expect((await get("/api/finance/ar/summary", clientToken)).status).toBe(403);
+  });
+});
+
+describe("finance-ar/3 books sync endpoint gating", () => {
+  it("is finance/super only and ships disabled (no-op)", async () => {
+    expect((await post("/api/integrations/zoho-books/sync", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/integrations/zoho-books/sync", {}, opsToken)).status).toBe(403); // sync is super/finance only
+    const res = await post("/api/integrations/zoho-books/sync", {}, adminToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { status: string }).status).toBe("disabled");
+  });
+});
+
+describe("finance-ar/3.B webhook routes customer payment to AR, not purchase_orders", () => {
+  it("a matching AR invoice is handled and the AP purchase_order is left untouched", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    // An AR invoice AND a same-id purchase_order (the exact collision the old bug hit).
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,due_date,total,balance,currency_code,status) VALUES ('INV-W','INV-W','INV-W','c1','2026-06-30',50000,50000,'INR','open')").run();
+    await db.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status) VALUES ('INV-W','v1','OPEN')").run();
+    const res = await post("/api/integrations/zoho/webhook", { event_type: "invoice.payment_received", data: { invoice_number: "INV-W" } });
+    expect(res.status).toBe(200);
+    const po = await db.prepare("SELECT status FROM purchase_orders WHERE id='INV-W'").first() as { status: string };
+    expect(po.status).toBe("OPEN"); // NOT flipped to PAID — the AP row is untouched
+  });
+  it("an unknown invoice is a safe no-op", async () => {
+    const res = await post("/api/integrations/zoho/webhook", { event_type: "invoice.payment_received", data: { invoice_number: "does-not-exist" } });
+    expect(res.status).toBe(200);
+  });
+});
