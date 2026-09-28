@@ -5,6 +5,11 @@ import {
   istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
   agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES, SEND_CRON,
 } from "../src/index";
+// Slice 1, Group 2 — Books mirror.
+import {
+  booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
+  mapBooksCreditNote, runBooksSync,
+} from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -3583,5 +3588,146 @@ describe("finance-ar/1.D schema self-heal", () => {
     const bf = await db.prepare("SELECT value FROM app_config WHERE key='initial_backfill_complete'").first() as { value: string } | null;
     expect(mode?.value).toBe("off");
     expect(bf?.value).toBe("0");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 2 (Zoho Books mirror)
+// ══════════════════════════════════════════════════════════════════════
+function booksEnv() {
+  return { ...(env as Record<string, unknown>), ZOHO_CLIENT_ID: "cid", ZOHO_CLIENT_SECRET: "sec",
+    ZOHO_REFRESH_TOKEN: "ref", ZOHO_BOOKS_ORG_ID: "borg", ZOHO_DC: "in" } as unknown as typeof env;
+}
+// Deterministic Books stand-in: token POST + /books/v3/<entity> GET. `data` maps
+// an entity name → its list of raw records (single page).
+function mockBooks(data: Record<string, Record<string, unknown>[]>) {
+  const calls: { url: string; method: string; headers: Record<string, string> }[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = typeof url === "string" ? url : (url as URL).toString();
+    calls.push({ url: u, method: (init?.method || "GET").toUpperCase(), headers: (init?.headers || {}) as Record<string, string> });
+    if (u.includes("/oauth/v2/token")) return new Response(JSON.stringify({ access_token: "tok-b", expires_in: 3600 }), { status: 200 });
+    const m = u.match(/\/books\/v3\/([a-z]+)\b/);
+    if (m) { const ent = m[1]; return new Response(JSON.stringify({ [ent]: data[ent] || [], page_context: { has_more_page: false, total: (data[ent] || []).length } }), { status: 200 }); }
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+describe("finance-ar/2.C Books entity mappers", () => {
+  it("mapBooksInvoice → paise, cycle_token, mirrored status", () => {
+    const m = mapBooksInvoice({ invoice_id: "inv1", invoice_number: "INV-1", customer_id: "cust1", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 180, total: 1180, currency_code: "INR", status: "partially_paid", exchange_rate: 1 });
+    expect("row" in m).toBe(true);
+    if (!("row" in m)) return;
+    expect(m.row.total).toBe(118000);
+    expect(m.row.gst).toBe(18000);
+    expect(m.row.status).toBe("partial");
+    expect(typeof m.row.cycle_token).toBe("string");
+    // cycle_token changes when total/due_date change (ladder restart on edit)
+    const m2 = mapBooksInvoice({ invoice_id: "inv1", due_date: "2026-06-30", total: 1181 });
+    if ("row" in m2) expect(m2.row.cycle_token).not.toBe(m.row.cycle_token);
+  });
+  it("mapBooksInvoice void + missing id", () => {
+    const v = mapBooksInvoice({ invoice_id: "inv2", total: 500, status: "void", due_date: "2026-01-01" });
+    if ("row" in v) expect(v.row.status).toBe("void");
+    expect("error" in mapBooksInvoice({ total: 5 })).toBe(true);
+  });
+  it("mapBooksPayment allocations satisfy Σ(applied)+unapplied == amount", () => {
+    const m = mapBooksPayment({ payment_id: "pay1", customer_id: "cust1", amount: 500, unused_amount: 100, date: "2026-07-01", invoices: [{ invoice_id: "inv1", amount_applied: 300 }, { invoice_id: "inv2", amount_applied: 100 }] });
+    expect("payment" in m).toBe(true);
+    if (!("payment" in m)) return;
+    const allocSum = m.allocations.reduce((n, a) => n + (a.amount as number), 0);
+    expect(allocSum + (m.payment.unapplied_amount as number)).toBe(m.payment.amount as number); // 30000+10000+10000 == 50000
+    expect(m.allocations.length).toBe(2);
+    expect(m.allocations[0].id).toBe("pay1:inv1");
+  });
+  it("mapBooksCreditNote on-account (no invoices) yields note, no allocations", () => {
+    const m = mapBooksCreditNote({ creditnote_id: "cn1", customer_id: "cust1", total: 250, date: "2026-07-02" });
+    if (!("note" in m)) throw new Error("expected note");
+    expect(m.note.amount).toBe(25000);
+    expect(m.allocations.length).toBe(0);
+  });
+  it("mapBooksContact reads credit_days and never sets dunning_opt_out", () => {
+    const m = mapBooksContact({ contact_id: "cust1", contact_name: "Acme", email: "a@acme.test", payment_terms: 30, currency_code: "INR" });
+    if (!("row" in m)) throw new Error("expected row");
+    expect(m.row.credit_days).toBe(30);
+    expect("dunning_opt_out" in m.row).toBe(false);
+  });
+});
+
+describe("finance-ar/2.B upsertMirror", () => {
+  it("inserts new, updates existing, and handles > 90 keys without a SQL-var error", async () => {
+    await ensureArSchema(env);
+    const rows = Array.from({ length: 100 }, (_, i) => ({ client_id: `um${i}`, name: `N${i}` }));
+    const a = await upsertMirror(env, "ar_clients", "client_id", rows);
+    expect(a.inserted).toBe(100);
+    const rows2 = rows.map(r => ({ ...r, name: `${r.name}-v2` }));
+    const b = await upsertMirror(env, "ar_clients", "client_id", rows2); // 100 keys → 2 chunks (90+10)
+    expect(b.updated).toBe(100);
+    const chk = await (env.DB as D1Database).prepare("SELECT name FROM ar_clients WHERE client_id='um50'").first() as { name: string };
+    expect(chk.name).toBe("N50-v2");
+  });
+  it("a partial payload never blanks an app-owned column (dunning_opt_out)", async () => {
+    await ensureArSchema(env);
+    await upsertMirror(env, "ar_clients", "client_id", [{ client_id: "cP", name: "Orig", dunning_opt_out: 1 }]);
+    const m = mapBooksContact({ contact_id: "cP", contact_name: "Renamed", email: "x@y.test" });
+    if (!("row" in m)) throw new Error("map failed");
+    await upsertMirror(env, "ar_clients", "client_id", [m.row]); // no dunning_opt_out in payload
+    const row = await (env.DB as D1Database).prepare("SELECT name, dunning_opt_out FROM ar_clients WHERE client_id='cP'").first() as { name: string; dunning_opt_out: number };
+    expect(row.dunning_opt_out).toBe(1); // preserved
+    expect(row.name).toBe("Renamed");   // updated
+  });
+});
+
+describe("finance-ar/2.A booksFetch", () => {
+  it("parses the entity array + page_context and sends If-Modified-Since when delta", async () => {
+    const { impl, calls } = mockBooks({ invoices: [{ invoice_id: "i1" }, { invoice_id: "i2" }] });
+    const res = await booksFetch(booksEnv(), "tok", "invoices", { page: 1, modifiedSinceEpoch: 1_700_000_000 }, impl);
+    expect(res.items.length).toBe(2);
+    expect(res.hasMore).toBe(false);
+    const invCall = calls.find(c => c.url.includes("/books/v3/invoices"))!;
+    expect(invCall.headers["If-Modified-Since"]).toBeTruthy();
+  });
+  it("retries a 429 then succeeds", async () => {
+    let n = 0;
+    const impl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/books/v3/contacts")) { n++; if (n === 1) return new Response("{}", { status: 429, headers: { "Retry-After": "0" } }); return new Response(JSON.stringify({ contacts: [{ contact_id: "c1" }], page_context: { has_more_page: false } }), { status: 200 }); }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const res = await booksFetch(booksEnv(), "tok", "contacts", { page: 1 }, impl);
+    expect(n).toBe(2);
+    expect(res.items.length).toBe(1);
+  });
+});
+
+describe("finance-ar/2.D runBooksSync orchestrator", () => {
+  it("mirrors contacts/invoices/payments/credit-notes and derives correct balances", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      contacts: [{ contact_id: "custA", contact_name: "Acme", email: "a@acme.test", payment_terms: 30 }],
+      invoices: [{ invoice_id: "invA", invoice_number: "INV-A", customer_id: "custA", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "sent" }],
+      creditnotes: [{ creditnote_id: "cnA", customer_id: "custA", total: 100, date: "2026-07-01", invoices_credited: [{ invoice_id: "invA", amount_applied: 100 }] }],
+      customerpayments: [{ payment_id: "payA", customer_id: "custA", amount: 400, unused_amount: 0, date: "2026-07-02", invoices: [{ invoice_id: "invA", amount_applied: 400 }] }],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    expect(r.invoices).toBe(1);
+    expect(r.backfill_complete).toBe(true);
+    const inv = await (env.DB as D1Database).prepare("SELECT total, amount_paid, credited, balance, status FROM ar_invoices WHERE id='invA'").first() as { total: number; amount_paid: number; credited: number; balance: number; status: string };
+    expect(inv.total).toBe(100000);       // ₹1000.00
+    expect(inv.amount_paid).toBe(40000);  // ₹400 applied
+    expect(inv.credited).toBe(10000);     // ₹100 credited
+    expect(inv.balance).toBe(50000);      // 100000 − 40000 − 10000
+    expect(inv.status).toBe("partial");
+    // backfill flag persisted; re-run is a no-op (no duplicate invoice rows)
+    await runBooksSync(booksEnv(), { full: true }, impl);
+    const cnt = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM ar_invoices WHERE id='invA'").first() as { n: number };
+    expect(cnt.n).toBe(1);
+    const bf = await (env.DB as D1Database).prepare("SELECT value FROM app_config WHERE key='initial_backfill_complete'").first() as { value: string };
+    expect(bf.value).toBe("1");
+  });
+  it("returns not_configured when Books org id is absent", async () => {
+    const r = await runBooksSync(env, { full: true }, (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch);
+    expect(r.status).toBe("not_configured");
   });
 });

@@ -85,14 +85,16 @@ merged by one agent), never dispatched to concurrent worktrees (plan-validation
       audit-column ALTERs + config defaults), invoked from `ensureFeatureTables`. ✅ done.
 
 ### Group 2 — Books client + mirror (depends on 1.B/1.C/1.D)
-- [ ] **2.A Books fetch client** — `booksFetch(entity,{page,modifiedSince})` generalising
-      `zohoFetchPage`; `MAX_PAGES_PER_RUN`, 429/5xx backoff. Injectable for tests.
-- [ ] **2.B Generic idempotent mirror upsert** — keyed on `zoho_*_id`, existing-id lookup chunked by
-      `D1_IN_CHUNK=90`; never blanks on partial payload; stamps `zoho_synced_at`.
-- [ ] **2.C Entity mappers** — invoices, customerpayments (+applied lines → `fin_allocations`),
-      creditnotes (+allocations), contacts (→`ar_clients`, `dunning_opt_out` app-owned/preserved).
-- [ ] **2.D Sync orchestrator** — order contacts→invoices→creditnotes→payments; per-entity watermark;
-      derive balances only after all streams complete; set `initial_backfill_complete` when caught up.
+- [x] **2.A Books fetch client** — `booksFetch` generalising `zohoFetchPage`; `MAX_PAGES_PER_RUN`,
+      429/5xx backoff, `If-Modified-Since`, injectable. ✅ done.
+- [x] **2.B Generic idempotent mirror upsert** — `upsertMirror`, chunked by `D1_IN_CHUNK=90`; never
+      blanks on partial payload (preserves `dunning_opt_out`); stamps `zoho_synced_at`. ✅ done.
+- [x] **2.C Entity mappers** — `mapBooksInvoice` (paise + `cycle_token` + mirrored status),
+      `mapBooksPayment` (+allocations, Σ+unapplied=amount), `mapBooksCreditNote` (+on-account),
+      `mapBooksContact` (`credit_days`, no `dunning_opt_out`). ✅ done.
+- [x] **2.D Sync orchestrator** — `runBooksSync` order contacts→invoices→creditnotes→payments;
+      per-entity watermark; `recomputeArBalances` derives balance/status/age; backfill flag flips only
+      on an uncapped full pass. ✅ done.
 
 ### Group 3 — AR read API + cockpit (depends on Group 2)
 - [ ] **3.A AR read endpoints** — `/ar/invoices`, `/ar/summary`, `/ar/client/:id` with **forced

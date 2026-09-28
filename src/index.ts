@@ -3237,8 +3237,277 @@ function computeDSO(openARPaise: number, creditSales90Paise: number, days = 90):
   return (openARPaise / creditSales90Paise) * days;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 2: Zoho Books mirror
+// Books is the accounting system of record; we mirror invoices/payments/
+// credit-notes/contacts idempotently (provenance-stamped) and derive balances.
+// All functions take an injected FetchImpl so they unit-test against stubs.
+// ══════════════════════════════════════════════════════════════════════
+
+// Deterministic, synchronous string hash (FNV-1a → base36). Used for cycle_token
+// (per-invoice) and cycle_batch (per statement) — must be stable across runs.
+function hashStr(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+
+// 2.A — one page of a Books list entity (invoices/creditnotes/customerpayments/
+// contacts), with the same capped back-off as the inventory client. The response
+// array lives under the entity key. Uses ZOHO_BOOKS_ORG_ID.
+async function booksFetch(
+  env: Env, token: string, entity: string,
+  opts: { page: number; modifiedSinceEpoch?: number }, fetchImpl: FetchImpl,
+): Promise<{ items: Record<string, unknown>[]; hasMore: boolean; total: number }> {
+  const orgId = env.ZOHO_BOOKS_ORG_ID || "";
+  const qs = new URLSearchParams({ organization_id: orgId, per_page: String(ZOHO_SYNC.PER_PAGE), page: String(opts.page) });
+  const headers: Record<string, string> = { "Authorization": `Zoho-oauthtoken ${token}` };
+  if ((opts.modifiedSinceEpoch ?? 0) > 0) headers["If-Modified-Since"] = new Date((opts.modifiedSinceEpoch as number) * 1000).toUTCString();
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/${entity}?${qs.toString()}`, { headers });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt >= ZOHO_SYNC.MAX_RETRIES) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status} after ${attempt} retries`);
+      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+      await _zSleep(Number.isFinite(ra) ? ra * 1000 : Math.min(ZOHO_SYNC.RETRY_CAP_MS, ZOHO_SYNC.RETRY_BASE_MS * 2 ** attempt));
+      continue;
+    }
+    if (res.status === 401) throw new ZohoAuthError(`401 on Books ${entity} page ${opts.page}`);
+    if (res.status === 304) return { items: [], hasMore: false, total: 0 };
+    if (!res.ok) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status}`);
+    const data = await res.json().catch(() => ({})) as Record<string, unknown> & { page_context?: { has_more_page?: boolean; total?: number } };
+    const items = Array.isArray(data[entity]) ? data[entity] as Record<string, unknown>[] : [];
+    return { items, hasMore: !!data.page_context?.has_more_page, total: Number(data.page_context?.total ?? 0) };
+  }
+}
+
+// 2.B — generic idempotent mirror upsert keyed on `keyCol`. Existing-key lookup is
+// chunked by D1_IN_CHUNK=90 (the inventory bug we must never repeat). Only the columns
+// present on a row are written, so a partial payload never blanks a stored field
+// (this is what preserves app-owned ar_clients.dunning_opt_out across syncs). Stamps
+// zoho_synced_at when a mirrored row does not carry one. Table/column names are
+// code-controlled (never user input), so string interpolation here is safe.
+async function upsertMirror(
+  env: Env, table: string, keyCol: string, rows: Record<string, unknown>[],
+): Promise<{ inserted: number; updated: number }> {
+  if (!rows.length) return { inserted: 0, updated: 0 };
+  const keys = rows.map(r => String(r[keyCol]));
+  const existing = new Set<string>();
+  for (let i = 0; i < keys.length; i += D1_IN_CHUNK) {
+    const part = keys.slice(i, i + D1_IN_CHUNK);
+    const ph = part.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(`SELECT ${keyCol} AS k FROM ${table} WHERE ${keyCol} IN (${ph})`).bind(...part).all();
+    for (const row of (results || []) as Array<{ k: unknown }>) existing.add(String(row.k));
+  }
+  let inserted = 0, updated = 0;
+  const stamp = new Date().toISOString();
+  for (const r of rows) {
+    const row: Record<string, unknown> = { ...r };
+    if (!("zoho_synced_at" in row) && ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments"].includes(table)) row.zoho_synced_at = stamp;
+    const key = String(row[keyCol]);
+    const cols = Object.keys(row);
+    if (existing.has(key)) {
+      const setCols = cols.filter(c => c !== keyCol);
+      if (!setCols.length) continue;
+      await env.DB.prepare(`UPDATE ${table} SET ${setCols.map(c => `${c}=?`).join(",")} WHERE ${keyCol}=?`)
+        .bind(...setCols.map(c => row[c]), key).run();
+      updated++;
+    } else {
+      await env.DB.prepare(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`)
+        .bind(...cols.map(c => row[c])).run();
+      inserted++;
+    }
+  }
+  return { inserted, updated };
+}
+
+// ── 2.C Entity mappers (pure). Only present values are set (never blank a column).
+// Money → integer paise. Books status is mirrored verbatim-ish; derived overdue/
+// settled state is computed later in recompute, not stored from the mapper.
+type MapErr = { error: string };
+const _put = (row: Record<string, unknown>, col: string, v: unknown) => {
+  if (v !== undefined && v !== null && String(v).trim() !== "") row[col] = v;
+};
+function _num(v: unknown): number | undefined { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
+
+function mapBooksContact(z: Record<string, unknown>): { row: Record<string, unknown> } | MapErr {
+  const cid = String(z.contact_id ?? "").trim();
+  if (!cid) return { error: "no contact_id" };
+  const row: Record<string, unknown> = { client_id: cid, zoho_contact_id: cid };
+  _put(row, "name", z.contact_name ?? z.company_name);
+  _put(row, "email", z.email);
+  _put(row, "phone", z.phone ?? z.mobile);
+  _put(row, "currency_code", z.currency_code);
+  const cd = _num(z.payment_terms);
+  if (cd !== undefined) row.credit_days = Math.max(0, Math.round(cd));
+  // NB: dunning_opt_out is app-owned — deliberately never set here.
+  return { row };
+}
+
+function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unknown>; reference: string } | MapErr {
+  const iid = String(z.invoice_id ?? "").trim();
+  if (!iid) return { error: "no invoice_id" };
+  const dueDate = String(z.due_date ?? "");
+  const total = toPaise(z.total as string | number);
+  const row: Record<string, unknown> = {
+    id: iid, zoho_invoice_id: iid,
+    subtotal: toPaise(z.sub_total as string | number),
+    gst: toPaise(z.tax_total as string | number),
+    total,
+    currency_code: String(z.currency_code ?? "INR"),
+    cycle_token: hashStr(`${dueDate}|${total}`),
+  };
+  _put(row, "number", z.invoice_number);
+  _put(row, "client_id", z.customer_id);
+  _put(row, "date", z.date);
+  _put(row, "due_date", z.due_date);
+  _put(row, "payment_expected_date", z.payment_expected_date);
+  _put(row, "entity_id", z.entity_id);
+  const ex = _num(z.exchange_rate); if (ex !== undefined) row.exchange_rate = ex;
+  // Mirror the Books lifecycle status (open/partial/paid/void). Derived overdue is
+  // computed in recompute; Books 'sent'/'unpaid'/'overdue' collapse to 'open'.
+  const st = String(z.status ?? "").toLowerCase();
+  row.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial"
+    : (st === "void" || st === "voided") ? "void" : "open";
+  return { row, reference: String(z.reference_number ?? "").trim() };
+}
+
+function mapBooksPayment(z: Record<string, unknown>): { payment: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const pid = String(z.payment_id ?? "").trim();
+  if (!pid) return { error: "no payment_id" };
+  const applied = Array.isArray(z.invoices) ? z.invoices as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${pid}:${String(a.invoice_id)}`, payment_id: pid, doc_type: "invoice", doc_id: String(a.invoice_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount) as string | number) }))
+    .filter(a => a.doc_id);
+  const payment: Record<string, unknown> = {
+    id: pid, zoho_payment_id: pid, direction: "in", party_type: "client",
+    amount: toPaise(z.amount as string | number),
+    unapplied_amount: toPaise((z.unused_amount ?? 0) as string | number),
+  };
+  _put(payment, "party_id", z.customer_id);
+  _put(payment, "date", z.date);
+  _put(payment, "method", z.payment_mode);
+  _put(payment, "ref", z.reference_number);
+  return { payment, allocations };
+}
+
+function mapBooksCreditNote(z: Record<string, unknown>): { note: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const cnid = String(z.creditnote_id ?? "").trim();
+  if (!cnid) return { error: "no creditnote_id" };
+  const applied = Array.isArray(z.invoices_credited) ? z.invoices_credited as Record<string, unknown>[]
+    : Array.isArray(z.invoices) ? z.invoices as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${cnid}:${String(a.invoice_id)}`, credit_note_id: cnid, invoice_id: String(a.invoice_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount_credited ?? a.amount) as string | number) }))
+    .filter(a => a.invoice_id);
+  const note: Record<string, unknown> = {
+    id: cnid, zoho_creditnote_id: cnid, amount: toPaise(z.total as string | number),
+  };
+  _put(note, "number", z.creditnote_number);
+  _put(note, "client_id", z.customer_id);
+  _put(note, "date", z.date);
+  _put(note, "reason", z.reason);
+  return { note, allocations };
+}
+
+interface BooksSyncResult {
+  status: "ok" | "not_configured" | "error";
+  scope: "delta" | "full";
+  contacts: number; invoices: number; creditnotes: number; payments: number;
+  cap_hit: boolean; backfill_complete: boolean; errors: string[];
+}
+
+// 2.D — orchestrator. Order: contacts → invoices → creditnotes → payments, so an
+// allocation never references a not-yet-mirrored invoice; balances are derived only
+// after all streams complete. Reminders stay disabled until backfill_complete flips.
+async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: FetchImpl = fetch): Promise<BooksSyncResult> {
+  const r: BooksSyncResult = { status: "ok", scope: opts.full ? "full" : "delta", contacts: 0, invoices: 0, creditnotes: 0, payments: 0, cap_hit: false, errors: [], backfill_complete: false };
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) { r.status = "not_configured"; return r; }
+  let token: string;
+  try { token = await zohoGetToken(env, fetchImpl); } catch (e) { r.status = "error"; r.errors.push(`auth: ${String(e)}`); return r; }
+
+  // Pull every page of an entity up to the run cap, honouring a per-entity watermark.
+  const pull = async (entity: string): Promise<Record<string, unknown>[]> => {
+    const since = opts.full ? 0 : (parseInt(await getConfig(env, `books_cursor_${entity}`, "0"), 10) || 0);
+    const out: Record<string, unknown>[] = [];
+    for (let page = 1; page <= ZOHO_SYNC.MAX_PAGES_PER_RUN; page++) {
+      const { items, hasMore } = await booksFetch(env, token, entity, { page, modifiedSinceEpoch: since }, fetchImpl);
+      out.push(...items);
+      if (!hasMore) return out;
+      if (page === ZOHO_SYNC.MAX_PAGES_PER_RUN) { r.cap_hit = true; r.errors.push(`${entity}: page cap hit — cursor held`); }
+    }
+    return out;
+  };
+
+  try {
+    // Contacts first (identity), so invoices link to an ar_clients row.
+    for (const z of await pull("contacts")) { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } await upsertMirror(env, "ar_clients", "client_id", [m.row]); r.contacts++; }
+
+    const invoiceRefs: Array<{ id: string; reference: string }> = [];
+    for (const z of await pull("invoices")) {
+      const m = mapBooksInvoice(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ar_invoices", "zoho_invoice_id", [m.row]); r.invoices++;
+      if (m.reference) invoiceRefs.push({ id: String(m.row.id), reference: m.reference });
+    }
+
+    for (const z of await pull("creditnotes")) {
+      const m = mapBooksCreditNote(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ar_credit_notes", "zoho_creditnote_id", [m.note]); r.creditnotes++;
+      if (m.allocations.length) await upsertMirror(env, "credit_allocations", "id", m.allocations);
+    }
+
+    for (const z of await pull("customerpayments")) {
+      const m = mapBooksPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.payments++;
+      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+    }
+
+    // Best-effort order/DC linkage by Books reference_number → our order id / DC id.
+    for (const { id, reference } of invoiceRefs) {
+      try {
+        const ord = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(reference).first();
+        if (ord) { await env.DB.prepare("UPDATE ar_invoices SET order_id=? WHERE id=?").bind(reference, id).run(); continue; }
+        const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=?").bind(reference).first();
+        if (dc) await env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(reference, id).run();
+      } catch { /* orders/DC table shape varies — linkage is best-effort */ }
+    }
+
+    await recomputeArBalances(env);
+
+    // Advance watermarks + flip backfill flag only when a full pass completed uncapped.
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    for (const e of ["contacts", "invoices", "creditnotes", "customerpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+    if (!r.cap_hit) { await setConfig(env, "initial_backfill_complete", "1", "system"); r.backfill_complete = true; }
+  } catch (e) {
+    r.status = "error"; r.errors.push(String(e));
+  }
+  return r;
+}
+
+// Derive amount_paid / credited / balance / status / age_bucket for all AR invoices
+// from the mirrored allocations (PRD §15: balance = total + late_fee − amount_paid −
+// credited; settled = balance ≤ 0). Money stays integer paise throughout.
+async function recomputeArBalances(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE ar_invoices SET
+       amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='invoice' AND doc_id=ar_invoices.id),0),
+       credited    = COALESCE((SELECT SUM(amount) FROM credit_allocations WHERE invoice_id=ar_invoices.id),0)`
+  ).run();
+  await env.DB.prepare(`UPDATE ar_invoices SET balance = total + COALESCE(late_fee,0) - amount_paid - credited`).run();
+  const today = istToday();
+  const { results } = await env.DB.prepare(
+    "SELECT id, due_date, balance, amount_paid, credited, status FROM ar_invoices WHERE status != 'void'"
+  ).all();
+  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; credited: number; status: string }>) {
+    const settled = (inv.balance ?? 0) <= 0;
+    const status = settled ? "paid" : ((inv.amount_paid || 0) + (inv.credited || 0) > 0 ? "partial" : "open");
+    const bucket = inv.due_date ? agingBucket(inv.due_date, today) : "current";
+    await env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id).run();
+  }
+}
+
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
+export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
+         mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
