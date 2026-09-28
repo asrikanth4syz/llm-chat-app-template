@@ -27,5 +27,7 @@
     queue, and reminders/dunning on the existing cron + notification + email infra. AR first, then
     AP, then reconciliation + dunning + finance dashboard. No in-app GL/GST-filing (Books owns it).
   - *Moniker:* `003-finance-ar`
+  - *PRD:* `plans/active_milestones/003-finance-ar/PRD-receivables-reminders.md` (AR + Payment
+    Reminders — first shippable slice, reminder-first)
   - *Plan:* `plans/active_milestones/003-finance-ar/plan.md`
   - *Context:* `plans/active_milestones/003-finance-ar/context.md`
