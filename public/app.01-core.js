@@ -192,6 +192,8 @@ const NAV = {
     { id:'receivables',     label:'Receivables',      icon:iconBilling,  badge:null },
     { id:'payables',        label:'Payables',         icon:iconWallet,   badge:null },
     { id:'reminders',       label:'Payment Reminders',icon:iconMail,     badge:null },
+    { id:'reconciliation',  label:'Reconciliation',   icon:iconFlow,     badge:null },
+    { id:'finance_dashboard',label:'Finance Dashboard',icon:iconPie,     badge:null },
     { id:'dunning',         label:'Dunning',          icon:iconMail,     badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconWallet,   badge:null },
     { section:'Reports & Insights' },
@@ -225,6 +227,8 @@ const NAV = {
     { id:'receivables',         label:'Receivables',      icon:iconBilling,   badge:null },
     { id:'payables',            label:'Payables',         icon:iconWallet,    badge:null },
     { id:'reminders',           label:'Payment Reminders',icon:iconBell,      badge:null },
+    { id:'reconciliation',      label:'Reconciliation',   icon:iconFlow,      badge:null },
+    { id:'finance_dashboard',   label:'Finance Dashboard',icon:iconPie,       badge:null },
     { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconHeadset,   badge:null },
     { section:'Alerts & Exceptions' },
@@ -274,7 +278,9 @@ const NAV = {
     { id:'receivables', label:'Receivables',   icon:iconBilling,   badge:null },
     { id:'payables',    label:'Payables',      icon:iconWallet,    badge:null },
     { id:'reminders',   label:'Payment Reminders', icon:iconMail,  badge:null },
+    { id:'reconciliation', label:'Reconciliation', icon:iconFlow,  badge:null },
     { section:'Reports & Insights' },
+    { id:'finance_dashboard', label:'Finance Dashboard', icon:iconPie, badge:null },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
   ],
   client: [
@@ -1080,6 +1086,8 @@ const PAGE_MAP = {
   receivables: 'renderReceivables',
   payables: 'renderPayables',
   reminders: 'renderReminders',
+  reconciliation: 'renderReconciliation',
+  finance_dashboard: 'renderFinanceDashboard',
   my_statement: 'renderMyStatement',
 };
 

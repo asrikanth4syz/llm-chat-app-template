@@ -88,7 +88,7 @@ read; unit-tested in isolation.
 - UI "Payables" page: what's due when, per-vendor aging, debit-note offsets, "pay before due" flags.
 - Tests mirror P3.1.
 
-## Milestone P3.3 — Reconciliation engine
+## Milestone P3.3 — Reconciliation engine  ← BUILT (green; exception queue + resolve)
 
 - **AR 3-way:** order/DC ↔ `ar_invoice` ↔ payment. **AP 3-way:** PO ↔ receipt(DC-in/GRN) ↔
   `ap_bill` ↔ payment.
@@ -110,7 +110,7 @@ read; unit-tested in isolation.
   `/api/finance/reminders/log` (GET).
 - Tests: tier progression, no double-send in a window, opt-out respected.
 
-## Milestone P3.5 — Finance dashboard & reports
+## Milestone P3.5 — Finance dashboard & reports  ← BUILT (green; AR/AP + cash + top debtors/creditors)
 
 - One dashboard: AR vs AP aging, cash position (in − out projected by due date), top debtors/
   creditors, DSO/DPO trend, GST payable/ITC summary (values surfaced from Books, not computed).

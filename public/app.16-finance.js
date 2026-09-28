@@ -23,8 +23,9 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 function financeRefresh() {
   const main = document.getElementById('main-content');
   if (!main) return;
-  if (APP.page === 'my_statement') renderMyStatement(main);
-  else renderReceivables(main);
+  const fn = { my_statement: renderMyStatement, payables: renderPayables, reminders: renderReminders,
+    reconciliation: renderReconciliation, finance_dashboard: renderFinanceDashboard }[APP.page] || renderReceivables;
+  fn(main);
 }
 
 // One per-currency KPI + aging block.
@@ -147,6 +148,69 @@ async function renderPayables(main) {
         <th style="padding:8px 12px;text-align:right">Total</th><th style="padding:8px 12px;text-align:right">Balance</th>
         <th style="padding:8px 12px">Status</th><th style="padding:8px 12px">Aging</th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : `<div class="card" style="padding:20px;color:var(--muted)">No open bills.</div>`}`;
+}
+
+// ── Reconciliation (finance/ops): exception worklist ───────────────────
+async function renderReconciliation(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading exceptions…</p></div>`;
+  const data = await api('/finance/reconcile/exceptions');
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load reconciliation.</div>`; return; }
+  const ex = data.exceptions || [];
+  const rows = ex.map(e => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:8px 12px">${h(e.kind === 'ar_3way' ? 'AR' : 'AP')}</td>
+    <td style="padding:8px 12px">${h(e.left_type)} ${h(e.left_id)}</td>
+    <td style="padding:8px 12px">${h(e.variance_reason || '')}</td>
+    <td style="padding:8px 12px;text-align:right">${e.variance_amount ? _fmtPaise(e.variance_amount) : '—'}</td>
+    <td style="padding:8px 12px"><button class="btn btn-secondary" ${dataAct('financeResolveException', e.id)}>Resolve</button></td></tr>`).join('');
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0">Reconciliation</h2>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" ${dataAct('financeRunReconcile')}>Run reconciliation</button>
+        <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div></div>
+    <h3 style="margin:0 0 10px">Exceptions (${ex.length})</h3>
+    ${ex.length ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+        <th style="padding:8px 12px">Ledger</th><th style="padding:8px 12px">Document</th><th style="padding:8px 12px">Reason</th>
+        <th style="padding:8px 12px;text-align:right">Variance</th><th style="padding:8px 12px"></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<div class="card" style="padding:20px;color:var(--muted)">No open exceptions. Run reconciliation to refresh.</div>`}`;
+}
+async function financeRunReconcile() {
+  const r = await api('/finance/reconcile/run', { method: 'POST', body: JSON.stringify({}) });
+  if (r) { showToast(`Reconciliation: ${r.total} exception(s) (AR ${r.ar_exceptions}, AP ${r.ap_exceptions})`, 'info'); renderReconciliation(document.getElementById('main-content')); }
+}
+async function financeResolveException(id) {
+  const note = prompt('Resolution note (optional):') ?? '';
+  const r = await api(`/finance/reconcile/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ note }) });
+  if (r) { showToast('Exception resolved', 'success'); renderReconciliation(document.getElementById('main-content')); }
+}
+
+// ── Finance dashboard (finance/ops): AR vs AP + cash position ──────────
+async function renderFinanceDashboard(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading finance dashboard…</p></div>`;
+  const d = await api('/finance/dashboard');
+  if (!d) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load dashboard.</div>`; return; }
+  const cashCards = (d.cash || []).map(c => `
+    <div class="card" style="flex:1;min-width:200px;padding:16px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Net position (${h(c.currency)})</div>
+      <div style="font-size:1.5rem;font-weight:600;margin-top:4px;color:${c.net >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${h(_fmtPaise(c.net, c.currency))}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">AR ${h(_fmtPaise(c.ar, c.currency))} · AP ${h(_fmtPaise(c.ap, c.currency))}</div>
+    </div>`).join('');
+  const list = (title, rows, idKey) => `<div class="card" style="flex:1;min-width:260px;padding:0;overflow-x:auto">
+    <div style="padding:10px 14px;font-weight:600;border-bottom:1px solid var(--border)">${h(title)}</div>
+    ${(rows || []).length ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)"><td style="padding:8px 12px">${h(r[idKey] || '')}</td><td style="padding:8px 12px;text-align:right">${h(_fmtPaise(r.bal, r.currency_code))}</td></tr>`).join('')}</tbody></table>` : `<div style="padding:16px;color:var(--muted)">None</div>`}
+  </div>`;
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0">Finance Dashboard</h2>
+      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">${cashCards || '<div class="card" style="padding:16px;color:var(--muted)">No balances yet.</div>'}</div>
+    <div class="card" style="padding:12px 16px;margin:8px 0 16px">Open reconciliation exceptions: <strong>${h(String(d.open_exceptions || 0))}</strong></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${list('Top Debtors (AR)', d.top_debtors, 'client_id')}
+      ${list('Top Creditors (AP)', d.top_creditors, 'vendor_id')}
+    </div>`;
 }
 
 // ── Reminders (finance/ops): follow-up-due worklist + run log ──────────

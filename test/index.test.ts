@@ -17,6 +17,8 @@ import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } fr
 import { hashStr } from "../src/index";
 // P3.2 — Payables (AP).
 import { mapBooksBill, mapBooksVendorPayment } from "../src/index";
+// P3.3 — Reconciliation.
+import { runReconciliation } from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -4153,5 +4155,47 @@ describe("finance-ap/read endpoints — finance-only, never client", () => {
     const inr = sum.by_currency.find(c => c.currency === "INR")!;
     expect(inr.outstanding).toBeGreaterThanOrEqual(100000);
     expect(typeof inr.dpo).toBe("number");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — P3.3 Reconciliation + P3.5 Dashboard
+// ══════════════════════════════════════════════════════════════════════
+describe("finance/3way reconciliation", () => {
+  it("flags unlinked + overpaid AR/AP; a manual resolution is not re-flagged", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("DELETE FROM reconciliations").run();
+    await db.prepare("DELETE FROM ar_invoices WHERE client_id='rc'").run();
+    await db.prepare("DELETE FROM ap_bills WHERE vendor_id='rv'").run();
+    // Unlinked AR invoice (no order/dc), plus an overpaid, linked one.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,total,amount_paid,credited,balance,status) VALUES ('rc-un','rc',100000,0,0,100000,'open')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,order_id,total,amount_paid,credited,balance,status) VALUES ('rc-over','rc','o1',100000,120000,0,-20000,'paid')").run();
+    // Unlinked AP bill (no PO).
+    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,vendor_id,total,amount_paid,balance,status) VALUES ('rv-un','rv',50000,0,50000,'open')").run();
+    const r = await runReconciliation(env);
+    expect(r.ar_exceptions).toBeGreaterThanOrEqual(2); // unlinked + overpayment
+    expect(r.ap_exceptions).toBeGreaterThanOrEqual(1); // unlinked bill
+    // Resolve the unlinked AR exception, then re-run: it must not reappear.
+    const exRow = await db.prepare("SELECT id FROM reconciliations WHERE left_id='rc-un' AND status='exception' LIMIT 1").first() as { id: string };
+    await db.prepare("UPDATE reconciliations SET status='manual', matched_by='tester' WHERE id=?").bind(exRow.id).run();
+    const r2 = await runReconciliation(env);
+    const stillThere = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-un' AND status='exception'").first() as { n: number };
+    expect(stillThere.n).toBe(0);       // resolved → suppressed
+    expect(r2.total).toBeGreaterThanOrEqual(2); // the others still flagged
+  });
+  it("endpoints: run/resolve are super/finance, exceptions/dashboard finance-only", async () => {
+    expect((await post("/api/finance/reconcile/run", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/run", {}, opsToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/run", {}, adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reconcile/exceptions", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reconcile/exceptions", clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/does-not-exist/resolve", { note: "x" }, adminToken)).status).toBe(404);
+    const dash = await get("/api/finance/dashboard", adminToken);
+    expect(dash.status).toBe(200);
+    const body = await dash.json() as { cash: unknown[]; open_exceptions: number };
+    expect(Array.isArray(body.cash)).toBe(true);
+    expect(typeof body.open_exceptions).toBe("number");
+    expect((await get("/api/finance/dashboard", clientToken)).status).toBe(403);
   });
 });

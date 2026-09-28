@@ -20,9 +20,11 @@
   - *Spec:* `plans/active_milestones/002-zoho-inventory-sync/spec.md`
   - *Context:* `plans/active_milestones/002-zoho-inventory-sync/context.md`
 
-- [ ] **Milestone 3: Phase 3 — Finance (Receivables & Payables)** — STATUS: IN PROGRESS
-  (Slice 1 built + green, ships inert: AR mirror + Gmail transport + consolidated dunning;
-  awaiting secrets + live enablement. AP / reconciliation / dashboard still to come.)
+- [ ] **Milestone 3: Phase 3 — Finance (Receivables & Payables)** — STATUS: BUILT (awaiting live rollout)
+  All slices built + green, ship inert: AR mirror + consolidated dunning (Gmail transport), AP mirror,
+  3-way reconciliation exception queue, and the finance dashboard. Awaiting Worker secrets + enabling
+  `books_sync_enabled`/`reminders_mode`. Deferred (own follow-ups): WhatsApp/SMS channels,
+  open-tracking + bounce scan, Pay-Now gateway, in-app late-fee computation.
   - *Description:* AP/AR cockpit over Zoho Books as the accounting system of record. App mirrors
     invoices/bills/payments from Books (idempotent, provenance-stamped like inventory) and adds the
     operational overlay Books lacks: order/DC/PO linkage, aging buckets, a reconciliation/exception

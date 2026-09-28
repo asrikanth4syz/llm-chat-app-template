@@ -2795,6 +2795,9 @@ async function ensureArSchema(env: Env): Promise<void> {
     // reuse fin_payments(direction='out') + fin_allocations(doc_type='bill').
     `CREATE TABLE IF NOT EXISTS ap_vendors ( vendor_id TEXT PRIMARY KEY, zoho_vendor_id TEXT, name TEXT, email TEXT, currency_code TEXT DEFAULT 'INR', zoho_synced_at TEXT );`,
     `CREATE TABLE IF NOT EXISTS ap_bills ( id TEXT PRIMARY KEY, zoho_bill_id TEXT, number TEXT, vendor_id TEXT, po_id TEXT, date TEXT, due_date TEXT, subtotal INTEGER DEFAULT 0, gst INTEGER DEFAULT 0, total INTEGER DEFAULT 0, amount_paid INTEGER DEFAULT 0, balance INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', exchange_rate REAL DEFAULT 1, status TEXT DEFAULT 'open', age_bucket TEXT, cycle_token TEXT, zoho_synced_at TEXT );`,
+    // Reconciliation (P3.3): exception queue. Auto rows (status='exception') are
+    // recomputed each run; manual resolutions (status='manual') are preserved.
+    `CREATE TABLE IF NOT EXISTS reconciliations ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, left_type TEXT, left_id TEXT, right_type TEXT, right_id TEXT, status TEXT NOT NULL DEFAULT 'exception', variance_amount INTEGER DEFAULT 0, variance_reason TEXT, matched_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Guarded column adds — for a DB whose reminder_runs predates the audit columns
   // (idempotent; "duplicate column" is swallowed). Never rely on CREATE to add these.
@@ -3909,7 +3912,7 @@ export { gmailGetToken, gmailSend, gmailMissingSecrets };
 export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
-export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances };
+export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
@@ -4171,6 +4174,10 @@ export default {
       if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
       if (path==="/api/finance/ap/summary"  && method==="GET") return handleApSummary(request,env);
       if (path.match(/^\/api\/finance\/ap\/vendor\/[^/]+$/) && method==="GET") return handleApVendorStatement(request,env,path);
+      if (path==="/api/finance/reconcile/run"       && method==="POST") return handleReconcileRun(request,env);
+      if (path==="/api/finance/reconcile/exceptions"&& method==="GET")  return handleReconcileExceptions(request,env);
+      if (path.match(/^\/api\/finance\/reconcile\/[^/]+\/resolve$/) && method==="POST") return handleReconcileResolve(request,env,path);
+      if (path==="/api/finance/dashboard"           && method==="GET")  return handleFinanceDashboard(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -8911,6 +8918,85 @@ async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record
     currency: a.currency, outstanding: a.outstanding, overdue: a.overdue, due_this_week: a.due_this_week,
     buckets: a.buckets, dpo: Math.round(computeDSO(a.outstanding, a._purch90) * 10) / 10,
   }));
+}
+
+// ── Reconciliation engine (P3.3) ───────────────────────────────────────
+// Auto-detect exceptions across the AR (order/DC ↔ invoice ↔ payment) and AP
+// (PO ↔ bill ↔ payment) chains. Recomputes 'exception' rows each run; a manual
+// resolution for the same doc+reason suppresses re-flagging.
+interface ReconResult { ar_exceptions: number; ap_exceptions: number; total: number; }
+async function runReconciliation(env: Env): Promise<ReconResult> {
+  await ensureArSchema(env);
+  // Preserve manual resolutions; clear the previous auto pass.
+  await env.DB.prepare("DELETE FROM reconciliations WHERE status='exception'").run();
+  const resolved = new Set<string>();
+  for (const m of (await env.DB.prepare("SELECT left_type,left_id,variance_reason FROM reconciliations WHERE status='manual'").all()).results as Array<{ left_type: string; left_id: string; variance_reason: string }>)
+    resolved.add(`${m.left_type}:${m.left_id}:${m.variance_reason}`);
+  const r: ReconResult = { ar_exceptions: 0, ap_exceptions: 0, total: 0 };
+  const add = async (kind: string, leftType: string, leftId: string, reason: string, variance: number) => {
+    if (resolved.has(`${leftType}:${leftId}:${reason}`)) return;
+    await env.DB.prepare(
+      "INSERT INTO reconciliations (id,kind,left_type,left_id,status,variance_amount,variance_reason) VALUES (?,?,?,?, 'exception', ?, ?)"
+    ).bind(uid(), kind, leftType, leftId, variance, reason).run();
+    if (kind === "ar_3way") r.ar_exceptions++; else r.ap_exceptions++;
+    r.total++;
+  };
+  // AR: unlinked invoices, and over-application (paid+credited beyond total).
+  for (const i of (await env.DB.prepare("SELECT id,order_id,dc_id,total,amount_paid,credited FROM ar_invoices WHERE status!='void'").all()).results as Array<{ id: string; order_id: string | null; dc_id: string | null; total: number; amount_paid: number; credited: number }>) {
+    if (!i.order_id && !i.dc_id) await add("ar_3way", "ar_invoice", i.id, "unlinked: no order/DC", 0);
+    const over = (i.amount_paid || 0) + (i.credited || 0) - (i.total || 0);
+    if (over > 0) await add("ar_3way", "ar_invoice", i.id, "overpayment: applied exceeds total", over);
+  }
+  // AP: unlinked bills, and over-payment.
+  for (const b of (await env.DB.prepare("SELECT id,po_id,total,amount_paid FROM ap_bills WHERE status!='void'").all()).results as Array<{ id: string; po_id: string | null; total: number; amount_paid: number }>) {
+    if (!b.po_id) await add("ap_3way", "ap_bill", b.id, "unlinked: no PO", 0);
+    const over = (b.amount_paid || 0) - (b.total || 0);
+    if (over > 0) await add("ap_3way", "ap_bill", b.id, "overpayment: paid exceeds total", over);
+  }
+  return r;
+}
+
+async function handleReconcileRun(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await runReconciliation(env));
+}
+async function handleReconcileExceptions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT id,kind,left_type,left_id,variance_amount,variance_reason,created_at FROM reconciliations WHERE status='exception' ORDER BY created_at DESC LIMIT 500"
+  ).all();
+  return json({ exceptions: results || [] });
+}
+async function handleReconcileResolve(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const body = await request.json().catch(() => ({})) as { note?: string };
+  const res = await env.DB.prepare("UPDATE reconciliations SET status='manual', matched_by=?, variance_reason=COALESCE(?,variance_reason) WHERE id=?")
+    .bind(user!.sub, body.note || null, id).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: "Not found" }, 404);
+  await audit(env, user, "RECON_RESOLVE", "reconciliation", id, undefined, body.note || "resolved");
+  return json({ ok: true });
+}
+
+// ── Finance dashboard (P3.5): AR vs AP snapshot + cash position ─────────
+async function handleFinanceDashboard(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const ar = await _arSummaryRows(env, null);
+  const ap = await _apSummaryRows(env, null);
+  // Net cash position per currency = AR outstanding − AP outstanding (indicative).
+  const cur = new Set<string>([...ar.map(a => a.currency as string), ...ap.map(a => a.currency as string)]);
+  const cash = [...cur].map(c => {
+    const a = ar.find(x => x.currency === c); const p = ap.find(x => x.currency === c);
+    return { currency: c, ar: (a?.outstanding as number) || 0, ap: (p?.outstanding as number) || 0, net: ((a?.outstanding as number) || 0) - ((p?.outstanding as number) || 0) };
+  });
+  const topDebtors = (await env.DB.prepare("SELECT client_id, currency_code, SUM(balance) AS bal FROM ar_invoices WHERE balance>0 AND status!='void' GROUP BY client_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const topCreditors = (await env.DB.prepare("SELECT vendor_id, currency_code, SUM(balance) AS bal FROM ap_bills WHERE balance>0 AND status!='void' GROUP BY vendor_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const openExceptions = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE status='exception'").first() as { n: number } | null)?.n || 0;
+  return json({ ar, ap, cash, top_debtors: topDebtors, top_creditors: topCreditors, open_exceptions: openExceptions });
 }
 
 // POST /api/integrations/zoho-books/sync — manual mirror. finance/super only;
