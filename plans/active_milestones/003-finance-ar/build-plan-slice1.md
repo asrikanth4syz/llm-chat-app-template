@@ -32,10 +32,47 @@
   upsert chunked by 90 (the inventory bug — never regress), `json(...)` responses, `getUser`/
   `requireUser` + role arrays, ships-disabled + dry-run rollout.
 
-## 📋 Task Execution (Parallel Groups)
+## ✅ Plan revisions (plan-validation r1)
 
-*Tasks in a group are independent (no shared function/file region) and may run in parallel. A later
-group depends on earlier ones.*
+Applied from `adversarial-reviews/plan-validation.md` (2-skeptic panel; skeptic 3 rate-limited).
+Fixed inline above: false parallelism claim, Group 5 sequential chain, 4.A PEM→DER decode, 5.D
+whole-body cron gate + `runReminderPass` factoring + wrangler-drift test, 5.E dry-run send-followup
+test + dataAct globals + backend-via-`SELF.fetch`. Remaining rules that bind every relevant task:
+
+- **Schema ownership (`schema-ownership-overlap-1d-5a`):** **Task 1.D owns every `CREATE TABLE IF NOT
+  EXISTS`** for all AR + `reminder_*` tables, including `reminder_runs` with `cycle_batch`, the audit
+  columns (`actor`,`workflow`,`forced`,`recipient_email`), and `UNIQUE(client_id,tier,cycle_batch)`.
+  **Task 5.A adds no CREATE** — only seeds `reminder_rules` and adds any later column via guarded
+  `ALTER ADD COLUMN` (never rely on CREATE-IF-NOT-EXISTS to add a column to an existing table). A
+  `PRAGMA table_info` test asserts all audit columns exist after a re-run over a pre-existing DB.
+- **Cold-isolate schema (`ar-schema-waituntil-race`):** `fixCategoryNames` runs via `ctx.waitUntil`
+  (unawaited, `index.ts:3122`). Add an **awaited `ensureArSchema(env)`** at the top of the
+  `/api/finance/*` route block (mirror the PI `await ensurePiSchema` at `index.ts:3139-3143`); 1.D
+  tests call the self-heal fn directly rather than racing `waitUntil`.
+- **Export block (`pure-fns-require-explicit-export`):** every new testable fn (`agingBucket`,
+  `selectTier`, `computeDSO`, `toPaise`/`fromPaise`, `istToday`/`daysBetweenIST`, `buildStatement`,
+  mappers, `runReminderPass`, PEM→DER helper) must be added to the `export { … }` block
+  (`index.ts:3099-3101`) or the vitest import can't reach it.
+- **Ordering (`3c-spa-after-3a-endpoints`):** within Group 3, **3.A before 3.C**; 3.C adds an
+  integration check that its render path consumes a real `/ar/summary` response shape (not only a
+  401-stubbed smoke).
+- **Nav ACL (`finance-pages-multi-nav-acl`):** add every new page id to `PAGE_MAP` **and** the correct
+  NAV surface for each reader — `finance_admin→NAV.finance`, `ops_admin→NAV.ops`,
+  `super_admin→NAV.platform` (or `ACTION_PAGES`) — so the smoke role×page ACL loop passes. This is
+  part of 3.C/5.E acceptance.
+- **Money boundary (`ar-real-money-boundary`):** existing `orders`/`order_items`/`purchase_orders`
+  money is **REAL rupees**; AR is **INTEGER paise**. Keep AR↔order/DC linkage **id/number-based only**;
+  never do amount arithmetic across that boundary.
+
+## 📋 Task Execution (Dependency-ordered groups — see the parallelism note below)
+
+*Groups are dependency-ordered; a later group depends on earlier ones. **Within a group, tasks are
+NOT file-independent** — nearly every backend task edits the single monolithic `src/index.ts` and the
+single `test/index.test.ts`, so tasks that touch `src/index.ts` MUST be executed **serially** (or
+merged by one agent), never dispatched to concurrent worktrees (plan-validation
+`group-parallelism-shared-monolith`). Genuine parallelism is only across files — e.g. a
+`public/*.js` SPA task alongside a `src/index.ts` task. "Group" here means "dependency tier," not
+"safe to run at once."*
 
 ### Group 1 — Foundations (parallel; pure/isolated units)
 - [ ] **1.A Aging/tier/DSO pure module** — `src/index.ts` (new pure functions) + `test/index.test.ts`.
@@ -69,7 +106,10 @@ group depends on earlier ones.*
 - [ ] **4.B `gmailSend`** — build RFC-822 MIME (+ base64url), optional attachment; returns
       `{ok, messageId} | {ok:false, error}`.
 
-### Group 5 — Dunning engine (depends on Groups 2,3,4)
+### Group 5 — Dunning engine (depends on Groups 2,3,4) — **internally sequential: 5.A → 5.B → 5.C → {5.D, 5.E}**
+> (plan-validation `group5-internal-sequential`: 5.B needs 5.A's schema; 5.C needs 5.B `buildStatement`
+> + 4.B `gmailSend` + 5.A's unique index; 5.D and 5.E both call 5.C `sendStatement`. Only 5.D & 5.E
+> are mutually parallel, and only after 5.C lands.)
 - [ ] **5.A `reminder_*` schema + seed rules** — tables incl. `cycle_batch`,
       `UNIQUE(client_id,tier,cycle_batch)`, audit columns; seed the 5 tiers (§7).
 - [ ] **5.B Statement builder** — group open invoices by customer, exclude invoice-scope disputes/
@@ -166,26 +206,41 @@ group depends on earlier ones.*
    aging matches 1.A.
 2. **Impl** — handlers with `getUser`/`requireUser`; for `client_*` **force** `client_id=caller` and
    reject cross-id. Register routes in the `route()` switch near other `/api/finance` paths.
-3. **Verify** — `npx vitest run -t "ar read"` + smoke route registration.
+3. **Verify** — `npx vitest run -t "ar read"` (backend routes via `SELF.fetch`, **not** smoke —
+   `smoke-is-frontend-only`).
 
 #### Task 3.B — Webhook fix
-1. **Test** — a customer-payment webhook updates AR (`fin_payments`/invoice), **not**
-   `purchase_orders`; a vendor path still hits AP; unknown event is a safe no-op; secret still checked.
-2. **Impl** — branch `handleZohoWebhook` on party/entity; keep `X-Zoho-Webhook-Secret` check.
+1. **Test** — the existing `invoice.payment_received` event now updates **AR** (`fin_payments`/invoice),
+   **not** `purchase_orders`; **unknown/non-customer events are a safe no-op** (no existing AP
+   bill-payment webhook exists to preserve — add a vendor branch only if AP webhooks are in scope,
+   `webhook-vendor-path-nonexistent`); secret still checked.
+2. **Impl** — retarget the `invoice.payment_received` branch of `handleZohoWebhook` to AR; keep the
+   `X-Zoho-Webhook-Secret` check (`index.ts:7940-7947`).
 3. **Verify** — `npx vitest run -t "webhook"`.
 
-#### Task 3.C — Receivables SPA
-1. **Test** — smoke: page registered, nav gated to finance/ops, every `dataAct` target resolves.
-2. **Impl** — `public/app.11-finance.js` render funcs; nav in `app.01-core.js`; `?v=` in `index.html`.
+#### Task 3.C — Receivables SPA (**after 3.A**)
+1. **Test** — smoke: page in `PAGE_MAP`, added to the correct NAV surface **per role**
+   (`finance_admin→NAV.finance`, `ops_admin→NAV.ops`, `super_admin→NAV.platform`) so the smoke ACL
+   loop passes (`finance-pages-multi-nav-acl`); every `dataAct` target is a top-level global function
+   (`dataact-targets-must-be-globals`). Plus an integration check that the render path consumes a real
+   `/ar/summary` shape (`3c-spa-after-3a-endpoints`).
+2. **Impl** — `public/app.11-finance.js` render funcs (dataAct targets as `function name(){}`); nav +
+   `PAGE_MAP`/`ACTION_PAGES` in `app.01-core.js`; `?v=` in `index.html`.
 3. **Verify** — `node test/smoke.mjs`; manual load.
 
 #### Task 4.A — Google SA JWT + token
-1. **Test** — signs an RS256 JWT (verify header/claims); caches the token until ~expiry (second call
-   ⇒ no new exchange); a 401 triggers exactly one re-mint; a token-exchange failure yields a distinct
-   `auth_error` (not per-recipient failure).
-2. **Impl** — `crypto.subtle.importKey('pkcs8', …, 'RSASSA-PKCS1-v1_5'/'SHA-256')` + `sign`; token
-   cache in module scope keyed to expiry.
-3. **Verify** — `npx vitest run -t "gmail auth"`.
+> **The existing `crypto.subtle.importKey` calls all use `'raw'` + `TextEncoder` (symmetric HMAC/
+> PBKDF2, `index.ts:8/19/33/41`). An RSA service-account key is different** and the plan must not
+> assume "same as today" (plan-validation `gmail-rs256-pem-decode-omitted`). `GOOGLE_SA_PRIVATE_KEY`
+> is a PEM string, often stored with escaped `\n`. **Prerequisite decode step:** `pem = key.replace(/\\n/g,'\n')` → strip `-----BEGIN/END PRIVATE KEY-----` lines → `der = Uint8Array.from(atob(body), c=>c.charCodeAt(0))`.
+1. **Test** — imports a **real test PEM** and signs an RS256 JWT that verifies against the test public
+   key (not just header/claims shape); caches the token until ~expiry (2nd call ⇒ no new exchange); a
+   401 triggers exactly one re-mint; a token-exchange failure yields a distinct `auth_error` (not a
+   per-recipient failure).
+2. **Impl** — PEM→DER helper (above) → `crypto.subtle.importKey('pkcs8', der.buffer,
+   {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'}, false, ['sign'])` → `sign`; token cache in module scope
+   keyed to expiry with single-flight refresh.
+3. **Verify** — `npx vitest run -t "gmail auth"` (incl. the real-PEM import case).
 
 #### Task 4.B — gmailSend
 1. **Test** — builds valid MIME (headers, base64url body); attaches a PDF part when given; returns
@@ -196,7 +251,9 @@ group depends on earlier ones.*
 #### Task 5.A — reminder schema + seed
 1. **Test** — tables exist with the unique index; seeding is idempotent; the 5 tiers match §7
    (`send_mode`, `min_overdue_days`, `min_gap_days`, `attach_pdf`).
-2. **Impl** — extend self-heal + a seed-on-empty for `reminder_rules`.
+2. **Impl** — **no `CREATE` here** (Task 1.D owns all table CREATEs incl. `cycle_batch`/audit columns
+   + the unique index); 5.A only **seeds `reminder_rules` on empty** and adds any further column via
+   guarded `ALTER ADD COLUMN` (`schema-ownership-overlap-1d-5a`).
 3. **Verify** — `npx vitest run -t "reminder schema"`.
 
 #### Task 5.B — Statement builder
@@ -231,16 +288,29 @@ group depends on earlier ones.*
    `initial_backfill_complete=0` ⇒ zero sends; when complete ⇒ auto tiers (pre-due/on-due) send,
    overdue tiers write "follow-up due" markers (no send); a second same-day invocation is a no-op via
    the daily `cycle_batch` guard; batch caps at `MAX_CUSTOMERS_PER_RUN` and advances a cursor.
-2. **Impl** — extend `scheduled()` (`index.ts:3105`) with the gated pass; add `SEND_CRON` to
-   `wrangler.jsonc`.
-3. **Verify** — `npx vitest run -t "cron pass"`.
+2. **Impl** — **factor the pass into a directly-callable `runReminderPass(env, cron)`** (no existing
+   test invokes the default export — `scheduled-not-invocable-in-harness`). Gate the **whole
+   dispatch** by cron so the added trigger does not re-fire the existing body:
+   `if (controller.cron === SEND_CRON) { await runReminderPass(env, controller.cron) } else {
+   <existing fixCategoryNames/runDeliveryReminders/runZohoSync body, index.ts:3106-3116> }`
+   (`new-cron-fires-entire-scheduled-body`). Add `SEND_CRON` to `wrangler.jsonc`; the `SEND_CRON`
+   constant and the wrangler entry have **one owner** (this task).
+3. **Verify** — `npx vitest run -t "cron pass"` (calls `runReminderPass` directly); **plus** a test
+   that imports the default export and calls `worker.scheduled({cron:SEND_CRON}, env, ctx)` via
+   `createExecutionContext`; **plus** a test that reads `wrangler.jsonc` and asserts its `crons` array
+   literally contains the `SEND_CRON` constant (`send-cron-drift-silent-noop`).
 
 #### Task 5.E — Follow-up endpoints + Reminders SPA
 1. **Test** — `followups-due` lists only manual-tier eligible customers with gap-eligibility;
-   `send-followup` respects gap/holds/force bounds and is finance-gated; `preview` renders without
-   sending; `rules` GET/POST finance-gated; `runs` returns statuses+reasons+actor. Client token → 403
-   on all. Smoke: page + `dataAct` targets resolve.
-2. **Impl** — handlers + `public/app.11-finance.js` Reminders page & worklist; `?v=` bump.
+   `send-followup` respects gap/holds/force bounds and is finance-gated; **`send-followup` under
+   `reminders_mode=dry_run` calls `gmailSend` zero times and writes one `status='dry_run'` run**
+   (`dryrun-sendfollowup-untested`); `preview` renders without sending; `rules` GET/POST finance-gated;
+   `runs` returns statuses+reasons+actor. Client token → 403 on all (assert **no data** in body).
+   Backend routes verified via vitest `SELF.fetch` (**not** smoke — smoke is frontend-only,
+   `smoke-is-frontend-only`); smoke covers the SPA page + `dataAct` target resolution.
+2. **Impl** — handlers + `public/app.11-finance.js` Reminders page & worklist; **every `dataAct`
+   target authored as a top-level `function name(){}`** (not `const`/arrow — smoke requires
+   `typeof window[fn]==='function'`, `dataact-targets-must-be-globals`); `?v=` bump.
 3. **Verify** — `npx vitest run -t "followup"` + `node test/smoke.mjs`.
 
 ### 🧪 Global Testing Strategy
