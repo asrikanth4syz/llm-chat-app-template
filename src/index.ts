@@ -3566,10 +3566,14 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     await recomputeArBalances(env);
     await recomputeApBalances(env);
 
-    // Advance watermarks + flip backfill flag only when a full pass completed uncapped.
-    const nowEpoch = Math.floor(Date.now() / 1000);
-    for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
-    if (!r.cap_hit) { await setConfig(env, "initial_backfill_complete", "1", "system"); r.backfill_complete = true; }
+    // Advance watermarks ONLY on an uncapped pass. If the page cap was hit, hold the
+    // cursors so the next run re-pulls the same window (never skip un-fetched pages).
+    if (!r.cap_hit) {
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+      await setConfig(env, "initial_backfill_complete", "1", "system");
+      r.backfill_complete = true;
+    }
   } catch (e) {
     r.status = "error"; r.errors.push(String(e));
   }
@@ -3794,7 +3798,14 @@ async function lastSentDaysAgo(env: Env, clientId: string, today: string): Promi
     "SELECT run_at FROM reminder_runs WHERE client_id=? AND status='sent' ORDER BY run_at DESC LIMIT 1"
   ).bind(clientId).first() as { run_at: string } | null;
   if (!row || !row.run_at) return null;
-  return daysBetweenIST(String(row.run_at).slice(0, 10), today);
+  // run_at is UTC — either 'YYYY-MM-DD HH:MM:SS' (datetime('now')) or a full ISO
+  // string. Normalise both to a UTC instant, then take the IST civil date before
+  // diffing, so a send in the 00:00–05:30 IST window isn't counted a day early.
+  const raw = String(row.run_at);
+  const iso = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return daysBetweenIST(raw.slice(0, 10), today);
+  return daysBetweenIST(istToday(d), today);
 }
 
 function _reminderSubject(tier: string, s: StatementResult): string {
@@ -3809,12 +3820,15 @@ function _fmtMoneyServer(paise: number, currency = "INR"): string {
   try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format((paise || 0) / 100); }
   catch { return `${currency} ${fromPaise(paise)}`; }
 }
+// Escape HTML in merge fields — the values are mirrored from Books, but a contact
+// name / invoice number with markup must never break (or inject into) the email.
+function _he(v: unknown): string { return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function _reminderHtml(client: { name?: string }, tier: string, s: StatementResult): string {
   const lines = s.by_currency.map(c => {
-    const rows = c.invoices.map(i => `<tr><td>${String(i.number || i.id)}</td><td>${String(i.due_date || "")}</td><td style="text-align:right">${_fmtMoneyServer(Number(i.balance || 0), c.currency)}</td></tr>`).join("");
-    return `<p><strong>${c.currency}</strong> — outstanding ${_fmtMoneyServer(c.outstanding, c.currency)}</p><table>${rows}</table>`;
+    const rows = c.invoices.map(i => `<tr><td>${_he(i.number || i.id)}</td><td>${_he(i.due_date || "")}</td><td style="text-align:right">${_he(_fmtMoneyServer(Number(i.balance || 0), c.currency))}</td></tr>`).join("");
+    return `<p><strong>${_he(c.currency)}</strong> — outstanding ${_he(_fmtMoneyServer(c.outstanding, c.currency))}</p><table>${rows}</table>`;
   }).join("");
-  return `<p>Dear ${client.name || "Customer"},</p><p>This is a ${tier.replace("-", " ")} reminder for the following open invoices:</p>${lines}<p>Please arrange payment at your earliest convenience.</p>`;
+  return `<p>Dear ${_he(client.name || "Customer")},</p><p>This is a ${_he(tier.replace("-", " "))} reminder for the following open invoices:</p>${lines}<p>Please arrange payment at your earliest convenience.</p>`;
 }
 
 interface SendOpts { mode: "off" | "dry_run" | "live"; force?: boolean; actor?: string; }
@@ -3870,7 +3884,11 @@ async function sendStatement(env: Env, client: { client_id: string; name?: strin
     await audit(env, null, "AR_REMINDER_SENT", "ar_client", client.client_id, undefined, stmt.tier);
     return { status: "sent", messageId: res.messageId };
   }
-  await env.DB.prepare("UPDATE reminder_runs SET status='failed', suppressed_reason=?, channel='email' WHERE id=?").bind(res.error, rowId).run();
+  // A failed send must stay RETRYABLE (PRD §15: failed rows don't consume the gap
+  // and are eligible next pass). Move the reserved row off the real cycle_batch so
+  // the unique (client,tier,cycle_batch) index no longer blocks a retry.
+  await env.DB.prepare("UPDATE reminder_runs SET status='failed', suppressed_reason=?, cycle_batch=?, channel='email' WHERE id=?")
+    .bind(res.error, `${stmt.cycle_batch}#failed#${uid()}`, rowId).run();
   return { status: "failed", error: res.error };
 }
 
@@ -8941,15 +8959,16 @@ async function runReconciliation(env: Env): Promise<ReconResult> {
     if (kind === "ar_3way") r.ar_exceptions++; else r.ap_exceptions++;
     r.total++;
   };
-  // AR: unlinked invoices, and over-application (paid+credited beyond total).
-  for (const i of (await env.DB.prepare("SELECT id,order_id,dc_id,total,amount_paid,credited FROM ar_invoices WHERE status!='void'").all()).results as Array<{ id: string; order_id: string | null; dc_id: string | null; total: number; amount_paid: number; credited: number }>) {
-    if (!i.order_id && !i.dc_id) await add("ar_3way", "ar_invoice", i.id, "unlinked: no order/DC", 0);
+  // Over-application is a genuine data-integrity exception (applied/paid beyond the
+  // document total). NOTE: "unlinked" (no order/DC/PO) is deliberately NOT flagged —
+  // many invoices/bills are legitimately direct, so a blanket unlinked check floods
+  // the queue with non-actionable rows. A precise linkage exception (reference_number
+  // present but unmatched) needs the reference persisted on the doc — a follow-up.
+  for (const i of (await env.DB.prepare("SELECT id,total,amount_paid,credited FROM ar_invoices WHERE status!='void'").all()).results as Array<{ id: string; total: number; amount_paid: number; credited: number }>) {
     const over = (i.amount_paid || 0) + (i.credited || 0) - (i.total || 0);
     if (over > 0) await add("ar_3way", "ar_invoice", i.id, "overpayment: applied exceeds total", over);
   }
-  // AP: unlinked bills, and over-payment.
-  for (const b of (await env.DB.prepare("SELECT id,po_id,total,amount_paid FROM ap_bills WHERE status!='void'").all()).results as Array<{ id: string; po_id: string | null; total: number; amount_paid: number }>) {
-    if (!b.po_id) await add("ap_3way", "ap_bill", b.id, "unlinked: no PO", 0);
+  for (const b of (await env.DB.prepare("SELECT id,total,amount_paid FROM ap_bills WHERE status!='void'").all()).results as Array<{ id: string; total: number; amount_paid: number }>) {
     const over = (b.amount_paid || 0) - (b.total || 0);
     if (over > 0) await add("ap_3way", "ap_bill", b.id, "overpayment: paid exceeds total", over);
   }
@@ -9105,14 +9124,17 @@ async function handleArHold(request: Request, env: Env, path: string): Promise<R
   const body = await request.json().catch(() => ({})) as { kind?: string; ptp_date?: string; clear?: boolean };
   if (body.clear) {
     await env.DB.prepare("UPDATE reminder_holds SET cleared_at=datetime('now') WHERE client_id=? AND cleared_at IS NULL").bind(clientId).run();
+    // Re-enable dunning too — otherwise an opt_out hold's flag would strand the
+    // customer suppressed with no API path back (clear is the only re-enable path).
+    await env.DB.prepare("UPDATE ar_clients SET dunning_opt_out=0 WHERE client_id=?").bind(clientId).run();
     await audit(env, user, "AR_HOLD_CLEAR", "ar_client", clientId, undefined, undefined);
     return json({ ok: true, cleared: true });
   }
   const kind = String(body.kind || "");
   if (!["negotiation", "dispute", "opt_out", "ptp"].includes(kind)) return json({ error: "Invalid hold kind" }, 400);
-  if (kind === "ptp" && body.ptp_date) {
-    const today = istToday();
-    const days = daysBetweenIST(today, body.ptp_date);
+  if (kind === "ptp") {
+    if (!body.ptp_date) return json({ error: "ptp_date is required for a promise-to-pay hold" }, 400);
+    const days = daysBetweenIST(istToday(), body.ptp_date);
     if (Number.isNaN(days) || days < 0 || days > 60) return json({ error: "ptp_date must be within 60 days and not in the past" }, 400);
   }
   await env.DB.prepare("INSERT INTO reminder_holds (id,client_id,kind,ptp_date,set_by) VALUES (?,?,?,?,?)")

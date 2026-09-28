@@ -17,7 +17,7 @@ function _fmtPaise(paise, currency) {
   }
 }
 
-const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60', '61-90': '61–90', '91+': '90+' };
+const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60', '61-90': '61–90', '91+': '91+' };
 
 // Re-render whichever finance page is active (delegated 'financeRefresh' target).
 function financeRefresh() {

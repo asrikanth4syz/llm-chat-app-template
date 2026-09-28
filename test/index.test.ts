@@ -4162,27 +4162,28 @@ describe("finance-ap/read endpoints — finance-only, never client", () => {
 // Phase 3 Finance — P3.3 Reconciliation + P3.5 Dashboard
 // ══════════════════════════════════════════════════════════════════════
 describe("finance/3way reconciliation", () => {
-  it("flags unlinked + overpaid AR/AP; a manual resolution is not re-flagged", async () => {
+  it("flags over-application on AR/AP; a manual resolution is not re-flagged; unlinked is NOT noise", async () => {
     const db = env.DB as D1Database;
     await ensureArSchema(env);
     await db.prepare("DELETE FROM reconciliations").run();
     await db.prepare("DELETE FROM ar_invoices WHERE client_id='rc'").run();
     await db.prepare("DELETE FROM ap_bills WHERE vendor_id='rv'").run();
-    // Unlinked AR invoice (no order/dc), plus an overpaid, linked one.
-    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,total,amount_paid,credited,balance,status) VALUES ('rc-un','rc',100000,0,0,100000,'open')").run();
+    // Overpaid AR invoice (applied 120000 > total 100000) and a clean direct invoice (unlinked, NOT flagged).
     await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,order_id,total,amount_paid,credited,balance,status) VALUES ('rc-over','rc','o1',100000,120000,0,-20000,'paid')").run();
-    // Unlinked AP bill (no PO).
-    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,vendor_id,total,amount_paid,balance,status) VALUES ('rv-un','rv',50000,0,50000,'open')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,total,amount_paid,credited,balance,status) VALUES ('rc-direct','rc',100000,0,0,100000,'open')").run();
+    // Overpaid AP bill.
+    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,vendor_id,total,amount_paid,balance,status) VALUES ('rv-over','rv',50000,60000,-10000,'paid')").run();
     const r = await runReconciliation(env);
-    expect(r.ar_exceptions).toBeGreaterThanOrEqual(2); // unlinked + overpayment
-    expect(r.ap_exceptions).toBeGreaterThanOrEqual(1); // unlinked bill
-    // Resolve the unlinked AR exception, then re-run: it must not reappear.
-    const exRow = await db.prepare("SELECT id FROM reconciliations WHERE left_id='rc-un' AND status='exception' LIMIT 1").first() as { id: string };
+    expect(r.ar_exceptions).toBe(1);   // only the overpayment; the direct invoice is NOT flagged (no unlinked noise)
+    expect(r.ap_exceptions).toBe(1);   // the AP overpayment
+    const directFlagged = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-direct'").first() as { n: number };
+    expect(directFlagged.n).toBe(0);
+    // Resolve the AR overpayment, then re-run: it must not reappear.
+    const exRow = await db.prepare("SELECT id FROM reconciliations WHERE left_id='rc-over' AND status='exception' LIMIT 1").first() as { id: string };
     await db.prepare("UPDATE reconciliations SET status='manual', matched_by='tester' WHERE id=?").bind(exRow.id).run();
-    const r2 = await runReconciliation(env);
-    const stillThere = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-un' AND status='exception'").first() as { n: number };
-    expect(stillThere.n).toBe(0);       // resolved → suppressed
-    expect(r2.total).toBeGreaterThanOrEqual(2); // the others still flagged
+    await runReconciliation(env);
+    const stillThere = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-over' AND status='exception'").first() as { n: number };
+    expect(stillThere.n).toBe(0);      // resolved → suppressed
   });
   it("endpoints: run/resolve are super/finance, exceptions/dashboard finance-only", async () => {
     expect((await post("/api/finance/reconcile/run", {}, clientToken)).status).toBe(403);
@@ -4197,5 +4198,43 @@ describe("finance/3way reconciliation", () => {
     expect(Array.isArray(body.cash)).toBe(true);
     expect(typeof body.open_exceptions).toBe("number");
     expect((await get("/api/finance/dashboard", clientToken)).status).toBe(403);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — code-review fixes (regression coverage)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance/cr-fix retry + opt-out clear + ptp validation", () => {
+  it("a failed send is retryable next pass (does not block on the unique key)", async () => {
+    await clearGmailTokenCache();
+    await seedDunClient("cr-retry", "a@x.test", [{ id: "cr1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "RT" }]);
+    let gmailCalls = 0;
+    const impl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("oauth2.googleapis.com/token")) return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 });
+      if (u.includes("gmail.googleapis.com")) { gmailCalls++; return gmailCalls === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ id: "ok-2" }), { status: 200 }); }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const r1 = await sendStatement(gmailEnv(), { client_id: "cr-retry", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r1.status).toBe("failed");
+    const r2 = await sendStatement(gmailEnv(), { client_id: "cr-retry", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r2.status).toBe("sent");        // NOT 'duplicate' — the failed row freed the cycle_batch
+    expect(gmailCalls).toBe(2);
+  });
+  it("clearing a hold re-enables dunning_opt_out", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,dunning_opt_out) VALUES ('cr-opt','X','x@y.test',1)").run();
+    await db.prepare("INSERT INTO reminder_holds (id,client_id,kind) VALUES ('crh','cr-opt','opt_out')").run();
+    const res = await post("/api/finance/ar/cr-opt/hold", { clear: true }, adminToken);
+    expect(res.status).toBe(200);
+    const row = await db.prepare("SELECT dunning_opt_out FROM ar_clients WHERE client_id='cr-opt'").first() as { dunning_opt_out: number };
+    expect(row.dunning_opt_out).toBe(0);   // re-enabled
+  });
+  it("a PTP hold without a date is rejected (400)", async () => {
+    await ensureArSchema(env);
+    await (env.DB as D1Database).prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email) VALUES ('cr-ptp','X','x@y.test')").run();
+    expect((await post("/api/finance/ar/cr-ptp/hold", { kind: "ptp" }, adminToken)).status).toBe(400);
+    expect((await post("/api/finance/ar/cr-ptp/hold", { kind: "ptp", ptp_date: dueDaysAgo(-10) }, adminToken)).status).toBe(200); // 10 days out
   });
 });
