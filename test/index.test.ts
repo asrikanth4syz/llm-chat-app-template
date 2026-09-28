@@ -15,6 +15,8 @@ import { gmailGetToken, gmailSend } from "../src/index";
 // Slice 1, Group 5 — dunning engine.
 import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
 import { hashStr } from "../src/index";
+// P3.2 — Payables (AP).
+import { mapBooksBill, mapBooksVendorPayment } from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -4088,5 +4090,68 @@ describe("finance-ar/5.E reminder endpoints", () => {
     expect((await post("/api/finance/ar/ep-hold/hold", { kind: "ptp", ptp_date: dueDaysAgo(90) }, adminToken)).status).toBe(400); // >60d out? actually past → invalid
     expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, adminToken)).status).toBe(200);
     expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, clientToken)).status).toBe(403);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — P3.2 Payables (AP)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ap/mappers", () => {
+  it("mapBooksBill → paise, vendor, mirrored status, cycle_token", () => {
+    const m = mapBooksBill({ bill_id: "b1", bill_number: "BILL-1", vendor_id: "v1", vendor_name: "Acme Supply", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 180, total: 1180, currency_code: "INR", status: "partially_paid" });
+    if (!("bill" in m)) throw new Error("expected bill");
+    expect(m.bill.total).toBe(118000);
+    expect(m.bill.status).toBe("partial");
+    expect(m.vendor && m.vendor.vendor_id).toBe("v1");
+    expect(typeof m.bill.cycle_token).toBe("string");
+  });
+  it("mapBooksVendorPayment allocations are direction out / doc_type bill", () => {
+    const m = mapBooksVendorPayment({ payment_id: "vp1", vendor_id: "v1", amount: 600, unused_amount: 0, date: "2026-07-01", bills: [{ bill_id: "b1", amount_applied: 600 }] });
+    if (!("payment" in m)) throw new Error("expected payment");
+    expect(m.payment.direction).toBe("out");
+    expect(m.allocations[0].doc_type).toBe("bill");
+    expect(m.allocations[0].amount).toBe(60000);
+  });
+});
+
+describe("finance-ap/runBooksSync mirrors bills + derives balances", () => {
+  it("bill balance = total − applied vendor payment", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      bills: [{ bill_id: "abB", bill_number: "BILL-B", vendor_id: "vB", vendor_name: "Vend B", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "open" }],
+      vendorpayments: [{ payment_id: "vpB", vendor_id: "vB", amount: 600, unused_amount: 0, date: "2026-07-01", bills: [{ bill_id: "abB", amount_applied: 600 }] }],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    expect(r.bills).toBe(1);
+    expect(r.vendorpayments).toBe(1);
+    const bill = await (env.DB as D1Database).prepare("SELECT total, amount_paid, balance, status FROM ap_bills WHERE id='abB'").first() as { total: number; amount_paid: number; balance: number; status: string };
+    expect(bill.total).toBe(100000);
+    expect(bill.amount_paid).toBe(60000);
+    expect(bill.balance).toBe(40000);
+    expect(bill.status).toBe("partial");
+    const ven = await (env.DB as D1Database).prepare("SELECT name FROM ap_vendors WHERE vendor_id='vB'").first() as { name: string };
+    expect(ven.name).toBe("Vend B");
+  });
+});
+
+describe("finance-ap/read endpoints — finance-only, never client", () => {
+  beforeAll(async () => {
+    await ensureArSchema(env);
+    await (env.DB as D1Database).prepare("INSERT OR REPLACE INTO ap_bills (id,zoho_bill_id,number,vendor_id,date,due_date,total,amount_paid,balance,currency_code,status,age_bucket) VALUES ('apb1','apb1','B-1','vX','2026-06-01','2026-06-30',100000,0,100000,'INR','open','1-30')").run();
+  });
+  it("finance/super read bills/summary/vendor; client is 403 on all AP", async () => {
+    expect((await get("/api/finance/ap/bills", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/summary", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/vendor/vX", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/bills", clientToken)).status).toBe(403);
+    expect((await get("/api/finance/ap/summary", clientToken)).status).toBe(403);
+    expect((await get("/api/finance/ap/vendor/vX", clientToken)).status).toBe(403);
+  });
+  it("summary is per-currency with a DPO number", async () => {
+    const sum = await (await get("/api/finance/ap/summary", adminToken)).json() as { by_currency: { currency: string; outstanding: number; dpo: number }[] };
+    const inr = sum.by_currency.find(c => c.currency === "INR")!;
+    expect(inr.outstanding).toBeGreaterThanOrEqual(100000);
+    expect(typeof inr.dpo).toBe("number");
   });
 });

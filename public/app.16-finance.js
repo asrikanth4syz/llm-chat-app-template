@@ -100,6 +100,55 @@ async function renderReceivables(main) {
     ${_financeInvoiceTable(invoices, true)}`;
 }
 
+// ── Payables (finance/ops): per-vendor aging + DPO + bills due ─────────
+function _apCurrencyBlock(c) {
+  const kpi = (label, val) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+    <div style="font-size:1.4rem;font-weight:600;margin-top:4px">${h(val)}</div></div>`;
+  const buckets = ['current', '1-30', '31-60', '61-90', '91+'];
+  return `<section style="margin-bottom:24px">
+    <h3 style="margin:0 0 10px">${h(c.currency)}</h3>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${kpi('Total Payable', _fmtPaise(c.outstanding, c.currency))}
+      ${kpi('Overdue', _fmtPaise(c.overdue, c.currency))}
+      ${kpi('Due This Week', _fmtPaise(c.due_this_week, c.currency))}
+      ${kpi('DPO (days)', String(c.dpo))}</div>
+    <div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5)">${buckets.map(b => `<th style="padding:8px 12px;text-align:right;font-weight:600">${h(_AGING_LABEL[b])}</th>`).join('')}</tr></thead>
+      <tbody><tr>${buckets.map(b => `<td style="padding:8px 12px;text-align:right">${h(_fmtPaise(c.buckets[b] || 0, c.currency))}</td>`).join('')}</tr></tbody>
+    </table></div></section>`;
+}
+async function renderPayables(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading payables…</p></div>`;
+  const [summary, list] = await Promise.all([api('/finance/ap/summary'), api('/finance/ap/bills')]);
+  if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load payables.</div>`; return; }
+  const byCur = summary.by_currency || [];
+  const bills = list.bills || [];
+  const rows = bills.length ? bills.map(b => {
+    const overdue = b.age_bucket && b.age_bucket !== 'current';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 12px">${h(b.number || b.id)}</td>
+      <td style="padding:8px 12px">${h(b.vendor_id || '')}</td>
+      <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
+      <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(b.total, b.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(b.balance, b.currency_code))}</td>
+      <td style="padding:8px 12px">${h(b.status || '')}</td>
+      <td style="padding:8px 12px">${h(_AGING_LABEL[b.age_bucket] || b.age_bucket || '')}</td></tr>`;
+  }).join('') : '';
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0">Payables</h2>
+      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div>
+    ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No outstanding payables.</div>`}
+    <h3 style="margin:18px 0 10px">Open Bills</h3>
+    ${rows ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+        <th style="padding:8px 12px">Bill</th><th style="padding:8px 12px">Vendor</th><th style="padding:8px 12px">Due</th>
+        <th style="padding:8px 12px;text-align:right">Total</th><th style="padding:8px 12px;text-align:right">Balance</th>
+        <th style="padding:8px 12px">Status</th><th style="padding:8px 12px">Aging</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : `<div class="card" style="padding:20px;color:var(--muted)">No open bills.</div>`}`;
+}
+
 // ── Reminders (finance/ops): follow-up-due worklist + run log ──────────
 // Collector-initiated overdue follow-ups (Send button, gated by min-gap on the
 // server) plus the recent reminder_runs audit. Auto tiers are sent by the cron.

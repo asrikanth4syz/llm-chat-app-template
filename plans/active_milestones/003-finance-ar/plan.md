@@ -79,7 +79,7 @@ read; unit-tested in isolation.
   D1-chunk safety on the id lookup.
 - **Rollout:** ships with sync **disabled**; enable in a dry-run that only reads.
 
-## Milestone P3.2 — Payables (AP)
+## Milestone P3.2 — Payables (AP)  ← BUILT (green; ships inert with the Books sync)
 
 - Mirror `GET /books/v3/bills` + `/vendorpayments` → `ap_bills` + `fin_payments(out)`; link to
   `po_id` via Books reference; offset `vendor_debit_notes`.

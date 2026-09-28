@@ -2791,6 +2791,10 @@ async function ensureArSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS reminder_runs ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, tier TEXT NOT NULL, cycle_batch TEXT NOT NULL, run_at TEXT DEFAULT (datetime('now')), channel TEXT, status TEXT NOT NULL, gmail_message_id TEXT, suppressed_reason TEXT, invoice_ids TEXT DEFAULT '[]', total_outstanding TEXT DEFAULT '{}', actor TEXT, workflow TEXT DEFAULT 'default', forced INTEGER DEFAULT 0, recipient_email TEXT );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_runs_cycle ON reminder_runs (client_id, tier, cycle_batch);`,
     `CREATE TABLE IF NOT EXISTS reminder_holds ( id TEXT PRIMARY KEY, client_id TEXT, invoice_id TEXT, kind TEXT NOT NULL, ptp_date TEXT, channel TEXT, set_by TEXT, set_at TEXT DEFAULT (datetime('now')), cleared_at TEXT );`,
+    // Payables (P3.2): bills + vendor identity mirrored from Books; vendor payments
+    // reuse fin_payments(direction='out') + fin_allocations(doc_type='bill').
+    `CREATE TABLE IF NOT EXISTS ap_vendors ( vendor_id TEXT PRIMARY KEY, zoho_vendor_id TEXT, name TEXT, email TEXT, currency_code TEXT DEFAULT 'INR', zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ap_bills ( id TEXT PRIMARY KEY, zoho_bill_id TEXT, number TEXT, vendor_id TEXT, po_id TEXT, date TEXT, due_date TEXT, subtotal INTEGER DEFAULT 0, gst INTEGER DEFAULT 0, total INTEGER DEFAULT 0, amount_paid INTEGER DEFAULT 0, balance INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', exchange_rate REAL DEFAULT 1, status TEXT DEFAULT 'open', age_bucket TEXT, cycle_token TEXT, zoho_synced_at TEXT );`,
   ];
   // Guarded column adds — for a DB whose reminder_runs predates the audit columns
   // (idempotent; "duplicate column" is swallowed). Never rely on CREATE to add these.
@@ -3409,10 +3413,74 @@ function mapBooksCreditNote(z: Record<string, unknown>): { note: Record<string, 
   return { note, allocations };
 }
 
+// ── AP mappers (P3.2). Bills carry vendor identity inline, so we upsert ap_vendors
+// from the bill rather than a separate vendor pull. Money → integer paise.
+function mapBooksBill(z: Record<string, unknown>): { bill: Record<string, unknown>; vendor: Record<string, unknown> | null; reference: string } | MapErr {
+  const bid = String(z.bill_id ?? "").trim();
+  if (!bid) return { error: "no bill_id" };
+  const dueDate = String(z.due_date ?? "");
+  const total = toPaise(z.total as string | number);
+  const bill: Record<string, unknown> = {
+    id: bid, zoho_bill_id: bid,
+    subtotal: toPaise(z.sub_total as string | number),
+    gst: toPaise(z.tax_total as string | number),
+    total,
+    currency_code: String(z.currency_code ?? "INR"),
+    cycle_token: hashStr(`${dueDate}|${total}`),
+  };
+  _put(bill, "number", z.bill_number);
+  _put(bill, "vendor_id", z.vendor_id);
+  _put(bill, "date", z.date);
+  _put(bill, "due_date", z.due_date);
+  const ex = _num(z.exchange_rate); if (ex !== undefined) bill.exchange_rate = ex;
+  const st = String(z.status ?? "").toLowerCase();
+  bill.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial" : (st === "void" || st === "voided") ? "void" : "open";
+  let vendor: Record<string, unknown> | null = null;
+  const vid = String(z.vendor_id ?? "").trim();
+  if (vid) { vendor = { vendor_id: vid, zoho_vendor_id: vid }; _put(vendor, "name", z.vendor_name); _put(vendor, "currency_code", z.currency_code); }
+  return { bill, vendor, reference: String(z.reference_number ?? "").trim() };
+}
+
+function mapBooksVendorPayment(z: Record<string, unknown>): { payment: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const pid = String(z.payment_id ?? "").trim();
+  if (!pid) return { error: "no payment_id" };
+  const applied = Array.isArray(z.bills) ? z.bills as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${pid}:${String(a.bill_id)}`, payment_id: pid, doc_type: "bill", doc_id: String(a.bill_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount) as string | number) }))
+    .filter(a => a.doc_id);
+  const payment: Record<string, unknown> = {
+    id: pid, zoho_payment_id: pid, direction: "out", party_type: "vendor",
+    amount: toPaise(z.amount as string | number),
+    unapplied_amount: toPaise((z.unused_amount ?? 0) as string | number),
+  };
+  _put(payment, "party_id", z.vendor_id);
+  _put(payment, "date", z.date);
+  _put(payment, "method", z.payment_mode);
+  _put(payment, "ref", z.reference_number);
+  return { payment, allocations };
+}
+
+// Derive amount_paid/balance/status/age_bucket for AP bills from vendor-payment
+// allocations (PRD §15: balance = total − amount_paid; settled = balance ≤ 0).
+async function recomputeApBalances(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE ap_bills SET amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='bill' AND doc_id=ap_bills.id),0)`
+  ).run();
+  await env.DB.prepare(`UPDATE ap_bills SET balance = total - amount_paid`).run();
+  const today = istToday();
+  const { results } = await env.DB.prepare("SELECT id, due_date, balance, amount_paid, status FROM ap_bills WHERE status != 'void'").all();
+  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; status: string }>) {
+    const status = (b.balance ?? 0) <= 0 ? "paid" : ((b.amount_paid || 0) > 0 ? "partial" : "open");
+    const bucket = b.due_date ? agingBucket(b.due_date, today) : "current";
+    await env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id).run();
+  }
+}
+
 interface BooksSyncResult {
   status: "ok" | "not_configured" | "error";
   scope: "delta" | "full";
   contacts: number; invoices: number; creditnotes: number; payments: number;
+  bills: number; vendorpayments: number;
   cap_hit: boolean; backfill_complete: boolean; errors: string[];
 }
 
@@ -3420,7 +3488,7 @@ interface BooksSyncResult {
 // allocation never references a not-yet-mirrored invoice; balances are derived only
 // after all streams complete. Reminders stay disabled until backfill_complete flips.
 async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: FetchImpl = fetch): Promise<BooksSyncResult> {
-  const r: BooksSyncResult = { status: "ok", scope: opts.full ? "full" : "delta", contacts: 0, invoices: 0, creditnotes: 0, payments: 0, cap_hit: false, errors: [], backfill_complete: false };
+  const r: BooksSyncResult = { status: "ok", scope: opts.full ? "full" : "delta", contacts: 0, invoices: 0, creditnotes: 0, payments: 0, bills: 0, vendorpayments: 0, cap_hit: false, errors: [], backfill_complete: false };
   if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) { r.status = "not_configured"; return r; }
   let token: string;
   try { token = await zohoGetToken(env, fetchImpl); } catch (e) { r.status = "error"; r.errors.push(`auth: ${String(e)}`); return r; }
@@ -3461,6 +3529,27 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
       if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
     }
 
+    // ── AP (P3.2): bills + vendor payments ──
+    const billRefs: Array<{ id: string; reference: string }> = [];
+    for (const z of await pull("bills")) {
+      const m = mapBooksBill(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ap_bills", "zoho_bill_id", [m.bill]); r.bills++;
+      if (m.vendor) await upsertMirror(env, "ap_vendors", "vendor_id", [m.vendor]);
+      if (m.reference) billRefs.push({ id: String(m.bill.id), reference: m.reference });
+    }
+    for (const z of await pull("vendorpayments")) {
+      const m = mapBooksVendorPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.vendorpayments++;
+      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+    }
+    // Best-effort PO linkage by Books reference_number → our purchase_orders id.
+    for (const { id, reference } of billRefs) {
+      try {
+        const po = await env.DB.prepare("SELECT id FROM purchase_orders WHERE id=?").bind(reference).first();
+        if (po) await env.DB.prepare("UPDATE ap_bills SET po_id=? WHERE id=?").bind(reference, id).run();
+      } catch { /* best-effort */ }
+    }
+
     // Best-effort order/DC linkage by Books reference_number → our order id / DC id.
     for (const { id, reference } of invoiceRefs) {
       try {
@@ -3472,10 +3561,11 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     }
 
     await recomputeArBalances(env);
+    await recomputeApBalances(env);
 
     // Advance watermarks + flip backfill flag only when a full pass completed uncapped.
     const nowEpoch = Math.floor(Date.now() / 1000);
-    for (const e of ["contacts", "invoices", "creditnotes", "customerpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+    for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
     if (!r.cap_hit) { await setConfig(env, "initial_backfill_complete", "1", "system"); r.backfill_complete = true; }
   } catch (e) {
     r.status = "error"; r.errors.push(String(e));
@@ -3819,6 +3909,7 @@ export { gmailGetToken, gmailSend, gmailMissingSecrets };
 export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
+export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
@@ -4077,6 +4168,9 @@ export default {
       if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
+      if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
+      if (path==="/api/finance/ap/summary"  && method==="GET") return handleApSummary(request,env);
+      if (path.match(/^\/api\/finance\/ap\/vendor\/[^/]+$/) && method==="GET") return handleApVendorStatement(request,env,path);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -8758,6 +8852,64 @@ async function _arSummaryRows(env: Env, clientId: string | null): Promise<Record
     currency: a.currency, outstanding: a.outstanding, overdue: a.overdue,
     due_this_week: a.due_this_week, buckets: a.buckets,
     dso: Math.round(computeDSO(a.outstanding, a._sales90) * 10) / 10,
+  }));
+}
+
+// ── Payables (P3.2) read API — finance/ops only; clients NEVER see AP. ──
+async function handleApBills(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
+  const vendor = url.searchParams.get("vendor"); if (vendor) { where.push("vendor_id=?"); bind.push(vendor); }
+  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging");
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, vendor_id, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
+  ).bind(...bind).all();
+  let rows = (results || []) as Record<string, unknown>[];
+  if (aging) rows = rows.filter(r => r.age_bucket === aging);
+  return json({ bills: rows });
+}
+async function handleApSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json({ by_currency: await _apSummaryRows(env, null) });
+}
+async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);   // no client access to AP
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE vendor_id=? AND status != 'void' ORDER BY due_date`
+  ).bind(id).all();
+  return json({ vendor_id: id, bills: results || [], by_currency: await _apSummaryRows(env, id) });
+}
+// Per-currency AP aggregation + DPO (days payable outstanding).
+async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record<string, unknown>[]> {
+  const today = istToday();
+  const where = vendorId ? "vendor_id=? AND status != 'void'" : "status != 'void'";
+  const bind = vendorId ? [vendorId] : [];
+  const { results } = await env.DB.prepare(`SELECT currency_code, balance, total, due_date, date FROM ap_bills WHERE ${where}`).bind(...bind).all();
+  const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
+  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _purch90: number }> = {};
+  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
+    const cur = r.currency_code || "INR";
+    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _purch90: 0 });
+    const bal = r.balance || 0;
+    if (bal > 0) {
+      a.outstanding += bal;
+      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+      a.buckets[bucket] += bal;
+      if (bucket !== "current") a.overdue += bal;
+      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    }
+    if (r.date && r.date >= cutoff90) a._purch90 += (r.total || 0);
+  }
+  return Object.values(acc).map(a => ({
+    currency: a.currency, outstanding: a.outstanding, overdue: a.overdue, due_this_week: a.due_this_week,
+    buckets: a.buckets, dpo: Math.round(computeDSO(a.outstanding, a._purch90) * 10) / 10,
   }));
 }
 
