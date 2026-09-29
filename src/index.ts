@@ -9079,6 +9079,10 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Forbidden" }, 403);
   if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return json({ status: "disabled" });
   const body = await request.json().catch(() => ({})) as { full?: boolean };
+  // A manual full sync mints a FRESH Zoho access token first, so a just-rotated
+  // refresh token or a newly-added Books scope takes effect immediately instead of
+  // waiting out the ~1h access-token cache (otherwise a correct fix still 401s).
+  if (body.full) { await setConfig(env, "zoho_token", "", user!.sub); await setConfig(env, "zoho_token_exp", "0", user!.sub); }
   const result = await runBooksSync(env, { full: !!body.full });
   // Surface WHY a sync failed so a non-technical operator isn't left with a bare
   // "sync error". Persist a compact message + a plain-language hint the panel shows.

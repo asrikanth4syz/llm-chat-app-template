@@ -4374,3 +4374,17 @@ describe("finance/finance-setup — sync error is surfaced with a hint", () => {
     expect(clean.last_sync_hint).toBe("");
   });
 });
+
+describe("finance/books-sync — manual full sync mints a fresh Zoho token", () => {
+  it("clears the cached Zoho access token before a full sync so a rotated token takes effect", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_sync_enabled", "1");
+    await setCfg("zoho_token", "stale-cached-token");
+    await setCfg("zoho_token_exp", String(Math.floor(Date.now() / 1000) + 3600)); // not yet expired
+    // Full manual sync must invalidate the cache up-front (regardless of the sync's
+    // own outcome, which is not_configured in the test env).
+    await post("/api/integrations/zoho-books/sync", { full: true }, adminToken);
+    expect(await getCfg("zoho_token")).toBe("");
+    expect(await getCfg("zoho_token_exp")).toBe("0");
+  });
+});
