@@ -4503,3 +4503,22 @@ describe("finance-ar/paid-in-books shows paid (not due) even without a synced pa
     expect(open.status).toBe("open");
   });
 });
+
+describe("finance/books — full rebuild resets the backfill state machine", () => {
+  it("resync clears initial_backfill_complete + cursors (super-admin only)", async () => {
+    await ensureArSchema(env);
+    await setCfg("initial_backfill_complete", "1");
+    await setCfg("books_bf_stage", "6");
+    await setCfg("books_cursor_invoices", "1700000000");
+    // A client user cannot rebuild.
+    expect((await post("/api/finance/books/resync", {}, clientToken)).status).toBe(403);
+    // ops_manager (unprivileged seed) cannot rebuild.
+    expect((await post("/api/finance/books/resync", {}, opsToken)).status).toBe(403);
+    // Super admin resets the machine.
+    const r = await post("/api/finance/books/resync", {}, adminToken);
+    expect(r.status).toBe(200);
+    expect(await getCfg("initial_backfill_complete")).toBe("0");
+    expect(await getCfg("books_bf_stage")).toBe("0");
+    expect(await getCfg("books_cursor_invoices")).toBe("0");
+  });
+});
