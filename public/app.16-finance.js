@@ -386,6 +386,7 @@ async function renderFinanceSetup(main) {
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
+      <div id="fin-sync-progress" style="font-size:12px;color:var(--blue,#1d6fa4);margin-top:8px"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
       <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>
         · <button class="btn btn-secondary btn-sm" ${dataAct('financeConnectZoho')} title="Paste a Zoho authorization code to mint a fresh token with this app's own credentials">Connect Zoho…</button>
@@ -414,15 +415,25 @@ async function financeToggleBooksSync(on) {
   if (r) { showToast('Books sync ' + (on ? 'enabled' : 'disabled'), 'info'); renderFinanceSetup(document.getElementById('main-content')); }
 }
 async function financeRunBooksSync() {
-  showToast('Syncing from Zoho Books… this can take a few minutes.', 'info');
-  const r = await api('/integrations/zoho-books/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
-  if (r) {
-    if (r.status === 'disabled') showToast('Turn the sync ON first.', 'error');
-    else if (r.status === 'not_configured') showToast('Zoho Books is not connected yet — ask IT to finish the connection.', 'error');
-    else if (r.status === 'ok') showToast(`Sync ok: ${r.invoices || 0} invoices, ${r.bills || 0} bills${r.backfill_complete ? ' · backfill complete' : ''}`, 'success');
-    else showToast('Sync failed: ' + (r.hint || (r.errors && r.errors[0]) || r.status) + ' — see the details below.', 'error');
-    renderFinanceSetup(document.getElementById('main-content'));
+  showToast('Syncing from Zoho Books…', 'info');
+  const prog = document.getElementById('fin-sync-progress');
+  const totals = {};
+  // The initial backfill is chunked server-side; keep calling until it reports
+  // complete (or a normal delta returns 'ok'). Each call is one bounded run.
+  for (let i = 0; i < 200; i++) {
+    const r = await api('/integrations/zoho-books/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
+    if (!r) { break; }
+    if (r.status === 'disabled') { showToast('Turn the sync ON first.', 'error'); break; }
+    if (r.status === 'not_configured') { showToast('Zoho Books is not connected yet — ask IT to finish the connection.', 'error'); break; }
+    if (r.status === 'error') { showToast('Sync failed: ' + (r.hint || (r.errors && r.errors[0]) || 'error') + ' — see the details below.', 'error'); break; }
+    for (const [k, v] of Object.entries(r.entity_counts || {})) totals[k] = (totals[k] || 0) + v;
+    if (r.backfill_complete || (r.status === 'ok' && !('entity_counts' in r))) {
+      showToast('Sync complete.', 'success'); break;
+    }
+    // in_progress → show running totals and continue
+    if (prog) prog.textContent = 'Backfilling… ' + Object.entries(totals).map(([k, v]) => `${k}: ${v}`).join(' · ');
   }
+  renderFinanceSetup(document.getElementById('main-content'));
 }
 // Paste a Zoho authorization code → exchanged server-side with THIS app's own
 // client id/secret + region, so the resulting refresh token can never mismatch
