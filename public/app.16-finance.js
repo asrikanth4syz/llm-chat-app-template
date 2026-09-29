@@ -30,7 +30,49 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
-const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '' };
+const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null };
+
+// ── Sortable-column helpers (client-side, over the cached list) ─────────
+const _AGING_ORDER = { current: 0, '1-30': 1, '31-60': 2, '61-90': 3, '91+': 4 };
+const _FIN_NUMERIC = new Set(['total', 'balance', 'worst_overdue_days']);
+function _finSortVal(row, col) {
+  if (col === 'age_bucket') return _AGING_ORDER[row[col]] ?? 99;
+  if (_FIN_NUMERIC.has(col)) return Number(row[col] || 0);
+  return String(row[col] == null ? '' : row[col]).toLowerCase();
+}
+function _finSortRows(rows, sort) {
+  if (!sort || !sort.col) return rows;
+  const dir = sort.dir === 'desc' ? -1 : 1;
+  return rows.slice().sort((a, b) => {
+    const va = _finSortVal(a, sort.col), vb = _finSortVal(b, sort.col);
+    if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0;
+  });
+}
+function _finToggleSort(cur, col) {
+  if (cur && cur.col === col) return { col, dir: cur.dir === 'asc' ? 'desc' : 'asc' };
+  return { col, dir: 'asc' };
+}
+// A clickable, sort-aware header cell. `sortKind` null → a plain header.
+function _sortableTh(sortKind, col, label, alignRight) {
+  const style = `padding:8px 12px;${alignRight ? 'text-align:right' : 'text-align:left'}`;
+  if (!sortKind) return `<th style="${style}">${h(label)}</th>`;
+  const cur = sortKind === 'ar' ? _FIN.arSort : _FIN.apSort;
+  const arrow = cur && cur.col === col ? (cur.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th style="${style}"><button ${dataAct('financeSort', sortKind, col)} title="Sort by ${h(label)}"
+    style="background:none;border:none;padding:0;font:inherit;font-weight:600;cursor:pointer;color:inherit;${alignRight ? '' : ''}">${h(label)}<span style="color:var(--blue,#1d6fa4)">${arrow}</span></button></th>`;
+}
+function financeSort(kind, col) {
+  if (kind === 'ar') { _FIN.arSort = _finToggleSort(_FIN.arSort, col); _renderArTable(); }
+  else if (kind === 'ap') { _FIN.apSort = _finToggleSort(_FIN.apSort, col); _renderApTable(); }
+}
+function _renderArTable() {
+  const host = document.getElementById('ar-table-host');
+  if (host) host.innerHTML = _financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar');
+}
+function _renderApTable() {
+  const host = document.getElementById('ap-table-host');
+  if (host) host.innerHTML = _apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort));
+}
 
 // Human-friendly "how long ago" for the last-synced line (falls back to the date).
 function _finAgo(iso) {
@@ -145,17 +187,17 @@ function _financeCurrencyBlock(c) {
 
 // Invoice rows table (shared by cockpit + statement). `showClient` adds a client
 // column whose name is a click-to-drill button (finance/ops cockpit only).
-function _financeInvoiceTable(invoices, showClient) {
+function _financeInvoiceTable(invoices, showClient, sortKind) {
   if (!invoices.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching invoices.</div>`;
   const head = `
     <tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-      <th style="padding:8px 12px">Invoice</th>
-      ${showClient ? '<th style="padding:8px 12px">Client</th>' : ''}
-      <th style="padding:8px 12px">Due</th>
-      <th style="padding:8px 12px;text-align:right">Total</th>
-      <th style="padding:8px 12px;text-align:right">Balance</th>
-      <th style="padding:8px 12px">Status</th>
-      <th style="padding:8px 12px">Aging</th>
+      ${_sortableTh(sortKind, 'number', 'Invoice')}
+      ${showClient ? _sortableTh(sortKind, 'client_name', 'Client') : ''}
+      ${_sortableTh(sortKind, 'due_date', 'Due')}
+      ${_sortableTh(sortKind, 'total', 'Total', true)}
+      ${_sortableTh(sortKind, 'balance', 'Balance', true)}
+      ${_sortableTh(sortKind, 'status', 'Status')}
+      ${_sortableTh(sortKind, 'age_bucket', 'Aging')}
     </tr>`;
   const clientCell = inv => {
     const label = inv.client_name || inv.client_id || '';
@@ -193,13 +235,12 @@ async function renderReceivables(main) {
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
     ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
-    <div id="ar-table-host">${_financeInvoiceTable(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), true)}</div>`;
+    <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar')}</div>`;
 }
 // Live filter for the receivables table (delegated data-input target).
 function financeFilterAr(q) {
   _FIN.arQ = q || '';
-  const host = document.getElementById('ar-table-host');
-  if (host) host.innerHTML = _financeInvoiceTable(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), true);
+  _renderArTable();
 }
 
 // Drill-in: a finance/ops user views any one customer's full statement.
@@ -263,9 +304,9 @@ function _apBillTable(bills) {
   }).join('');
   return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-      <th style="padding:8px 12px">Bill</th><th style="padding:8px 12px">Vendor</th><th style="padding:8px 12px">Due</th>
-      <th style="padding:8px 12px;text-align:right">Total</th><th style="padding:8px 12px;text-align:right">Balance</th>
-      <th style="padding:8px 12px">Status</th><th style="padding:8px 12px">Aging</th></tr></thead>
+      ${_sortableTh('ap', 'number', 'Bill')}${_sortableTh('ap', 'vendor_name', 'Vendor')}${_sortableTh('ap', 'due_date', 'Due')}
+      ${_sortableTh('ap', 'total', 'Total', true)}${_sortableTh('ap', 'balance', 'Balance', true)}
+      ${_sortableTh('ap', 'status', 'Status')}${_sortableTh('ap', 'age_bucket', 'Aging')}</tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 async function renderPayables(main) {
@@ -282,12 +323,11 @@ async function renderPayables(main) {
     ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No payables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Bills</h3>
     ${_finToolbar('ap', 'Search bills by number, vendor, status…', true)}
-    <div id="ap-table-host">${_apBillTable(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)))}</div>`;
+    <div id="ap-table-host">${_apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort))}</div>`;
 }
 function financeFilterAp(q) {
   _FIN.apQ = q || '';
-  const host = document.getElementById('ap-table-host');
-  if (host) host.innerHTML = _apBillTable(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)));
+  _renderApTable();
 }
 // Drill-in: any one vendor's full statement (finance/ops only).
 async function financeViewVendor(vendorId) {

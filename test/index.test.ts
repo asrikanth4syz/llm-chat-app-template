@@ -3727,7 +3727,7 @@ describe("finance-ar/2.D runBooksSync orchestrator", () => {
     await ensureArSchema(env);
     const { impl } = mockBooks({
       contacts: [{ contact_id: "custA", contact_name: "Acme", email: "a@acme.test", payment_terms: 30 }],
-      invoices: [{ invoice_id: "invA", invoice_number: "INV-A", customer_id: "custA", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "sent" }],
+      invoices: [{ invoice_id: "invA", invoice_number: "INV-A", customer_id: "custA", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, balance: 500, status: "sent" }],
       creditnotes: [{ creditnote_id: "cnA", customer_id: "custA", total: 100, date: "2026-07-01", invoices_credited: [{ invoice_id: "invA", amount_applied: 100 }] }],
       customerpayments: [{ payment_id: "payA", customer_id: "custA", amount: 400, unused_amount: 0, date: "2026-07-02", invoices: [{ invoice_id: "invA", amount_applied: 400 }] }],
     });
@@ -4133,7 +4133,7 @@ describe("finance-ap/runBooksSync mirrors bills + derives balances", () => {
   it("bill balance = total − applied vendor payment", async () => {
     await ensureArSchema(env);
     const { impl } = mockBooks({
-      bills: [{ bill_id: "abB", bill_number: "BILL-B", vendor_id: "vB", vendor_name: "Vend B", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "open" }],
+      bills: [{ bill_id: "abB", bill_number: "BILL-B", vendor_id: "vB", vendor_name: "Vend B", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, balance: 400, status: "open" }],
       vendorpayments: [{ payment_id: "vpB", vendor_id: "vB", amount: 600, unused_amount: 0, date: "2026-07-01", bills: [{ bill_id: "abB", amount_applied: 600 }] }],
     });
     const r = await runBooksSync(booksEnv(), { full: true }, impl);
@@ -4477,5 +4477,29 @@ describe("finance/books — resumable backfill stepper", () => {
     const inv = await db.prepare("SELECT balance, age_bucket FROM ar_invoices WHERE id='bf-i1'").first() as { balance: number; age_bucket: string } | null;
     expect(inv?.balance).toBe(118000);
     expect(typeof inv?.age_bucket).toBe("string");
+  });
+});
+
+describe("finance-ar/paid-in-books shows paid (not due) even without a synced payment", () => {
+  it("mirrors Books balance=0 → status paid; a fully-open invoice stays due", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      contacts: [{ contact_id: "pc1", contact_name: "PaidCo", email: "p@paid.test" }],
+      invoices: [
+        // Paid in Books (balance 0), but NO customerpayments/allocations are synced.
+        { invoice_id: "426-00437", invoice_number: "426-00437", customer_id: "pc1", date: "2026-05-01", due_date: "2026-05-31", sub_total: 1000, tax_total: 0, total: 1000, balance: 0, status: "paid" },
+        // Genuinely outstanding.
+        { invoice_id: "open-1", invoice_number: "OPEN-1", customer_id: "pc1", date: "2026-06-01", due_date: "2026-06-30", sub_total: 500, tax_total: 0, total: 500, balance: 500, status: "sent" },
+      ],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    const db = env.DB as D1Database;
+    const paid = await db.prepare("SELECT balance, status FROM ar_invoices WHERE id='426-00437'").first() as { balance: number; status: string };
+    expect(paid.balance).toBe(0);
+    expect(paid.status).toBe("paid");   // ← the reported bug: was showing 'open'/due
+    const open = await db.prepare("SELECT balance, status FROM ar_invoices WHERE id='open-1'").first() as { balance: number; status: string };
+    expect(open.balance).toBe(50000);
+    expect(open.status).toBe("open");
   });
 });
