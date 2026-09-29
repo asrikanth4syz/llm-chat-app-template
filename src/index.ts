@@ -3566,6 +3566,11 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     await recomputeArBalances(env);
     await recomputeApBalances(env);
 
+    // Stamp when Books data last landed, so cockpits can show "Data synced …" and
+    // staff can tell fresh numbers from stale ones. Written on every pass that
+    // reached recompute (a capped/partial pass still refreshed data).
+    await setConfig(env, "books_last_sync_at", new Date().toISOString(), "system");
+
     // Advance watermarks ONLY on an uncapped pass. If the page cap was hit, hold the
     // cursors so the next run re-pulls the same window (never skip un-fetched pages).
     if (!r.cap_hit) {
@@ -4196,6 +4201,8 @@ export default {
       if (path==="/api/finance/reconcile/exceptions"&& method==="GET")  return handleReconcileExceptions(request,env);
       if (path.match(/^\/api\/finance\/reconcile\/[^/]+\/resolve$/) && method==="POST") return handleReconcileResolve(request,env,path);
       if (path==="/api/finance/dashboard"           && method==="GET")  return handleFinanceDashboard(request,env);
+      if (path==="/api/finance/status"              && method==="GET")  return handleFinanceStatus(request,env);
+      if (path==="/api/finance/settings"            && method==="POST") return handleFinanceSettings(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -8819,7 +8826,7 @@ async function handleArInvoices(request: Request, env: Env): Promise<Response> {
   const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging");
   const { results } = await env.DB.prepare(
-    `SELECT id, number, client_id, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT id, number, client_id, (SELECT name FROM ar_clients WHERE ar_clients.client_id=ar_invoices.client_id) AS client_name, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
   ).bind(...bind).all();
   let rows = (results || []) as Record<string, unknown>[];
   if (aging) rows = rows.filter(r => r.age_bucket === aging);
@@ -8831,7 +8838,7 @@ async function handleArSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _arSummaryRows(env, null) });
+  return json({ by_currency: await _arSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
@@ -8891,7 +8898,7 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
   const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging");
   const { results } = await env.DB.prepare(
-    `SELECT id, number, vendor_id, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT id, number, vendor_id, (SELECT name FROM ap_vendors WHERE ap_vendors.vendor_id=ap_bills.vendor_id) AS vendor_name, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
   ).bind(...bind).all();
   let rows = (results || []) as Record<string, unknown>[];
   if (aging) rows = rows.filter(r => r.age_bucket === aging);
@@ -8900,7 +8907,7 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
 async function handleApSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _apSummaryRows(env, null) });
+  return json({ by_currency: await _apSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
@@ -9012,8 +9019,10 @@ async function handleFinanceDashboard(request: Request, env: Env): Promise<Respo
     const a = ar.find(x => x.currency === c); const p = ap.find(x => x.currency === c);
     return { currency: c, ar: (a?.outstanding as number) || 0, ap: (p?.outstanding as number) || 0, net: ((a?.outstanding as number) || 0) - ((p?.outstanding as number) || 0) };
   });
-  const topDebtors = (await env.DB.prepare("SELECT client_id, currency_code, SUM(balance) AS bal FROM ar_invoices WHERE balance>0 AND status!='void' GROUP BY client_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
-  const topCreditors = (await env.DB.prepare("SELECT vendor_id, currency_code, SUM(balance) AS bal FROM ap_bills WHERE balance>0 AND status!='void' GROUP BY vendor_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  // Show recognizable names (fall back to the id) — non-technical staff think in
+  // customer/vendor names, not Zoho ids.
+  const topDebtors = (await env.DB.prepare("SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, i.currency_code, SUM(i.balance) AS bal FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id WHERE i.balance>0 AND i.status!='void' GROUP BY i.client_id, i.currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const topCreditors = (await env.DB.prepare("SELECT b.vendor_id, COALESCE(v.name, b.vendor_id) AS name, b.currency_code, SUM(b.balance) AS bal FROM ap_bills b LEFT JOIN ap_vendors v ON v.vendor_id=b.vendor_id WHERE b.balance>0 AND b.status!='void' GROUP BY b.vendor_id, b.currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
   const openExceptions = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE status='exception'").first() as { n: number } | null)?.n || 0;
   return json({ ar, ap, cash, top_debtors: topDebtors, top_creditors: topCreditors, open_exceptions: openExceptions });
 }
@@ -9028,6 +9037,67 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   const body = await request.json().catch(() => ({})) as { full?: boolean };
   const result = await runBooksSync(env, { full: !!body.full });
   return json(result);
+}
+
+// ── Finance Setup / go-live control panel (super-admin) ────────────────
+// One status+toggle surface so go-live is clickable, not a wrangler/D1 chore.
+async function _booksMissingSecrets(env: Env): Promise<string[]> {
+  const miss: string[] = [];
+  if (!env.ZOHO_CLIENT_ID) miss.push("ZOHO_CLIENT_ID");
+  if (!env.ZOHO_CLIENT_SECRET) miss.push("ZOHO_CLIENT_SECRET");
+  if (!(await zohoRefreshToken(env))) miss.push("ZOHO_REFRESH_TOKEN (or Connect)");
+  if (!env.ZOHO_BOOKS_ORG_ID) miss.push("ZOHO_BOOKS_ORG_ID");
+  return miss;
+}
+async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
+  const zmiss = await _booksMissingSecrets(env);
+  const gmiss = gmailMissingSecrets(env);
+  const num = async (sql: string) => ((await env.DB.prepare(sql).first() as { n: number } | null)?.n ?? 0);
+  const hadDryRun = (await num("SELECT COUNT(*) AS n FROM reminder_runs WHERE status='dry_run'")) > 0;
+  return {
+    zoho: { configured: zmiss.length === 0, missing: zmiss },
+    gmail: { configured: gmiss.length === 0, missing: gmiss },
+    books_sync_enabled: (await getConfig(env, "books_sync_enabled", "0")) === "1",
+    reminders_mode: await getConfig(env, "reminders_mode", "off"),
+    last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
+    backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
+    had_dry_run: hadDryRun,
+    counts: {
+      invoices: await num("SELECT COUNT(*) AS n FROM ar_invoices"),
+      bills: await num("SELECT COUNT(*) AS n FROM ap_bills"),
+      customers: await num("SELECT COUNT(*) AS n FROM ar_clients"),
+    },
+  };
+}
+// GET status — super/finance may view.
+async function handleFinanceStatus(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await _financeStatus(env));
+}
+// POST settings — super-admin only; validates + guards the live transition; audited.
+async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string };
+  if (body.books_sync_enabled !== undefined) {
+    await setConfig(env, "books_sync_enabled", body.books_sync_enabled ? "1" : "0", user!.sub);
+    await audit(env, user, "FIN_BOOKS_SYNC_TOGGLE", "app_config", "books_sync_enabled", undefined, body.books_sync_enabled ? "1" : "0");
+  }
+  if (body.reminders_mode !== undefined) {
+    const mode = String(body.reminders_mode);
+    if (!["off", "dry_run", "live"].includes(mode)) return json({ error: "mode must be off, dry_run, or live" }, 400);
+    if (mode === "live") {
+      // Guardrails so a non-technical operator cannot skip the safety ramp.
+      if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1")
+        return json({ error: "Run a full Books sync first — the initial backfill is not complete." }, 400);
+      const dry = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE status='dry_run'").first() as { n: number } | null)?.n ?? 0;
+      if (dry === 0) return json({ error: "Do a Dry run first and review the results before going live." }, 400);
+    }
+    await setConfig(env, "reminders_mode", mode, user!.sub);
+    await audit(env, user, "FIN_REMINDERS_MODE", "app_config", "reminders_mode", undefined, mode);
+  }
+  return json(await _financeStatus(env));
 }
 
 // ── Group 5.E: reminder endpoints ─────────────────────────────────────

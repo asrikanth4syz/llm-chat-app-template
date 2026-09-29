@@ -205,6 +205,7 @@ const NAV = {
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
     { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconEye,    badge:null },
     { section:'Admin & Settings' },
+    { id:'finance_setup', label:'Finance Setup', icon:iconSettings, badge:null },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconBadge,  badge:null },
     { id:'zones',       label:'Location Zones', icon:iconPin,    badge:null },
@@ -1088,6 +1089,7 @@ const PAGE_MAP = {
   reminders: 'renderReminders',
   reconciliation: 'renderReconciliation',
   finance_dashboard: 'renderFinanceDashboard',
+  finance_setup: 'renderFinanceSetup',
   my_statement: 'renderMyStatement',
 };
 
