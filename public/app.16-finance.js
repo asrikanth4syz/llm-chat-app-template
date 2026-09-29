@@ -387,7 +387,8 @@ async function renderFinanceSetup(main) {
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>${s.zoho_token_source === 'connect' ? ` · <button class="btn btn-secondary btn-sm" ${dataAct('financeZohoUseSecret')} title="Clear the stored Connect token so the ZOHO_REFRESH_TOKEN secret is used instead">Use Worker secret instead</button>` : ''}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>
+        · <button class="btn btn-secondary btn-sm" ${dataAct('financeConnectZoho')} title="Paste a Zoho authorization code to mint a fresh token with this app's own credentials">Connect Zoho…</button>${s.zoho_token_source === 'connect' ? ` · <button class="btn btn-secondary btn-sm" ${dataAct('financeZohoUseSecret')} title="Clear the stored Connect token so the ZOHO_REFRESH_TOKEN secret is used instead">Use Worker secret instead</button>` : ''}</div>
       ${s.last_sync_error ? `<div style="margin-top:12px;padding:12px 14px;border:1px solid var(--danger,#b3261e);background:var(--danger-bg,#fdecea);border-radius:8px">
         <div style="font-weight:700;color:var(--danger,#b3261e);font-size:13px;margin-bottom:4px">⚠ Last sync failed</div>
         ${s.last_sync_hint ? `<div style="font-size:13px;margin-bottom:6px">${h(s.last_sync_hint)}</div>` : ''}
@@ -420,6 +421,30 @@ async function financeRunBooksSync() {
     else showToast('Sync failed: ' + (r.hint || (r.errors && r.errors[0]) || r.status) + ' — see the details below.', 'error');
     renderFinanceSetup(document.getElementById('main-content'));
   }
+}
+// Paste a Zoho authorization code → exchanged server-side with THIS app's own
+// client id/secret + region, so the resulting refresh token can never mismatch
+// (the invalid_code trap). Use a code scoped for BOTH Books and Inventory.
+function financeConnectZoho() {
+  openModal('Connect Zoho (for Books + Inventory)',
+    `<div style="font-size:.85rem;line-height:1.5;color:var(--text-muted);margin-bottom:12px">
+       <ol style="margin:0 0 0 18px;padding:0">
+         <li>Open your Zoho API console: <code>api-console.zoho.&lt;your region&gt;</code> (e.g. <code>.in</code> or <code>.com</code>) → your <b>Self Client</b>.</li>
+         <li><b>Generate Code</b> with scope:<br><code style="user-select:all">ZohoBooks.fullaccess.all,ZohoInventory.fullaccess.all</code></li>
+         <li>Pick a short duration, copy the code, and paste it below <b>immediately</b> (it expires in ~10 minutes).</li>
+       </ol>
+       <div style="margin-top:8px">The code is exchanged using this app's own ZOHO_CLIENT_ID/SECRET and ZOHO_DC, so it always matches.</div>
+     </div>
+     <input id="fin-zoho-code" type="text" placeholder="Paste authorization code (1000.xxxx…)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font:inherit">`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('financeConnectZohoSubmit')}>Connect</button>`);
+}
+async function financeConnectZohoSubmit() {
+  const code = (document.getElementById('fin-zoho-code').value || '').trim();
+  if (!code) { showToast('Paste the authorization code first', 'error'); return; }
+  const r = await api('/integrations/zoho-inventory/connect', { method: 'POST', body: JSON.stringify({ code }) });
+  if (r && r.ok) { closeModal(); showToast('Zoho connected — now click Run full sync now.', 'success'); renderFinanceSetup(document.getElementById('main-content')); }
+  else showToast('Connect failed: ' + ((r && r.error) || 'unknown error') + (r && r.dc ? ' (region ' + r.dc + ')' : ''), 'error');
 }
 async function financeZohoUseSecret() {
   if (!confirm('Switch Zoho to the Worker ZOHO_REFRESH_TOKEN secret?\n\nUse this if you re-minted the token with Books scope. The stored in-app Connect token will be cleared and the Worker secret used instead.')) return;
