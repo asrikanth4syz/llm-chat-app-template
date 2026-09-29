@@ -32,6 +32,22 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 // box and the CSV export both work off the same data without a re-fetch.
 const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null };
 
+// Cap how many rows get built into the DOM at once — a few thousand <tr> via
+// innerHTML is what makes the cockpit janky. Sort/filter/export still operate on
+// the full cached list; only the render is capped, with a footer note.
+const _FIN_RENDER_CAP = 250;
+function _finCapNote(total) {
+  if (total <= _FIN_RENDER_CAP) return '';
+  return `<div style="padding:8px 12px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)">Showing the first ${_FIN_RENDER_CAP} of ${total} rows. Use search or a column sort to narrow, or Export CSV for the full list.</div>`;
+}
+// Colored, theme-safe status pill (bordered, text-colored). open = fully due → red.
+function _finStatusPill(status) {
+  const s = String(status || '').toLowerCase();
+  const c = s === 'paid' ? 'var(--success,#2e6e12)' : s === 'partial' ? 'var(--warning,#8a5a00)'
+    : s === 'void' ? 'var(--muted,#777)' : 'var(--danger,#b3261e)';
+  return `<span style="display:inline-block;padding:1px 9px;border:1px solid ${c};border-radius:10px;font-size:11px;font-weight:600;color:${c};text-transform:capitalize">${h(status || '—')}</span>`;
+}
+
 // ── Sortable-column helpers (client-side, over the cached list) ─────────
 const _AGING_ORDER = { current: 0, '1-30': 1, '31-60': 2, '61-90': 3, '91+': 4 };
 const _FIN_NUMERIC = new Set(['total', 'balance', 'worst_overdue_days']);
@@ -205,17 +221,18 @@ function _financeInvoiceTable(invoices, showClient, sortKind) {
     return `<td style="padding:8px 12px"><button ${dataAct('financeViewClient', inv.client_id)} title="View this customer's statement"
       style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
   };
-  const rows = invoices.map(inv => `
+  const shown = invoices.length > _FIN_RENDER_CAP ? invoices.slice(0, _FIN_RENDER_CAP) : invoices;
+  const rows = shown.map(inv => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(inv.number || inv.id)}</td>
       ${showClient ? clientCell(inv) : ''}
       <td style="padding:8px 12px">${h(inv.due_date || '')}</td>
-      <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
-      <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
-      <td style="padding:8px 12px">${h(inv.status || '')}</td>
+      <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
+      <td style="padding:8px 12px">${_finStatusPill(inv.status)}</td>
       <td style="padding:8px 12px">${h(_AGING_LABEL[inv.age_bucket] || inv.age_bucket || '')}</td>
     </tr>`).join('');
-  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>${head}</thead><tbody>${rows}</tbody></table>${_finCapNote(invoices.length)}</div>`;
 }
 
 // Finance/ops cockpit: per-currency KPIs + aging + the searchable, exportable,
@@ -291,15 +308,16 @@ function _apBillTable(bills) {
     return `<td style="padding:8px 12px"><button ${dataAct('financeViewVendor', b.vendor_id)} title="View this vendor's statement"
       style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
   };
-  const rows = bills.map(b => {
-    const overdue = b.age_bucket && b.age_bucket !== 'current';
+  const shown = bills.length > _FIN_RENDER_CAP ? bills.slice(0, _FIN_RENDER_CAP) : bills;
+  const rows = shown.map(b => {
+    const overdue = b.age_bucket && b.age_bucket !== 'current' && (b.balance || 0) > 0;
     return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(b.number || b.id)}</td>
       ${vendorCell(b)}
       <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
-      <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(b.total, b.currency_code))}</td>
-      <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(b.balance, b.currency_code))}</td>
-      <td style="padding:8px 12px">${h(b.status || '')}</td>
+      <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.total, b.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.balance, b.currency_code))}</td>
+      <td style="padding:8px 12px">${_finStatusPill(b.status)}</td>
       <td style="padding:8px 12px">${h(_AGING_LABEL[b.age_bucket] || b.age_bucket || '')}</td></tr>`;
   }).join('');
   return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -307,7 +325,7 @@ function _apBillTable(bills) {
       ${_sortableTh('ap', 'number', 'Bill')}${_sortableTh('ap', 'vendor_name', 'Vendor')}${_sortableTh('ap', 'due_date', 'Due')}
       ${_sortableTh('ap', 'total', 'Total', true)}${_sortableTh('ap', 'balance', 'Balance', true)}
       ${_sortableTh('ap', 'status', 'Status')}${_sortableTh('ap', 'age_bucket', 'Aging')}</tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
+    <tbody>${rows}</tbody></table>${_finCapNote(bills.length)}</div>`;
 }
 async function renderPayables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading payables…</p></div>`;
@@ -424,6 +442,7 @@ async function renderFinanceSetup(main) {
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <button class="btn ${s.books_sync_enabled ? 'btn-primary' : 'btn-secondary'}" ${dataAct('financeToggleBooksSync', !s.books_sync_enabled)}>${s.books_sync_enabled ? 'Sync is ON — turn off' : 'Turn sync ON'}</button>
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
+        <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeResyncAll') : 'disabled'} title="Rebuild everything from Books — re-pulls every invoice/bill and refreshes paid/due status. Use if paid documents still show as due.">Rebuild from Books</button>
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div id="fin-sync-progress" style="font-size:12px;color:var(--blue,#1d6fa4);margin-top:8px"></div>
@@ -453,6 +472,15 @@ async function renderFinanceSetup(main) {
 async function financeToggleBooksSync(on) {
   const r = await api('/finance/settings', { method: 'POST', body: JSON.stringify({ books_sync_enabled: !!on }) });
   if (r) { showToast('Books sync ' + (on ? 'enabled' : 'disabled'), 'info'); renderFinanceSetup(document.getElementById('main-content')); }
+}
+// Full rebuild: reset the backfill server-side, then run it. Corrects rows synced
+// before the balance-mirror fix (paid documents that still show as due).
+async function financeResyncAll() {
+  if (!confirm('Rebuild all finance data from Zoho Books?\n\nThis re-pulls every invoice and bill and refreshes their paid/due status. It only reads from Books, and runs in the background — leave the page open until it finishes.')) return;
+  const r = await api('/finance/books/resync', { method: 'POST', body: JSON.stringify({}) });
+  if (!r) return;
+  showToast('Rebuild started — pulling everything from Books…', 'info');
+  await financeRunBooksSync();
 }
 async function financeRunBooksSync() {
   showToast('Syncing from Zoho Books…', 'info');

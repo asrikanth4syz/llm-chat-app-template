@@ -4345,6 +4345,7 @@ export default {
       if (path==="/api/finance/settings"            && method==="POST") return handleFinanceSettings(request,env);
       if (path==="/api/finance/zoho/use-secret"     && method==="POST") return handleZohoUseSecret(request,env);
       if (path==="/api/finance/zoho/test"           && method==="GET")  return handleZohoTest(request,env);
+      if (path==="/api/finance/books/resync"        && method==="POST") return handleBooksResync(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9045,7 +9046,7 @@ async function handleArClientStatement(request: Request, env: Env, path: string)
   if (!full && !isClient) return json({ error: "Forbidden" }, 403);
   if (isClient && id !== (user!.client_id || "")) return json({ error: "Forbidden" }, 403);
   const { results } = await env.DB.prepare(
-    `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY due_date`
+    `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
   ).bind(id).all();
   return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
 }
@@ -9115,7 +9116,7 @@ async function handleApVendorStatement(request: Request, env: Env, path: string)
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);   // no client access to AP
   const id = decodeURIComponent(path.split("/").pop()!);
   const { results } = await env.DB.prepare(
-    `SELECT id, number, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE vendor_id=? AND status != 'void' ORDER BY due_date`
+    `SELECT id, number, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE vendor_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
   ).bind(id).all();
   return json({ vendor_id: id, bills: results || [], by_currency: await _apSummaryRows(env, id) });
 }
@@ -9360,6 +9361,22 @@ async function handleZohoUseSecret(request: Request, env: Env): Promise<Response
   await setConfig(env, "zoho_token_exp", "0", user!.sub);
   await audit(env, user, "ZOHO_USE_SECRET", "app_config", "zoho_refresh_token", undefined, "cleared stored Connect token; using ZOHO_REFRESH_TOKEN");
   return json(await _financeStatus(env));
+}
+
+// POST /api/finance/books/resync — rebuild the whole mirror from Books. Resets the
+// resumable backfill (and delta cursors) so the next run RE-PULLS every invoice/bill
+// and re-mirrors Books' balance/status. Needed to correct rows synced before the
+// balance-mirror fix: a delta sync never re-pulls an unchanged paid document, so
+// their stale balance would otherwise persist (paid docs shown as due).
+async function handleBooksResync(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may rebuild the finance sync" }, 403);
+  await setConfig(env, "initial_backfill_complete", "0", user!.sub);
+  await setConfig(env, "books_bf_stage", "0", user!.sub);
+  for (const e of BOOKS_ENTITIES) { await setConfig(env, `books_bf_page_${e}`, "1", user!.sub); await setConfig(env, `books_cursor_${e}`, "0", user!.sub); }
+  await setConfig(env, "books_last_sync_error", "", user!.sub);
+  await audit(env, user, "BOOKS_RESYNC", "app_config", "initial_backfill_complete", undefined, "full rebuild requested");
+  return json({ ok: true, ...(await _financeStatus(env)) });
 }
 
 // GET /api/finance/zoho/test — read-only connection probe. Forces a fresh token
