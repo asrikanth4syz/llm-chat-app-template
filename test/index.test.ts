@@ -4423,3 +4423,17 @@ describe("finance/finance-setup — sync-error hints classify invalid_code vs 40
     expect(c.last_sync_hint).toMatch(/rejected the organization/i);
   });
 });
+
+describe("finance/zoho — connection self-test probe", () => {
+  it("reports token source/region/org and is finance-gated (token refresh fails cleanly with no network)", async () => {
+    await ensureArSchema(env);
+    await setCfg("zoho_refresh_token", "some-stored-token");
+    await setCfg("zoho_token", ""); await setCfg("zoho_token_exp", "0");
+    const r = await (await get("/api/finance/zoho/test", adminToken)).json() as { token_source: string; dc: string; token_ok: boolean };
+    expect(r.token_source).toBe("connect");
+    expect(typeof r.dc).toBe("string");
+    expect(r.token_ok).toBe(false); // no outbound network in the test env → refresh fails, reported cleanly
+    // client_* role cannot probe.
+    expect((await get("/api/finance/zoho/test", clientToken)).status).toBe(403);
+  });
+});

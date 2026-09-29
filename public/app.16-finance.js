@@ -388,7 +388,9 @@ async function renderFinanceSetup(main) {
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
       <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>
-        · <button class="btn btn-secondary btn-sm" ${dataAct('financeConnectZoho')} title="Paste a Zoho authorization code to mint a fresh token with this app's own credentials">Connect Zoho…</button>${s.zoho_token_source === 'connect' ? ` · <button class="btn btn-secondary btn-sm" ${dataAct('financeZohoUseSecret')} title="Clear the stored Connect token so the ZOHO_REFRESH_TOKEN secret is used instead">Use Worker secret instead</button>` : ''}</div>
+        · <button class="btn btn-secondary btn-sm" ${dataAct('financeConnectZoho')} title="Paste a Zoho authorization code to mint a fresh token with this app's own credentials">Connect Zoho…</button>
+        · <button class="btn btn-secondary btn-sm" ${dataAct('financeTestZoho')} title="Check the Zoho connection step by step (token refresh, then a Books read)">Test connection</button>${s.zoho_token_source === 'connect' ? ` · <button class="btn btn-secondary btn-sm" ${dataAct('financeZohoUseSecret')} title="Clear the stored Connect token so the ZOHO_REFRESH_TOKEN secret is used instead">Use Worker secret instead</button>` : ''}</div>
+      <div id="fin-zoho-test" style="margin-top:8px"></div>
       ${s.last_sync_error ? `<div style="margin-top:12px;padding:12px 14px;border:1px solid var(--danger,#b3261e);background:var(--danger-bg,#fdecea);border-radius:8px">
         <div style="font-weight:700;color:var(--danger,#b3261e);font-size:13px;margin-bottom:4px">⚠ Last sync failed</div>
         ${s.last_sync_hint ? `<div style="font-size:13px;margin-bottom:6px">${h(s.last_sync_hint)}</div>` : ''}
@@ -425,6 +427,22 @@ async function financeRunBooksSync() {
 // Paste a Zoho authorization code → exchanged server-side with THIS app's own
 // client id/secret + region, so the resulting refresh token can never mismatch
 // (the invalid_code trap). Use a code scoped for BOTH Books and Inventory.
+async function financeTestZoho() {
+  const box = document.getElementById('fin-zoho-test');
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Testing…</span>';
+  const r = await api('/finance/zoho/test');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  const row = (ok, label, detail) => `<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:3px">
+    <span style="color:${ok ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${ok ? '✓' : '✗'}</span>
+    <span>${h(label)}${detail ? ' — <span style="color:var(--muted)">' + h(detail) + '</span>' : ''}</span></div>`;
+  const parts = [];
+  parts.push(row(true, `Using ${r.token_source === 'connect' ? 'in-app Connect token' : r.token_source === 'secret' ? 'Worker secret' : 'no token'} · region ${r.dc} · Books org id ${r.books_org_id_present ? 'set' : 'MISSING'}`, ''));
+  parts.push(row(!!r.token_ok, 'Token refresh', r.token_ok ? 'ok' : ('failed: ' + (r.token_error || '?'))));
+  if (r.token_ok) parts.push(row(!!r.books_ok, 'Books read', r.books_ok ? 'ok' : ('HTTP ' + (r.books_status || '?') + ' ' + (r.books_error || ''))));
+  const allOk = r.token_ok && r.books_ok;
+  if (box) box.innerHTML = `<div style="padding:10px 12px;border:1px solid ${allOk ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'};border-radius:8px;background:var(--surface-2,#f8fafc)">
+    <div style="font-weight:700;font-size:12px;margin-bottom:2px;color:${allOk ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${allOk ? 'Connection OK — you can run the sync' : 'Connection problem'}</div>${parts.join('')}</div>`;
+}
 function financeConnectZoho() {
   openModal('Connect Zoho (for Books + Inventory)',
     `<div style="font-size:.85rem;line-height:1.5;color:var(--text-muted);margin-bottom:12px">

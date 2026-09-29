@@ -4204,6 +4204,7 @@ export default {
       if (path==="/api/finance/status"              && method==="GET")  return handleFinanceStatus(request,env);
       if (path==="/api/finance/settings"            && method==="POST") return handleFinanceSettings(request,env);
       if (path==="/api/finance/zoho/use-secret"     && method==="POST") return handleZohoUseSecret(request,env);
+      if (path==="/api/finance/zoho/test"           && method==="GET")  return handleZohoTest(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9196,6 +9197,38 @@ async function handleZohoUseSecret(request: Request, env: Env): Promise<Response
   await setConfig(env, "zoho_token_exp", "0", user!.sub);
   await audit(env, user, "ZOHO_USE_SECRET", "app_config", "zoho_refresh_token", undefined, "cleared stored Connect token; using ZOHO_REFRESH_TOKEN");
   return json(await _financeStatus(env));
+}
+
+// GET /api/finance/zoho/test — read-only connection probe. Forces a fresh token
+// refresh, then one lightweight Books read, and reports each step's outcome so an
+// operator can see EXACTLY where it breaks (token refresh vs Books permission vs
+// org/region) instead of a single conflated "sync error". Never returns the token.
+async function handleZohoTest(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const stored = (await getConfig(env, "zoho_refresh_token", "")).trim();
+  const dc = zohoDc(env);
+  const orgId = env.ZOHO_BOOKS_ORG_ID || "";
+  const out: Record<string, unknown> = {
+    token_source: stored ? "connect" : (env.ZOHO_REFRESH_TOKEN ? "secret" : "none"),
+    dc, books_org_id_present: !!orgId,
+    client_id_present: !!env.ZOHO_CLIENT_ID, client_secret_present: !!env.ZOHO_CLIENT_SECRET,
+  };
+  let token = "";
+  try {
+    token = await zohoGetToken(env, fetch, true); // force a fresh refresh — this is where invalid_code surfaces
+    out.token_ok = true;
+  } catch (e) {
+    out.token_ok = false; out.token_error = String((e as { message?: string })?.message || e);
+    return json(out); // can't test Books without a token
+  }
+  try {
+    const res = await fetch(`https://www.zohoapis.${dc}/books/v3/contacts?organization_id=${encodeURIComponent(orgId)}&per_page=1&page=1`,
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+    out.books_status = res.status; out.books_ok = res.ok;
+    if (!res.ok) { const d = await res.json().catch(() => ({})) as { message?: string; code?: number }; out.books_error = d.message || `HTTP ${res.status}`; }
+  } catch (e) { out.books_ok = false; out.books_error = String(e); }
+  return json(out);
 }
 
 // ── Group 5.E: reminder endpoints ─────────────────────────────────────
