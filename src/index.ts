@@ -4203,6 +4203,7 @@ export default {
       if (path==="/api/finance/dashboard"           && method==="GET")  return handleFinanceDashboard(request,env);
       if (path==="/api/finance/status"              && method==="GET")  return handleFinanceStatus(request,env);
       if (path==="/api/finance/settings"            && method==="POST") return handleFinanceSettings(request,env);
+      if (path==="/api/finance/zoho/use-secret"     && method==="POST") return handleZohoUseSecret(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9122,8 +9123,14 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
   const gmiss = gmailMissingSecrets(env);
   const num = async (sql: string) => ((await env.DB.prepare(sql).first() as { n: number } | null)?.n ?? 0);
   const hadDryRun = (await num("SELECT COUNT(*) AS n FROM reminder_runs WHERE status='dry_run'")) > 0;
+  // Which refresh token the app actually uses: the in-app Connect flow stores one in
+  // config and it WINS over the ZOHO_REFRESH_TOKEN secret. Surfacing this lets an
+  // operator see that a freshly-set secret is being shadowed by an older Connect token.
+  const storedTok = (await getConfig(env, "zoho_refresh_token", "")).trim();
+  const zohoTokenSource = storedTok ? "connect" : (env.ZOHO_REFRESH_TOKEN ? "secret" : "none");
   return {
     zoho: { configured: zmiss.length === 0, missing: zmiss },
+    zoho_token_source: zohoTokenSource,
     gmail: { configured: gmiss.length === 0, missing: gmiss },
     books_sync_enabled: (await getConfig(env, "books_sync_enabled", "0")) === "1",
     reminders_mode: await getConfig(env, "reminders_mode", "off"),
@@ -9167,6 +9174,21 @@ async function handleFinanceSettings(request: Request, env: Env): Promise<Respon
     await setConfig(env, "reminders_mode", mode, user!.sub);
     await audit(env, user, "FIN_REMINDERS_MODE", "app_config", "reminders_mode", undefined, mode);
   }
+  return json(await _financeStatus(env));
+}
+
+// POST /api/finance/zoho/use-secret — drop the in-app Connect refresh token so the
+// app falls back to the ZOHO_REFRESH_TOKEN Worker secret. Needed when the stored
+// Connect token has narrower scope (e.g. Inventory-only) than a freshly-set secret
+// (Inventory + Books). Also clears the cached access token so the switch is immediate.
+async function handleZohoUseSecret(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may change the Zoho connection" }, 403);
+  if (!(env.ZOHO_REFRESH_TOKEN || "").trim()) return json({ error: "No ZOHO_REFRESH_TOKEN secret is set — add it first, then switch." }, 400);
+  await setConfig(env, "zoho_refresh_token", "", user!.sub); // clear stored Connect token → fall back to the secret
+  await setConfig(env, "zoho_token", "", user!.sub);          // clear cached access token
+  await setConfig(env, "zoho_token_exp", "0", user!.sub);
+  await audit(env, user, "ZOHO_USE_SECRET", "app_config", "zoho_refresh_token", undefined, "cleared stored Connect token; using ZOHO_REFRESH_TOKEN");
   return json(await _financeStatus(env));
 }
 
