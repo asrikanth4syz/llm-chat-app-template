@@ -16,7 +16,7 @@ import { gmailGetToken, gmailSend } from "../src/index";
 import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
 import { hashStr } from "../src/index";
 // P3.2 — Payables (AP).
-import { mapBooksBill, mapBooksVendorPayment } from "../src/index";
+import { mapBooksBill, mapBooksVendorPayment, runBooksBackfillStep } from "../src/index";
 // P3.3 — Reconciliation.
 import { runReconciliation } from "../src/index";
 
@@ -4448,5 +4448,34 @@ describe("finance/zoho — connection self-test probe", () => {
     expect(r.token_ok).toBe(false); // no outbound network in the test env → refresh fails, reported cleanly
     // client_* role cannot probe.
     expect((await get("/api/finance/zoho/test", clientToken)).status).toBe(403);
+  });
+});
+
+describe("finance/books — resumable backfill stepper", () => {
+  it("advances entity-by-entity across calls, then finalizes and marks backfill complete", async () => {
+    await ensureArSchema(env);
+    const db = env.DB as D1Database;
+    // Clean slate for the backfill state machine.
+    await setCfg("books_bf_stage", "0");
+    await setCfg("initial_backfill_complete", "0");
+    for (const e of ["contacts","invoices","creditnotes","customerpayments","bills","vendorpayments"]) await setCfg(`books_bf_page_${e}`, "1");
+    const { impl } = mockBooks({
+      contacts: [{ contact_id: "bf-c1", contact_name: "BF Cust", email: "bf@x.test" }],
+      invoices: [{ invoice_id: "bf-i1", invoice_number: "BF-1", customer_id: "bf-c1", date: "2026-06-01", due_date: "2026-06-30", total: 1180, sub_total: 1000, tax_total: 180, currency_code: "INR", status: "open", exchange_rate: 1 }],
+    });
+    // First call: pulls all 6 single-page entities (budget 8 > 6), returns in_progress.
+    const s1 = await runBooksBackfillStep(booksEnv(), impl);
+    expect(s1.status).toBe("in_progress");
+    expect(s1.backfill_complete).toBe(false);
+    expect(await getCfg("initial_backfill_complete")).toBe("0");
+    // Second call: stage past the last entity → finalize (recompute + mark complete).
+    const s2 = await runBooksBackfillStep(booksEnv(), impl);
+    expect(s2.status).toBe("ok");
+    expect(s2.backfill_complete).toBe(true);
+    expect(await getCfg("initial_backfill_complete")).toBe("1");
+    // Data landed and balances were recomputed (age bucket set on the open invoice).
+    const inv = await db.prepare("SELECT balance, age_bucket FROM ar_invoices WHERE id='bf-i1'").first() as { balance: number; age_bucket: string } | null;
+    expect(inv?.balance).toBe(118000);
+    expect(typeof inv?.age_bucket).toBe("string");
   });
 });

@@ -3623,6 +3623,85 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
   return r;
 }
 
+// ── Resumable initial backfill ─────────────────────────────────────────
+// A first-time backfill of thousands of records can exceed a single Worker's
+// CPU/wall-time budget even with batched writes. This processes a BOUNDED number
+// of pages per invocation, persisting a per-entity page cursor + a stage pointer,
+// so repeated calls (the SPA auto-continues; the cron also advances it) chip
+// through every entity and then finalize. Order/DC linkage is a delta-sync concern
+// and is intentionally skipped here (best-effort, non-critical for AR go-live).
+const BOOKS_ENTITIES = ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"] as const;
+const BACKFILL_PAGE_BUDGET = 8; // pages fetched+written per invocation (≈1600 rows at PER_PAGE=200)
+interface BackfillStepResult {
+  status: "in_progress" | "ok" | "not_configured" | "error";
+  backfill_complete: boolean; stage: string; pages_this_run: number;
+  entity_counts: Record<string, number>; errors: string[];
+}
+// Map + batch-upsert one entity's page of items (plus its sub-rows). Returns rows written.
+async function _ingestBooksEntity(env: Env, entity: string, items: Record<string, unknown>[]): Promise<number> {
+  if (!items.length) return 0;
+  if (entity === "contacts") {
+    const rows: Record<string, unknown>[] = []; for (const z of items) { const m = mapBooksContact(z); if ("row" in m) rows.push(m.row); }
+    await upsertMirror(env, "ar_clients", "client_id", rows); return rows.length;
+  }
+  if (entity === "invoices") {
+    const rows: Record<string, unknown>[] = []; for (const z of items) { const m = mapBooksInvoice(z); if ("row" in m) rows.push(m.row); }
+    await upsertMirror(env, "ar_invoices", "zoho_invoice_id", rows); return rows.length;
+  }
+  if (entity === "creditnotes") {
+    const rows: Record<string, unknown>[] = []; const allocs: Record<string, unknown>[] = [];
+    for (const z of items) { const m = mapBooksCreditNote(z); if ("note" in m) { rows.push(m.note); if (m.allocations.length) allocs.push(...m.allocations); } }
+    await upsertMirror(env, "ar_credit_notes", "zoho_creditnote_id", rows); if (allocs.length) await upsertMirror(env, "credit_allocations", "id", allocs); return rows.length;
+  }
+  if (entity === "customerpayments" || entity === "vendorpayments") {
+    const rows: Record<string, unknown>[] = []; const allocs: Record<string, unknown>[] = [];
+    for (const z of items) { const m = entity === "customerpayments" ? mapBooksPayment(z) : mapBooksVendorPayment(z); if ("payment" in m) { rows.push(m.payment); if (m.allocations.length) allocs.push(...m.allocations); } }
+    await upsertMirror(env, "fin_payments", "zoho_payment_id", rows); if (allocs.length) await upsertMirror(env, "fin_allocations", "id", allocs); return rows.length;
+  }
+  if (entity === "bills") {
+    const rows: Record<string, unknown>[] = []; const vendors: Record<string, unknown>[] = [];
+    for (const z of items) { const m = mapBooksBill(z); if ("bill" in m) { rows.push(m.bill); if (m.vendor) vendors.push(m.vendor); } }
+    if (vendors.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendors);
+    await upsertMirror(env, "ap_bills", "zoho_bill_id", rows); return rows.length;
+  }
+  return 0;
+}
+async function runBooksBackfillStep(env: Env, fetchImpl: FetchImpl = fetch): Promise<BackfillStepResult> {
+  const r: BackfillStepResult = { status: "in_progress", backfill_complete: false, stage: "", pages_this_run: 0, entity_counts: {}, errors: [] };
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) { r.status = "not_configured"; return r; }
+  let token: string;
+  try { token = await zohoGetToken(env, fetchImpl); } catch (e) { r.status = "error"; r.errors.push(`auth: ${String(e)}`); return r; }
+  try {
+    let stage = parseInt(await getConfig(env, "books_bf_stage", "0"), 10) || 0;
+    // Finalize step runs alone (recompute over the whole dataset is isolated from fetching).
+    if (stage >= BOOKS_ENTITIES.length) {
+      await recomputeArBalances(env);
+      await recomputeApBalances(env);
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      for (const e of BOOKS_ENTITIES) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+      await setConfig(env, "books_last_sync_at", new Date().toISOString(), "system");
+      await setConfig(env, "initial_backfill_complete", "1", "system");
+      await setConfig(env, "books_last_sync_error", "", "system");
+      await setConfig(env, "books_bf_stage", "0", "system");
+      for (const e of BOOKS_ENTITIES) await setConfig(env, `books_bf_page_${e}`, "1", "system");
+      r.status = "ok"; r.backfill_complete = true; r.stage = "finalized";
+      return r;
+    }
+    let pages = 0;
+    while (stage < BOOKS_ENTITIES.length && pages < BACKFILL_PAGE_BUDGET) {
+      const entity = BOOKS_ENTITIES[stage];
+      const page = parseInt(await getConfig(env, `books_bf_page_${entity}`, "1"), 10) || 1;
+      const { items, hasMore } = await booksFetch(env, token, entity, { page, modifiedSinceEpoch: 0 }, fetchImpl);
+      r.entity_counts[entity] = (r.entity_counts[entity] || 0) + await _ingestBooksEntity(env, entity, items);
+      pages++; r.pages_this_run = pages; r.stage = entity;
+      if (hasMore) { await setConfig(env, `books_bf_page_${entity}`, String(page + 1), "system"); }
+      else { stage++; await setConfig(env, "books_bf_stage", String(stage), "system"); }
+    }
+    // If every entity is pulled, the NEXT call finalizes (isolated recompute).
+    return r;
+  } catch (e) { r.status = "error"; r.errors.push(String(e)); return r; }
+}
+
 // Derive amount_paid / credited / balance / status / age_bucket for all AR invoices
 // from the mirrored allocations (PRD §15: balance = total + late_fee − amount_paid −
 // credited; settled = balance ≤ 0). Money stays integer paise throughout.
@@ -3975,7 +4054,7 @@ export { gmailGetToken, gmailSend, gmailMissingSecrets };
 export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
-export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation };
+export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation, runBooksBackfillStep };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
@@ -9125,11 +9204,16 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   // refresh token or a newly-added Books scope takes effect immediately instead of
   // waiting out the ~1h access-token cache (otherwise a correct fix still 401s).
   if (body.full) { await setConfig(env, "zoho_token", "", user!.sub); await setConfig(env, "zoho_token_exp", "0", user!.sub); }
-  const result = await runBooksSync(env, { full: !!body.full });
+  // Until the initial backfill is complete, run the RESUMABLE stepper (bounded work
+  // per call; the SPA auto-continues). Once complete, a manual run is a normal delta.
+  const backfillDone = (await getConfig(env, "initial_backfill_complete", "0")) === "1";
+  const result: BooksSyncResult | BackfillStepResult = backfillDone
+    ? await runBooksSync(env, { full: !!body.full })
+    : await runBooksBackfillStep(env);
   // Surface WHY a sync failed so a non-technical operator isn't left with a bare
   // "sync error". Persist a compact message + a plain-language hint the panel shows.
   const errText = (result.errors || []).slice(0, 3).join(" | ");
-  const failed = result.status !== "ok" || !!errText;
+  const failed = result.status === "error" || result.status === "not_configured";
   const stored = failed ? `${result.status}${errText ? ": " + errText : ""}` : "";
   await setConfig(env, "books_last_sync_error", stored, user!.sub);
   return json({ ...result, hint: failed ? _booksSyncHint(stored) : "" });
