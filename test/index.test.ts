@@ -3675,6 +3675,19 @@ describe("finance-ar/2.B upsertMirror", () => {
     const chk = await (env.DB as D1Database).prepare("SELECT name FROM ar_clients WHERE client_id='um50'").first() as { name: string };
     expect(chk.name).toBe("N50-v2");
   });
+  it("dedupes duplicate keys within one batched call (no PRIMARY KEY violation)", async () => {
+    await ensureArSchema(env);
+    // Two rows share a key in a single call (e.g. two bills for the same vendor).
+    const res = await upsertMirror(env, "ar_clients", "client_id", [
+      { client_id: "dup1", name: "First" },
+      { client_id: "dup1", name: "Second" }, // same key → 2nd becomes an UPDATE, not a 2nd INSERT
+      { client_id: "dup2", name: "Other" },
+    ]);
+    expect(res.inserted).toBe(2);
+    expect(res.updated).toBe(1);
+    const row = await (env.DB as D1Database).prepare("SELECT name FROM ar_clients WHERE client_id='dup1'").first() as { name: string };
+    expect(row.name).toBe("Second"); // last write wins
+  });
   it("a partial payload never blanks an app-owned column (dunning_opt_out)", async () => {
     await ensureArSchema(env);
     await upsertMirror(env, "ar_clients", "client_id", [{ client_id: "cP", name: "Orig", dunning_opt_out: 1 }]);

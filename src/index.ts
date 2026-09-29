@@ -3294,20 +3294,35 @@ async function booksFetch(
 // (this is what preserves app-owned ar_clients.dunning_opt_out across syncs). Stamps
 // zoho_synced_at when a mirrored row does not carry one. Table/column names are
 // code-controlled (never user input), so string interpolation here is safe.
+// Run prepared statements in D1 batches. A Worker allows ~1000 subrequests per
+// request; one .batch() call is ONE subrequest regardless of how many statements
+// it carries, so batching is what lets a multi-thousand-row Books backfill finish
+// in a single invocation instead of dying part-way. Statements in a batch run in
+// order and transactionally, so an INSERT then a same-key UPDATE is safe.
+const D1_BATCH = 50;
+async function _d1Batch(env: Env, stmts: D1PreparedStatement[]): Promise<void> {
+  for (let i = 0; i < stmts.length; i += D1_BATCH) await env.DB.batch(stmts.slice(i, i + D1_BATCH));
+}
+// Chunked existence lookup (respects D1's ~100 bound-variable limit) → the set of
+// keys already present in `table`.
+async function _existingKeys(env: Env, table: string, keyCol: string, keys: string[]): Promise<Set<string>> {
+  const set = new Set<string>();
+  for (let i = 0; i < keys.length; i += D1_IN_CHUNK) {
+    const part = keys.slice(i, i + D1_IN_CHUNK);
+    const { results } = await env.DB.prepare(`SELECT ${keyCol} AS k FROM ${table} WHERE ${keyCol} IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const row of (results || []) as Array<{ k: unknown }>) set.add(String(row.k));
+  }
+  return set;
+}
+
 async function upsertMirror(
   env: Env, table: string, keyCol: string, rows: Record<string, unknown>[],
 ): Promise<{ inserted: number; updated: number }> {
   if (!rows.length) return { inserted: 0, updated: 0 };
-  const keys = rows.map(r => String(r[keyCol]));
-  const existing = new Set<string>();
-  for (let i = 0; i < keys.length; i += D1_IN_CHUNK) {
-    const part = keys.slice(i, i + D1_IN_CHUNK);
-    const ph = part.map(() => "?").join(",");
-    const { results } = await env.DB.prepare(`SELECT ${keyCol} AS k FROM ${table} WHERE ${keyCol} IN (${ph})`).bind(...part).all();
-    for (const row of (results || []) as Array<{ k: unknown }>) existing.add(String(row.k));
-  }
+  const existing = await _existingKeys(env, table, keyCol, rows.map(r => String(r[keyCol])));
   let inserted = 0, updated = 0;
   const stamp = new Date().toISOString();
+  const stmts: D1PreparedStatement[] = [];
   for (const r of rows) {
     const row: Record<string, unknown> = { ...r };
     if (!("zoho_synced_at" in row) && ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments"].includes(table)) row.zoho_synced_at = stamp;
@@ -3316,15 +3331,17 @@ async function upsertMirror(
     if (existing.has(key)) {
       const setCols = cols.filter(c => c !== keyCol);
       if (!setCols.length) continue;
-      await env.DB.prepare(`UPDATE ${table} SET ${setCols.map(c => `${c}=?`).join(",")} WHERE ${keyCol}=?`)
-        .bind(...setCols.map(c => row[c]), key).run();
+      stmts.push(env.DB.prepare(`UPDATE ${table} SET ${setCols.map(c => `${c}=?`).join(",")} WHERE ${keyCol}=?`)
+        .bind(...setCols.map(c => row[c]), key));
       updated++;
     } else {
-      await env.DB.prepare(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`)
-        .bind(...cols.map(c => row[c])).run();
+      existing.add(key); // dedupe duplicate keys within this same input batch (2nd occurrence → UPDATE)
+      stmts.push(env.DB.prepare(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`)
+        .bind(...cols.map(c => row[c])));
       inserted++;
     }
   }
+  await _d1Batch(env, stmts);
   return { inserted, updated };
 }
 
@@ -3472,11 +3489,13 @@ async function recomputeApBalances(env: Env): Promise<void> {
   await env.DB.prepare(`UPDATE ap_bills SET balance = total - amount_paid`).run();
   const today = istToday();
   const { results } = await env.DB.prepare("SELECT id, due_date, balance, amount_paid, status FROM ap_bills WHERE status != 'void'").all();
+  const stmts: D1PreparedStatement[] = [];
   for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; status: string }>) {
     const status = (b.balance ?? 0) <= 0 ? "paid" : ((b.amount_paid || 0) > 0 ? "partial" : "open");
     const bucket = b.due_date ? agingBucket(b.due_date, today) : "current";
-    await env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id).run();
+    stmts.push(env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id));
   }
+  await _d1Batch(env, stmts);
 }
 
 interface BooksSyncResult {
@@ -3510,56 +3529,75 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
   };
 
   try {
+    // Each entity: collect ALL mapped rows, then upsert once (one batched writer call),
+    // so a first-time backfill of thousands of rows stays within the Worker's
+    // subrequest budget instead of one .run() per row.
     // Contacts first (identity), so invoices link to an ar_clients row.
-    for (const z of await pull("contacts")) { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } await upsertMirror(env, "ar_clients", "client_id", [m.row]); r.contacts++; }
+    const contactRows: Record<string, unknown>[] = [];
+    for (const z of await pull("contacts")) { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } contactRows.push(m.row); }
+    await upsertMirror(env, "ar_clients", "client_id", contactRows); r.contacts = contactRows.length;
 
-    const invoiceRefs: Array<{ id: string; reference: string }> = [];
+    const invoiceRows: Record<string, unknown>[] = []; const invoiceRefs: Array<{ id: string; reference: string }> = [];
     for (const z of await pull("invoices")) {
       const m = mapBooksInvoice(z); if ("error" in m) { r.errors.push(m.error); continue; }
-      await upsertMirror(env, "ar_invoices", "zoho_invoice_id", [m.row]); r.invoices++;
+      invoiceRows.push(m.row);
       if (m.reference) invoiceRefs.push({ id: String(m.row.id), reference: m.reference });
     }
+    await upsertMirror(env, "ar_invoices", "zoho_invoice_id", invoiceRows); r.invoices = invoiceRows.length;
 
+    const cnRows: Record<string, unknown>[] = []; const cnAllocs: Record<string, unknown>[] = [];
     for (const z of await pull("creditnotes")) {
       const m = mapBooksCreditNote(z); if ("error" in m) { r.errors.push(m.error); continue; }
-      await upsertMirror(env, "ar_credit_notes", "zoho_creditnote_id", [m.note]); r.creditnotes++;
-      if (m.allocations.length) await upsertMirror(env, "credit_allocations", "id", m.allocations);
+      cnRows.push(m.note); if (m.allocations.length) cnAllocs.push(...m.allocations);
     }
+    await upsertMirror(env, "ar_credit_notes", "zoho_creditnote_id", cnRows); r.creditnotes = cnRows.length;
+    if (cnAllocs.length) await upsertMirror(env, "credit_allocations", "id", cnAllocs);
 
+    const payRows: Record<string, unknown>[] = []; const payAllocs: Record<string, unknown>[] = [];
     for (const z of await pull("customerpayments")) {
       const m = mapBooksPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
-      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.payments++;
-      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+      payRows.push(m.payment); if (m.allocations.length) payAllocs.push(...m.allocations);
     }
+    await upsertMirror(env, "fin_payments", "zoho_payment_id", payRows); r.payments = payRows.length;
+    if (payAllocs.length) await upsertMirror(env, "fin_allocations", "id", payAllocs);
 
     // ── AP (P3.2): bills + vendor payments ──
-    const billRefs: Array<{ id: string; reference: string }> = [];
+    const billRows: Record<string, unknown>[] = []; const vendorRows: Record<string, unknown>[] = []; const billRefs: Array<{ id: string; reference: string }> = [];
     for (const z of await pull("bills")) {
       const m = mapBooksBill(z); if ("error" in m) { r.errors.push(m.error); continue; }
-      await upsertMirror(env, "ap_bills", "zoho_bill_id", [m.bill]); r.bills++;
-      if (m.vendor) await upsertMirror(env, "ap_vendors", "vendor_id", [m.vendor]);
+      billRows.push(m.bill); if (m.vendor) vendorRows.push(m.vendor);
       if (m.reference) billRefs.push({ id: String(m.bill.id), reference: m.reference });
     }
+    if (vendorRows.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorRows); // upsertMirror dedupes repeated vendor ids
+    await upsertMirror(env, "ap_bills", "zoho_bill_id", billRows); r.bills = billRows.length;
+
+    const vpRows: Record<string, unknown>[] = []; const vpAllocs: Record<string, unknown>[] = [];
     for (const z of await pull("vendorpayments")) {
       const m = mapBooksVendorPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
-      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.vendorpayments++;
-      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+      vpRows.push(m.payment); if (m.allocations.length) vpAllocs.push(...m.allocations);
     }
-    // Best-effort PO linkage by Books reference_number → our purchase_orders id.
-    for (const { id, reference } of billRefs) {
+    await upsertMirror(env, "fin_payments", "zoho_payment_id", vpRows); r.vendorpayments = vpRows.length;
+    if (vpAllocs.length) await upsertMirror(env, "fin_allocations", "id", vpAllocs);
+
+    // Best-effort PO linkage by Books reference_number → our purchase_orders id (batched).
+    if (billRefs.length) {
       try {
-        const po = await env.DB.prepare("SELECT id FROM purchase_orders WHERE id=?").bind(reference).first();
-        if (po) await env.DB.prepare("UPDATE ap_bills SET po_id=? WHERE id=?").bind(reference, id).run();
+        const poSet = await _existingKeys(env, "purchase_orders", "id", [...new Set(billRefs.map(x => x.reference))]);
+        await _d1Batch(env, billRefs.filter(x => poSet.has(x.reference)).map(x => env.DB.prepare("UPDATE ap_bills SET po_id=? WHERE id=?").bind(x.reference, x.id)));
       } catch { /* best-effort */ }
     }
-
-    // Best-effort order/DC linkage by Books reference_number → our order id / DC id.
-    for (const { id, reference } of invoiceRefs) {
+    // Best-effort order/DC linkage by Books reference_number → our order id / DC id (batched).
+    if (invoiceRefs.length) {
       try {
-        const ord = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(reference).first();
-        if (ord) { await env.DB.prepare("UPDATE ar_invoices SET order_id=? WHERE id=?").bind(reference, id).run(); continue; }
-        const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=?").bind(reference).first();
-        if (dc) await env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(reference, id).run();
+        const refs = [...new Set(invoiceRefs.map(x => x.reference))];
+        const ordSet = await _existingKeys(env, "orders", "id", refs);
+        const dcSet = await _existingKeys(env, "delivery_challans", "id", refs.filter(r2 => !ordSet.has(r2)));
+        const stmts: D1PreparedStatement[] = [];
+        for (const x of invoiceRefs) {
+          if (ordSet.has(x.reference)) stmts.push(env.DB.prepare("UPDATE ar_invoices SET order_id=? WHERE id=?").bind(x.reference, x.id));
+          else if (dcSet.has(x.reference)) stmts.push(env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(x.reference, x.id));
+        }
+        await _d1Batch(env, stmts);
       } catch { /* orders/DC table shape varies — linkage is best-effort */ }
     }
 
@@ -3599,12 +3637,14 @@ async function recomputeArBalances(env: Env): Promise<void> {
   const { results } = await env.DB.prepare(
     "SELECT id, due_date, balance, amount_paid, credited, status FROM ar_invoices WHERE status != 'void'"
   ).all();
+  const stmts: D1PreparedStatement[] = [];
   for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; credited: number; status: string }>) {
     const settled = (inv.balance ?? 0) <= 0;
     const status = settled ? "paid" : ((inv.amount_paid || 0) + (inv.credited || 0) > 0 ? "partial" : "open");
     const bucket = inv.due_date ? agingBucket(inv.due_date, today) : "current";
-    await env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id).run();
+    stmts.push(env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id));
   }
+  await _d1Batch(env, stmts);
 }
 
 // ══════════════════════════════════════════════════════════════════════
