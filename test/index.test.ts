@@ -4359,3 +4359,18 @@ describe("delivery — destination details + driver reassignment", () => {
     expect((await post("/api/delivery-challans/RA-DC/reassign", { driver_name: "Too Late" }, adminToken)).status).toBe(409);
   });
 });
+
+describe("finance/finance-setup — sync error is surfaced with a hint", () => {
+  it("status exposes last_sync_error and maps a 401 to a Books-scope hint", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_last_sync_error", "error: ZohoAuthError: 401 on Books contacts page 1");
+    const st = await (await get("/api/finance/status", adminToken)).json() as { last_sync_error: string | null; last_sync_hint: string };
+    expect(st.last_sync_error).toContain("401");
+    expect(st.last_sync_hint).toMatch(/ZohoBooks\.fullaccess|Books permission/i);
+    // A clean state reports no error.
+    await setCfg("books_last_sync_error", "");
+    const clean = await (await get("/api/finance/status", adminToken)).json() as { last_sync_error: string | null; last_sync_hint: string };
+    expect(clean.last_sync_error).toBe(null);
+    expect(clean.last_sync_hint).toBe("");
+  });
+});
