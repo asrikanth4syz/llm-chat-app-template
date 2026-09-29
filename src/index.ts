@@ -3373,11 +3373,16 @@ function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unkn
   if (!iid) return { error: "no invoice_id" };
   const dueDate = String(z.due_date ?? "");
   const total = toPaise(z.total as string | number);
+  // Books is the system of record: mirror its outstanding `balance` (it already nets
+  // payments, credit notes, TDS and write-offs). Falling back to `total` when the
+  // field is absent means a missing balance shows as fully-due, never falsely paid.
+  const hasBal = "balance" in z && z.balance !== null && z.balance !== "";
   const row: Record<string, unknown> = {
     id: iid, zoho_invoice_id: iid,
     subtotal: toPaise(z.sub_total as string | number),
     gst: toPaise(z.tax_total as string | number),
     total,
+    balance: hasBal ? toPaise(z.balance as string | number) : total,
     currency_code: String(z.currency_code ?? "INR"),
     cycle_token: hashStr(`${dueDate}|${total}`),
   };
@@ -3440,11 +3445,13 @@ function mapBooksBill(z: Record<string, unknown>): { bill: Record<string, unknow
   if (!bid) return { error: "no bill_id" };
   const dueDate = String(z.due_date ?? "");
   const total = toPaise(z.total as string | number);
+  const hasBal = "balance" in z && z.balance !== null && z.balance !== ""; // Books outstanding (SoR)
   const bill: Record<string, unknown> = {
     id: bid, zoho_bill_id: bid,
     subtotal: toPaise(z.sub_total as string | number),
     gst: toPaise(z.tax_total as string | number),
     total,
+    balance: hasBal ? toPaise(z.balance as string | number) : total,
     currency_code: String(z.currency_code ?? "INR"),
     cycle_token: hashStr(`${dueDate}|${total}`),
   };
@@ -3483,16 +3490,17 @@ function mapBooksVendorPayment(z: Record<string, unknown>): { payment: Record<st
 // Derive amount_paid/balance/status/age_bucket for AP bills from vendor-payment
 // allocations (PRD §15: balance = total − amount_paid; settled = balance ≤ 0).
 async function recomputeApBalances(env: Env): Promise<void> {
+  // balance mirrored from Books (SoR); amount_paid from allocations is display detail.
   await env.DB.prepare(
     `UPDATE ap_bills SET amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='bill' AND doc_id=ap_bills.id),0)`
   ).run();
-  await env.DB.prepare(`UPDATE ap_bills SET balance = total - amount_paid`).run();
   const today = istToday();
-  const { results } = await env.DB.prepare("SELECT id, due_date, balance, amount_paid, status FROM ap_bills WHERE status != 'void'").all();
+  const { results } = await env.DB.prepare("SELECT id, due_date, balance, total, status FROM ap_bills WHERE status != 'void'").all();
   const stmts: D1PreparedStatement[] = [];
-  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; status: string }>) {
-    const status = (b.balance ?? 0) <= 0 ? "paid" : ((b.amount_paid || 0) > 0 ? "partial" : "open");
-    const bucket = b.due_date ? agingBucket(b.due_date, today) : "current";
+  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; status: string }>) {
+    const bal = b.balance ?? 0;
+    const status = bal <= 0 ? "paid" : (bal < (b.total || 0) ? "partial" : "open");
+    const bucket = bal <= 0 ? "current" : (b.due_date ? agingBucket(b.due_date, today) : "current");
     stmts.push(env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id));
   }
   await _d1Batch(env, stmts);
@@ -3706,21 +3714,24 @@ async function runBooksBackfillStep(env: Env, fetchImpl: FetchImpl = fetch): Pro
 // from the mirrored allocations (PRD §15: balance = total + late_fee − amount_paid −
 // credited; settled = balance ≤ 0). Money stays integer paise throughout.
 async function recomputeArBalances(env: Env): Promise<void> {
+  // `balance` is mirrored from Books (the system of record) and is NOT re-derived —
+  // re-deriving from only the allocations we sync marked genuinely-paid invoices as
+  // due whenever a payment/credit/TDS line wasn't captured. amount_paid / credited
+  // are refreshed from allocations for the statement's payment DETAIL only.
   await env.DB.prepare(
     `UPDATE ar_invoices SET
        amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='invoice' AND doc_id=ar_invoices.id),0),
        credited    = COALESCE((SELECT SUM(amount) FROM credit_allocations WHERE invoice_id=ar_invoices.id),0)`
   ).run();
-  await env.DB.prepare(`UPDATE ar_invoices SET balance = total + COALESCE(late_fee,0) - amount_paid - credited`).run();
   const today = istToday();
   const { results } = await env.DB.prepare(
-    "SELECT id, due_date, balance, amount_paid, credited, status FROM ar_invoices WHERE status != 'void'"
+    "SELECT id, due_date, balance, total, status FROM ar_invoices WHERE status != 'void'"
   ).all();
   const stmts: D1PreparedStatement[] = [];
-  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; credited: number; status: string }>) {
-    const settled = (inv.balance ?? 0) <= 0;
-    const status = settled ? "paid" : ((inv.amount_paid || 0) + (inv.credited || 0) > 0 ? "partial" : "open");
-    const bucket = inv.due_date ? agingBucket(inv.due_date, today) : "current";
+  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; status: string }>) {
+    const bal = inv.balance ?? 0;
+    const status = bal <= 0 ? "paid" : (bal < (inv.total || 0) ? "partial" : "open");
+    const bucket = bal <= 0 ? "current" : (inv.due_date ? agingBucket(inv.due_date, today) : "current");
     stmts.push(env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id));
   }
   await _d1Batch(env, stmts);
