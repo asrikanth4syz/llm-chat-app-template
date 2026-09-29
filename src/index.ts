@@ -2766,6 +2766,55 @@ async function ensureFeatureTables(env: Env): Promise<void> {
         ('482369',18,'Paper articles (napkins, tissues)'),('960810',18,'Pens (ball point)')`
     ).run();
   } catch { /* table missing / non-fatal */ }
+  // Phase 3 Finance (003-finance-ar): AR mirror + reminder tables self-heal here
+  // too, so a cold isolate on the cron path has them. The fetch path additionally
+  // awaits ensureArSchema before any /api/finance handler (see route()).
+  await ensureArSchema(env);
+}
+
+// ── Phase 3 Finance schema (003-finance-ar, Slice 1 Group 1.D) ─────────
+// Task 1.D OWNS every AR/reminder CREATE + the reminder_runs unique index and
+// audit columns (Task 5.A only seeds/ALTERs — never CREATEs — per plan
+// `schema-ownership-overlap-1d-5a`). Idempotent: CREATE IF NOT EXISTS + guarded
+// ALTER; errors swallowed. Money columns are INTEGER paise (PRD §15); only
+// exchange_rate is REAL (a ratio, not money).
+async function ensureArSchema(env: Env): Promise<void> {
+  const stmts: string[] = [
+    `CREATE TABLE IF NOT EXISTS ar_clients ( client_id TEXT PRIMARY KEY, zoho_contact_id TEXT, name TEXT, email TEXT, phone TEXT, credit_days INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', dunning_opt_out INTEGER DEFAULT 0, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ar_invoices ( id TEXT PRIMARY KEY, zoho_invoice_id TEXT, number TEXT, client_id TEXT, order_id TEXT, dc_id TEXT, date TEXT, due_date TEXT, payment_expected_date TEXT, subtotal INTEGER DEFAULT 0, gst INTEGER DEFAULT 0, total INTEGER DEFAULT 0, amount_paid INTEGER DEFAULT 0, credited INTEGER DEFAULT 0, late_fee INTEGER DEFAULT 0, balance INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', exchange_rate REAL DEFAULT 1, entity_id TEXT, status TEXT DEFAULT 'open', age_bucket TEXT, cycle_token TEXT, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ar_credit_notes ( id TEXT PRIMARY KEY, zoho_creditnote_id TEXT, number TEXT, client_id TEXT, invoice_id TEXT, amount INTEGER DEFAULT 0, date TEXT, reason TEXT, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS fin_payments ( id TEXT PRIMARY KEY, direction TEXT DEFAULT 'in', zoho_payment_id TEXT, party_type TEXT DEFAULT 'client', party_id TEXT, amount INTEGER DEFAULT 0, date TEXT, method TEXT, ref TEXT, unapplied_amount INTEGER DEFAULT 0, zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS fin_allocations ( id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, doc_type TEXT DEFAULT 'invoice', doc_id TEXT NOT NULL, amount INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS credit_allocations ( id TEXT PRIMARY KEY, credit_note_id TEXT NOT NULL, invoice_id TEXT NOT NULL, amount INTEGER DEFAULT 0 );`,
+    `CREATE TABLE IF NOT EXISTS reminder_rules ( id TEXT PRIMARY KEY, workflow TEXT DEFAULT 'default', tier TEXT NOT NULL, min_overdue_days INTEGER NOT NULL, send_mode TEXT DEFAULT 'manual', min_gap_days INTEGER DEFAULT 5, tone TEXT, attach_pdf INTEGER DEFAULT 0, channel_priority TEXT DEFAULT '["email","in_app"]', active INTEGER DEFAULT 1 );`,
+    `CREATE TABLE IF NOT EXISTS reminder_templates ( id TEXT PRIMARY KEY, name TEXT NOT NULL, lang TEXT DEFAULT 'en', subject TEXT, body TEXT, conditional_blocks TEXT DEFAULT '[]' );`,
+    `CREATE TABLE IF NOT EXISTS reminder_runs ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, tier TEXT NOT NULL, cycle_batch TEXT NOT NULL, run_at TEXT DEFAULT (datetime('now')), channel TEXT, status TEXT NOT NULL, gmail_message_id TEXT, suppressed_reason TEXT, invoice_ids TEXT DEFAULT '[]', total_outstanding TEXT DEFAULT '{}', actor TEXT, workflow TEXT DEFAULT 'default', forced INTEGER DEFAULT 0, recipient_email TEXT );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_runs_cycle ON reminder_runs (client_id, tier, cycle_batch);`,
+    `CREATE TABLE IF NOT EXISTS reminder_holds ( id TEXT PRIMARY KEY, client_id TEXT, invoice_id TEXT, kind TEXT NOT NULL, ptp_date TEXT, channel TEXT, set_by TEXT, set_at TEXT DEFAULT (datetime('now')), cleared_at TEXT );`,
+    // Payables (P3.2): bills + vendor identity mirrored from Books; vendor payments
+    // reuse fin_payments(direction='out') + fin_allocations(doc_type='bill').
+    `CREATE TABLE IF NOT EXISTS ap_vendors ( vendor_id TEXT PRIMARY KEY, zoho_vendor_id TEXT, name TEXT, email TEXT, currency_code TEXT DEFAULT 'INR', zoho_synced_at TEXT );`,
+    `CREATE TABLE IF NOT EXISTS ap_bills ( id TEXT PRIMARY KEY, zoho_bill_id TEXT, number TEXT, vendor_id TEXT, po_id TEXT, date TEXT, due_date TEXT, subtotal INTEGER DEFAULT 0, gst INTEGER DEFAULT 0, total INTEGER DEFAULT 0, amount_paid INTEGER DEFAULT 0, balance INTEGER DEFAULT 0, currency_code TEXT DEFAULT 'INR', exchange_rate REAL DEFAULT 1, status TEXT DEFAULT 'open', age_bucket TEXT, cycle_token TEXT, zoho_synced_at TEXT );`,
+    // Reconciliation (P3.3): exception queue. Auto rows (status='exception') are
+    // recomputed each run; manual resolutions (status='manual') are preserved.
+    `CREATE TABLE IF NOT EXISTS reconciliations ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, left_type TEXT, left_id TEXT, right_type TEXT, right_id TEXT, status TEXT NOT NULL DEFAULT 'exception', variance_amount INTEGER DEFAULT 0, variance_reason TEXT, matched_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+  ];
+  // Guarded column adds — for a DB whose reminder_runs predates the audit columns
+  // (idempotent; "duplicate column" is swallowed). Never rely on CREATE to add these.
+  const alters: string[] = [
+    `ALTER TABLE reminder_runs ADD COLUMN cycle_batch TEXT`,
+    `ALTER TABLE reminder_runs ADD COLUMN actor TEXT`,
+    `ALTER TABLE reminder_runs ADD COLUMN workflow TEXT DEFAULT 'default'`,
+    `ALTER TABLE reminder_runs ADD COLUMN forced INTEGER DEFAULT 0`,
+    `ALTER TABLE reminder_runs ADD COLUMN recipient_email TEXT`,
+  ];
+  for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  // Config defaults — reminders ship OFF and stay disabled until backfill completes.
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('reminders_mode','off')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('initial_backfill_complete','0')").run();
+  } catch { /* app_config may not exist yet on a bare DB */ }
+  await seedReminderRules(env); // 5.A dunning ladder (idempotent)
 }
 
 // One-time upgrade of any plaintext SEED: passwords to PBKDF2, so no plaintext
@@ -3096,14 +3145,810 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
   return { gstin: g.gstin, pan };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance (003-finance-ar) — Slice 1 foundations (pure, no I/O)
+// All functions here are deterministic and unit-tested in isolation; see
+// PRD §15 "Locked specification decisions" for the pinned rules they encode.
+// ══════════════════════════════════════════════════════════════════════
+
+// Reminder send cadence (PRD §15). Business clock is IST (UTC+5:30, no DST).
+// 08:00 IST = 02:30 UTC. SEND_CRON must stay byte-identical to the wrangler.jsonc
+// trigger — a drift test (Group 5) reads wrangler.jsonc and asserts this literal.
+const SEND_HOUR_IST = 8;
+const SEND_CRON = "30 2 * * *";
+// Batch bound for the daily reminder pass (continuation cursor across ticks).
+const MAX_CUSTOMERS_PER_RUN = 200;
+
+// ── IST civil-date helpers (PRD §15: single clock = Asia/Kolkata) ──────
+// India has no DST, so a fixed +05:30 offset is exact. `now` is injectable
+// so the aging/tier logic is deterministic and unit-testable.
+function istToday(now: Date = new Date()): string {
+  return new Date(now.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+// Whole civil days between two YYYY-MM-DD dates (b − a). Positive if b is later.
+function daysBetweenIST(fromDate: string, toDate: string): number {
+  const a = Date.parse(fromDate + "T00:00:00Z");
+  const b = Date.parse(toDate + "T00:00:00Z");
+  if (Number.isNaN(a) || Number.isNaN(b)) return NaN;
+  return Math.round((b - a) / 86400000);
+}
+// Days a due invoice is overdue relative to `today` (IST civil dates).
+// ≤0 ⇒ not yet due; ≥1 ⇒ overdue by that many days.
+function overdueDays(dueDate: string, today: string): number {
+  return daysBetweenIST(dueDate, today);
+}
+
+// ── Money: INTEGER minor units (paise). NEVER REAL (PRD §15). ──────────
+// Parse a rupee string/number to integer paise without float drift.
+function toPaise(x: string | number | null | undefined): number {
+  if (x === null || x === undefined || x === "") return 0;
+  const s = String(x).trim();
+  const neg = s.startsWith("-");
+  const cleaned = s.replace(/[^0-9.]/g, "");
+  if (cleaned === "" || cleaned === ".") return 0;
+  const [rupees = "0", paiseRaw = ""] = cleaned.split(".");
+  const paise = (paiseRaw + "00").slice(0, 2);
+  const val = (parseInt(rupees || "0", 10) * 100) + parseInt(paise || "0", 10);
+  return neg ? -val : val;
+}
+// Render integer paise back to a plain "1234.56" rupee string (no symbol).
+function fromPaise(p: number): string {
+  const neg = p < 0;
+  const a = Math.abs(Math.trunc(p));
+  return (neg ? "-" : "") + Math.floor(a / 100) + "." + String(a % 100).padStart(2, "0");
+}
+// Display-only formatting (float here is fine — it never re-enters storage).
+function formatMoney(paise: number, currency = "INR"): string {
+  try {
+    return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(paise / 100);
+  } catch {
+    return `${currency} ${fromPaise(paise)}`;
+  }
+}
+
+// ── Aging, tier selection, DSO (PRD §15 pinned formulas) ───────────────
+// Half-open buckets from due_date: Current(≤0) / 1–30 / 31–60 / 61–90 / 91+.
+function agingBucket(dueDate: string, today: string): "current" | "1-30" | "31-60" | "61-90" | "91+" {
+  const od = overdueDays(dueDate, today);
+  if (od <= 0) return "current";
+  if (od <= 30) return "1-30";
+  if (od <= 60) return "31-60";
+  if (od <= 90) return "61-90";
+  return "91+";
+}
+// A dunning-ladder rule: the lowest worst-overdue-days at which the tier applies.
+interface TierRule { tier: string; min_overdue_days: number; }
+// Seeded default ladder (PRD §7). Pre-due window opens at −7; On-due at 0.
+const DEFAULT_TIER_RULES: TierRule[] = [
+  { tier: "pre-due", min_overdue_days: -7 },
+  { tier: "on-due", min_overdue_days: 0 },
+  { tier: "overdue-1", min_overdue_days: 1 },
+  { tier: "overdue-2", min_overdue_days: 16 },
+  { tier: "final", min_overdue_days: 31 },
+];
+// Select the HIGHEST tier whose min_overdue_days ≤ worst (PRD §15). Returns
+// null when the customer's worst invoice is still further out than pre-due.
+function selectTier(worstOverdueDays: number, rules: TierRule[] = DEFAULT_TIER_RULES): string | null {
+  let best: TierRule | null = null;
+  for (const r of rules) {
+    if (r.min_overdue_days <= worstOverdueDays && (best === null || r.min_overdue_days > best.min_overdue_days)) {
+      best = r;
+    }
+  }
+  return best ? best.tier : null;
+}
+// Days Sales Outstanding (PRD §15): (open AR ÷ trailing-N-day credit sales) × N.
+// Divide-by-zero guarded → 0. Inputs are paise; the ratio is unitless so the
+// paise cancel. `days` defaults to the pinned 90-day window.
+function computeDSO(openARPaise: number, creditSales90Paise: number, days = 90): number {
+  if (!creditSales90Paise || creditSales90Paise <= 0) return 0;
+  return (openARPaise / creditSales90Paise) * days;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 2: Zoho Books mirror
+// Books is the accounting system of record; we mirror invoices/payments/
+// credit-notes/contacts idempotently (provenance-stamped) and derive balances.
+// All functions take an injected FetchImpl so they unit-test against stubs.
+// ══════════════════════════════════════════════════════════════════════
+
+// Deterministic, synchronous string hash (FNV-1a → base36). Used for cycle_token
+// (per-invoice) and cycle_batch (per statement) — must be stable across runs.
+function hashStr(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+
+// 2.A — one page of a Books list entity (invoices/creditnotes/customerpayments/
+// contacts), with the same capped back-off as the inventory client. The response
+// array lives under the entity key. Uses ZOHO_BOOKS_ORG_ID.
+async function booksFetch(
+  env: Env, token: string, entity: string,
+  opts: { page: number; modifiedSinceEpoch?: number }, fetchImpl: FetchImpl,
+): Promise<{ items: Record<string, unknown>[]; hasMore: boolean; total: number }> {
+  const orgId = env.ZOHO_BOOKS_ORG_ID || "";
+  const qs = new URLSearchParams({ organization_id: orgId, per_page: String(ZOHO_SYNC.PER_PAGE), page: String(opts.page) });
+  const headers: Record<string, string> = { "Authorization": `Zoho-oauthtoken ${token}` };
+  if ((opts.modifiedSinceEpoch ?? 0) > 0) headers["If-Modified-Since"] = new Date((opts.modifiedSinceEpoch as number) * 1000).toUTCString();
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/${entity}?${qs.toString()}`, { headers });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt >= ZOHO_SYNC.MAX_RETRIES) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status} after ${attempt} retries`);
+      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+      await _zSleep(Number.isFinite(ra) ? ra * 1000 : Math.min(ZOHO_SYNC.RETRY_CAP_MS, ZOHO_SYNC.RETRY_BASE_MS * 2 ** attempt));
+      continue;
+    }
+    if (res.status === 401) throw new ZohoAuthError(`401 on Books ${entity} page ${opts.page}`);
+    if (res.status === 304) return { items: [], hasMore: false, total: 0 };
+    if (!res.ok) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status}`);
+    const data = await res.json().catch(() => ({})) as Record<string, unknown> & { page_context?: { has_more_page?: boolean; total?: number } };
+    const items = Array.isArray(data[entity]) ? data[entity] as Record<string, unknown>[] : [];
+    return { items, hasMore: !!data.page_context?.has_more_page, total: Number(data.page_context?.total ?? 0) };
+  }
+}
+
+// 2.B — generic idempotent mirror upsert keyed on `keyCol`. Existing-key lookup is
+// chunked by D1_IN_CHUNK=90 (the inventory bug we must never repeat). Only the columns
+// present on a row are written, so a partial payload never blanks a stored field
+// (this is what preserves app-owned ar_clients.dunning_opt_out across syncs). Stamps
+// zoho_synced_at when a mirrored row does not carry one. Table/column names are
+// code-controlled (never user input), so string interpolation here is safe.
+async function upsertMirror(
+  env: Env, table: string, keyCol: string, rows: Record<string, unknown>[],
+): Promise<{ inserted: number; updated: number }> {
+  if (!rows.length) return { inserted: 0, updated: 0 };
+  const keys = rows.map(r => String(r[keyCol]));
+  const existing = new Set<string>();
+  for (let i = 0; i < keys.length; i += D1_IN_CHUNK) {
+    const part = keys.slice(i, i + D1_IN_CHUNK);
+    const ph = part.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(`SELECT ${keyCol} AS k FROM ${table} WHERE ${keyCol} IN (${ph})`).bind(...part).all();
+    for (const row of (results || []) as Array<{ k: unknown }>) existing.add(String(row.k));
+  }
+  let inserted = 0, updated = 0;
+  const stamp = new Date().toISOString();
+  for (const r of rows) {
+    const row: Record<string, unknown> = { ...r };
+    if (!("zoho_synced_at" in row) && ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments"].includes(table)) row.zoho_synced_at = stamp;
+    const key = String(row[keyCol]);
+    const cols = Object.keys(row);
+    if (existing.has(key)) {
+      const setCols = cols.filter(c => c !== keyCol);
+      if (!setCols.length) continue;
+      await env.DB.prepare(`UPDATE ${table} SET ${setCols.map(c => `${c}=?`).join(",")} WHERE ${keyCol}=?`)
+        .bind(...setCols.map(c => row[c]), key).run();
+      updated++;
+    } else {
+      await env.DB.prepare(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`)
+        .bind(...cols.map(c => row[c])).run();
+      inserted++;
+    }
+  }
+  return { inserted, updated };
+}
+
+// ── 2.C Entity mappers (pure). Only present values are set (never blank a column).
+// Money → integer paise. Books status is mirrored verbatim-ish; derived overdue/
+// settled state is computed later in recompute, not stored from the mapper.
+type MapErr = { error: string };
+const _put = (row: Record<string, unknown>, col: string, v: unknown) => {
+  if (v !== undefined && v !== null && String(v).trim() !== "") row[col] = v;
+};
+function _num(v: unknown): number | undefined { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
+
+function mapBooksContact(z: Record<string, unknown>): { row: Record<string, unknown> } | MapErr {
+  const cid = String(z.contact_id ?? "").trim();
+  if (!cid) return { error: "no contact_id" };
+  const row: Record<string, unknown> = { client_id: cid, zoho_contact_id: cid };
+  _put(row, "name", z.contact_name ?? z.company_name);
+  _put(row, "email", z.email);
+  _put(row, "phone", z.phone ?? z.mobile);
+  _put(row, "currency_code", z.currency_code);
+  const cd = _num(z.payment_terms);
+  if (cd !== undefined) row.credit_days = Math.max(0, Math.round(cd));
+  // NB: dunning_opt_out is app-owned — deliberately never set here.
+  return { row };
+}
+
+function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unknown>; reference: string } | MapErr {
+  const iid = String(z.invoice_id ?? "").trim();
+  if (!iid) return { error: "no invoice_id" };
+  const dueDate = String(z.due_date ?? "");
+  const total = toPaise(z.total as string | number);
+  const row: Record<string, unknown> = {
+    id: iid, zoho_invoice_id: iid,
+    subtotal: toPaise(z.sub_total as string | number),
+    gst: toPaise(z.tax_total as string | number),
+    total,
+    currency_code: String(z.currency_code ?? "INR"),
+    cycle_token: hashStr(`${dueDate}|${total}`),
+  };
+  _put(row, "number", z.invoice_number);
+  _put(row, "client_id", z.customer_id);
+  _put(row, "date", z.date);
+  _put(row, "due_date", z.due_date);
+  _put(row, "payment_expected_date", z.payment_expected_date);
+  _put(row, "entity_id", z.entity_id);
+  const ex = _num(z.exchange_rate); if (ex !== undefined) row.exchange_rate = ex;
+  // Mirror the Books lifecycle status (open/partial/paid/void). Derived overdue is
+  // computed in recompute; Books 'sent'/'unpaid'/'overdue' collapse to 'open'.
+  const st = String(z.status ?? "").toLowerCase();
+  row.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial"
+    : (st === "void" || st === "voided") ? "void" : "open";
+  return { row, reference: String(z.reference_number ?? "").trim() };
+}
+
+function mapBooksPayment(z: Record<string, unknown>): { payment: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const pid = String(z.payment_id ?? "").trim();
+  if (!pid) return { error: "no payment_id" };
+  const applied = Array.isArray(z.invoices) ? z.invoices as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${pid}:${String(a.invoice_id)}`, payment_id: pid, doc_type: "invoice", doc_id: String(a.invoice_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount) as string | number) }))
+    .filter(a => a.doc_id);
+  const payment: Record<string, unknown> = {
+    id: pid, zoho_payment_id: pid, direction: "in", party_type: "client",
+    amount: toPaise(z.amount as string | number),
+    unapplied_amount: toPaise((z.unused_amount ?? 0) as string | number),
+  };
+  _put(payment, "party_id", z.customer_id);
+  _put(payment, "date", z.date);
+  _put(payment, "method", z.payment_mode);
+  _put(payment, "ref", z.reference_number);
+  return { payment, allocations };
+}
+
+function mapBooksCreditNote(z: Record<string, unknown>): { note: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const cnid = String(z.creditnote_id ?? "").trim();
+  if (!cnid) return { error: "no creditnote_id" };
+  const applied = Array.isArray(z.invoices_credited) ? z.invoices_credited as Record<string, unknown>[]
+    : Array.isArray(z.invoices) ? z.invoices as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${cnid}:${String(a.invoice_id)}`, credit_note_id: cnid, invoice_id: String(a.invoice_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount_credited ?? a.amount) as string | number) }))
+    .filter(a => a.invoice_id);
+  const note: Record<string, unknown> = {
+    id: cnid, zoho_creditnote_id: cnid, amount: toPaise(z.total as string | number),
+  };
+  _put(note, "number", z.creditnote_number);
+  _put(note, "client_id", z.customer_id);
+  _put(note, "date", z.date);
+  _put(note, "reason", z.reason);
+  return { note, allocations };
+}
+
+// ── AP mappers (P3.2). Bills carry vendor identity inline, so we upsert ap_vendors
+// from the bill rather than a separate vendor pull. Money → integer paise.
+function mapBooksBill(z: Record<string, unknown>): { bill: Record<string, unknown>; vendor: Record<string, unknown> | null; reference: string } | MapErr {
+  const bid = String(z.bill_id ?? "").trim();
+  if (!bid) return { error: "no bill_id" };
+  const dueDate = String(z.due_date ?? "");
+  const total = toPaise(z.total as string | number);
+  const bill: Record<string, unknown> = {
+    id: bid, zoho_bill_id: bid,
+    subtotal: toPaise(z.sub_total as string | number),
+    gst: toPaise(z.tax_total as string | number),
+    total,
+    currency_code: String(z.currency_code ?? "INR"),
+    cycle_token: hashStr(`${dueDate}|${total}`),
+  };
+  _put(bill, "number", z.bill_number);
+  _put(bill, "vendor_id", z.vendor_id);
+  _put(bill, "date", z.date);
+  _put(bill, "due_date", z.due_date);
+  const ex = _num(z.exchange_rate); if (ex !== undefined) bill.exchange_rate = ex;
+  const st = String(z.status ?? "").toLowerCase();
+  bill.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial" : (st === "void" || st === "voided") ? "void" : "open";
+  let vendor: Record<string, unknown> | null = null;
+  const vid = String(z.vendor_id ?? "").trim();
+  if (vid) { vendor = { vendor_id: vid, zoho_vendor_id: vid }; _put(vendor, "name", z.vendor_name); _put(vendor, "currency_code", z.currency_code); }
+  return { bill, vendor, reference: String(z.reference_number ?? "").trim() };
+}
+
+function mapBooksVendorPayment(z: Record<string, unknown>): { payment: Record<string, unknown>; allocations: Record<string, unknown>[] } | MapErr {
+  const pid = String(z.payment_id ?? "").trim();
+  if (!pid) return { error: "no payment_id" };
+  const applied = Array.isArray(z.bills) ? z.bills as Record<string, unknown>[] : [];
+  const allocations = applied
+    .map(a => ({ id: `${pid}:${String(a.bill_id)}`, payment_id: pid, doc_type: "bill", doc_id: String(a.bill_id ?? ""), amount: toPaise((a.amount_applied ?? a.amount) as string | number) }))
+    .filter(a => a.doc_id);
+  const payment: Record<string, unknown> = {
+    id: pid, zoho_payment_id: pid, direction: "out", party_type: "vendor",
+    amount: toPaise(z.amount as string | number),
+    unapplied_amount: toPaise((z.unused_amount ?? 0) as string | number),
+  };
+  _put(payment, "party_id", z.vendor_id);
+  _put(payment, "date", z.date);
+  _put(payment, "method", z.payment_mode);
+  _put(payment, "ref", z.reference_number);
+  return { payment, allocations };
+}
+
+// Derive amount_paid/balance/status/age_bucket for AP bills from vendor-payment
+// allocations (PRD §15: balance = total − amount_paid; settled = balance ≤ 0).
+async function recomputeApBalances(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE ap_bills SET amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='bill' AND doc_id=ap_bills.id),0)`
+  ).run();
+  await env.DB.prepare(`UPDATE ap_bills SET balance = total - amount_paid`).run();
+  const today = istToday();
+  const { results } = await env.DB.prepare("SELECT id, due_date, balance, amount_paid, status FROM ap_bills WHERE status != 'void'").all();
+  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; status: string }>) {
+    const status = (b.balance ?? 0) <= 0 ? "paid" : ((b.amount_paid || 0) > 0 ? "partial" : "open");
+    const bucket = b.due_date ? agingBucket(b.due_date, today) : "current";
+    await env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id).run();
+  }
+}
+
+interface BooksSyncResult {
+  status: "ok" | "not_configured" | "error";
+  scope: "delta" | "full";
+  contacts: number; invoices: number; creditnotes: number; payments: number;
+  bills: number; vendorpayments: number;
+  cap_hit: boolean; backfill_complete: boolean; errors: string[];
+}
+
+// 2.D — orchestrator. Order: contacts → invoices → creditnotes → payments, so an
+// allocation never references a not-yet-mirrored invoice; balances are derived only
+// after all streams complete. Reminders stay disabled until backfill_complete flips.
+async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: FetchImpl = fetch): Promise<BooksSyncResult> {
+  const r: BooksSyncResult = { status: "ok", scope: opts.full ? "full" : "delta", contacts: 0, invoices: 0, creditnotes: 0, payments: 0, bills: 0, vendorpayments: 0, cap_hit: false, errors: [], backfill_complete: false };
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) { r.status = "not_configured"; return r; }
+  let token: string;
+  try { token = await zohoGetToken(env, fetchImpl); } catch (e) { r.status = "error"; r.errors.push(`auth: ${String(e)}`); return r; }
+
+  // Pull every page of an entity up to the run cap, honouring a per-entity watermark.
+  const pull = async (entity: string): Promise<Record<string, unknown>[]> => {
+    const since = opts.full ? 0 : (parseInt(await getConfig(env, `books_cursor_${entity}`, "0"), 10) || 0);
+    const out: Record<string, unknown>[] = [];
+    for (let page = 1; page <= ZOHO_SYNC.MAX_PAGES_PER_RUN; page++) {
+      const { items, hasMore } = await booksFetch(env, token, entity, { page, modifiedSinceEpoch: since }, fetchImpl);
+      out.push(...items);
+      if (!hasMore) return out;
+      if (page === ZOHO_SYNC.MAX_PAGES_PER_RUN) { r.cap_hit = true; r.errors.push(`${entity}: page cap hit — cursor held`); }
+    }
+    return out;
+  };
+
+  try {
+    // Contacts first (identity), so invoices link to an ar_clients row.
+    for (const z of await pull("contacts")) { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } await upsertMirror(env, "ar_clients", "client_id", [m.row]); r.contacts++; }
+
+    const invoiceRefs: Array<{ id: string; reference: string }> = [];
+    for (const z of await pull("invoices")) {
+      const m = mapBooksInvoice(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ar_invoices", "zoho_invoice_id", [m.row]); r.invoices++;
+      if (m.reference) invoiceRefs.push({ id: String(m.row.id), reference: m.reference });
+    }
+
+    for (const z of await pull("creditnotes")) {
+      const m = mapBooksCreditNote(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ar_credit_notes", "zoho_creditnote_id", [m.note]); r.creditnotes++;
+      if (m.allocations.length) await upsertMirror(env, "credit_allocations", "id", m.allocations);
+    }
+
+    for (const z of await pull("customerpayments")) {
+      const m = mapBooksPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.payments++;
+      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+    }
+
+    // ── AP (P3.2): bills + vendor payments ──
+    const billRefs: Array<{ id: string; reference: string }> = [];
+    for (const z of await pull("bills")) {
+      const m = mapBooksBill(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "ap_bills", "zoho_bill_id", [m.bill]); r.bills++;
+      if (m.vendor) await upsertMirror(env, "ap_vendors", "vendor_id", [m.vendor]);
+      if (m.reference) billRefs.push({ id: String(m.bill.id), reference: m.reference });
+    }
+    for (const z of await pull("vendorpayments")) {
+      const m = mapBooksVendorPayment(z); if ("error" in m) { r.errors.push(m.error); continue; }
+      await upsertMirror(env, "fin_payments", "zoho_payment_id", [m.payment]); r.vendorpayments++;
+      if (m.allocations.length) await upsertMirror(env, "fin_allocations", "id", m.allocations);
+    }
+    // Best-effort PO linkage by Books reference_number → our purchase_orders id.
+    for (const { id, reference } of billRefs) {
+      try {
+        const po = await env.DB.prepare("SELECT id FROM purchase_orders WHERE id=?").bind(reference).first();
+        if (po) await env.DB.prepare("UPDATE ap_bills SET po_id=? WHERE id=?").bind(reference, id).run();
+      } catch { /* best-effort */ }
+    }
+
+    // Best-effort order/DC linkage by Books reference_number → our order id / DC id.
+    for (const { id, reference } of invoiceRefs) {
+      try {
+        const ord = await env.DB.prepare("SELECT id FROM orders WHERE id=?").bind(reference).first();
+        if (ord) { await env.DB.prepare("UPDATE ar_invoices SET order_id=? WHERE id=?").bind(reference, id).run(); continue; }
+        const dc = await env.DB.prepare("SELECT id FROM delivery_challans WHERE id=?").bind(reference).first();
+        if (dc) await env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(reference, id).run();
+      } catch { /* orders/DC table shape varies — linkage is best-effort */ }
+    }
+
+    await recomputeArBalances(env);
+    await recomputeApBalances(env);
+
+    // Advance watermarks ONLY on an uncapped pass. If the page cap was hit, hold the
+    // cursors so the next run re-pulls the same window (never skip un-fetched pages).
+    if (!r.cap_hit) {
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+      await setConfig(env, "initial_backfill_complete", "1", "system");
+      r.backfill_complete = true;
+    }
+  } catch (e) {
+    r.status = "error"; r.errors.push(String(e));
+  }
+  return r;
+}
+
+// Derive amount_paid / credited / balance / status / age_bucket for all AR invoices
+// from the mirrored allocations (PRD §15: balance = total + late_fee − amount_paid −
+// credited; settled = balance ≤ 0). Money stays integer paise throughout.
+async function recomputeArBalances(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE ar_invoices SET
+       amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='invoice' AND doc_id=ar_invoices.id),0),
+       credited    = COALESCE((SELECT SUM(amount) FROM credit_allocations WHERE invoice_id=ar_invoices.id),0)`
+  ).run();
+  await env.DB.prepare(`UPDATE ar_invoices SET balance = total + COALESCE(late_fee,0) - amount_paid - credited`).run();
+  const today = istToday();
+  const { results } = await env.DB.prepare(
+    "SELECT id, due_date, balance, amount_paid, credited, status FROM ar_invoices WHERE status != 'void'"
+  ).all();
+  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; amount_paid: number; credited: number; status: string }>) {
+    const settled = (inv.balance ?? 0) <= 0;
+    const status = settled ? "paid" : ((inv.amount_paid || 0) + (inv.credited || 0) > 0 ? "partial" : "open");
+    const bucket = inv.due_date ? agingBucket(inv.due_date, today) : "current";
+    await env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id).run();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 4: Gmail transport (Google Workspace)
+// Cloudflare Workers cannot open SMTP, so this is the Gmail REST API with a
+// service-account JWT (domain-wide delegation, impersonating GMAIL_SENDER).
+// RS256 signing needs a PKCS8 key: the existing crypto.subtle usage is all
+// HMAC 'raw' keys — a private RSA key must be PEM→DER decoded first.
+// ══════════════════════════════════════════════════════════════════════
+class GmailAuthError extends Error {}
+
+// base64url (no padding) from raw bytes / from a UTF-8 string.
+function _b64urlFromBytes(bytes: Uint8Array): string {
+  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function _b64url(str: string): string { return _b64urlFromBytes(new TextEncoder().encode(str)); }
+// Standard base64 (with padding) of a UTF-8 string, CRLF-wrapped at 76 cols for MIME bodies.
+function _b64std(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/(.{76})/g, "$1\r\n");
+}
+// PEM (possibly with escaped \n) → DER bytes for crypto.subtle.importKey('pkcs8', …).
+function _pemToDer(pem: string): Uint8Array {
+  const body = pem.replace(/\\n/g, "\n").replace(/-----BEGIN [^-]+-----/, "").replace(/-----END [^-]+-----/, "").replace(/\s+/g, "");
+  const bin = atob(body); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function gmailMissingSecrets(env: Env): string[] {
+  const miss: string[] = [];
+  if (!env.GOOGLE_SA_EMAIL) miss.push("GOOGLE_SA_EMAIL");
+  if (!env.GOOGLE_SA_PRIVATE_KEY) miss.push("GOOGLE_SA_PRIVATE_KEY");
+  if (!env.GMAIL_SENDER) miss.push("GMAIL_SENDER");
+  return miss;
+}
+
+// 4.A — mint (or reuse cached) a Gmail access token via the SA JWT-bearer flow.
+// Caches to app_config with a 120s skew. A token-exchange/key failure throws
+// GmailAuthError (a distinct, operator-alertable state, not a per-recipient failure).
+async function gmailGetToken(env: Env, fetchImpl: FetchImpl, force = false): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (!force) {
+    const cached = await getConfig(env, "gmail_token", "");
+    const exp = parseInt(await getConfig(env, "gmail_token_exp", "0"), 10) || 0;
+    if (cached && exp - 120 > now) return cached;
+  }
+  const miss = gmailMissingSecrets(env);
+  if (miss.length) throw new GmailAuthError(`Gmail not configured: ${miss.join(", ")}`);
+  const header = _b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = _b64url(JSON.stringify({
+    iss: (env.GOOGLE_SA_EMAIL || "").trim(),
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    aud: "https://oauth2.googleapis.com/token",
+    sub: (env.GMAIL_SENDER || "").trim(),      // impersonated mailbox (domain-wide delegation)
+    iat: now, exp: now + 3600,
+  }));
+  const signingInput = `${header}.${claim}`;
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey("pkcs8", _pemToDer(env.GOOGLE_SA_PRIVATE_KEY || "").buffer as ArrayBuffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  } catch (e) { throw new GmailAuthError(`invalid service-account key: ${String(e)}`); }
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signingInput));
+  const jwt = `${signingInput}.${_b64urlFromBytes(new Uint8Array(sig))}`;
+  const res = await fetchImpl("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }).toString(),
+  });
+  const data = await res.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
+  if (!res.ok || !data.access_token) throw new GmailAuthError(data.error_description || data.error || `gmail token exchange failed (${res.status})`);
+  await setConfig(env, "gmail_token", data.access_token, "system");
+  await setConfig(env, "gmail_token_exp", String(now + (data.expires_in || 3600)), "system");
+  return data.access_token;
+}
+
+interface GmailAttachment { filename: string; contentType: string; contentBase64: string; }
+interface GmailSendOpts { to: string; subject: string; html?: string; text?: string; attachment?: GmailAttachment; }
+
+// RFC-2047 encode a Subject only when it carries non-ASCII (keeps ASCII subjects readable).
+function _mimeSubject(s: string): string {
+  return /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${btoa(unescape(encodeURIComponent(s)))}?=` : s;
+}
+function _buildMime(from: string, o: GmailSendOpts): string {
+  const bodyType = o.html ? "text/html" : "text/plain";
+  const body = o.html || o.text || "";
+  const base = [`From: ${from}`, `To: ${o.to}`, `Subject: ${_mimeSubject(o.subject)}`, "MIME-Version: 1.0"];
+  let msg: string;
+  if (o.attachment) {
+    const b = "bnd_" + Math.random().toString(36).slice(2);
+    msg = [
+      ...base, `Content-Type: multipart/mixed; boundary="${b}"`, "",
+      `--${b}`, `Content-Type: ${bodyType}; charset="UTF-8"`, "Content-Transfer-Encoding: base64", "", _b64std(body), "",
+      `--${b}`, `Content-Type: ${o.attachment.contentType}; name="${o.attachment.filename}"`,
+      `Content-Disposition: attachment; filename="${o.attachment.filename}"`, "Content-Transfer-Encoding: base64", "",
+      o.attachment.contentBase64.replace(/\s+/g, ""), "", `--${b}--`, "",
+    ].join("\r\n");
+  } else {
+    msg = [...base, `Content-Type: ${bodyType}; charset="UTF-8"`, "Content-Transfer-Encoding: base64", "", _b64std(body), ""].join("\r\n");
+  }
+  return _b64url(msg);
+}
+
+// 4.B — send one message. Returns a typed result (never throws): a token/config
+// problem is kind:'auth' (whole system dark → alert), a non-2xx send is kind:'send'
+// (per-recipient). Re-mints once on a 401. Supports a base64 attachment (PDF).
+type GmailSendResult = { ok: true; messageId: string } | { ok: false; error: string; kind: "auth" | "send" };
+async function gmailSend(env: Env, opts: GmailSendOpts, fetchImpl: FetchImpl = fetch): Promise<GmailSendResult> {
+  const from = (env.GMAIL_SENDER || "").trim();
+  let token: string;
+  try { token = await gmailGetToken(env, fetchImpl); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e), kind: "auth" }; }
+  const raw = _buildMime(from, opts);
+  const send = (tok: string) => fetchImpl("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { "Authorization": `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw }),
+  });
+  let res = await send(token);
+  if (res.status === 401) {
+    try { token = await gmailGetToken(env, fetchImpl, true); }
+    catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e), kind: "auth" }; }
+    res = await send(token);
+  }
+  const data = await res.json().catch(() => ({})) as { id?: string; error?: { message?: string } };
+  if (!res.ok || !data.id) return { ok: false, error: (data.error && data.error.message) || `gmail send HTTP ${res.status}`, kind: "send" };
+  return { ok: true, messageId: data.id };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 5: consolidated dunning engine
+// One statement per customer. Auto (cron) sends only pre-due/on-due; overdue
+// tiers are collector-initiated. Reserve-before-send idempotency on
+// (client_id,tier,cycle_batch); holds/opt-out/PTP suppress; min-gap guardrail.
+// ══════════════════════════════════════════════════════════════════════
+const REMINDER_RULE_SEED: Array<{ id: string; tier: string; min: number; mode: "auto" | "manual"; pdf: number; tone: string }> = [
+  { id: "rule:pre-due", tier: "pre-due", min: -7, mode: "auto", pdf: 0, tone: "Early friendly notice" },
+  { id: "rule:on-due", tier: "on-due", min: 0, mode: "auto", pdf: 0, tone: "Polite reminder" },
+  { id: "rule:overdue-1", tier: "overdue-1", min: 1, mode: "manual", pdf: 1, tone: "Firm — balance highlighted" },
+  { id: "rule:overdue-2", tier: "overdue-2", min: 16, mode: "manual", pdf: 1, tone: "Formal — references terms" },
+  { id: "rule:final", tier: "final", min: 31, mode: "manual", pdf: 1, tone: "Final notice — escalation path" },
+];
+const REMINDER_MIN_GAP_DAYS = 5;
+
+// 5.A — seed the dunning ladder once (idempotent on deterministic id).
+async function seedReminderRules(env: Env): Promise<void> {
+  for (const r of REMINDER_RULE_SEED) {
+    try {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO reminder_rules (id,workflow,tier,min_overdue_days,send_mode,min_gap_days,tone,attach_pdf,active) VALUES (?,?,?,?,?,?,?,?,1)"
+      ).bind(r.id, "default", r.tier, r.min, r.mode, REMINDER_MIN_GAP_DAYS, r.tone, r.pdf).run();
+    } catch { /* table missing on a bare DB — non-fatal */ }
+  }
+}
+
+interface StatementResult {
+  tier: string; cycle_batch: string; worst_overdue_days: number; invoice_ids: string[];
+  by_currency: Array<{ currency: string; outstanding: number; invoices: Record<string, unknown>[] }>;
+}
+
+// 5.B — build ONE consolidated statement for a customer's currently-open invoices.
+// Pure: settled (balance≤0) and void invoices are already excluded by the caller's
+// query + this filter. Tier = highest rule whose min_overdue_days ≤ worst overdue.
+// cycle_batch = digest of the sorted covered cycle_tokens (a Books edit → new batch).
+function buildStatement(invoices: Record<string, unknown>[], tierRules: TierRule[], today: string): StatementResult | null {
+  const open = invoices.filter(i => Number(i.balance || 0) > 0 && i.status !== "void");
+  if (!open.length) return null;
+  let worst = -Infinity;
+  for (const i of open) { const od = i.due_date ? overdueDays(String(i.due_date), today) : 0; if (od > worst) worst = od; }
+  const tier = selectTier(worst, tierRules);
+  if (!tier) return null; // still further out than the pre-due window
+  const byCur: Record<string, { currency: string; outstanding: number; invoices: Record<string, unknown>[] }> = {};
+  for (const i of open) {
+    const c = String(i.currency_code || "INR");
+    (byCur[c] = byCur[c] || { currency: c, outstanding: 0, invoices: [] });
+    byCur[c].outstanding += Number(i.balance || 0);
+    byCur[c].invoices.push(i);
+  }
+  const tokens = open.map(i => String(i.cycle_token || "")).sort();
+  return { tier, cycle_batch: hashStr(tokens.join("|")), worst_overdue_days: worst, invoice_ids: open.map(i => String(i.id)), by_currency: Object.values(byCur) };
+}
+
+// Active hold (force never overrides these). A PTP is active only until its date.
+async function reminderHoldActive(env: Env, clientId: string, today: string): Promise<string | null> {
+  const { results } = await env.DB.prepare(
+    "SELECT kind, ptp_date FROM reminder_holds WHERE client_id=? AND cleared_at IS NULL"
+  ).bind(clientId).all();
+  for (const h of (results || []) as Array<{ kind: string; ptp_date: string | null }>) {
+    if (h.kind === "ptp") { if (!h.ptp_date || h.ptp_date >= today) return "ptp"; /* expired PTP no longer suppresses */ }
+    else return h.kind; // dispute | negotiation | opt_out
+  }
+  return null;
+}
+// Whole IST days since the last successfully-SENT email (failed/suppressed/dry_run don't count).
+async function lastSentDaysAgo(env: Env, clientId: string, today: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    "SELECT run_at FROM reminder_runs WHERE client_id=? AND status='sent' ORDER BY run_at DESC LIMIT 1"
+  ).bind(clientId).first() as { run_at: string } | null;
+  if (!row || !row.run_at) return null;
+  // run_at is UTC — either 'YYYY-MM-DD HH:MM:SS' (datetime('now')) or a full ISO
+  // string. Normalise both to a UTC instant, then take the IST civil date before
+  // diffing, so a send in the 00:00–05:30 IST window isn't counted a day early.
+  const raw = String(row.run_at);
+  const iso = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return daysBetweenIST(raw.slice(0, 10), today);
+  return daysBetweenIST(istToday(d), today);
+}
+
+function _reminderSubject(tier: string, s: StatementResult): string {
+  const cur = s.by_currency[0];
+  const amt = cur ? _fmtMoneyServer(cur.outstanding, cur.currency) : "";
+  if (tier === "pre-due") return `Upcoming payment reminder — ${amt} due`;
+  if (tier === "on-due") return `Payment due today — ${amt}`;
+  if (tier === "final") return `Final notice — ${amt} overdue`;
+  return `Payment overdue — ${amt}`;
+}
+function _fmtMoneyServer(paise: number, currency = "INR"): string {
+  try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format((paise || 0) / 100); }
+  catch { return `${currency} ${fromPaise(paise)}`; }
+}
+// Escape HTML in merge fields — the values are mirrored from Books, but a contact
+// name / invoice number with markup must never break (or inject into) the email.
+function _he(v: unknown): string { return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function _reminderHtml(client: { name?: string }, tier: string, s: StatementResult): string {
+  const lines = s.by_currency.map(c => {
+    const rows = c.invoices.map(i => `<tr><td>${_he(i.number || i.id)}</td><td>${_he(i.due_date || "")}</td><td style="text-align:right">${_he(_fmtMoneyServer(Number(i.balance || 0), c.currency))}</td></tr>`).join("");
+    return `<p><strong>${_he(c.currency)}</strong> — outstanding ${_he(_fmtMoneyServer(c.outstanding, c.currency))}</p><table>${rows}</table>`;
+  }).join("");
+  return `<p>Dear ${_he(client.name || "Customer")},</p><p>This is a ${_he(tier.replace("-", " "))} reminder for the following open invoices:</p>${lines}<p>Please arrange payment at your earliest convenience.</p>`;
+}
+
+interface SendOpts { mode: "off" | "dry_run" | "live"; force?: boolean; actor?: string; }
+type SendResult = { status: "sent"; messageId: string } | { status: "dry_run" | "duplicate" | "failed"; reason?: string; error?: string } | { status: "suppressed"; reason: string } | { status: "off" };
+
+// 5.C — the atomic send core. Order: suppression checks → build → reserve row
+// (real cycle_batch) BEFORE the Gmail call → send → mark sent/failed. A crash after
+// Gmail accepts leaves a 'sending' row that blocks a re-send on the unique key.
+async function sendStatement(env: Env, client: { client_id: string; name?: string; email?: string; dunning_opt_out?: number }, opts: SendOpts, fetchImpl: FetchImpl = fetch): Promise<SendResult> {
+  const today = istToday();
+  const actor = opts.actor || "system";
+  if (opts.mode === "off") return { status: "off" };
+  const logSup = async (reason: string, batch: string) => {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,suppressed_reason,actor,recipient_email) VALUES (?,?,?,?,?,?,?,?)"
+    ).bind(uid(), client.client_id, "-", `${batch}#sup#${uid()}`, "suppressed", reason, actor, client.email || null).run();
+  };
+  // Holds / opt-out — force NEVER overrides these.
+  if (client.dunning_opt_out) { await logSup("opt_out", "x"); return { status: "suppressed", reason: "opt_out" }; }
+  const hold = await reminderHoldActive(env, client.client_id, today);
+  if (hold) { await logSup(hold, "x"); return { status: "suppressed", reason: hold }; }
+  // Re-read live open invoices at send time (drops any that cleared).
+  const { results } = await env.DB.prepare(
+    "SELECT id,number,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'"
+  ).bind(client.client_id).all();
+  const tierRules = REMINDER_RULE_SEED.map(r => ({ tier: r.tier, min_overdue_days: r.min }));
+  const stmt = buildStatement((results || []) as Record<string, unknown>[], tierRules, today);
+  if (!stmt) { await logSup("settled", "x"); return { status: "suppressed", reason: "settled" }; }
+  if (!client.email) { await logSup("no-email", stmt.cycle_batch); return { status: "suppressed", reason: "no-email" }; }
+  // Min-gap (force overrides, but never the 24h hard floor).
+  const daysAgo = await lastSentDaysAgo(env, client.client_id, today);
+  if (daysAgo !== null && daysAgo < REMINDER_MIN_GAP_DAYS) {
+    if (!opts.force) { await logSup("gap-not-elapsed", stmt.cycle_batch); return { status: "suppressed", reason: "gap-not-elapsed" }; }
+    if (daysAgo < 1) { await logSup("gap-floor-24h", stmt.cycle_batch); return { status: "suppressed", reason: "gap-floor-24h" }; }
+  }
+  const totalOut = JSON.stringify(Object.fromEntries(stmt.by_currency.map(c => [c.currency, c.outstanding])));
+  if (opts.mode === "dry_run") {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,invoice_ids,total_outstanding,actor,recipient_email,forced) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(uid(), client.client_id, stmt.tier, `${stmt.cycle_batch}#dry#${uid()}`, "dry_run", JSON.stringify(stmt.invoice_ids), totalOut, actor, client.email, opts.force ? 1 : 0).run();
+    return { status: "dry_run" };
+  }
+  // LIVE: reserve the idempotency slot (real cycle_batch) BEFORE sending.
+  const rowId = uid();
+  try {
+    await env.DB.prepare(
+      "INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,invoice_ids,total_outstanding,actor,recipient_email,forced) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(rowId, client.client_id, stmt.tier, stmt.cycle_batch, "sending", JSON.stringify(stmt.invoice_ids), totalOut, actor, client.email, opts.force ? 1 : 0).run();
+  } catch { return { status: "duplicate" }; } // unique(client,tier,cycle_batch) → already sent/sending
+  const res = await gmailSend(env, { to: client.email, subject: _reminderSubject(stmt.tier, stmt), html: _reminderHtml(client, stmt.tier, stmt) }, fetchImpl);
+  if (res.ok) {
+    await env.DB.prepare("UPDATE reminder_runs SET status='sent', gmail_message_id=?, channel='email' WHERE id=?").bind(res.messageId, rowId).run();
+    await audit(env, null, "AR_REMINDER_SENT", "ar_client", client.client_id, undefined, stmt.tier);
+    return { status: "sent", messageId: res.messageId };
+  }
+  // A failed send must stay RETRYABLE (PRD §15: failed rows don't consume the gap
+  // and are eligible next pass). Move the reserved row off the real cycle_batch so
+  // the unique (client,tier,cycle_batch) index no longer blocks a retry.
+  await env.DB.prepare("UPDATE reminder_runs SET status='failed', suppressed_reason=?, cycle_batch=?, channel='email' WHERE id=?")
+    .bind(res.error, `${stmt.cycle_batch}#failed#${uid()}`, rowId).run();
+  return { status: "failed", error: res.error };
+}
+
+// 5.D — the daily auto pass. Gated to the SEND_CRON tick by scheduled(). Auto-sends
+// ONLY pre-due/on-due; overdue tiers are surfaced to collectors (computed live by the
+// followups-due endpoint), never auto-sent. Ships behind reminders_mode + backfill gate.
+interface ReminderPassResult { status: "ok" | "disabled" | "backfill_pending"; mode: string; considered: number; sent: number; dry_run: number; suppressed: number; }
+async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fetch): Promise<ReminderPassResult> {
+  await ensureArSchema(env);
+  const mode = await getConfig(env, "reminders_mode", "off");
+  const r: ReminderPassResult = { status: "ok", mode, considered: 0, sent: 0, dry_run: 0, suppressed: 0 };
+  if (cron !== SEND_CRON) { r.status = "disabled"; return r; }               // wrong tick → no-op
+  if (mode === "off") { r.status = "disabled"; return r; }
+  if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1") { r.status = "backfill_pending"; return r; }
+  const today = istToday();
+  const autoTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "auto").map(x => x.tier));
+  const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+  const { results } = await env.DB.prepare(
+    `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
+     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>0 AND i.status!='void')
+     LIMIT ${MAX_CUSTOMERS_PER_RUN}`
+  ).all();
+  for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
+    const inv = (await env.DB.prepare("SELECT id,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
+    if (!stmt || !autoTiers.has(stmt.tier)) continue;    // manual (overdue) tiers → collector worklist, not auto
+    r.considered++;
+    const out = await sendStatement(env, c, { mode: mode as SendOpts["mode"], actor: "system" }, fetchImpl);
+    if (out.status === "sent") r.sent++;
+    else if (out.status === "dry_run") r.dry_run++;
+    else if (out.status === "suppressed") r.suppressed++;
+  }
+  return r;
+}
+
 // Named exports for tests (drive the Zoho pull with an injected fetch against a throwaway D1).
 export { runZohoSync, mapZohoItem, upsertInventoryRows, migrateHsnTo6Digit, migrateBackfillAeratedHsn };
+export { gmailGetToken, gmailSend, gmailMissingSecrets };
+export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
+export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
+         mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
+export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
+// Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
+export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
+         agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
+         SEND_CRON };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
+      // The SEND_CRON tick runs ONLY the reminder pass; every other registered
+      // trigger runs the existing delivery/inventory work. Gating the whole
+      // dispatch stops the added trigger from re-firing the other jobs.
+      if ((controller.cron || "") === SEND_CRON) {
+        try { await runReminderPass(env, controller.cron || ""); }
+        catch (e) { console.error("reminder pass cron error:", String(e)); }
+        return;
+      }
       await fixCategoryNames(env); // make sure columns/tables exist first
       await runDeliveryReminders(env);
       // Zoho Inventory pull (milestone 002). Disabled + dry-run by default, so this
@@ -3336,6 +4181,28 @@ export default {
       if (path==="/api/integrations/zoho-inventory/delete-inactive-nonzoho" && method==="POST") return handleZohoDeleteInactiveNonZoho(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
+
+      // Phase 3 Finance — Receivables (003-finance-ar). Await the AR schema before
+      // any finance handler so a cold isolate never races the waitUntil self-heal.
+      if (path.startsWith("/api/finance/") || path==="/api/integrations/zoho-books/sync") await ensureArSchema(env);
+      if (path==="/api/finance/ar/invoices" && method==="GET") return handleArInvoices(request,env);
+      if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
+      if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
+      if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
+      if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
+      if (path==="/api/finance/ap/summary"  && method==="GET") return handleApSummary(request,env);
+      if (path.match(/^\/api\/finance\/ap\/vendor\/[^/]+$/) && method==="GET") return handleApVendorStatement(request,env,path);
+      if (path==="/api/finance/reconcile/run"       && method==="POST") return handleReconcileRun(request,env);
+      if (path==="/api/finance/reconcile/exceptions"&& method==="GET")  return handleReconcileExceptions(request,env);
+      if (path.match(/^\/api\/finance\/reconcile\/[^/]+\/resolve$/) && method==="POST") return handleReconcileResolve(request,env,path);
+      if (path==="/api/finance/dashboard"           && method==="GET")  return handleFinanceDashboard(request,env);
+      if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
+      if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
+      if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
+      if (path==="/api/finance/reminders/followups-due"&& method==="GET")  return handleFollowupsDue(request,env);
+      if (path==="/api/finance/reminders/preview"      && method==="GET")  return handleReminderPreview(request,env);
+      if (path==="/api/finance/reminders/send-followup"&& method==="POST") return handleSendFollowup(request,env);
+      if (path==="/api/finance/reminders/run"          && method==="POST") return handleReminderRun(request,env);
 
       // Feature 15.X: Fulfilment & Reconciliation reports (must be before generic reports regex)
       if (path==="/api/reports/order-vs-delivery"    && method==="GET") return handleRptOrderVsDelivery(request,env);
@@ -7929,6 +8796,354 @@ async function handleSaveSettings(request: Request, env: Env): Promise<Response>
 // Gap 4: ZOHO BOOKS WEBHOOK
 // ════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 3: AR read API + webhook AR-routing
+// ══════════════════════════════════════════════════════════════════════
+const FIN_FULL_ROLES = ["super_admin", "ops_admin", "finance_admin"];
+
+// Days-until-due for the "due this week" KPI (0..7 inclusive, not yet overdue).
+function _dueWithinDays(due: string, today: string, n: number): boolean {
+  const d = daysBetweenIST(today, due); // positive = due in the future
+  return d >= 0 && d <= n;
+}
+
+// GET /api/finance/ar/invoices — finance/ops only (clients use /ar/client/:id).
+async function handleArInvoices(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
+  const client = url.searchParams.get("client"); if (client) { where.push("client_id=?"); bind.push(client); }
+  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging");
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, client_id, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
+  ).bind(...bind).all();
+  let rows = (results || []) as Record<string, unknown>[];
+  if (aging) rows = rows.filter(r => r.age_bucket === aging);
+  return json({ invoices: rows });
+}
+
+// Per-currency AR summary + aging + DSO. finance/ops only.
+async function handleArSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json({ by_currency: await _arSummaryRows(env, null) });
+}
+
+// GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
+// client_* caller sees ONLY its own (403 on any other id) — per §15 IDOR rule.
+async function handleArClientStatement(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const full = FIN_FULL_ROLES.includes(user!.role);
+  const isClient = user!.role.startsWith("client_");
+  if (!full && !isClient) return json({ error: "Forbidden" }, 403);
+  if (isClient && id !== (user!.client_id || "")) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY due_date`
+  ).bind(id).all();
+  return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
+}
+
+// Shared per-currency aggregation. `clientId` null = all clients (finance view).
+async function _arSummaryRows(env: Env, clientId: string | null): Promise<Record<string, unknown>[]> {
+  const today = istToday();
+  const where = clientId ? "client_id=? AND status != 'void'" : "status != 'void'";
+  const bind = clientId ? [clientId] : [];
+  const { results } = await env.DB.prepare(
+    `SELECT currency_code, balance, total, due_date, date FROM ar_invoices WHERE ${where}`
+  ).bind(...bind).all();
+  const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
+  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _sales90: number }> = {};
+  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
+    const cur = r.currency_code || "INR";
+    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _sales90: 0 });
+    const bal = r.balance || 0;
+    if (bal > 0) {
+      a.outstanding += bal;
+      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+      a.buckets[bucket] += bal;
+      if (bucket !== "current") a.overdue += bal;
+      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    }
+    if (r.date && r.date >= cutoff90) a._sales90 += (r.total || 0);
+  }
+  return Object.values(acc).map(a => ({
+    currency: a.currency, outstanding: a.outstanding, overdue: a.overdue,
+    due_this_week: a.due_this_week, buckets: a.buckets,
+    dso: Math.round(computeDSO(a.outstanding, a._sales90) * 10) / 10,
+  }));
+}
+
+// ── Payables (P3.2) read API — finance/ops only; clients NEVER see AP. ──
+async function handleApBills(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
+  const vendor = url.searchParams.get("vendor"); if (vendor) { where.push("vendor_id=?"); bind.push(vendor); }
+  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging");
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, vendor_id, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
+  ).bind(...bind).all();
+  let rows = (results || []) as Record<string, unknown>[];
+  if (aging) rows = rows.filter(r => r.age_bucket === aging);
+  return json({ bills: rows });
+}
+async function handleApSummary(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json({ by_currency: await _apSummaryRows(env, null) });
+}
+async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);   // no client access to AP
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const { results } = await env.DB.prepare(
+    `SELECT id, number, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE vendor_id=? AND status != 'void' ORDER BY due_date`
+  ).bind(id).all();
+  return json({ vendor_id: id, bills: results || [], by_currency: await _apSummaryRows(env, id) });
+}
+// Per-currency AP aggregation + DPO (days payable outstanding).
+async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record<string, unknown>[]> {
+  const today = istToday();
+  const where = vendorId ? "vendor_id=? AND status != 'void'" : "status != 'void'";
+  const bind = vendorId ? [vendorId] : [];
+  const { results } = await env.DB.prepare(`SELECT currency_code, balance, total, due_date, date FROM ap_bills WHERE ${where}`).bind(...bind).all();
+  const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
+  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _purch90: number }> = {};
+  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
+    const cur = r.currency_code || "INR";
+    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _purch90: 0 });
+    const bal = r.balance || 0;
+    if (bal > 0) {
+      a.outstanding += bal;
+      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+      a.buckets[bucket] += bal;
+      if (bucket !== "current") a.overdue += bal;
+      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    }
+    if (r.date && r.date >= cutoff90) a._purch90 += (r.total || 0);
+  }
+  return Object.values(acc).map(a => ({
+    currency: a.currency, outstanding: a.outstanding, overdue: a.overdue, due_this_week: a.due_this_week,
+    buckets: a.buckets, dpo: Math.round(computeDSO(a.outstanding, a._purch90) * 10) / 10,
+  }));
+}
+
+// ── Reconciliation engine (P3.3) ───────────────────────────────────────
+// Auto-detect exceptions across the AR (order/DC ↔ invoice ↔ payment) and AP
+// (PO ↔ bill ↔ payment) chains. Recomputes 'exception' rows each run; a manual
+// resolution for the same doc+reason suppresses re-flagging.
+interface ReconResult { ar_exceptions: number; ap_exceptions: number; total: number; }
+async function runReconciliation(env: Env): Promise<ReconResult> {
+  await ensureArSchema(env);
+  // Preserve manual resolutions; clear the previous auto pass.
+  await env.DB.prepare("DELETE FROM reconciliations WHERE status='exception'").run();
+  const resolved = new Set<string>();
+  for (const m of (await env.DB.prepare("SELECT left_type,left_id,variance_reason FROM reconciliations WHERE status='manual'").all()).results as Array<{ left_type: string; left_id: string; variance_reason: string }>)
+    resolved.add(`${m.left_type}:${m.left_id}:${m.variance_reason}`);
+  const r: ReconResult = { ar_exceptions: 0, ap_exceptions: 0, total: 0 };
+  const add = async (kind: string, leftType: string, leftId: string, reason: string, variance: number) => {
+    if (resolved.has(`${leftType}:${leftId}:${reason}`)) return;
+    await env.DB.prepare(
+      "INSERT INTO reconciliations (id,kind,left_type,left_id,status,variance_amount,variance_reason) VALUES (?,?,?,?, 'exception', ?, ?)"
+    ).bind(uid(), kind, leftType, leftId, variance, reason).run();
+    if (kind === "ar_3way") r.ar_exceptions++; else r.ap_exceptions++;
+    r.total++;
+  };
+  // Over-application is a genuine data-integrity exception (applied/paid beyond the
+  // document total). NOTE: "unlinked" (no order/DC/PO) is deliberately NOT flagged —
+  // many invoices/bills are legitimately direct, so a blanket unlinked check floods
+  // the queue with non-actionable rows. A precise linkage exception (reference_number
+  // present but unmatched) needs the reference persisted on the doc — a follow-up.
+  for (const i of (await env.DB.prepare("SELECT id,total,amount_paid,credited FROM ar_invoices WHERE status!='void'").all()).results as Array<{ id: string; total: number; amount_paid: number; credited: number }>) {
+    const over = (i.amount_paid || 0) + (i.credited || 0) - (i.total || 0);
+    if (over > 0) await add("ar_3way", "ar_invoice", i.id, "overpayment: applied exceeds total", over);
+  }
+  for (const b of (await env.DB.prepare("SELECT id,total,amount_paid FROM ap_bills WHERE status!='void'").all()).results as Array<{ id: string; total: number; amount_paid: number }>) {
+    const over = (b.amount_paid || 0) - (b.total || 0);
+    if (over > 0) await add("ap_3way", "ap_bill", b.id, "overpayment: paid exceeds total", over);
+  }
+  return r;
+}
+
+async function handleReconcileRun(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await runReconciliation(env));
+}
+async function handleReconcileExceptions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT id,kind,left_type,left_id,variance_amount,variance_reason,created_at FROM reconciliations WHERE status='exception' ORDER BY created_at DESC LIMIT 500"
+  ).all();
+  return json({ exceptions: results || [] });
+}
+async function handleReconcileResolve(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const body = await request.json().catch(() => ({})) as { note?: string };
+  const res = await env.DB.prepare("UPDATE reconciliations SET status='manual', matched_by=?, variance_reason=COALESCE(?,variance_reason) WHERE id=?")
+    .bind(user!.sub, body.note || null, id).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: "Not found" }, 404);
+  await audit(env, user, "RECON_RESOLVE", "reconciliation", id, undefined, body.note || "resolved");
+  return json({ ok: true });
+}
+
+// ── Finance dashboard (P3.5): AR vs AP snapshot + cash position ─────────
+async function handleFinanceDashboard(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const ar = await _arSummaryRows(env, null);
+  const ap = await _apSummaryRows(env, null);
+  // Net cash position per currency = AR outstanding − AP outstanding (indicative).
+  const cur = new Set<string>([...ar.map(a => a.currency as string), ...ap.map(a => a.currency as string)]);
+  const cash = [...cur].map(c => {
+    const a = ar.find(x => x.currency === c); const p = ap.find(x => x.currency === c);
+    return { currency: c, ar: (a?.outstanding as number) || 0, ap: (p?.outstanding as number) || 0, net: ((a?.outstanding as number) || 0) - ((p?.outstanding as number) || 0) };
+  });
+  const topDebtors = (await env.DB.prepare("SELECT client_id, currency_code, SUM(balance) AS bal FROM ar_invoices WHERE balance>0 AND status!='void' GROUP BY client_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const topCreditors = (await env.DB.prepare("SELECT vendor_id, currency_code, SUM(balance) AS bal FROM ap_bills WHERE balance>0 AND status!='void' GROUP BY vendor_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const openExceptions = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE status='exception'").first() as { n: number } | null)?.n || 0;
+  return json({ ar, ap, cash, top_debtors: topDebtors, top_creditors: topCreditors, open_exceptions: openExceptions });
+}
+
+// POST /api/integrations/zoho-books/sync — manual mirror. finance/super only;
+// ships DISABLED (books_sync_enabled='0') → no-op, like the inventory rollout.
+async function handleBooksSync(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return json({ status: "disabled" });
+  const body = await request.json().catch(() => ({})) as { full?: boolean };
+  const result = await runBooksSync(env, { full: !!body.full });
+  return json(result);
+}
+
+// ── Group 5.E: reminder endpoints ─────────────────────────────────────
+const FIN_WRITE_ROLES = ["super_admin", "finance_admin"];
+async function _arClient(env: Env, id: string): Promise<{ client_id: string; name?: string; email?: string; dunning_opt_out?: number } | null> {
+  return env.DB.prepare("SELECT client_id, name, email, dunning_opt_out FROM ar_clients WHERE client_id=?").bind(id).first();
+}
+
+async function handleReminderRules(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare("SELECT id,tier,min_overdue_days,send_mode,min_gap_days,tone,attach_pdf,active FROM reminder_rules ORDER BY min_overdue_days").all();
+  return json({ rules: results || [], mode: await getConfig(env, "reminders_mode", "off") });
+}
+
+async function handleReminderRuns(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT id,client_id,tier,status,suppressed_reason,gmail_message_id,actor,forced,recipient_email,invoice_ids,total_outstanding,run_at FROM reminder_runs ORDER BY run_at DESC LIMIT 200"
+  ).all();
+  return json({ runs: results || [] });
+}
+
+// Customers whose worst-overdue tier is collector-initiated (manual) — the worklist.
+async function handleFollowupsDue(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const manualTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "manual").map(x => x.tier));
+  const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+  const { results } = await env.DB.prepare(
+    `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
+     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>0 AND i.status!='void') LIMIT ${MAX_CUSTOMERS_PER_RUN}`
+  ).all();
+  const due: Record<string, unknown>[] = [];
+  for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
+    const inv = (await env.DB.prepare("SELECT id,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
+    if (!stmt || !manualTiers.has(stmt.tier)) continue;
+    const hold = await reminderHoldActive(env, c.client_id, today);
+    const daysAgo = await lastSentDaysAgo(env, c.client_id, today);
+    const eligibleInDays = daysAgo === null ? 0 : Math.max(0, REMINDER_MIN_GAP_DAYS - daysAgo);
+    due.push({
+      client_id: c.client_id, name: c.name, email: c.email, tier: stmt.tier,
+      worst_overdue_days: stmt.worst_overdue_days,
+      total_outstanding: Object.fromEntries(stmt.by_currency.map(x => [x.currency, x.outstanding])),
+      hold: hold || null, opt_out: !!c.dunning_opt_out,
+      eligible: !hold && !c.dunning_opt_out && !!c.email && eligibleInDays === 0,
+      eligible_in_days: eligibleInDays,
+    });
+  }
+  return json({ followups: due });
+}
+
+// Render a statement for the confirm screen — no send, any mode.
+async function handleReminderPreview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const id = new URL(request.url).searchParams.get("client_id") || "";
+  const client = await _arClient(env, id);
+  if (!client) return json({ error: "Unknown client" }, 404);
+  const today = istToday();
+  const inv = (await env.DB.prepare("SELECT id,number,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(id).all()).results || [];
+  const stmt = buildStatement(inv as Record<string, unknown>[], REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min })), today);
+  if (!stmt) return json({ nothing_due: true });
+  return json({ client_id: id, tier: stmt.tier, subject: _reminderSubject(stmt.tier, stmt), html: _reminderHtml(client, stmt.tier, stmt), invoice_ids: stmt.invoice_ids });
+}
+
+// Collector-initiated overdue send. super/finance. force overrides gap only (§15).
+async function handleSendFollowup(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as { client_id?: string; force?: boolean };
+  const client = await _arClient(env, String(body.client_id || ""));
+  if (!client) return json({ error: "Unknown client" }, 404);
+  const mode = (await getConfig(env, "reminders_mode", "off")) as SendOpts["mode"];
+  const result = await sendStatement(env, client, { mode, force: !!body.force, actor: user!.sub });
+  return json({ mode, ...result });
+}
+
+// Manual trigger of the daily auto pass. super/finance.
+async function handleReminderRun(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await runReminderPass(env, SEND_CRON));
+}
+
+// Set or clear a hold on a client (negotiation/dispute/opt_out/ptp). super/finance.
+async function handleArHold(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const clientId = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const body = await request.json().catch(() => ({})) as { kind?: string; ptp_date?: string; clear?: boolean };
+  if (body.clear) {
+    await env.DB.prepare("UPDATE reminder_holds SET cleared_at=datetime('now') WHERE client_id=? AND cleared_at IS NULL").bind(clientId).run();
+    // Re-enable dunning too — otherwise an opt_out hold's flag would strand the
+    // customer suppressed with no API path back (clear is the only re-enable path).
+    await env.DB.prepare("UPDATE ar_clients SET dunning_opt_out=0 WHERE client_id=?").bind(clientId).run();
+    await audit(env, user, "AR_HOLD_CLEAR", "ar_client", clientId, undefined, undefined);
+    return json({ ok: true, cleared: true });
+  }
+  const kind = String(body.kind || "");
+  if (!["negotiation", "dispute", "opt_out", "ptp"].includes(kind)) return json({ error: "Invalid hold kind" }, 400);
+  if (kind === "ptp") {
+    if (!body.ptp_date) return json({ error: "ptp_date is required for a promise-to-pay hold" }, 400);
+    const days = daysBetweenIST(istToday(), body.ptp_date);
+    if (Number.isNaN(days) || days < 0 || days > 60) return json({ error: "ptp_date must be within 60 days and not in the past" }, 400);
+  }
+  await env.DB.prepare("INSERT INTO reminder_holds (id,client_id,kind,ptp_date,set_by) VALUES (?,?,?,?,?)")
+    .bind(uid(), clientId, kind, kind === "ptp" ? (body.ptp_date || null) : null, user!.sub).run();
+  if (kind === "opt_out") await env.DB.prepare("UPDATE ar_clients SET dunning_opt_out=1 WHERE client_id=?").bind(clientId).run();
+  await audit(env, user, "AR_HOLD_SET", "ar_client", clientId, undefined, kind);
+  return json({ ok: true, kind });
+}
+
 async function handleZohoWebhook(request: Request, env: Env): Promise<Response> {
   const secret = request.headers.get("X-Zoho-Webhook-Secret");
   if (env.ZOHO_BOOKS_WEBHOOK_SECRET && secret !== env.ZOHO_BOOKS_WEBHOOK_SECRET) {
@@ -7937,13 +9152,22 @@ async function handleZohoWebhook(request: Request, env: Env): Promise<Response> 
   const body = await request.json() as Record<string,unknown>;
   const event = body.event_type as string;
 
+  // Customer-invoice payment → Accounts RECEIVABLE (never purchase_orders/AP).
+  // The webhook only flags + recomputes; the delta mirror carries the amounts.
   if (event === "invoice.payment_received") {
-    const invoiceId = (body.data as Record<string,string>)?.invoice_number;
-    if (invoiceId) {
-      await env.DB.prepare("UPDATE purchase_orders SET status='PAID',updated_at=datetime('now') WHERE id=?").bind(invoiceId).run();
-      await pushNotification(env, "finance_admin", `Payment received for invoice ${invoiceId} via Zoho Books`);
-      await audit(env, null, "ZOHO_PAYMENT", "purchase_order", invoiceId, "INVOICED", "PAID");
+    await ensureArSchema(env);
+    const d = (body.data as Record<string, unknown>) || {};
+    const invNo = String(d.invoice_number ?? "").trim();
+    const invId = String(d.invoice_id ?? "").trim();
+    const inv = await env.DB.prepare(
+      "SELECT id FROM ar_invoices WHERE (?<>'' AND id=?) OR (?<>'' AND number=?) LIMIT 1"
+    ).bind(invId, invId, invNo, invNo).first() as { id: string } | null;
+    if (inv) {
+      await recomputeArBalances(env);
+      await pushNotification(env, "finance_admin", `Payment received for invoice ${invNo || invId} (AR) via Zoho Books`);
+      await audit(env, null, "ZOHO_AR_PAYMENT", "ar_invoice", inv.id, undefined, "payment_received");
     }
+    // No matching AR invoice → safe no-op. There is no AP bill-payment webhook.
   }
   return json({ok:true});
 }

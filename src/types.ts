@@ -16,6 +16,11 @@ export interface Env {
   ZOHO_CLIENT_SECRET?: string;
   ZOHO_REFRESH_TOKEN?: string;
   ZOHO_DC?: string; // data centre, e.g. "in" → accounts.zoho.in / zohoapis.in
+  // Phase 3 Finance — Gmail API transport (Google Workspace service account,
+  // domain-wide delegation). All Worker SECRETS, never vars. See PRD §10a.
+  GOOGLE_SA_EMAIL?: string;        // service-account client email
+  GOOGLE_SA_PRIVATE_KEY?: string;  // PKCS8 PEM (may carry escaped \n)
+  GMAIL_SENDER?: string;           // impersonated mailbox, e.g. accounts@4syz.com
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_FROM_NUMBER: string;

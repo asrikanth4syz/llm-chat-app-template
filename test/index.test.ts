@@ -1,5 +1,24 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, it, expect, beforeAll } from "vitest";
+// Phase 3 Finance (003-finance-ar) Slice 1 — pure foundations under test.
+import {
+  istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
+  agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES, SEND_CRON,
+} from "../src/index";
+// Slice 1, Group 2 — Books mirror.
+import {
+  booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
+  mapBooksCreditNote, runBooksSync,
+} from "../src/index";
+// Slice 1, Group 4 — Gmail transport.
+import { gmailGetToken, gmailSend } from "../src/index";
+// Slice 1, Group 5 — dunning engine.
+import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
+import { hashStr } from "../src/index";
+// P3.2 — Payables (AP).
+import { mapBooksBill, mapBooksVendorPayment } from "../src/index";
+// P3.3 — Reconciliation.
+import { runReconciliation } from "../src/index";
 
 // Load all migration SQL files at Vite build time (sorted by filename)
 const migrationModules = import.meta.glob<string>("../migrations/*.sql", { as: "raw", eager: true });
@@ -3430,5 +3449,792 @@ describe("Product Intelligence verification workflow (P0.3)", () => {
     expect(queue.tasks.some(t => t.claim_id === hp.id)).toBe(false);
     expect(typeof queue.counts.evidence_requested).toBe("number");
     expect(queue.counts.verified_this_week).toBeGreaterThanOrEqual(1);  // Vegan just verified now
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance (003-finance-ar) — Slice 1, Group 1 (foundations)
+// Pure functions + schema self-heal. Encodes the PRD §15 pinned rules.
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ar/1.C ist date helpers", () => {
+  it("istToday returns the IST civil date, crossing the 18:30 UTC boundary", () => {
+    // 18:45 UTC → 00:15 IST next day
+    expect(istToday(new Date("2026-03-10T18:45:00Z"))).toBe("2026-03-11");
+    // 18:15 UTC → 23:45 IST same day
+    expect(istToday(new Date("2026-03-10T18:15:00Z"))).toBe("2026-03-10");
+    // exactly midnight UTC → 05:30 IST same day
+    expect(istToday(new Date("2026-03-10T00:00:00Z"))).toBe("2026-03-10");
+  });
+  it("daysBetweenIST counts whole civil days (signed)", () => {
+    expect(daysBetweenIST("2026-03-01", "2026-03-31")).toBe(30);
+    expect(daysBetweenIST("2026-03-31", "2026-03-01")).toBe(-30);
+    expect(daysBetweenIST("2026-03-10", "2026-03-10")).toBe(0);
+  });
+  it("overdueDays is due→today (positive when overdue)", () => {
+    expect(overdueDays("2026-03-10", "2026-03-10")).toBe(0);
+    expect(overdueDays("2026-03-10", "2026-03-11")).toBe(1);
+    expect(overdueDays("2026-03-10", "2026-03-05")).toBe(-5);
+  });
+});
+
+describe("finance-ar/1.B money helpers", () => {
+  it("toPaise parses rupee strings/numbers to integer paise, no drift", () => {
+    expect(toPaise("1234.56")).toBe(123456);
+    expect(toPaise("1234")).toBe(123400);
+    expect(toPaise("0.05")).toBe(5);
+    expect(toPaise("₹1,234.56")).toBe(123456);
+    expect(toPaise(1234.5)).toBe(123450);
+    expect(toPaise("-10.10")).toBe(-1010);
+    expect(toPaise(null)).toBe(0);
+    expect(toPaise("")).toBe(0);
+    expect(Number.isInteger(toPaise("99.99"))).toBe(true);
+  });
+  it("fromPaise round-trips and pads", () => {
+    expect(fromPaise(123456)).toBe("1234.56");
+    expect(fromPaise(5)).toBe("0.05");
+    expect(fromPaise(-1010)).toBe("-10.10");
+    expect(fromPaise(toPaise("789.00"))).toBe("789.00");
+  });
+  it("summing 10k paise amounts is exact (no float drift)", () => {
+    let sum = 0;
+    for (let i = 0; i < 10000; i++) sum += toPaise("0.01");
+    expect(sum).toBe(10000);             // 10000 × ₹0.01 = ₹100.00 exactly
+    expect(fromPaise(sum)).toBe("100.00");
+  });
+  it("formatMoney renders a currency string without re-entering storage", () => {
+    expect(typeof formatMoney(123456, "INR")).toBe("string");
+    expect(formatMoney(123456, "INR")).toContain("1,234.56");
+  });
+});
+
+describe("finance-ar/1.A aging + tier + DSO", () => {
+  const T = "2026-06-30"; // today
+  it("aging buckets are disjoint half-open from due_date", () => {
+    expect(agingBucket(T, T)).toBe("current");                 // due today = current
+    expect(agingBucket("2026-07-05", T)).toBe("current");      // not yet due
+    expect(agingBucket("2026-06-29", T)).toBe("1-30");         // 1 overdue
+    expect(agingBucket("2026-05-31", T)).toBe("1-30");         // 30 overdue
+    expect(agingBucket("2026-05-30", T)).toBe("31-60");        // 31 overdue
+    expect(agingBucket("2026-04-30", T)).toBe("61-90");        // 61 overdue
+    expect(agingBucket("2026-03-31", T)).toBe("91+");          // 91 overdue
+  });
+  it("bucket boundaries: 30→1-30, 31→31-60, 60→31-60, 61→61-90, 90→61-90, 91→91+", () => {
+    const day = (od: number) => { const d = new Date(Date.parse(T + "T00:00:00Z") - od * 86400000); return d.toISOString().slice(0, 10); };
+    expect(agingBucket(day(30), T)).toBe("1-30");
+    expect(agingBucket(day(31), T)).toBe("31-60");
+    expect(agingBucket(day(60), T)).toBe("31-60");
+    expect(agingBucket(day(61), T)).toBe("61-90");
+    expect(agingBucket(day(90), T)).toBe("61-90");
+    expect(agingBucket(day(91), T)).toBe("91+");
+  });
+  it("selectTier picks the highest tier whose min_overdue_days ≤ worst", () => {
+    expect(selectTier(-8)).toBeNull();          // further out than pre-due window
+    expect(selectTier(-3)).toBe("pre-due");
+    expect(selectTier(-1)).toBe("pre-due");
+    expect(selectTier(0)).toBe("on-due");
+    expect(selectTier(1)).toBe("overdue-1");
+    expect(selectTier(15)).toBe("overdue-1");
+    expect(selectTier(16)).toBe("overdue-2");
+    expect(selectTier(30)).toBe("overdue-2");
+    expect(selectTier(31)).toBe("final");
+    expect(selectTier(400)).toBe("final");
+  });
+  it("DEFAULT_TIER_RULES matches the PRD §7 ladder", () => {
+    expect(DEFAULT_TIER_RULES.map(r => r.tier)).toEqual(["pre-due", "on-due", "overdue-1", "overdue-2", "final"]);
+  });
+  it("computeDSO = (openAR/creditSales)*days, guarded against divide-by-zero", () => {
+    expect(computeDSO(90000, 90000, 90)).toBe(90);   // one full window's sales outstanding
+    expect(computeDSO(45000, 90000, 90)).toBe(45);
+    expect(computeDSO(10000, 0, 90)).toBe(0);        // no sales → 0, no NaN
+    expect(computeDSO(0, 90000, 90)).toBe(0);
+  });
+});
+
+describe("finance-ar/1.D schema self-heal", () => {
+  it("SEND_CRON is the 08:00 IST (02:30 UTC) daily expression", () => {
+    expect(SEND_CRON).toBe("30 2 * * *");
+  });
+  it("ensureArSchema creates the AR + reminder tables idempotently", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await ensureArSchema(env); // re-run must be a no-op (no throw)
+    const names = ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments",
+      "fin_allocations", "credit_allocations", "reminder_rules", "reminder_templates",
+      "reminder_runs", "reminder_holds"];
+    for (const n of names) {
+      const row = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(n).first();
+      expect(row, `table ${n} should exist`).toBeTruthy();
+    }
+  });
+  it("reminder_runs carries cycle_batch + audit columns and money columns are INTEGER", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const cols = (await db.prepare("PRAGMA table_info(reminder_runs)").all()).results as Array<{ name: string }>;
+    const colNames = cols.map(c => c.name);
+    for (const c of ["cycle_batch", "actor", "workflow", "forced", "recipient_email"]) {
+      expect(colNames, `reminder_runs.${c}`).toContain(c);
+    }
+    const invCols = (await db.prepare("PRAGMA table_info(ar_invoices)").all()).results as Array<{ name: string; type: string }>;
+    for (const money of ["subtotal", "gst", "total", "amount_paid", "credited", "late_fee", "balance"]) {
+      const col = invCols.find(c => c.name === money)!;
+      expect(col.type.toUpperCase(), `ar_invoices.${money} affinity`).toBe("INTEGER");
+    }
+  });
+  it("enforces the reminder_runs (client_id,tier,cycle_batch) unique index", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('rr1','cX','final','b1','sent')").run();
+    let threw = false;
+    try {
+      await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('rr2','cX','final','b1','sent')").run();
+    } catch { threw = true; }
+    expect(threw, "duplicate (client_id,tier,cycle_batch) must violate the unique index").toBe(true);
+  });
+  it("defaults reminders to OFF and backfill-incomplete", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const mode = await db.prepare("SELECT value FROM app_config WHERE key='reminders_mode'").first() as { value: string } | null;
+    const bf = await db.prepare("SELECT value FROM app_config WHERE key='initial_backfill_complete'").first() as { value: string } | null;
+    expect(mode?.value).toBe("off");
+    expect(bf?.value).toBe("0");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 2 (Zoho Books mirror)
+// ══════════════════════════════════════════════════════════════════════
+function booksEnv() {
+  return { ...(env as Record<string, unknown>), ZOHO_CLIENT_ID: "cid", ZOHO_CLIENT_SECRET: "sec",
+    ZOHO_REFRESH_TOKEN: "ref", ZOHO_BOOKS_ORG_ID: "borg", ZOHO_DC: "in" } as unknown as typeof env;
+}
+// Deterministic Books stand-in: token POST + /books/v3/<entity> GET. `data` maps
+// an entity name → its list of raw records (single page).
+function mockBooks(data: Record<string, Record<string, unknown>[]>) {
+  const calls: { url: string; method: string; headers: Record<string, string> }[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = typeof url === "string" ? url : (url as URL).toString();
+    calls.push({ url: u, method: (init?.method || "GET").toUpperCase(), headers: (init?.headers || {}) as Record<string, string> });
+    if (u.includes("/oauth/v2/token")) return new Response(JSON.stringify({ access_token: "tok-b", expires_in: 3600 }), { status: 200 });
+    const m = u.match(/\/books\/v3\/([a-z]+)\b/);
+    if (m) { const ent = m[1]; return new Response(JSON.stringify({ [ent]: data[ent] || [], page_context: { has_more_page: false, total: (data[ent] || []).length } }), { status: 200 }); }
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+describe("finance-ar/2.C Books entity mappers", () => {
+  it("mapBooksInvoice → paise, cycle_token, mirrored status", () => {
+    const m = mapBooksInvoice({ invoice_id: "inv1", invoice_number: "INV-1", customer_id: "cust1", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 180, total: 1180, currency_code: "INR", status: "partially_paid", exchange_rate: 1 });
+    expect("row" in m).toBe(true);
+    if (!("row" in m)) return;
+    expect(m.row.total).toBe(118000);
+    expect(m.row.gst).toBe(18000);
+    expect(m.row.status).toBe("partial");
+    expect(typeof m.row.cycle_token).toBe("string");
+    // cycle_token changes when total/due_date change (ladder restart on edit)
+    const m2 = mapBooksInvoice({ invoice_id: "inv1", due_date: "2026-06-30", total: 1181 });
+    if ("row" in m2) expect(m2.row.cycle_token).not.toBe(m.row.cycle_token);
+  });
+  it("mapBooksInvoice void + missing id", () => {
+    const v = mapBooksInvoice({ invoice_id: "inv2", total: 500, status: "void", due_date: "2026-01-01" });
+    if ("row" in v) expect(v.row.status).toBe("void");
+    expect("error" in mapBooksInvoice({ total: 5 })).toBe(true);
+  });
+  it("mapBooksPayment allocations satisfy Σ(applied)+unapplied == amount", () => {
+    const m = mapBooksPayment({ payment_id: "pay1", customer_id: "cust1", amount: 500, unused_amount: 100, date: "2026-07-01", invoices: [{ invoice_id: "inv1", amount_applied: 300 }, { invoice_id: "inv2", amount_applied: 100 }] });
+    expect("payment" in m).toBe(true);
+    if (!("payment" in m)) return;
+    const allocSum = m.allocations.reduce((n, a) => n + (a.amount as number), 0);
+    expect(allocSum + (m.payment.unapplied_amount as number)).toBe(m.payment.amount as number); // 30000+10000+10000 == 50000
+    expect(m.allocations.length).toBe(2);
+    expect(m.allocations[0].id).toBe("pay1:inv1");
+  });
+  it("mapBooksCreditNote on-account (no invoices) yields note, no allocations", () => {
+    const m = mapBooksCreditNote({ creditnote_id: "cn1", customer_id: "cust1", total: 250, date: "2026-07-02" });
+    if (!("note" in m)) throw new Error("expected note");
+    expect(m.note.amount).toBe(25000);
+    expect(m.allocations.length).toBe(0);
+  });
+  it("mapBooksContact reads credit_days and never sets dunning_opt_out", () => {
+    const m = mapBooksContact({ contact_id: "cust1", contact_name: "Acme", email: "a@acme.test", payment_terms: 30, currency_code: "INR" });
+    if (!("row" in m)) throw new Error("expected row");
+    expect(m.row.credit_days).toBe(30);
+    expect("dunning_opt_out" in m.row).toBe(false);
+  });
+});
+
+describe("finance-ar/2.B upsertMirror", () => {
+  it("inserts new, updates existing, and handles > 90 keys without a SQL-var error", async () => {
+    await ensureArSchema(env);
+    const rows = Array.from({ length: 100 }, (_, i) => ({ client_id: `um${i}`, name: `N${i}` }));
+    const a = await upsertMirror(env, "ar_clients", "client_id", rows);
+    expect(a.inserted).toBe(100);
+    const rows2 = rows.map(r => ({ ...r, name: `${r.name}-v2` }));
+    const b = await upsertMirror(env, "ar_clients", "client_id", rows2); // 100 keys → 2 chunks (90+10)
+    expect(b.updated).toBe(100);
+    const chk = await (env.DB as D1Database).prepare("SELECT name FROM ar_clients WHERE client_id='um50'").first() as { name: string };
+    expect(chk.name).toBe("N50-v2");
+  });
+  it("a partial payload never blanks an app-owned column (dunning_opt_out)", async () => {
+    await ensureArSchema(env);
+    await upsertMirror(env, "ar_clients", "client_id", [{ client_id: "cP", name: "Orig", dunning_opt_out: 1 }]);
+    const m = mapBooksContact({ contact_id: "cP", contact_name: "Renamed", email: "x@y.test" });
+    if (!("row" in m)) throw new Error("map failed");
+    await upsertMirror(env, "ar_clients", "client_id", [m.row]); // no dunning_opt_out in payload
+    const row = await (env.DB as D1Database).prepare("SELECT name, dunning_opt_out FROM ar_clients WHERE client_id='cP'").first() as { name: string; dunning_opt_out: number };
+    expect(row.dunning_opt_out).toBe(1); // preserved
+    expect(row.name).toBe("Renamed");   // updated
+  });
+});
+
+describe("finance-ar/2.A booksFetch", () => {
+  it("parses the entity array + page_context and sends If-Modified-Since when delta", async () => {
+    const { impl, calls } = mockBooks({ invoices: [{ invoice_id: "i1" }, { invoice_id: "i2" }] });
+    const res = await booksFetch(booksEnv(), "tok", "invoices", { page: 1, modifiedSinceEpoch: 1_700_000_000 }, impl);
+    expect(res.items.length).toBe(2);
+    expect(res.hasMore).toBe(false);
+    const invCall = calls.find(c => c.url.includes("/books/v3/invoices"))!;
+    expect(invCall.headers["If-Modified-Since"]).toBeTruthy();
+  });
+  it("retries a 429 then succeeds", async () => {
+    let n = 0;
+    const impl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/books/v3/contacts")) { n++; if (n === 1) return new Response("{}", { status: 429, headers: { "Retry-After": "0" } }); return new Response(JSON.stringify({ contacts: [{ contact_id: "c1" }], page_context: { has_more_page: false } }), { status: 200 }); }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const res = await booksFetch(booksEnv(), "tok", "contacts", { page: 1 }, impl);
+    expect(n).toBe(2);
+    expect(res.items.length).toBe(1);
+  });
+});
+
+describe("finance-ar/2.D runBooksSync orchestrator", () => {
+  it("mirrors contacts/invoices/payments/credit-notes and derives correct balances", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      contacts: [{ contact_id: "custA", contact_name: "Acme", email: "a@acme.test", payment_terms: 30 }],
+      invoices: [{ invoice_id: "invA", invoice_number: "INV-A", customer_id: "custA", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "sent" }],
+      creditnotes: [{ creditnote_id: "cnA", customer_id: "custA", total: 100, date: "2026-07-01", invoices_credited: [{ invoice_id: "invA", amount_applied: 100 }] }],
+      customerpayments: [{ payment_id: "payA", customer_id: "custA", amount: 400, unused_amount: 0, date: "2026-07-02", invoices: [{ invoice_id: "invA", amount_applied: 400 }] }],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    expect(r.invoices).toBe(1);
+    expect(r.backfill_complete).toBe(true);
+    const inv = await (env.DB as D1Database).prepare("SELECT total, amount_paid, credited, balance, status FROM ar_invoices WHERE id='invA'").first() as { total: number; amount_paid: number; credited: number; balance: number; status: string };
+    expect(inv.total).toBe(100000);       // ₹1000.00
+    expect(inv.amount_paid).toBe(40000);  // ₹400 applied
+    expect(inv.credited).toBe(10000);     // ₹100 credited
+    expect(inv.balance).toBe(50000);      // 100000 − 40000 − 10000
+    expect(inv.status).toBe("partial");
+    // backfill flag persisted; re-run is a no-op (no duplicate invoice rows)
+    await runBooksSync(booksEnv(), { full: true }, impl);
+    const cnt = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM ar_invoices WHERE id='invA'").first() as { n: number };
+    expect(cnt.n).toBe(1);
+    const bf = await (env.DB as D1Database).prepare("SELECT value FROM app_config WHERE key='initial_backfill_complete'").first() as { value: string };
+    expect(bf.value).toBe("1");
+  });
+  it("returns not_configured when Books org id is absent", async () => {
+    const r = await runBooksSync(env, { full: true }, (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch);
+    expect(r.status).toBe("not_configured");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 3 (AR read API + webhook AR-routing)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ar/3.A AR read endpoints + IDOR scoping", () => {
+  beforeAll(async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    // Two clients' invoices — tst-client's client_id is 'c1'.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,amount_paid,credited,balance,currency_code,status,age_bucket) VALUES ('ai-c1','ai-c1','INV-C1','c1','2026-06-01','2026-06-30',100000,0,0,100000,'INR','open','1-30')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,amount_paid,credited,balance,currency_code,status,age_bucket) VALUES ('ai-c2','ai-c2','INV-C2','c2','2026-06-01','2026-06-30',200000,0,0,200000,'INR','open','1-30')").run();
+  });
+  it("finance/super can list all invoices; a client_* token is 403 on /ar/invoices", async () => {
+    expect((await get("/api/finance/ar/invoices", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ar/invoices", opsToken)).status).toBe(403);   // ops_manager is unprivileged in this app
+    expect((await get("/api/finance/ar/invoices", clientToken)).status).toBe(403);
+    const body = await (await get("/api/finance/ar/invoices", adminToken)).json() as { invoices: { id: string }[] };
+    expect(body.invoices.some(i => i.id === "ai-c1")).toBe(true);
+    expect(body.invoices.some(i => i.id === "ai-c2")).toBe(true);
+  });
+  it("a client sees ONLY its own statement and is 403 (no data) on another client's", async () => {
+    const own = await get("/api/finance/ar/client/c1", clientToken);
+    expect(own.status).toBe(200);
+    const ob = await own.json() as { invoices: { client_id?: string; id: string }[] };
+    expect(ob.invoices.every(i => i.id === "ai-c1")).toBe(true);   // only c1's invoice
+    const other = await get("/api/finance/ar/client/c2", clientToken);
+    expect(other.status).toBe(403);
+    const otherBody = await other.json() as { invoices?: unknown };
+    expect(otherBody.invoices).toBeUndefined();                    // no data leaked in the body
+  });
+  it("finance can read any client's statement; summary is per-currency with DSO", async () => {
+    expect((await get("/api/finance/ar/client/c2", adminToken)).status).toBe(200);
+    const sum = await (await get("/api/finance/ar/summary", adminToken)).json() as { by_currency: { currency: string; outstanding: number; dso: number }[] };
+    const inr = sum.by_currency.find(c => c.currency === "INR")!;
+    expect(inr).toBeTruthy();
+    expect(inr.outstanding).toBeGreaterThanOrEqual(300000);        // c1 + c2 outstanding
+    expect(typeof inr.dso).toBe("number");
+    expect((await get("/api/finance/ar/summary", clientToken)).status).toBe(403);
+  });
+});
+
+describe("finance-ar/3 books sync endpoint gating", () => {
+  it("is finance/super only and ships disabled (no-op)", async () => {
+    expect((await post("/api/integrations/zoho-books/sync", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/integrations/zoho-books/sync", {}, opsToken)).status).toBe(403); // sync is super/finance only
+    const res = await post("/api/integrations/zoho-books/sync", {}, adminToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { status: string }).status).toBe("disabled");
+  });
+});
+
+describe("finance-ar/3.B webhook routes customer payment to AR, not purchase_orders", () => {
+  it("a matching AR invoice is handled and the AP purchase_order is left untouched", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    // An AR invoice AND a same-id purchase_order (the exact collision the old bug hit).
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,due_date,total,balance,currency_code,status) VALUES ('INV-W','INV-W','INV-W','c1','2026-06-30',50000,50000,'INR','open')").run();
+    await db.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status) VALUES ('INV-W','v1','OPEN')").run();
+    const res = await post("/api/integrations/zoho/webhook", { event_type: "invoice.payment_received", data: { invoice_number: "INV-W" } });
+    expect(res.status).toBe(200);
+    const po = await db.prepare("SELECT status FROM purchase_orders WHERE id='INV-W'").first() as { status: string };
+    expect(po.status).toBe("OPEN"); // NOT flipped to PAID — the AP row is untouched
+  });
+  it("an unknown invoice is a safe no-op", async () => {
+    const res = await post("/api/integrations/zoho/webhook", { event_type: "invoice.payment_received", data: { invoice_number: "does-not-exist" } });
+    expect(res.status).toBe(200);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 4 (Gmail transport)
+// Uses a REAL generated RSA key so the PEM→DER + RS256 sign path is exercised
+// (the plan-validation `gmail-rs256-pem-decode-omitted` first-domino finding).
+// ══════════════════════════════════════════════════════════════════════
+let _testPem = "";
+let _testPubKey: CryptoKey;
+beforeAll(async () => {
+  const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+  let bin = ""; for (let i = 0; i < pkcs8.length; i++) bin += String.fromCharCode(pkcs8[i]);
+  _testPem = "-----BEGIN PRIVATE KEY-----\n" + btoa(bin).replace(/(.{64})/g, "$1\n") + "\n-----END PRIVATE KEY-----\n";
+  _testPubKey = kp.publicKey;
+});
+function gmailEnv(pem = _testPem) {
+  return { ...(env as Record<string, unknown>), GOOGLE_SA_EMAIL: "sa@proj.iam.gserviceaccount.com", GOOGLE_SA_PRIVATE_KEY: pem, GMAIL_SENDER: "accounts@4syz.com" } as unknown as typeof env;
+}
+async function clearGmailTokenCache() {
+  await (env.DB as D1Database).prepare("DELETE FROM app_config WHERE key IN ('gmail_token','gmail_token_exp')").run();
+}
+function b64urlDecode(s: string): string { return atob(s.replace(/-/g, "+").replace(/_/g, "/")); }
+
+describe("finance-ar/4.A gmailGetToken (RS256 SA JWT)", () => {
+  it("signs a valid RS256 JWT from a real PEM and returns the access token", async () => {
+    await clearGmailTokenCache();
+    let captured = "";
+    let tokenCalls = 0;
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com/token")) {
+        tokenCalls++;
+        captured = new URLSearchParams(String(init?.body)).get("assertion") || "";
+        return new Response(JSON.stringify({ access_token: "gtok-1", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const tok = await gmailGetToken(gmailEnv(), impl);
+    expect(tok).toBe("gtok-1");
+    // The JWT verifies against the generated public key, and carries the right claims.
+    const [h64, c64, s64] = captured.split(".");
+    const sig = Uint8Array.from(b64urlDecode(s64), c => c.charCodeAt(0));
+    const okSig = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", _testPubKey, sig, new TextEncoder().encode(`${h64}.${c64}`));
+    expect(okSig).toBe(true);
+    const claims = JSON.parse(b64urlDecode(c64));
+    expect(claims.sub).toBe("accounts@4syz.com");
+    expect(claims.scope).toContain("gmail.send");
+    // Second call is served from cache — no new token exchange.
+    await gmailGetToken(gmailEnv(), impl);
+    expect(tokenCalls).toBe(1);
+  });
+  it("throws a distinct auth error for a bad key (not a per-recipient failure)", async () => {
+    await clearGmailTokenCache();
+    let threw = false;
+    try { await gmailGetToken(gmailEnv("-----BEGIN PRIVATE KEY-----\nnot-base64!!\n-----END PRIVATE KEY-----"), (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch); }
+    catch { threw = true; }
+    expect(threw).toBe(true);
+  });
+});
+
+describe("finance-ar/4.B gmailSend", () => {
+  function sendMock(sendStatus: number, sendBody: unknown, opts: { first401?: boolean } = {}) {
+    const state = { rawSent: "", tokenCalls: 0, sendCalls: 0 };
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("oauth2.googleapis.com/token")) { state.tokenCalls++; return new Response(JSON.stringify({ access_token: `gtok-${state.tokenCalls}`, expires_in: 3600 }), { status: 200 }); }
+      if (u.includes("gmail.googleapis.com")) {
+        state.sendCalls++;
+        state.rawSent = (JSON.parse(String(init?.body)) as { raw: string }).raw;
+        if (opts.first401 && state.sendCalls === 1) return new Response("{}", { status: 401 });
+        return new Response(JSON.stringify(sendBody), { status: sendStatus });
+      }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    return { impl, state };
+  }
+  it("sends an HTML message and returns the Gmail messageId", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-1" });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Statement", html: "<b>Due &amp; owing</b>" }, impl);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.messageId).toBe("msg-1");
+    const raw = b64urlDecode(state.rawSent);
+    expect(raw).toContain("To: x@y.test");
+    expect(raw).toContain("Subject: Statement");
+    expect(raw).toContain("From: accounts@4syz.com");
+  });
+  it("attaches a PDF as multipart/mixed", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-2" });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Inv", text: "see attached", attachment: { filename: "INV-1.pdf", contentType: "application/pdf", contentBase64: btoa("PDFDATA") } }, impl);
+    expect(r.ok).toBe(true);
+    const raw = b64urlDecode(state.rawSent);
+    expect(raw).toContain("multipart/mixed");
+    expect(raw).toContain('filename="INV-1.pdf"');
+  });
+  it("re-mints the token once on a 401 then succeeds", async () => {
+    await clearGmailTokenCache();
+    const { impl, state } = sendMock(200, { id: "msg-3" }, { first401: true });
+    const r = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Hi", text: "hi" }, impl);
+    expect(r.ok).toBe(true);
+    expect(state.tokenCalls).toBe(2);  // initial + forced re-mint
+    expect(state.sendCalls).toBe(2);
+  });
+  it("returns kind:'send' on a non-2xx and kind:'auth' when unconfigured", async () => {
+    await clearGmailTokenCache();
+    const { impl } = sendMock(400, { error: { message: "Bad Request" } });
+    const bad = await gmailSend(gmailEnv(), { to: "x@y.test", subject: "Hi", text: "hi" }, impl);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.kind).toBe("send");
+    // Missing GMAIL secrets → auth kind, and NO send call is attempted.
+    await clearGmailTokenCache(); // drop any token cached by the case above (cache short-circuits config)
+    let sendAttempted = false;
+    const impl2 = (async (url: string | URL) => { if (String(url).includes("gmail.googleapis.com")) sendAttempted = true; return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+    const noAuth = await gmailSend(env, { to: "x@y.test", subject: "Hi", text: "hi" }, impl2);
+    expect(noAuth.ok).toBe(false);
+    if (!noAuth.ok) expect(noAuth.kind).toBe("auth");
+    expect(sendAttempted).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Slice 1, Group 5 (consolidated dunning engine)
+// ══════════════════════════════════════════════════════════════════════
+const TIER_RULES = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
+function daysAgoISO(n: number) { return new Date(Date.parse(istToday() + "T00:00:00Z") - n * 86400000).toISOString(); }
+function dueDaysAgo(n: number) { return new Date(Date.parse(istToday() + "T00:00:00Z") - n * 86400000).toISOString().slice(0, 10); }
+async function seedDunClient(id: string, email: string | null, invoices: Array<{ id: string; due: string; total: number; balance: number; currency?: string; status?: string; tok?: string }>) {
+  const db = env.DB as D1Database;
+  await ensureArSchema(env);
+  await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,dunning_opt_out) VALUES (?,?,?,0)").bind(id, "Name " + id, email).run();
+  await db.prepare("DELETE FROM ar_invoices WHERE client_id=?").bind(id).run();
+  await db.prepare("DELETE FROM reminder_runs WHERE client_id=?").bind(id).run();
+  await db.prepare("DELETE FROM reminder_holds WHERE client_id=?").bind(id).run();
+  for (const iv of invoices)
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,due_date,total,balance,currency_code,status,cycle_token) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .bind(iv.id, iv.id, iv.id, id, iv.due, iv.total, iv.balance, iv.currency || "INR", iv.status || "open", iv.tok || ("tok-" + iv.id)).run();
+}
+function gmailStub(sendId = "m1") {
+  const st = { sends: 0, tokens: 0 };
+  const impl = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.includes("oauth2.googleapis.com/token")) { st.tokens++; return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 }); }
+    if (u.includes("gmail.googleapis.com")) { st.sends++; return new Response(JSON.stringify({ id: sendId }), { status: 200 }); }
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { impl, st };
+}
+
+describe("finance-ar/5.B buildStatement", () => {
+  it("groups per currency, picks the tier, and derives cycle_batch", () => {
+    const inv = [
+      { id: "i1", balance: 50000, due_date: dueDaysAgo(5), currency_code: "INR", cycle_token: "a", status: "open" },
+      { id: "i2", balance: 20000, due_date: dueDaysAgo(2), currency_code: "USD", cycle_token: "b", status: "open" },
+      { id: "i3", balance: 0, due_date: dueDaysAgo(1), currency_code: "INR", cycle_token: "c", status: "open" }, // settled, excluded
+    ];
+    const s = buildStatement(inv, TIER_RULES, istToday())!;
+    expect(s.tier).toBe("overdue-1");                 // worst overdue is 5 days
+    expect(s.by_currency.length).toBe(2);             // INR + USD, no blended total
+    expect(s.invoice_ids.sort()).toEqual(["i1", "i2"]);
+    expect(s.cycle_batch).toBe(hashStr(["a", "b"].sort().join("|")));
+  });
+  it("returns null when nothing is due", () => {
+    expect(buildStatement([{ id: "x", balance: 0, due_date: dueDaysAgo(1), cycle_token: "z", status: "open" }], TIER_RULES, istToday())).toBeNull();
+  });
+});
+
+describe("finance-ar/5.C sendStatement", () => {
+  it("dry_run logs a row and sends zero email", async () => {
+    await seedDunClient("dc-dry", "a@x.test", [{ id: "di1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-dry", email: "a@x.test", name: "A" }, { mode: "dry_run" }, impl);
+    expect(r.status).toBe("dry_run");
+    expect(st.sends).toBe(0);
+    const row = await (env.DB as D1Database).prepare("SELECT status FROM reminder_runs WHERE client_id='dc-dry' AND status='dry_run'").first();
+    expect(row).toBeTruthy();
+  });
+  it("live sends once; a second same-day send never double-sends (gap guards it)", async () => {
+    await clearGmailTokenCache();
+    await seedDunClient("dc-idem", "a@x.test", [{ id: "ii1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "T1" }]);
+    const { impl, st } = gmailStub("mid-1");
+    const r1 = await sendStatement(gmailEnv(), { client_id: "dc-idem", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r1.status).toBe("sent");
+    if (r1.status === "sent") expect(r1.messageId).toBe("mid-1");
+    // Sequential re-send is blocked by the min-gap (the unique-key 'duplicate' path is the
+    // concurrent/crash case, covered by the reserve-before-send test below).
+    const r2 = await sendStatement(gmailEnv(), { client_id: "dc-idem", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r2.status).toBe("suppressed");
+    if (r2.status === "suppressed") expect(r2.reason).toBe("gap-not-elapsed");
+    expect(st.sends).toBe(1); // never double-sends
+  });
+  it("reserve-before-send: a stale 'sending' row blocks a re-send (crash recovery)", async () => {
+    await seedDunClient("dc-crash", "a@x.test", [{ id: "ic1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "ONLY" }]);
+    const batch = hashStr(["ONLY"].join("|"));
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('pre','dc-crash','overdue-1',?, 'sending')").bind(batch).run();
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-crash", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r.status).toBe("duplicate");
+    expect(st.sends).toBe(0);
+  });
+  it("suppresses opt-out and an active PTP hold (force never overrides holds)", async () => {
+    await seedDunClient("dc-opt", "a@x.test", [{ id: "io1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl, st } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-opt", email: "a@x.test", dunning_opt_out: 1 }, { mode: "live", force: true }, impl);
+    expect(r.status).toBe("suppressed");
+    if (r.status === "suppressed") expect(r.reason).toBe("opt_out");
+    // Active future PTP
+    await seedDunClient("dc-ptp", "a@x.test", [{ id: "ip1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_holds (id,client_id,kind,ptp_date) VALUES ('h1','dc-ptp','ptp',?)").bind(dueDaysAgo(-10)).run();
+    const r2 = await sendStatement(gmailEnv(), { client_id: "dc-ptp", email: "a@x.test" }, { mode: "live", force: true }, impl);
+    expect(r2.status).toBe("suppressed");
+    if (r2.status === "suppressed") expect(r2.reason).toBe("ptp");
+    expect(st.sends).toBe(0);
+  });
+  it("suppresses a customer with no email (flagged, not silent)", async () => {
+    await seedDunClient("dc-noemail", null, [{ id: "in1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    const { impl } = gmailStub();
+    const r = await sendStatement(gmailEnv(), { client_id: "dc-noemail", email: undefined }, { mode: "live" }, impl);
+    expect(r.status).toBe("suppressed");
+    if (r.status === "suppressed") expect(r.reason).toBe("no-email");
+    const row = await (env.DB as D1Database).prepare("SELECT suppressed_reason FROM reminder_runs WHERE client_id='dc-noemail'").first() as { suppressed_reason: string };
+    expect(row.suppressed_reason).toBe("no-email");
+  });
+  it("min-gap blocks a re-send; force overrides the gap (above the 24h floor)", async () => {
+    await seedDunClient("dc-gap", "a@x.test", [{ id: "ig1", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,run_at) VALUES ('g0','dc-gap','overdue-1','prevbatch','sent',?)").bind(daysAgoISO(2)).run();
+    const { impl, st } = gmailStub("mid-gap");
+    const blocked = await sendStatement(gmailEnv(), { client_id: "dc-gap", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(blocked.status).toBe("suppressed");
+    if (blocked.status === "suppressed") expect(blocked.reason).toBe("gap-not-elapsed");
+    expect(st.sends).toBe(0);
+    const forced = await sendStatement(gmailEnv(), { client_id: "dc-gap", email: "a@x.test" }, { mode: "live", force: true }, impl);
+    expect(forced.status).toBe("sent"); // 2 days ago > 24h floor
+    expect(st.sends).toBe(1);
+  });
+});
+
+describe("finance-ar/5.D runReminderPass", () => {
+  async function setCfg2(k: string, v: string) { await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, v).run(); }
+  it("no-ops on the wrong cron, when off, and when backfill is pending", async () => {
+    await ensureArSchema(env);
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "1");
+    expect((await runReminderPass(env, "0 */3 * * *")).status).toBe("disabled"); // wrong tick
+    await setCfg2("reminders_mode", "off");
+    expect((await runReminderPass(env, "30 2 * * *")).status).toBe("disabled");
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "0");
+    expect((await runReminderPass(env, "30 2 * * *")).status).toBe("backfill_pending");
+  });
+  it("auto-sends only pre-due/on-due; overdue customers are left to the worklist", async () => {
+    await setCfg2("reminders_mode", "dry_run"); await setCfg2("initial_backfill_complete", "1");
+    await seedDunClient("dp-auto", "a@x.test", [{ id: "pa1", due: istToday(), total: 50000, balance: 50000 }]);   // on-due → auto
+    await seedDunClient("dp-manual", "b@x.test", [{ id: "pm1", due: dueDaysAgo(20), total: 50000, balance: 50000 }]); // overdue-2 → manual
+    const r = await runReminderPass(env, "30 2 * * *");
+    expect(r.status).toBe("ok");
+    const autoRow = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id='dp-auto' AND status='dry_run'").first() as { n: number };
+    expect(autoRow.n).toBeGreaterThanOrEqual(1);  // auto tier considered
+    const manRow = await (env.DB as D1Database).prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id='dp-manual'").first() as { n: number };
+    expect(manRow.n).toBe(0);                      // manual tier NOT auto-sent
+  });
+});
+
+describe("finance-ar/5.E reminder endpoints", () => {
+  it("rules/runs/followups are finance-gated; send-followup + hold are super/finance", async () => {
+    await ensureArSchema(env);
+    expect((await get("/api/finance/reminders/rules", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reminders/rules", clientToken)).status).toBe(403);
+    const rules = await (await get("/api/finance/reminders/rules", adminToken)).json() as { rules: unknown[] };
+    expect(rules.rules.length).toBe(5);
+    expect((await get("/api/finance/reminders/followups-due", adminToken)).status).toBe(200);
+    expect((await post("/api/finance/reminders/send-followup", { client_id: "x" }, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reminders/run", {}, opsToken)).status).toBe(403);
+  });
+  it("send-followup respects mode=off (no send)", async () => {
+    await seedDunClient("ep-1", "a@x.test", [{ id: "ep1i", due: dueDaysAgo(20), total: 50000, balance: 50000 }]);
+    await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES ('reminders_mode','off') ON CONFLICT(key) DO UPDATE SET value='off'").run();
+    const res = await post("/api/finance/reminders/send-followup", { client_id: "ep-1" }, adminToken);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { status: string }).status).toBe("off");
+  });
+  it("hold endpoint validates kind and PTP horizon", async () => {
+    await seedDunClient("ep-hold", "a@x.test", [{ id: "eph", due: dueDaysAgo(3), total: 50000, balance: 50000 }]);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "bogus" }, adminToken)).status).toBe(400);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "ptp", ptp_date: dueDaysAgo(90) }, adminToken)).status).toBe(400); // >60d out? actually past → invalid
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, adminToken)).status).toBe(200);
+    expect((await post("/api/finance/ar/ep-hold/hold", { kind: "negotiation" }, clientToken)).status).toBe(403);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — P3.2 Payables (AP)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance-ap/mappers", () => {
+  it("mapBooksBill → paise, vendor, mirrored status, cycle_token", () => {
+    const m = mapBooksBill({ bill_id: "b1", bill_number: "BILL-1", vendor_id: "v1", vendor_name: "Acme Supply", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 180, total: 1180, currency_code: "INR", status: "partially_paid" });
+    if (!("bill" in m)) throw new Error("expected bill");
+    expect(m.bill.total).toBe(118000);
+    expect(m.bill.status).toBe("partial");
+    expect(m.vendor && m.vendor.vendor_id).toBe("v1");
+    expect(typeof m.bill.cycle_token).toBe("string");
+  });
+  it("mapBooksVendorPayment allocations are direction out / doc_type bill", () => {
+    const m = mapBooksVendorPayment({ payment_id: "vp1", vendor_id: "v1", amount: 600, unused_amount: 0, date: "2026-07-01", bills: [{ bill_id: "b1", amount_applied: 600 }] });
+    if (!("payment" in m)) throw new Error("expected payment");
+    expect(m.payment.direction).toBe("out");
+    expect(m.allocations[0].doc_type).toBe("bill");
+    expect(m.allocations[0].amount).toBe(60000);
+  });
+});
+
+describe("finance-ap/runBooksSync mirrors bills + derives balances", () => {
+  it("bill balance = total − applied vendor payment", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      bills: [{ bill_id: "abB", bill_number: "BILL-B", vendor_id: "vB", vendor_name: "Vend B", date: "2026-06-01", due_date: "2026-06-30", sub_total: 1000, tax_total: 0, total: 1000, status: "open" }],
+      vendorpayments: [{ payment_id: "vpB", vendor_id: "vB", amount: 600, unused_amount: 0, date: "2026-07-01", bills: [{ bill_id: "abB", amount_applied: 600 }] }],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    expect(r.bills).toBe(1);
+    expect(r.vendorpayments).toBe(1);
+    const bill = await (env.DB as D1Database).prepare("SELECT total, amount_paid, balance, status FROM ap_bills WHERE id='abB'").first() as { total: number; amount_paid: number; balance: number; status: string };
+    expect(bill.total).toBe(100000);
+    expect(bill.amount_paid).toBe(60000);
+    expect(bill.balance).toBe(40000);
+    expect(bill.status).toBe("partial");
+    const ven = await (env.DB as D1Database).prepare("SELECT name FROM ap_vendors WHERE vendor_id='vB'").first() as { name: string };
+    expect(ven.name).toBe("Vend B");
+  });
+});
+
+describe("finance-ap/read endpoints — finance-only, never client", () => {
+  beforeAll(async () => {
+    await ensureArSchema(env);
+    await (env.DB as D1Database).prepare("INSERT OR REPLACE INTO ap_bills (id,zoho_bill_id,number,vendor_id,date,due_date,total,amount_paid,balance,currency_code,status,age_bucket) VALUES ('apb1','apb1','B-1','vX','2026-06-01','2026-06-30',100000,0,100000,'INR','open','1-30')").run();
+  });
+  it("finance/super read bills/summary/vendor; client is 403 on all AP", async () => {
+    expect((await get("/api/finance/ap/bills", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/summary", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/vendor/vX", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/ap/bills", clientToken)).status).toBe(403);
+    expect((await get("/api/finance/ap/summary", clientToken)).status).toBe(403);
+    expect((await get("/api/finance/ap/vendor/vX", clientToken)).status).toBe(403);
+  });
+  it("summary is per-currency with a DPO number", async () => {
+    const sum = await (await get("/api/finance/ap/summary", adminToken)).json() as { by_currency: { currency: string; outstanding: number; dpo: number }[] };
+    const inr = sum.by_currency.find(c => c.currency === "INR")!;
+    expect(inr.outstanding).toBeGreaterThanOrEqual(100000);
+    expect(typeof inr.dpo).toBe("number");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — P3.3 Reconciliation + P3.5 Dashboard
+// ══════════════════════════════════════════════════════════════════════
+describe("finance/3way reconciliation", () => {
+  it("flags over-application on AR/AP; a manual resolution is not re-flagged; unlinked is NOT noise", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("DELETE FROM reconciliations").run();
+    await db.prepare("DELETE FROM ar_invoices WHERE client_id='rc'").run();
+    await db.prepare("DELETE FROM ap_bills WHERE vendor_id='rv'").run();
+    // Overpaid AR invoice (applied 120000 > total 100000) and a clean direct invoice (unlinked, NOT flagged).
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,order_id,total,amount_paid,credited,balance,status) VALUES ('rc-over','rc','o1',100000,120000,0,-20000,'paid')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,client_id,total,amount_paid,credited,balance,status) VALUES ('rc-direct','rc',100000,0,0,100000,'open')").run();
+    // Overpaid AP bill.
+    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,vendor_id,total,amount_paid,balance,status) VALUES ('rv-over','rv',50000,60000,-10000,'paid')").run();
+    const r = await runReconciliation(env);
+    expect(r.ar_exceptions).toBe(1);   // only the overpayment; the direct invoice is NOT flagged (no unlinked noise)
+    expect(r.ap_exceptions).toBe(1);   // the AP overpayment
+    const directFlagged = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-direct'").first() as { n: number };
+    expect(directFlagged.n).toBe(0);
+    // Resolve the AR overpayment, then re-run: it must not reappear.
+    const exRow = await db.prepare("SELECT id FROM reconciliations WHERE left_id='rc-over' AND status='exception' LIMIT 1").first() as { id: string };
+    await db.prepare("UPDATE reconciliations SET status='manual', matched_by='tester' WHERE id=?").bind(exRow.id).run();
+    await runReconciliation(env);
+    const stillThere = await db.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE left_id='rc-over' AND status='exception'").first() as { n: number };
+    expect(stillThere.n).toBe(0);      // resolved → suppressed
+  });
+  it("endpoints: run/resolve are super/finance, exceptions/dashboard finance-only", async () => {
+    expect((await post("/api/finance/reconcile/run", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/run", {}, opsToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/run", {}, adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reconcile/exceptions", adminToken)).status).toBe(200);
+    expect((await get("/api/finance/reconcile/exceptions", clientToken)).status).toBe(403);
+    expect((await post("/api/finance/reconcile/does-not-exist/resolve", { note: "x" }, adminToken)).status).toBe(404);
+    const dash = await get("/api/finance/dashboard", adminToken);
+    expect(dash.status).toBe(200);
+    const body = await dash.json() as { cash: unknown[]; open_exceptions: number };
+    expect(Array.isArray(body.cash)).toBe(true);
+    expect(typeof body.open_exceptions).toBe("number");
+    expect((await get("/api/finance/dashboard", clientToken)).status).toBe(403);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — code-review fixes (regression coverage)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance/cr-fix retry + opt-out clear + ptp validation", () => {
+  it("a failed send is retryable next pass (does not block on the unique key)", async () => {
+    await clearGmailTokenCache();
+    await seedDunClient("cr-retry", "a@x.test", [{ id: "cr1", due: dueDaysAgo(3), total: 50000, balance: 50000, tok: "RT" }]);
+    let gmailCalls = 0;
+    const impl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("oauth2.googleapis.com/token")) return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 });
+      if (u.includes("gmail.googleapis.com")) { gmailCalls++; return gmailCalls === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ id: "ok-2" }), { status: 200 }); }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const r1 = await sendStatement(gmailEnv(), { client_id: "cr-retry", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r1.status).toBe("failed");
+    const r2 = await sendStatement(gmailEnv(), { client_id: "cr-retry", email: "a@x.test" }, { mode: "live" }, impl);
+    expect(r2.status).toBe("sent");        // NOT 'duplicate' — the failed row freed the cycle_batch
+    expect(gmailCalls).toBe(2);
+  });
+  it("clearing a hold re-enables dunning_opt_out", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,dunning_opt_out) VALUES ('cr-opt','X','x@y.test',1)").run();
+    await db.prepare("INSERT INTO reminder_holds (id,client_id,kind) VALUES ('crh','cr-opt','opt_out')").run();
+    const res = await post("/api/finance/ar/cr-opt/hold", { clear: true }, adminToken);
+    expect(res.status).toBe(200);
+    const row = await db.prepare("SELECT dunning_opt_out FROM ar_clients WHERE client_id='cr-opt'").first() as { dunning_opt_out: number };
+    expect(row.dunning_opt_out).toBe(0);   // re-enabled
+  });
+  it("a PTP hold without a date is rejected (400)", async () => {
+    await ensureArSchema(env);
+    await (env.DB as D1Database).prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email) VALUES ('cr-ptp','X','x@y.test')").run();
+    expect((await post("/api/finance/ar/cr-ptp/hold", { kind: "ptp" }, adminToken)).status).toBe(400);
+    expect((await post("/api/finance/ar/cr-ptp/hold", { kind: "ptp", ptp_date: dueDaysAgo(-10) }, adminToken)).status).toBe(200); // 10 days out
   });
 });

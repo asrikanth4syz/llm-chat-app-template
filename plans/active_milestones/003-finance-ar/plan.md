@@ -79,7 +79,7 @@ read; unit-tested in isolation.
   D1-chunk safety on the id lookup.
 - **Rollout:** ships with sync **disabled**; enable in a dry-run that only reads.
 
-## Milestone P3.2 — Payables (AP)
+## Milestone P3.2 — Payables (AP)  ← BUILT (green; ships inert with the Books sync)
 
 - Mirror `GET /books/v3/bills` + `/vendorpayments` → `ap_bills` + `fin_payments(out)`; link to
   `po_id` via Books reference; offset `vendor_debit_notes`.
@@ -88,7 +88,7 @@ read; unit-tested in isolation.
 - UI "Payables" page: what's due when, per-vendor aging, debit-note offsets, "pay before due" flags.
 - Tests mirror P3.1.
 
-## Milestone P3.3 — Reconciliation engine
+## Milestone P3.3 — Reconciliation engine  ← BUILT (green; exception queue + resolve)
 
 - **AR 3-way:** order/DC ↔ `ar_invoice` ↔ payment. **AP 3-way:** PO ↔ receipt(DC-in/GRN) ↔
   `ap_bill` ↔ payment.
@@ -110,7 +110,7 @@ read; unit-tested in isolation.
   `/api/finance/reminders/log` (GET).
 - Tests: tier progression, no double-send in a window, opt-out respected.
 
-## Milestone P3.5 — Finance dashboard & reports
+## Milestone P3.5 — Finance dashboard & reports  ← BUILT (green; AR/AP + cash + top debtors/creditors)
 
 - One dashboard: AR vs AP aging, cash position (in − out projected by due date), top debtors/
   creditors, DSO/DPO trend, GST payable/ITC summary (values surfaced from Books, not computed).
@@ -134,8 +134,18 @@ read; unit-tested in isolation.
 F1–F4 (foundation) → P3.1 AR → P3.2 AP → P3.3 reconcile → P3.4 reminders → P3.5 dashboard.
 AR (F1–F4 + P3.1) is the first shippable unit and delivers cash-collection value on its own.
 
-## Open questions to confirm before P3.1 build
-1. Do Books invoices carry our order/DC id in `reference_number` (or a custom field) so we can
-   auto-link? If not, we link by client+amount+date heuristic + manual fallback.
-2. Reminder channels — email + in-app only, or also WhatsApp/SMS later (Twilio/MSG91 stubs exist)?
-3. Multi-currency, or INR-only (assumed INR-only)?
+## Open questions — RESOLVED in the PRD
+See `PRD-receivables-reminders.md` §11 (answered from the operator's reference spec):
+1. **Auto-link** on Books `reference_number` (= invoice/transaction number) → order/DC, with a
+   manual-link fallback for unmatched invoices.
+2. **Channels:** email + in-app now (existing infra); channel-priority/fallback/opt-out modelled now;
+   WhatsApp/SMS adapters (MSG91/Twilio) as a follow-up — no architectural change.
+3. **Multi-currency:** store & display `currency_code`/`exchange_rate` from Books from day one;
+   INR is the primary operating currency.
+
+## PRD note
+The reference material ("Payment Reminders" spec) is **reminder-first**, so the PRD reorders the first
+shippable slice to **AR mirror (P3.1) + Payment Reminders (P3.4 brought forward)** rather than
+AR → AP → reconcile → reminders. AP, full 3-way reconciliation, Pay-Now gateway, in-app late-fee
+computation, and WhatsApp/SMS channels remain as sequenced follow-ups. The foundation F1–F4 is
+unchanged.

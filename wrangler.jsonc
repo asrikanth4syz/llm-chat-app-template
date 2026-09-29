@@ -24,7 +24,9 @@
 	"triggers": {
 		// "30 3 * * *": 03:30 UTC = 09:00 IST — daily delivery reminders + Zoho full reconcile.
 		// "0 */3 * * *": every 3 hours — Zoho Inventory delta pull (no-op until enabled).
-		"crons": ["30 3 * * *", "0 */3 * * *"]
+		// "30 2 * * *": 02:30 UTC = 08:00 IST — Phase 3 AR reminder pass (SEND_CRON;
+		//   must stay byte-identical to the SEND_CRON constant in src/index.ts).
+		"crons": ["30 3 * * *", "0 */3 * * *", "30 2 * * *"]
 	},
 	"upload_source_maps": true,
 	"d1_databases": [

@@ -189,6 +189,11 @@ const NAV = {
     { id:'approval_chains', label:'Approval Chains',  icon:iconFlow,     badge:null },
     { section:'Billing & Finance' },
     { id:'dc_billing',      label:'Billing',          icon:iconBilling,  badge:'!' },
+    { id:'receivables',     label:'Receivables',      icon:iconBilling,  badge:null },
+    { id:'payables',        label:'Payables',         icon:iconWallet,   badge:null },
+    { id:'reminders',       label:'Payment Reminders',icon:iconMail,     badge:null },
+    { id:'reconciliation',  label:'Reconciliation',   icon:iconFlow,     badge:null },
+    { id:'finance_dashboard',label:'Finance Dashboard',icon:iconPie,     badge:null },
     { id:'dunning',         label:'Dunning',          icon:iconMail,     badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconWallet,   badge:null },
     { section:'Reports & Insights' },
@@ -219,6 +224,11 @@ const NAV = {
     { id:'dc_manager',          label:'DC Manager',       icon:iconTruck,     badge:null },
     { section:'Billing & Finance' },
     { id:'dc_billing',          label:'Billing',          icon:iconBilling,   badge:'!' },
+    { id:'receivables',         label:'Receivables',      icon:iconBilling,   badge:null },
+    { id:'payables',            label:'Payables',         icon:iconWallet,    badge:null },
+    { id:'reminders',           label:'Payment Reminders',icon:iconBell,      badge:null },
+    { id:'reconciliation',      label:'Reconciliation',   icon:iconFlow,      badge:null },
+    { id:'finance_dashboard',   label:'Finance Dashboard',icon:iconPie,       badge:null },
     { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconHeadset,   badge:null },
     { section:'Alerts & Exceptions' },
@@ -265,7 +275,12 @@ const NAV = {
     { id:'dashboard',   label:'Home',          icon:iconDashboard, badge:null },
     { section:'Billing & Finance' },
     { id:'dc_billing',  label:'DC Billing',    icon:iconBilling,   badge:'!' },
+    { id:'receivables', label:'Receivables',   icon:iconBilling,   badge:null },
+    { id:'payables',    label:'Payables',      icon:iconWallet,    badge:null },
+    { id:'reminders',   label:'Payment Reminders', icon:iconMail,  badge:null },
+    { id:'reconciliation', label:'Reconciliation', icon:iconFlow,  badge:null },
     { section:'Reports & Insights' },
+    { id:'finance_dashboard', label:'Finance Dashboard', icon:iconPie, badge:null },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
   ],
   client: [
@@ -283,6 +298,8 @@ const NAV = {
     { id:'client_consumption', label:'Consumption Report', icon:iconReports, badge:null },
     { id:'client_budget',  label:'Budget & Spend',    icon:iconReports, badge:null },
     { id:'client_reports', label:'Executive Reports', icon:iconReports, badge:null },
+    { section:'Billing' },
+    { id:'my_statement',   label:'My Statement',   icon:iconBilling,  badge:null },
     { section:'Support' },
     { id:'service_desk',   label:'Service Desk',   icon:iconDesk,      badge:null },
   ],
@@ -294,6 +311,8 @@ const NAV = {
     { id:'catalog',       label:'Catalogue',      icon:iconLayers,   badge:null },
     { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
     { id:'my_orders',     label:'All Orders',     icon:iconOrders,   badge:null },
+    { section:'Billing' },
+    { id:'my_statement',  label:'My Statement',   icon:iconBilling,  badge:null },
   ],
   client_user: [
     { section:'Home' },
@@ -304,6 +323,8 @@ const NAV = {
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
     { section:'My Store' },
     { id:'my_inventory', label:'My Inventory', icon:iconInventory, badge:null },
+    { section:'Billing' },
+    { id:'my_statement', label:'My Statement', icon:iconBilling,   badge:null },
   ],
   vendor: [
     { section:'Home' },
@@ -1060,6 +1081,14 @@ const PAGE_MAP = {
   over_delivery_audit: 'renderOverDeliveryAudit',
   zones: 'renderZonesPage',
   catalog: 'renderCatalog',
+  // Phase 3 Finance (003-finance-ar): Receivables cockpit (finance/ops/super) and
+  // the client-facing statement (client_*).
+  receivables: 'renderReceivables',
+  payables: 'renderPayables',
+  reminders: 'renderReminders',
+  reconciliation: 'renderReconciliation',
+  finance_dashboard: 'renderFinanceDashboard',
+  my_statement: 'renderMyStatement',
 };
 
 // Phase 2: pages folded into a hub redirect to the hub on their tab, so every
