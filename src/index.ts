@@ -2798,6 +2798,16 @@ async function ensureArSchema(env: Env): Promise<void> {
     // Reconciliation (P3.3): exception queue. Auto rows (status='exception') are
     // recomputed each run; manual resolutions (status='manual') are preserved.
     `CREATE TABLE IF NOT EXISTS reconciliations ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, left_type TEXT, left_id TEXT, right_type TEXT, right_id TEXT, status TEXT NOT NULL DEFAULT 'exception', variance_amount INTEGER DEFAULT 0, variance_reason TEXT, matched_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    // Perf indexes — the cockpits filter on status/balance and join by party id; the
+    // recompute + allocation sums scan by doc/invoice. Without these, every finance
+    // page full-scans ar_invoices/ap_bills (thousands of rows) on each load.
+    `CREATE INDEX IF NOT EXISTS ix_ar_invoices_client ON ar_invoices (client_id);`,
+    `CREATE INDEX IF NOT EXISTS ix_ar_invoices_open ON ar_invoices (status, balance);`,
+    `CREATE INDEX IF NOT EXISTS ix_ap_bills_vendor ON ap_bills (vendor_id);`,
+    `CREATE INDEX IF NOT EXISTS ix_ap_bills_open ON ap_bills (status, balance);`,
+    `CREATE INDEX IF NOT EXISTS ix_fin_allocations_doc ON fin_allocations (doc_type, doc_id);`,
+    `CREATE INDEX IF NOT EXISTS ix_credit_allocations_inv ON credit_allocations (invoice_id);`,
+    `CREATE INDEX IF NOT EXISTS ix_reconciliations_status ON reconciliations (status);`,
   ];
   // Guarded column adds — for a DB whose reminder_runs predates the audit columns
   // (idempotent; "duplicate column" is swallowed). Never rely on CREATE to add these.
@@ -8996,17 +9006,24 @@ async function handleArInvoices(request: Request, env: Env): Promise<Response> {
   const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
   const url = new URL(request.url);
-  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
-  const client = url.searchParams.get("client"); if (client) { where.push("client_id=?"); bind.push(client); }
-  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
-  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
-  const aging = url.searchParams.get("aging");
+  // Cockpit shows OUTSTANDING invoices by default (balance>0). Most rows in a mature
+  // Books org are paid; returning them all made the page fetch + render thousands of
+  // rows. `?all=1` (or an explicit status filter) opts back into the full set.
+  const where: string[] = ["i.status != 'void'"]; const bind: unknown[] = [];
+  const status = url.searchParams.get("status");
+  const wantAll = url.searchParams.get("all") === "1";
+  if (!wantAll && !status) where.push("i.balance > 0");
+  const client = url.searchParams.get("client"); if (client) { where.push("i.client_id=?"); bind.push(client); }
+  if (status) { where.push("i.status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("i.currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging"); if (aging) { where.push("i.age_bucket=?"); bind.push(aging); }
   const { results } = await env.DB.prepare(
-    `SELECT id, number, client_id, (SELECT name FROM ar_clients WHERE ar_clients.client_id=ar_invoices.client_id) AS client_name, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT i.id, i.number, i.client_id, c.name AS client_name, i.order_id, i.dc_id, i.date, i.due_date,
+       i.total, i.amount_paid, i.credited, i.balance, i.currency_code, i.status, i.age_bucket
+     FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id = i.client_id
+     WHERE ${where.join(" AND ")} ORDER BY i.balance DESC, i.due_date LIMIT 2000`
   ).bind(...bind).all();
-  let rows = (results || []) as Record<string, unknown>[];
-  if (aging) rows = rows.filter(r => r.age_bucket === aging);
-  return json({ invoices: rows });
+  return json({ invoices: results || [] });
 }
 
 // Per-currency AR summary + aging + DSO. finance/ops only.
@@ -9036,26 +9053,30 @@ async function handleArClientStatement(request: Request, env: Env, path: string)
 // Shared per-currency aggregation. `clientId` null = all clients (finance view).
 async function _arSummaryRows(env: Env, clientId: string | null): Promise<Record<string, unknown>[]> {
   const today = istToday();
-  const where = clientId ? "client_id=? AND status != 'void'" : "status != 'void'";
-  const bind = clientId ? [clientId] : [];
-  const { results } = await env.DB.prepare(
-    `SELECT currency_code, balance, total, due_date, date FROM ar_invoices WHERE ${where}`
-  ).bind(...bind).all();
   const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
-  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _sales90: number }> = {};
-  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
-    const cur = r.currency_code || "INR";
-    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _sales90: 0 });
-    const bal = r.balance || 0;
-    if (bal > 0) {
-      a.outstanding += bal;
-      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
-      a.buckets[bucket] += bal;
-      if (bucket !== "current") a.overdue += bal;
-      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
-    }
-    if (r.date && r.date >= cutoff90) a._sales90 += (r.total || 0);
+  const clientCond = clientId ? " AND client_id=?" : "";
+  const clientBind = clientId ? [clientId] : [];
+  type Acc = { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _sales90: number };
+  const acc: Record<string, Acc> = {};
+  const at = (cur: string) => acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _sales90: 0 });
+  // (1) Only OUTSTANDING invoices drive aging/overdue/due-this-week (uses the
+  // (status,balance) index; excludes the paid majority).
+  const outstanding = await env.DB.prepare(
+    `SELECT currency_code, balance, due_date FROM ar_invoices WHERE status != 'void' AND balance > 0${clientCond}`
+  ).bind(...clientBind).all();
+  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due_date: string }>) {
+    const a = at(r.currency_code || "INR"); const bal = r.balance || 0;
+    a.outstanding += bal;
+    const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+    a.buckets[bucket] += bal;
+    if (bucket !== "current") a.overdue += bal;
+    else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
   }
+  // (2) 90-day sales for DSO — aggregated in SQL (per-currency scalars, not rows).
+  const sales = await env.DB.prepare(
+    `SELECT currency_code, COALESCE(SUM(total),0) AS s FROM ar_invoices WHERE status != 'void' AND date >= ?${clientCond} GROUP BY currency_code`
+  ).bind(cutoff90, ...clientBind).all();
+  for (const r of (sales.results || []) as Array<{ currency_code: string; s: number }>) at(r.currency_code || "INR")._sales90 += r.s || 0;
   return Object.values(acc).map(a => ({
     currency: a.currency, outstanding: a.outstanding, overdue: a.overdue,
     due_this_week: a.due_this_week, buckets: a.buckets,
@@ -9068,17 +9089,21 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
   const url = new URL(request.url);
-  const where: string[] = ["status != 'void'"]; const bind: unknown[] = [];
-  const vendor = url.searchParams.get("vendor"); if (vendor) { where.push("vendor_id=?"); bind.push(vendor); }
-  const status = url.searchParams.get("status"); if (status) { where.push("status=?"); bind.push(status); }
-  const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
-  const aging = url.searchParams.get("aging");
+  const where: string[] = ["b.status != 'void'"]; const bind: unknown[] = [];
+  const status = url.searchParams.get("status");
+  const wantAll = url.searchParams.get("all") === "1";
+  if (!wantAll && !status) where.push("b.balance > 0");
+  const vendor = url.searchParams.get("vendor"); if (vendor) { where.push("b.vendor_id=?"); bind.push(vendor); }
+  if (status) { where.push("b.status=?"); bind.push(status); }
+  const currency = url.searchParams.get("currency"); if (currency) { where.push("b.currency_code=?"); bind.push(currency); }
+  const aging = url.searchParams.get("aging"); if (aging) { where.push("b.age_bucket=?"); bind.push(aging); }
   const { results } = await env.DB.prepare(
-    `SELECT id, number, vendor_id, (SELECT name FROM ap_vendors WHERE ap_vendors.vendor_id=ap_bills.vendor_id) AS vendor_name, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT b.id, b.number, b.vendor_id, v.name AS vendor_name, b.po_id, b.date, b.due_date,
+       b.total, b.amount_paid, b.balance, b.currency_code, b.status, b.age_bucket
+     FROM ap_bills b LEFT JOIN ap_vendors v ON v.vendor_id = b.vendor_id
+     WHERE ${where.join(" AND ")} ORDER BY b.balance DESC, b.due_date LIMIT 2000`
   ).bind(...bind).all();
-  let rows = (results || []) as Record<string, unknown>[];
-  if (aging) rows = rows.filter(r => r.age_bucket === aging);
-  return json({ bills: rows });
+  return json({ bills: results || [] });
 }
 async function handleApSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
@@ -9097,24 +9122,27 @@ async function handleApVendorStatement(request: Request, env: Env, path: string)
 // Per-currency AP aggregation + DPO (days payable outstanding).
 async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record<string, unknown>[]> {
   const today = istToday();
-  const where = vendorId ? "vendor_id=? AND status != 'void'" : "status != 'void'";
-  const bind = vendorId ? [vendorId] : [];
-  const { results } = await env.DB.prepare(`SELECT currency_code, balance, total, due_date, date FROM ap_bills WHERE ${where}`).bind(...bind).all();
   const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
-  const acc: Record<string, { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _purch90: number }> = {};
-  for (const r of (results || []) as Array<{ currency_code: string; balance: number; total: number; due_date: string; date: string }>) {
-    const cur = r.currency_code || "INR";
-    const a = acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _purch90: 0 });
-    const bal = r.balance || 0;
-    if (bal > 0) {
-      a.outstanding += bal;
-      const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
-      a.buckets[bucket] += bal;
-      if (bucket !== "current") a.overdue += bal;
-      else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
-    }
-    if (r.date && r.date >= cutoff90) a._purch90 += (r.total || 0);
+  const vendCond = vendorId ? " AND vendor_id=?" : "";
+  const vendBind = vendorId ? [vendorId] : [];
+  type Acc = { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _purch90: number };
+  const acc: Record<string, Acc> = {};
+  const at = (cur: string) => acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _purch90: 0 });
+  const outstanding = await env.DB.prepare(
+    `SELECT currency_code, balance, due_date FROM ap_bills WHERE status != 'void' AND balance > 0${vendCond}`
+  ).bind(...vendBind).all();
+  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due_date: string }>) {
+    const a = at(r.currency_code || "INR"); const bal = r.balance || 0;
+    a.outstanding += bal;
+    const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+    a.buckets[bucket] += bal;
+    if (bucket !== "current") a.overdue += bal;
+    else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
   }
+  const purch = await env.DB.prepare(
+    `SELECT currency_code, COALESCE(SUM(total),0) AS s FROM ap_bills WHERE status != 'void' AND date >= ?${vendCond} GROUP BY currency_code`
+  ).bind(cutoff90, ...vendBind).all();
+  for (const r of (purch.results || []) as Array<{ currency_code: string; s: number }>) at(r.currency_code || "INR")._purch90 += r.s || 0;
   return Object.values(acc).map(a => ({
     currency: a.currency, outstanding: a.outstanding, overdue: a.overdue, due_this_week: a.due_this_week,
     buckets: a.buckets, dpo: Math.round(computeDSO(a.outstanding, a._purch90) * 10) / 10,
