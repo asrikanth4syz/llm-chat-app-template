@@ -814,6 +814,7 @@ async function renderDelivery(el) {
         <div style="font-size:.82rem;font-weight:600;margin-bottom:2px">${dc.client_name||'Unknown Client'}</div>
         ${dc.driver_name ? `<div style="font-size:.78rem;color:var(--text-muted)">🚚 ${dc.vehicle_no||'—'} · ${dc.driver_name}</div>` : ''}
       </div>
+      <div style="padding:0 16px 10px">${typeof _dcDestination==='function'?_dcDestination(dc):''}</div>
       ${dQty != null && tQty ? `
       <div style="padding:0 16px 4px">
         <div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--text-muted);margin-bottom:4px">
@@ -1314,6 +1315,42 @@ async function confirmDispatch(dcId) {
   else switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
 }
 
+// Reassign the delivery person AFTER dispatch (wrong driver picked, or the driver
+// changed en route). Does not re-dispatch — the challan stays In Transit. Ops /
+// warehouse / delivery-manager only (server re-checks the role).
+async function reassignDriverModal(dcId) {
+  const [staff, dc] = await Promise.all([
+    api('/staff').catch(()=>[]),
+    api(`/delivery-challans/${dcId}`).catch(()=>null)
+  ]);
+  if (!dc) { showToast('Delivery not found','error'); return; }
+  const v = (x)=> x==null ? '' : String(x);
+  const staffOpts = (staff||[]).filter(s=>s.active && s.role==='delivery_staff')
+    .map(s=>`<option value="${s.id}" ${dc.staff_id===s.id?'selected':''}>${h(s.name)}</option>`).join('');
+  openModal(`Reassign delivery person — ${h(dc.dc_number||dc.id)}`,
+    `<p style="margin-bottom:12px;color:var(--text-muted)">Change who is delivering this challan. It stays <b>In Transit</b> — this does not re-dispatch it.</p>
+     <div class="form-group"><label>Assign Staff</label><select id="ra-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
+     <div class="form-group"><label>Driver Name</label><input type="text" id="ra-driver" placeholder="e.g. Rajesh Kumar" value="${h(v(dc.driver_name))}"></div>
+     <div class="form-group"><label>Driver Phone</label><input type="tel" id="ra-phone" placeholder="e.g. +91-9988776655" value="${h(v(dc.driver_phone))}"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveReassignDriver', dcId)}>Save</button>`);
+}
+
+async function saveReassignDriver(dcId) {
+  const staff_id     = document.getElementById('ra-staff').value;
+  const driver_name  = document.getElementById('ra-driver').value.trim();
+  const driver_phone = document.getElementById('ra-phone').value.trim();
+  if (!staff_id && !driver_name) { showToast('Pick a staff member or type a driver name','error'); return; }
+  const res = await api('/delivery-challans/' + encodeURIComponent(dcId) + '/reassign', {
+    method:'POST',
+    body: JSON.stringify({ staff_id: staff_id||null, driver_name, driver_phone })
+  });
+  closeModal();
+  if (!res) return;
+  showToast(`DC ${dcId} reassigned`);
+  navigate(APP.page || 'delivery');
+}
+
 async function markDelivered(dcId) {
   const items = await api(`/delivery-challans/${dcId}/items`);
   if (!items) return;
@@ -1459,8 +1496,11 @@ async function toggleVoiceRecording() {
 // Transit-card action buttons — shared by both transit renderers so a
 // pending-approval challan is handled identically. A held (discrepancy) delivery
 // shows a manager "Review" action instead of the driver "Delivered" button.
+const DC_ASSIGN_ROLES = ['super_admin','ops_admin','warehouse_exec','delivery_manager'];
 function dcTransitActions(dc) {
-  const base = `<button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>
+  const canReassign = DC_ASSIGN_ROLES.includes(APP.user?.role);
+  const reassign = canReassign ? ` <button class="btn btn-secondary btn-sm" ${dataAct('reassignDriverModal', dc.id)} title="Change the assigned delivery person">Reassign</button>` : '';
+  const base = `<button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>Items</button>${reassign}
      <button class="btn btn-secondary btn-sm" style="color:var(--danger)" ${dataAct('returnDCModal', dc.id)}>Return</button>`;
   if (dc.delivery_approval === 'PENDING') {
     return base + (['super_admin','ops_admin'].includes(APP.user?.role)

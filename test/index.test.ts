@@ -4311,3 +4311,51 @@ describe("finance/usability — last-synced freshness surfaces", () => {
     expect(ap.last_sync_at).toBe("2026-09-20T10:00:00.000Z");
   });
 });
+
+describe("delivery — destination details + driver reassignment", () => {
+  it("delivery-challan list carries the client's address, map pin, and receiving contact", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO clients (id,name,active,address,contact_name,contact_phone,map_pin) VALUES ('DEL-CL','Harbour Foods',1,'12 MG Road, Bengaluru','Priya Nair','+91-9800011122','12.9716,77.5946')").run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total,order_type) VALUES ('DEL-ORD','DEL-CL','tst-ops','IN_SHIPMENT',1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,dc_number,status,total_qty) VALUES ('DEL-DC','DEL-ORD','DEL-DC-1','IN_TRANSIT',5)").run();
+    const list = await (await get("/api/delivery-challans", adminToken)).json() as Array<Record<string, unknown>>;
+    const dc = list.find(d => d.id === "DEL-DC")!;
+    expect(dc.client_address).toBe("12 MG Road, Bengaluru");
+    expect(dc.client_contact_name).toBe("Priya Nair");
+    expect(dc.client_contact_phone).toBe("+91-9800011122");
+    expect(dc.client_map_pin).toBe("12.9716,77.5946");
+    const one = await (await get("/api/delivery-challans/DEL-DC", adminToken)).json() as Record<string, unknown>;
+    expect(one.client_address).toBe("12 MG Road, Bengaluru");
+    expect(one.client_contact_phone).toBe("+91-9800011122");
+  });
+
+  it("reassign changes the delivery person after dispatch; super/ops-admin only; blocked once delivered", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES ('RA-CL','Reassign Co',1)").run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,grand_total,order_type) VALUES ('RA-ORD','RA-CL','tst-ops','IN_SHIPMENT',500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,dc_number,status,driver_name) VALUES ('RA-DC','RA-ORD','RA-DC-1','IN_TRANSIT','Old Driver')").run();
+    await db.prepare("INSERT OR REPLACE INTO staff (id,name,phone,role,active) VALUES ('RA-STF','Ravi Kumar','+91-9900011122','delivery_staff',1)").run();
+
+    // A client user cannot reassign.
+    expect((await post("/api/delivery-challans/RA-DC/reassign", { driver_name: "X" }, clientToken)).status).toBe(403);
+    // ops_manager (seeded, unprivileged) cannot reassign.
+    expect((await post("/api/delivery-challans/RA-DC/reassign", { driver_name: "X" }, opsToken)).status).toBe(403);
+
+    // Super admin reassigns by staff — the staff name becomes the driver_name so the
+    // delivery_exec name-match keeps resolving the DC.
+    const ok = await post("/api/delivery-challans/RA-DC/reassign", { staff_id: "RA-STF" }, adminToken);
+    expect(ok.status).toBe(200);
+    let row = await db.prepare("SELECT staff_id,driver_name FROM delivery_challans WHERE id='RA-DC'").first() as { staff_id: string; driver_name: string };
+    expect(row.staff_id).toBe("RA-STF");
+    expect(row.driver_name).toBe("Ravi Kumar");
+
+    // An explicit driver name overrides.
+    await post("/api/delivery-challans/RA-DC/reassign", { driver_name: "Direct Driver", driver_phone: "+91-9000000000" }, adminToken);
+    row = await db.prepare("SELECT driver_name FROM delivery_challans WHERE id='RA-DC'").first() as { staff_id: string; driver_name: string };
+    expect(row.driver_name).toBe("Direct Driver");
+
+    // Once delivered, reassignment is refused.
+    await db.prepare("UPDATE delivery_challans SET status='DELIVERED' WHERE id='RA-DC'").run();
+    expect((await post("/api/delivery-challans/RA-DC/reassign", { driver_name: "Too Late" }, adminToken)).status).toBe(409);
+  });
+});
