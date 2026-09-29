@@ -4295,6 +4295,7 @@ export default {
       if (path.match(/^\/api\/approval-chain-instances\/[^/]+\/act$/) && method==="POST") return handleApprovalChainAct(request,env,path);
 
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/dispatch$/) && method==="POST") return handleDispatchDC(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/reassign$/) && method==="POST") return handleReassignDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/items$/) && method==="GET") return handleListDCItems(request,env,path);
       if (path==="/api/stock-movements" && method==="GET") return handleListStockMovements(request,env);
 
@@ -6860,6 +6861,8 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
 
   const isClient = ["client_admin","client_approver","client_user"].includes(user!.role);
   let query = `SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value,
+    c.address AS client_address, c.location AS client_location, c.zone AS client_zone,
+    c.map_pin AS client_map_pin, c.contact_name AS client_contact_name, c.contact_phone AS client_contact_phone,
     COALESCE((SELECT COUNT(*) FROM dc_documents d WHERE d.dc_id=dc.id),0) AS doc_count
     FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
     WHERE 1=1`;
@@ -6891,7 +6894,10 @@ async function handleGetDC(request: Request, env: Env, path: string): Promise<Re
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
   const dc = await env.DB.prepare(
-    `SELECT dc.*, c.name as client_name FROM delivery_challans dc
+    `SELECT dc.*, c.name as client_name,
+       c.address AS client_address, c.location AS client_location, c.zone AS client_zone,
+       c.map_pin AS client_map_pin, c.contact_name AS client_contact_name, c.contact_phone AS client_contact_phone
+     FROM delivery_challans dc
      LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id WHERE dc.id=?`
   ).bind(id).first();
   if (!dc) return json({error:"Not found"}, 404);
@@ -7262,6 +7268,44 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   await pushNotification(env, "client_admin", `DC ${id} dispatched — vehicle ${body.vehicle_no||'TBD'}`);
   await audit(env, user, "DISPATCH", "delivery_challan", id, undefined, JSON.stringify({vehicle:body.vehicle_no,driver:body.driver_name}));
   return json({id, status:"IN_TRANSIT"});
+}
+
+// POST /api/delivery-challans/:id/reassign — change the assigned delivery person
+// (staff record and/or free-text driver) AFTER dispatch, without re-dispatching.
+// Dispatch itself is a one-shot gate-out; this is the "I picked the wrong driver"
+// / "the driver changed en route" correction. Allowed on any challan not yet
+// DELIVERED or CANCELLED. Internal ops/warehouse/delivery-manager only — the
+// delivery executive and client/vendor roles cannot reassign.
+const DC_ASSIGN_ROLES = ["super_admin", "ops_admin", "warehouse_exec", "delivery_manager"];
+async function handleReassignDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!DC_ASSIGN_ROLES.includes(user!.role)) return json({ error: "Only ops, warehouse, or a delivery manager may reassign a delivery" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { staff_id?: string; driver_name?: string; driver_phone?: string };
+  const dc = await env.DB.prepare("SELECT status, driver_name, staff_id FROM delivery_challans WHERE id=?").bind(id).first() as { status?: string; driver_name?: string; staff_id?: string } | null;
+  if (!dc) return json({ error: "Delivery challan not found" }, 404);
+  if (dc.status === "DELIVERED" || dc.status === "CANCELLED") {
+    return json({ error: `Cannot reassign a ${String(dc.status).toLowerCase()} challan`, code: "TERMINAL_STATE" }, 409);
+  }
+  // Resolve a display name: an explicit driver_name wins; otherwise fall back to
+  // the chosen staff member's name so the delivery_exec name-match keeps working.
+  let driverName = body.driver_name != null ? String(body.driver_name).trim() : null;
+  const staffId = body.staff_id != null ? (String(body.staff_id).trim() || null) : undefined;
+  if (staffId) {
+    const st = await env.DB.prepare("SELECT name FROM staff WHERE id=?").bind(staffId).first() as { name?: string } | null;
+    if (st?.name && !driverName) driverName = st.name;
+  }
+  if (staffId === undefined && driverName === null) return json({ error: "Provide a staff member or a driver name" }, 400);
+  const fields: string[] = []; const vals: unknown[] = [];
+  if (staffId !== undefined) { fields.push("staff_id=?"); vals.push(staffId); }
+  if (driverName !== null) { fields.push("driver_name=?"); vals.push(driverName || null); }
+  if (body.driver_phone !== undefined) { fields.push("driver_phone=?"); vals.push(String(body.driver_phone).trim() || null); }
+  if (!fields.length) return json({ error: "Nothing to change" }, 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE delivery_challans SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
+  await audit(env, user, "REASSIGN", "delivery_challan", id, `${dc.driver_name || dc.staff_id || "unassigned"}`, JSON.stringify({ staff_id: staffId, driver_name: driverName }));
+  return json({ id, driver_name: driverName, staff_id: staffId });
 }
 
 async function handleListDCItems(request: Request, env: Env, path: string): Promise<Response> {

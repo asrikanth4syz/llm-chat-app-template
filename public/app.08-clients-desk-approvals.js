@@ -128,6 +128,7 @@ function execDCCard(dc, today) {
         <div><span class="u-muted">Vehicle</span><br><b>${dc.vehicle_no||'—'}</b></div>
         <div><span class="u-muted">ETA</span><br><b style="color:${overdue?'var(--danger)':'inherit'}">${eta}</b></div>
       </div>
+      ${_dcDestination(dc)}
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--border-light,#f1f5f9);border-radius:8px;margin-bottom:12px;font-size:.82rem">
         <span class="u-muted">Items to deliver</span>
         <span style="font-weight:700;font-size:1rem;color:var(--navy)">${dc.total_qty||'?'}</span>
@@ -367,6 +368,28 @@ function mapsLink(pin, address) {
   if (pin && /^-?\d+\.\d+,-?\d+\.\d+$/.test(pin.trim())) return `https://www.google.com/maps?q=${pin.trim()}`;
   const q = address || pin;
   return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : null;
+}
+
+// Delivery-destination panel for a DC card: where to go (address + Open map) and
+// who receives the goods (contact person + tap-to-call). Data comes from the
+// client on the DC (client_address / client_map_pin / client_contact_* — served
+// by handleListDCs & handleGetDC). Returns '' when nothing is known, so callers
+// can drop it in unconditionally. Shared by the delivery-exec, warehouse, and
+// order-detail DC cards.
+function _dcDestination(dc) {
+  if (!dc) return '';
+  const addr = dc.client_address || dc.client_location || '';
+  const pin = dc.client_map_pin || '';
+  const map = mapsLink(pin, addr);
+  const cname = dc.client_contact_name || '';
+  const cphone = dc.client_contact_phone || '';
+  if (!addr && !pin && !cname && !cphone) return '';
+  const rows = [];
+  if (addr || map) rows.push(`<div style="display:flex;align-items:flex-start;gap:6px"><span>📍</span><span>${h(addr || 'Location on map')}${map ? ` · <a href="${map}" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600">Open map</a>` : ''}</span></div>`);
+  if (cname || cphone) rows.push(`<div style="display:flex;align-items:center;gap:6px"><span>👤</span><span>${h(cname || 'Receiving contact')}${cphone ? ` · <a href="tel:${h(cphone)}" style="color:var(--blue);font-weight:600">${h(cphone)}</a>` : ''}</span></div>`);
+  return `<div style="background:var(--surface-2,#f8fafc);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--text-muted);display:flex;flex-direction:column;gap:6px">
+    <div style="font-weight:700;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--navy)">Delivery destination</div>
+    ${rows.join('')}</div>`;
 }
 
 // ── Client Catalog Management ─────────────────────────────────────
