@@ -4388,3 +4388,20 @@ describe("finance/books-sync — manual full sync mints a fresh Zoho token", () 
     expect(await getCfg("zoho_token_exp")).toBe("0");
   });
 });
+
+describe("finance/zoho — use Worker secret over stored Connect token", () => {
+  it("reports token source and clears the stored Connect token on switch (super-admin only)", async () => {
+    await ensureArSchema(env);
+    await setCfg("zoho_refresh_token", "stored-connect-token-inventory-only");
+    await setCfg("zoho_token", "cached-access");
+    await setCfg("zoho_token_exp", String(Math.floor(Date.now() / 1000) + 3600));
+    const st = await (await get("/api/finance/status", adminToken)).json() as { zoho_token_source: string };
+    expect(st.zoho_token_source).toBe("connect");
+    // A non-super role cannot switch.
+    expect((await post("/api/finance/zoho/use-secret", {}, opsToken)).status).toBe(403);
+    // No ZOHO_REFRESH_TOKEN secret in the test env → guarded 400, stored token untouched.
+    const noSecret = await post("/api/finance/zoho/use-secret", {}, adminToken);
+    expect(noSecret.status).toBe(400);
+    expect(await getCfg("zoho_refresh_token")).toBe("stored-connect-token-inventory-only");
+  });
+});

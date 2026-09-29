@@ -387,6 +387,7 @@ async function renderFinanceSetup(main) {
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>${s.zoho_token_source === 'connect' ? ` · <button class="btn btn-secondary btn-sm" ${dataAct('financeZohoUseSecret')} title="Clear the stored Connect token so the ZOHO_REFRESH_TOKEN secret is used instead">Use Worker secret instead</button>` : ''}</div>
       ${s.last_sync_error ? `<div style="margin-top:12px;padding:12px 14px;border:1px solid var(--danger,#b3261e);background:var(--danger-bg,#fdecea);border-radius:8px">
         <div style="font-weight:700;color:var(--danger,#b3261e);font-size:13px;margin-bottom:4px">⚠ Last sync failed</div>
         ${s.last_sync_hint ? `<div style="font-size:13px;margin-bottom:6px">${h(s.last_sync_hint)}</div>` : ''}
@@ -419,6 +420,11 @@ async function financeRunBooksSync() {
     else showToast('Sync failed: ' + (r.hint || (r.errors && r.errors[0]) || r.status) + ' — see the details below.', 'error');
     renderFinanceSetup(document.getElementById('main-content'));
   }
+}
+async function financeZohoUseSecret() {
+  if (!confirm('Switch Zoho to the Worker ZOHO_REFRESH_TOKEN secret?\n\nUse this if you re-minted the token with Books scope. The stored in-app Connect token will be cleared and the Worker secret used instead.')) return;
+  const r = await api('/finance/zoho/use-secret', { method: 'POST', body: JSON.stringify({}) });
+  if (r) { showToast('Now using the Worker ZOHO_REFRESH_TOKEN — run the full sync again.', 'success'); renderFinanceSetup(document.getElementById('main-content')); }
 }
 async function financeSetReminderMode(mode) {
   if (mode === 'live' && !confirm('Go LIVE? Real reminder emails will start going to customers.')) return;
