@@ -9094,14 +9094,20 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   return json({ ...result, hint: failed ? _booksSyncHint(stored) : "" });
 }
 
-// Map a raw Books-sync failure to a plain-language fix. Kept small and pattern-based:
-// the two failures a fresh connection actually hits are (1) the shared Zoho token
-// lacking Books scope (401) and (2) a wrong org id / data-centre region.
+// Map a raw Books-sync failure to a plain-language fix. Order matters: a refresh-token
+// rejection (invalid_code/invalid_grant, surfaced as "auth: …") must be caught before
+// the generic org branch, since it also contains the word "invalid".
 function _booksSyncHint(msg: string): string {
   const s = (msg || "").toLowerCase();
-  if (/401|unauthor|zohoauth|invalid.?(oauth|token)|scope/.test(s))
-    return "The Zoho token doesn't have Books permission yet. Re-mint ZOHO_REFRESH_TOKEN with the scope ZohoBooks.fullaccess.all (the Inventory-only token can't read Books), then update the Worker secret and run the sync again.";
-  if (/companyid|organization|\b400\b|\b404\b|invalid/.test(s))
+  // (1) The refresh token itself was rejected — wrong app credentials, wrong region,
+  // or an expired/bad token. This is NOT an org problem.
+  if (/invalid_code|invalid_grant|invalid_client|token refresh failed/.test(s) || /^error: auth:|(^|\s)auth:/.test(s))
+    return "Zoho rejected the refresh token (invalid_code). A token only works with the exact ZOHO_CLIENT_ID/SECRET and region (ZOHO_DC) it was minted for — a token from a different Zoho app or data centre fails. Easiest fix: use 'Connect Zoho' below with a code scoped ZohoBooks.fullaccess.all,ZohoInventory.fullaccess.all — it exchanges the code with this app's own credentials so it can't mismatch.";
+  // (2) Authenticated OK, but the token has no Books permission.
+  if (/401|unauthor|zohoauth|scope|invalid.?(oauth|token)/.test(s))
+    return "The Zoho token authenticated but has no Books permission. Re-connect with a code scoped ZohoBooks.fullaccess.all (add ZohoInventory.fullaccess.all so Inventory keeps working).";
+  // (3) Org / data-centre rejection.
+  if (/companyid|organization|company|\b400\b|\b404\b|invalid/.test(s))
     return "Zoho rejected the organization. Check ZOHO_BOOKS_ORG_ID is the Books (not Inventory) org id, and that ZOHO_DC matches your Zoho region (e.g. 'in' for zoho.in, 'com' for zoho.com).";
   if (/not_configured/.test(s))
     return "A required secret is missing — check the Connections chips above.";

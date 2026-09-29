@@ -4405,3 +4405,21 @@ describe("finance/zoho — use Worker secret over stored Connect token", () => {
     expect(await getCfg("zoho_refresh_token")).toBe("stored-connect-token-inventory-only");
   });
 });
+
+describe("finance/finance-setup — sync-error hints classify invalid_code vs 401 vs org", () => {
+  it("maps invalid_code (refresh-token rejection) to the token/region hint, not the org hint", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_last_sync_error", "error: auth: Error: invalid_code");
+    const a = await (await get("/api/finance/status", adminToken)).json() as { last_sync_hint: string };
+    expect(a.last_sync_hint).toMatch(/invalid_code|refresh token/i);
+    expect(a.last_sync_hint).not.toMatch(/rejected the organization/i);
+    // A genuine 401 still maps to the Books-scope hint.
+    await setCfg("books_last_sync_error", "error: Error: 401 on Books contacts page 1");
+    const b = await (await get("/api/finance/status", adminToken)).json() as { last_sync_hint: string };
+    expect(b.last_sync_hint).toMatch(/Books permission/i);
+    // An organization rejection still maps to the org hint.
+    await setCfg("books_last_sync_error", "error: Error: CompanyID or CompanyName is invalid");
+    const c = await (await get("/api/finance/status", adminToken)).json() as { last_sync_hint: string };
+    expect(c.last_sync_hint).toMatch(/rejected the organization/i);
+  });
+});
