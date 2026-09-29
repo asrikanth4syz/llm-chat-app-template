@@ -186,6 +186,79 @@ async function financeResolveException(id) {
   if (r) { showToast('Exception resolved', 'success'); renderReconciliation(document.getElementById('main-content')); }
 }
 
+// ── Finance Setup (super admin): guided go-live control panel ──────────
+// Designed for non-technical staff: status chips, plain-language mode choices,
+// and buttons disabled with a reason until each safety step is done.
+function _chip(ok, label) {
+  const c = ok ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)';
+  return `<span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:${c}"><span style="width:9px;height:9px;border-radius:50%;background:${c};display:inline-block"></span>${h(label)}</span>`;
+}
+async function renderFinanceSetup(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading finance setup…</p></div>`;
+  const s = await api('/finance/status');
+  if (!s) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load finance setup.</div>`; return; }
+  const modeBtn = (val, title, desc) => {
+    const active = s.reminders_mode === val;
+    const liveLocked = val === 'live' && (!s.backfill_complete || !s.had_dry_run);
+    const why = liveLocked ? (!s.backfill_complete ? 'Run a full Books sync first' : 'Do a Dry run first') : '';
+    return `<button class="btn ${active ? 'btn-primary' : 'btn-secondary'}" style="flex:1;min-width:150px;flex-direction:column;align-items:flex-start;padding:12px 14px;text-align:left;${liveLocked ? 'opacity:.5;cursor:not-allowed' : ''}"
+      ${liveLocked ? `disabled title="${h(why)}"` : dataAct('financeSetReminderMode', val)}>
+      <span style="font-weight:600">${h(title)}${active ? ' ✓' : ''}</span>
+      <span style="font-size:12px;color:var(--muted);font-weight:400;margin-top:2px">${h(desc)}${liveLocked ? ' — ' + h(why) : ''}</span></button>`;
+  };
+  main.innerHTML = `
+    <h2 style="margin:0 0 4px">Finance Setup</h2>
+    <p style="color:var(--muted);margin:0 0 18px">Turn on the Zoho Books sync and payment-reminder emails. Follow the steps top to bottom.</p>
+
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:10px">Connections</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div>${_chip(s.zoho.configured, s.zoho.configured ? 'Zoho Books connected' : 'Zoho Books not connected')}${s.zoho.configured ? '' : `<div style="font-size:12px;color:var(--muted);margin-top:2px">Ask IT to add: ${h((s.zoho.missing || []).join(', '))}</div>`}</div>
+        <div>${_chip(s.gmail.configured, s.gmail.configured ? 'Email sending connected (Gmail)' : 'Email sending not connected')}${s.gmail.configured ? '' : `<div style="font-size:12px;color:var(--muted);margin-top:2px">Ask IT to add: ${h((s.gmail.missing || []).join(', '))}</div>`}</div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:6px">Step 1 · Sync invoices &amp; bills from Zoho Books</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px">Pulls invoices, bills, payments and credit notes from Zoho Books into SmartPantry. Safe to run repeatedly — it only reads from Books.</p>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn ${s.books_sync_enabled ? 'btn-primary' : 'btn-secondary'}" ${dataAct('financeToggleBooksSync', !s.books_sync_enabled)}>${s.books_sync_enabled ? 'Sync is ON — turn off' : 'Turn sync ON'}</button>
+        <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
+        <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div style="font-weight:600;margin-bottom:6px">Step 2 · Payment-reminder emails</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px">Choose how reminders behave. Always try <strong>Dry run</strong> first and review the results before going Live.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${modeBtn('off', 'Off', 'No emails are sent at all.')}
+        ${modeBtn('dry_run', 'Dry run', 'Prepares statements and logs them — sends nothing.')}
+        ${modeBtn('live', 'Live', 'Really emails customers (pre-due & on-due automatically).')}
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:12px 0 0">Overdue follow-ups are never automatic — a person sends them from the <a href="#reminders" style="color:var(--blue,#1d6fa4)">Payment Reminders</a> worklist.</p>
+    </div>`;
+}
+async function financeToggleBooksSync(on) {
+  const r = await api('/finance/settings', { method: 'POST', body: JSON.stringify({ books_sync_enabled: !!on }) });
+  if (r) { showToast('Books sync ' + (on ? 'enabled' : 'disabled'), 'info'); renderFinanceSetup(document.getElementById('main-content')); }
+}
+async function financeRunBooksSync() {
+  showToast('Syncing from Zoho Books… this can take a few minutes.', 'info');
+  const r = await api('/integrations/zoho-books/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
+  if (r) {
+    if (r.status === 'disabled') showToast('Turn the sync ON first.', 'error');
+    else if (r.status === 'not_configured') showToast('Zoho Books is not connected yet — ask IT to finish the connection.', 'error');
+    else showToast(`Sync ${r.status}: ${r.invoices || 0} invoices, ${r.bills || 0} bills${r.backfill_complete ? ' · backfill complete' : ''}`, r.status === 'ok' ? 'success' : 'info');
+    renderFinanceSetup(document.getElementById('main-content'));
+  }
+}
+async function financeSetReminderMode(mode) {
+  if (mode === 'live' && !confirm('Go LIVE? Real reminder emails will start going to customers.')) return;
+  const r = await api('/finance/settings', { method: 'POST', body: JSON.stringify({ reminders_mode: mode }) });
+  if (r) { showToast('Reminder mode: ' + mode, mode === 'live' ? 'success' : 'info'); renderFinanceSetup(document.getElementById('main-content')); }
+}
+
 // ── Finance dashboard (finance/ops): AR vs AP + cash position ──────────
 async function renderFinanceDashboard(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading finance dashboard…</p></div>`;

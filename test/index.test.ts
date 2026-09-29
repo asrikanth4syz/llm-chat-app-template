@@ -4238,3 +4238,46 @@ describe("finance/cr-fix retry + opt-out clear + ptp validation", () => {
     expect((await post("/api/finance/ar/cr-ptp/hold", { kind: "ptp", ptp_date: dueDaysAgo(-10) }, adminToken)).status).toBe(200); // 10 days out
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 Finance — Finance Setup control panel (go-live)
+// ══════════════════════════════════════════════════════════════════════
+describe("finance/finance-setup control panel", () => {
+  async function cfg(k: string, v: string) {
+    await (env.DB as D1Database).prepare("INSERT INTO app_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, v).run();
+  }
+  it("status is finance-readable; settings are super-admin only", async () => {
+    await ensureArSchema(env);
+    const st = await get("/api/finance/status", adminToken);
+    expect(st.status).toBe(200);
+    const body = await st.json() as { books_sync_enabled: boolean; zoho: unknown; counts: unknown };
+    expect(typeof body.books_sync_enabled).toBe("boolean");
+    expect(body.zoho).toBeTruthy();
+    expect(body.counts).toBeTruthy();
+    expect((await get("/api/finance/status", clientToken)).status).toBe(403);
+    expect((await post("/api/finance/settings", { books_sync_enabled: true }, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/settings", { books_sync_enabled: true }, opsToken)).status).toBe(403); // not super
+  });
+  it("toggling Books sync persists", async () => {
+    const r = await (await post("/api/finance/settings", { books_sync_enabled: true }, adminToken)).json() as { books_sync_enabled: boolean };
+    expect(r.books_sync_enabled).toBe(true);
+    const r2 = await (await post("/api/finance/settings", { books_sync_enabled: false }, adminToken)).json() as { books_sync_enabled: boolean };
+    expect(r2.books_sync_enabled).toBe(false);
+  });
+  it("Live is guarded until backfill is complete AND a dry run exists", async () => {
+    const db = env.DB as D1Database;
+    await cfg("initial_backfill_complete", "0");
+    expect((await post("/api/finance/settings", { reminders_mode: "live" }, adminToken)).status).toBe(400); // no backfill
+    await cfg("initial_backfill_complete", "1");
+    await db.prepare("DELETE FROM reminder_runs WHERE status='dry_run'").run();
+    expect((await post("/api/finance/settings", { reminders_mode: "live" }, adminToken)).status).toBe(400); // no dry run
+    await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status) VALUES ('fs-dry','cX','on-due','fsb','dry_run')").run();
+    const ok = await post("/api/finance/settings", { reminders_mode: "live" }, adminToken);
+    expect(ok.status).toBe(200);
+    expect((await ok.json() as { reminders_mode: string }).reminders_mode).toBe("live");
+    await post("/api/finance/settings", { reminders_mode: "off" }, adminToken); // reset
+  });
+  it("rejects an invalid reminder mode", async () => {
+    expect((await post("/api/finance/settings", { reminders_mode: "banana" }, adminToken)).status).toBe(400);
+  });
+});

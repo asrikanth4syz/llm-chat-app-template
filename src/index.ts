@@ -4196,6 +4196,8 @@ export default {
       if (path==="/api/finance/reconcile/exceptions"&& method==="GET")  return handleReconcileExceptions(request,env);
       if (path.match(/^\/api\/finance\/reconcile\/[^/]+\/resolve$/) && method==="POST") return handleReconcileResolve(request,env,path);
       if (path==="/api/finance/dashboard"           && method==="GET")  return handleFinanceDashboard(request,env);
+      if (path==="/api/finance/status"              && method==="GET")  return handleFinanceStatus(request,env);
+      if (path==="/api/finance/settings"            && method==="POST") return handleFinanceSettings(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9028,6 +9030,66 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   const body = await request.json().catch(() => ({})) as { full?: boolean };
   const result = await runBooksSync(env, { full: !!body.full });
   return json(result);
+}
+
+// ── Finance Setup / go-live control panel (super-admin) ────────────────
+// One status+toggle surface so go-live is clickable, not a wrangler/D1 chore.
+async function _booksMissingSecrets(env: Env): Promise<string[]> {
+  const miss: string[] = [];
+  if (!env.ZOHO_CLIENT_ID) miss.push("ZOHO_CLIENT_ID");
+  if (!env.ZOHO_CLIENT_SECRET) miss.push("ZOHO_CLIENT_SECRET");
+  if (!(await zohoRefreshToken(env))) miss.push("ZOHO_REFRESH_TOKEN (or Connect)");
+  if (!env.ZOHO_BOOKS_ORG_ID) miss.push("ZOHO_BOOKS_ORG_ID");
+  return miss;
+}
+async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
+  const zmiss = await _booksMissingSecrets(env);
+  const gmiss = gmailMissingSecrets(env);
+  const num = async (sql: string) => ((await env.DB.prepare(sql).first() as { n: number } | null)?.n ?? 0);
+  const hadDryRun = (await num("SELECT COUNT(*) AS n FROM reminder_runs WHERE status='dry_run'")) > 0;
+  return {
+    zoho: { configured: zmiss.length === 0, missing: zmiss },
+    gmail: { configured: gmiss.length === 0, missing: gmiss },
+    books_sync_enabled: (await getConfig(env, "books_sync_enabled", "0")) === "1",
+    reminders_mode: await getConfig(env, "reminders_mode", "off"),
+    backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
+    had_dry_run: hadDryRun,
+    counts: {
+      invoices: await num("SELECT COUNT(*) AS n FROM ar_invoices"),
+      bills: await num("SELECT COUNT(*) AS n FROM ap_bills"),
+      customers: await num("SELECT COUNT(*) AS n FROM ar_clients"),
+    },
+  };
+}
+// GET status — super/finance may view.
+async function handleFinanceStatus(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  return json(await _financeStatus(env));
+}
+// POST settings — super-admin only; validates + guards the live transition; audited.
+async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string };
+  if (body.books_sync_enabled !== undefined) {
+    await setConfig(env, "books_sync_enabled", body.books_sync_enabled ? "1" : "0", user!.sub);
+    await audit(env, user, "FIN_BOOKS_SYNC_TOGGLE", "app_config", "books_sync_enabled", undefined, body.books_sync_enabled ? "1" : "0");
+  }
+  if (body.reminders_mode !== undefined) {
+    const mode = String(body.reminders_mode);
+    if (!["off", "dry_run", "live"].includes(mode)) return json({ error: "mode must be off, dry_run, or live" }, 400);
+    if (mode === "live") {
+      // Guardrails so a non-technical operator cannot skip the safety ramp.
+      if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1")
+        return json({ error: "Run a full Books sync first — the initial backfill is not complete." }, 400);
+      const dry = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE status='dry_run'").first() as { n: number } | null)?.n ?? 0;
+      if (dry === 0) return json({ error: "Do a Dry run first and review the results before going live." }, 400);
+    }
+    await setConfig(env, "reminders_mode", mode, user!.sub);
+    await audit(env, user, "FIN_REMINDERS_MODE", "app_config", "reminders_mode", undefined, mode);
+  }
+  return json(await _financeStatus(env));
 }
 
 // ── Group 5.E: reminder endpoints ─────────────────────────────────────
