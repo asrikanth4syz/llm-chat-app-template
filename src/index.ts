@@ -8821,7 +8821,7 @@ async function handleArInvoices(request: Request, env: Env): Promise<Response> {
   const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging");
   const { results } = await env.DB.prepare(
-    `SELECT id, number, client_id, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT id, number, client_id, (SELECT name FROM ar_clients WHERE ar_clients.client_id=ar_invoices.client_id) AS client_name, order_id, dc_id, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE ${where.join(" AND ")} ORDER BY due_date`
   ).bind(...bind).all();
   let rows = (results || []) as Record<string, unknown>[];
   if (aging) rows = rows.filter(r => r.age_bucket === aging);
@@ -8893,7 +8893,7 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
   const currency = url.searchParams.get("currency"); if (currency) { where.push("currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging");
   const { results } = await env.DB.prepare(
-    `SELECT id, number, vendor_id, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
+    `SELECT id, number, vendor_id, (SELECT name FROM ap_vendors WHERE ap_vendors.vendor_id=ap_bills.vendor_id) AS vendor_name, po_id, date, due_date, total, amount_paid, balance, currency_code, status, age_bucket FROM ap_bills WHERE ${where.join(" AND ")} ORDER BY due_date`
   ).bind(...bind).all();
   let rows = (results || []) as Record<string, unknown>[];
   if (aging) rows = rows.filter(r => r.age_bucket === aging);
@@ -9014,8 +9014,10 @@ async function handleFinanceDashboard(request: Request, env: Env): Promise<Respo
     const a = ar.find(x => x.currency === c); const p = ap.find(x => x.currency === c);
     return { currency: c, ar: (a?.outstanding as number) || 0, ap: (p?.outstanding as number) || 0, net: ((a?.outstanding as number) || 0) - ((p?.outstanding as number) || 0) };
   });
-  const topDebtors = (await env.DB.prepare("SELECT client_id, currency_code, SUM(balance) AS bal FROM ar_invoices WHERE balance>0 AND status!='void' GROUP BY client_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
-  const topCreditors = (await env.DB.prepare("SELECT vendor_id, currency_code, SUM(balance) AS bal FROM ap_bills WHERE balance>0 AND status!='void' GROUP BY vendor_id, currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  // Show recognizable names (fall back to the id) — non-technical staff think in
+  // customer/vendor names, not Zoho ids.
+  const topDebtors = (await env.DB.prepare("SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, i.currency_code, SUM(i.balance) AS bal FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id WHERE i.balance>0 AND i.status!='void' GROUP BY i.client_id, i.currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
+  const topCreditors = (await env.DB.prepare("SELECT b.vendor_id, COALESCE(v.name, b.vendor_id) AS name, b.currency_code, SUM(b.balance) AS bal FROM ap_bills b LEFT JOIN ap_vendors v ON v.vendor_id=b.vendor_id WHERE b.balance>0 AND b.status!='void' GROUP BY b.vendor_id, b.currency_code ORDER BY bal DESC LIMIT 5").all()).results || [];
   const openExceptions = (await env.DB.prepare("SELECT COUNT(*) AS n FROM reconciliations WHERE status='exception'").first() as { n: number } | null)?.n || 0;
   return json({ ar, ap, cash, top_debtors: topDebtors, top_creditors: topCreditors, open_exceptions: openExceptions });
 }

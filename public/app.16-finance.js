@@ -74,7 +74,7 @@ function _financeInvoiceTable(invoices, showClient) {
   const rows = invoices.map(inv => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(inv.number || inv.id)}</td>
-      ${showClient ? `<td style="padding:8px 12px">${h(inv.client_id || '')}</td>` : ''}
+      ${showClient ? `<td style="padding:8px 12px">${h(inv.client_name || inv.client_id || '')}</td>` : ''}
       <td style="padding:8px 12px">${h(inv.due_date || '')}</td>
       <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
@@ -96,7 +96,7 @@ async function renderReceivables(main) {
       <h2 style="margin:0">Receivables</h2>
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
     </div>
-    ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No outstanding receivables.</div>`}
+    ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
     ${_financeInvoiceTable(invoices, true)}`;
 }
@@ -129,7 +129,7 @@ async function renderPayables(main) {
     const overdue = b.age_bucket && b.age_bucket !== 'current';
     return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(b.number || b.id)}</td>
-      <td style="padding:8px 12px">${h(b.vendor_id || '')}</td>
+      <td style="padding:8px 12px">${h(b.vendor_name || b.vendor_id || '')}</td>
       <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
       <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(b.total, b.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(b.balance, b.currency_code))}</td>
@@ -140,7 +140,7 @@ async function renderPayables(main) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <h2 style="margin:0">Payables</h2>
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div>
-    ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No outstanding payables.</div>`}
+    ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No payables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Bills</h3>
     ${rows ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
@@ -272,7 +272,7 @@ async function renderFinanceDashboard(main) {
     </div>`).join('');
   const list = (title, rows, idKey) => `<div class="card" style="flex:1;min-width:260px;padding:0;overflow-x:auto">
     <div style="padding:10px 14px;font-weight:600;border-bottom:1px solid var(--border)">${h(title)}</div>
-    ${(rows || []).length ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)"><td style="padding:8px 12px">${h(r[idKey] || '')}</td><td style="padding:8px 12px;text-align:right">${h(_fmtPaise(r.bal, r.currency_code))}</td></tr>`).join('')}</tbody></table>` : `<div style="padding:16px;color:var(--muted)">None</div>`}
+    ${(rows || []).length ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)"><td style="padding:8px 12px">${h(r.name || r[idKey] || '')}</td><td style="padding:8px 12px;text-align:right">${h(_fmtPaise(r.bal, r.currency_code))}</td></tr>`).join('')}</tbody></table>` : `<div style="padding:16px;color:var(--muted)">None</div>`}
   </div>`;
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -348,7 +348,12 @@ async function renderReminders(main) {
 
 // Collector action: send an overdue follow-up (server enforces gap + holds).
 async function financeSendFollowup(clientId) {
-  if (!confirm('Send a follow-up statement to this customer now?')) return;
+  // Show the clerk what will go out (tier + amount in the subject, invoice count) before sending.
+  const p = await api('/finance/reminders/preview?client_id=' + encodeURIComponent(clientId));
+  if (!p) return;
+  if (p.nothing_due) { showToast('Nothing is currently due for this customer.', 'info'); renderReminders(document.getElementById('main-content')); return; }
+  const n = (p.invoice_ids || []).length;
+  if (!confirm(`Send this reminder now?\n\n${p.subject || ''}\n\nCovers ${n} open invoice${n === 1 ? '' : 's'}.`)) return;
   const r = await api('/finance/reminders/send-followup', { method: 'POST', body: JSON.stringify({ client_id: clientId }) });
   if (r) { showToast('Follow-up: ' + (r.status || 'done') + (r.reason ? ' (' + r.reason + ')' : ''), r.status === 'sent' ? 'success' : 'info'); renderReminders(document.getElementById('main-content')); }
 }

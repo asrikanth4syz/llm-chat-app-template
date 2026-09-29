@@ -4281,3 +4281,20 @@ describe("finance/finance-setup control panel", () => {
     expect((await post("/api/finance/settings", { reminders_mode: "banana" }, adminToken)).status).toBe(400);
   });
 });
+
+describe("finance/usability — names surface instead of Zoho ids", () => {
+  it("AR invoices, AP bills, and dashboard top-lists carry human names", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email) VALUES ('nm-c','Acme Foods Pvt Ltd','ap@acme.test')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,due_date,total,balance,currency_code,status,age_bucket) VALUES ('nm-inv','nm-inv','NM-1','nm-c','2026-06-30',100000,100000,'INR','open','1-30')").run();
+    await db.prepare("INSERT OR REPLACE INTO ap_vendors (vendor_id,name) VALUES ('nm-v','Sunrise Supply Co')").run();
+    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,zoho_bill_id,number,vendor_id,due_date,total,balance,currency_code,status,age_bucket) VALUES ('nm-bill','nm-bill','NB-1','nm-v','2026-06-30',50000,50000,'INR','open','1-30')").run();
+    const inv = await (await get("/api/finance/ar/invoices", adminToken)).json() as { invoices: { id: string; client_name?: string }[] };
+    expect(inv.invoices.find(i => i.id === "nm-inv")?.client_name).toBe("Acme Foods Pvt Ltd");
+    const bills = await (await get("/api/finance/ap/bills", adminToken)).json() as { bills: { id: string; vendor_name?: string }[] };
+    expect(bills.bills.find(b => b.id === "nm-bill")?.vendor_name).toBe("Sunrise Supply Co");
+    const dash = await (await get("/api/finance/dashboard", adminToken)).json() as { top_debtors: { name?: string; client_id: string }[] };
+    expect(dash.top_debtors.some(d => d.name === "Acme Foods Pvt Ltd")).toBe(true);
+  });
+});
