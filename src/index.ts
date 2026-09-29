@@ -9080,7 +9080,27 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return json({ status: "disabled" });
   const body = await request.json().catch(() => ({})) as { full?: boolean };
   const result = await runBooksSync(env, { full: !!body.full });
-  return json(result);
+  // Surface WHY a sync failed so a non-technical operator isn't left with a bare
+  // "sync error". Persist a compact message + a plain-language hint the panel shows.
+  const errText = (result.errors || []).slice(0, 3).join(" | ");
+  const failed = result.status !== "ok" || !!errText;
+  const stored = failed ? `${result.status}${errText ? ": " + errText : ""}` : "";
+  await setConfig(env, "books_last_sync_error", stored, user!.sub);
+  return json({ ...result, hint: failed ? _booksSyncHint(stored) : "" });
+}
+
+// Map a raw Books-sync failure to a plain-language fix. Kept small and pattern-based:
+// the two failures a fresh connection actually hits are (1) the shared Zoho token
+// lacking Books scope (401) and (2) a wrong org id / data-centre region.
+function _booksSyncHint(msg: string): string {
+  const s = (msg || "").toLowerCase();
+  if (/401|unauthor|zohoauth|invalid.?(oauth|token)|scope/.test(s))
+    return "The Zoho token doesn't have Books permission yet. Re-mint ZOHO_REFRESH_TOKEN with the scope ZohoBooks.fullaccess.all (the Inventory-only token can't read Books), then update the Worker secret and run the sync again.";
+  if (/companyid|organization|\b400\b|\b404\b|invalid/.test(s))
+    return "Zoho rejected the organization. Check ZOHO_BOOKS_ORG_ID is the Books (not Inventory) org id, and that ZOHO_DC matches your Zoho region (e.g. 'in' for zoho.in, 'com' for zoho.com).";
+  if (/not_configured/.test(s))
+    return "A required secret is missing — check the Connections chips above.";
+  return "";
 }
 
 // ── Finance Setup / go-live control panel (super-admin) ────────────────
@@ -9104,6 +9124,8 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
     books_sync_enabled: (await getConfig(env, "books_sync_enabled", "0")) === "1",
     reminders_mode: await getConfig(env, "reminders_mode", "off"),
     last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
+    last_sync_error: (await getConfig(env, "books_last_sync_error", "")) || null,
+    last_sync_hint: _booksSyncHint((await getConfig(env, "books_last_sync_error", "")) || ""),
     backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
     had_dry_run: hadDryRun,
     counts: {

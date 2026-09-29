@@ -387,6 +387,11 @@ async function renderFinanceSetup(main) {
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
+      ${s.last_sync_error ? `<div style="margin-top:12px;padding:12px 14px;border:1px solid var(--danger,#b3261e);background:var(--danger-bg,#fdecea);border-radius:8px">
+        <div style="font-weight:700;color:var(--danger,#b3261e);font-size:13px;margin-bottom:4px">⚠ Last sync failed</div>
+        ${s.last_sync_hint ? `<div style="font-size:13px;margin-bottom:6px">${h(s.last_sync_hint)}</div>` : ''}
+        <div style="font-size:11px;color:var(--muted);font-family:monospace;word-break:break-word">${h(s.last_sync_error)}</div>
+      </div>` : ''}
     </div>
 
     <div class="card" style="padding:16px">
@@ -410,7 +415,8 @@ async function financeRunBooksSync() {
   if (r) {
     if (r.status === 'disabled') showToast('Turn the sync ON first.', 'error');
     else if (r.status === 'not_configured') showToast('Zoho Books is not connected yet — ask IT to finish the connection.', 'error');
-    else showToast(`Sync ${r.status}: ${r.invoices || 0} invoices, ${r.bills || 0} bills${r.backfill_complete ? ' · backfill complete' : ''}`, r.status === 'ok' ? 'success' : 'info');
+    else if (r.status === 'ok') showToast(`Sync ok: ${r.invoices || 0} invoices, ${r.bills || 0} bills${r.backfill_complete ? ' · backfill complete' : ''}`, 'success');
+    else showToast('Sync failed: ' + (r.hint || (r.errors && r.errors[0]) || r.status) + ' — see the details below.', 'error');
     renderFinanceSetup(document.getElementById('main-content'));
   }
 }
