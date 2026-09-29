@@ -1,10 +1,19 @@
 /* ============================================================
- * app.16-finance.js — Phase 3 Finance (003-finance-ar), Slice 1
- * Receivables cockpit (finance/ops) + client statement (client_*).
- * Read-only views over the Zoho-Books AR mirror. Money arrives as
- * INTEGER paise from the API and is formatted for display only.
- * dataAct targets here (financeRefresh) are top-level globals so the
- * smoke test's delegated-target check resolves them.
+ * app.16-finance.js — Phase 3 Finance (003-finance-ar)
+ * Receivables/Payables cockpits (finance/ops) + client statement,
+ * reminders worklist, reconciliation, dashboard, and the go-live
+ * Finance Setup panel. Read views over the Zoho-Books mirror; money
+ * arrives as INTEGER paise and is formatted for display only.
+ *
+ * Non-technical usability layer (built as follow-ups):
+ *   • human names (not Zoho ids) everywhere,
+ *   • "Data synced …" freshness line on the cockpits,
+ *   • in-cockpit search box (delegated data-input),
+ *   • click-a-name to drill into that customer's / vendor's statement,
+ *   • one-click CSV export of the aging list,
+ *   • plain-language tooltips on DSO / DPO.
+ * dataAct / data-input targets are top-level globals so the smoke test's
+ * delegated-target check resolves them.
  * ========================================================== */
 
 // Format integer paise → a currency string (display only; never re-stored).
@@ -19,20 +28,96 @@ function _fmtPaise(paise, currency) {
 
 const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60', '61-90': '61–90', '91+': '91+' };
 
+// In-memory cache of the last-loaded lists + active search text, so the search
+// box and the CSV export both work off the same data without a re-fetch.
+const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '' };
+
+// Human-friendly "how long ago" for the last-synced line (falls back to the date).
+function _finAgo(iso) {
+  if (!iso) return 'never';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return String(iso);
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) { const m = Math.floor(s / 60); return m + ' minute' + (m === 1 ? '' : 's') + ' ago'; }
+  if (s < 86400) { const hh = Math.floor(s / 3600); return hh + ' hour' + (hh === 1 ? '' : 's') + ' ago'; }
+  const d = Math.floor(s / 86400);
+  if (d < 30) return d + ' day' + (d === 1 ? '' : 's') + ' ago';
+  try { return new Date(t).toLocaleDateString(); } catch (_) { return iso.slice(0, 10); }
+}
+// A muted "Data synced …" line for a cockpit header.
+function _finSyncedLine(iso) {
+  return `<div style="font-size:12px;color:var(--muted);margin:-8px 0 14px">Data synced ${h(_finAgo(iso))}${iso ? ' · from Zoho Books' : ' — an admin can turn on the sync under Finance Setup'}</div>`;
+}
+
+// A search + export toolbar. `kind` drives which filter/export target fires.
+function _finToolbar(kind, placeholder, withExport) {
+  const q = kind === 'ar' ? _FIN.arQ : kind === 'ap' ? _FIN.apQ : _FIN.foQ;
+  const filterFn = kind === 'ar' ? 'financeFilterAr' : kind === 'ap' ? 'financeFilterAp' : 'financeFilterFollowups';
+  const exportBtn = withExport
+    ? `<button class="btn btn-secondary" ${dataAct('financeExportCsv', kind)} title="Download this list as a CSV spreadsheet">Export CSV</button>`
+    : '';
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+    <input type="search" data-input="${filterFn}" data-val value="${h(q || '')}" placeholder="${h(placeholder)}"
+      aria-label="${h(placeholder)}"
+      style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font:inherit;background:var(--bg,#fff);color:inherit">
+    ${exportBtn}</div>`;
+}
+
+// Case-insensitive match across a row's display-relevant fields.
+function _finRowMatch(obj, q) {
+  if (!q) return true;
+  const s = q.toLowerCase();
+  return Object.values(obj).some(v => v != null && typeof v !== 'object' && String(v).toLowerCase().includes(s));
+}
+
+// ── CSV export helpers (client-side Blob download; CSP-safe) ────────────
+function _csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function _downloadCsv(filename, rows) {
+  const csv = rows.map(r => r.map(_csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch (_) {} }, 0);
+}
+function financeExportCsv(kind) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (kind === 'ap') {
+    const rows = (_FIN.ap || []).filter(b => _finRowMatch(b, _FIN.apQ));
+    const out = [['Bill', 'Vendor', 'Vendor ID', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
+    for (const b of rows) out.push([b.number || b.id, b.vendor_name || '', b.vendor_id || '', b.due_date || '',
+      ((b.total || 0) / 100).toFixed(2), ((b.balance || 0) / 100).toFixed(2), b.currency_code || 'INR', b.status || '', _AGING_LABEL[b.age_bucket] || b.age_bucket || '']);
+    _downloadCsv('payables-' + today + '.csv', out);
+    showToast('Exported ' + rows.length + ' bill' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
+  } else {
+    const rows = (_FIN.ar || []).filter(i => _finRowMatch(i, _FIN.arQ));
+    const out = [['Invoice', 'Client', 'Client ID', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
+    for (const i of rows) out.push([i.number || i.id, i.client_name || '', i.client_id || '', i.due_date || '',
+      ((i.total || 0) / 100).toFixed(2), ((i.balance || 0) / 100).toFixed(2), i.currency_code || 'INR', i.status || '', _AGING_LABEL[i.age_bucket] || i.age_bucket || '']);
+    _downloadCsv('receivables-' + today + '.csv', out);
+    showToast('Exported ' + rows.length + ' invoice' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
+  }
+}
+
 // Re-render whichever finance page is active (delegated 'financeRefresh' target).
 function financeRefresh() {
   const main = document.getElementById('main-content');
   if (!main) return;
   const fn = { my_statement: renderMyStatement, payables: renderPayables, reminders: renderReminders,
-    reconciliation: renderReconciliation, finance_dashboard: renderFinanceDashboard }[APP.page] || renderReceivables;
+    reconciliation: renderReconciliation, finance_dashboard: renderFinanceDashboard, finance_setup: renderFinanceSetup }[APP.page] || renderReceivables;
   fn(main);
 }
 
-// One per-currency KPI + aging block.
+// One per-currency KPI + aging block. DSO carries a plain-language tooltip.
 function _financeCurrencyBlock(c) {
-  const kpi = (label, val) => `
-    <div class="card" style="flex:1;min-width:150px;padding:14px 16px">
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+  const kpi = (label, val, hint) => `
+    <div class="card" style="flex:1;min-width:150px;padding:14px 16px"${hint ? ` title="${h(hint)}"` : ''}>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}${hint ? ' <span style="cursor:help">ⓘ</span>' : ''}</div>
       <div style="font-size:1.4rem;font-weight:600;margin-top:4px">${h(val)}</div>
     </div>`;
   const buckets = ['current', '1-30', '31-60', '61-90', '91+'];
@@ -45,7 +130,7 @@ function _financeCurrencyBlock(c) {
         ${kpi('Total Outstanding', _fmtPaise(c.outstanding, c.currency))}
         ${kpi('Overdue', _fmtPaise(c.overdue, c.currency))}
         ${kpi('Due This Week', _fmtPaise(c.due_this_week, c.currency))}
-        ${kpi('DSO (days)', String(c.dso))}
+        ${kpi('DSO (days)', String(c.dso), 'Days Sales Outstanding — the average number of days it takes to collect payment after a sale. Lower is better.')}
       </div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -58,9 +143,10 @@ function _financeCurrencyBlock(c) {
     </section>`;
 }
 
-// Invoice rows table (shared by cockpit + statement). `showClient` adds a client column.
+// Invoice rows table (shared by cockpit + statement). `showClient` adds a client
+// column whose name is a click-to-drill button (finance/ops cockpit only).
 function _financeInvoiceTable(invoices, showClient) {
-  if (!invoices.length) return `<div class="card" style="padding:20px;color:var(--muted)">No open invoices.</div>`;
+  if (!invoices.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching invoices.</div>`;
   const head = `
     <tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
       <th style="padding:8px 12px">Invoice</th>
@@ -71,10 +157,16 @@ function _financeInvoiceTable(invoices, showClient) {
       <th style="padding:8px 12px">Status</th>
       <th style="padding:8px 12px">Aging</th>
     </tr>`;
+  const clientCell = inv => {
+    const label = inv.client_name || inv.client_id || '';
+    if (!inv.client_id) return `<td style="padding:8px 12px">${h(label)}</td>`;
+    return `<td style="padding:8px 12px"><button ${dataAct('financeViewClient', inv.client_id)} title="View this customer's statement"
+      style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
+  };
   const rows = invoices.map(inv => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(inv.number || inv.id)}</td>
-      ${showClient ? `<td style="padding:8px 12px">${h(inv.client_name || inv.client_id || '')}</td>` : ''}
+      ${showClient ? clientCell(inv) : ''}
       <td style="padding:8px 12px">${h(inv.due_date || '')}</td>
       <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
@@ -84,27 +176,57 @@ function _financeInvoiceTable(invoices, showClient) {
   return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
-// Finance/ops cockpit: per-currency KPIs + aging + the open-invoice list.
+// Finance/ops cockpit: per-currency KPIs + aging + the searchable, exportable,
+// drillable open-invoice list.
 async function renderReceivables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading receivables…</p></div>`;
   const [summary, list] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices')]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load receivables.</div>`; return; }
   const byCur = summary.by_currency || [];
-  const invoices = list.invoices || [];
+  _FIN.ar = list.invoices || [];
   main.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Receivables</h2>
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
     </div>
+    ${_finSyncedLine(summary.last_sync_at)}
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
-    ${_financeInvoiceTable(invoices, true)}`;
+    ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
+    <div id="ar-table-host">${_financeInvoiceTable(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), true)}</div>`;
+}
+// Live filter for the receivables table (delegated data-input target).
+function financeFilterAr(q) {
+  _FIN.arQ = q || '';
+  const host = document.getElementById('ar-table-host');
+  if (host) host.innerHTML = _financeInvoiceTable(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), true);
+}
+
+// Drill-in: a finance/ops user views any one customer's full statement.
+async function financeViewClient(clientId) {
+  const main = document.getElementById('main-content');
+  if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading statement…</p></div>`;
+  const data = await api('/finance/ar/client/' + encodeURIComponent(clientId));
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load statement.</div>`; return; }
+  const name = (_FIN.ar.find(i => i.client_id === clientId) || {}).client_name || clientId;
+  const byCur = data.by_currency || [];
+  const invoices = data.invoices || [];
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div><button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Receivables</button></div>
+      <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>Refresh</button>
+    </div>
+    <h2 style="margin:0 0 12px">${h(name)} — Statement</h2>
+    ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">Nothing outstanding for this customer.</div>`}
+    <h3 style="margin:18px 0 10px">Open Invoices</h3>
+    ${_financeInvoiceTable(invoices, false)}`;
 }
 
 // ── Payables (finance/ops): per-vendor aging + DPO + bills due ─────────
 function _apCurrencyBlock(c) {
-  const kpi = (label, val) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
-    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+  const kpi = (label, val, hint) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px"${hint ? ` title="${h(hint)}"` : ''}>
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}${hint ? ' <span style="cursor:help">ⓘ</span>' : ''}</div>
     <div style="font-size:1.4rem;font-weight:600;margin-top:4px">${h(val)}</div></div>`;
   const buckets = ['current', '1-30', '31-60', '61-90', '91+'];
   return `<section style="margin-bottom:24px">
@@ -113,41 +235,79 @@ function _apCurrencyBlock(c) {
       ${kpi('Total Payable', _fmtPaise(c.outstanding, c.currency))}
       ${kpi('Overdue', _fmtPaise(c.overdue, c.currency))}
       ${kpi('Due This Week', _fmtPaise(c.due_this_week, c.currency))}
-      ${kpi('DPO (days)', String(c.dpo))}</div>
+      ${kpi('DPO (days)', String(c.dpo), 'Days Payable Outstanding — the average number of days you take to pay suppliers after a bill is raised. Higher preserves cash, but paying past the due date risks the relationship.')}</div>
     <div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="background:var(--bg-subtle,#f5f5f5)">${buckets.map(b => `<th style="padding:8px 12px;text-align:right;font-weight:600">${h(_AGING_LABEL[b])}</th>`).join('')}</tr></thead>
       <tbody><tr>${buckets.map(b => `<td style="padding:8px 12px;text-align:right">${h(_fmtPaise(c.buckets[b] || 0, c.currency))}</td>`).join('')}</tr></tbody>
     </table></div></section>`;
+}
+// Open-bills table (shared by cockpit filter re-render). Vendor name drills in.
+function _apBillTable(bills) {
+  if (!bills.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching bills.</div>`;
+  const vendorCell = b => {
+    const label = b.vendor_name || b.vendor_id || '';
+    if (!b.vendor_id) return `<td style="padding:8px 12px">${h(label)}</td>`;
+    return `<td style="padding:8px 12px"><button ${dataAct('financeViewVendor', b.vendor_id)} title="View this vendor's statement"
+      style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
+  };
+  const rows = bills.map(b => {
+    const overdue = b.age_bucket && b.age_bucket !== 'current';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 12px">${h(b.number || b.id)}</td>
+      ${vendorCell(b)}
+      <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
+      <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(b.total, b.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(b.balance, b.currency_code))}</td>
+      <td style="padding:8px 12px">${h(b.status || '')}</td>
+      <td style="padding:8px 12px">${h(_AGING_LABEL[b.age_bucket] || b.age_bucket || '')}</td></tr>`;
+  }).join('');
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+      <th style="padding:8px 12px">Bill</th><th style="padding:8px 12px">Vendor</th><th style="padding:8px 12px">Due</th>
+      <th style="padding:8px 12px;text-align:right">Total</th><th style="padding:8px 12px;text-align:right">Balance</th>
+      <th style="padding:8px 12px">Status</th><th style="padding:8px 12px">Aging</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
 }
 async function renderPayables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading payables…</p></div>`;
   const [summary, list] = await Promise.all([api('/finance/ap/summary'), api('/finance/ap/bills')]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load payables.</div>`; return; }
   const byCur = summary.by_currency || [];
-  const bills = list.bills || [];
-  const rows = bills.length ? bills.map(b => {
-    const overdue = b.age_bucket && b.age_bucket !== 'current';
-    return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:8px 12px">${h(b.number || b.id)}</td>
-      <td style="padding:8px 12px">${h(b.vendor_name || b.vendor_id || '')}</td>
-      <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
-      <td style="padding:8px 12px;text-align:right">${h(_fmtPaise(b.total, b.currency_code))}</td>
-      <td style="padding:8px 12px;text-align:right;font-weight:600">${h(_fmtPaise(b.balance, b.currency_code))}</td>
-      <td style="padding:8px 12px">${h(b.status || '')}</td>
-      <td style="padding:8px 12px">${h(_AGING_LABEL[b.age_bucket] || b.age_bucket || '')}</td></tr>`;
-  }).join('') : '';
+  _FIN.ap = list.bills || [];
   main.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Payables</h2>
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div>
+    ${_finSyncedLine(summary.last_sync_at)}
     ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No payables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Bills</h3>
-    ${rows ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-        <th style="padding:8px 12px">Bill</th><th style="padding:8px 12px">Vendor</th><th style="padding:8px 12px">Due</th>
-        <th style="padding:8px 12px;text-align:right">Total</th><th style="padding:8px 12px;text-align:right">Balance</th>
-        <th style="padding:8px 12px">Status</th><th style="padding:8px 12px">Aging</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>` : `<div class="card" style="padding:20px;color:var(--muted)">No open bills.</div>`}`;
+    ${_finToolbar('ap', 'Search bills by number, vendor, status…', true)}
+    <div id="ap-table-host">${_apBillTable(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)))}</div>`;
+}
+function financeFilterAp(q) {
+  _FIN.apQ = q || '';
+  const host = document.getElementById('ap-table-host');
+  if (host) host.innerHTML = _apBillTable(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)));
+}
+// Drill-in: any one vendor's full statement (finance/ops only).
+async function financeViewVendor(vendorId) {
+  const main = document.getElementById('main-content');
+  if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading vendor statement…</p></div>`;
+  const data = await api('/finance/ap/vendor/' + encodeURIComponent(vendorId));
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load vendor statement.</div>`; return; }
+  const name = (_FIN.ap.find(b => b.vendor_id === vendorId) || {}).vendor_name || vendorId;
+  const byCur = data.by_currency || [];
+  const bills = data.bills || [];
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div><button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Payables</button></div>
+      <button class="btn btn-secondary" ${dataAct('financeViewVendor', vendorId)}>Refresh</button>
+    </div>
+    <h2 style="margin:0 0 12px">${h(name)} — Statement</h2>
+    ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">Nothing outstanding for this vendor.</div>`}
+    <h3 style="margin:18px 0 10px">Open Bills</h3>
+    ${_apBillTable(bills)}`;
 }
 
 // ── Reconciliation (finance/ops): exception worklist ───────────────────
@@ -226,6 +386,7 @@ async function renderFinanceSetup(main) {
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
     </div>
 
     <div class="card" style="padding:16px">
@@ -270,9 +431,17 @@ async function renderFinanceDashboard(main) {
       <div style="font-size:1.5rem;font-weight:600;margin-top:4px;color:${c.net >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${h(_fmtPaise(c.net, c.currency))}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:6px">AR ${h(_fmtPaise(c.ar, c.currency))} · AP ${h(_fmtPaise(c.ap, c.currency))}</div>
     </div>`).join('');
+  // Top lists: click a name to drill into that party's statement.
+  const drill = (idKey, id) => idKey === 'client_id' ? dataAct('financeViewClient', id) : dataAct('financeViewVendor', id);
   const list = (title, rows, idKey) => `<div class="card" style="flex:1;min-width:260px;padding:0;overflow-x:auto">
     <div style="padding:10px 14px;font-weight:600;border-bottom:1px solid var(--border)">${h(title)}</div>
-    ${(rows || []).length ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)"><td style="padding:8px 12px">${h(r.name || r[idKey] || '')}</td><td style="padding:8px 12px;text-align:right">${h(_fmtPaise(r.bal, r.currency_code))}</td></tr>`).join('')}</tbody></table>` : `<div style="padding:16px;color:var(--muted)">None</div>`}
+    ${(rows || []).length ? `<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${rows.map(r => {
+      const id = r[idKey]; const label = r.name || id || '';
+      const nameCell = id
+        ? `<button ${drill(idKey, id)} title="View statement" style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button>`
+        : h(label);
+      return `<tr style="border-top:1px solid var(--border)"><td style="padding:8px 12px">${nameCell}</td><td style="padding:8px 12px;text-align:right">${h(_fmtPaise(r.bal, r.currency_code))}</td></tr>`;
+    }).join('')}</tbody></table>` : `<div style="padding:16px;color:var(--muted)">None</div>`}
   </div>`;
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -289,13 +458,8 @@ async function renderFinanceDashboard(main) {
 // ── Reminders (finance/ops): follow-up-due worklist + run log ──────────
 // Collector-initiated overdue follow-ups (Send button, gated by min-gap on the
 // server) plus the recent reminder_runs audit. Auto tiers are sent by the cron.
-async function renderReminders(main) {
-  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading reminders…</p></div>`;
-  const [rules, due, runs] = await Promise.all([
-    api('/finance/reminders/rules'), api('/finance/reminders/followups-due'), api('/finance/reminders/runs')]);
-  if (!rules || !due || !runs) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load reminders.</div>`; return; }
-  const mode = rules.mode || 'off';
-  const followups = due.followups || [];
+function _followupTable(followups) {
+  if (!followups.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching customers awaiting a follow-up.</div>`;
   const rows = followups.map(f => {
     const amt = Object.entries(f.total_outstanding || {}).map(([c, v]) => _fmtPaise(v, c)).join(', ');
     const status = f.opt_out ? 'Opted out' : f.hold ? ('Hold: ' + f.hold) : !f.email ? 'No email'
@@ -303,14 +467,31 @@ async function renderReminders(main) {
     const btn = f.eligible
       ? `<button class="btn btn-primary" ${dataAct('financeSendFollowup', f.client_id)}>Send follow-up</button>`
       : `<button class="btn btn-secondary" disabled title="${h(status)}">Send follow-up</button>`;
+    const nameCell = f.client_id
+      ? `<button ${dataAct('financeViewClient', f.client_id)} title="View this customer's statement" style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(f.name || f.client_id)}</button>`
+      : h(f.name || f.client_id);
     return `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:8px 12px">${h(f.name || f.client_id)}</td>
+      <td style="padding:8px 12px">${nameCell}</td>
       <td style="padding:8px 12px">${h(f.tier)}</td>
       <td style="padding:8px 12px;text-align:right">${h(String(f.worst_overdue_days))}</td>
       <td style="padding:8px 12px;text-align:right">${h(amt)}</td>
       <td style="padding:8px 12px">${h(status)}</td>
       <td style="padding:8px 12px">${btn}</td></tr>`;
   }).join('');
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+      <th style="padding:8px 12px">Client</th><th style="padding:8px 12px">Tier</th>
+      <th style="padding:8px 12px;text-align:right">Overdue (d)</th><th style="padding:8px 12px;text-align:right">Outstanding</th>
+      <th style="padding:8px 12px">Status</th><th style="padding:8px 12px"></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+async function renderReminders(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading reminders…</p></div>`;
+  const [rules, due, runs] = await Promise.all([
+    api('/finance/reminders/rules'), api('/finance/reminders/followups-due'), api('/finance/reminders/runs')]);
+  if (!rules || !due || !runs) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load reminders.</div>`; return; }
+  const mode = rules.mode || 'off';
+  _FIN.followups = due.followups || [];
   const runRows = (runs.runs || []).slice(0, 50).map(r => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:6px 12px">${h((r.run_at || '').replace('T', ' ').slice(0, 16))}</td>
@@ -329,14 +510,9 @@ async function renderReminders(main) {
     <div class="card" style="padding:12px 16px;margin-bottom:16px">
       Mode: <strong>${h(mode)}</strong> ${mode === 'off' ? '— reminders are disabled (no mail is sent).' : mode === 'dry_run' ? '— dry run: statements are logged, nothing is sent.' : '— live sending.'}
     </div>
-    <h3 style="margin:0 0 10px">Follow-ups Due (${followups.length})</h3>
-    ${followups.length ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-        <th style="padding:8px 12px">Client</th><th style="padding:8px 12px">Tier</th>
-        <th style="padding:8px 12px;text-align:right">Overdue (d)</th><th style="padding:8px 12px;text-align:right">Outstanding</th>
-        <th style="padding:8px 12px">Status</th><th style="padding:8px 12px"></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`
-      : `<div class="card" style="padding:20px;color:var(--muted)">No overdue customers awaiting a follow-up.</div>`}
+    <h3 style="margin:0 0 10px">Follow-ups Due (${_FIN.followups.length})</h3>
+    ${_FIN.followups.length ? _finToolbar('followups', 'Search customers by name, tier, status…', false) : ''}
+    <div id="followup-table-host">${_FIN.followups.length ? _followupTable(_FIN.followups.filter(f => _finRowMatch(f, _FIN.foQ))) : `<div class="card" style="padding:20px;color:var(--muted)">No overdue customers awaiting a follow-up.</div>`}</div>
     <h3 style="margin:18px 0 10px">Recent Runs</h3>
     ${runRows ? `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
@@ -344,6 +520,11 @@ async function renderReminders(main) {
         <th style="padding:6px 12px">Status</th><th style="padding:6px 12px">By</th></tr></thead>
       <tbody>${runRows}</tbody></table></div>`
       : `<div class="card" style="padding:20px;color:var(--muted)">No reminder runs yet.</div>`}`;
+}
+function financeFilterFollowups(q) {
+  _FIN.foQ = q || '';
+  const host = document.getElementById('followup-table-host');
+  if (host) host.innerHTML = _followupTable(_FIN.followups.filter(f => _finRowMatch(f, _FIN.foQ)));
 }
 
 // Collector action: send an overdue follow-up (server enforces gap + holds).

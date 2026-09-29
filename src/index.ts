@@ -3566,6 +3566,11 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     await recomputeArBalances(env);
     await recomputeApBalances(env);
 
+    // Stamp when Books data last landed, so cockpits can show "Data synced …" and
+    // staff can tell fresh numbers from stale ones. Written on every pass that
+    // reached recompute (a capped/partial pass still refreshed data).
+    await setConfig(env, "books_last_sync_at", new Date().toISOString(), "system");
+
     // Advance watermarks ONLY on an uncapped pass. If the page cap was hit, hold the
     // cursors so the next run re-pulls the same window (never skip un-fetched pages).
     if (!r.cap_hit) {
@@ -8833,7 +8838,7 @@ async function handleArSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _arSummaryRows(env, null) });
+  return json({ by_currency: await _arSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
@@ -8902,7 +8907,7 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
 async function handleApSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _apSummaryRows(env, null) });
+  return json({ by_currency: await _apSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
@@ -9054,6 +9059,7 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
     gmail: { configured: gmiss.length === 0, missing: gmiss },
     books_sync_enabled: (await getConfig(env, "books_sync_enabled", "0")) === "1",
     reminders_mode: await getConfig(env, "reminders_mode", "off"),
+    last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
     backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
     had_dry_run: hadDryRun,
     counts: {

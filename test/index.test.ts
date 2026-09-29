@@ -4298,3 +4298,16 @@ describe("finance/usability — names surface instead of Zoho ids", () => {
     expect(dash.top_debtors.some(d => d.name === "Acme Foods Pvt Ltd")).toBe(true);
   });
 });
+
+describe("finance/usability — last-synced freshness surfaces", () => {
+  it("status, AR summary, and AP summary all report books_last_sync_at", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_last_sync_at", "2026-09-20T10:00:00.000Z");
+    const st = await (await get("/api/finance/status", adminToken)).json() as { last_sync_at: string | null };
+    expect(st.last_sync_at).toBe("2026-09-20T10:00:00.000Z");
+    const ar = await (await get("/api/finance/ar/summary", adminToken)).json() as { last_sync_at: string | null };
+    expect(ar.last_sync_at).toBe("2026-09-20T10:00:00.000Z");
+    const ap = await (await get("/api/finance/ap/summary", adminToken)).json() as { last_sync_at: string | null };
+    expect(ap.last_sync_at).toBe("2026-09-20T10:00:00.000Z");
+  });
+});
