@@ -4343,6 +4343,8 @@ export default {
       if (path.startsWith("/api/finance/") || path==="/api/integrations/zoho-books/sync") await ensureArSchema(env);
       if (path==="/api/finance/ar/invoices" && method==="GET") return handleArInvoices(request,env);
       if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
+      if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
+      if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
       if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
@@ -9046,6 +9048,29 @@ async function handleArSummary(request: Request, env: Env): Promise<Response> {
   return json({ by_currency: await _arSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 
+// GET /api/finance/ar/by-customer — one aggregated row per customer (billed / paid /
+// outstanding / overdue / open count / oldest due). A single indexed GROUP BY, so it
+// is cheaper than the invoice list. finance/ops only.
+async function handleArByCustomer(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const { results } = await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, c.email AS email, i.currency_code AS currency_code,
+       SUM(i.total) AS billed,
+       SUM(CASE WHEN i.balance > 0 THEN i.balance ELSE 0 END) AS outstanding,
+       SUM(CASE WHEN i.balance > 0 AND i.age_bucket != 'current' THEN i.balance ELSE 0 END) AS overdue,
+       COUNT(*) AS invoices,
+       SUM(CASE WHEN i.balance > 0 THEN 1 ELSE 0 END) AS open_invoices,
+       MIN(CASE WHEN i.balance > 0 THEN i.due_date ELSE NULL END) AS oldest_due
+     FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id = i.client_id
+     WHERE i.status != 'void'
+     GROUP BY i.client_id, i.currency_code
+     ORDER BY outstanding DESC`
+  ).all();
+  const customers = ((results || []) as Record<string, unknown>[]).map(r => ({ ...r, paid: (Number(r.billed) || 0) - (Number(r.outstanding) || 0) }));
+  return json({ customers });
+}
+
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
 // client_* caller sees ONLY its own (403 on any other id) — per §15 IDOR rule.
 async function handleArClientStatement(request: Request, env: Env, path: string): Promise<Response> {
@@ -9060,6 +9085,52 @@ async function handleArClientStatement(request: Request, env: Env, path: string)
     `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
   ).bind(id).all();
   return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
+}
+
+// Statement-of-account email body (outstanding invoices + total). Plain, non-dunning.
+function _arStatementHtml(client: { name?: string }, invoices: Array<Record<string, unknown>>): string {
+  const cur = String(invoices[0]?.currency_code || "INR");
+  const total = invoices.reduce((s, i) => s + (Number(i.balance) || 0), 0);
+  const rows = invoices.map(i => `<tr>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.number || i.id)}</td>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.date || "")}</td>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.due_date || "")}</td>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${_he(formatMoney(Number(i.balance) || 0, cur))}</td></tr>`).join("");
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:640px">
+    <p>Dear ${_he(client.name || "Customer")},</p>
+    <p>Please find your current statement of outstanding invoices below.</p>
+    <table style="border-collapse:collapse;width:100%;font-size:13px">
+      <thead><tr style="background:#f5f5f5">
+        <th style="padding:6px 10px;text-align:left">Invoice</th><th style="padding:6px 10px;text-align:left">Date</th>
+        <th style="padding:6px 10px;text-align:left">Due</th><th style="padding:6px 10px;text-align:right">Balance</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="3" style="padding:8px 10px;text-align:right;font-weight:bold;border-top:2px solid #333">Total outstanding</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:bold;border-top:2px solid #333">${_he(formatMoney(total, cur))}</td></tr></tfoot>
+    </table>
+    <p>Kindly arrange payment at your earliest convenience. For any queries, simply reply to this email.</p>
+    <p>Regards,<br>Accounts Team</p></div>`;
+}
+
+// POST /api/finance/ar/client/:id/email-statement — email a customer their outstanding
+// statement via Gmail. Explicit collector action (super/finance). Sends live when Gmail
+// is configured; never sends to a customer without an email on file.
+async function handleEmailStatement(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_WRITE_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const client = await _arClient(env, id);
+  if (!client) return json({ error: "Unknown customer" }, 404);
+  if (!client.email) return json({ error: "This customer has no email address on file." }, 400);
+  if (gmailMissingSecrets(env).length) return json({ error: "Email sending isn't connected — ask IT to finish the Gmail setup under Finance Setup." }, 400);
+  const inv = ((await env.DB.prepare(
+    "SELECT id, number, date, due_date, balance, currency_code FROM ar_invoices WHERE client_id=? AND status!='void' AND balance>0 ORDER BY due_date"
+  ).bind(id).all()).results || []) as Array<Record<string, unknown>>;
+  if (!inv.length) return json({ error: "Nothing outstanding to send for this customer." }, 400);
+  const subject = `Statement of account — ${client.name || id}`;
+  const res = await gmailSend(env, { to: client.email, subject, html: _arStatementHtml(client, inv) });
+  await audit(env, user, "EMAIL_STATEMENT", "ar_client", id, undefined, res.ok ? `sent to ${client.email}` : res.error);
+  if (!res.ok) return json({ error: res.error, kind: res.kind }, 502);
+  return json({ ok: true, to: client.email, message_id: res.messageId, invoices: inv.length });
 }
 
 // Shared per-currency aggregation. `clientId` null = all clients (finance view).
