@@ -4539,3 +4539,25 @@ describe("finance-ar/books_status='paid' forces paid even if balance is missing"
     expect(inv.status).toBe("paid");  // ← the reported bug: was showing due
   });
 });
+
+describe("finance-ar/by-customer summary + email statement", () => {
+  it("aggregates billed/paid/outstanding/overdue per customer and gates email", async () => {
+    await ensureArSchema(env);
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email) VALUES ('bc-c1','Bagora Foods','bagora@x.test')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email) VALUES ('bc-c2','No Email Co',NULL)").run();
+    // c1: one open (bal 40000, overdue) + one paid (bal 0)
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,age_bucket,books_status) VALUES ('bc-i1','bc-i1','BC-1','bc-c1','2026-04-01','2026-04-30',100000,40000,'INR','partial','1-30','partial')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,age_bucket,books_status) VALUES ('bc-i2','bc-i2','BC-2','bc-c1','2026-03-01','2026-03-31',60000,0,'INR','paid','current','paid')").run();
+    const data = await (await get("/api/finance/ar/by-customer", adminToken)).json() as { customers: Array<Record<string, number & string>> };
+    const c1 = data.customers.find(c => c.client_id === "bc-c1")!;
+    expect(c1.billed).toBe(160000);
+    expect(c1.outstanding).toBe(40000);
+    expect(c1.paid).toBe(120000);      // billed − outstanding
+    expect(c1.overdue).toBe(40000);    // the 1-30 open one
+    expect(Number(c1.open_invoices)).toBe(1);
+    // Email: a client role is forbidden; a customer with no email is a 400.
+    expect((await post("/api/finance/ar/client/bc-c1/email-statement", {}, clientToken)).status).toBe(403);
+    expect((await post("/api/finance/ar/client/bc-c2/email-statement", {}, adminToken)).status).toBe(400); // no email on file
+  });
+});

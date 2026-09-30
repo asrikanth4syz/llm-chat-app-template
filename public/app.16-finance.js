@@ -30,7 +30,24 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
-const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1 };
+const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1,
+  customers: [], custQ: '', custSort: { col: 'outstanding', dir: 'desc' }, custPage: 1 };
+
+// Print the given HTML as a PDF via the browser (Ctrl/Cmd+P → Save as PDF). CSP-safe:
+// a print-only container + @media print stylesheet, then window.print().
+function financePrint(title, innerHtml) {
+  document.getElementById('fin-print')?.remove();
+  document.getElementById('fin-print-style')?.remove();
+  const style = document.createElement('style');
+  style.id = 'fin-print-style';
+  style.textContent = '@media print{body>*{display:none!important}#fin-print{display:block!important}}#fin-print{font-family:Arial,Helvetica,sans-serif;color:#111}#fin-print table{border-collapse:collapse;width:100%;font-size:12px}#fin-print th,#fin-print td{border:1px solid #ccc;padding:5px 8px;text-align:left}#fin-print td.n,#fin-print th.n{text-align:right}';
+  const div = document.createElement('div');
+  div.id = 'fin-print'; div.style.display = 'none';
+  div.innerHTML = `<h2 style="margin:0 0 4px">${h(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:10px">Generated ${h(new Date().toLocaleString())}</div>${innerHtml}`;
+  document.body.appendChild(style); document.body.appendChild(div);
+  window.print();
+  setTimeout(() => { div.remove(); style.remove(); }, 800);
+}
 
 // Cap how many rows get built into the DOM at once — a few thousand <tr> via
 // innerHTML is what makes the cockpit janky. Sort/filter/export still operate on
@@ -54,6 +71,7 @@ function _finPager(kind, page, total) {
 function financePage(kind, delta) {
   if (kind === 'ar') { _FIN.arPage = Math.max(1, (_FIN.arPage || 1) + delta); _renderArTable(); }
   else if (kind === 'ap') { _FIN.apPage = Math.max(1, (_FIN.apPage || 1) + delta); _renderApTable(); }
+  else if (kind === 'cust') { _FIN.custPage = Math.max(1, (_FIN.custPage || 1) + delta); _renderCustTable(); }
 }
 // Colored, theme-safe status pill (bordered, text-colored). open = fully due → red.
 function _finStatusPill(status) {
@@ -65,7 +83,7 @@ function _finStatusPill(status) {
 
 // ── Sortable-column helpers (client-side, over the cached list) ─────────
 const _AGING_ORDER = { current: 0, '1-30': 1, '31-60': 2, '61-90': 3, '91+': 4 };
-const _FIN_NUMERIC = new Set(['total', 'balance', 'worst_overdue_days']);
+const _FIN_NUMERIC = new Set(['total', 'balance', 'worst_overdue_days', 'billed', 'paid', 'outstanding', 'overdue', 'invoices', 'open_invoices']);
 function _finSortVal(row, col) {
   if (col === 'age_bucket') return _AGING_ORDER[row[col]] ?? 99;
   if (_FIN_NUMERIC.has(col)) return Number(row[col] || 0);
@@ -95,6 +113,7 @@ function _sortableTh(sortKind, col, label, alignRight) {
 function financeSort(kind, col) {
   if (kind === 'ar') { _FIN.arSort = _finToggleSort(_FIN.arSort, col); _FIN.arPage = 1; _renderArTable(); }
   else if (kind === 'ap') { _FIN.apSort = _finToggleSort(_FIN.apSort, col); _FIN.apPage = 1; _renderApTable(); }
+  else if (kind === 'cust') { _FIN.custSort = _finToggleSort(_FIN.custSort, col); _FIN.custPage = 1; _renderCustTable(); }
 }
 function _renderArTable() {
   const host = document.getElementById('ar-table-host'); if (!host) return;
@@ -131,8 +150,8 @@ function _finSyncedLine(iso) {
 
 // A search + export toolbar. `kind` drives which filter/export target fires.
 function _finToolbar(kind, placeholder, withExport) {
-  const q = kind === 'ar' ? _FIN.arQ : kind === 'ap' ? _FIN.apQ : _FIN.foQ;
-  const filterFn = kind === 'ar' ? 'financeFilterAr' : kind === 'ap' ? 'financeFilterAp' : 'financeFilterFollowups';
+  const q = kind === 'ar' ? _FIN.arQ : kind === 'ap' ? _FIN.apQ : kind === 'cust' ? _FIN.custQ : _FIN.foQ;
+  const filterFn = kind === 'ar' ? 'financeFilterAr' : kind === 'ap' ? 'financeFilterAp' : kind === 'cust' ? 'financeFilterCust' : 'financeFilterFollowups';
   const exportBtn = withExport
     ? `<button class="btn btn-secondary" ${dataAct('financeExportCsv', kind)} title="Download this list as a CSV spreadsheet">Export CSV</button>`
     : '';
@@ -273,7 +292,10 @@ async function renderReceivables(main) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Receivables</h2>
-      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" ${dataAct('renderArCustomers')}>By customer ▸</button>
+        <button class="btn btn-secondary" ${dataAct('financeRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
+      </div>
     </div>
     ${_finSyncedLine(summary.last_sync_at)}
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
@@ -287,6 +309,106 @@ function financeFilterAr(q) {
   _renderArTable();
 }
 
+// ── Customer-wise Receivables summary ──────────────────────────────────
+function _custSortVal(r, col) {
+  if (col === 'name') return String(r.name || r.client_id || '').toLowerCase();
+  if (col === 'oldest_due') return String(r.oldest_due || '9999');
+  return Number(r[col] || 0);
+}
+function _custView() {
+  let rows = (_FIN.customers || []).filter(c => _finRowMatch(c, _FIN.custQ));
+  const s = _FIN.custSort;
+  if (s && s.col) {
+    const dir = s.dir === 'desc' ? -1 : 1;
+    rows = rows.slice().sort((a, b) => { const va = _custSortVal(a, s.col), vb = _custSortVal(b, s.col); return va < vb ? -dir : va > vb ? dir : 0; });
+  }
+  return rows;
+}
+function _custTable(rows, page) {
+  if (!rows.length) return `<div class="card" style="padding:20px;color:var(--muted)">No customers with receivables.</div>`;
+  const th = (col, label, r) => _sortableThKind('cust', col, label, r);
+  const start = (page - 1) * _FIN_RENDER_CAP;
+  const shown = rows.slice(start, start + _FIN_RENDER_CAP);
+  const body = shown.map(c => {
+    const nameBtn = c.client_id
+      ? `<button ${dataAct('financeViewClient', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button>`
+      : h(c.name || '');
+    const num = v => `<td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(v, c.currency_code))}</td>`;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 12px">${nameBtn}</td>
+      ${num(c.billed)}${num(c.paid)}
+      <td style="padding:8px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.outstanding, c.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums;color:${(c.overdue || 0) > 0 ? 'var(--danger,#b3261e)' : 'inherit'}">${h(_fmtPaise(c.overdue, c.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right">${h(String(c.open_invoices || 0))}</td>
+      <td style="padding:8px 12px">${h(c.oldest_due || '—')}</td>
+      <td style="padding:8px 12px"><button class="btn btn-secondary btn-sm" ${dataAct('financeViewClient', c.client_id)}>Open ▸</button></td></tr>`;
+  }).join('');
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+      ${th('name', 'Customer')}${th('billed', 'Billed', true)}${th('paid', 'Paid', true)}${th('outstanding', 'Outstanding', true)}
+      ${th('overdue', 'Overdue', true)}${th('open_invoices', 'Open', true)}${th('oldest_due', 'Oldest due')}<th></th></tr></thead>
+    <tbody>${body}</tbody></table>${_finPager('cust', page, rows.length)}</div>`;
+}
+// A sort header that dispatches financeSort(kind,col) with a kind-specific arrow.
+function _sortableThKind(kind, col, label, alignRight) {
+  const cur = kind === 'cust' ? _FIN.custSort : null;
+  const arrow = cur && cur.col === col ? (cur.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const style = `padding:8px 12px;${alignRight ? 'text-align:right' : 'text-align:left'}`;
+  return `<th style="${style}"><button ${dataAct('financeSort', kind, col)} title="Sort by ${h(label)}" style="background:none;border:none;padding:0;font:inherit;font-weight:600;cursor:pointer;color:inherit">${h(label)}<span style="color:var(--blue,#1d6fa4)">${arrow}</span></button></th>`;
+}
+function _renderCustTable() {
+  const host = document.getElementById('cust-table-host'); if (!host) return;
+  const rows = _custView();
+  const pages = Math.max(1, Math.ceil(rows.length / _FIN_RENDER_CAP));
+  _FIN.custPage = Math.min(Math.max(1, _FIN.custPage || 1), pages);
+  host.innerHTML = _custTable(rows, _FIN.custPage);
+}
+function financeFilterCust(q) { _FIN.custQ = q || ''; _FIN.custPage = 1; _renderCustTable(); }
+async function renderArCustomers() {
+  const main = document.getElementById('main-content'); if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading customer summary…</p></div>`;
+  const data = await api('/finance/ar/by-customer');
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load customer summary.</div>`; return; }
+  _FIN.customers = data.customers || []; _FIN.custPage = 1;
+  const withDue = _FIN.customers.filter(c => (c.outstanding || 0) > 0).length;
+  const totalOut = _FIN.customers.reduce((s, c) => s + (c.outstanding || 0), 0);
+  const totalOver = _FIN.customers.reduce((s, c) => s + (c.overdue || 0), 0);
+  const kpi = (label, val, danger) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+    <div style="font-size:1.4rem;font-weight:600;margin-top:4px;${danger ? 'color:var(--danger,#b3261e)' : ''}">${h(val)}</div></div>`;
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <h2 style="margin:0">Receivables by Customer</h2>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" ${dataAct('financeExportCustomersCsv')}>Export CSV</button>
+        <button class="btn btn-secondary" ${dataAct('financePrintCustomers')}>Print / PDF</button>
+        <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to invoices</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${kpi('Customers with dues', String(withDue))}
+      ${kpi('Total outstanding', _fmtPaise(totalOut))}
+      ${kpi('Total overdue', _fmtPaise(totalOver), true)}
+    </div>
+    ${_finToolbar('cust', 'Search customers…', false)}
+    <div id="cust-table-host">${_custTable(_custView(), _FIN.custPage)}</div>`;
+}
+function financeExportCustomersCsv() {
+  const rows = _custView();
+  const out = [['Customer', 'Client ID', 'Currency', 'Billed', 'Paid', 'Outstanding', 'Overdue', 'Open invoices', 'Total invoices', 'Oldest due']];
+  for (const c of rows) out.push([c.name || '', c.client_id || '', c.currency_code || 'INR',
+    ((c.billed || 0) / 100).toFixed(2), ((c.paid || 0) / 100).toFixed(2), ((c.outstanding || 0) / 100).toFixed(2),
+    ((c.overdue || 0) / 100).toFixed(2), String(c.open_invoices || 0), String(c.invoices || 0), c.oldest_due || '']);
+  _downloadCsv('receivables-by-customer-' + new Date().toISOString().slice(0, 10) + '.csv', out);
+  showToast('Exported ' + rows.length + ' customer' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
+}
+function financePrintCustomers() {
+  const rows = _custView();
+  const cell = v => `<td class="n">${h(_fmtPaise(v))}</td>`;
+  const body = rows.map(c => `<tr><td>${h(c.name || c.client_id || '')}</td>${cell(c.billed)}${cell(c.paid)}${cell(c.outstanding)}${cell(c.overdue)}<td class="n">${h(String(c.open_invoices || 0))}</td><td>${h(c.oldest_due || '')}</td></tr>`).join('');
+  financePrint('Receivables by Customer', `<table><thead><tr><th>Customer</th><th class="n">Billed</th><th class="n">Paid</th><th class="n">Outstanding</th><th class="n">Overdue</th><th class="n">Open</th><th>Oldest due</th></tr></thead><tbody>${body}</tbody></table>`);
+}
+
 // Drill-in: a finance/ops user views any one customer's full statement.
 async function financeViewClient(clientId) {
   const main = document.getElementById('main-content');
@@ -294,18 +416,42 @@ async function financeViewClient(clientId) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading statement…</p></div>`;
   const data = await api('/finance/ar/client/' + encodeURIComponent(clientId));
   if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load statement.</div>`; return; }
-  const name = (_FIN.ar.find(i => i.client_id === clientId) || {}).client_name || clientId;
+  const name = (_FIN.customers.find(c => c.client_id === clientId) || {}).name
+    || (_FIN.ar.find(i => i.client_id === clientId) || {}).client_name || clientId;
   const byCur = data.by_currency || [];
   const invoices = data.invoices || [];
+  const open = invoices.filter(i => (i.balance || 0) > 0);
+  const paid = invoices.filter(i => (i.balance || 0) <= 0);
+  APP._finStmt = { clientId, name };
   main.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div><button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Receivables</button></div>
-      <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>Refresh</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Receivables</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" ${dataAct('financeEmailStatement', clientId)}>✉ Email statement</button>
+        <button class="btn btn-secondary" ${dataAct('financePrintStatement')}>Print / PDF</button>
+        <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>Refresh</button>
+      </div>
     </div>
     <h2 style="margin:0 0 12px">${h(name)} — Statement</h2>
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">Nothing outstanding for this customer.</div>`}
-    <h3 style="margin:18px 0 10px">Open Invoices</h3>
-    ${_financeInvoiceTable(invoices, false)}`;
+    <h3 style="margin:18px 0 10px">Open invoices (${open.length})</h3>
+    ${_financeInvoiceTable(open, false)}
+    <h3 style="margin:22px 0 10px;color:var(--muted)">Paid / settled (${paid.length})</h3>
+    ${paid.length ? _financeInvoiceTable(paid, false) : `<div class="card" style="padding:16px;color:var(--muted)">No settled invoices on record.</div>`}`;
+}
+// Email the currently-open customer's statement (explicit collector action).
+async function financeEmailStatement(clientId) {
+  if (!confirm('Email this customer their statement of outstanding invoices now?')) return;
+  const r = await api('/finance/ar/client/' + encodeURIComponent(clientId) + '/email-statement', { method: 'POST', body: JSON.stringify({}) });
+  if (r && r.ok) showToast('Statement emailed to ' + r.to, 'success');
+  else if (r) showToast('Could not email: ' + (r.error || 'unknown error'), 'error');
+}
+// Print the on-screen statement (the open-invoice table) as PDF.
+function financePrintStatement() {
+  const st = APP._finStmt || {};
+  const host = document.getElementById('main-content');
+  const table = host ? host.querySelector('table') : null;
+  financePrint((st.name || 'Customer') + ' — Statement', table ? `<table>${table.innerHTML}</table>` : '<p>No invoices to print.</p>');
 }
 
 // ── Payables (finance/ops): per-vendor aging + DPO + bills due ─────────
