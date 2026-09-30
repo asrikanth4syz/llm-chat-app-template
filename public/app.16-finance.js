@@ -30,7 +30,7 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
-const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null };
+const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1 };
 
 // Cap how many rows get built into the DOM at once — a few thousand <tr> via
 // innerHTML is what makes the cockpit janky. Sort/filter/export still operate on
@@ -39,6 +39,21 @@ const _FIN_RENDER_CAP = 250;
 function _finCapNote(total) {
   if (total <= _FIN_RENDER_CAP) return '';
   return `<div style="padding:8px 12px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)">Showing the first ${_FIN_RENDER_CAP} of ${total} rows. Use search or a column sort to narrow, or Export CSV for the full list.</div>`;
+}
+// Prev/Next pager footer for a paginated cockpit table.
+function _finPager(kind, page, total) {
+  const pages = Math.max(1, Math.ceil(total / _FIN_RENDER_CAP));
+  if (pages <= 1) return `<div style="padding:8px 12px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)">${total} row${total === 1 ? '' : 's'}</div>`;
+  const start = (page - 1) * _FIN_RENDER_CAP;
+  const end = Math.min(total, start + _FIN_RENDER_CAP);
+  const btn = (delta, label, disabled) => `<button class="btn btn-secondary btn-sm" ${disabled ? 'disabled' : dataAct('financePage', kind, delta)} style="${disabled ? 'opacity:.5;cursor:default' : ''}">${label}</button>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)">
+    <span>Showing ${start + 1}–${end} of ${total}</span>
+    <span style="display:flex;align-items:center;gap:8px">${btn(-1, '◀ Prev', page <= 1)}<span>Page ${page} of ${pages}</span>${btn(1, 'Next ▶', page >= pages)}</span></div>`;
+}
+function financePage(kind, delta) {
+  if (kind === 'ar') { _FIN.arPage = Math.max(1, (_FIN.arPage || 1) + delta); _renderArTable(); }
+  else if (kind === 'ap') { _FIN.apPage = Math.max(1, (_FIN.apPage || 1) + delta); _renderApTable(); }
 }
 // Colored, theme-safe status pill (bordered, text-colored). open = fully due → red.
 function _finStatusPill(status) {
@@ -78,16 +93,22 @@ function _sortableTh(sortKind, col, label, alignRight) {
     style="background:none;border:none;padding:0;font:inherit;font-weight:600;cursor:pointer;color:inherit;${alignRight ? '' : ''}">${h(label)}<span style="color:var(--blue,#1d6fa4)">${arrow}</span></button></th>`;
 }
 function financeSort(kind, col) {
-  if (kind === 'ar') { _FIN.arSort = _finToggleSort(_FIN.arSort, col); _renderArTable(); }
-  else if (kind === 'ap') { _FIN.apSort = _finToggleSort(_FIN.apSort, col); _renderApTable(); }
+  if (kind === 'ar') { _FIN.arSort = _finToggleSort(_FIN.arSort, col); _FIN.arPage = 1; _renderArTable(); }
+  else if (kind === 'ap') { _FIN.apSort = _finToggleSort(_FIN.apSort, col); _FIN.apPage = 1; _renderApTable(); }
 }
 function _renderArTable() {
-  const host = document.getElementById('ar-table-host');
-  if (host) host.innerHTML = _financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar');
+  const host = document.getElementById('ar-table-host'); if (!host) return;
+  const rows = _finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort);
+  const pages = Math.max(1, Math.ceil(rows.length / _FIN_RENDER_CAP));
+  _FIN.arPage = Math.min(Math.max(1, _FIN.arPage || 1), pages);
+  host.innerHTML = _financeInvoiceTable(rows, true, 'ar', _FIN.arPage);
 }
 function _renderApTable() {
-  const host = document.getElementById('ap-table-host');
-  if (host) host.innerHTML = _apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort));
+  const host = document.getElementById('ap-table-host'); if (!host) return;
+  const rows = _finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort);
+  const pages = Math.max(1, Math.ceil(rows.length / _FIN_RENDER_CAP));
+  _FIN.apPage = Math.min(Math.max(1, _FIN.apPage || 1), pages);
+  host.innerHTML = _apBillTable(rows, _FIN.apPage);
 }
 
 // Human-friendly "how long ago" for the last-synced line (falls back to the date).
@@ -147,15 +168,15 @@ function financeExportCsv(kind) {
   const today = new Date().toISOString().slice(0, 10);
   if (kind === 'ap') {
     const rows = (_FIN.ap || []).filter(b => _finRowMatch(b, _FIN.apQ));
-    const out = [['Bill', 'Vendor', 'Vendor ID', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
-    for (const b of rows) out.push([b.number || b.id, b.vendor_name || '', b.vendor_id || '', b.due_date || '',
+    const out = [['Bill', 'Vendor', 'Vendor ID', 'Date', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
+    for (const b of rows) out.push([b.number || b.id, b.vendor_name || '', b.vendor_id || '', b.date || '', b.due_date || '',
       ((b.total || 0) / 100).toFixed(2), ((b.balance || 0) / 100).toFixed(2), b.currency_code || 'INR', b.status || '', _AGING_LABEL[b.age_bucket] || b.age_bucket || '']);
     _downloadCsv('payables-' + today + '.csv', out);
     showToast('Exported ' + rows.length + ' bill' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
   } else {
     const rows = (_FIN.ar || []).filter(i => _finRowMatch(i, _FIN.arQ));
-    const out = [['Invoice', 'Client', 'Client ID', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
-    for (const i of rows) out.push([i.number || i.id, i.client_name || '', i.client_id || '', i.due_date || '',
+    const out = [['Invoice', 'Client', 'Client ID', 'Date', 'Due', 'Total', 'Balance', 'Currency', 'Status', 'Aging']];
+    for (const i of rows) out.push([i.number || i.id, i.client_name || '', i.client_id || '', i.date || '', i.due_date || '',
       ((i.total || 0) / 100).toFixed(2), ((i.balance || 0) / 100).toFixed(2), i.currency_code || 'INR', i.status || '', _AGING_LABEL[i.age_bucket] || i.age_bucket || '']);
     _downloadCsv('receivables-' + today + '.csv', out);
     showToast('Exported ' + rows.length + ' invoice' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
@@ -203,12 +224,13 @@ function _financeCurrencyBlock(c) {
 
 // Invoice rows table (shared by cockpit + statement). `showClient` adds a client
 // column whose name is a click-to-drill button (finance/ops cockpit only).
-function _financeInvoiceTable(invoices, showClient, sortKind) {
+function _financeInvoiceTable(invoices, showClient, sortKind, page) {
   if (!invoices.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching invoices.</div>`;
   const head = `
     <tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
       ${_sortableTh(sortKind, 'number', 'Invoice')}
       ${showClient ? _sortableTh(sortKind, 'client_name', 'Client') : ''}
+      ${_sortableTh(sortKind, 'date', 'Date')}
       ${_sortableTh(sortKind, 'due_date', 'Due')}
       ${_sortableTh(sortKind, 'total', 'Total', true)}
       ${_sortableTh(sortKind, 'balance', 'Balance', true)}
@@ -221,18 +243,23 @@ function _financeInvoiceTable(invoices, showClient, sortKind) {
     return `<td style="padding:8px 12px"><button ${dataAct('financeViewClient', inv.client_id)} title="View this customer's statement"
       style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
   };
-  const shown = invoices.length > _FIN_RENDER_CAP ? invoices.slice(0, _FIN_RENDER_CAP) : invoices;
+  // page>0 → paginated cockpit; else → statement (cap-with-note).
+  const start = page ? (page - 1) * _FIN_RENDER_CAP : 0;
+  const shown = page ? invoices.slice(start, start + _FIN_RENDER_CAP)
+    : (invoices.length > _FIN_RENDER_CAP ? invoices.slice(0, _FIN_RENDER_CAP) : invoices);
   const rows = shown.map(inv => `
     <tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(inv.number || inv.id)}</td>
       ${showClient ? clientCell(inv) : ''}
+      <td style="padding:8px 12px">${h(inv.date || '')}</td>
       <td style="padding:8px 12px">${h(inv.due_date || '')}</td>
       <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
       <td style="padding:8px 12px">${_finStatusPill(inv.status)}</td>
       <td style="padding:8px 12px">${h(_AGING_LABEL[inv.age_bucket] || inv.age_bucket || '')}</td>
     </tr>`).join('');
-  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>${head}</thead><tbody>${rows}</tbody></table>${_finCapNote(invoices.length)}</div>`;
+  const footer = page ? _finPager('ar', page, invoices.length) : _finCapNote(invoices.length);
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead>${head}</thead><tbody>${rows}</tbody></table>${footer}</div>`;
 }
 
 // Finance/ops cockpit: per-currency KPIs + aging + the searchable, exportable,
@@ -242,7 +269,7 @@ async function renderReceivables(main) {
   const [summary, list] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices')]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load receivables.</div>`; return; }
   const byCur = summary.by_currency || [];
-  _FIN.ar = list.invoices || [];
+  _FIN.ar = list.invoices || []; _FIN.arPage = 1;
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Receivables</h2>
@@ -252,11 +279,11 @@ async function renderReceivables(main) {
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
     ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
-    <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar')}</div>`;
+    <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar', (_FIN.arPage || 1))}</div>`;
 }
 // Live filter for the receivables table (delegated data-input target).
 function financeFilterAr(q) {
-  _FIN.arQ = q || '';
+  _FIN.arQ = q || ''; _FIN.arPage = 1;
   _renderArTable();
 }
 
@@ -300,7 +327,7 @@ function _apCurrencyBlock(c) {
     </table></div></section>`;
 }
 // Open-bills table (shared by cockpit filter re-render). Vendor name drills in.
-function _apBillTable(bills) {
+function _apBillTable(bills, page) {
   if (!bills.length) return `<div class="card" style="padding:20px;color:var(--muted)">No matching bills.</div>`;
   const vendorCell = b => {
     const label = b.vendor_name || b.vendor_id || '';
@@ -308,31 +335,35 @@ function _apBillTable(bills) {
     return `<td style="padding:8px 12px"><button ${dataAct('financeViewVendor', b.vendor_id)} title="View this vendor's statement"
       style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(label)}</button></td>`;
   };
-  const shown = bills.length > _FIN_RENDER_CAP ? bills.slice(0, _FIN_RENDER_CAP) : bills;
+  const start = page ? (page - 1) * _FIN_RENDER_CAP : 0;
+  const shown = page ? bills.slice(start, start + _FIN_RENDER_CAP)
+    : (bills.length > _FIN_RENDER_CAP ? bills.slice(0, _FIN_RENDER_CAP) : bills);
   const rows = shown.map(b => {
     const overdue = b.age_bucket && b.age_bucket !== 'current' && (b.balance || 0) > 0;
     return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${h(b.number || b.id)}</td>
       ${vendorCell(b)}
+      <td style="padding:8px 12px">${h(b.date || '')}</td>
       <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
       <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.total, b.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.balance, b.currency_code))}</td>
       <td style="padding:8px 12px">${_finStatusPill(b.status)}</td>
       <td style="padding:8px 12px">${h(_AGING_LABEL[b.age_bucket] || b.age_bucket || '')}</td></tr>`;
   }).join('');
+  const footer = page ? _finPager('ap', page, bills.length) : _finCapNote(bills.length);
   return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-      ${_sortableTh('ap', 'number', 'Bill')}${_sortableTh('ap', 'vendor_name', 'Vendor')}${_sortableTh('ap', 'due_date', 'Due')}
+      ${_sortableTh('ap', 'number', 'Bill')}${_sortableTh('ap', 'vendor_name', 'Vendor')}${_sortableTh('ap', 'date', 'Date')}${_sortableTh('ap', 'due_date', 'Due')}
       ${_sortableTh('ap', 'total', 'Total', true)}${_sortableTh('ap', 'balance', 'Balance', true)}
       ${_sortableTh('ap', 'status', 'Status')}${_sortableTh('ap', 'age_bucket', 'Aging')}</tr></thead>
-    <tbody>${rows}</tbody></table>${_finCapNote(bills.length)}</div>`;
+    <tbody>${rows}</tbody></table>${footer}</div>`;
 }
 async function renderPayables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading payables…</p></div>`;
   const [summary, list] = await Promise.all([api('/finance/ap/summary'), api('/finance/ap/bills')]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load payables.</div>`; return; }
   const byCur = summary.by_currency || [];
-  _FIN.ap = list.bills || [];
+  _FIN.ap = list.bills || []; _FIN.apPage = 1;
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Payables</h2>
@@ -341,10 +372,10 @@ async function renderPayables(main) {
     ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No payables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     <h3 style="margin:18px 0 10px">Open Bills</h3>
     ${_finToolbar('ap', 'Search bills by number, vendor, status…', true)}
-    <div id="ap-table-host">${_apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort))}</div>`;
+    <div id="ap-table-host">${_apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort), (_FIN.apPage || 1))}</div>`;
 }
 function financeFilterAp(q) {
-  _FIN.apQ = q || '';
+  _FIN.apQ = q || ''; _FIN.apPage = 1;
   _renderApTable();
 }
 // Drill-in: any one vendor's full statement (finance/ops only).

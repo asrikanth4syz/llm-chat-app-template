@@ -4522,3 +4522,20 @@ describe("finance/books — full rebuild resets the backfill state machine", () 
     expect(await getCfg("books_cursor_invoices")).toBe("0");
   });
 });
+
+describe("finance-ar/books_status='paid' forces paid even if balance is missing", () => {
+  it("a Books-paid invoice with balance omitted in the payload resolves to paid/0", async () => {
+    await ensureArSchema(env);
+    const { impl } = mockBooks({
+      contacts: [{ contact_id: "bs1", contact_name: "BS Co", email: "b@bs.test" }],
+      // NOTE: no `balance` field at all, but Books status = paid.
+      invoices: [{ invoice_id: "PAID-NOBAL", invoice_number: "PAID-NOBAL", customer_id: "bs1", date: "2026-04-01", due_date: "2026-04-30", sub_total: 5000, tax_total: 0, total: 5000, status: "paid" }],
+    });
+    const r = await runBooksSync(booksEnv(), { full: true }, impl);
+    expect(r.status).toBe("ok");
+    const inv = await (env.DB as D1Database).prepare("SELECT balance, status, books_status FROM ar_invoices WHERE id='PAID-NOBAL'").first() as { balance: number; status: string; books_status: string };
+    expect(inv.books_status).toBe("paid");
+    expect(inv.balance).toBe(0);      // forced to 0 by books_status, not left at total
+    expect(inv.status).toBe("paid");  // ← the reported bug: was showing due
+  });
+});
