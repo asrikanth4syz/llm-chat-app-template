@@ -2817,6 +2817,11 @@ async function ensureArSchema(env: Env): Promise<void> {
     `ALTER TABLE reminder_runs ADD COLUMN workflow TEXT DEFAULT 'default'`,
     `ALTER TABLE reminder_runs ADD COLUMN forced INTEGER DEFAULT 0`,
     `ALTER TABLE reminder_runs ADD COLUMN recipient_email TEXT`,
+    // Books' own lifecycle status, mirrored verbatim and never overwritten by
+    // recompute — the authoritative "is this paid?" signal even if a list payload
+    // omits `balance`.
+    `ALTER TABLE ar_invoices ADD COLUMN books_status TEXT`,
+    `ALTER TABLE ap_bills ADD COLUMN books_status TEXT`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Config defaults — reminders ship OFF and stay disabled until backfill completes.
@@ -3408,6 +3413,7 @@ function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unkn
   const st = String(z.status ?? "").toLowerCase();
   row.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial"
     : (st === "void" || st === "voided") ? "void" : "open";
+  row.books_status = row.status; // authoritative lifecycle from Books
   return { row, reference: String(z.reference_number ?? "").trim() };
 }
 
@@ -3472,6 +3478,7 @@ function mapBooksBill(z: Record<string, unknown>): { bill: Record<string, unknow
   const ex = _num(z.exchange_rate); if (ex !== undefined) bill.exchange_rate = ex;
   const st = String(z.status ?? "").toLowerCase();
   bill.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial" : (st === "void" || st === "voided") ? "void" : "open";
+  bill.books_status = bill.status; // authoritative lifecycle from Books
   let vendor: Record<string, unknown> | null = null;
   const vid = String(z.vendor_id ?? "").trim();
   if (vid) { vendor = { vendor_id: vid, zoho_vendor_id: vid }; _put(vendor, "name", z.vendor_name); _put(vendor, "currency_code", z.currency_code); }
@@ -3505,13 +3512,14 @@ async function recomputeApBalances(env: Env): Promise<void> {
     `UPDATE ap_bills SET amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='bill' AND doc_id=ap_bills.id),0)`
   ).run();
   const today = istToday();
-  const { results } = await env.DB.prepare("SELECT id, due_date, balance, total, status FROM ap_bills WHERE status != 'void'").all();
+  const { results } = await env.DB.prepare("SELECT id, due_date, balance, total, books_status FROM ap_bills WHERE status != 'void'").all();
   const stmts: D1PreparedStatement[] = [];
-  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; status: string }>) {
-    const bal = b.balance ?? 0;
+  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; books_status: string }>) {
+    const paid = b.books_status === "paid";
+    const bal = paid ? 0 : (b.balance ?? 0);
     const status = bal <= 0 ? "paid" : (bal < (b.total || 0) ? "partial" : "open");
     const bucket = bal <= 0 ? "current" : (b.due_date ? agingBucket(b.due_date, today) : "current");
-    stmts.push(env.DB.prepare("UPDATE ap_bills SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, b.id));
+    stmts.push(env.DB.prepare("UPDATE ap_bills SET balance=?, status=?, age_bucket=? WHERE id=?").bind(bal, status, bucket, b.id));
   }
   await _d1Batch(env, stmts);
 }
@@ -3735,14 +3743,17 @@ async function recomputeArBalances(env: Env): Promise<void> {
   ).run();
   const today = istToday();
   const { results } = await env.DB.prepare(
-    "SELECT id, due_date, balance, total, status FROM ar_invoices WHERE status != 'void'"
+    "SELECT id, due_date, balance, total, books_status FROM ar_invoices WHERE status != 'void'"
   ).all();
   const stmts: D1PreparedStatement[] = [];
-  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; status: string }>) {
-    const bal = inv.balance ?? 0;
+  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; books_status: string }>) {
+    // Books' own 'paid' wins: force balance to 0 even if a list payload omitted it
+    // (this is what left paid docs showing as due).
+    const paid = inv.books_status === "paid";
+    const bal = paid ? 0 : (inv.balance ?? 0);
     const status = bal <= 0 ? "paid" : (bal < (inv.total || 0) ? "partial" : "open");
     const bucket = bal <= 0 ? "current" : (inv.due_date ? agingBucket(inv.due_date, today) : "current");
-    stmts.push(env.DB.prepare("UPDATE ar_invoices SET status=?, age_bucket=? WHERE id=?").bind(status, bucket, inv.id));
+    stmts.push(env.DB.prepare("UPDATE ar_invoices SET balance=?, status=?, age_bucket=? WHERE id=?").bind(bal, status, bucket, inv.id));
   }
   await _d1Batch(env, stmts);
 }
