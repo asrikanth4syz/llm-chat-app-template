@@ -4584,3 +4584,40 @@ describe("delivery → order status advances from any non-terminal status (clien
     expect(o.status).toBe("CLOSED");
   });
 });
+
+describe("recompute order statuses from deliveries (one-time repair)", () => {
+  it("advances an order stuck at a pre-delivery status whose DC is already DELIVERED", async () => {
+    const db = env.DB as D1Database;
+    // Order stuck at PICKED (delivered before the advance-on-delivery fix): DC is
+    // DELIVERED with 6 of 10 recorded, but the order status never moved.
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-STUCK','c1','tst-ops','PICKED',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-stk-i1','OD-STUCK','SKU001','Rice',10,100,1000)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,dc_number) VALUES ('ODS-DC','OD-STUCK','DELIVERED',6,6,'ODS-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('ods-di1','ODS-DC','SKU001','Rice',6,6)").run();
+
+    // Dry run reports the change without applying it.
+    const dry = await post("/api/orders/recompute-status", { dry_run: true }, adminToken);
+    expect(dry.status).toBe(200);
+    const dryBody = await dry.json() as { would_change: number; applied: number; results: Array<{order_id:string;to:string;changed:boolean}> };
+    expect(dryBody.applied).toBe(0);
+    expect(dryBody.results.find(r => r.order_id === "OD-STUCK")).toMatchObject({ to: "PARTIALLY_CLOSED", changed: true });
+    let o = await db.prepare("SELECT status FROM orders WHERE id='OD-STUCK'").first() as { status: string };
+    expect(o.status).toBe("PICKED"); // unchanged on dry run
+
+    // Apply → order advances to PARTIALLY_CLOSED (6 of 10 delivered).
+    const run = await post("/api/orders/recompute-status", { dry_run: false }, adminToken);
+    expect(run.status).toBe(200);
+    o = await db.prepare("SELECT status FROM orders WHERE id='OD-STUCK'").first() as { status: string };
+    expect(o.status).toBe("PARTIALLY_CLOSED");
+
+    // Idempotent: a second apply changes nothing.
+    const again = await post("/api/orders/recompute-status", { dry_run: false }, adminToken);
+    const againBody = await again.json() as { applied: number };
+    expect(againBody.applied).toBe(0);
+  });
+
+  it("is forbidden for unprivileged roles", async () => {
+    const r = await post("/api/orders/recompute-status", { dry_run: true }, opsToken);
+    expect(r.status).toBe(403);
+  });
+});

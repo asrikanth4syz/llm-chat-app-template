@@ -459,7 +459,14 @@ async function renderOverDeliveryAudit(el) {
       }).join('')
     : `<div class="nba-empty" style="background:var(--card);border:1px solid var(--border);border-radius:14px"><div class="big">✅</div><p style="margin:8px 0 0">No over-delivered orders found — every order is within its ordered quantity.</p></div>`;
 
-  el.querySelector('.nba').innerHTML = chips + body +
+  const repairBar = `<div class="aud-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="font-size:.82rem">
+        <b>Recompute order statuses from deliveries</b>
+        <div style="color:var(--text-muted,#5c7180);margin-top:2px;max-width:60ch">Advances any order whose goods were already delivered but whose status never moved (stuck at Picked/Picking) to <b>Partially Delivered</b> or <b>Delivered</b>, so clients see the right state. Only ever advances an order — never reopens a closed one.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('recomputeStatusPreview')}>Preview…</button>
+    </div>`;
+  el.querySelector('.nba').innerHTML = repairBar + chips + body +
     `<p class="nba-note">Read-only audit. A row flagged <b>⚠ likely phantom</b> is a DELIVERED challan whose line quantity was never recorded, so it was counted at its full ordered load. Cancelling/correcting such a challan is a separate, explicit action.</p>`;
 }
 
@@ -529,5 +536,45 @@ async function repairApply(dcId, reverse) {
     if (typeof navigate === 'function') navigate('over_delivery_audit');
   } else {
     showToast('Nothing changed — challan was not eligible.', 'error');
+  }
+}
+
+// Recompute order statuses from their delivered challans — repairs orders that were
+// delivered before the "advance on delivery" fix and are stuck at a pre-delivery
+// status. Dry-run preview first; nothing mutates until "Apply".
+async function recomputeStatusPreview() {
+  openModal('Recompute order statuses',
+    '<div class="loading-state"><div class="spinner"></div></div>',
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const d = await api('/orders/recompute-status', { method:'POST', body: JSON.stringify({ dry_run:true }) });
+  if (!d) return;
+  const changed = (d.results || []).filter(r => r.changed);
+  const label = s => s === 'CLOSED' ? 'Delivered' : s === 'PARTIALLY_CLOSED' ? 'Partially Delivered' : h(s || '');
+  const rows = changed.map(r => `<tr>
+      <td class="tnum">${h(r.order_id)}</td>
+      <td>${label(r.from)}</td>
+      <td>→ <b>${label(r.to)}</b></td>
+    </tr>`).join('');
+  const bodyHtml = changed.length
+    ? `<p style="font-size:.86rem;margin:0 0 10px">Scanned <b>${d.scanned}</b> delivered order(s). <b>${changed.length}</b> will be advanced to match their deliveries:</p>
+       <table class="aud-table"><thead><tr><th>Order</th><th>Now</th><th>Becomes</th></tr></thead><tbody>${rows}</tbody></table>
+       <p class="nba-note" style="text-align:left;margin-top:10px">Dry-run preview — nothing has changed yet. This only advances orders; it never reopens or downgrades.</p>`
+    : `<div class="nba-empty"><div class="big">✅</div><p style="margin:8px 0 0">All ${d.scanned} delivered order(s) already show the correct status. Nothing to repair.</p></div>`;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  const mf = document.getElementById('modal-footer');
+  if (mf) mf.innerHTML = changed.length
+    ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button> <button class="btn btn-primary" ${dataAct('recomputeStatusApply')}>Advance ${changed.length} order(s)</button>`
+    : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+}
+
+async function recomputeStatusApply() {
+  const d = await api('/orders/recompute-status', { method:'POST', body: JSON.stringify({ dry_run:false }) });
+  if (!d) return;
+  closeModal();
+  if (d.applied > 0) {
+    showToast(`Recomputed — ${d.applied} order(s) advanced to match their deliveries.`);
+    if (typeof navigate === 'function') navigate('over_delivery_audit');
+  } else {
+    showToast('Nothing changed — all orders already correct.');
   }
 }
