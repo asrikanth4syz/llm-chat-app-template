@@ -446,7 +446,7 @@ async function renderDeliveryRoutes(el) {
           <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s" data-hover>
             <input type="checkbox" class="dc-select" data-id="${dc.id}" value="${dc.id}" style="width:16px;height:16px;flex-shrink:0">
             <div>
-              <div style="font-weight:600;font-size:.85rem">DC #${dc.id}</div>
+              <div style="font-weight:600;font-size:.85rem">DC ${dc.dc_number||dc.id}</div>
               <div style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id||'—'} · ${dc.client_name||'Unknown'} ${dc.dispatched_at?'· Dispatched '+fmtDate(dc.dispatched_at):''}</div>
             </div>
           </label>`).join('')}
@@ -513,7 +513,7 @@ async function openNewRouteModal() {
       ${undelivered.length ? `<div style="display:grid;gap:6px;max-height:300px;overflow:auto">
         ${undelivered.map(dc => `<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
           <input type="checkbox" class="nr-dc" value="${dc.id}" style="width:16px;height:16px;flex-shrink:0">
-          <div><div style="font-weight:600;font-size:.85rem">DC #${dc.id}</div>
+          <div><div style="font-weight:600;font-size:.85rem">DC ${dc.dc_number||dc.id}</div>
           <div style="font-size:.74rem;color:var(--text-muted)">Order ${dc.order_id || '—'} · ${h(dc.client_name || 'Unknown')}</div></div>
         </label>`).join('')}
       </div>` : `<div style="color:var(--text-muted);font-size:.85rem;padding:8px 0">No unrouted delivery challans available — every DC is already routed or delivered.</div>`}

@@ -4253,7 +4253,6 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+$/)           && method==="GET")  return handleGetDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
-      if (path.match(/^\/api\/delivery-challans\/[^/]+\/partial$/)  && method==="POST") return handlePartialDelivery(request,env,path);
       if (path==="/api/delivery-approvals"                          && method==="GET")  return handleListDeliveryApprovals(request,env);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver-decision$/) && method==="POST") return handleDeliveryDecision(request,env,path);
 
@@ -5982,7 +5981,7 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     const dispatchItems = (allocations.length > 0 ? allocations : orderItems)
       .filter(i => (i.qty as number) > 0);
     const totalQty = dispatchItems.reduce((s, i) => s + (i.qty as number), 0);
-    const dcId = `DC-${Math.floor(Math.random()*9000+1000)}`;
+    const dcId = uid();                       // collision-free internal id (series number carried by dc_number)
     const dcNumber = await nextDCNumber(env); // system-owned challan number, never typed by an operator
     await env.DB.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)")
       .bind(dcId, id, totalQty, dcNumber).run();
@@ -7286,7 +7285,7 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
   // (based on order remaining, so we never schedule more than was ordered).
   const shortItems = deliveries.filter(i => i.order_remaining > 0);
   if (shortItems.length > 0 && dc.order_id) {
-    const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
+    const newDCId = uid();                       // collision-free internal id (series number carried by dc_number)
     const remainingTotal = shortItems.reduce((s, i) => s + i.order_remaining, 0);
     const newDCNumber = await nextDCNumber(env);
     await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)")
@@ -7295,7 +7294,7 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
       await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
         .bind(uid(), newDCId, r.sku, r.name, r.order_remaining).run();
     }
-    await pushNotification(env, "ops_admin", `DC ${id} partial delivery — follow-up DC ${newDCId} created for ${remainingTotal} units`);
+    await pushNotification(env, "ops_admin", `${dc.dc_number||id} partial delivery — follow-up challan ${newDCNumber} created for ${remainingTotal} units`);
   }
 
   // Check if order is fully delivered across ALL DCs (sum of qty_delivered >= order_items.qty for each SKU)
@@ -7353,7 +7352,7 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
     }
   }
 
-  await pushNotification(env, "client_admin", `Delivery ${id} confirmed — ${totalDelivered} units`);
+  await pushNotification(env, "client_admin", `Delivery ${dc.dc_number||id} confirmed — ${totalDelivered} units`);
   await audit(env, user, "DELIVER", "delivery_challan", id);
   return json({id, status:"DELIVERED", delivered: totalDelivered, order_closed: orderFullyClosed, partial: shortItems.length > 0});
 }
@@ -7410,61 +7409,12 @@ async function handleDeliveryDecision(request: Request, env: Env, path: string):
   return json({error:"decision must be 'approve' or 'reject'"}, 400);
 }
 
-// Gap 14: Partial delivery
-async function handlePartialDelivery(request: Request, env: Env, path: string): Promise<Response> {
-  const user = await getUser(request, env);
-  const denied = requireUser(user); if (denied) return denied;
-  const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {delivered_qty:number;total_qty:number;notes?:string;items?:{sku:string;qty_delivered:number}[]};
-  const {delivered_qty, total_qty, notes} = body;
-
-  if (!delivered_qty || delivered_qty >= total_qty) {
-    return json({error:"delivered_qty must be less than total_qty"}, 400);
-  }
-
-  const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
-  const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
-
-  // Update this DC's delivered qty
-  await env.DB.prepare("UPDATE delivery_challans SET status='DELIVERED',delivered_qty=?,total_qty=?,delivered_at=datetime('now') WHERE id=?")
-    .bind(delivered_qty, total_qty, id).run();
-
-  // Proportionally deduct stock for delivered items
-  const ratio = delivered_qty / total_qty;
-  for (const item of dcItems) {
-    const deliveredNow = Math.floor((item.qty_ordered as number) * ratio);
-    const pendingQty = (item.qty_ordered as number) - deliveredNow;
-    await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?").bind(deliveredNow, id, item.sku).run();
-    if (deliveredNow > 0) {
-      await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?")
-        .bind(deliveredNow, deliveredNow, item.sku).run();
-      await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(uid(), item.sku as string, 'DELIVERY', -deliveredNow, id, 'delivery_challan', `Partial delivery via DC ${id}`, user!.name).run();
-    }
-  }
-
-  // Create new DC for remaining
-  if (dc?.order_id) {
-    // From any non-terminal status, so the client's order reflects the partial delivery.
-    await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED','PARTIALLY_CLOSED')").bind(dc.order_id).run();
-    const remaining = total_qty - delivered_qty;
-    const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
-    const newDCNumber = await nextDCNumber(env);
-    await env.DB.prepare("INSERT INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,'SCHEDULED',?,?)").bind(newDCId, dc.order_id, remaining, newDCNumber).run();
-    // Create dc_items for the new DC with remaining qtys
-    for (const item of dcItems) {
-      const pendingQty = (item.qty_ordered as number) - Math.floor((item.qty_ordered as number) * ratio);
-      if (pendingQty > 0) {
-        await env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
-          .bind(uid(), newDCId, item.sku, item.name, pendingQty).run();
-      }
-    }
-    await pushNotification(env, "ops_admin", `Partial delivery for DC ${id} — ${remaining} units pending. New DC ${newDCId} created.`);
-  }
-
-  await audit(env, user, "PARTIAL_DELIVERY", "delivery_challan", id, undefined, `delivered:${delivered_qty}/${total_qty}`);
-  return json({id, delivered_qty, total_qty});
-}
+// NOTE: the legacy proportional "partial delivery" engine (POST /delivery-challans/:id/
+// partial) was retired. It split a single delivered_qty across SKUs by ratio — an
+// approximation that could disagree with the item-level truth. All partial deliveries now
+// flow through the one engine: handleDeliverDC → applyDeliveryFinalize, which records exact
+// per-SKU delivered quantities, applies the discrepancy/voice-note gate, and spins up the
+// follow-up challan for the remainder.
 
 async function handleDispatchDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
@@ -7472,7 +7422,7 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   const id = path.split("/").slice(-2)[0];
   const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string;staff_id?:string;scheduled_time?:string};
 
-  const dc = await env.DB.prepare("SELECT order_id, status FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string;status?:string}|null;
+  const dc = await env.DB.prepare("SELECT order_id, status, dc_number FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string;status?:string;dc_number?:string}|null;
   if (!dc) return json({error:"Delivery challan not found"}, 404);
   if (dc.status === "IN_TRANSIT" || dc.status === "DELIVERED") {
     return json({error:`Challan already ${dc.status.toLowerCase().replace('_',' ')}`, code:"ALREADY_DISPATCHED"}, 409);
@@ -7499,10 +7449,15 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   await env.DB.prepare("UPDATE delivery_challans SET status='IN_TRANSIT',vehicle_no=?,driver_name=?,driver_phone=?,staff_id=COALESCE(?,staff_id),scheduled_time=COALESCE(?,scheduled_time),dispatched_at=datetime('now'),expected_delivery_date=? WHERE id=?")
     .bind(body.vehicle_no||null, body.driver_name||null, body.driver_phone||null, body.staff_id||null, body.scheduled_time||null, body.expected_delivery_date||null, id).run();
   if (dc.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status IN ('READY_TO_PICK','PARTIALLY_CLOSED')")
+    // Advance to IN_SHIPMENT from ANY non-terminal pre-shipment status — symmetric with the
+    // deliver side, which advances from any non-terminal status. Pinning this to a short
+    // whitelist (READY_TO_PICK/PARTIALLY_CLOSED) let an order dispatched from PICKED,
+    // QUALITY_CHECK, etc. fall out of sync with its own challan. Never touch a terminal or
+    // already-shipping/partially-closed order.
+    await env.DB.prepare("UPDATE orders SET status='IN_SHIPMENT',updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED','IN_SHIPMENT','PARTIALLY_CLOSED')")
       .bind(dc.order_id).run();
   }
-  await pushNotification(env, "client_admin", `DC ${id} dispatched — vehicle ${body.vehicle_no||'TBD'}`);
+  await pushNotification(env, "client_admin", `${dc.dc_number||id} dispatched — vehicle ${body.vehicle_no||'TBD'}`);
   await audit(env, user, "DISPATCH", "delivery_challan", id, undefined, JSON.stringify({vehicle:body.vehicle_no,driver:body.driver_name}));
   return json({id, status:"IN_TRANSIT"});
 }

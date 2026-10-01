@@ -619,7 +619,7 @@ async function viewOrder(id) {
     ${orderDCs.map(dc=>`
       <div style="border:1px solid ${dc.status==='SCHEDULED'?'var(--warning)':'var(--border)'};border-radius:8px;padding:12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <div><b>${dc.id}</b> — ${statusBadge(dc.status)}</div>
+          <div><b>${dc.dc_number||dc.id}</b> — ${statusBadge(dc.status)}</div>
           <div style="display:flex;gap:4px">
             <button class="btn btn-secondary btn-sm" ${dataActEl('toggleDCItemsInline', dc.id)}>View Items</button>
             ${dc.status==='SCHEDULED'&&!['client_admin','client_user','client_approver'].includes(APP.user?.role||'')?`<button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>`:''}
@@ -628,7 +628,7 @@ async function viewOrder(id) {
         </div>
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
         ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
-        ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch — remaining items from partial delivery</div>`:''}
+        ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch${(dc.delivered_qty>0||orderDCs.some(x=>x.status==='DELIVERED'))?' — remaining items after an earlier partial delivery':''}</div>`:''}
         <div id="dcitems-${dc.id}" style="display:none"></div>
       </div>`).join('')}` : '';
 
@@ -2163,7 +2163,7 @@ async function dispatchRemainingModal(orderId) {
   const dcList = pending.map(dc => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div>
-        <div class="u-b600">${dc.id}</div>
+        <div class="u-b600">${dc.dc_number||dc.id}</div>
         <div style="font-size:.8rem;color:var(--text-muted)">${dc.dispatchable||dc.total_qty||'?'} units due — ready to dispatch</div>
       </div>
       <button class="btn btn-primary btn-sm" ${dataActClose('dispatchDCModal', dc.id)}>Dispatch</button>
