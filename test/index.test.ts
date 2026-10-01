@@ -4677,3 +4677,33 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe("DC number entry at delivery (the number used in Zoho)", () => {
+  it("warehouse/ops may set the DC number at delivery — it replaces the series number", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DCN','c1','tst-ops','IN_SHIPMENT',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-dcn-i1','OD-DCN','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODN-DC','OD-DCN','IN_TRANSIT',5,'DCN-00001')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odn-di1','ODN-DC','SKU001','Rice',5,0)").run();
+    // ops_manager is a back-office role → allowed to set the number.
+    const r = await post("/api/delivery-challans/ODN-DC/deliver", { items: [{ sku: "SKU001", qty_delivered: 5 }], dc_number: "ZB/2026/00917" }, opsToken);
+    expect(r.status).toBe(200);
+    const row = await db.prepare("SELECT dc_number FROM delivery_challans WHERE id='ODN-DC'").first() as { dc_number: string };
+    expect(row.dc_number).toBe("ZB/2026/00917"); // Zoho number replaced the auto series number
+  });
+
+  it("delivery executives cannot set the DC number — delivery still succeeds, number unchanged", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES ('tst-dex','dex@sp.test','SEED:dex123','delivery_exec','Dex Rider','SmartPantry','DX',1)").run();
+    const execToken = await login("dex@sp.test", "dex123");
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DCN2','c1','tst-ops','IN_SHIPMENT',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-dcn2-i1','OD-DCN2','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number,driver_name) VALUES ('ODN-DC2','OD-DCN2','IN_TRANSIT',5,'DCN-00002','Dex Rider')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odn2-di1','ODN-DC2','SKU001','Rice',5,0)").run();
+    const r = await post("/api/delivery-challans/ODN-DC2/deliver", { items: [{ sku: "SKU001", qty_delivered: 5 }], dc_number: "HACK-001" }, execToken);
+    expect(r.status).toBe(200); // the delivery itself is allowed
+    const row = await db.prepare("SELECT dc_number, status FROM delivery_challans WHERE id='ODN-DC2'").first() as { dc_number: string; status: string };
+    expect(row.status).toBe("DELIVERED");
+    expect(row.dc_number).toBe("DCN-00002"); // exec's dc_number was ignored
+  });
+});
