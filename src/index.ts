@@ -4377,6 +4377,7 @@ export default {
       if (path==="/api/reports/dc-reconciliation"    && method==="GET") return handleRptDCReconciliation(request,env);
       if (path==="/api/reports/over-delivery-audit"  && method==="GET") return handleRptOverDeliveryAudit(request,env);
       if (path==="/api/reports/over-delivery-audit/repair" && method==="POST") return handleRepairOverDelivery(request,env);
+      if (path==="/api/orders/recompute-status"      && method==="POST") return handleRecomputeOrderStatuses(request,env);
       if (path==="/api/reports/pending-supply"       && method==="GET") return handleRptPendingSupply(request,env);
       if (path==="/api/reports/due-ageing"           && method==="GET") return handleRptDueAgeing(request,env);
       if (path==="/api/reports/brand-shortfall"      && method==="GET") return handleRptBrandShortfall(request,env);
@@ -5479,6 +5480,76 @@ async function handleRepairOverDelivery(request: Request, env: Env): Promise<Res
     note: dryRun
       ? "Dry run — nothing was changed. Re-send with dry_run:false to apply."
       : `Cancelled ${applied} challan(s)${stockReversed ? `, reversed ${stockReversed} unit(s) to stock` : ''}.`,
+    results,
+  });
+}
+
+// One-time data repair: recompute each order's status from its DELIVERED challans.
+// Orders delivered BEFORE the "advance status on delivery" fix stay stuck at their
+// pre-delivery status (e.g. PICKED) even though their goods are out — so the client's
+// "My Orders" never shows Partially Delivered / Delivered. This walks every order that
+// has at least one DELIVERED challan and, comparing cumulative delivered vs ordered per
+// SKU, advances it to CLOSED (all lines satisfied) or PARTIALLY_CLOSED (some delivered).
+// It only ever ADVANCES a non-terminal order — it never reopens CLOSED/CANCELLED ones and
+// never downgrades — so it is safe to re-run. Dry run by default.
+async function handleRecomputeOrderStatuses(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const body = await request.json().catch(()=>({})) as { dry_run?: boolean };
+  const dryRun = body.dry_run !== false; // default true — apply only on explicit false
+
+  // Orders with ≥1 DELIVERED challan that are not already terminal and not still drafts.
+  const { results: orders } = await env.DB.prepare(
+    `SELECT DISTINCT o.id, o.status
+       FROM orders o JOIN delivery_challans dc ON dc.order_id=o.id
+      WHERE dc.status='DELIVERED'
+        AND o.status NOT IN ('CLOSED','CANCELLED','DRAFT')`
+  ).all() as { results: { id:string; status:string }[] };
+
+  const results: Array<Record<string,unknown>> = [];
+  let applied = 0;
+  for (const o of orders) {
+    const { results: orderItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(o.id).all() as { results: Record<string,unknown>[] };
+    let allDelivered = orderItems.length > 0;
+    let anyDelivered = false;
+    for (const oi of orderItems) {
+      const row = await env.DB.prepare(
+        "SELECT COALESCE(SUM(di.qty_delivered),0) AS total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND dc2.status='DELIVERED' AND di.sku=?"
+      ).bind(o.id, oi.sku).first() as Record<string,unknown>|null;
+      const del = Number(row?.total)||0;
+      if (del > 0) anyDelivered = true;
+      if (del < (Number(oi.qty)||0)) allDelivered = false;
+    }
+    if (!anyDelivered) { results.push({ order_id:o.id, from:o.status, to:o.status, changed:false, reason:"delivered challan recorded 0 units" }); continue; }
+    const target = allDelivered ? "CLOSED" : "PARTIALLY_CLOSED";
+    if (o.status === target) { results.push({ order_id:o.id, from:o.status, to:target, changed:false, reason:"already correct" }); continue; }
+
+    results.push({ order_id:o.id, from:o.status, to:target, changed:true });
+    if (!dryRun) {
+      if (target === "CLOSED") {
+        await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED')").bind(o.id).run();
+        await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE order_id=? AND status='SCHEDULED'").bind(o.id).run();
+      } else {
+        await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED')").bind(o.id).run();
+      }
+      await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), o.id, o.status||null, target, user!.sub, user!.name, "Status recompute repair — recomputed from delivered challans").run().catch(()=>{});
+      await audit(env, user, "RECOMPUTE_STATUS", "order", o.id, undefined, `${o.status} → ${target}`);
+      applied++;
+    }
+  }
+
+  const changed = results.filter(r => r.changed);
+  return json({
+    dry_run: dryRun,
+    scanned: orders.length,
+    would_change: changed.length,
+    applied,                                    // 0 on a dry run
+    note: dryRun
+      ? "Dry run — nothing was changed. Re-send with dry_run:false to apply."
+      : `Advanced ${applied} order(s) to match their deliveries.`,
     results,
   });
 }
