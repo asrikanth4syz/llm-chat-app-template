@@ -1351,22 +1351,47 @@ async function saveReassignDriver(dcId) {
   navigate(APP.page || 'delivery');
 }
 
+// Roles allowed to set the DC number (the number used in Zoho) at delivery time.
+// Delivery executives confirm the delivery but do not assign the document number.
+const DC_NUMBER_EDIT_ROLES = ['super_admin','ops_admin','ops_manager','warehouse_exec'];
+function dcNumberField(curDcNum) {
+  if (!DC_NUMBER_EDIT_ROLES.includes(APP.user?.role||'')) return '';
+  return `
+    <div style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg,var(--surface-2))">
+      <label for="deliver-dcnum" style="display:block;font-size:.82rem;font-weight:700;color:var(--navy);margin-bottom:4px">DC number (as entered in Zoho)</label>
+      <input type="text" id="deliver-dcnum" class="form-control form-control-sm" value="${h(curDcNum||'')}" placeholder="e.g. your Zoho DC / invoice number" maxlength="40" style="max-width:280px">
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Overwrites the auto number${curDcNum?` (<b>${h(curDcNum)}</b>)`:''} shown on this challan everywhere. Leave as-is to keep it.</div>
+    </div>`;
+}
+
 async function markDelivered(dcId) {
-  const items = await api(`/delivery-challans/${dcId}/items`);
+  const [items, dc] = await Promise.all([
+    api(`/delivery-challans/${dcId}/items`),
+    api(`/delivery-challans/${dcId}`).catch(()=>null)
+  ]);
   if (!items) return;
+  const curDcNum = (dc && dc.dc_number) || '';
+  const titleNum = curDcNum || dcId;
   if (!items.length) {
-    // No line items tracked — just confirm
-    const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({}) });
-    if (res) { showToast(`DC ${dcId} marked as delivered`); switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]); }
+    // No line items tracked — confirm (and optionally set the Zoho DC number).
+    APP._deliveryVoice = null;
+    openModal(`Confirm Delivery — ${h(titleNum)}`, `
+      <p style="color:var(--text-muted);margin-bottom:12px">No line items are tracked on this challan — confirm the delivery.</p>
+      ${dcNumberField(curDcNum)}
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+        <button class="btn btn-success" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
+      </div>`);
     return;
   }
   const capped = items.some(i => i.order_remaining != null && i.order_remaining < i.qty_ordered);
   APP._deliveryVoice = null; // reset any prior recording
-  openModal(`Confirm Delivery — ${dcId}`, `
+  openModal(`Confirm Delivery — ${h(titleNum)}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
       Enter the actual qty delivered for each item. If any line is <b>short or excess</b> vs what was dispatched,
       you must record a short voice explanation — the delivery is then sent to a manager for approval before it is marked delivered.
     </p>
+    ${dcNumberField(curDcNum)}
     <table class="table" style="margin-bottom:16px">
       <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Expected</th><th class="u-center">Delivered</th></tr></thead>
       <tbody>
@@ -1420,6 +1445,10 @@ async function confirmDelivery(dcId) {
   const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
   const items = inputs.map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
   const discrepancy = inputs.some(inp => (parseInt(inp.value)||0) !== (parseInt(inp.dataset.expected)||0));
+  // Optional operator-entered DC number (the number used in Zoho) — server accepts it
+  // only from back-office roles and ignores a blank value.
+  const dcNumEl = document.getElementById('deliver-dcnum');
+  const dcNumber = dcNumEl ? dcNumEl.value.trim() : '';
 
   if (discrepancy) {
     if (!APP._deliveryVoice) { showToast('Record a voice explanation for the short/excess delivery', 'error'); return; }
@@ -1430,7 +1459,7 @@ async function confirmDelivery(dcId) {
     }) });
     if (!up) return;
     const note = document.getElementById('variance-note')?.value || '';
-    const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items, variance_note: note }) });
+    const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items, variance_note: note, dc_number: dcNumber || undefined }) });
     if (!res) return;
     closeModal();
     showToast('Sent to manager for approval — delivery on hold', 'info');
@@ -1440,10 +1469,10 @@ async function confirmDelivery(dcId) {
     return;
   }
 
-  const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items }) });
+  const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items, dc_number: dcNumber || undefined }) });
   if (res) {
     closeModal();
-    const msg = res.partial ? `Partial delivery recorded — follow-up DC created` : `DC ${dcId} fully delivered${res.order_closed?' — order closed':''}`;
+    const msg = res.partial ? `Partial delivery recorded — follow-up DC created` : `DC ${dcNumber||dcId} fully delivered${res.order_closed?' — order closed':''}`;
     showToast(msg);
     switchDeliveryTab('delivered', document.querySelectorAll('#dc-tabs .tab-btn')[2]);
   }

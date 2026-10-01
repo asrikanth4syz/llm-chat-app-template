@@ -7200,11 +7200,23 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]; variance_note?:string};
+  const body = await request.json().catch(()=>({})) as {items?:{sku:string;qty_delivered:number}[]; variance_note?:string; dc_number?:string};
 
   const {results: dcItems} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(id).all() as {results: Record<string,unknown>[]};
   const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,unknown>|null;
   if (!dc) return json({error:"Not found"}, 404);
+
+  // Operator-entered DC number (the number used in Zoho) overwrites the system-
+  // generated series number for display. The internal `id` stays the stable key, so
+  // this is a pure relabel. Only back-office warehouse/ops roles may set it — the
+  // delivery executive confirms the delivery but does not assign the document number.
+  const DC_NUMBER_EDIT_ROLES = ["super_admin", "ops_admin", "ops_manager", "warehouse_exec"];
+  const typedDcNumber = typeof body.dc_number === "string" ? body.dc_number.trim().slice(0, 40) : "";
+  if (typedDcNumber && typedDcNumber !== dc.dc_number && DC_NUMBER_EDIT_ROLES.includes(user!.role)) {
+    await env.DB.prepare("UPDATE delivery_challans SET dc_number=? WHERE id=?").bind(typedDcNumber, id).run();
+    await audit(env, user, "SET_DC_NUMBER", "delivery_challan", id, String(dc.dc_number||""), typedDcNumber);
+    dc.dc_number = typedDcNumber; // so the confirmation notification uses the Zoho number
+  }
 
   // Discrepancy = any line delivered != dispatched (short or excess).
   const hasDiscrepancy = dcItems.some(di => {
