@@ -3797,6 +3797,9 @@ async function runBooksBackfillStep(env: Env, fetchImpl: FetchImpl = fetch): Pro
       if (hasMore) { await setConfig(env, `books_bf_page_${entity}`, String(page + 1), "system"); }
       else { stage++; await setConfig(env, "books_bf_stage", String(stage), "system"); }
     }
+    // Advance "last synced" on any step that actually ingested data, so the panel
+    // reflects progress during a long backfill (not only at the final finalize step).
+    if (r.pages_this_run > 0) await setConfig(env, "books_last_sync_at", new Date().toISOString(), "system");
     // If every entity is pulled, the NEXT call finalizes (isolated recompute).
     return r;
   } catch (e) { r.status = "error"; r.errors.push(String(e)); return r; }
@@ -9601,18 +9604,26 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   // refresh token or a newly-added Books scope takes effect immediately instead of
   // waiting out the ~1h access-token cache (otherwise a correct fix still 401s).
   if (body.full) { await setConfig(env, "zoho_token", "", user!.sub); await setConfig(env, "zoho_token_exp", "0", user!.sub); }
-  // Until the initial backfill is complete, run the RESUMABLE stepper (bounded work
-  // per call; the SPA auto-continues). Once complete, a manual run is a normal delta.
+  // A full re-pull of a large org in one invocation exceeds the Worker CPU/subrequest
+  // budget and is killed before it can stamp "last synced" — data lands but the
+  // timestamp never advances. So a manual FULL sync routes through the RESUMABLE
+  // stepper: reset the backfill once (only when it was already complete — the SPA
+  // re-sends full:true each iteration, so guard on backfillDone to reset just once),
+  // then step in bounded chunks that commit + stamp as they go. A non-full run is a
+  // normal delta; an in-progress backfill simply continues.
   const backfillDone = (await getConfig(env, "initial_backfill_complete", "0")) === "1";
-  const result: BooksSyncResult | BackfillStepResult = backfillDone
-    ? await runBooksSync(env, { full: !!body.full })
-    : await runBooksBackfillStep(env);
+  if (body.full && backfillDone) await resetBooksBackfill(env, user!.sub);
+  const stepped = (await getConfig(env, "initial_backfill_complete", "0")) !== "1";
+  const result: BooksSyncResult | BackfillStepResult = stepped
+    ? await runBooksBackfillStep(env)
+    : await runBooksSync(env, { full: false });
   // Surface WHY a sync failed so a non-technical operator isn't left with a bare
-  // "sync error". Persist a compact message + a plain-language hint the panel shows.
+  // "sync error". Persist a compact message, a timestamp, and a plain-language hint.
   const errText = (result.errors || []).slice(0, 3).join(" | ");
   const failed = result.status === "error" || result.status === "not_configured";
   const stored = failed ? `${result.status}${errText ? ": " + errText : ""}` : "";
   await setConfig(env, "books_last_sync_error", stored, user!.sub);
+  await setConfig(env, "books_last_sync_error_at", failed ? new Date().toISOString() : "", user!.sub);
   return json({ ...result, hint: failed ? _booksSyncHint(stored) : "" });
 }
 
@@ -9664,6 +9675,7 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
     reminders_mode: await getConfig(env, "reminders_mode", "off"),
     last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
     last_sync_error: (await getConfig(env, "books_last_sync_error", "")) || null,
+    last_sync_error_at: (await getConfig(env, "books_last_sync_error_at", "")) || null,
     last_sync_hint: _booksSyncHint((await getConfig(env, "books_last_sync_error", "")) || ""),
     backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
     had_dry_run: hadDryRun,
@@ -9766,13 +9778,19 @@ async function handleZohoUseSecret(request: Request, env: Env): Promise<Response
 // and re-mirrors Books' balance/status. Needed to correct rows synced before the
 // balance-mirror fix: a delta sync never re-pulls an unchanged paid document, so
 // their stale balance would otherwise persist (paid docs shown as due).
+// Reset the resumable backfill so the next sync re-pulls every entity from page 1 with
+// a zero watermark (a full re-mirror). Shared by Resync and by a manual full sync.
+async function resetBooksBackfill(env: Env, actor: string): Promise<void> {
+  await setConfig(env, "initial_backfill_complete", "0", actor);
+  await setConfig(env, "books_bf_stage", "0", actor);
+  for (const e of BOOKS_ENTITIES) { await setConfig(env, `books_bf_page_${e}`, "1", actor); await setConfig(env, `books_cursor_${e}`, "0", actor); }
+  await setConfig(env, "books_last_sync_error", "", actor);
+  await setConfig(env, "books_last_sync_error_at", "", actor);
+}
 async function handleBooksResync(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may rebuild the finance sync" }, 403);
-  await setConfig(env, "initial_backfill_complete", "0", user!.sub);
-  await setConfig(env, "books_bf_stage", "0", user!.sub);
-  for (const e of BOOKS_ENTITIES) { await setConfig(env, `books_bf_page_${e}`, "1", user!.sub); await setConfig(env, `books_cursor_${e}`, "0", user!.sub); }
-  await setConfig(env, "books_last_sync_error", "", user!.sub);
+  await resetBooksBackfill(env, user!.sub);
   await audit(env, user, "BOOKS_RESYNC", "app_config", "initial_backfill_complete", undefined, "full rebuild requested");
   return json({ ok: true, ...(await _financeStatus(env)) });
 }
