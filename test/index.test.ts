@@ -4917,3 +4917,33 @@ describe("AP vendor sync — vendor contacts mirror into ap_vendors", () => {
     expect(cust?.name).toBe("Acme Foods");
   });
 });
+
+describe("AP vendor pull + sync cross-check", () => {
+  it("booksFetch('vendors') calls /contacts?contact_type=vendor and reads the contacts key", async () => {
+    const { impl, calls } = mockBooks({ contacts: [{ contact_id: "V1", contact_name: "Vend Co", contact_type: "vendor" }] });
+    const res = await booksFetch(booksEnv(), "tok", "vendors", { page: 1 }, impl);
+    expect(res.items.length).toBe(1);
+    const url = calls.find(c => c.url.includes("/books/v3/contacts"))?.url || "";
+    expect(url).toContain("contact_type=vendor");
+  });
+
+  it("a backfill run mirrors a vendor contact into ap_vendors", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_bf_stage", "0");
+    for (const e of ["contacts", "vendors", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) {
+      await setCfg(`books_bf_page_${e}`, "1"); await setCfg(`books_cursor_${e}`, "0");
+    }
+    const { impl } = mockBooks({ contacts: [{ contact_id: "VX", contact_name: "CHHAVI TEST", contact_type: "vendor", email: "v@x.com" }] });
+    let done = false;
+    for (let i = 0; i < 20 && !done; i++) { const r = await runBooksBackfillStep(booksEnv(), impl); done = r.backfill_complete; }
+    const v = await (env.DB as D1Database).prepare("SELECT name FROM ap_vendors WHERE vendor_id='VX'").first() as { name: string } | null;
+    expect(v?.name).toBe("CHHAVI TEST");
+  });
+
+  it("GET /finance/books/counts gates roles (and needs Zoho configured)", async () => {
+    const r = await get("/api/finance/books/counts", adminToken);
+    expect([400, 502]).toContain(r.status);         // test env has no Zoho org id → "not connected"
+    const forbidden = await get("/api/finance/books/counts", clientToken);
+    expect(forbidden.status).toBe(403);
+  });
+});

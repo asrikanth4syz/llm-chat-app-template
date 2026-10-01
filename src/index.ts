@@ -3352,11 +3352,13 @@ async function booksFetch(
   opts: { page: number; modifiedSinceEpoch?: number }, fetchImpl: FetchImpl,
 ): Promise<{ items: Record<string, unknown>[]; hasMore: boolean; total: number }> {
   const orgId = env.ZOHO_BOOKS_ORG_ID || "";
+  const spec = BOOKS_FETCH_SPEC[entity] || { path: entity, key: entity };
   const qs = new URLSearchParams({ organization_id: orgId, per_page: String(ZOHO_SYNC.PER_PAGE), page: String(opts.page) });
+  for (const [k, v] of Object.entries(spec.params || {})) qs.set(k, v);
   const headers: Record<string, string> = { "Authorization": `Zoho-oauthtoken ${token}` };
   if ((opts.modifiedSinceEpoch ?? 0) > 0) headers["If-Modified-Since"] = new Date((opts.modifiedSinceEpoch as number) * 1000).toUTCString();
   for (let attempt = 0; ; attempt++) {
-    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/${entity}?${qs.toString()}`, { headers });
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/${spec.path}?${qs.toString()}`, { headers });
     if (res.status === 429 || res.status >= 500) {
       if (attempt >= ZOHO_SYNC.MAX_RETRIES) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status} after ${attempt} retries`);
       const ra = parseInt(res.headers.get("Retry-After") || "", 10);
@@ -3367,7 +3369,7 @@ async function booksFetch(
     if (res.status === 304) return { items: [], hasMore: false, total: 0 };
     if (!res.ok) throw new Error(`Books ${entity} page ${opts.page}: HTTP ${res.status}`);
     const data = await res.json().catch(() => ({})) as Record<string, unknown> & { page_context?: { has_more_page?: boolean; total?: number } };
-    const items = Array.isArray(data[entity]) ? data[entity] as Record<string, unknown>[] : [];
+    const items = Array.isArray(data[spec.key]) ? data[spec.key] as Record<string, unknown>[] : [];
     return { items, hasMore: !!data.page_context?.has_more_page, total: Number(data.page_context?.total ?? 0) };
   }
 }
@@ -3656,6 +3658,12 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     await upsertMirror(env, "ar_clients", "client_id", contactRows); r.contacts = contactRows.length;
     if (vendorContactRows.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorContactRows);
 
+    // Explicit vendor pull (/contacts?contact_type=vendor): mirror EVERY vendor into
+    // ap_vendors, independent of bills or of whether the default contacts list tags them.
+    const vendorRows2: Record<string, unknown>[] = [];
+    for (const z of await pull("vendors")) { const v = mapBooksVendorContact(z); if ("error" in v) { r.errors.push(v.error); continue; } vendorRows2.push(v.vendor); }
+    if (vendorRows2.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorRows2);
+
     const invoiceRows: Record<string, unknown>[] = []; const invoiceRefs: Array<{ id: string; reference: string }> = [];
     for (const z of await pull("invoices")) {
       const m = mapBooksInvoice(z); if ("error" in m) { r.errors.push(m.error); continue; }
@@ -3732,7 +3740,7 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     // cursors so the next run re-pulls the same window (never skip un-fetched pages).
     if (!r.cap_hit) {
       const nowEpoch = Math.floor(Date.now() / 1000);
-      for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
+      for (const e of BOOKS_ENTITIES) await setConfig(env, `books_cursor_${e}`, String(nowEpoch), "system");
       await setConfig(env, "initial_backfill_complete", "1", "system");
       r.backfill_complete = true;
     }
@@ -3749,7 +3757,17 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
 // so repeated calls (the SPA auto-continues; the cron also advances it) chip
 // through every entity and then finalize. Order/DC linkage is a delta-sync concern
 // and is intentionally skipped here (best-effort, non-critical for AR go-live).
-const BOOKS_ENTITIES = ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"] as const;
+// "vendors" is a logical entity = /contacts filtered to contact_type=vendor (see
+// BOOKS_FETCH_SPEC). It pulls vendors explicitly, so a vendor that the default
+// /contacts list omits or doesn't tag still mirrors into ap_vendors.
+const BOOKS_ENTITIES = ["contacts", "vendors", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"] as const;
+// Logical entity → Zoho path, response key, and extra query params. Entities not
+// listed use their own name as the path and response key.
+const BOOKS_FETCH_SPEC: Record<string, { path: string; key: string; params?: Record<string, string> }> = {
+  vendors: { path: "contacts", key: "contacts", params: { contact_type: "vendor" } },
+  // Not a sync entity — used only by the counts cross-check for an accurate customer total.
+  customers: { path: "contacts", key: "contacts", params: { contact_type: "customer" } },
+};
 const BACKFILL_PAGE_BUDGET = 8; // pages fetched+written per invocation (≈1600 rows at PER_PAGE=200)
 interface BackfillStepResult {
   status: "in_progress" | "ok" | "not_configured" | "error";
@@ -3768,6 +3786,12 @@ async function _ingestBooksEntity(env: Env, entity: string, items: Record<string
     if (rows.length) await upsertMirror(env, "ar_clients", "client_id", rows);
     if (vendors.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendors);
     return rows.length + vendors.length;
+  }
+  if (entity === "vendors") {
+    const vendors: Record<string, unknown>[] = [];
+    for (const z of items) { const v = mapBooksVendorContact(z); if ("vendor" in v) vendors.push(v.vendor); }
+    if (vendors.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendors);
+    return vendors.length;
   }
   if (entity === "invoices") {
     const rows: Record<string, unknown>[] = []; for (const z of items) { const m = mapBooksInvoice(z); if ("row" in m) rows.push(m.row); }
@@ -4494,6 +4518,7 @@ export default {
       if (path==="/api/finance/zoho/use-secret"     && method==="POST") return handleZohoUseSecret(request,env);
       if (path==="/api/finance/zoho/test"           && method==="GET")  return handleZohoTest(request,env);
       if (path==="/api/finance/books/resync"        && method==="POST") return handleBooksResync(request,env);
+      if (path==="/api/finance/books/counts"        && method==="GET")  return handleBooksCounts(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9812,6 +9837,35 @@ async function resetBooksBackfill(env: Env, actor: string): Promise<void> {
   await setConfig(env, "books_last_sync_error", "", actor);
   await setConfig(env, "books_last_sync_error_at", "", actor);
 }
+// GET /api/finance/books/counts — cross-check sync completeness: for each entity, the
+// total Zoho reports vs the rows mirrored in the app. Lets an operator confirm every
+// vendor/customer/invoice/bill came across (and spot a shortfall at a glance).
+async function handleBooksCounts(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) return json({ error: "Zoho Books is not connected yet." }, 400);
+  let token: string;
+  try { token = await zohoGetToken(env, fetch); } catch (e) { return json({ error: `Could not reach Zoho: ${String(e)}` }, 502); }
+  const num = async (sql: string) => ((await env.DB.prepare(sql).first() as { n: number } | null)?.n ?? 0);
+  // Zoho total for an entity = page_context.total on a single page-1 read (null on failure).
+  const zohoTotal = async (entity: string): Promise<number | null> => {
+    try { return (await booksFetch(env, token, entity, { page: 1 }, fetch)).total; } catch { return null; }
+  };
+  const spec: Array<{ entity: string; label: string; table: string }> = [
+    { entity: "customers", label: "Customers", table: "ar_clients" },
+    { entity: "vendors", label: "Vendors", table: "ap_vendors" },
+    { entity: "invoices", label: "Invoices", table: "ar_invoices" },
+    { entity: "bills", label: "Bills", table: "ap_bills" },
+  ];
+  const rows: Array<Record<string, unknown>> = [];
+  for (const s of spec) {
+    const zoho = await zohoTotal(s.entity);
+    const app = await num(`SELECT COUNT(*) AS n FROM ${s.table}`);
+    rows.push({ entity: s.label, zoho, app, ok: zoho == null ? null : app >= zoho });
+  }
+  return json({ checked_at: new Date().toISOString(), rows, backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1" });
+}
+
 async function handleBooksResync(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may rebuild the finance sync" }, 403);

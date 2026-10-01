@@ -765,8 +765,10 @@ async function renderFinanceSetup(main) {
         <button class="btn ${s.books_sync_enabled ? 'btn-primary' : 'btn-secondary'}" ${dataAct('financeToggleBooksSync', !s.books_sync_enabled)}>${s.books_sync_enabled ? 'Sync is ON — turn off' : 'Turn sync ON'}</button>
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeResyncAll') : 'disabled'} title="Rebuild everything from Books — re-pulls every invoice/bill and refreshes paid/due status. Use if paid documents still show as due.">Rebuild from Books</button>
+        <button class="btn btn-secondary" ${s.zoho.configured ? dataAct('financeCheckCounts') : 'disabled'} title="Compare the totals Zoho reports against what the app has mirrored — confirms every vendor, customer, invoice and bill came across.">Check sync vs Zoho</button>
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
+      <div id="fin-counts" style="margin-top:10px"></div>
       <div id="fin-sync-progress" style="font-size:12px;color:var(--blue,#1d6fa4);margin-top:8px"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
       <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>
@@ -804,6 +806,34 @@ async function financeResyncAll() {
   if (!r) return;
   showToast('Rebuild started — pulling everything from Books…', 'info');
   await financeRunBooksSync();
+}
+// Cross-check completeness: show Zoho's total vs the app's mirrored count per entity.
+async function financeCheckCounts() {
+  const box = document.getElementById('fin-counts');
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Checking against Zoho…</span>';
+  const r = await api('/finance/books/counts');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  if (r.error) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--danger,#b3261e)">${h(r.error)}</div>`; return; }
+  const rows = (r.rows || []).map(x => {
+    const zoho = x.zoho == null ? '—' : String(x.zoho);
+    const diff = (x.zoho == null) ? null : (x.app - x.zoho);
+    const mark = x.ok == null ? '<span style="color:var(--muted)">?</span>'
+      : x.ok ? '<span style="color:var(--success,#2e6e12)">✓</span>'
+      : `<span style="color:var(--danger,#b3261e)">⚠ missing ${Math.max(0, -diff)}</span>`;
+    return `<tr>
+      <td style="padding:5px 12px">${h(x.entity)}</td>
+      <td style="padding:5px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(zoho)}</td>
+      <td style="padding:5px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(String(x.app))}</td>
+      <td style="padding:5px 12px">${mark}</td></tr>`;
+  }).join('');
+  const anyMissing = (r.rows || []).some(x => x.ok === false);
+  if (box) box.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;max-width:460px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:6px 12px">Entity</th><th style="padding:6px 12px;text-align:right">In Zoho</th><th style="padding:6px 12px;text-align:right">In app</th><th style="padding:6px 12px">Status</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Checked ${h(_finWhen(r.checked_at))}${!r.backfill_complete ? ' · backfill still in progress' : ''}${anyMissing ? ' · run <strong>Rebuild from Books</strong> if a shortfall persists' : ''}</div>`;
 }
 async function financeRunBooksSync() {
   showToast('Syncing from Zoho Books…', 'info');
