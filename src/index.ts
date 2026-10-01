@@ -2822,12 +2822,24 @@ async function ensureArSchema(env: Env): Promise<void> {
     // omits `balance`.
     `ALTER TABLE ar_invoices ADD COLUMN books_status TEXT`,
     `ALTER TABLE ap_bills ADD COLUMN books_status TEXT`,
+    // Effective due date + its source (PRD §15 precedence: manual → Zoho → client
+    // credit period → workspace default). Derived in recompute; drives all aging/DPD.
+    `ALTER TABLE ar_invoices ADD COLUMN effective_due_date TEXT`,
+    `ALTER TABLE ar_invoices ADD COLUMN due_source TEXT`,
+    `ALTER TABLE ar_invoices ADD COLUMN due_override_date TEXT`,
+    `ALTER TABLE ap_bills ADD COLUMN effective_due_date TEXT`,
+    `ALTER TABLE ap_bills ADD COLUMN due_source TEXT`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Config defaults — reminders ship OFF and stay disabled until backfill completes.
   try {
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('reminders_mode','off')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('initial_backfill_complete','0')").run();
+    // Dues-logic settings (PRD §5): ₹1 settled cutoff, 30-day default credit period,
+    // 3-day staleness threshold that blocks automated sends on an old snapshot.
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_dust_cutoff_paise','100')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_default_credit_days','30')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_stale_days','3')").run();
   } catch { /* app_config may not exist yet on a bare DB */ }
   await seedReminderRules(env); // 5.A dunning ladder (idempotent)
 }
@@ -3192,6 +3204,54 @@ function daysBetweenIST(fromDate: string, toDate: string): number {
 function overdueDays(dueDate: string, today: string): number {
   return daysBetweenIST(dueDate, today);
 }
+// YYYY-MM-DD n days after `date` (IST civil). Returns the input unchanged if unparseable.
+function addDaysIST(date: string, days: number): string {
+  const t = Date.parse(date + "T00:00:00Z");
+  if (Number.isNaN(t)) return date;
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+// Effective due date + its source, per PRD §15 precedence:
+//   1. manual override (a locked/typed due date) → "manual"
+//   2. a USABLE Zoho due date (present and not earlier than the invoice date) → "zoho"
+//   3. invoice date + client credit period → "client"
+//   4. invoice date + workspace default credit period → "default"
+// A Zoho due date earlier than the invoice date is treated as "not set" and falls through.
+type DueSource = "manual" | "zoho" | "client" | "default";
+function resolveEffectiveDue(opts: {
+  invoiceDate?: string | null; zohoDue?: string | null; overrideDate?: string | null;
+  clientCreditDays?: number | null; defaultCreditDays: number;
+}): { due: string; source: DueSource } {
+  const inv = (opts.invoiceDate || "").slice(0, 10);
+  const zoho = (opts.zohoDue || "").slice(0, 10);
+  const override = (opts.overrideDate || "").slice(0, 10);
+  if (override) return { due: override, source: "manual" };
+  const zohoUsable = !!zoho && (!inv || daysBetweenIST(inv, zoho) >= 0);
+  if (zohoUsable) return { due: zoho, source: "zoho" };
+  if (inv) {
+    if (opts.clientCreditDays != null && opts.clientCreditDays >= 0)
+      return { due: addDaysIST(inv, opts.clientCreditDays), source: "client" };
+    return { due: addDaysIST(inv, opts.defaultCreditDays), source: "default" };
+  }
+  // No invoice date and no usable Zoho date — keep whatever Zoho gave (may be blank).
+  return { due: zoho, source: zoho ? "zoho" : "default" };
+}
+// Read an integer workspace setting from app_config with a fallback.
+async function finCfgInt(env: Env, key: string, dflt: number): Promise<number> {
+  const raw = await getConfig(env, key, String(dflt));
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) ? n : dflt;
+}
+// Staleness guard (PRD §5.10): how old the last Books sync is and whether it crosses
+// the configured threshold. A stale snapshot blocks automated sends (every invoice
+// would otherwise read as long-overdue) and raises a banner in the cockpits.
+async function finStaleInfo(env: Env): Promise<{ last_sync_at: string | null; age_days: number | null; stale: boolean; threshold_days: number }> {
+  const last = (await getConfig(env, "books_last_sync_at", "")) || "";
+  const threshold = await finCfgInt(env, "fin_stale_days", 3);
+  const t = last ? Date.parse(last) : NaN;
+  if (!last || Number.isNaN(t)) return { last_sync_at: last || null, age_days: null, stale: true, threshold_days: threshold };
+  const ageDays = Math.floor((Date.now() - t) / 86400000);
+  return { last_sync_at: last, age_days: ageDays, stale: ageDays > threshold, threshold_days: threshold };
+}
 
 // ── Money: INTEGER minor units (paise). NEVER REAL (PRD §15). ──────────
 // Parse a rupee string/number to integer paise without float drift.
@@ -3512,14 +3572,19 @@ async function recomputeApBalances(env: Env): Promise<void> {
     `UPDATE ap_bills SET amount_paid = COALESCE((SELECT SUM(amount) FROM fin_allocations WHERE doc_type='bill' AND doc_id=ap_bills.id),0)`
   ).run();
   const today = istToday();
-  const { results } = await env.DB.prepare("SELECT id, due_date, balance, total, books_status FROM ap_bills WHERE status != 'void'").all();
+  const defaultCreditDays = await finCfgInt(env, "fin_default_credit_days", 30);
+  const { results } = await env.DB.prepare("SELECT id, date, due_date, balance, total, books_status FROM ap_bills WHERE status != 'void'").all();
   const stmts: D1PreparedStatement[] = [];
-  for (const b of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; books_status: string }>) {
+  for (const b of (results || []) as Array<{ id: string; date: string; due_date: string; balance: number; total: number; books_status: string }>) {
     const paid = b.books_status === "paid";
     const bal = paid ? 0 : (b.balance ?? 0);
     const status = bal <= 0 ? "paid" : (bal < (b.total || 0) ? "partial" : "open");
-    const bucket = bal <= 0 ? "current" : (b.due_date ? agingBucket(b.due_date, today) : "current");
-    stmts.push(env.DB.prepare("UPDATE ap_bills SET balance=?, status=?, age_bucket=? WHERE id=?").bind(bal, status, bucket, b.id));
+    // AP has no per-vendor credit terms: Zoho bill due date, else invoice date + default.
+    const { due, source } = resolveEffectiveDue({ invoiceDate: b.date, zohoDue: b.due_date, defaultCreditDays });
+    const bucket = bal <= 0 ? "current" : (due ? agingBucket(due, today) : "current");
+    stmts.push(env.DB.prepare(
+      "UPDATE ap_bills SET balance=?, status=?, age_bucket=?, effective_due_date=?, due_source=? WHERE id=?"
+    ).bind(bal, status, bucket, due || null, source, b.id));
   }
   await _d1Batch(env, stmts);
 }
@@ -3742,18 +3807,31 @@ async function recomputeArBalances(env: Env): Promise<void> {
        credited    = COALESCE((SELECT SUM(amount) FROM credit_allocations WHERE invoice_id=ar_invoices.id),0)`
   ).run();
   const today = istToday();
+  const defaultCreditDays = await finCfgInt(env, "fin_default_credit_days", 30);
   const { results } = await env.DB.prepare(
-    "SELECT id, due_date, balance, total, books_status FROM ar_invoices WHERE status != 'void'"
+    `SELECT i.id, i.date, i.due_date, i.due_override_date, i.balance, i.total, i.books_status,
+            c.credit_days AS client_credit_days
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id = i.client_id
+      WHERE i.status != 'void'`
   ).all();
   const stmts: D1PreparedStatement[] = [];
-  for (const inv of (results || []) as Array<{ id: string; due_date: string; balance: number; total: number; books_status: string }>) {
+  for (const inv of (results || []) as Array<{ id: string; date: string; due_date: string; due_override_date: string | null; balance: number; total: number; books_status: string; client_credit_days: number | null }>) {
     // Books' own 'paid' wins: force balance to 0 even if a list payload omitted it
     // (this is what left paid docs showing as due).
     const paid = inv.books_status === "paid";
     const bal = paid ? 0 : (inv.balance ?? 0);
     const status = bal <= 0 ? "paid" : (bal < (inv.total || 0) ? "partial" : "open");
-    const bucket = bal <= 0 ? "current" : (inv.due_date ? agingBucket(inv.due_date, today) : "current");
-    stmts.push(env.DB.prepare("UPDATE ar_invoices SET balance=?, status=?, age_bucket=? WHERE id=?").bind(bal, status, bucket, inv.id));
+    // credit_days 0 means "unset" here (column default) → fall to the workspace default;
+    // a genuine 0-day ("due on receipt") client is expressed via its Zoho due date.
+    const cc = inv.client_credit_days && inv.client_credit_days > 0 ? inv.client_credit_days : null;
+    const { due, source } = resolveEffectiveDue({
+      invoiceDate: inv.date, zohoDue: inv.due_date, overrideDate: inv.due_override_date,
+      clientCreditDays: cc, defaultCreditDays,
+    });
+    const bucket = bal <= 0 ? "current" : (due ? agingBucket(due, today) : "current");
+    stmts.push(env.DB.prepare(
+      "UPDATE ar_invoices SET balance=?, status=?, age_bucket=?, effective_due_date=?, due_source=? WHERE id=?"
+    ).bind(bal, status, bucket, due || null, source, inv.id));
   }
   await _d1Batch(env, stmts);
 }
@@ -4051,7 +4129,7 @@ async function sendStatement(env: Env, client: { client_id: string; name?: strin
 // 5.D — the daily auto pass. Gated to the SEND_CRON tick by scheduled(). Auto-sends
 // ONLY pre-due/on-due; overdue tiers are surfaced to collectors (computed live by the
 // followups-due endpoint), never auto-sent. Ships behind reminders_mode + backfill gate.
-interface ReminderPassResult { status: "ok" | "disabled" | "backfill_pending"; mode: string; considered: number; sent: number; dry_run: number; suppressed: number; }
+interface ReminderPassResult { status: "ok" | "disabled" | "backfill_pending" | "stale"; mode: string; considered: number; sent: number; dry_run: number; suppressed: number; }
 async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fetch): Promise<ReminderPassResult> {
   await ensureArSchema(env);
   const mode = await getConfig(env, "reminders_mode", "off");
@@ -4059,16 +4137,20 @@ async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fe
   if (cron !== SEND_CRON) { r.status = "disabled"; return r; }               // wrong tick → no-op
   if (mode === "off") { r.status = "disabled"; return r; }
   if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1") { r.status = "backfill_pending"; return r; }
+  // Staleness guard (PRD §5.10): never auto-send off an old snapshot — every invoice
+  // would read as long-overdue. A dry run is allowed (review only); live is blocked.
+  if (mode === "live" && (await finStaleInfo(env)).stale) { r.status = "stale"; return r; }
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const today = istToday();
   const autoTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "auto").map(x => x.tier));
   const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
   const { results } = await env.DB.prepare(
     `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
-     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>0 AND i.status!='void')
+     WHERE EXISTS (SELECT 1 FROM ar_invoices i WHERE i.client_id=c.client_id AND i.balance>${dust} AND i.status!='void')
      LIMIT ${MAX_CUSTOMERS_PER_RUN}`
   ).all();
   for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
-    const inv = (await env.DB.prepare("SELECT id,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const inv = (await env.DB.prepare("SELECT id,due_date,effective_due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
     const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
     if (!stmt || !autoTiers.has(stmt.tier)) continue;    // manual (overdue) tiers → collector worklist, not auto
     r.considered++;
@@ -4091,7 +4173,7 @@ export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSer
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
-         SEND_CRON };
+         SEND_CRON, resolveEffectiveDue, addDaysIST };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
@@ -9073,17 +9155,20 @@ async function handleArInvoices(request: Request, env: Env): Promise<Response> {
   // Cockpit shows OUTSTANDING invoices by default (balance>0). Most rows in a mature
   // Books org are paid; returning them all made the page fetch + render thousands of
   // rows. `?all=1` (or an explicit status filter) opts back into the full set.
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const where: string[] = ["i.status != 'void'"]; const bind: unknown[] = [];
   const status = url.searchParams.get("status");
   const wantAll = url.searchParams.get("all") === "1";
-  if (!wantAll && !status) where.push("i.balance > 0");
+  // Default view = outstanding above the dust cutoff; ?dust=1 shows only the residue tray.
+  if (url.searchParams.get("dust") === "1") { where.push("i.balance > 0 AND i.balance <= ?"); bind.push(dust); }
+  else if (!wantAll && !status) { where.push("i.balance > ?"); bind.push(dust); }
   const client = url.searchParams.get("client"); if (client) { where.push("i.client_id=?"); bind.push(client); }
   if (status) { where.push("i.status=?"); bind.push(status); }
   const currency = url.searchParams.get("currency"); if (currency) { where.push("i.currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging"); if (aging) { where.push("i.age_bucket=?"); bind.push(aging); }
   const { results } = await env.DB.prepare(
     `SELECT i.id, i.number, i.client_id, c.name AS client_name, i.order_id, i.dc_id, i.date, i.due_date,
-       i.total, i.amount_paid, i.credited, i.balance, i.currency_code, i.status, i.age_bucket
+       i.effective_due_date, i.due_source, i.total, i.amount_paid, i.credited, i.balance, i.currency_code, i.status, i.age_bucket
      FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id = i.client_id
      WHERE ${where.join(" AND ")} ORDER BY i.balance DESC, i.due_date LIMIT 2000`
   ).bind(...bind).all();
@@ -9095,7 +9180,9 @@ async function handleArSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _arSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
+  const asOfRaw = new URL(request.url).searchParams.get("as_of") || "";
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : undefined;
+  return json({ by_currency: await _arSummaryRows(env, null, { asOf }), as_of: asOf || istToday(), stale: await finStaleInfo(env), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 
 // GET /api/finance/ar/by-customer — one aggregated row per customer (billed / paid /
@@ -9104,21 +9191,40 @@ async function handleArSummary(request: Request, env: Env): Promise<Response> {
 async function handleArByCustomer(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  // As-of date (default today). Valid YYYY-MM-DD only, else today. Dust ≤ cutoff excluded.
+  const asOfRaw = url.searchParams.get("as_of") || "";
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : istToday();
+  const asOf7 = addDaysIST(asOf, 7);
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
+  // Buckets by EFFECTIVE due date vs as-of: overdue (DPD>0), due today (=as-of),
+  // upcoming (next 7 days). Dust is inlined (trusted integer); dates are bound.
   const { results } = await env.DB.prepare(
-    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, c.email AS email, i.currency_code AS currency_code,
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, c.email AS email, c.credit_days AS credit_days, i.currency_code AS currency_code,
        SUM(i.total) AS billed,
-       SUM(CASE WHEN i.balance > 0 THEN i.balance ELSE 0 END) AS outstanding,
-       SUM(CASE WHEN i.balance > 0 AND i.age_bucket != 'current' THEN i.balance ELSE 0 END) AS overdue,
+       SUM(CASE WHEN i.balance > ${dust} THEN i.balance ELSE 0 END) AS outstanding,
+       SUM(CASE WHEN i.balance > ${dust} AND COALESCE(i.effective_due_date, i.due_date) < ? THEN i.balance ELSE 0 END) AS overdue,
+       SUM(CASE WHEN i.balance > ${dust} AND COALESCE(i.effective_due_date, i.due_date) = ? THEN i.balance ELSE 0 END) AS due_today,
+       SUM(CASE WHEN i.balance > ${dust} AND COALESCE(i.effective_due_date, i.due_date) > ? AND COALESCE(i.effective_due_date, i.due_date) <= ? THEN i.balance ELSE 0 END) AS upcoming,
        COUNT(*) AS invoices,
-       SUM(CASE WHEN i.balance > 0 THEN 1 ELSE 0 END) AS open_invoices,
-       MIN(CASE WHEN i.balance > 0 THEN i.due_date ELSE NULL END) AS oldest_due
+       SUM(CASE WHEN i.balance > ${dust} THEN 1 ELSE 0 END) AS open_invoices,
+       MIN(CASE WHEN i.balance > ${dust} THEN COALESCE(i.effective_due_date, i.due_date) ELSE NULL END) AS oldest_due
      FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id = i.client_id
      WHERE i.status != 'void'
      GROUP BY i.client_id, i.currency_code
      ORDER BY outstanding DESC`
-  ).all();
-  const customers = ((results || []) as Record<string, unknown>[]).map(r => ({ ...r, paid: (Number(r.billed) || 0) - (Number(r.outstanding) || 0) }));
-  return json({ customers });
+  ).bind(asOf, asOf, asOf, asOf7).all();
+  const customers = ((results || []) as Record<string, unknown>[]).map(r => {
+    const overdue = Number(r.overdue) || 0, dueToday = Number(r.due_today) || 0;
+    const oldest = r.oldest_due ? String(r.oldest_due) : null;
+    return {
+      ...r,
+      paid: (Number(r.billed) || 0) - (Number(r.outstanding) || 0),
+      total_due_now: overdue + dueToday,
+      oldest_dpd: oldest ? Math.max(0, daysBetweenIST(oldest, asOf)) : 0,
+    };
+  });
+  return json({ as_of: asOf, stale: await finStaleInfo(env), customers });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
@@ -9132,7 +9238,7 @@ async function handleArClientStatement(request: Request, env: Env, path: string)
   if (!full && !isClient) return json({ error: "Forbidden" }, 403);
   if (isClient && id !== (user!.client_id || "")) return json({ error: "Forbidden" }, 403);
   const { results } = await env.DB.prepare(
-    `SELECT id, number, date, due_date, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
+    `SELECT id, number, date, due_date, effective_due_date, due_source, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
   ).bind(id).all();
   return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
 }
@@ -9144,7 +9250,7 @@ function _arStatementHtml(client: { name?: string }, invoices: Array<Record<stri
   const rows = invoices.map(i => `<tr>
     <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.number || i.id)}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.date || "")}</td>
-    <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.due_date || "")}</td>
+    <td style="padding:6px 10px;border-bottom:1px solid #eee">${_he(i.effective_due_date || i.due_date || "")}</td>
     <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${_he(formatMoney(Number(i.balance) || 0, cur))}</td></tr>`).join("");
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:640px">
     <p>Dear ${_he(client.name || "Customer")},</p>
@@ -9172,9 +9278,10 @@ async function handleEmailStatement(request: Request, env: Env, path: string): P
   if (!client) return json({ error: "Unknown customer" }, 404);
   if (!client.email) return json({ error: "This customer has no email address on file." }, 400);
   if (gmailMissingSecrets(env).length) return json({ error: "Email sending isn't connected — ask IT to finish the Gmail setup under Finance Setup." }, 400);
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const inv = ((await env.DB.prepare(
-    "SELECT id, number, date, due_date, balance, currency_code FROM ar_invoices WHERE client_id=? AND status!='void' AND balance>0 ORDER BY due_date"
-  ).bind(id).all()).results || []) as Array<Record<string, unknown>>;
+    "SELECT id, number, date, due_date, effective_due_date, balance, currency_code FROM ar_invoices WHERE client_id=? AND status!='void' AND balance>? ORDER BY COALESCE(effective_due_date, due_date)"
+  ).bind(id, dust).all()).results || []) as Array<Record<string, unknown>>;
   if (!inv.length) return json({ error: "Nothing outstanding to send for this customer." }, 400);
   const subject = `Statement of account — ${client.name || id}`;
   const res = await gmailSend(env, { to: client.email, subject, html: _arStatementHtml(client, inv) });
@@ -9184,26 +9291,29 @@ async function handleEmailStatement(request: Request, env: Env, path: string): P
 }
 
 // Shared per-currency aggregation. `clientId` null = all clients (finance view).
-async function _arSummaryRows(env: Env, clientId: string | null): Promise<Record<string, unknown>[]> {
-  const today = istToday();
+// `opts.asOf` lets the caller value the book at an arbitrary date (default today);
+// dust balances (≤ the workspace cutoff) are excluded from every figure.
+async function _arSummaryRows(env: Env, clientId: string | null, opts: { asOf?: string } = {}): Promise<Record<string, unknown>[]> {
+  const today = opts.asOf || istToday();
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
   const clientCond = clientId ? " AND client_id=?" : "";
   const clientBind = clientId ? [clientId] : [];
   type Acc = { currency: string; outstanding: number; overdue: number; due_this_week: number; buckets: Record<string, number>; _sales90: number };
   const acc: Record<string, Acc> = {};
   const at = (cur: string) => acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _sales90: 0 });
-  // (1) Only OUTSTANDING invoices drive aging/overdue/due-this-week (uses the
-  // (status,balance) index; excludes the paid majority).
+  // (1) Only OUTSTANDING invoices above the dust cutoff drive aging/overdue/due-this-week
+  // (uses the (status,balance) index; excludes the paid majority and rounding residue).
   const outstanding = await env.DB.prepare(
-    `SELECT currency_code, balance, due_date FROM ar_invoices WHERE status != 'void' AND balance > 0${clientCond}`
-  ).bind(...clientBind).all();
-  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due_date: string }>) {
+    `SELECT currency_code, balance, COALESCE(effective_due_date, due_date) AS due FROM ar_invoices WHERE status != 'void' AND balance > ?${clientCond}`
+  ).bind(dust, ...clientBind).all();
+  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due: string }>) {
     const a = at(r.currency_code || "INR"); const bal = r.balance || 0;
     a.outstanding += bal;
-    const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+    const bucket = r.due ? agingBucket(r.due, today) : "current";
     a.buckets[bucket] += bal;
     if (bucket !== "current") a.overdue += bal;
-    else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    else if (r.due && _dueWithinDays(r.due, today, 7)) a.due_this_week += bal;
   }
   // (2) 90-day sales for DSO — aggregated in SQL (per-currency scalars, not rows).
   const sales = await env.DB.prepare(
@@ -9222,17 +9332,19 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
   const url = new URL(request.url);
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const where: string[] = ["b.status != 'void'"]; const bind: unknown[] = [];
   const status = url.searchParams.get("status");
   const wantAll = url.searchParams.get("all") === "1";
-  if (!wantAll && !status) where.push("b.balance > 0");
+  if (url.searchParams.get("dust") === "1") { where.push("b.balance > 0 AND b.balance <= ?"); bind.push(dust); }
+  else if (!wantAll && !status) { where.push("b.balance > ?"); bind.push(dust); }
   const vendor = url.searchParams.get("vendor"); if (vendor) { where.push("b.vendor_id=?"); bind.push(vendor); }
   if (status) { where.push("b.status=?"); bind.push(status); }
   const currency = url.searchParams.get("currency"); if (currency) { where.push("b.currency_code=?"); bind.push(currency); }
   const aging = url.searchParams.get("aging"); if (aging) { where.push("b.age_bucket=?"); bind.push(aging); }
   const { results } = await env.DB.prepare(
     `SELECT b.id, b.number, b.vendor_id, v.name AS vendor_name, b.po_id, b.date, b.due_date,
-       b.total, b.amount_paid, b.balance, b.currency_code, b.status, b.age_bucket
+       b.effective_due_date, b.due_source, b.total, b.amount_paid, b.balance, b.currency_code, b.status, b.age_bucket
      FROM ap_bills b LEFT JOIN ap_vendors v ON v.vendor_id = b.vendor_id
      WHERE ${where.join(" AND ")} ORDER BY b.balance DESC, b.due_date LIMIT 2000`
   ).bind(...bind).all();
@@ -9241,7 +9353,9 @@ async function handleApBills(request: Request, env: Env): Promise<Response> {
 async function handleApSummary(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
-  return json({ by_currency: await _apSummaryRows(env, null), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
+  const asOfRaw = new URL(request.url).searchParams.get("as_of") || "";
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : undefined;
+  return json({ by_currency: await _apSummaryRows(env, null, { asOf }), as_of: asOf || istToday(), stale: await finStaleInfo(env), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
 async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
@@ -9253,8 +9367,9 @@ async function handleApVendorStatement(request: Request, env: Env, path: string)
   return json({ vendor_id: id, bills: results || [], by_currency: await _apSummaryRows(env, id) });
 }
 // Per-currency AP aggregation + DPO (days payable outstanding).
-async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record<string, unknown>[]> {
-  const today = istToday();
+async function _apSummaryRows(env: Env, vendorId: string | null, opts: { asOf?: string } = {}): Promise<Record<string, unknown>[]> {
+  const today = opts.asOf || istToday();
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const cutoff90 = new Date(Date.parse(today + "T00:00:00Z") - 90 * 86400000).toISOString().slice(0, 10);
   const vendCond = vendorId ? " AND vendor_id=?" : "";
   const vendBind = vendorId ? [vendorId] : [];
@@ -9262,15 +9377,15 @@ async function _apSummaryRows(env: Env, vendorId: string | null): Promise<Record
   const acc: Record<string, Acc> = {};
   const at = (cur: string) => acc[cur] || (acc[cur] = { currency: cur, outstanding: 0, overdue: 0, due_this_week: 0, buckets: { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, _purch90: 0 });
   const outstanding = await env.DB.prepare(
-    `SELECT currency_code, balance, due_date FROM ap_bills WHERE status != 'void' AND balance > 0${vendCond}`
-  ).bind(...vendBind).all();
-  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due_date: string }>) {
+    `SELECT currency_code, balance, COALESCE(effective_due_date, due_date) AS due FROM ap_bills WHERE status != 'void' AND balance > ?${vendCond}`
+  ).bind(dust, ...vendBind).all();
+  for (const r of (outstanding.results || []) as Array<{ currency_code: string; balance: number; due: string }>) {
     const a = at(r.currency_code || "INR"); const bal = r.balance || 0;
     a.outstanding += bal;
-    const bucket = r.due_date ? agingBucket(r.due_date, today) : "current";
+    const bucket = r.due ? agingBucket(r.due, today) : "current";
     a.buckets[bucket] += bal;
     if (bucket !== "current") a.overdue += bal;
-    else if (r.due_date && _dueWithinDays(r.due_date, today, 7)) a.due_this_week += bal;
+    else if (r.due && _dueWithinDays(r.due, today, 7)) a.due_this_week += bal;
   }
   const purch = await env.DB.prepare(
     `SELECT currency_code, COALESCE(SUM(total),0) AS s FROM ap_bills WHERE status != 'void' AND date >= ?${vendCond} GROUP BY currency_code`
@@ -9442,6 +9557,12 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
     last_sync_hint: _booksSyncHint((await getConfig(env, "books_last_sync_error", "")) || ""),
     backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
     had_dry_run: hadDryRun,
+    stale: await finStaleInfo(env),
+    dues_settings: {
+      dust_cutoff_paise: await finCfgInt(env, "fin_dust_cutoff_paise", 100),
+      default_credit_days: await finCfgInt(env, "fin_default_credit_days", 30),
+      stale_days: await finCfgInt(env, "fin_stale_days", 3),
+    },
     counts: {
       invoices: await num("SELECT COUNT(*) AS n FROM ar_invoices"),
       bills: await num("SELECT COUNT(*) AS n FROM ap_bills"),
@@ -9459,7 +9580,25 @@ async function handleFinanceStatus(request: Request, env: Env): Promise<Response
 async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
-  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string };
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number };
+  // Dues-logic settings (PRD §5). default_credit_days re-derives effective due dates,
+  // so recompute both ledgers after it changes.
+  if (body.dust_cutoff_paise !== undefined) {
+    const v = Math.max(0, Math.round(Number(body.dust_cutoff_paise) || 0));
+    await setConfig(env, "fin_dust_cutoff_paise", String(v), user!.sub);
+    await audit(env, user, "FIN_DUST_CUTOFF", "app_config", "fin_dust_cutoff_paise", undefined, String(v));
+  }
+  if (body.stale_days !== undefined) {
+    const v = Math.max(0, Math.round(Number(body.stale_days) || 0));
+    await setConfig(env, "fin_stale_days", String(v), user!.sub);
+    await audit(env, user, "FIN_STALE_DAYS", "app_config", "fin_stale_days", undefined, String(v));
+  }
+  if (body.default_credit_days !== undefined) {
+    const v = Math.min(365, Math.max(0, Math.round(Number(body.default_credit_days) || 0)));
+    await setConfig(env, "fin_default_credit_days", String(v), user!.sub);
+    await audit(env, user, "FIN_DEFAULT_CREDIT_DAYS", "app_config", "fin_default_credit_days", undefined, String(v));
+    await recomputeArBalances(env); await recomputeApBalances(env);
+  }
   if (body.books_sync_enabled !== undefined) {
     await setConfig(env, "books_sync_enabled", body.books_sync_enabled ? "1" : "0", user!.sub);
     await audit(env, user, "FIN_BOOKS_SYNC_TOGGLE", "app_config", "books_sync_enabled", undefined, body.books_sync_enabled ? "1" : "0");

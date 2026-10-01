@@ -15,6 +15,7 @@ import { gmailGetToken, gmailSend } from "../src/index";
 // Slice 1, Group 5 — dunning engine.
 import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
 import { hashStr } from "../src/index";
+import { recomputeArBalances, resolveEffectiveDue } from "../src/index";
 // P3.2 — Payables (AP).
 import { mapBooksBill, mapBooksVendorPayment, runBooksBackfillStep } from "../src/index";
 // P3.3 — Reconciliation.
@@ -4705,5 +4706,62 @@ describe("DC number entry at delivery (the number used in Zoho)", () => {
     const row = await db.prepare("SELECT dc_number, status FROM delivery_challans WHERE id='ODN-DC2'").first() as { dc_number: string; status: string };
     expect(row.status).toBe("DELIVERED");
     expect(row.dc_number).toBe("DCN-00002"); // exec's dc_number was ignored
+  });
+});
+
+describe("Tier 1 dues logic — effective due date, dust cutoff, as-of, staleness", () => {
+  it("resolveEffectiveDue applies manual → Zoho → client → default precedence", () => {
+    expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "2026-01-20", overrideDate: "2026-02-02", defaultCreditDays: 30 }))
+      .toEqual({ due: "2026-02-02", source: "manual" });
+    expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "2026-01-20", defaultCreditDays: 30 }))
+      .toEqual({ due: "2026-01-20", source: "zoho" });
+    expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "", clientCreditDays: 45, defaultCreditDays: 30 }))
+      .toEqual({ due: "2026-02-15", source: "client" });
+    expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "", defaultCreditDays: 30 }))
+      .toEqual({ due: "2026-01-31", source: "default" });
+    // A Zoho due date earlier than the invoice date counts as "not set" → falls through.
+    expect(resolveEffectiveDue({ invoiceDate: "2026-01-10", zohoDue: "2026-01-01", defaultCreditDays: 30 }).source).toBe("default");
+  });
+
+  it("by-customer excludes dust, derives effective due date, and buckets by as-of", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,credit_days,currency_code) VALUES ('T1C','T1 Client','t1@x.com',0,'INR')").run();
+    const mk = (id: string, date: string, due: string, total: number, bal: number) =>
+      db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(id, id, id, "T1C", date, due, total, bal, "INR", "open", "open").run();
+    await mk("T1-I1", "2026-01-01", "2026-01-31", 100000, 100000); // Zoho due
+    await mk("T1-I2", "2026-01-01", "2026-01-31", 42, 42);          // dust (≤ ₹1)
+    await mk("T1-I3", "2026-01-01", "", 100000, 100000);            // no Zoho due → default 30 → 2026-01-31
+    await recomputeArBalances(env);
+
+    const li = await (await get("/api/finance/ar/invoices?client=T1C", adminToken)).json() as { invoices: Array<Record<string, unknown>> };
+    const i3 = li.invoices.find(x => x.id === "T1-I3")!;
+    expect(i3.effective_due_date).toBe("2026-01-31");
+    expect(i3.due_source).toBe("default");
+    expect(li.invoices.find(x => x.id === "T1-I2")).toBeFalsy(); // dust excluded from the default list
+
+    const bc = await (await get("/api/finance/ar/by-customer?as_of=2026-01-31", adminToken)).json() as { customers: Array<Record<string, number>> };
+    const row = bc.customers.find((c: Record<string, unknown>) => c.client_id === "T1C")!;
+    expect(row.outstanding).toBe(200000);   // 2×₹1000; the ₹0.42 dust is excluded
+    expect(row.due_today).toBe(200000);
+    expect(row.overdue).toBe(0);
+    expect(row.total_due_now).toBe(200000);
+
+    const bc2 = await (await get("/api/finance/ar/by-customer?as_of=2026-03-01", adminToken)).json() as { customers: Array<Record<string, number>> };
+    const row2 = bc2.customers.find((c: Record<string, unknown>) => c.client_id === "T1C")!;
+    expect(row2.overdue).toBe(200000);
+    expect(row2.due_today).toBe(0);
+    expect(row2.oldest_dpd).toBeGreaterThan(0);
+  });
+
+  it("a stale snapshot blocks the live auto-send pass", async () => {
+    await ensureArSchema(env);
+    await setCfg("reminders_mode", "live");
+    await setCfg("initial_backfill_complete", "1");
+    await setCfg("fin_stale_days", "3");
+    await setCfg("books_last_sync_at", new Date(Date.now() - 10 * 86400000).toISOString());
+    const r = await runReminderPass(env, SEND_CRON);
+    expect(r.status).toBe("stale");
   });
 });
