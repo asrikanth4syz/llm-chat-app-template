@@ -778,7 +778,7 @@ async function renderDelivery(el) {
     <div class="card" style="padding:0;overflow:hidden">
       <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-          <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+          <span style="font-weight:700;font-size:.95rem">DC ${dc.dc_number||dc.id}</span>
           <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
         </div>
         <div style="font-size:.82rem;color:var(--text-muted)">${dc.client_name||'Unknown Client'}</div>
@@ -806,7 +806,7 @@ async function renderDelivery(el) {
       <div style="padding:14px 16px 10px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
           <div>
-            <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+            <span style="font-weight:700;font-size:.95rem">DC ${dc.dc_number||dc.id}</span>
             ${isOverdue ? '<span class="badge badge-danger" style="margin-left:6px">Overdue</span>' : ''}
           </div>
           <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
@@ -853,7 +853,7 @@ async function renderDelivery(el) {
       const needsAction = delivered.filter(d => !d.pod_uploaded || !d.billed);
       const complete    = delivered.filter(d => d.pod_uploaded && d.billed);
       const rows = (list) => list.map(dc=>`<tr>
-        <td><b>${dc.id}</b></td>
+        <td><b>${dc.dc_number||dc.id}</b></td>
         <td>${dc.order_id}</td>
         <td>${dc.client_name||'—'}</td>
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
@@ -917,7 +917,7 @@ async function renderDelivery(el) {
     if (tab === 'returns') {
       if (!returns.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
       return `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
-        ${returns.map(dc=>`<tr><td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
+        ${returns.map(dc=>`<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
       </tbody></table></div></div>`;
     }
     // all
@@ -932,7 +932,7 @@ async function renderDelivery(el) {
       <tbody id="dc-all-tbody">${dcs.map(dc=>{
         const od = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
         return `<tr data-status="${dc.status}" style="${od?'background:#fff8e6':''}">
-          <td><b>${dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
+          <td><b>${dc.dc_number||dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
           <td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${statusBadge(dc.status)}</td>
           <td>${dc.total_qty||'—'}</td><td>${dc.vehicle_no||'—'}</td><td>${dc.driver_name||'—'}</td>
           <td>${fmtDate(dc.dispatched_at)}</td>
@@ -978,7 +978,7 @@ async function switchDeliveryTab(tab, btn) {
         <div class="card" style="padding:0;overflow:hidden">
           <div style="padding:14px 16px 10px;border-bottom:1px solid var(--border)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-              <span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+              <span style="font-weight:700;font-size:.95rem">DC ${dc.dc_number||dc.id}</span>
               <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
             </div>
             <div style="font-size:.82rem;color:var(--text-muted)">${dc.client_name||'Unknown Client'}</div>
@@ -1009,7 +1009,7 @@ async function switchDeliveryTab(tab, btn) {
         <div class="card" style="padding:0;overflow:hidden;border-left:3px solid ${borderColor}">
           <div style="padding:14px 16px 10px">
             <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-              <div><span style="font-weight:700;font-size:.95rem">DC #${dc.id}</span>
+              <div><span style="font-weight:700;font-size:.95rem">DC ${dc.dc_number||dc.id}</span>
                 ${isOverdue?'<span class="badge badge-danger" style="margin-left:6px">Overdue</span>':''}</div>
               <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
             </div>
@@ -1043,7 +1043,7 @@ async function switchDeliveryTab(tab, btn) {
       const needsAction = delivered.filter(d => !d.pod_uploaded || !d.billed);
       const complete    = delivered.filter(d => d.pod_uploaded && d.billed);
       const rows = (list) => list.map(dc=>`<tr>
-        <td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
+        <td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
         <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.delivered_at)}</td>
         <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`}</td>
@@ -1108,7 +1108,7 @@ async function switchDeliveryTab(tab, btn) {
     } else if (tab === 'returns') {
       content.innerHTML = returns.length
         ? `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
-            ${returns.map(dc=>`<tr><td><b>${dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
+            ${returns.map(dc=>`<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
           </tbody></table></div></div>`
         : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
 
@@ -1124,7 +1124,7 @@ async function switchDeliveryTab(tab, btn) {
         <tbody id="dc-all-tbody">${dcs.map(dc=>{
           const od = dc.expected_delivery_date && new Date(dc.expected_delivery_date) < today && dc.status !== 'DELIVERED';
           return `<tr data-status="${dc.status}" style="${od?'background:#fff8e6':''}">
-            <td><b>${dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
+            <td><b>${dc.dc_number||dc.id}</b>${od?'<span class="badge badge-danger" style="margin-left:4px;font-size:.65rem">OD</span>':''}</td>
             <td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${statusBadge(dc.status)}</td>
             <td>${dc.total_qty||'—'}</td><td>${dc.vehicle_no||'—'}</td><td>${dc.driver_name||'—'}</td>
             <td>${fmtDate(dc.dispatched_at)}</td>
@@ -1175,7 +1175,7 @@ function podScanRow(dc) {
     : '<span style="color:var(--text-muted);font-size:.8rem">—</span>';
 
   return `<tr data-search="${search}">
-    <td><b>${dc.id}</b></td>
+    <td><b>${dc.dc_number||dc.id}</b></td>
     <td>${dc.order_id}</td>
     <td>${dc.client_name||'—'}</td>
     <td>${dc.driver_name||'—'}</td>

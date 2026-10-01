@@ -4621,3 +4621,39 @@ describe("recompute order statuses from deliveries (one-time repair)", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("delivery-workflow hardening (risks 1-5)", () => {
+  it("R3: dispatch advances the order to IN_SHIPMENT from PICKED (symmetric guard)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DISP','c1','tst-ops','PICKED',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-disp-i1','OD-DISP','SKU001','Rice',10,100,1000)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODP-DC','OD-DISP','SCHEDULED',10,'ODP-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odp-di1','ODP-DC','SKU001','Rice',10,0)").run();
+    const r = await post("/api/delivery-challans/ODP-DC/dispatch", { vehicle_no: "KA01AB1234", driver_name: "Ravi" }, adminToken);
+    expect(r.status).toBe(200);
+    const o = await db.prepare("SELECT status FROM orders WHERE id='OD-DISP'").first() as { status: string };
+    expect(o.status).toBe("IN_SHIPMENT"); // previously stayed PICKED (guard only matched READY_TO_PICK/PARTIALLY_CLOSED)
+  });
+
+  it("R2: the follow-up (back-order) challan gets a collision-free id and its own dc_number", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-BACK','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-back-i1','OD-BACK','SKU001','Rice',10,100,1000)").run();
+    // Dispatch 6, deliver 6 → remainder 4 spins up a follow-up SCHEDULED challan.
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODB-DC','OD-BACK','IN_TRANSIT',6,'ODB-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odb-di1','ODB-DC','SKU001','Rice',6,0)").run();
+    const r = await post("/api/delivery-challans/ODB-DC/deliver", { items: [{ sku: "SKU001", qty_delivered: 6 }] }, adminToken);
+    expect(r.status).toBe(200);
+    const follow = await db.prepare("SELECT id, dc_number FROM delivery_challans WHERE order_id='OD-BACK' AND status='SCHEDULED'").first() as { id: string; dc_number: string };
+    expect(follow?.id).toBeTruthy();
+    expect(follow.id).not.toMatch(/^DC-\d+$/); // no longer the collision-prone random DC-#### id
+    expect(follow.dc_number).toBeTruthy();      // carries a proper series number for display
+  });
+
+  it("R1: the retired /partial endpoint is gone (404, not a handler)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODX-DC','OD-BACK','IN_TRANSIT',6,'ODX-1')").run();
+    const r = await post("/api/delivery-challans/ODX-DC/partial", { delivered_qty: 3, total_qty: 6 }, adminToken);
+    expect(r.status).toBe(404);
+  });
+});

@@ -82,7 +82,7 @@ async function renderDeliveryExecDashboard(el) {
         <div style="display:flex;align-items:center;gap:10px">
           <div style="width:32px;height:32px;border-radius:50%;background:var(--success-soft-bg);display:flex;align-items:center;justify-content:center;font-size:1rem">✅</div>
           <div>
-            <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC #${dc.id}</div>
+            <div style="font-weight:700;font-size:.88rem;color:var(--navy)">DC ${dc.dc_number||dc.id}</div>
             <div style="font-size:.78rem;color:var(--text-muted)">${dc.client_name||'—'} · Order ${dc.order_id} · ${fmtDate(dc.delivered_at)}</div>
           </div>
         </div>
@@ -115,7 +115,7 @@ function execDCCard(dc, today) {
     <!-- Card header -->
     <div style="padding:14px 16px;background:${overdue?'var(--danger-bg)':'var(--surface-2)'};border-bottom:1px solid ${overdue?'var(--red-soft-bg)':'var(--border)'};display:flex;justify-content:space-between;align-items:center">
       <div>
-        <span style="font-weight:800;font-size:.92rem;color:var(--navy)">DC #${dc.id}</span>
+        <span style="font-weight:800;font-size:.92rem;color:var(--navy)">DC ${dc.dc_number||dc.id}</span>
         ${overdue ? '<span style="margin-left:8px;background:var(--danger);color:#fff;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase">Overdue</span>' : ''}
       </div>
       <span style="font-size:.8rem;font-weight:600;color:#0369a1;background:#e0f2fe;padding:3px 10px;border-radius:20px">In Transit</span>

@@ -90,7 +90,7 @@ async function renderDCBilling(el) {
           <table class="table">
             <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Delivered</th><th>Aging</th><th>Action</th></tr></thead>
             <tbody>${unbilled.sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(dc=>`<tr ${Math.floor((Date.now()-new Date(dc.created_at).getTime())/86400000)>15?'style="background:rgba(220,38,38,.04)"':''}>
-              <td><b>${dc.id}</b></td>
+              <td><b>${dc.dc_number||dc.id}</b></td>
               <td><span style="font-size:.82rem">${dc.order_id}</span></td>
               <td><b>${dc.client_name||'—'}</b></td>
               <td><b>${fmt(dc.order_value)}</b></td>
@@ -111,7 +111,7 @@ async function renderDCBilling(el) {
           <table class="table">
             <thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Value</th><th>Billed On</th><th>Aging</th></tr></thead>
             <tbody>${billed.map(dc=>`<tr>
-              <td><b>${dc.id}</b></td><td>${dc.order_id}</td>
+              <td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td>
               <td>${dc.client_name||'—'}</td>
               <td>${fmt(dc.order_value)}</td>
               <td>${fmtDate(dc.billed_at)}</td>
