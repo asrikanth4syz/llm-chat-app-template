@@ -503,6 +503,7 @@ async function financeViewClient(clientId) {
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Receivables</button>
       <div style="display:flex;gap:8px">
         <button class="btn btn-primary" ${dataAct('financeEmailStatement', clientId)}>✉ Email statement</button>
+        <button class="btn btn-secondary" ${dataAct('financeViewLedger', clientId, 'fy')}>Full statement (ledger)</button>
         <button class="btn btn-secondary" ${dataAct('financePrintStatement')}>Print / PDF</button>
         <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>Refresh</button>
       </div>
@@ -513,6 +514,61 @@ async function financeViewClient(clientId) {
     ${_financeInvoiceTable(open, false)}
     <h3 style="margin:22px 0 10px;color:var(--muted)">Paid / settled (${paid.length})</h3>
     ${paid.length ? _financeInvoiceTable(paid, false) : `<div class="card" style="padding:16px;color:var(--muted)">No settled invoices on record.</div>`}`;
+}
+// Full statement (ledger): opening → every invoice/payment/credit note → closing.
+function _finLedgerTable(data) {
+  const cur = data.currency || 'INR';
+  const money = v => h(_fmtPaise(v, cur));
+  const rows = (data.lines || []).map(l => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:7px 12px;white-space:nowrap">${h(l.date || '')}</td>
+      <td style="padding:7px 12px">${h(l.type || '')}</td>
+      <td style="padding:7px 12px">${h(l.ref || '')}</td>
+      <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${l.debit ? money(l.debit) : ''}</td>
+      <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${l.credit ? money(l.credit) : ''}</td>
+      <td style="padding:7px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${money(l.balance)}</td></tr>`).join('');
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+      <th style="padding:8px 12px">Date</th><th style="padding:8px 12px">Type</th><th style="padding:8px 12px">Reference</th>
+      <th style="padding:8px 12px;text-align:right">Debit</th><th style="padding:8px 12px;text-align:right">Credit</th><th style="padding:8px 12px;text-align:right">Balance</th></tr></thead>
+    <tbody>
+      <tr style="background:var(--bg-subtle,#fafafa)"><td style="padding:7px 12px" colspan="5"><b>Opening balance</b> (as of ${h(data.from || '')})</td><td style="padding:7px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(data.opening)}</td></tr>
+      ${rows || `<tr><td colspan="6" style="padding:14px;color:var(--muted)">No transactions in this period.</td></tr>`}
+      <tr style="background:var(--bg-subtle,#fafafa);border-top:2px solid var(--border)"><td style="padding:8px 12px" colspan="3"><b>Closing balance</b> (as of ${h(data.to || '')})</td>
+        <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${money(data.total_debit)}</td>
+        <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${money(data.total_credit)}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${money(data.closing)}</td></tr>
+    </tbody></table></div>`;
+}
+async function financeViewLedger(clientId, period) {
+  const main = document.getElementById('main-content'); if (!main) return;
+  const p = period || 'fy';
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading full statement…</p></div>`;
+  const data = await api('/finance/ar/client/' + encodeURIComponent(clientId) + '/ledger?period=' + encodeURIComponent(p));
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load the ledger.</div>`; return; }
+  APP._finLedger = { ...data, period: p };
+  const name = data.client_name || clientId;
+  const opts = [['fy', 'This FY'], ['3m', '3 months'], ['6m', '6 months'], ['12m', '12 months']];
+  const pbtns = opts.map(([v, l]) =>
+    `<button ${dataAct('financeViewLedger', clientId, v)} style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;cursor:pointer;background:${v === p ? 'var(--blue,#1d6fa4)' : 'transparent'};color:${v === p ? '#fff' : 'inherit'}">${l}</button>`).join(' ');
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>← Back to statement</button>
+      <div style="display:flex;gap:8px"><button class="btn btn-secondary" ${dataAct('financePrintLedger')}>Print / PDF</button></div>
+    </div>
+    <h2 style="margin:0 0 4px">${h(name)} — Full statement</h2>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:10px">${h(data.from || '')} → ${h(data.to || '')}</div>
+    <div style="display:flex;gap:4px;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:var(--muted);margin-right:4px">Period</span>${pbtns}</div>
+    ${_finLedgerTable(data)}`;
+}
+function financePrintLedger() {
+  const d = APP._finLedger; if (!d) return;
+  const cur = d.currency || 'INR';
+  const cell = v => `<td class="n">${h(_fmtPaise(v, cur))}</td>`;
+  const body = (d.lines || []).map(l => `<tr><td>${h(l.date || '')}</td><td>${h(l.type || '')}</td><td>${h(l.ref || '')}</td>${l.debit ? cell(l.debit) : '<td class="n"></td>'}${l.credit ? cell(l.credit) : '<td class="n"></td>'}${cell(l.balance)}</tr>`).join('');
+  const head = `<tr><td colspan="5"><b>Opening balance</b> (${h(d.from || '')})</td>${cell(d.opening)}</tr>`;
+  const foot = `<tr><td colspan="3"><b>Closing balance</b> (${h(d.to || '')})</td>${cell(d.total_debit)}${cell(d.total_credit)}${cell(d.closing)}</tr>`;
+  financePrint((d.client_name || d.client_id || '') + ' — Full statement (' + h(d.from || '') + ' → ' + h(d.to || '') + ')',
+    `<table><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead><tbody>${head}${body}${foot}</tbody></table>`);
 }
 // Email the currently-open customer's statement (explicit collector action).
 async function financeEmailStatement(clientId) {

@@ -15,7 +15,7 @@ import { gmailGetToken, gmailSend } from "../src/index";
 // Slice 1, Group 5 — dunning engine.
 import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
 import { hashStr } from "../src/index";
-import { recomputeArBalances, resolveEffectiveDue, computeArKpis } from "../src/index";
+import { recomputeArBalances, resolveEffectiveDue, computeArKpis, _arLedger, indianFYRange } from "../src/index";
 // P3.2 — Payables (AP).
 import { mapBooksBill, mapBooksVendorPayment, runBooksBackfillStep } from "../src/index";
 // P3.3 — Reconciliation.
@@ -4792,6 +4792,43 @@ describe("Tier 2 KPI suite — DSO / CEI / Avg collection / Overdue%", () => {
     expect(body.targets.dso).toBe(45);
     expect(Array.isArray(body.by_currency)).toBe(true);
     const forbidden = await get("/api/finance/kpis", clientToken);
+    expect(forbidden.status).toBe(403);
+  });
+});
+
+describe("Tier 2 full ledger statement", () => {
+  it("indianFYRange wraps the April–March year", () => {
+    expect(indianFYRange("2026-07-15")).toEqual({ from: "2026-04-01", to: "2027-03-31" });
+    expect(indianFYRange("2026-02-15")).toEqual({ from: "2025-04-01", to: "2026-03-31" });
+  });
+
+  it("_arLedger carries opening balance and runs debits/credits to closing", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const mkInv = (id: string, date: string, total: number) =>
+      db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,currency_code,status,books_status) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .bind(id, id, id, "LC", date, total, 0, "INR", "open", "open").run();
+    await mkInv("OLD", "2026-01-01", 50000);   // before period
+    await mkInv("IN", "2026-05-01", 100000);   // in period
+    await db.prepare("INSERT OR REPLACE INTO fin_payments (id,direction,party_type,party_id,amount,date,ref) VALUES ('P0','in','client','LC',20000,'2026-02-01','adv')").run();
+    await db.prepare("INSERT OR REPLACE INTO fin_payments (id,direction,party_type,party_id,amount,date,ref) VALUES ('P1','in','client','LC',40000,'2026-06-01','neft')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_credit_notes (id,zoho_creditnote_id,number,client_id,amount,date) VALUES ('CN1','CN1','CN1','LC',10000,'2026-07-01')").run();
+    const led = await _arLedger(env, "LC", { from: "2026-04-01", to: "2027-03-31" }) as {
+      opening: number; closing: number; total_debit: number; total_credit: number; lines: Array<{ balance: number }>;
+    };
+    expect(led.opening).toBe(30000);        // 50000 invoice − 20000 payment, both before the period
+    expect(led.total_debit).toBe(100000);   // the in-period invoice
+    expect(led.total_credit).toBe(50000);   // 40000 payment + 10000 credit note
+    expect(led.closing).toBe(80000);
+    expect(led.lines.length).toBe(3);
+    expect(led.lines[led.lines.length - 1].balance).toBe(80000);
+  });
+
+  it("GET ledger enforces the client IDOR rule", async () => {
+    const r = await get("/api/finance/ar/client/LC/ledger?period=fy", adminToken);
+    expect(r.status).toBe(200);
+    // a client token may only read its OWN ledger (seeded client is c1, not LC)
+    const forbidden = await get("/api/finance/ar/client/LC/ledger", clientToken);
     expect(forbidden.status).toBe(403);
   });
 });

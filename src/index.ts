@@ -4179,7 +4179,7 @@ export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSer
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
-         SEND_CRON, resolveEffectiveDue, addDaysIST, computeArKpis };
+         SEND_CRON, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
@@ -4433,6 +4433,7 @@ export default {
       if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
       if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
+      if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
       if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
@@ -9789,6 +9790,75 @@ async function handleZohoTest(request: Request, env: Env): Promise<Response> {
 const FIN_WRITE_ROLES = ["super_admin", "finance_admin"];
 async function _arClient(env: Env, id: string): Promise<{ client_id: string; name?: string; email?: string; dunning_opt_out?: number } | null> {
   return env.DB.prepare("SELECT client_id, name, email, dunning_opt_out FROM ar_clients WHERE client_id=?").bind(id).first();
+}
+
+// ── Full statement (ledger) — PRD §8C-B ────────────────────────────────
+// Indian financial year (1-Apr → 31-Mar) containing `d`.
+function indianFYRange(d: string): { from: string; to: string } {
+  const [y, m] = d.split("-").map(n => parseInt(n, 10));
+  const startYear = m >= 4 ? y : y - 1;
+  return { from: `${startYear}-04-01`, to: `${startYear + 1}-03-31` };
+}
+// Resolve a period spec → {from,to}. period: fy (default) | 3m | 6m | 12m | custom.
+function resolveLedgerRange(period: string, from: string, to: string, today: string): { from: string; to: string } {
+  if (period === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) return { from, to };
+  if (period === "3m") return { from: addDaysIST(today, -90), to: today };
+  if (period === "6m") return { from: addDaysIST(today, -182), to: today };
+  if (period === "12m") return { from: addDaysIST(today, -365), to: today };
+  return indianFYRange(today); // fy default
+}
+// A client's chronological ledger: opening balance carried into the period, then every
+// invoice (debit) and payment / credit note (credit) dated in the window, with a running
+// balance, then the closing balance. Zoho supplies payments + credit notes, so this is a
+// true ledger (no fabricated history). Money stays integer paise.
+async function _arLedger(env: Env, clientId: string, range: { from: string; to: string }): Promise<Record<string, unknown>> {
+  const { from, to } = range;
+  const invoices = ((await env.DB.prepare(
+    "SELECT number, date, total, currency_code FROM ar_invoices WHERE client_id=? AND status!='void' AND date IS NOT NULL ORDER BY date"
+  ).bind(clientId).all()).results || []) as Array<{ number: string; date: string; total: number; currency_code: string }>;
+  const payments = ((await env.DB.prepare(
+    "SELECT date, amount, ref, method FROM fin_payments WHERE direction='in' AND party_id=? AND date IS NOT NULL ORDER BY date"
+  ).bind(clientId).all()).results || []) as Array<{ date: string; amount: number; ref: string; method: string }>;
+  const credits = ((await env.DB.prepare(
+    "SELECT number, date, amount FROM ar_credit_notes WHERE client_id=? AND date IS NOT NULL ORDER BY date"
+  ).bind(clientId).all()).results || []) as Array<{ number: string; date: string; amount: number }>;
+  const currency = invoices[0]?.currency_code || "INR";
+
+  // Opening balance = debits − credits strictly BEFORE the period start.
+  let opening = 0;
+  for (const i of invoices) if (i.date < from) opening += i.total || 0;
+  for (const p of payments) if (p.date < from) opening -= p.amount || 0;
+  for (const c of credits) if (c.date < from) opening -= c.amount || 0;
+
+  type Line = { date: string; type: string; ref: string; debit: number; credit: number };
+  const lines: Line[] = [];
+  for (const i of invoices) if (i.date >= from && i.date <= to) lines.push({ date: i.date, type: "Invoice", ref: i.number || "", debit: i.total || 0, credit: 0 });
+  for (const p of payments) if (p.date >= from && p.date <= to) lines.push({ date: p.date, type: "Payment", ref: p.ref || p.method || "", debit: 0, credit: p.amount || 0 });
+  for (const c of credits) if (c.date >= from && c.date <= to) lines.push({ date: c.date, type: "Credit note", ref: c.number || "", debit: 0, credit: c.amount || 0 });
+  // Stable chronological order; within a day, debits before credits so the running
+  // balance reads naturally (bill raised, then settled).
+  lines.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (b.debit - b.credit) - (a.debit - a.credit));
+
+  let bal = opening;
+  const rows = lines.map(l => { bal += l.debit - l.credit; return { ...l, balance: bal }; });
+  const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
+  const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
+  return { client_id: clientId, from, to, currency, opening, closing: bal, total_debit: totalDebit, total_credit: totalCredit, lines: rows };
+}
+
+// GET /api/finance/ar/client/:id/ledger — full statement. finance/ops any client; a
+// client_* caller sees ONLY its own (same IDOR rule as the dues statement).
+async function handleArLedger(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  const id = decodeURIComponent(path.split("/").slice(-2)[0]);
+  const full = FIN_FULL_ROLES.includes(user!.role);
+  const isClient = user!.role.startsWith("client_");
+  if (!full && !isClient) return json({ error: "Forbidden" }, 403);
+  if (isClient && id !== (user!.client_id || "")) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const range = resolveLedgerRange(url.searchParams.get("period") || "fy", url.searchParams.get("from") || "", url.searchParams.get("to") || "", istToday());
+  const client = await _arClient(env, id);
+  return json({ ...(await _arLedger(env, id, range)), client_name: client?.name || id });
 }
 
 async function handleReminderRules(request: Request, env: Env): Promise<Response> {
