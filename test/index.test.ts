@@ -4832,3 +4832,38 @@ describe("Tier 2 full ledger statement", () => {
     expect(forbidden.status).toBe(403);
   });
 });
+
+describe("Tier 2 dunning hardening — weekly throttle + overdue auto-send opt-in", () => {
+  it("suppresses a send that would exceed the weekly cap", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await setCfg("fin_max_reminders_per_week", "1");
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,credit_days,currency_code) VALUES ('WC','WC Client','wc@x.com',0,'INR')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('WC-I','WC-I','WC-I','WC','2026-01-01','2026-01-10',100000,100000,'INR','open','open')").run();
+    // A successful send 6 days ago: past the 5-day min-gap, but still inside the 7-day cap window.
+    const sixAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+    await db.prepare("INSERT INTO reminder_runs (id,client_id,tier,cycle_batch,status,run_at,recipient_email) VALUES (?,?,?,?,?,?,?)")
+      .bind("wc-prev", "WC", "overdue-1", "b-prev", "sent", sixAgo + " 10:00:00", "wc@x.com").run();
+    const out = await sendStatement(env, { client_id: "WC", name: "WC Client", email: "wc@x.com" }, { mode: "dry_run" });
+    expect(out.status).toBe("suppressed");
+    expect((out as { reason: string }).reason).toBe("weekly-cap");
+  });
+
+  it("auto-sends overdue tiers only when the opt-in is on", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await setCfg("reminders_mode", "dry_run");
+    await setCfg("initial_backfill_complete", "1");
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,email,credit_days,currency_code) VALUES ('OA','OA Client','oa@x.com',0,'INR')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('OA-I','OA-I','OA-I','OA','2026-01-01','2026-01-10',100000,100000,'INR','open','open')").run();
+    const dryCount = async () => ((await db.prepare("SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id='OA' AND status='dry_run'").first()) as { n: number }).n;
+
+    await setCfg("fin_overdue_autosend", "0");
+    await runReminderPass(env, SEND_CRON);
+    expect(await dryCount()).toBe(0);           // overdue tier is a manual worklist by default
+
+    await setCfg("fin_overdue_autosend", "1");
+    await runReminderPass(env, SEND_CRON);
+    expect(await dryCount()).toBeGreaterThan(0); // opt-in extends auto-send to overdue tiers
+  });
+});
