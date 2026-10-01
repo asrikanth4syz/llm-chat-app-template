@@ -2840,6 +2840,12 @@ async function ensureArSchema(env: Env): Promise<void> {
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_dust_cutoff_paise','100')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_default_credit_days','30')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_stale_days','3')").run();
+    // KPI suite (PRD §14): trailing period + configurable targets (DSO/ACP days, CEI %, overdue %).
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_kpi_period_days','90')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_dso','45')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_cei','80')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_acp','45')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_overdue_pct','15')").run();
   } catch { /* app_config may not exist yet on a bare DB */ }
   await seedReminderRules(env); // 5.A dunning ladder (idempotent)
 }
@@ -4173,7 +4179,7 @@ export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSer
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
-         SEND_CRON, resolveEffectiveDue, addDaysIST };
+         SEND_CRON, resolveEffectiveDue, addDaysIST, computeArKpis };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
@@ -4425,6 +4431,7 @@ export default {
       if (path==="/api/finance/ar/invoices" && method==="GET") return handleArInvoices(request,env);
       if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
       if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
+      if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
@@ -9327,6 +9334,90 @@ async function _arSummaryRows(env: Env, clientId: string | null, opts: { asOf?: 
   }));
 }
 
+// ── Collection-performance KPIs (PRD §14) ──────────────────────────────
+// DSO, CEI, Average Collection Period and Overdue% per currency, for a trailing
+// period of N days ending at the as-of date. AR is reconstructed at both the period
+// start and the as-of date from invoices + payment/credit allocation DATES, so the
+// metrics are correct for any as-of (not just today) and reconcile to Zoho history.
+// Pure arithmetic once the rows are loaded — one scan each of invoices, payment
+// allocations and credit allocations (indexed), computed in memory.
+async function computeArKpis(env: Env, opts: { asOf?: string; periodDays?: number } = {}): Promise<Record<string, unknown>> {
+  const asOf = opts.asOf || istToday();
+  const period = opts.periodDays && opts.periodDays > 0 ? opts.periodDays : await finCfgInt(env, "fin_kpi_period_days", 90);
+  const periodStart = addDaysIST(asOf, -period);
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
+
+  // Invoices: total, currency, dates. Allocation events (payments + credit notes) per
+  // invoice as {amount, date} so we can value the balance at any cutoff date.
+  const inv = ((await env.DB.prepare(
+    "SELECT id, currency_code, total, date, COALESCE(effective_due_date, due_date) AS due FROM ar_invoices WHERE status != 'void'"
+  ).all()).results || []) as Array<{ id: string; currency_code: string; total: number; date: string; due: string }>;
+  const events: Record<string, Array<{ amount: number; date: string }>> = {};
+  const push = (id: string, amount: number, date: string) => { (events[id] = events[id] || []).push({ amount: amount || 0, date: date || "" }); };
+  for (const a of ((await env.DB.prepare(
+    "SELECT a.doc_id AS id, a.amount AS amount, p.date AS date FROM fin_allocations a JOIN fin_payments p ON p.id=a.payment_id WHERE a.doc_type='invoice'"
+  ).all()).results || []) as Array<{ id: string; amount: number; date: string }>) push(a.id, a.amount, a.date);
+  for (const a of ((await env.DB.prepare(
+    "SELECT ca.invoice_id AS id, ca.amount AS amount, cn.date AS date FROM credit_allocations ca JOIN ar_credit_notes cn ON cn.id=ca.credit_note_id"
+  ).all()).results || []) as Array<{ id: string; amount: number; date: string }>) push(a.id, a.amount, a.date);
+
+  // Balance of one invoice valued at cutoff date D = total − (payments/credits dated ≤ D).
+  const balAt = (id: string, total: number, d: string) => {
+    let paid = 0; for (const e of events[id] || []) if (e.date && e.date <= d) paid += e.amount;
+    return Math.max(0, total - paid);
+  };
+  type Acc = { currency: string; beginAR: number; endAR: number; endCurrentAR: number; sales: number; overdue: number; overdue_count: number };
+  const acc: Record<string, Acc> = {};
+  const at = (c: string) => acc[c] || (acc[c] = { currency: c, beginAR: 0, endAR: 0, endCurrentAR: 0, sales: 0, overdue: 0, overdue_count: 0 });
+  for (const i of inv) {
+    const cur = i.currency_code || "INR"; const a = at(cur);
+    if (i.date && i.date <= periodStart) { const b = balAt(i.id, i.total, periodStart); if (b > dust) a.beginAR += b; }
+    if (!i.date || i.date <= asOf) {
+      const b = balAt(i.id, i.total, asOf);
+      if (b > dust) {
+        a.endAR += b;
+        const overdue = i.due && i.due < asOf;             // DPD > 0 at as-of
+        if (overdue) { a.overdue += b; a.overdue_count++; } else a.endCurrentAR += b;
+      }
+    }
+    if (i.date && i.date > periodStart && i.date <= asOf) a.sales += i.total;   // credit sales in period
+  }
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+  const by_currency = Object.values(acc).map(a => {
+    const dso = a.sales > 0 ? r1((a.endAR / a.sales) * period) : null;
+    const avgAR = (a.beginAR + a.endAR) / 2;
+    const acp = a.sales > 0 ? r1((avgAR / a.sales) * period) : null;
+    const ceiDenom = a.beginAR + a.sales - a.endCurrentAR;
+    const cei = ceiDenom > 0 ? r1(((a.beginAR + a.sales - a.endAR) / ceiDenom) * 100) : null;
+    const overdue_pct = a.endAR > 0 ? r1((a.overdue / a.endAR) * 100) : 0;
+    return {
+      currency: a.currency, ar: a.endAR, credit_sales: a.sales, beginning_ar: a.beginAR,
+      dso, cei, acp, overdue: a.overdue, overdue_count: a.overdue_count, overdue_pct,
+    };
+  });
+  return {
+    as_of: asOf, period_days: period,
+    targets: {
+      dso: await finCfgInt(env, "fin_target_dso", 45),
+      cei: await finCfgInt(env, "fin_target_cei", 80),
+      acp: await finCfgInt(env, "fin_target_acp", 45),
+      overdue_pct: await finCfgInt(env, "fin_target_overdue_pct", 15),
+    },
+    by_currency,
+  };
+}
+
+async function handleFinanceKpis(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const asOfRaw = url.searchParams.get("as_of") || "";
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : undefined;
+  const periodRaw = parseInt(url.searchParams.get("period") || "", 10);
+  const periodDays = [30, 60, 90, 365].includes(periodRaw) ? periodRaw : undefined;
+  return json({ ...(await computeArKpis(env, { asOf, periodDays })), stale: await finStaleInfo(env) });
+}
+
 // ── Payables (P3.2) read API — finance/ops only; clients NEVER see AP. ──
 async function handleApBills(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
@@ -9580,7 +9671,19 @@ async function handleFinanceStatus(request: Request, env: Env): Promise<Response
 async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
-  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number };
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number; kpi_period_days?: number; target_dso?: number; target_cei?: number; target_acp?: number; target_overdue_pct?: number };
+  // KPI period + targets (PRD §14) — plain integer settings, audited.
+  const kpiInt = async (field: keyof typeof body, key: string, max = 100000) => {
+    if (body[field] === undefined) return;
+    const v = Math.min(max, Math.max(0, Math.round(Number(body[field]) || 0)));
+    await setConfig(env, key, String(v), user!.sub);
+    await audit(env, user, "FIN_SETTING", "app_config", key, undefined, String(v));
+  };
+  await kpiInt("kpi_period_days", "fin_kpi_period_days", 3650);
+  await kpiInt("target_dso", "fin_target_dso", 3650);
+  await kpiInt("target_cei", "fin_target_cei", 1000);
+  await kpiInt("target_acp", "fin_target_acp", 3650);
+  await kpiInt("target_overdue_pct", "fin_target_overdue_pct", 1000);
   // Dues-logic settings (PRD §5). default_credit_days re-derives effective due dates,
   // so recompute both ledgers after it changes.
   if (body.dust_cutoff_paise !== undefined) {

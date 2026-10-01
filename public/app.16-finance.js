@@ -31,7 +31,7 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
 const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1,
-  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '' };
+  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '', kpiPeriod: 90 };
 
 // Print the given HTML as a PDF via the browser (Ctrl/Cmd+P → Save as PDF). CSP-safe:
 // a print-only container + @media print stylesheet, then window.print().
@@ -300,7 +300,8 @@ function _financeInvoiceTable(invoices, showClient, sortKind, page) {
 // drillable open-invoice list.
 async function renderReceivables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading receivables…</p></div>`;
-  const [summary, list] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices')]);
+  const period = _FIN.kpiPeriod || 90;
+  const [summary, list, kpis] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices'), api('/finance/kpis?period=' + period)]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load receivables.</div>`; return; }
   const byCur = summary.by_currency || [];
   _FIN.ar = list.invoices || []; _FIN.arPage = 1;
@@ -313,7 +314,9 @@ async function renderReceivables(main) {
       </div>
     </div>
     ${_finSyncedLine(summary.last_sync_at)}
+    ${_finStaleBanner(kpis && kpis.stale)}
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
+    ${kpis ? _finKpiSection(kpis) : ''}
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
     ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
     <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar', (_FIN.arPage || 1))}</div>`;
@@ -391,6 +394,42 @@ function _finStaleBanner(stale) {
     ⚠ <strong>Data is ${h(age)}</strong> (threshold ${h(String(stale.threshold_days))}d). Figures may be out of date, and automated reminders are paused until a fresh Zoho sync. Run <strong>Sync now</strong> under Finance Setup.</div>`;
 }
 function financeSetAsOf(v) { _FIN.asOf = v || ''; renderArCustomers(); }
+function financeSetKpiPeriod(n) { _FIN.kpiPeriod = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
+// One KPI tile: value vs target, coloured by on/off-track (grey when n/a).
+function _finKpiCard(label, value, suffix, ok, targetText) {
+  const col = ok === null ? 'var(--muted)' : ok ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)';
+  const val = (value === null || value === undefined) ? 'n/a' : (value + (suffix || ''));
+  return `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+    <div style="font-size:1.5rem;font-weight:700;margin-top:4px;color:${col}">${h(val)}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px">${ok === null ? '—' : (ok ? '✓ On track' : '✗ Off track')} · ${h(targetText)}</div></div>`;
+}
+function _finKpiSection(kpis) {
+  const rows = kpis.by_currency || [];
+  if (!rows.length) return '';
+  const t = kpis.targets || {};
+  const cur = kpis.period_days || 90;
+  const periodBtns = [30, 60, 90, 365].map(n =>
+    `<button ${dataAct('financeSetKpiPeriod', n)} style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;cursor:pointer;background:${n === cur ? 'var(--blue,#1d6fa4)' : 'transparent'};color:${n === cur ? '#fff' : 'inherit'}">${n}d</button>`).join(' ');
+  const blocks = rows.map(k => {
+    const dsoOk = k.dso == null ? null : (k.dso <= t.dso);
+    const ceiOk = k.cei == null ? null : (k.cei >= t.cei);
+    const acpOk = k.acp == null ? null : (k.acp <= t.acp);
+    const ovOk = (k.overdue_pct == null) ? null : (k.overdue_pct <= t.overdue_pct);
+    return `<div style="margin-top:8px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${h(k.currency)} · AR ${h(_fmtPaise(k.ar, k.currency))} · credit sales (period) ${h(_fmtPaise(k.credit_sales, k.currency))}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        ${_finKpiCard('DSO', k.dso, 'd', dsoOk, 'target ≤ ' + t.dso + 'd')}
+        ${_finKpiCard('CEI', k.cei, '%', ceiOk, 'target ≥ ' + t.cei + '%')}
+        ${_finKpiCard('Avg collection', k.acp, 'd', acpOk, 'target ≤ ' + t.acp + 'd')}
+        ${_finKpiCard('Overdue', k.overdue_pct, '%', ovOk, (k.overdue_count || 0) + ' inv · ≤ ' + t.overdue_pct + '%')}
+      </div></div>`;
+  }).join('');
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 4px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Collection KPIs</h3>
+      <div style="display:flex;gap:4px;align-items:center"><span style="font-size:12px;color:var(--muted);margin-right:4px">Period</span>${periodBtns}</div>
+    </div>${blocks}`;
+}
 async function renderArCustomers() {
   const main = document.getElementById('main-content'); if (!main) return;
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading customer summary…</p></div>`;

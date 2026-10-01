@@ -15,7 +15,7 @@ import { gmailGetToken, gmailSend } from "../src/index";
 // Slice 1, Group 5 — dunning engine.
 import { buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED } from "../src/index";
 import { hashStr } from "../src/index";
-import { recomputeArBalances, resolveEffectiveDue } from "../src/index";
+import { recomputeArBalances, resolveEffectiveDue, computeArKpis } from "../src/index";
 // P3.2 — Payables (AP).
 import { mapBooksBill, mapBooksVendorPayment, runBooksBackfillStep } from "../src/index";
 // P3.3 — Reconciliation.
@@ -4763,5 +4763,35 @@ describe("Tier 1 dues logic — effective due date, dust cutoff, as-of, stalenes
     await setCfg("books_last_sync_at", new Date(Date.now() - 10 * 86400000).toISOString());
     const r = await runReminderPass(env, SEND_CRON);
     expect(r.status).toBe("stale");
+  });
+});
+
+describe("Tier 2 KPI suite — DSO / CEI / Avg collection / Overdue%", () => {
+  it("computeArKpis derives each KPI from reconstructed AR", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    // One ₹1000 invoice dated inside the 90-day period, unpaid and overdue at the as-of.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('K1','K1','K1','KC','2026-02-01','2026-03-01',100000,100000,'INR','open','open')").run();
+    const k = await computeArKpis(env, { asOf: "2026-04-01", periodDays: 90 }) as { by_currency: Array<Record<string, number>> };
+    const row = k.by_currency.find(r => r.currency as unknown as string === "INR")!;
+    expect(row.ar).toBe(100000);
+    expect(row.credit_sales).toBe(100000);
+    expect(row.dso).toBe(90);         // (AR ÷ sales) × 90 = 90
+    expect(row.acp).toBe(45);         // avg AR (50000) ÷ sales × 90
+    expect(row.cei).toBe(0);          // nothing collected in the period
+    expect(row.overdue).toBe(100000);
+    expect(row.overdue_count).toBe(1);
+    expect(row.overdue_pct).toBe(100);
+  });
+
+  it("GET /finance/kpis returns targets + per-currency rows for finance roles", async () => {
+    const r = await get("/api/finance/kpis?period=90", adminToken);
+    expect(r.status).toBe(200);
+    const body = await r.json() as { period_days: number; targets: Record<string, number>; by_currency: unknown[] };
+    expect(body.period_days).toBe(90);
+    expect(body.targets.dso).toBe(45);
+    expect(Array.isArray(body.by_currency)).toBe(true);
+    const forbidden = await get("/api/finance/kpis", clientToken);
+    expect(forbidden.status).toBe(403);
   });
 });
