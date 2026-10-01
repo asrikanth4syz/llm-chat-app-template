@@ -4670,7 +4670,9 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
 
   let query = `SELECT o.*,c.name as client_name,u.name as creator_name,
     (SELECT COUNT(*) FROM order_items WHERE order_id=o.id) AS item_count,
-    (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty
+    (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty,
+    (SELECT COALESCE(SUM(di.qty_delivered),0) FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id
+       WHERE dc.order_id=o.id AND dc.status='DELIVERED') AS delivered_qty
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE 1=1`;
   const params: string[] = [];
 

@@ -4622,6 +4622,26 @@ describe("recompute order statuses from deliveries (one-time repair)", () => {
   });
 });
 
+describe("orders list surfaces delivered_qty for reconciliation", () => {
+  it("returns delivered_qty summed over DELIVERED challans (feeds the Ordered/Delivered/Due view)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-RECON','c1','tst-ops','READY_TO_PICK',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-recon-i1','OD-RECON','SKU001','Rice',10,100,1000)").run();
+    // One DELIVERED challan (3 units) and one still SCHEDULED (must NOT count).
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODR-DC1','OD-RECON','DELIVERED',3,'ODR-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odr-di1','ODR-DC1','SKU001','Rice',3,3)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODR-DC2','OD-RECON','SCHEDULED',7,'ODR-2')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odr-di2','ODR-DC2','SKU001','Rice',7,0)").run();
+
+    const r = await get("/api/orders?q=OD-RECON", adminToken);
+    expect(r.status).toBe(200);
+    const rows = await r.json() as Array<{ id:string; total_qty:number; delivered_qty:number }>;
+    const row = rows.find(x => x.id === "OD-RECON")!;
+    expect(row.total_qty).toBe(10);
+    expect(row.delivered_qty).toBe(3); // only the DELIVERED challan counts — order is partial even though status is READY_TO_PICK
+  });
+});
+
 describe("delivery-workflow hardening (risks 1-5)", () => {
   it("R3: dispatch advances the order to IN_SHIPMENT from PICKED (symmetric guard)", async () => {
     const db = env.DB as D1Database;
