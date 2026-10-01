@@ -158,6 +158,15 @@ function _finAgo(iso) {
   if (d < 30) return d + ' day' + (d === 1 ? '' : 's') + ' ago';
   try { return new Date(t).toLocaleDateString(); } catch (_) { return iso.slice(0, 10); }
 }
+// Absolute local timestamp (date + HH:MM) for an ISO instant — shown alongside the
+// relative "… ago" so an operator can tell exactly when a message was generated.
+function _finWhen(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  try { return new Date(t).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch (_) { return String(iso).replace('T', ' ').slice(0, 16); }
+}
 // A muted "Data synced …" line for a cockpit header.
 function _finSyncedLine(iso) {
   return `<div style="font-size:12px;color:var(--muted);margin:-8px 0 14px">Data synced ${h(_finAgo(iso))}${iso ? ' · from Zoho Books' : ' — an admin can turn on the sync under Finance Setup'}</div>`;
@@ -761,6 +770,7 @@ async function renderFinanceSetup(main) {
       <div id="fin-zoho-test" style="margin-top:8px"></div>
       ${s.last_sync_error ? `<div style="margin-top:12px;padding:12px 14px;border:1px solid var(--danger,#b3261e);background:var(--danger-bg,#fdecea);border-radius:8px">
         <div style="font-weight:700;color:var(--danger,#b3261e);font-size:13px;margin-bottom:4px">⚠ Last sync failed</div>
+        ${s.last_sync_error_at ? `<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Reported <strong>${h(_finAgo(s.last_sync_error_at))}</strong>${_finWhen(s.last_sync_error_at) ? ' · ' + h(_finWhen(s.last_sync_error_at)) : ''}</div>` : ''}
         ${s.last_sync_hint ? `<div style="font-size:13px;margin-bottom:6px">${h(s.last_sync_hint)}</div>` : ''}
         <div style="font-size:11px;color:var(--muted);font-family:monospace;word-break:break-word">${h(s.last_sync_error)}</div>
       </div>` : ''}

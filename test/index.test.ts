@@ -4867,3 +4867,23 @@ describe("Tier 2 dunning hardening — weekly throttle + overdue auto-send opt-i
     expect(await dryCount()).toBeGreaterThan(0); // opt-in extends auto-send to overdue tiers
   });
 });
+
+describe("Books sync stamps last-synced as data lands", () => {
+  it("a backfill run to completion updates books_last_sync_at", async () => {
+    await ensureArSchema(env);
+    // Fresh backfill state + cleared timestamp.
+    await setCfg("books_bf_stage", "0");
+    await setCfg("books_last_sync_at", "");
+    for (const e of ["contacts", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) {
+      await setCfg(`books_bf_page_${e}`, "1"); await setCfg(`books_cursor_${e}`, "0");
+    }
+    const be = booksEnv();
+    const { impl } = mockBooks({ contacts: [{ contact_id: "c1", contact_name: "X" }], invoices: [{ invoice_id: "i1", total: 100, date: "2026-01-01" }] });
+    let done = false;
+    for (let i = 0; i < 20 && !done; i++) { const r = await runBooksBackfillStep(be, impl); done = r.backfill_complete; }
+    expect(done).toBe(true);
+    const stamp = await getCfg("books_last_sync_at");
+    expect(stamp).toBeTruthy();
+    expect(Date.parse(String(stamp))).toBeGreaterThan(Date.now() - 60000); // stamped ~now, not stale
+  });
+});
