@@ -31,6 +31,30 @@ function injectOqPhaseCss() {
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
 
+// Delivery-progress badge for an order row: shows the REAL fulfilment state derived
+// from delivered units (handleListOrders supplies delivered_qty = Σ qty_delivered over
+// DELIVERED challans), independent of the workflow status which can lag behind.
+function oqDeliveryBadge(o) {
+  const d = Number(o.delivered_qty) || 0, t = Number(o.total_qty) || 0;
+  if (d <= 0 || o.status === 'CANCELLED') return '';
+  if (d >= t && t > 0) {
+    if (['CLOSED','DELIVERED'].includes(o.status)) return '';          // status already says Delivered
+    return `<div style="margin-top:3px;font-size:.66rem;font-weight:800;color:#0C8E6D">✅ Fully Delivered</div>`;
+  }
+  return `<div style="margin-top:3px;font-size:.66rem;font-weight:800;color:#B5731A">📦 Partially Delivered</div>`;
+}
+
+// Delivered/Due sub-line under the Total Qty cell, so ordered vs delivered vs due is
+// visible at a glance in the list — not only after opening the order.
+function oqQtyBreakdown(o) {
+  const d = Number(o.delivered_qty) || 0, t = Number(o.total_qty) || 0;
+  if (d <= 0) return '';
+  const delivered = Math.min(d, t), due = Math.max(0, t - delivered);
+  return `<div style="margin-top:2px;font-size:.68rem;color:var(--text-muted);line-height:1.4">
+    <span style="color:#0C8E6D;font-weight:700">${delivered.toLocaleString('en-IN')}</span> delivered${due>0?` · <span style="color:#B5731A;font-weight:700">${due.toLocaleString('en-IN')}</span> due`:''}
+  </div>`;
+}
+
 async function renderOrdersHub(el) {
   const tabs = ordersTabsForRole();
   // A single-tab role gets the plain page — no pointless tab bar.
@@ -201,7 +225,13 @@ async function renderMyOrders(el) {
       container.innerHTML = filtered.map(o => {
         const sc = STATUS_COLOR[o.status] || '#6b7280';
         const isCancelled = o.status === 'CANCELLED';
-        const isPartial   = o.status === 'PARTIALLY_CLOSED';
+        // Derive fulfilment from actual delivered units (handleListOrders -> delivered_qty)
+        // so the client sees the truth even when the workflow status lags behind.
+        const delUnits    = Number(o.delivered_qty) || 0;
+        const totUnits    = Number(o.total_qty) || 0;
+        const dueUnits    = Math.max(0, totUnits - Math.min(delUnits, totUnits));
+        const deliveryStarted = delUnits > 0 && !isCancelled;
+        const isPartial   = o.status === 'PARTIALLY_CLOSED' || (deliveryStarted && delUnits < totUnits);
         const isDone      = o.status === 'CLOSED';
         const itemNames   = (o.items||[]).slice(0,4).map(i=>i.name||i.item_name||'').filter(Boolean);
 
@@ -242,13 +272,13 @@ async function renderMyOrders(el) {
 
             ${o.need_by_date ? `<div style="padding:6px 12px;background:var(--red-soft-bg);border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid var(--red-soft-bg)">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
             ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'var(--success-bg)'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'var(--red-soft-bg)':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
-            ${isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
+            ${deliveryStarted && delUnits < totUnits?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">📦 Partially delivered — <b>${Math.min(delUnits,totUnits).toLocaleString('en-IN')}</b> of <b>${totUnits.toLocaleString('en-IN')}</b> units received · <b>${dueUnits.toLocaleString('en-IN')}</b> due</div>`:isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
 
             <!-- Action buttons -->
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View Details</button>
               ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', o.id)}>Submit Order</button>`:''}
-              ${['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status)?`<button class="btn btn-primary btn-sm" ${dataAct('viewOrderDrilldown', o.id)}>📦 Delivery Breakdown</button>`:''}
+              ${(deliveryStarted||['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status))?`<button class="btn btn-primary btn-sm" ${dataAct('viewOrderDrilldown', o.id)}>📦 Delivery Breakdown</button>`:''}
               ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', o.id)}>🔄 Reorder</button>`:''}
               ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" ${dataAct('cancelOrder', o.id)} data-stop>Cancel</button>`:''}
             </div>
@@ -591,7 +621,11 @@ async function viewOrder(id) {
   // instead of PICKED (what the warehouse pulled).
   const deliveredMap = {};
   (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: l.qty_delivered||0, due: l.qty_due||0 }; });
-  const showDelivered = ['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(order.status) && (drill?.lines||[]).length > 0;
+  // Show the Ordered/Delivered/Due reconciliation whenever ANY delivery has actually
+  // been recorded — never gate it on order.status, which can lag behind the challans
+  // (a part-delivered order can still sit at READY_TO_PICK/PICKED until recomputed).
+  const anyDelivered = (drill?.lines || []).some(l => (l.qty_delivered||0) > 0);
+  const showDelivered = anyDelivered && (drill?.lines||[]).length > 0;
 
   // Fulfilment totals for the progress meter (from the delivery breakdown).
   const dLines = drill?.lines || [];
@@ -607,10 +641,38 @@ async function viewOrder(id) {
       <div class="ord-meter-warn" style="margin-top:6px;font-size:.8rem;color:var(--danger,#C6472A);background:var(--danger-bg,#FBE7E1);border:1px solid var(--danger,#C6472A);border-radius:8px;padding:7px 10px">
         ⚠ <b>${overUnits} unit${overUnits===1?'':'s'} over-delivered</b> — recorded deliveries exceed the ordered quantity. This usually means a duplicate or phantom delivery challan was counted. Review the DCs below and cancel any that shouldn't have shipped.
       </div>` : '';
+  // Layman reconciliation: three big numbers (Ordered / Delivered / Due), a
+  // progress bar, and a plain-language delivery status derived from the actual
+  // delivered units — independent of the workflow status, which can lag behind.
+  const reconTile = (label, val, color) => `
+    <div style="text-align:center;padding:10px 6px;border:1px solid var(--border);border-radius:10px;background:var(--bg,var(--surface-2))">
+      <div style="font-size:1.35rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums;line-height:1.1">${val.toLocaleString('en-IN')}</div>
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-top:3px">${label}</div>
+    </div>`;
+  const deliveredCapped = Math.min(deliveredUnits, orderedUnits);
+  const fullyDelivered  = deliveredCapped >= orderedUnits && orderedUnits > 0;
+  const delChip = fullyDelivered
+    ? `<span style="font-size:.72rem;font-weight:800;color:#0C8E6D;background:#E4F5EF;border:1px solid #0C8E6D;border-radius:999px;padding:3px 11px">✅ Fully Delivered</span>`
+    : `<span style="font-size:.72rem;font-weight:800;color:#B5731A;background:#FBF0DB;border:1px solid #B5731A;border-radius:999px;padding:3px 11px">📦 Partially Delivered</span>`;
+  // If delivery has started but the workflow status hasn't caught up, say so plainly.
+  const statusLagged = showDelivered && !['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','DELIVERED'].includes(order.status);
+  const workflowNote = statusLagged
+    ? `<div style="margin-top:8px;font-size:.76rem;color:var(--text-muted)">Workflow stage still shows ${statusBadge(order.status)} — a super-admin can run <b>Recompute order statuses</b> to align it.</div>`
+    : '';
   const meterHtml = showDelivered ? `
-    <div class="ord-meter">
+    <div style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:18px;background:var(--surface)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="font-weight:800;color:var(--navy);font-size:.95rem">📦 Delivery reconciliation</div>
+        ${delChip}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+        ${reconTile('Ordered', orderedUnits, 'var(--navy)')}
+        ${reconTile('Delivered', deliveredCapped, '#0C8E6D')}
+        ${reconTile('Due', dueUnits, dueUnits>0?'#B5731A':'var(--text-muted)')}
+      </div>
       <div class="ord-meter-bar"><i class="del" style="width:${fulfilPct}%"></i><i class="due" style="width:${100-fulfilPct}%"></i></div>
-      <div class="ord-meter-cap">${fulfilPct}% delivered — <b>${Math.min(deliveredUnits,orderedUnits)} of ${orderedUnits} units</b>${dueUnits>0?` · <b>${dueUnits}</b> due${dueValue?` (${fmt(dueValue)})`:''}`:''}</div>
+      <div class="ord-meter-cap">${fulfilPct}% delivered by quantity${dueValue?` · ${fmt(dueValue)} still due`:''}</div>
+      ${workflowNote}
       ${anomalyHtml}
     </div>` : '';
 
@@ -1611,13 +1673,14 @@ async function renderOrderQueue(el) {
         </td>
         <td data-label="Client">${o.client_name||'—'}</td>
         <td data-label="Amount" style="font-weight:700">${fmt(o.grand_total)}</td>
-        <td data-label="Status">${statusBadge(o.status)}</td>
+        <td data-label="Status">${statusBadge(o.status)}${oqDeliveryBadge(o)}</td>
         <td data-label="Type">${orderTypeBadge(o.order_type||'Regular')}</td>
         <td data-label="Items" class="u-center">
           <span class="oq-numunit"><b>${o.item_count||0}</b> items</span>
         </td>
         <td data-label="Total Qty" class="u-center">
           <span class="oq-numunit"><b>${o.total_qty||0}</b> units</span>
+          ${oqQtyBreakdown(o)}
         </td>
         <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td data-label="Actions">${orderQueueActions(o)}</td>
