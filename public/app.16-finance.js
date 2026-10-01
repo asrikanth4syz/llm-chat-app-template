@@ -31,7 +31,7 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
 const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1,
-  customers: [], custQ: '', custSort: { col: 'outstanding', dir: 'desc' }, custPage: 1 };
+  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '' };
 
 // Print the given HTML as a PDF via the browser (Ctrl/Cmd+P → Save as PDF). CSP-safe:
 // a print-only container + @media print stylesheet, then window.print().
@@ -79,6 +79,21 @@ function _finStatusPill(status) {
   const c = s === 'paid' ? 'var(--success,#2e6e12)' : s === 'partial' ? 'var(--warning,#8a5a00)'
     : s === 'void' ? 'var(--muted,#777)' : 'var(--danger,#b3261e)';
   return `<span style="display:inline-block;padding:1px 9px;border:1px solid ${c};border-radius:10px;font-size:11px;font-weight:600;color:${c};text-transform:capitalize">${h(status || '—')}</span>`;
+}
+
+// Where the effective due date came from (PRD §15 precedence). Small chip next to the
+// due date so an operator can see whether it's the Zoho date, a credit-period derivation,
+// the workspace default, or a manual override.
+const _DUE_SRC = {
+  zoho:    { t: 'Zoho',    c: 'var(--blue,#1d6fa4)' },
+  client:  { t: 'Client',  c: 'var(--purple,#6b4fa1)' },
+  default: { t: 'Default', c: 'var(--muted,#777)' },
+  manual:  { t: 'Manual',  c: 'var(--warning,#8a5a00)' },
+};
+function _finDueBadge(src) {
+  const m = _DUE_SRC[String(src || '').toLowerCase()];
+  if (!m) return '';
+  return ` <span title="Due date source: ${m.t}" style="display:inline-block;padding:0 6px;border:1px solid ${m.c};border-radius:8px;font-size:10px;font-weight:600;color:${m.c};vertical-align:middle">${m.t}</span>`;
 }
 
 // ── Sortable-column helpers (client-side, over the cached list) ─────────
@@ -271,7 +286,7 @@ function _financeInvoiceTable(invoices, showClient, sortKind, page) {
       <td style="padding:8px 12px">${h(inv.number || inv.id)}</td>
       ${showClient ? clientCell(inv) : ''}
       <td style="padding:8px 12px">${h(inv.date || '')}</td>
-      <td style="padding:8px 12px">${h(inv.due_date || '')}</td>
+      <td style="padding:8px 12px;white-space:nowrap">${h(inv.effective_due_date || inv.due_date || '')}${_finDueBadge(inv.due_source)}</td>
       <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.total, inv.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(inv.balance, inv.currency_code))}</td>
       <td style="padding:8px 12px">${_finStatusPill(inv.status)}</td>
@@ -333,20 +348,23 @@ function _custTable(rows, page) {
     const nameBtn = c.client_id
       ? `<button ${dataAct('financeViewClient', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button>`
       : h(c.name || '');
-    const num = v => `<td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(v, c.currency_code))}</td>`;
+    const num = (v, bold, danger) => `<td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums;${bold ? 'font-weight:700;' : ''}${danger && (v || 0) > 0 ? 'color:var(--danger,#b3261e)' : ''}">${h(_fmtPaise(v, c.currency_code))}</td>`;
+    const credit = (c.credit_days && c.credit_days > 0) ? `${c.credit_days}d` : '30 (default)';
     return `<tr style="border-top:1px solid var(--border)">
       <td style="padding:8px 12px">${nameBtn}</td>
-      ${num(c.billed)}${num(c.paid)}
-      <td style="padding:8px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.outstanding, c.currency_code))}</td>
-      <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums;color:${(c.overdue || 0) > 0 ? 'var(--danger,#b3261e)' : 'inherit'}">${h(_fmtPaise(c.overdue, c.currency_code))}</td>
-      <td style="padding:8px 12px;text-align:right">${h(String(c.open_invoices || 0))}</td>
-      <td style="padding:8px 12px">${h(c.oldest_due || '—')}</td>
+      <td style="padding:8px 12px;color:var(--muted);font-size:12px">${h(credit)}</td>
+      ${num(c.due_today)}
+      ${num(c.overdue, false, true)}
+      ${num(c.total_due_now, true, true)}
+      ${num(c.upcoming)}
+      <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.outstanding, c.currency_code))}</td>
+      <td style="padding:8px 12px;text-align:right">${(c.oldest_dpd || 0) > 0 ? `<span style="color:var(--danger,#b3261e);font-weight:600">${h(String(c.oldest_dpd))}d</span>` : '—'}</td>
       <td style="padding:8px 12px"><button class="btn btn-secondary btn-sm" ${dataAct('financeViewClient', c.client_id)}>Open ▸</button></td></tr>`;
   }).join('');
   return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-      ${th('name', 'Customer')}${th('billed', 'Billed', true)}${th('paid', 'Paid', true)}${th('outstanding', 'Outstanding', true)}
-      ${th('overdue', 'Overdue', true)}${th('open_invoices', 'Open', true)}${th('oldest_due', 'Oldest due')}<th></th></tr></thead>
+      ${th('name', 'Customer')}<th style="padding:8px 12px">Credit</th>${th('due_today', 'Due today', true)}${th('overdue', 'Overdue', true)}
+      ${th('total_due_now', 'Total due now', true)}${th('upcoming', 'Upcoming', true)}${th('outstanding', 'Outstanding', true)}${th('oldest_dpd', 'Oldest DPD', true)}<th></th></tr></thead>
     <tbody>${body}</tbody></table>${_finPager('cust', page, rows.length)}</div>`;
 }
 // A sort header that dispatches financeSort(kind,col) with a kind-specific arrow.
@@ -364,49 +382,67 @@ function _renderCustTable() {
   host.innerHTML = _custTable(rows, _FIN.custPage);
 }
 function financeFilterCust(q) { _FIN.custQ = q || ''; _FIN.custPage = 1; _renderCustTable(); }
+// Stale-data banner: a snapshot older than the threshold blocks automated sends and
+// means today's DPD/aging are computed off an old book. Shown across the dues cockpits.
+function _finStaleBanner(stale) {
+  if (!stale || !stale.stale) return '';
+  const age = stale.age_days == null ? 'never synced' : `${stale.age_days} day${stale.age_days === 1 ? '' : 's'} old`;
+  return `<div class="card" style="padding:12px 16px;margin-bottom:14px;border-left:4px solid var(--warning,#8a5a00);background:var(--warning-bg,#fff8e6)">
+    ⚠ <strong>Data is ${h(age)}</strong> (threshold ${h(String(stale.threshold_days))}d). Figures may be out of date, and automated reminders are paused until a fresh Zoho sync. Run <strong>Sync now</strong> under Finance Setup.</div>`;
+}
+function financeSetAsOf(v) { _FIN.asOf = v || ''; renderArCustomers(); }
 async function renderArCustomers() {
   const main = document.getElementById('main-content'); if (!main) return;
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading customer summary…</p></div>`;
-  const data = await api('/finance/ar/by-customer');
+  const qs = _FIN.asOf ? ('?as_of=' + encodeURIComponent(_FIN.asOf)) : '';
+  const data = await api('/finance/ar/by-customer' + qs);
   if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load customer summary.</div>`; return; }
   _FIN.customers = data.customers || []; _FIN.custPage = 1;
-  const withDue = _FIN.customers.filter(c => (c.outstanding || 0) > 0).length;
+  const asOf = data.as_of || '';
+  const withDue = _FIN.customers.filter(c => (c.total_due_now || 0) > 0).length;
+  const dueToday = _FIN.customers.reduce((s, c) => s + (c.due_today || 0), 0);
+  const totalDueNow = _FIN.customers.reduce((s, c) => s + (c.total_due_now || 0), 0);
+  const upcoming = _FIN.customers.reduce((s, c) => s + (c.upcoming || 0), 0);
   const totalOut = _FIN.customers.reduce((s, c) => s + (c.outstanding || 0), 0);
-  const totalOver = _FIN.customers.reduce((s, c) => s + (c.overdue || 0), 0);
-  const kpi = (label, val, danger) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
+  const kpi = (label, val, danger) => `<div class="card" style="flex:1;min-width:140px;padding:14px 16px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
     <div style="font-size:1.4rem;font-weight:600;margin-top:4px;${danger ? 'color:var(--danger,#b3261e)' : ''}">${h(val)}</div></div>`;
   main.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <h2 style="margin:0">Receivables by Customer</h2>
-      <div style="display:flex;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Client Dues</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:12px;color:var(--muted)">As of
+          <input type="date" value="${h(asOf)}" ${dataInputVal('financeSetAsOf')} style="margin-left:6px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font:inherit"></label>
         <button class="btn btn-secondary" ${dataAct('financeExportCustomersCsv')}>Export CSV</button>
         <button class="btn btn-secondary" ${dataAct('financePrintCustomers')}>Print / PDF</button>
         <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to invoices</button>
       </div>
     </div>
+    ${_finStaleBanner(data.stale)}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      ${kpi('Customers with dues', String(withDue))}
+      ${kpi('Clients with dues', String(withDue))}
+      ${kpi('Due today', _fmtPaise(dueToday))}
+      ${kpi('Total due now', _fmtPaise(totalDueNow), true)}
+      ${kpi('Upcoming 7 days', _fmtPaise(upcoming))}
       ${kpi('Total outstanding', _fmtPaise(totalOut))}
-      ${kpi('Total overdue', _fmtPaise(totalOver), true)}
     </div>
     ${_finToolbar('cust', 'Search customers…', false)}
     <div id="cust-table-host">${_custTable(_custView(), _FIN.custPage)}</div>`;
 }
 function financeExportCustomersCsv() {
   const rows = _custView();
-  const out = [['Customer', 'Client ID', 'Currency', 'Billed', 'Paid', 'Outstanding', 'Overdue', 'Open invoices', 'Total invoices', 'Oldest due']];
-  for (const c of rows) out.push([c.name || '', c.client_id || '', c.currency_code || 'INR',
-    ((c.billed || 0) / 100).toFixed(2), ((c.paid || 0) / 100).toFixed(2), ((c.outstanding || 0) / 100).toFixed(2),
-    ((c.overdue || 0) / 100).toFixed(2), String(c.open_invoices || 0), String(c.invoices || 0), c.oldest_due || '']);
-  _downloadCsv('receivables-by-customer-' + new Date().toISOString().slice(0, 10) + '.csv', out);
+  const out = [['Customer', 'Client ID', 'Currency', 'Credit days', 'Due today', 'Overdue', 'Total due now', 'Upcoming 7d', 'Outstanding', 'Oldest DPD', 'Open invoices']];
+  for (const c of rows) out.push([c.name || '', c.client_id || '', c.currency_code || 'INR', String(c.credit_days || ''),
+    ((c.due_today || 0) / 100).toFixed(2), ((c.overdue || 0) / 100).toFixed(2), ((c.total_due_now || 0) / 100).toFixed(2),
+    ((c.upcoming || 0) / 100).toFixed(2), ((c.outstanding || 0) / 100).toFixed(2), String(c.oldest_dpd || 0), String(c.open_invoices || 0)]);
+  _downloadCsv('client-dues-' + (_FIN.asOf || new Date().toISOString().slice(0, 10)) + '.csv', out);
   showToast('Exported ' + rows.length + ' customer' + (rows.length === 1 ? '' : 's') + ' to CSV', 'success');
 }
 function financePrintCustomers() {
   const rows = _custView();
   const cell = v => `<td class="n">${h(_fmtPaise(v))}</td>`;
-  const body = rows.map(c => `<tr><td>${h(c.name || c.client_id || '')}</td>${cell(c.billed)}${cell(c.paid)}${cell(c.outstanding)}${cell(c.overdue)}<td class="n">${h(String(c.open_invoices || 0))}</td><td>${h(c.oldest_due || '')}</td></tr>`).join('');
-  financePrint('Receivables by Customer', `<table><thead><tr><th>Customer</th><th class="n">Billed</th><th class="n">Paid</th><th class="n">Outstanding</th><th class="n">Overdue</th><th class="n">Open</th><th>Oldest due</th></tr></thead><tbody>${body}</tbody></table>`);
+  const body = rows.map(c => `<tr><td>${h(c.name || c.client_id || '')}</td>${cell(c.due_today)}${cell(c.overdue)}${cell(c.total_due_now)}${cell(c.upcoming)}${cell(c.outstanding)}<td class="n">${h(String(c.oldest_dpd || 0))}d</td></tr>`).join('');
+  financePrint('Client Dues' + (_FIN.asOf ? ' — as of ' + _FIN.asOf : ''), `<table><thead><tr><th>Customer</th><th class="n">Due today</th><th class="n">Overdue</th><th class="n">Total due now</th><th class="n">Upcoming</th><th class="n">Outstanding</th><th class="n">Oldest DPD</th></tr></thead><tbody>${body}</tbody></table>`);
 }
 
 // Drill-in: a finance/ops user views any one customer's full statement.
@@ -490,7 +526,7 @@ function _apBillTable(bills, page) {
       <td style="padding:8px 12px">${h(b.number || b.id)}</td>
       ${vendorCell(b)}
       <td style="padding:8px 12px">${h(b.date || '')}</td>
-      <td style="padding:8px 12px">${h(b.due_date || '')}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
+      <td style="padding:8px 12px;white-space:nowrap">${h(b.effective_due_date || b.due_date || '')}${_finDueBadge(b.due_source)}${overdue ? ' <span style="color:var(--danger,#b3261e)">⚠ pay before due</span>' : ''}</td>
       <td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.total, b.currency_code))}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">${h(_fmtPaise(b.balance, b.currency_code))}</td>
       <td style="padding:8px 12px">${_finStatusPill(b.status)}</td>
