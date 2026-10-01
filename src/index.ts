@@ -3451,6 +3451,21 @@ function mapBooksContact(z: Record<string, unknown>): { row: Record<string, unkn
   // NB: dunning_opt_out is app-owned — deliberately never set here.
   return { row };
 }
+// Zoho's /contacts list returns BOTH customers and vendors (distinguished by
+// contact_type). A vendor contact must mirror into ap_vendors, not ar_clients —
+// otherwise a vendor with no (or only paid) bills never appears in Payables.
+function isVendorContact(z: Record<string, unknown>): boolean {
+  return String(z.contact_type ?? "").toLowerCase() === "vendor";
+}
+function mapBooksVendorContact(z: Record<string, unknown>): { vendor: Record<string, unknown> } | MapErr {
+  const cid = String(z.contact_id ?? "").trim();
+  if (!cid) return { error: "no contact_id" };
+  const vendor: Record<string, unknown> = { vendor_id: cid, zoho_vendor_id: cid };
+  _put(vendor, "name", z.contact_name ?? z.company_name);
+  _put(vendor, "email", z.email);
+  _put(vendor, "currency_code", z.currency_code);
+  return { vendor };
+}
 
 function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unknown>; reference: string } | MapErr {
   const iid = String(z.invoice_id ?? "").trim();
@@ -3633,9 +3648,13 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
     // so a first-time backfill of thousands of rows stays within the Worker's
     // subrequest budget instead of one .run() per row.
     // Contacts first (identity), so invoices link to an ar_clients row.
-    const contactRows: Record<string, unknown>[] = [];
-    for (const z of await pull("contacts")) { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } contactRows.push(m.row); }
+    const contactRows: Record<string, unknown>[] = []; const vendorContactRows: Record<string, unknown>[] = [];
+    for (const z of await pull("contacts")) {
+      if (isVendorContact(z)) { const v = mapBooksVendorContact(z); if ("error" in v) { r.errors.push(v.error); continue; } vendorContactRows.push(v.vendor); }
+      else { const m = mapBooksContact(z); if ("error" in m) { r.errors.push(m.error); continue; } contactRows.push(m.row); }
+    }
     await upsertMirror(env, "ar_clients", "client_id", contactRows); r.contacts = contactRows.length;
+    if (vendorContactRows.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorContactRows);
 
     const invoiceRows: Record<string, unknown>[] = []; const invoiceRefs: Array<{ id: string; reference: string }> = [];
     for (const z of await pull("invoices")) {
@@ -3741,8 +3760,14 @@ interface BackfillStepResult {
 async function _ingestBooksEntity(env: Env, entity: string, items: Record<string, unknown>[]): Promise<number> {
   if (!items.length) return 0;
   if (entity === "contacts") {
-    const rows: Record<string, unknown>[] = []; for (const z of items) { const m = mapBooksContact(z); if ("row" in m) rows.push(m.row); }
-    await upsertMirror(env, "ar_clients", "client_id", rows); return rows.length;
+    const rows: Record<string, unknown>[] = []; const vendors: Record<string, unknown>[] = [];
+    for (const z of items) {
+      if (isVendorContact(z)) { const v = mapBooksVendorContact(z); if ("vendor" in v) vendors.push(v.vendor); }
+      else { const m = mapBooksContact(z); if ("row" in m) rows.push(m.row); }
+    }
+    if (rows.length) await upsertMirror(env, "ar_clients", "client_id", rows);
+    if (vendors.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendors);
+    return rows.length + vendors.length;
   }
   if (entity === "invoices") {
     const rows: Record<string, unknown>[] = []; for (const z of items) { const m = mapBooksInvoice(z); if ("row" in m) rows.push(m.row); }
@@ -4195,7 +4220,7 @@ export { gmailGetToken, gmailSend, gmailMissingSecrets };
 export { seedReminderRules, buildStatement, sendStatement, runReminderPass, REMINDER_RULE_SEED };
 export { booksFetch, upsertMirror, mapBooksContact, mapBooksInvoice, mapBooksPayment,
          mapBooksCreditNote, runBooksSync, recomputeArBalances, hashStr };
-export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation, runBooksBackfillStep };
+export { mapBooksBill, mapBooksVendorPayment, recomputeApBalances, runReconciliation, runBooksBackfillStep, mapBooksVendorContact, isVendorContact };
 export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSeries };
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,

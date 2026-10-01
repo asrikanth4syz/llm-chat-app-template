@@ -31,7 +31,7 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
 const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1,
-  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '', kpiPeriod: 90 };
+  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '', kpiPeriod: 90, arAll: false, apAll: false };
 
 // Print the given HTML as a PDF via the browser (Ctrl/Cmd+P → Save as PDF). CSP-safe:
 // a print-only container + @media print stylesheet, then window.print().
@@ -310,7 +310,7 @@ function _financeInvoiceTable(invoices, showClient, sortKind, page) {
 async function renderReceivables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading receivables…</p></div>`;
   const period = _FIN.kpiPeriod || 90;
-  const [summary, list, kpis] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices'), api('/finance/kpis?period=' + period)]);
+  const [summary, list, kpis] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices' + (_FIN.arAll ? '?all=1' : '')), api('/finance/kpis?period=' + period)]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load receivables.</div>`; return; }
   const byCur = summary.by_currency || [];
   _FIN.ar = list.invoices || []; _FIN.arPage = 1;
@@ -319,6 +319,7 @@ async function renderReceivables(main) {
       <h2 style="margin:0">Receivables</h2>
       <div style="display:flex;gap:8px">
         <button class="btn btn-primary" ${dataAct('renderArCustomers')}>By customer ▸</button>
+        <button class="btn btn-secondary" ${dataAct('financeToggleArAll')}>${_FIN.arAll ? 'Outstanding only' : 'Include paid'}</button>
         <button class="btn btn-secondary" ${dataAct('financeRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
       </div>
     </div>
@@ -326,7 +327,7 @@ async function renderReceivables(main) {
     ${_finStaleBanner(kpis && kpis.stale)}
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
     ${kpis ? _finKpiSection(kpis) : ''}
-    <h3 style="margin:18px 0 10px">Open Invoices</h3>
+    <h3 style="margin:18px 0 10px">${_FIN.arAll ? 'All Invoices' : 'Open Invoices'}</h3>
     ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
     <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar', (_FIN.arPage || 1))}</div>`;
 }
@@ -404,6 +405,7 @@ function _finStaleBanner(stale) {
 }
 function financeSetAsOf(v) { _FIN.asOf = v || ''; renderArCustomers(); }
 function financeSetKpiPeriod(n) { _FIN.kpiPeriod = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
+function financeToggleArAll() { _FIN.arAll = !_FIN.arAll; const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
 // One KPI tile: value vs target, coloured by on/off-track (grey when n/a).
 function _finKpiCard(label, value, suffix, ok, targetText) {
   const col = ok === null ? 'var(--muted)' : ok ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)';
@@ -644,19 +646,22 @@ function _apBillTable(bills, page) {
       ${_sortableTh('ap', 'status', 'Status')}${_sortableTh('ap', 'age_bucket', 'Aging')}</tr></thead>
     <tbody>${rows}</tbody></table>${footer}</div>`;
 }
+function financeToggleApAll() { _FIN.apAll = !_FIN.apAll; const m = document.getElementById('main-content'); if (m) renderPayables(m); }
 async function renderPayables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading payables…</p></div>`;
-  const [summary, list] = await Promise.all([api('/finance/ap/summary'), api('/finance/ap/bills')]);
+  const [summary, list] = await Promise.all([api('/finance/ap/summary'), api('/finance/ap/bills' + (_FIN.apAll ? '?all=1' : ''))]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load payables.</div>`; return; }
   const byCur = summary.by_currency || [];
   _FIN.ap = list.bills || []; _FIN.apPage = 1;
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Payables</h2>
-      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" ${dataAct('financeToggleApAll')}>${_FIN.apAll ? 'Outstanding only' : 'Include paid'}</button>
+        <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div></div>
     ${_finSyncedLine(summary.last_sync_at)}
     ${byCur.length ? byCur.map(_apCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No payables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
-    <h3 style="margin:18px 0 10px">Open Bills</h3>
+    <h3 style="margin:18px 0 10px">${_FIN.apAll ? 'All Bills' : 'Open Bills'}</h3>
     ${_finToolbar('ap', 'Search bills by number, vendor, status…', true)}
     <div id="ap-table-host">${_apBillTable(_finSortRows(_FIN.ap.filter(b => _finRowMatch(b, _FIN.apQ)), _FIN.apSort), (_FIN.apPage || 1))}</div>`;
 }
