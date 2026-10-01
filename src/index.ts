@@ -2846,6 +2846,9 @@ async function ensureArSchema(env: Env): Promise<void> {
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_cei','80')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_acp','45')").run();
     await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_target_overdue_pct','15')").run();
+    // Dunning hardening (PRD §6): weekly reminder cap per client; overdue auto-send opt-in (OFF by default).
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_max_reminders_per_week','1')").run();
+    await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('fin_overdue_autosend','0')").run();
   } catch { /* app_config may not exist yet on a bare DB */ }
   await seedReminderRules(env); // 5.A dunning ladder (idempotent)
 }
@@ -4007,7 +4010,7 @@ function buildStatement(invoices: Record<string, unknown>[], tierRules: TierRule
   const open = invoices.filter(i => Number(i.balance || 0) > 0 && i.status !== "void");
   if (!open.length) return null;
   let worst = -Infinity;
-  for (const i of open) { const od = i.due_date ? overdueDays(String(i.due_date), today) : 0; if (od > worst) worst = od; }
+  for (const i of open) { const d = (i.effective_due_date || i.due_date) as string | undefined; const od = d ? overdueDays(String(d), today) : 0; if (od > worst) worst = od; }
   const tier = selectTier(worst, tierRules);
   if (!tier) return null; // still further out than the pre-due window
   const byCur: Record<string, { currency: string; outstanding: number; invoices: Record<string, unknown>[] }> = {};
@@ -4090,10 +4093,12 @@ async function sendStatement(env: Env, client: { client_id: string; name?: strin
   if (client.dunning_opt_out) { await logSup("opt_out", "x"); return { status: "suppressed", reason: "opt_out" }; }
   const hold = await reminderHoldActive(env, client.client_id, today);
   if (hold) { await logSup(hold, "x"); return { status: "suppressed", reason: hold }; }
-  // Re-read live open invoices at send time (drops any that cleared).
+  // Re-read live open invoices at send time (drops any that cleared, and any dust ≤
+  // cutoff — a payment match that leaves only rounding residue stops reminders).
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const { results } = await env.DB.prepare(
-    "SELECT id,number,due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'"
-  ).bind(client.client_id).all();
+    "SELECT id,number,due_date,effective_due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void' AND balance>?"
+  ).bind(client.client_id, dust).all();
   const tierRules = REMINDER_RULE_SEED.map(r => ({ tier: r.tier, min_overdue_days: r.min }));
   const stmt = buildStatement((results || []) as Record<string, unknown>[], tierRules, today);
   if (!stmt) { await logSup("settled", "x"); return { status: "suppressed", reason: "settled" }; }
@@ -4103,6 +4108,16 @@ async function sendStatement(env: Env, client: { client_id: string; name?: strin
   if (daysAgo !== null && daysAgo < REMINDER_MIN_GAP_DAYS) {
     if (!opts.force) { await logSup("gap-not-elapsed", stmt.cycle_batch); return { status: "suppressed", reason: "gap-not-elapsed" }; }
     if (daysAgo < 1) { await logSup("gap-floor-24h", stmt.cycle_batch); return { status: "suppressed", reason: "gap-floor-24h" }; }
+  }
+  // Weekly throttle (PRD §6.1): at most N successful sends per rolling 7 days per client.
+  // Force overrides the weekly cap but never the min-gap 24h floor above.
+  const weeklyCap = await finCfgInt(env, "fin_max_reminders_per_week", 1);
+  if (!opts.force && weeklyCap > 0) {
+    const since = addDaysIST(today, -7);
+    const sent7 = (await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM reminder_runs WHERE client_id=? AND status='sent' AND substr(run_at,1,10) >= ?"
+    ).bind(client.client_id, since).first() as { n: number } | null)?.n ?? 0;
+    if (sent7 >= weeklyCap) { await logSup("weekly-cap", stmt.cycle_batch); return { status: "suppressed", reason: "weekly-cap" }; }
   }
   const totalOut = JSON.stringify(Object.fromEntries(stmt.by_currency.map(c => [c.currency, c.outstanding])));
   if (opts.mode === "dry_run") {
@@ -4148,7 +4163,10 @@ async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fe
   if (mode === "live" && (await finStaleInfo(env)).stale) { r.status = "stale"; return r; }
   const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   const today = istToday();
-  const autoTiers = new Set(REMINDER_RULE_SEED.filter(x => x.mode === "auto").map(x => x.tier));
+  // By default only pre-due/on-due auto-send; overdue tiers are a collector worklist.
+  // Opt-in (fin_overdue_autosend=1) extends auto-send to the overdue dunning tiers too.
+  const overdueAuto = (await getConfig(env, "fin_overdue_autosend", "0")) === "1";
+  const autoTiers = new Set(REMINDER_RULE_SEED.filter(x => overdueAuto || x.mode === "auto").map(x => x.tier));
   const tierRules = REMINDER_RULE_SEED.map(x => ({ tier: x.tier, min_overdue_days: x.min }));
   const { results } = await env.DB.prepare(
     `SELECT c.client_id, c.name, c.email, c.dunning_opt_out FROM ar_clients c
@@ -4156,7 +4174,7 @@ async function runReminderPass(env: Env, cron: string, fetchImpl: FetchImpl = fe
      LIMIT ${MAX_CUSTOMERS_PER_RUN}`
   ).all();
   for (const c of (results || []) as Array<{ client_id: string; name: string; email: string; dunning_opt_out: number }>) {
-    const inv = (await env.DB.prepare("SELECT id,due_date,effective_due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void'").bind(c.client_id).all()).results || [];
+    const inv = (await env.DB.prepare("SELECT id,due_date,effective_due_date,balance,currency_code,cycle_token,status FROM ar_invoices WHERE client_id=? AND status!='void' AND balance>?").bind(c.client_id, dust).all()).results || [];
     const stmt = buildStatement(inv as Record<string, unknown>[], tierRules, today);
     if (!stmt || !autoTiers.has(stmt.tier)) continue;    // manual (overdue) tiers → collector worklist, not auto
     r.considered++;
@@ -9672,7 +9690,7 @@ async function handleFinanceStatus(request: Request, env: Env): Promise<Response
 async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
-  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number; kpi_period_days?: number; target_dso?: number; target_cei?: number; target_acp?: number; target_overdue_pct?: number };
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number; kpi_period_days?: number; target_dso?: number; target_cei?: number; target_acp?: number; target_overdue_pct?: number; max_reminders_per_week?: number; overdue_autosend?: boolean };
   // KPI period + targets (PRD §14) — plain integer settings, audited.
   const kpiInt = async (field: keyof typeof body, key: string, max = 100000) => {
     if (body[field] === undefined) return;
@@ -9685,6 +9703,11 @@ async function handleFinanceSettings(request: Request, env: Env): Promise<Respon
   await kpiInt("target_cei", "fin_target_cei", 1000);
   await kpiInt("target_acp", "fin_target_acp", 3650);
   await kpiInt("target_overdue_pct", "fin_target_overdue_pct", 1000);
+  await kpiInt("max_reminders_per_week", "fin_max_reminders_per_week", 50);
+  if (body.overdue_autosend !== undefined) {
+    await setConfig(env, "fin_overdue_autosend", body.overdue_autosend ? "1" : "0", user!.sub);
+    await audit(env, user, "FIN_OVERDUE_AUTOSEND", "app_config", "fin_overdue_autosend", undefined, body.overdue_autosend ? "1" : "0");
+  }
   // Dues-logic settings (PRD §5). default_credit_days re-derives effective due dates,
   // so recompute both ledgers after it changes.
   if (body.dust_cutoff_paise !== undefined) {
