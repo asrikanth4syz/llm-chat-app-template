@@ -4887,3 +4887,33 @@ describe("Books sync stamps last-synced as data lands", () => {
     expect(Date.parse(String(stamp))).toBeGreaterThan(Date.now() - 60000); // stamped ~now, not stale
   });
 });
+
+import { mapBooksVendorContact, isVendorContact } from "../src/index";
+
+describe("AP vendor sync — vendor contacts mirror into ap_vendors", () => {
+  it("isVendorContact + mapBooksVendorContact route by contact_type", () => {
+    expect(isVendorContact({ contact_type: "vendor" })).toBe(true);
+    expect(isVendorContact({ contact_type: "customer" })).toBe(false);
+    const v = mapBooksVendorContact({ contact_id: "V9", contact_name: "CHHAVI MERCHANDISE", email: "c@x.com" });
+    expect("vendor" in v && v.vendor.vendor_id).toBe("V9");
+    expect("vendor" in v && v.vendor.name).toBe("CHHAVI MERCHANDISE");
+  });
+
+  it("a vendor contact lands in ap_vendors, a customer in ar_clients", async () => {
+    const be = booksEnv();
+    const { impl } = mockBooks({
+      contacts: [
+        { contact_id: "VEND1", contact_name: "CHHAVI MERCHANDISE", contact_type: "vendor", email: "c@x.com" },
+        { contact_id: "CUST1", contact_name: "Acme Foods", contact_type: "customer" },
+      ],
+    });
+    await runBooksSync(be, { full: true }, impl);
+    const db = env.DB as D1Database;
+    const vend = await db.prepare("SELECT name FROM ap_vendors WHERE vendor_id='VEND1'").first() as { name: string } | null;
+    expect(vend?.name).toBe("CHHAVI MERCHANDISE");                       // vendor appears in Payables even with no bills
+    const misfiled = await db.prepare("SELECT 1 FROM ar_clients WHERE client_id='VEND1'").first();
+    expect(misfiled).toBeFalsy();                                        // and is NOT mis-filed as an AR customer
+    const cust = await db.prepare("SELECT name FROM ar_clients WHERE client_id='CUST1'").first() as { name: string } | null;
+    expect(cust?.name).toBe("Acme Foods");
+  });
+});
