@@ -7238,15 +7238,24 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
       ).bind(dc.order_id, oi.sku).first() as Record<string,unknown>|null;
       if ((row?.total as number || 0) < (oi.qty as number)) { allDelivered = false; break; }
     }
-    if (allDelivered) {
-      await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    // Advance the order from ANY non-terminal status (not just IN_SHIPMENT): a
+    // delivered DC must always move its order to CLOSED/PARTIALLY_CLOSED, otherwise
+    // the client's "My Orders" never reflects the delivery even though the DC shows
+    // DELIVERED to warehouse/ops.
+    const curOrd = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(dc.order_id).first() as { status?: string } | null;
+    const prevStatus = curOrd?.status || "";
+    const terminal = prevStatus === "CLOSED" || prevStatus === "CANCELLED";
+    if (allDelivered && !terminal) {
+      await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED')").bind(dc.order_id).run();
       await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
-        .bind(uid(), dc.order_id, 'IN_SHIPMENT', 'CLOSED', user!.sub, user!.name, `Fully delivered — DC ${id}`).run();
+        .bind(uid(), dc.order_id, prevStatus || null, 'CLOSED', user!.sub, user!.name, `Fully delivered — DC ${id}`).run();
       // Suppress any lingering SCHEDULED challan so it can never be dispatched again.
       await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE order_id=? AND status='SCHEDULED'").bind(dc.order_id).run();
       orderFullyClosed = true;
-    } else {
-      await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
+    } else if (!terminal && prevStatus !== "PARTIALLY_CLOSED") {
+      await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED')").bind(dc.order_id).run();
+      await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), dc.order_id, prevStatus || null, 'PARTIALLY_CLOSED', user!.sub, user!.name, `Partially delivered — DC ${id}`).run();
     }
   }
 
@@ -7365,7 +7374,8 @@ async function handlePartialDelivery(request: Request, env: Env, path: string): 
 
   // Create new DC for remaining
   if (dc?.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(dc.order_id).run();
+    // From any non-terminal status, so the client's order reflects the partial delivery.
+    await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status NOT IN ('CLOSED','CANCELLED','PARTIALLY_CLOSED')").bind(dc.order_id).run();
     const remaining = total_qty - delivered_qty;
     const newDCId = `DC-${Math.floor(Math.random()*9000+1000)}`;
     const newDCNumber = await nextDCNumber(env);

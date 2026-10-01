@@ -4561,3 +4561,26 @@ describe("finance-ar/by-customer summary + email statement", () => {
     expect((await post("/api/finance/ar/client/bc-c2/email-statement", {}, adminToken)).status).toBe(400); // no email on file
   });
 });
+
+describe("delivery → order status advances from any non-terminal status (client visibility)", () => {
+  it("a delivered DC moves its order to PARTIALLY_CLOSED then CLOSED even if never IN_SHIPMENT", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DLV','c1','tst-ops','READY_TO_PICK',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-dlv-i1','OD-DLV','SKU001','Rice',10,100,1000)").run();
+    // DC dispatched only 6 of 10; delivering exactly 6 is NOT a discrepancy (no voice gate).
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODV-DC','OD-DLV','IN_TRANSIT',6,'ODV-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odv-di1','ODV-DC','SKU001','Rice',6,0)").run();
+    const r1 = await post("/api/delivery-challans/ODV-DC/deliver", { items: [{ sku: "SKU001", qty_delivered: 6 }] }, adminToken);
+    expect(r1.status).toBe(200);
+    let o = await db.prepare("SELECT status FROM orders WHERE id='OD-DLV'").first() as { status: string };
+    expect(o.status).toBe("PARTIALLY_CLOSED"); // was READY_TO_PICK — previously would NOT advance
+    // The finalize created a follow-up DC for the remaining 4 — deliver it → CLOSED.
+    const follow = await db.prepare("SELECT id FROM delivery_challans WHERE order_id='OD-DLV' AND status='SCHEDULED'").first() as { id: string };
+    expect(follow?.id).toBeTruthy();
+    await db.prepare("UPDATE delivery_challans SET status='IN_TRANSIT' WHERE id=?").bind(follow.id).run();
+    const r2 = await post(`/api/delivery-challans/${follow.id}/deliver`, { items: [{ sku: "SKU001", qty_delivered: 4 }] }, adminToken);
+    expect(r2.status).toBe(200);
+    o = await db.prepare("SELECT status FROM orders WHERE id='OD-DLV'").first() as { status: string };
+    expect(o.status).toBe("CLOSED");
+  });
+});
