@@ -3660,9 +3660,12 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
 
     // Explicit vendor pull (/contacts?contact_type=vendor): mirror EVERY vendor into
     // ap_vendors, independent of bills or of whether the default contacts list tags them.
-    const vendorRows2: Record<string, unknown>[] = [];
-    for (const z of await pull("vendors")) { const v = mapBooksVendorContact(z); if ("error" in v) { r.errors.push(v.error); continue; } vendorRows2.push(v.vendor); }
-    if (vendorRows2.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorRows2);
+    // Best-effort: a failure here must never abort the AR/AP sync that follows.
+    try {
+      const vendorRows2: Record<string, unknown>[] = [];
+      for (const z of await pull("vendors")) { const v = mapBooksVendorContact(z); if ("error" in v) { r.errors.push(v.error); continue; } vendorRows2.push(v.vendor); }
+      if (vendorRows2.length) await upsertMirror(env, "ap_vendors", "vendor_id", vendorRows2);
+    } catch (e) { r.errors.push(`vendors skipped: ${String(e)}`); }
 
     const invoiceRows: Record<string, unknown>[] = []; const invoiceRefs: Array<{ id: string; reference: string }> = [];
     for (const z of await pull("invoices")) {
@@ -3763,14 +3766,13 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
 const BOOKS_ENTITIES = ["contacts", "vendors", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"] as const;
 // Logical entity → Zoho path, response key, and extra query params. Entities not
 // listed use their own name as the path and response key.
-// NB: the Zoho Books /contacts LIST filter takes the PLURAL value ("vendors"/"customers"),
-// even though an individual contact's contact_type field is the singular "vendor"/"customer".
-// Zoho's /contacts list returns customers only unless contact_type=vendors is passed, so the
-// vendor pull MUST send the plural filter (the earlier singular value silently returned none).
+// The Zoho Books /contacts list filters by contact_type with the SINGULAR value
+// ("vendor"/"customer") — the plural value is rejected with HTTP 400. "vendors" and
+// "customers" are logical sync/probe entities that hit /contacts with that filter.
 const BOOKS_FETCH_SPEC: Record<string, { path: string; key: string; params?: Record<string, string> }> = {
-  vendors: { path: "contacts", key: "contacts", params: { contact_type: "vendors" } },
+  vendors: { path: "contacts", key: "contacts", params: { contact_type: "vendor" } },
   // Not a sync entity — used only by the counts cross-check for an accurate customer total.
-  customers: { path: "contacts", key: "contacts", params: { contact_type: "customers" } },
+  customers: { path: "contacts", key: "contacts", params: { contact_type: "customer" } },
 };
 const BACKFILL_PAGE_BUDGET = 8; // pages fetched+written per invocation (≈1600 rows at PER_PAGE=200)
 interface BackfillStepResult {
@@ -3844,7 +3846,16 @@ async function runBooksBackfillStep(env: Env, fetchImpl: FetchImpl = fetch): Pro
     while (stage < BOOKS_ENTITIES.length && pages < BACKFILL_PAGE_BUDGET) {
       const entity = BOOKS_ENTITIES[stage];
       const page = parseInt(await getConfig(env, `books_bf_page_${entity}`, "1"), 10) || 1;
-      const { items, hasMore } = await booksFetch(env, token, entity, { page, modifiedSinceEpoch: 0 }, fetchImpl);
+      let items: Record<string, unknown>[]; let hasMore: boolean;
+      try {
+        ({ items, hasMore } = await booksFetch(env, token, entity, { page, modifiedSinceEpoch: 0 }, fetchImpl));
+      } catch (e) {
+        // The vendors pull is best-effort: a Zoho quirk on /contacts?contact_type=vendor
+        // must never abort the whole backfill (invoices/bills come after it). Skip the
+        // stage and carry on; every other entity stays fatal.
+        if (entity === "vendors") { r.errors.push(`vendors skipped: ${String(e)}`); stage++; await setConfig(env, "books_bf_stage", String(stage), "system"); pages++; r.pages_this_run = pages; continue; }
+        throw e;
+      }
       r.entity_counts[entity] = (r.entity_counts[entity] || 0) + await _ingestBooksEntity(env, entity, items);
       pages++; r.pages_this_run = pages; r.stage = entity;
       if (hasMore) { await setConfig(env, `books_bf_page_${entity}`, String(page + 1), "system"); }
