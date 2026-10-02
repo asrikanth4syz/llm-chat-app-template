@@ -197,6 +197,7 @@ const NAV = {
     { id:'dunning',         label:'Dunning',          icon:iconMail,     badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconWallet,   badge:null },
     { section:'Reports & Insights' },
+    { id:'sales_analytics',      label:'Sales Analytics',     icon:iconPie,     badge:null },
     { id:'exec_bi',              label:'Executive BI',        icon:iconPie,     badge:null },
     { id:'consolidated_report',  label:'Consolidated Report', icon:iconFile,    badge:null },
     { id:'reports',              label:'Reports & BI',        icon:iconReports, badge:null },
@@ -1091,6 +1092,8 @@ const PAGE_MAP = {
   finance_dashboard: 'renderFinanceDashboard',
   finance_setup: 'renderFinanceSetup',
   my_statement: 'renderMyStatement',
+  // Sales Analytics (app.17) — super-admin only (platform nav).
+  sales_analytics: 'renderSalesAnalytics',
 };
 
 // Phase 2: pages folded into a hub redirect to the hub on their tab, so every
