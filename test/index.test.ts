@@ -4924,7 +4924,7 @@ describe("AP vendor pull + sync cross-check", () => {
     const res = await booksFetch(booksEnv(), "tok", "vendors", { page: 1 }, impl);
     expect(res.items.length).toBe(1);
     const url = calls.find(c => c.url.includes("/books/v3/contacts"))?.url || "";
-    expect(url).toContain("contact_type=vendor");
+    expect(url).toContain("contact_type=vendors"); // Zoho list filter is the PLURAL value
   });
 
   it("a backfill run mirrors a vendor contact into ap_vendors", async () => {

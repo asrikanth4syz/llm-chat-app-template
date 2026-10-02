@@ -3763,10 +3763,14 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
 const BOOKS_ENTITIES = ["contacts", "vendors", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"] as const;
 // Logical entity → Zoho path, response key, and extra query params. Entities not
 // listed use their own name as the path and response key.
+// NB: the Zoho Books /contacts LIST filter takes the PLURAL value ("vendors"/"customers"),
+// even though an individual contact's contact_type field is the singular "vendor"/"customer".
+// Zoho's /contacts list returns customers only unless contact_type=vendors is passed, so the
+// vendor pull MUST send the plural filter (the earlier singular value silently returned none).
 const BOOKS_FETCH_SPEC: Record<string, { path: string; key: string; params?: Record<string, string> }> = {
-  vendors: { path: "contacts", key: "contacts", params: { contact_type: "vendor" } },
+  vendors: { path: "contacts", key: "contacts", params: { contact_type: "vendors" } },
   // Not a sync entity — used only by the counts cross-check for an accurate customer total.
-  customers: { path: "contacts", key: "contacts", params: { contact_type: "customer" } },
+  customers: { path: "contacts", key: "contacts", params: { contact_type: "customers" } },
 };
 const BACKFILL_PAGE_BUDGET = 8; // pages fetched+written per invocation (≈1600 rows at PER_PAGE=200)
 interface BackfillStepResult {
