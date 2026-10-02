@@ -10004,7 +10004,8 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
   let token: string;
   try { token = await zohoGetToken(env, fetch); } catch (e) { return json({ error: `Could not reach Zoho: ${String(e)}` }, 502); }
   // Pull all of this customer's invoices from Zoho (paginated), keyed by invoice_id.
-  const zoho: Record<string, { number: string; balance: number; status: string }> = {};
+  type ZInv = { number: string; balance: number; status: string; date: string; due_date: string };
+  const zoho: Record<string, ZInv> = {};
   try {
     for (let page = 1; page <= 50; page++) {
       const qs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID || "", per_page: "200", page: String(page), customer_id: id });
@@ -10015,16 +10016,33 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
       for (const z of items) {
         const iid = String(z.invoice_id ?? ""); if (!iid) continue;
         const st = String(z.status ?? "").toLowerCase();
-        zoho[iid] = { number: String(z.invoice_number ?? iid), balance: toPaise(z.balance as string | number), status: st };
+        zoho[iid] = { number: String(z.invoice_number ?? iid), balance: toPaise(z.balance as string | number), status: st,
+          date: String(z.date ?? ""), due_date: String(z.due_date ?? "") };
       }
       if (!data.page_context?.has_more_page) break;
     }
   } catch (e) { return json({ error: `Zoho read failed: ${String(e)}` }, 502); }
 
+  // Zoho's OWN customer-level figures (the number shown on the customer page). These let
+  // us tell a data gap (invoices differ) apart from a definitional gap (Zoho's receivable
+  // counts unapplied credits/advances that the sum of invoice balances does not).
+  let contact: { receivable: number | null; unused_credits: number | null; name: string } = { receivable: null, unused_credits: null, name: "" };
+  try {
+    const cqs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID || "" });
+    const cres = await fetch(`https://www.zohoapis.${zohoDc(env)}/books/v3/contacts/${encodeURIComponent(id)}?${cqs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+    if (cres.ok) {
+      const cdata = await cres.json().catch(() => ({})) as { contact?: Record<string, unknown> };
+      const c = cdata.contact || {};
+      if (c.outstanding_receivable_amount != null) contact.receivable = toPaise(c.outstanding_receivable_amount as string | number);
+      if (c.unused_credits_receivable_amount != null) contact.unused_credits = toPaise(c.unused_credits_receivable_amount as string | number);
+      contact.name = String(c.contact_name ?? "");
+    }
+  } catch { /* contact-level figure is advisory; the invoice diff stands on its own */ }
+
   // App mirror for this client.
   const appRows = ((await env.DB.prepare(
-    "SELECT id, number, balance, status FROM ar_invoices WHERE client_id=?"
-  ).bind(id).all()).results || []) as Array<{ id: string; number: string; balance: number; status: string }>;
+    "SELECT id, number, balance, status, date, due_date, effective_due_date FROM ar_invoices WHERE client_id=?"
+  ).bind(id).all()).results || []) as Array<{ id: string; number: string; balance: number; status: string; date: string; due_date: string; effective_due_date: string | null }>;
   const app: Record<string, { number: string; balance: number; status: string }> = {};
   for (const r of appRows) app[r.id] = { number: r.number, balance: r.balance || 0, status: r.status };
 
@@ -10034,21 +10052,37 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
 
   const missing_in_app: Array<Record<string, unknown>> = [];
   const mismatched: Array<Record<string, unknown>> = [];
+  // Full line-by-line view (every open invoice on either side), for an exportable review.
+  const lines: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
   for (const [iid, z] of Object.entries(zoho)) {
     if (!isOpen(z.status)) continue;
+    seen.add(iid);
     const a = app[iid];
+    const appBal = a ? a.balance : null;
+    const state = !a ? (z.balance !== 0 ? "missing_in_app" : "ok") : (a.balance === z.balance ? "ok" : "mismatch");
+    lines.push({ invoice: z.number, date: z.date, due_date: z.due_date, status: z.status, zoho_balance: z.balance, app_balance: appBal, diff: z.balance - (appBal || 0), state });
     if (!a) { if (z.balance !== 0) missing_in_app.push({ invoice: z.number, zoho_balance: z.balance }); continue; }
     if (a.balance !== z.balance) mismatched.push({ invoice: z.number, zoho_balance: z.balance, app_balance: a.balance, diff: z.balance - a.balance });
   }
   const extra_in_app: Array<Record<string, unknown>> = [];
   for (const r of appRows) {
     if (!isOpen(r.status) || (r.balance || 0) <= 0) continue;
-    if (!zoho[r.id]) extra_in_app.push({ invoice: r.number, app_balance: r.balance });
+    if (!seen.has(r.id)) {
+      extra_in_app.push({ invoice: r.number, app_balance: r.balance });
+      lines.push({ invoice: r.number, date: r.date, due_date: r.effective_due_date || r.due_date, status: r.status, zoho_balance: null, app_balance: r.balance, diff: -(r.balance || 0), state: "extra_in_app" });
+    }
   }
+  lines.sort((a, b) => Math.abs(Number(b.diff) || 0) - Math.abs(Number(a.diff) || 0));
   return json({
-    client_id: id, zoho_total: zohoTotal, app_total: appTotal, diff: zohoTotal - appTotal,
+    client_id: id, customer_name: contact.name || null,
+    zoho_total: zohoTotal, app_total: appTotal, diff: zohoTotal - appTotal,
     zoho_invoice_count: Object.keys(zoho).length, app_invoice_count: appRows.length,
-    missing_in_app, mismatched, extra_in_app,
+    zoho_contact_receivable: contact.receivable, zoho_unused_credits: contact.unused_credits,
+    // If Zoho's customer figure exceeds the sum of its own open invoices, the remainder is
+    // definitional (typically unapplied credits/advances), NOT a sync gap.
+    definitional_gap: contact.receivable != null ? contact.receivable - zohoTotal : null,
+    missing_in_app, mismatched, extra_in_app, lines,
     last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
     backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
   });

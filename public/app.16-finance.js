@@ -544,6 +544,8 @@ async function financeViewClient(clientId) {
     <h3 style="margin:22px 0 10px;color:var(--muted)">Paid / settled (${paid.length})</h3>
     ${paid.length ? _financeInvoiceTable(paid, false) : `<div class="card" style="padding:16px;color:var(--muted)">No settled invoices on record.</div>`}`;
 }
+// The last reconcile result, kept so "Export review" can rebuild the CSV without a refetch.
+let _FIN_RECON = null;
 // Reconcile a customer's outstanding against Zoho, live, to the paisa — the trust check.
 async function financeReconcileClient(clientId) {
   const box = document.getElementById('fin-reconcile');
@@ -551,27 +553,75 @@ async function financeReconcileClient(clientId) {
   const r = await api('/finance/ar/client/' + encodeURIComponent(clientId) + '/reconcile');
   if (!r) { if (box) box.innerHTML = ''; return; }
   if (r.error) { if (box) box.innerHTML = `<div class="card" style="padding:12px 14px;color:var(--danger,#b3261e)">${h(r.error)}</div>`; return; }
-  const match = r.diff === 0;
-  const diffAbs = Math.abs(r.diff || 0);
-  const money = v => h(_fmtPaise(v));
-  const rowList = (title, rows, cols) => rows && rows.length ? `
-    <div style="margin-top:8px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">${h(title)} (${rows.length})</div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>
-      ${rows.slice(0, 50).map(x => `<tr style="border-top:1px solid var(--border)">
-        <td style="padding:4px 10px">${h(x.invoice || '')}</td>${cols.map(c => `<td style="padding:4px 10px;text-align:right;font-variant-numeric:tabular-nums">${money(x[c])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table></div>` : '';
-  if (box) box.innerHTML = `
-    <div class="card" style="padding:14px 16px;border-left:4px solid ${match ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div style="font-weight:800;color:${match ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${match ? '✓ Reconciles with Zoho to the paisa' : '⚠ Out by ' + money(diffAbs)}</div>
-        <div style="font-size:12px;color:var(--muted)">Zoho <b>${money(r.zoho_total)}</b> · App <b>${money(r.app_total)}</b> · ${h(String(r.zoho_invoice_count))} Zoho / ${h(String(r.app_invoice_count))} app invoices</div>
+  _FIN_RECON = r;
+  const money = v => (v === null || v === undefined) ? '—' : h(_fmtPaise(v));
+  const invMatch = r.diff === 0;                               // app sum vs Zoho's open-invoice sum
+  const defGap = r.definitional_gap;                           // Zoho customer figure − sum of its open invoices
+  const hasContact = r.zoho_contact_receivable !== null && r.zoho_contact_receivable !== undefined;
+  // Three-way ladder: Zoho customer figure → sum of Zoho open invoices → app.
+  const ladderRow = (label, val, note) => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:6px 12px">${h(label)}${note ? ` <span style="color:var(--muted);font-weight:400">${h(note)}</span>` : ''}</td>
+    <td style="padding:6px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${money(val)}</td></tr>`;
+  const stateBadge = s => s === 'ok' ? '<span style="color:var(--success,#2e6e12)">✓</span>'
+    : s === 'mismatch' ? '<span style="color:var(--danger,#b3261e)">≠ differs</span>'
+    : s === 'missing_in_app' ? '<span style="color:var(--danger,#b3261e)">missing in app</span>'
+    : s === 'extra_in_app' ? '<span style="color:var(--warning,#8a5a00)">extra in app</span>' : h(s || '');
+  const lines = r.lines || [];
+  const notOk = lines.filter(l => l.state !== 'ok');
+  const fullTable = lines.length ? `
+    <div style="margin-top:12px;overflow-x:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+        <div style="font-size:12px;font-weight:700">Invoice-by-invoice (${notOk.length ? h(String(notOk.length)) + ' need attention of ' : ''}${h(String(lines.length))})</div>
+        <button class="btn btn-secondary btn-sm" ${dataAct('financeExportReconcile')} title="Download this comparison as a CSV for review">Export review (CSV)</button>
       </div>
-      ${!r.backfill_complete ? `<div style="font-size:12px;color:var(--warning,#8a5a00);margin-top:4px">⚠ Backfill is still running — figures may be incomplete until it finishes.</div>` : ''}
-      ${rowList('Missing in app (in Zoho, not synced)', r.missing_in_app, ['zoho_balance'])}
-      ${rowList('Balance differs (Zoho vs app vs diff)', r.mismatched, ['zoho_balance', 'app_balance', 'diff'])}
-      ${rowList('Extra in app (not in Zoho)', r.extra_in_app, ['app_balance'])}
-      ${!match ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">Most mismatches clear after a fresh sync. If they persist, use <b>Rebuild from Books</b> to re-pull every document.</div>` : ''}
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:5px 10px">Invoice</th><th style="padding:5px 10px">Date</th><th style="padding:5px 10px">Status</th>
+          <th style="padding:5px 10px;text-align:right">Zoho</th><th style="padding:5px 10px;text-align:right">App</th>
+          <th style="padding:5px 10px;text-align:right">Diff</th><th style="padding:5px 10px"></th></tr></thead>
+        <tbody>${lines.slice(0, 200).map(l => `<tr style="border-top:1px solid var(--border);${l.state !== 'ok' ? 'background:var(--danger-bg,#fff2f0)' : ''}">
+          <td style="padding:5px 10px;white-space:nowrap">${h(l.invoice || '')}</td>
+          <td style="padding:5px 10px;white-space:nowrap;color:var(--muted)">${h(l.date || '')}</td>
+          <td style="padding:5px 10px;color:var(--muted)">${h(l.status || '')}</td>
+          <td style="padding:5px 10px;text-align:right;font-variant-numeric:tabular-nums">${money(l.zoho_balance)}</td>
+          <td style="padding:5px 10px;text-align:right;font-variant-numeric:tabular-nums">${money(l.app_balance)}</td>
+          <td style="padding:5px 10px;text-align:right;font-variant-numeric:tabular-nums;${l.diff ? 'color:var(--danger,#b3261e);font-weight:600' : ''}">${l.diff ? money(l.diff) : '—'}</td>
+          <td style="padding:5px 10px;white-space:nowrap">${stateBadge(l.state)}</td></tr>`).join('')}
+        </tbody></table>
+      ${lines.length > 200 ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">Showing the 200 largest by difference — export the CSV for the full list.</div>` : ''}
+    </div>` : '';
+  if (box) box.innerHTML = `
+    <div class="card" style="padding:14px 16px;border-left:4px solid ${invMatch && !defGap ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">
+      <div style="font-weight:800;color:${invMatch && !defGap ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'};margin-bottom:8px">
+        ${invMatch && !defGap ? '✓ Reconciles with Zoho to the paisa' : invMatch && defGap ? 'ⓘ App matches Zoho’s invoices — the rest is credits/advances' : '⚠ App differs from Zoho by ' + money(Math.abs(r.diff || 0))}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;max-width:460px">
+        <tbody>
+        ${hasContact ? ladderRow('Zoho customer receivable', r.zoho_contact_receivable, '(as shown in Zoho)') : ''}
+        ${ladderRow('Sum of Zoho open invoices', r.zoho_total, `${r.zoho_invoice_count} invoices`)}
+        ${ladderRow('App — Total Outstanding', r.app_total, `${r.app_invoice_count} invoices`)}
+        </tbody></table>
+      ${hasContact && defGap ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px 10px;background:var(--bg-subtle,#f5f5f5);border-radius:6px">
+        Zoho’s customer figure is <b>${money(defGap)}</b> higher than the sum of its own open invoices${r.zoho_unused_credits ? ` — of which <b>${money(r.zoho_unused_credits)}</b> is unused credits/advances` : ''}.
+        That part is a <b>definitional</b> difference (Zoho counts credits/advances in the customer total), <b>not</b> a sync gap, so the app’s per-invoice outstanding is still correct.</div>` : ''}
+      ${!r.backfill_complete ? `<div style="font-size:12px;color:var(--warning,#8a5a00);margin-top:8px">⚠ Backfill is still running — figures may be incomplete until it finishes.</div>` : ''}
+      ${!invMatch ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">The highlighted rows below are the exact invoices behind the difference. Most clear after <b>Sync now</b>; if they persist, use <b>Rebuild from Books</b>.</div>` : ''}
+      ${fullTable}
     </div>`;
+}
+// Download the current reconcile result as a CSV for offline review.
+function financeExportReconcile() {
+  const r = _FIN_RECON; if (!r) { showToast('Run Reconcile first', 'error'); return; }
+  const p = v => (v === null || v === undefined) ? '' : (v / 100).toFixed(2);
+  const out = [['Invoice', 'Date', 'Due', 'Status', 'Zoho balance', 'App balance', 'Diff', 'State']];
+  for (const l of (r.lines || [])) out.push([l.invoice || '', l.date || '', l.due_date || '', l.status || '', p(l.zoho_balance), p(l.app_balance), p(l.diff), l.state || '']);
+  out.push([]);
+  if (r.zoho_contact_receivable != null) out.push(['Zoho customer receivable', '', '', '', p(r.zoho_contact_receivable)]);
+  out.push(['Sum of Zoho open invoices', '', '', '', p(r.zoho_total)]);
+  out.push(['App Total Outstanding', '', '', '', p(r.app_total)]);
+  out.push(['App vs Zoho invoices diff', '', '', '', p(r.diff)]);
+  const name = (r.customer_name || r.client_id || 'customer').replace(/[^\w.-]+/g, '_');
+  _downloadCsv('reconcile-' + name + '-' + new Date().toISOString().slice(0, 10) + '.csv', out);
+  showToast('Exported reconcile review to CSV', 'success');
 }
 // Full statement (ledger): opening → every invoice/payment/credit note → closing.
 function _finLedgerTable(data) {
