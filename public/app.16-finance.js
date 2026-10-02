@@ -183,9 +183,12 @@ function _finToolbar(kind, placeholder, withExport) {
     ? `<button class="btn btn-secondary" ${dataAct('financeExportCsv', kind)} title="Download this list as a CSV spreadsheet">Export CSV</button>`
     : '';
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-    <input type="search" data-input="${filterFn}" data-val value="${h(q || '')}" placeholder="${h(placeholder)}"
-      aria-label="${h(placeholder)}"
-      style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font:inherit;background:var(--bg,#fff);color:inherit">
+    <div style="flex:1;min-width:220px;position:relative;display:flex;align-items:center">
+      <span aria-hidden="true" style="position:absolute;left:12px;font-size:15px;color:var(--muted);pointer-events:none">🔍</span>
+      <input type="search" data-input="${filterFn}" data-val value="${h(q || '')}" placeholder="${h(placeholder)}"
+        aria-label="${h(placeholder)}"
+        style="width:100%;padding:10px 12px 10px 36px;border:2px solid var(--border);border-radius:8px;font:inherit;background:var(--bg,#fff);color:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+    </div>
     ${exportBtn}</div>`;
 }
 
@@ -313,7 +316,10 @@ function _financeInvoiceTable(invoices, showClient, sortKind, page) {
 async function renderReceivables(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading receivables…</p></div>`;
   const period = _FIN.kpiPeriod || 90;
-  const [summary, list, kpis] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices' + (_FIN.arAll ? '?all=1' : '')), api('/finance/kpis?period=' + period)]);
+  // Paint the table as soon as the summary + list are in; KPIs are heavier to
+  // compute, so they load asynchronously into their own slot (the page no longer
+  // blocks on them).
+  const [summary, list] = await Promise.all([api('/finance/ar/summary'), api('/finance/ar/invoices' + (_FIN.arAll ? '?all=1' : ''))]);
   if (!summary || !list) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load receivables.</div>`; return; }
   const byCur = summary.by_currency || [];
   _FIN.ar = list.invoices || []; _FIN.arPage = 1;
@@ -327,12 +333,19 @@ async function renderReceivables(main) {
       </div>
     </div>
     ${_finSyncedLine(summary.last_sync_at)}
-    ${_finStaleBanner(kpis && kpis.stale)}
+    <div id="ar-stale-host"></div>
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">No receivables data yet. If that's unexpected, an admin can turn on the Zoho Books sync under <strong>Finance Setup</strong>.</div>`}
-    ${kpis ? _finKpiSection(kpis) : ''}
+    <div id="ar-kpi-host"><div class="card" style="padding:12px 16px;color:var(--muted);font-size:12px">Loading performance metrics…</div></div>
     <h3 style="margin:18px 0 10px">${_FIN.arAll ? 'All Invoices' : 'Open Invoices'}</h3>
     ${_finToolbar('ar', 'Search invoices by number, customer, status…', true)}
     <div id="ar-table-host">${_financeInvoiceTable(_finSortRows(_FIN.ar.filter(i => _finRowMatch(i, _FIN.arQ)), _FIN.arSort), true, 'ar', (_FIN.arPage || 1))}</div>`;
+  // KPIs load after the table is visible.
+  api('/finance/kpis?period=' + period).then(kpis => {
+    const kh = document.getElementById('ar-kpi-host');
+    if (kh) kh.innerHTML = kpis ? _finKpiSection(kpis) : '';
+    const sh = document.getElementById('ar-stale-host');
+    if (sh && kpis && kpis.stale) sh.innerHTML = _finStaleBanner(kpis.stale);
+  }).catch(() => { const kh = document.getElementById('ar-kpi-host'); if (kh) kh.innerHTML = ''; });
 }
 // Live filter for the receivables table (delegated data-input target).
 function financeFilterAr(q) {
@@ -515,19 +528,50 @@ async function financeViewClient(clientId) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to Receivables</button>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" ${dataAct('financeEmailStatement', clientId)}>✉ Email statement</button>
         <button class="btn btn-secondary" ${dataAct('financeViewLedger', clientId, 'fy')}>Full statement (ledger)</button>
+        <button class="btn btn-secondary" ${dataAct('financeReconcileClient', clientId)} title="Pull this customer's invoices live from Zoho and compare to the app, to the paisa">⚖ Reconcile with Zoho</button>
         <button class="btn btn-secondary" ${dataAct('financePrintStatement')}>Print / PDF</button>
         <button class="btn btn-secondary" ${dataAct('financeViewClient', clientId)}>Refresh</button>
       </div>
     </div>
     <h2 style="margin:0 0 12px">${h(name)} — Statement</h2>
+    <div id="fin-reconcile" style="margin-bottom:12px"></div>
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">Nothing outstanding for this customer.</div>`}
     <h3 style="margin:18px 0 10px">Open invoices (${open.length})</h3>
     ${_financeInvoiceTable(open, false)}
     <h3 style="margin:22px 0 10px;color:var(--muted)">Paid / settled (${paid.length})</h3>
     ${paid.length ? _financeInvoiceTable(paid, false) : `<div class="card" style="padding:16px;color:var(--muted)">No settled invoices on record.</div>`}`;
+}
+// Reconcile a customer's outstanding against Zoho, live, to the paisa — the trust check.
+async function financeReconcileClient(clientId) {
+  const box = document.getElementById('fin-reconcile');
+  if (box) box.innerHTML = `<div class="card" style="padding:12px 14px"><span style="font-size:13px;color:var(--muted)">Pulling this customer's invoices from Zoho…</span></div>`;
+  const r = await api('/finance/ar/client/' + encodeURIComponent(clientId) + '/reconcile');
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  if (r.error) { if (box) box.innerHTML = `<div class="card" style="padding:12px 14px;color:var(--danger,#b3261e)">${h(r.error)}</div>`; return; }
+  const match = r.diff === 0;
+  const diffAbs = Math.abs(r.diff || 0);
+  const money = v => h(_fmtPaise(v));
+  const rowList = (title, rows, cols) => rows && rows.length ? `
+    <div style="margin-top:8px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">${h(title)} (${rows.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>
+      ${rows.slice(0, 50).map(x => `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:4px 10px">${h(x.invoice || '')}</td>${cols.map(c => `<td style="padding:4px 10px;text-align:right;font-variant-numeric:tabular-nums">${money(x[c])}</td>`).join('')}</tr>`).join('')}
+      </tbody></table></div>` : '';
+  if (box) box.innerHTML = `
+    <div class="card" style="padding:14px 16px;border-left:4px solid ${match ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="font-weight:800;color:${match ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${match ? '✓ Reconciles with Zoho to the paisa' : '⚠ Out by ' + money(diffAbs)}</div>
+        <div style="font-size:12px;color:var(--muted)">Zoho <b>${money(r.zoho_total)}</b> · App <b>${money(r.app_total)}</b> · ${h(String(r.zoho_invoice_count))} Zoho / ${h(String(r.app_invoice_count))} app invoices</div>
+      </div>
+      ${!r.backfill_complete ? `<div style="font-size:12px;color:var(--warning,#8a5a00);margin-top:4px">⚠ Backfill is still running — figures may be incomplete until it finishes.</div>` : ''}
+      ${rowList('Missing in app (in Zoho, not synced)', r.missing_in_app, ['zoho_balance'])}
+      ${rowList('Balance differs (Zoho vs app vs diff)', r.mismatched, ['zoho_balance', 'app_balance', 'diff'])}
+      ${rowList('Extra in app (not in Zoho)', r.extra_in_app, ['app_balance'])}
+      ${!match ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">Most mismatches clear after a fresh sync. If they persist, use <b>Rebuild from Books</b> to re-pull every document.</div>` : ''}
+    </div>`;
 }
 // Full statement (ledger): opening → every invoice/payment/credit note → closing.
 function _finLedgerTable(data) {

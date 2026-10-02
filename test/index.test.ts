@@ -4957,6 +4957,15 @@ describe("Books find diagnostic endpoint", () => {
   });
 });
 
+describe("AR per-customer reconcile with Zoho", () => {
+  it("gates to finance roles and requires Zoho to be configured", async () => {
+    const forbidden = await get("/api/finance/ar/client/C1/reconcile", clientToken);
+    expect(forbidden.status).toBe(403);
+    const r = await get("/api/finance/ar/client/C1/reconcile", adminToken);
+    expect([400, 502]).toContain(r.status); // test env has no Zoho org id → "not connected"
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
