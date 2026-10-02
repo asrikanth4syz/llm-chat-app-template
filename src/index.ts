@@ -2833,7 +2833,13 @@ async function ensureArSchema(env: Env): Promise<void> {
     // invoice). Captured from the contact payload / the reconcile detail call. Only folded
     // into a client's outstanding when fin_include_opening_balance is on.
     `ALTER TABLE ar_clients ADD COLUMN opening_balance INTEGER DEFAULT 0`,
+    // Sales Analytics (super-admin): per-client default salesperson owner + region. Both
+    // are app-owned (never set from the Zoho mirror), so upsertMirror's COALESCE keep
+    // preserves them across syncs.
+    `ALTER TABLE ar_clients ADD COLUMN salesperson_id TEXT`,
+    `ALTER TABLE ar_clients ADD COLUMN region TEXT`,
   ];
+  stmts.push(`CREATE TABLE IF NOT EXISTS sales_reps ( id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )`);
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Config defaults — reminders ship OFF and stay disabled until backfill completes.
   try {
@@ -4533,6 +4539,12 @@ export default {
       if (path==="/api/analytics/billing-exceptions" && method==="GET") return handleBillingExceptions(request,env);
       if (path.match(/^\/api\/analytics\/billing-exceptions\/[^/]+$/) && method==="GET") return handleBillingExceptionDetail(request,env,path);
       if (path.match(/^\/api\/analytics\/client\/[^/]+$/) && method==="GET") return handleClientAnalytics(request,env,path);
+      if (path==="/api/analytics/sales/by-rep" && method==="GET") return handleSalesByRep(request,env);
+      if (path==="/api/analytics/sales/by-region" && method==="GET") return handleSalesByRegion(request,env);
+      if (path==="/api/analytics/reps" && (method==="GET"||method==="POST")) return handleSalesReps(request,env);
+      if (path.match(/^\/api\/analytics\/reps\/[^/]+$/) && method==="POST") return handleSalesRepUpdate(request,env,path);
+      if (path==="/api/analytics/assignments" && method==="GET") return handleSalesAssignments(request,env);
+      if (path==="/api/analytics/client-assignment" && method==="POST") return handleSalesAssign(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/reconcile$/) && method==="GET") return handleArReconcileClient(request,env,path);
@@ -9575,6 +9587,109 @@ async function handleClientAnalytics(request: Request, env: Env, path: string): 
     },
     health: { status: health, reasons }, trend, recent_invoices: recent,
   });
+}
+
+// ── Salespeople & regions (super-admin only) ───────────────────────────
+// Revenue is attributed to a client's owning salesperson. Per-order override
+// is a later phase; today the owner is the per-client default.
+async function handleSalesReps(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => ({})) as { name?: string; email?: string };
+    const name = (body.name || "").trim();
+    if (!name) return json({ error: "Salesperson name is required" }, 400);
+    const id = uid();
+    await env.DB.prepare("INSERT INTO sales_reps (id,name,email,active) VALUES (?,?,?,1)").bind(id, name, (body.email || "").trim() || null).run();
+    await audit(env, user, "SALES_REP_CREATE", "sales_reps", id, undefined, name);
+    return json({ ok: true, id });
+  }
+  const reps = (((await env.DB.prepare("SELECT id,name,email,active FROM sales_reps ORDER BY active DESC, name").all()).results) || []) as Array<Record<string, unknown>>;
+  return json({ reps });
+}
+async function handleSalesRepUpdate(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const body = await request.json().catch(() => ({})) as { name?: string; email?: string; active?: boolean };
+  const sets: string[] = [], binds: unknown[] = [];
+  if (body.name !== undefined) { sets.push("name=?"); binds.push((body.name || "").trim()); }
+  if (body.email !== undefined) { sets.push("email=?"); binds.push((body.email || "").trim() || null); }
+  if (body.active !== undefined) { sets.push("active=?"); binds.push(body.active ? 1 : 0); }
+  if (!sets.length) return json({ error: "Nothing to update" }, 400);
+  binds.push(id);
+  await env.DB.prepare(`UPDATE sales_reps SET ${sets.join(", ")} WHERE id=?`).bind(...binds).run();
+  await audit(env, user, "SALES_REP_UPDATE", "sales_reps", id, undefined, JSON.stringify(body));
+  return json({ ok: true });
+}
+// POST /api/analytics/client-assignment — set a client's owner + region.
+async function handleSalesAssign(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as { client_id?: string; salesperson_id?: string | null; region?: string | null };
+  const cid = (body.client_id || "").trim();
+  if (!cid) return json({ error: "client_id is required" }, 400);
+  const sets: string[] = [], binds: unknown[] = [];
+  if (body.salesperson_id !== undefined) { sets.push("salesperson_id=?"); binds.push((body.salesperson_id || "") || null); }
+  if (body.region !== undefined) { sets.push("region=?"); binds.push((body.region || "").trim() || null); }
+  if (!sets.length) return json({ error: "Nothing to update" }, 400);
+  binds.push(cid);
+  const r = await env.DB.prepare(`UPDATE ar_clients SET ${sets.join(", ")} WHERE client_id=?`).bind(...binds).run();
+  if (!r.meta || r.meta.changes === 0) return json({ error: "Unknown client" }, 404);
+  await audit(env, user, "SALES_CLIENT_ASSIGN", "ar_clients", cid, undefined, JSON.stringify(body));
+  return json({ ok: true });
+}
+// GET /api/analytics/assignments — clients with their owner + region (setup table).
+async function handleSalesAssignments(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const clients = (((await env.DB.prepare(
+    "SELECT client_id, name, salesperson_id, region FROM ar_clients ORDER BY name"
+  ).all()).results) || []) as Array<Record<string, unknown>>;
+  const reps = (((await env.DB.prepare("SELECT id,name FROM sales_reps WHERE active=1 ORDER BY name").all()).results) || []) as Array<Record<string, unknown>>;
+  return json({ clients, reps });
+}
+// GET /api/analytics/sales/by-rep?period= — revenue attributed by client owner.
+async function handleSalesByRep(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const period = Math.min(3650, Math.max(1, parseInt(new URL(request.url).searchParams.get("period") || "90", 10) || 90));
+  const start = addDaysIST(istToday(), -period);
+  const repRows = (((await env.DB.prepare("SELECT id,name FROM sales_reps").all()).results) || []) as Array<{ id: string; name: string }>;
+  const repName: Record<string, string> = {}; for (const r of repRows) repName[r.id] = r.name;
+  // Assigned client counts per rep (all clients, not just billed).
+  const assigned = (((await env.DB.prepare("SELECT COALESCE(salesperson_id,'') AS rep, COUNT(*) AS n FROM ar_clients GROUP BY rep").all()).results) || []) as Array<{ rep: string; n: number }>;
+  const assignedMap: Record<string, number> = {}; for (const a of assigned) assignedMap[a.rep] = a.n || 0;
+  const sales = (((await env.DB.prepare(
+    `SELECT COALESCE(c.salesperson_id,'') AS rep, COUNT(DISTINCT i.client_id) AS clients_billed, COUNT(*) AS invoices, COALESCE(SUM(i.total),0) AS net
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE i.status!='void' AND i.date>=? GROUP BY rep`
+  ).bind(start).all()).results) || []) as Array<{ rep: string; clients_billed: number; invoices: number; net: number }>;
+  const salesMap: Record<string, { clients_billed: number; invoices: number; net: number }> = {};
+  for (const s of sales) salesMap[s.rep] = { clients_billed: s.clients_billed || 0, invoices: s.invoices || 0, net: s.net || 0 };
+  const repIds = new Set<string>([...Object.keys(assignedMap), ...Object.keys(salesMap)]);
+  const rows = Array.from(repIds).map(rep => ({
+    rep_id: rep || null,
+    name: rep ? (repName[rep] || "(deleted salesperson)") : "Unassigned",
+    clients: assignedMap[rep] || 0,
+    clients_billed: salesMap[rep]?.clients_billed || 0,
+    invoices: salesMap[rep]?.invoices || 0,
+    net_sales: salesMap[rep]?.net || 0,
+  })).sort((a, b) => b.net_sales - a.net_sales);
+  return json({ period_days: period, reps: rows });
+}
+// GET /api/analytics/sales/by-region?period= — net sales by client region.
+async function handleSalesByRegion(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const period = Math.min(3650, Math.max(1, parseInt(new URL(request.url).searchParams.get("period") || "90", 10) || 90));
+  const start = addDaysIST(istToday(), -period);
+  const rows = (((await env.DB.prepare(
+    `SELECT COALESCE(NULLIF(TRIM(c.region),''),'Unassigned') AS region, COUNT(DISTINCT i.client_id) AS clients, COUNT(*) AS invoices, COALESCE(SUM(i.total),0) AS net
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE i.status!='void' AND i.date>=? GROUP BY region ORDER BY net DESC`
+  ).bind(start).all()).results) || []) as Array<Record<string, unknown>>;
+  return json({ period_days: period, regions: rows });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
