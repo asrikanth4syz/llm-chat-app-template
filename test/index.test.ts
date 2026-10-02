@@ -5023,6 +5023,25 @@ describe("Sales Analytics — super-admin only overview", () => {
   });
 });
 
+describe("Sales Analytics — draft invoices are excluded", () => {
+  it("does not count Zoho drafts in sales KPIs or client performance", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('DRC','Draft Co','INR')").run();
+    const prevYm = (() => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, m - 2, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; })();
+    // One REAL (overdue→open) invoice and three DRAFT versions of the same supply.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('DR_REAL','DR_REAL','426-00644','DRC',?,?,15438362,15438362,'INR','open','overdue')").bind(prevYm + "-15", prevYm + "-30").run();
+    for (let i = 0; i < 3; i++) {
+      await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES (?,?,?,'DRC',?,?,18636233,18636233,'INR','open','draft')")
+        .bind("DR_D" + i, "DR_D" + i, "425-" + i, prevYm + "-26", prevYm + "-30").run();
+    }
+    const r = await (await get("/api/analytics/sales/overview?period=365", adminToken)).json() as { client_performance: Array<Record<string, number>> };
+    const row = r.client_performance.find(c => (c.client_id as unknown as string) === "DRC")!;
+    // Only the single real invoice counts — the three drafts (₹1.86L each) are excluded.
+    expect(row.prev).toBe(15438362);
+  });
+});
+
 describe("Billing Exceptions — regular buyer went quiet", () => {
   it("is super-admin only and flags a monthly buyer with no billing this month", async () => {
     const db = env.DB as D1Database;

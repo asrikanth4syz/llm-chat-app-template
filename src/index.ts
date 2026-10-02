@@ -3512,12 +3512,14 @@ function mapBooksInvoice(z: Record<string, unknown>): { row: Record<string, unkn
   _put(row, "payment_expected_date", z.payment_expected_date);
   _put(row, "entity_id", z.entity_id);
   const ex = _num(z.exchange_rate); if (ex !== undefined) row.exchange_rate = ex;
-  // Mirror the Books lifecycle status (open/partial/paid/void). Derived overdue is
-  // computed in recompute; Books 'sent'/'unpaid'/'overdue' collapse to 'open'.
+  // app `status` is the collapsed balance lifecycle (open/partial/paid/void) used by the
+  // recompute + cockpits. books_status keeps the RAW Books status (draft / sent / overdue /
+  // unpaid / paid / partially_paid / void) — the only way to tell a DRAFT (not real billing)
+  // from an issued invoice, which the sales analytics must exclude.
   const st = String(z.status ?? "").toLowerCase();
   row.status = st === "paid" ? "paid" : st === "partially_paid" ? "partial"
     : (st === "void" || st === "voided") ? "void" : "open";
-  row.books_status = row.status; // authoritative lifecycle from Books
+  row.books_status = st || row.status; // raw Books status, preserved (not collapsed)
   return { row, reference: String(z.reference_number ?? "").trim() };
 }
 
@@ -9370,6 +9372,12 @@ async function handleArByCustomer(request: Request, env: Env): Promise<Response>
 // data (invoice line items are not mirrored). Money is paise throughout.
 // ══════════════════════════════════════════════════════════════════════
 const SALES_ANALYTICS_ROLE = "super_admin";
+// "Real" (billable) invoices for sales analytics: not void, and NOT a Zoho draft. A draft
+// is an unposted invoice (often several draft versions of the same supply) — counting it
+// inflates sales. books_status holds the raw Books status; older rows synced before the
+// draft-preservation fix read as 'open', so a Rebuild from Books re-tags them.
+const SALES_REAL_INVOICE = "status!='void' AND COALESCE(books_status,'') != 'draft'";
+const SALES_REAL_INVOICE_I = "i.status!='void' AND COALESCE(i.books_status,'') != 'draft'";
 // Prepend 0 and slice last 7 chars ("YYYY-MM") of an IST month offset from today.
 function _ymOffset(base: string, monthsBack: number): string {
   const [y, m] = base.slice(0, 7).split("-").map(Number);
@@ -9401,7 +9409,7 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   // KPIs over the trailing period (sales = billed invoice total; outstanding is current).
   const kpiRow = await env.DB.prepare(
     `SELECT COALESCE(SUM(total),0) AS net_sales, COUNT(*) AS invoices, COUNT(DISTINCT client_id) AS active_clients
-       FROM ar_invoices WHERE status!='void' AND date >= ?`
+       FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND date >= ?`
   ).bind(periodStart).first() as { net_sales: number; invoices: number; active_clients: number } | null;
   const outRow = await env.DB.prepare(
     `SELECT COALESCE(SUM(balance),0) AS outstanding FROM ar_invoices WHERE status!='void' AND balance > ?`
@@ -9410,7 +9418,7 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   // 12-month sales trend.
   const monthly = (((await env.DB.prepare(
     `SELECT substr(date,1,7) AS ym, COALESCE(SUM(total),0) AS net, COUNT(*) AS cnt
-       FROM ar_invoices WHERE status!='void' AND date >= ? GROUP BY ym ORDER BY ym`
+       FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND date >= ? GROUP BY ym ORDER BY ym`
   ).bind(trendStart).all()).results) || []) as Array<{ ym: string; net: number; cnt: number }>;
   const monthMap: Record<string, { net: number; cnt: number }> = {};
   for (const r of monthly) monthMap[r.ym] = { net: r.net || 0, cnt: r.cnt || 0 };
@@ -9423,7 +9431,7 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   const perfRows = (((await env.DB.prepare(
     `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym, COALESCE(SUM(i.total),0) AS net
        FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
-      WHERE i.status!='void' AND substr(i.date,1,7) IN (?,?)
+      WHERE ${SALES_REAL_INVOICE_I} AND substr(i.date,1,7) IN (?,?)
       GROUP BY i.client_id, ym`
   ).bind(prevYm, curYm).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number }>;
   const byClient: Record<string, { name: string; prev: number; curr: number }> = {};
@@ -9460,7 +9468,7 @@ async function _billingExceptions(env: Env, targetMonth: string, lookback: numbe
     `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym,
             COALESCE(SUM(i.total),0) AS net, MAX(i.date) AS last_date
        FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
-      WHERE i.status!='void' AND substr(i.date,1,7) >= ? AND substr(i.date,1,7) <= ?
+      WHERE ${SALES_REAL_INVOICE_I} AND substr(i.date,1,7) >= ? AND substr(i.date,1,7) <= ?
       GROUP BY i.client_id, ym`
   ).bind(windowStart, targetMonth).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number; last_date: string }>;
   const agg: Record<string, { name: string; months: Record<string, number>; last_date: string }> = {};
@@ -9522,7 +9530,7 @@ async function handleBillingExceptionDetail(request: Request, env: Env, path: st
   const histStart = _ymOffset(month, 11);
   const rows = (((await env.DB.prepare(
     `SELECT substr(date,1,7) AS ym, COALESCE(SUM(total),0) AS net, COUNT(*) AS cnt
-       FROM ar_invoices WHERE status!='void' AND client_id=? AND substr(date,1,7) >= ? AND substr(date,1,7) <= ? GROUP BY ym`
+       FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND client_id=? AND substr(date,1,7) >= ? AND substr(date,1,7) <= ? GROUP BY ym`
   ).bind(id, histStart, month).all()).results) || []) as Array<{ ym: string; net: number; cnt: number }>;
   const hm: Record<string, { net: number; cnt: number }> = {};
   for (const r of rows) hm[r.ym] = { net: r.net || 0, cnt: r.cnt || 0 };
@@ -9546,7 +9554,7 @@ async function handleClientAnalytics(request: Request, env: Env, path: string): 
   const client = await env.DB.prepare("SELECT client_id, name, email FROM ar_clients WHERE client_id=?").bind(id).first() as { client_id: string; name: string; email: string } | null;
   // All non-void invoice dates/totals for cadence + lifetime metrics.
   const inv = (((await env.DB.prepare(
-    "SELECT date, total, balance FROM ar_invoices WHERE status!='void' AND client_id=? ORDER BY date"
+    `SELECT date, total, balance FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND client_id=? ORDER BY date`
   ).bind(id).all()).results) || []) as Array<{ date: string; total: number; balance: number }>;
   const count = inv.length;
   const totalLifetime = inv.reduce((s, i) => s + (i.total || 0), 0);
@@ -9663,7 +9671,7 @@ async function handleSalesByRep(request: Request, env: Env): Promise<Response> {
   const sales = (((await env.DB.prepare(
     `SELECT COALESCE(c.salesperson_id,'') AS rep, COUNT(DISTINCT i.client_id) AS clients_billed, COUNT(*) AS invoices, COALESCE(SUM(i.total),0) AS net
        FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
-      WHERE i.status!='void' AND i.date>=? GROUP BY rep`
+      WHERE ${SALES_REAL_INVOICE_I} AND i.date>=? GROUP BY rep`
   ).bind(start).all()).results) || []) as Array<{ rep: string; clients_billed: number; invoices: number; net: number }>;
   const salesMap: Record<string, { clients_billed: number; invoices: number; net: number }> = {};
   for (const s of sales) salesMap[s.rep] = { clients_billed: s.clients_billed || 0, invoices: s.invoices || 0, net: s.net || 0 };
@@ -9687,7 +9695,7 @@ async function handleSalesByRegion(request: Request, env: Env): Promise<Response
   const rows = (((await env.DB.prepare(
     `SELECT COALESCE(NULLIF(TRIM(c.region),''),'Unassigned') AS region, COUNT(DISTINCT i.client_id) AS clients, COUNT(*) AS invoices, COALESCE(SUM(i.total),0) AS net
        FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
-      WHERE i.status!='void' AND i.date>=? GROUP BY region ORDER BY net DESC`
+      WHERE ${SALES_REAL_INVOICE_I} AND i.date>=? GROUP BY region ORDER BY net DESC`
   ).bind(start).all()).results) || []) as Array<Record<string, unknown>>;
   return json({ period_days: period, regions: rows });
 }
