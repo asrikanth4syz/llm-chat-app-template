@@ -4532,6 +4532,7 @@ export default {
       if (path==="/api/analytics/sales/overview" && method==="GET") return handleSalesOverview(request,env);
       if (path==="/api/analytics/billing-exceptions" && method==="GET") return handleBillingExceptions(request,env);
       if (path.match(/^\/api\/analytics\/billing-exceptions\/[^/]+$/) && method==="GET") return handleBillingExceptionDetail(request,env,path);
+      if (path.match(/^\/api\/analytics\/client\/[^/]+$/) && method==="GET") return handleClientAnalytics(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/reconcile$/) && method==="GET") return handleArReconcileClient(request,env,path);
@@ -9519,6 +9520,61 @@ async function handleBillingExceptionDetail(request: Request, env: Env, path: st
   ).bind(id).all()).results) || []) as Array<Record<string, unknown>>;
   const [one] = await _billingExceptions(env, month, 6).then(xs => xs.filter(x => x.client_id === id));
   return json({ client_id: id, name: client?.name || id, month, history, recent_invoices: recent, exception: one || null });
+}
+
+// GET /api/analytics/client/:id — Client 360 (super-admin only). A sales-lens
+// profile built from the invoice mirror: volumes, cadence, trend and a health
+// indicator (§15: recency + consistency + trend, with the reasons shown).
+async function handleClientAnalytics(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const today = istToday();
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
+  const client = await env.DB.prepare("SELECT client_id, name, email FROM ar_clients WHERE client_id=?").bind(id).first() as { client_id: string; name: string; email: string } | null;
+  // All non-void invoice dates/totals for cadence + lifetime metrics.
+  const inv = (((await env.DB.prepare(
+    "SELECT date, total, balance FROM ar_invoices WHERE status!='void' AND client_id=? ORDER BY date"
+  ).bind(id).all()).results) || []) as Array<{ date: string; total: number; balance: number }>;
+  const count = inv.length;
+  const totalLifetime = inv.reduce((s, i) => s + (i.total || 0), 0);
+  const outstanding = inv.reduce((s, i) => s + ((i.balance || 0) > dust ? i.balance : 0), 0);
+  const firstDate = count ? inv[0].date : null, lastDate = count ? inv[count - 1].date : null;
+  const avgInvoice = count ? Math.round(totalLifetime / count) : 0;
+  // Average interval between consecutive invoices (cadence), in days.
+  let avgInterval = 0;
+  if (count >= 2) { const span = daysBetweenIST(inv[0].date, inv[count - 1].date); avgInterval = Math.round(span / (count - 1)); }
+  const daysSinceLast = lastDate ? daysBetweenIST(lastDate, today) : null;
+  // 12-month trend + trailing-12m total.
+  const histStart = _ymOffset(today, 11);
+  const byMonth: Record<string, number> = {};
+  for (const i of inv) { const ym = (i.date || "").slice(0, 7); if (ym >= histStart && ym <= today.slice(0, 7)) byMonth[ym] = (byMonth[ym] || 0) + (i.total || 0); }
+  const trend = Array.from({ length: 12 }, (_, i) => { const ym = _ymOffset(today, 11 - i); return { month: ym, net_sales: byMonth[ym] || 0 }; });
+  const total12m = trend.reduce((s, t) => s + t.net_sales, 0);
+  const activeMonths = trend.filter(t => t.net_sales > 0).length;
+  const avgMonthly = Math.round(total12m / 12);
+  // Health (§15): recency + consistency + trend (last 3 active-window vs prior 3).
+  const last3 = trend.slice(9).reduce((s, t) => s + t.net_sales, 0);
+  const prev3 = trend.slice(6, 9).reduce((s, t) => s + t.net_sales, 0);
+  const reasons: string[] = [];
+  let health = "stable";
+  if (daysSinceLast != null && avgInterval > 0 && daysSinceLast > Math.max(45, avgInterval * 2)) { health = "at_risk"; reasons.push(`No billing for ${daysSinceLast} days (usual cadence ~${avgInterval}d)`); }
+  if (prev3 > 0 && last3 < prev3 * 0.6) { health = "at_risk"; reasons.push(`Sales down ${Math.round((1 - last3 / prev3) * 100)}% vs the prior 3 months`); }
+  else if (prev3 > 0 && last3 < prev3 * 0.85 && health !== "at_risk") { health = "attention"; reasons.push(`Sales softening vs the prior 3 months`); }
+  if (activeMonths <= 3 && health === "stable") { health = "attention"; reasons.push(`Billed in only ${activeMonths} of the last 12 months`); }
+  if (!reasons.length) reasons.push("Billing cadence and volume are steady");
+  const recent = (((await env.DB.prepare(
+    "SELECT number, date, total, balance, status FROM ar_invoices WHERE status!='void' AND client_id=? ORDER BY date DESC LIMIT 8"
+  ).bind(id).all()).results) || []) as Array<Record<string, unknown>>;
+  return json({
+    client_id: id, name: client?.name || id, email: client?.email || null,
+    metrics: {
+      total_lifetime: totalLifetime, total_12m: total12m, avg_monthly: avgMonthly, avg_invoice: avgInvoice,
+      invoices: count, outstanding, first_billing: firstDate, last_billing: lastDate,
+      days_since_last: daysSinceLast, avg_interval_days: avgInterval, active_months_12m: activeMonths,
+    },
+    health: { status: health, reasons }, trend, recent_invoices: recent,
+  });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a

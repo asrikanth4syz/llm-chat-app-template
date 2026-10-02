@@ -5053,6 +5053,31 @@ describe("Billing Exceptions — regular buyer went quiet", () => {
   });
 });
 
+describe("Client 360 analytics", () => {
+  it("is super-admin only and returns metrics, health, trend and recent invoices", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('C360','Profile Co','INR')").run();
+    const ym = (back: number) => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - back, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    for (let i = 0; i < 3; i++) {
+      await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES (?,?,?,'C360',?,?,100000,?,'INR',?,?)")
+        .bind("P" + i, "P" + i, "P" + i, ym(i) + "-12", ym(i) + "-27", i === 0 ? 100000 : 0, i === 0 ? "open" : "paid", i === 0 ? "open" : "paid").run();
+    }
+    const forbidden = await get("/api/analytics/client/C360", opsToken);
+    expect(forbidden.status).toBe(403);
+    const r = await get("/api/analytics/client/C360", adminToken);
+    expect(r.status).toBe(200);
+    const b = await r.json() as { metrics: Record<string, number>; health: { status: string; reasons: string[] }; trend: unknown[]; recent_invoices: unknown[] };
+    expect(b.metrics.invoices).toBe(3);
+    expect(b.metrics.total_lifetime).toBe(300000);
+    expect(b.metrics.outstanding).toBe(100000);        // only the current-month invoice is open
+    expect(b.trend.length).toBe(12);
+    expect(b.recent_invoices.length).toBe(3);
+    expect(["stable", "attention", "at_risk"]).toContain(b.health.status);
+    expect(b.health.reasons.length).toBeGreaterThan(0);
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
