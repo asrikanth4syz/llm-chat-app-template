@@ -4,9 +4,28 @@
 // every endpoint is gated to super_admin server-side. Built on the invoice
 // mirror; no product-line data (Phase 2). Money arrives as INTEGER paise.
 // ════════════════════════════════════════════════════════════════════════
-const _SA = { period: 90 };
+const _SA = { period: 90, tab: 'dashboard', excMonth: '', excLookback: 6 };
 
-// Status chip for a client's month-on-month movement.
+// ── Hub shell: one nav entry, tabbed sections ──────────────────────────
+async function renderSalesAnalytics(main) {
+  if (!main) return;
+  const tab = _SA.tab || 'dashboard';
+  const tabBtn = (id, label) => `<button class="btn ${tab === id ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetTab', id)}>${h(label)}</button>`;
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Sales Analytics</h2>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}</div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books.</p>
+    <div id="sa-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
+  const body = document.getElementById('sa-body');
+  if (tab === 'exceptions') return _saExceptions(body);
+  return _saDashboard(body);
+}
+function salesSetTab(id) { _SA.tab = id; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function renderSalesAnalyticsRefresh() { const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+
+// ── Tab 1: Executive dashboard ─────────────────────────────────────────
 function _saStatusChip(status, pct) {
   const map = {
     new:  ['🟢 New',        'var(--success,#2e6e12)'],
@@ -18,40 +37,31 @@ function _saStatusChip(status, pct) {
   const [label, col] = map[status] || map.none;
   return `<span style="font-weight:600;color:${col};white-space:nowrap">${h(label)}</span>`;
 }
-
-// A 12-month bar chart drawn with plain divs (CSP-safe, no chart library).
 function _saTrendChart(trend) {
   const max = Math.max(1, ...trend.map(t => t.net_sales));
   const bars = trend.map(t => {
     const pct = Math.round((t.net_sales / max) * 100);
-    const label = t.month.slice(5); // MM
     return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0" title="${h(t.month)} · ${h(_fmtPaise(t.net_sales))} · ${h(String(t.invoices))} invoices">
       <div style="width:100%;display:flex;align-items:flex-end;height:120px">
         <div style="width:100%;background:var(--blue,#1d6fa4);border-radius:4px 4px 0 0;height:${Math.max(2, pct)}%;min-height:2px"></div>
       </div>
-      <div style="font-size:10px;color:var(--muted)">${h(label)}</div>
+      <div style="font-size:10px;color:var(--muted)">${h(t.month.slice(5))}</div>
     </div>`;
   }).join('');
   return `<div class="card" style="padding:16px">
     <div style="font-size:13px;font-weight:600;margin-bottom:12px">Monthly sales — last 12 months</div>
-    <div style="display:flex;gap:4px;align-items:flex-end">${bars}</div>
-  </div>`;
+    <div style="display:flex;gap:4px;align-items:flex-end">${bars}</div></div>`;
 }
-
 function _saKpi(label, value, sub) {
   return `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
     <div style="font-size:1.5rem;font-weight:700;margin-top:4px">${h(value)}</div>
     ${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${h(sub)}</div>` : ''}</div>`;
 }
-
-async function renderSalesAnalytics(main) {
-  if (!main) return;
-  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading sales analytics…</p></div>`;
+async function _saDashboard(body) {
   const period = _SA.period || 90;
   const data = await api('/analytics/sales/overview?period=' + period);
-  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load sales analytics.</div>`; return; }
-  if (data.error) { main.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h(data.error)}</div>`; return; }
+  if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
   const k = data.kpis || {};
   const perf = data.client_performance || [];
   const periodBtn = (n, label) => `<button class="btn ${period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
@@ -60,15 +70,11 @@ async function renderSalesAnalytics(main) {
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.prev))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${h(_fmtPaise(c.curr))}</td>
     <td style="padding:7px 12px;text-align:right">${_saStatusChip(c.status, c.growth_pct)}</td></tr>`).join('');
-  main.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Sales Analytics</h2>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        ${periodBtn(30, '30d')}${periodBtn(90, '90d')}${periodBtn(180, '180d')}${periodBtn(365, '1y')}
-        <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
-      </div>
+  body.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      ${periodBtn(30, '30d')}${periodBtn(90, '90d')}${periodBtn(180, '180d')}${periodBtn(365, '1y')}
+      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books over the selected period.</p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
       ${_saKpi('Sales (' + period + 'd)', _fmtPaise(k.net_sales), 'billed invoice value')}
       ${_saKpi('Invoices', String(k.invoices || 0), 'in period')}
@@ -80,15 +86,93 @@ async function renderSalesAnalytics(main) {
       <div style="padding:14px 16px 0;font-size:13px;font-weight:600">Client performance — ${h(data.previous_month || '')} → ${h(data.current_month || '')}</div>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px">
         <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-          <th style="padding:8px 12px">Client</th>
-          <th style="padding:8px 12px;text-align:right">Last month</th>
-          <th style="padding:8px 12px;text-align:right">This month</th>
-          <th style="padding:8px 12px;text-align:right">Movement</th></tr></thead>
+          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px;text-align:right">Last month</th>
+          <th style="padding:8px 12px;text-align:right">This month</th><th style="padding:8px 12px;text-align:right">Movement</th></tr></thead>
         <tbody>${perfRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No billing in the last two months.</td></tr>`}</tbody>
-      </table>
-    </div>
-    <p style="font-size:12px;color:var(--muted);margin:14px 0 0">Billing Exceptions, Client 360, and salesperson / region / target analytics are coming next.</p>`;
+      </table></div>`;
 }
-// Refresh / period handlers (delegated, CSP-safe).
-function renderSalesAnalyticsRefresh() { const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
 function salesSetPeriod(n) { _SA.period = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+
+// ── Tab 2: Billing Exceptions — "who didn't get billed?" ───────────────
+function _saSevChip(sev) {
+  const map = { critical: ['🔴 Critical', 'var(--danger,#b3261e)'], attention: ['🟠 Attention', 'var(--warning,#8a5a00)'], monitor: ['🟡 Monitor', 'var(--muted)'] };
+  const [label, col] = map[sev] || ['—', 'var(--muted)'];
+  return `<span style="font-weight:600;color:${col};white-space:nowrap">${h(label)}</span>`;
+}
+const _SA_REASON = { not_billed: 'No invoice this month', below_average: 'Below normal average' };
+async function _saExceptions(body) {
+  const month = _SA.excMonth || '';
+  const qs = '?lookback=' + (_SA.excLookback || 6) + (month ? '&month=' + encodeURIComponent(month) : '');
+  const data = await api('/analytics/billing-exceptions' + qs);
+  if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
+  const c = data.counts || {};
+  const rows = (data.exceptions || []).map(e => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:7px 12px">${h(e.name || e.client_id)}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.expected))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.actual))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;color:var(--danger,#b3261e);font-weight:600">${h(_fmtPaise(e.gap))}</td>
+    <td style="padding:7px 12px;font-size:12px;color:var(--muted)">${h(_SA_REASON[e.reason] || e.reason)}</td>
+    <td style="padding:7px 12px">${_saSevChip(e.severity)}</td>
+    <td style="padding:7px 12px"><button class="btn btn-secondary btn-sm" ${dataAct('salesViewException', e.client_id)}>View ▸</button></td></tr>`).join('');
+  body.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <span style="font-size:13px;color:var(--muted)">Comparing <b>${h(data.month)}</b> against the prior <b>${h(String(data.lookback))}</b> months.</span>
+      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${_saKpi('Potential gap', _fmtPaise(data.potential_gap), 'expected − actual')}
+      ${_saKpi('🔴 Critical', String(c.critical || 0), 'high value, not billed')}
+      ${_saKpi('🟠 Attention', String(c.attention || 0), 'not billed / big drop')}
+      ${_saKpi('🟡 Monitor', String(c.monitor || 0), 'below average')}
+    </div>
+    <div id="sa-exc-detail"></div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px;text-align:right">Expected</th>
+          <th style="padding:8px 12px;text-align:right">Actual</th><th style="padding:8px 12px;text-align:right">Gap</th>
+          <th style="padding:8px 12px">Reason</th><th style="padding:8px 12px">Severity</th><th style="padding:8px 12px"></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="7" style="padding:16px;color:var(--muted)">No billing exceptions — every regular buyer billed as expected. 🎉</td></tr>`}</tbody>
+      </table></div>`;
+}
+// Drill-down: why was this client flagged + their 12-month history.
+async function salesViewException(clientId) {
+  const box = document.getElementById('sa-exc-detail');
+  if (box) box.innerHTML = `<div class="card" style="padding:12px 14px"><span style="font-size:13px;color:var(--muted)">Loading…</span></div>`;
+  const month = _SA.excMonth || '';
+  const d = await api('/analytics/billing-exceptions/' + encodeURIComponent(clientId) + (month ? '?month=' + encodeURIComponent(month) : ''));
+  if (!box) return;
+  if (!d || d.error) { box.innerHTML = `<div class="card" style="padding:12px 14px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  const e = d.exception || {};
+  const hist = d.history || [];
+  const max = Math.max(1, ...hist.map(x => x.net_sales));
+  const bars = hist.map(x => `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${h(x.month)} · ${h(_fmtPaise(x.net_sales))}">
+    <div style="width:100%;display:flex;align-items:flex-end;height:70px"><div style="width:100%;background:${x.net_sales ? 'var(--blue,#1d6fa4)' : 'var(--border)'};border-radius:3px 3px 0 0;height:${Math.max(2, Math.round((x.net_sales / max) * 100))}%"></div></div>
+    <div style="font-size:9px;color:var(--muted)">${h(x.month.slice(5))}</div></div>`).join('');
+  const recent = (d.recent_invoices || []).map(i => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:4px 10px">${h(i.number || '')}</td><td style="padding:4px 10px;color:var(--muted)">${h(i.date || '')}</td>
+    <td style="padding:4px 10px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(i.total))}</td>
+    <td style="padding:4px 10px;color:var(--muted)">${h(i.status || '')}</td></tr>`).join('');
+  box.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid var(--danger,#b3261e)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="font-weight:800">${h(d.name || clientId)} — billing exception</div>
+        <button class="btn btn-secondary btn-sm" ${dataAct('salesCloseException')}>✕ Close</button>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0">
+        <div><div style="font-size:11px;color:var(--muted)">Expected</div><div style="font-size:1.2rem;font-weight:700">${h(_fmtPaise(e.expected || 0))}</div></div>
+        <div><div style="font-size:11px;color:var(--muted)">Actual (${h(d.month)})</div><div style="font-size:1.2rem;font-weight:700">${h(_fmtPaise(e.actual || 0))}</div></div>
+        <div><div style="font-size:11px;color:var(--muted)">Gap</div><div style="font-size:1.2rem;font-weight:700;color:var(--danger,#b3261e)">${h(_fmtPaise(e.gap || 0))}</div></div>
+        <div><div style="font-size:11px;color:var(--muted)">Months active (of lookback)</div><div style="font-size:1.2rem;font-weight:700">${h(String(e.months_active || 0))}</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Last billing: <b>${h(e.last_billing || '—')}</b> · Reason: <b>${h(_SA_REASON[e.reason] || e.reason || '—')}</b></div>
+      <div style="font-size:12px;font-weight:600;margin:12px 0 6px">12-month billing history</div>
+      <div style="display:flex;gap:3px;align-items:flex-end">${bars}</div>
+      ${recent ? `<div style="font-size:12px;font-weight:600;margin:14px 0 4px">Recent invoices</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${recent}</tbody></table>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-secondary btn-sm" ${dataAct('financeViewClient', clientId)}>Open statement ▸</button>
+      </div>
+    </div>`;
+}
+function salesCloseException() { const b = document.getElementById('sa-exc-detail'); if (b) b.innerHTML = ''; }

@@ -5023,6 +5023,36 @@ describe("Sales Analytics — super-admin only overview", () => {
   });
 });
 
+describe("Billing Exceptions — regular buyer went quiet", () => {
+  it("is super-admin only and flags a monthly buyer with no billing this month", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('BEX','Regular Buyer','INR')").run();
+    const today = new Date().toISOString().slice(0, 10);
+    const ym = (back: number) => { const [y, m] = today.slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - back, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    // Billed each of the prior 4 months, then nothing in the current month.
+    for (let i = 1; i <= 4; i++) {
+      await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES (?,?,?,'BEX',?,?,8000000,0,'INR','paid','paid')")
+        .bind("BX" + i, "BX" + i, "BX" + i, ym(i) + "-10", ym(i) + "-25").run();
+    }
+    const forbidden = await get("/api/analytics/billing-exceptions", opsToken);
+    expect(forbidden.status).toBe(403);
+    const r = await get("/api/analytics/billing-exceptions?lookback=6", adminToken);
+    expect(r.status).toBe(200);
+    const body = await r.json() as { counts: Record<string, number>; exceptions: Array<Record<string, unknown>> };
+    const row = body.exceptions.find(e => (e.client_id as string) === "BEX")!;
+    expect(row).toBeTruthy();
+    expect(row.reason).toBe("not_billed");
+    expect(row.severity).toBe("critical");       // avg ₹80k ≥ ₹50k critical threshold
+    expect(row.actual).toBe(0);
+    expect(row.expected).toBe(8000000);          // average of the active months
+    // drill-down resolves and carries the 12-month history
+    const d = await (await get("/api/analytics/billing-exceptions/BEX", adminToken)).json() as { history: unknown[]; exception: Record<string, unknown> | null };
+    expect(d.history.length).toBe(12);
+    expect(d.exception && d.exception.reason).toBe("not_billed");
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
