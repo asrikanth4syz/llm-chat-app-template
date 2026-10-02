@@ -594,15 +594,17 @@ async function financeReconcileClient(clientId) {
     <div class="card" style="padding:14px 16px;border-left:4px solid ${invMatch && !defGap ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">
       <div style="font-weight:800;color:${invMatch && !defGap ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'};margin-bottom:8px">
         ${invMatch && !defGap ? '✓ Reconciles with Zoho to the paisa' : invMatch && defGap ? 'ⓘ App matches Zoho’s invoices — the rest is credits/advances' : '⚠ App differs from Zoho by ' + money(Math.abs(r.diff || 0))}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;max-width:460px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;max-width:480px">
         <tbody>
         ${hasContact ? ladderRow('Zoho customer receivable', r.zoho_contact_receivable, '(as shown in Zoho)') : ''}
+        ${r.zoho_opening_balance ? ladderRow('— of which opening balance', r.zoho_opening_balance, '(pre-Zoho, not an invoice)') : ''}
         ${ladderRow('Sum of Zoho open invoices', r.zoho_total, `${r.zoho_invoice_count} invoices`)}
         ${ladderRow('App — Total Outstanding', r.app_total, `${r.app_invoice_count} invoices`)}
         </tbody></table>
       ${hasContact && defGap ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px 10px;background:var(--bg-subtle,#f5f5f5);border-radius:6px">
-        Zoho’s customer figure is <b>${money(defGap)}</b> higher than the sum of its own open invoices${r.zoho_unused_credits ? ` — of which <b>${money(r.zoho_unused_credits)}</b> is unused credits/advances` : ''}.
-        That part is a <b>definitional</b> difference (Zoho counts credits/advances in the customer total), <b>not</b> a sync gap, so the app’s per-invoice outstanding is still correct.</div>` : ''}
+        Zoho’s customer figure is <b>${money(defGap)}</b> higher than the sum of its own open invoices.
+        ${r.zoho_opening_balance ? `This is the <b>opening balance</b> (${money(r.zoho_opening_balance)}) carried forward from before Zoho — it is not an invoice, so the app’s invoice-based total does not include it.` : r.zoho_unused_credits ? `<b>${money(r.zoho_unused_credits)}</b> of it is unused credits/advances.` : `It is an amount Zoho counts that is not an open invoice (typically an <b>opening balance</b> carried forward from before Zoho, or unapplied credits).`}
+        That part is <b>not</b> a sync gap, so the app’s per-invoice outstanding is still correct for collections.</div>` : ''}
       ${!r.backfill_complete ? `<div style="font-size:12px;color:var(--warning,#8a5a00);margin-top:8px">⚠ Backfill is still running — figures may be incomplete until it finishes.</div>` : ''}
       ${!invMatch ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">The highlighted rows below are the exact invoices behind the difference. Most clear after <b>Sync now</b>; if they persist, use <b>Rebuild from Books</b>.</div>` : ''}
       ${fullTable}
@@ -616,6 +618,7 @@ function financeExportReconcile() {
   for (const l of (r.lines || [])) out.push([l.invoice || '', l.date || '', l.due_date || '', l.status || '', p(l.zoho_balance), p(l.app_balance), p(l.diff), l.state || '']);
   out.push([]);
   if (r.zoho_contact_receivable != null) out.push(['Zoho customer receivable', '', '', '', p(r.zoho_contact_receivable)]);
+  if (r.zoho_opening_balance != null) out.push(['  of which opening balance (pre-Zoho)', '', '', '', p(r.zoho_opening_balance)]);
   out.push(['Sum of Zoho open invoices', '', '', '', p(r.zoho_total)]);
   out.push(['App Total Outstanding', '', '', '', p(r.app_total)]);
   out.push(['App vs Zoho invoices diff', '', '', '', p(r.diff)]);
