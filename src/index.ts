@@ -4529,6 +4529,7 @@ export default {
       if (path==="/api/finance/ar/summary"  && method==="GET") return handleArSummary(request,env);
       if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
       if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
+      if (path==="/api/analytics/sales/overview" && method==="GET") return handleSalesOverview(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/reconcile$/) && method==="GET") return handleArReconcileClient(request,env,path);
@@ -9346,6 +9347,87 @@ async function handleArByCustomer(request: Request, env: Env): Promise<Response>
     };
   });
   return json({ as_of: asOf, stale: await finStaleInfo(env), include_opening_balance: includeOpening, customers });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Sales Analytics (super-admin ONLY — sales data is not visible to any other
+// role). Built on the invoice mirror (ar_invoices) + clients; no product-line
+// data (invoice line items are not mirrored). Money is paise throughout.
+// ══════════════════════════════════════════════════════════════════════
+const SALES_ANALYTICS_ROLE = "super_admin";
+// Prepend 0 and slice last 7 chars ("YYYY-MM") of an IST month offset from today.
+function _ymOffset(base: string, monthsBack: number): string {
+  const [y, m] = base.slice(0, 7).split("-").map(Number);
+  const d = new Date(Date.UTC(y, (m - 1) - monthsBack, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+// Month-on-month classification (PRD §14): guards the 0→x and x→0 edges so a new
+// or lost client is labelled, not shown as ±100% noise.
+function _momStatus(prev: number, curr: number): { status: string; growth_pct: number | null } {
+  if (prev <= 0 && curr > 0) return { status: "new", growth_pct: null };
+  if (prev > 0 && curr <= 0) return { status: "lost", growth_pct: -100 };
+  if (prev <= 0 && curr <= 0) return { status: "none", growth_pct: null };
+  const pct = Math.round(((curr - prev) / prev) * 1000) / 10;
+  return { status: pct >= 0 ? "up" : "down", growth_pct: pct };
+}
+// GET /api/analytics/sales/overview?period=<days> — executive dashboard feed.
+async function handleSalesOverview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const period = Math.min(3650, Math.max(1, parseInt(url.searchParams.get("period") || "90", 10) || 90));
+  const today = istToday();
+  const periodStart = addDaysIST(today, -period);
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
+  const curYm = today.slice(0, 7);
+  const prevYm = _ymOffset(today, 1);
+  const trendStart = _ymOffset(today, 11) + "-01";
+
+  // KPIs over the trailing period (sales = billed invoice total; outstanding is current).
+  const kpiRow = await env.DB.prepare(
+    `SELECT COALESCE(SUM(total),0) AS net_sales, COUNT(*) AS invoices, COUNT(DISTINCT client_id) AS active_clients
+       FROM ar_invoices WHERE status!='void' AND date >= ?`
+  ).bind(periodStart).first() as { net_sales: number; invoices: number; active_clients: number } | null;
+  const outRow = await env.DB.prepare(
+    `SELECT COALESCE(SUM(balance),0) AS outstanding FROM ar_invoices WHERE status!='void' AND balance > ?`
+  ).bind(dust).first() as { outstanding: number } | null;
+
+  // 12-month sales trend.
+  const monthly = (((await env.DB.prepare(
+    `SELECT substr(date,1,7) AS ym, COALESCE(SUM(total),0) AS net, COUNT(*) AS cnt
+       FROM ar_invoices WHERE status!='void' AND date >= ? GROUP BY ym ORDER BY ym`
+  ).bind(trendStart).all()).results) || []) as Array<{ ym: string; net: number; cnt: number }>;
+  const monthMap: Record<string, { net: number; cnt: number }> = {};
+  for (const r of monthly) monthMap[r.ym] = { net: r.net || 0, cnt: r.cnt || 0 };
+  const trend = Array.from({ length: 12 }, (_, i) => {
+    const ym = _ymOffset(today, 11 - i);
+    return { month: ym, net_sales: monthMap[ym]?.net || 0, invoices: monthMap[ym]?.cnt || 0 };
+  });
+
+  // Client performance: current calendar month vs the previous one.
+  const perfRows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym, COALESCE(SUM(i.total),0) AS net
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE i.status!='void' AND substr(i.date,1,7) IN (?,?)
+      GROUP BY i.client_id, ym`
+  ).bind(prevYm, curYm).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number }>;
+  const byClient: Record<string, { name: string; prev: number; curr: number }> = {};
+  for (const r of perfRows) {
+    const e = byClient[r.client_id] || (byClient[r.client_id] = { name: r.name, prev: 0, curr: 0 });
+    if (r.ym === curYm) e.curr = r.net || 0; else if (r.ym === prevYm) e.prev = r.net || 0;
+  }
+  const client_performance = Object.entries(byClient).map(([client_id, e]) => ({
+    client_id, name: e.name, prev: e.prev, curr: e.curr, ..._momStatus(e.prev, e.curr),
+  })).sort((a, b) => b.curr - a.curr || b.prev - a.prev).slice(0, 200);
+
+  return json({
+    period_days: period, as_of: today, current_month: curYm, previous_month: prevYm,
+    kpis: {
+      net_sales: kpiRow?.net_sales || 0, invoices: kpiRow?.invoices || 0,
+      active_clients: kpiRow?.active_clients || 0, outstanding: outRow?.outstanding || 0,
+    },
+    trend, client_performance,
+  });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a

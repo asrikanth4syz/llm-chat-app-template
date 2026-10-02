@@ -4992,6 +4992,37 @@ describe("Opening balance — optional inclusion in outstanding", () => {
   });
 });
 
+describe("Sales Analytics — super-admin only overview", () => {
+  it("is forbidden to non-super-admins and returns KPIs + trend + client performance for super admin", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('SAC','Sales Client','INR')").run();
+    const today = new Date().toISOString().slice(0, 10);
+    const thisMonth = today.slice(0, 7);
+    const prevMonth = (() => { const [y, m] = thisMonth.split("-").map(Number); const d = new Date(Date.UTC(y, m - 2, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; })();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI1','SI1','SI1','SAC',?,?,100000,0,'INR','paid','paid')").bind(prevMonth + "-10", prevMonth + "-25").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI2','SI2','SI2','SAC',?,?,150000,150000,'INR','open','open')").bind(thisMonth + "-05", thisMonth + "-20").run();
+
+    // ops_manager (finance-capable) must NOT see sales data — super-admin only.
+    const forbidden = await get("/api/analytics/sales/overview", opsToken);
+    expect(forbidden.status).toBe(403);
+    const clientForbidden = await get("/api/analytics/sales/overview", clientToken);
+    expect(clientForbidden.status).toBe(403);
+
+    const r = await get("/api/analytics/sales/overview?period=365", adminToken);
+    expect(r.status).toBe(200);
+    const body = await r.json() as { kpis: Record<string, number>; trend: Array<{ month: string; net_sales: number }>; client_performance: Array<Record<string, unknown>> };
+    expect(body.kpis.net_sales).toBe(250000);        // both invoices billed in the last year
+    expect(body.kpis.active_clients).toBe(1);
+    expect(body.trend.length).toBe(12);               // always a full 12-month window
+    const row = body.client_performance.find(c => (c.client_id as string) === "SAC")!;
+    expect(row.prev).toBe(100000);
+    expect(row.curr).toBe(150000);
+    expect(row.status).toBe("up");
+    expect(row.growth_pct).toBe(50);                  // (150k-100k)/100k
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
