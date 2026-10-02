@@ -4519,6 +4519,7 @@ export default {
       if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
+      if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/reconcile$/) && method==="GET") return handleArReconcileClient(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+$/) && method==="GET") return handleArClientStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
       if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
@@ -9989,6 +9990,68 @@ async function handleZohoTest(request: Request, env: Env): Promise<Response> {
 const FIN_WRITE_ROLES = ["super_admin", "finance_admin"];
 async function _arClient(env: Env, id: string): Promise<{ client_id: string; name?: string; email?: string; dunning_opt_out?: number } | null> {
   return env.DB.prepare("SELECT client_id, name, email, dunning_opt_out FROM ar_clients WHERE client_id=?").bind(id).first();
+}
+
+// GET /api/finance/ar/client/:id/reconcile — trust check: pull this customer's invoices
+// LIVE from Zoho and diff against the app's mirror, to the paisa. Reports the total
+// difference and the exact invoices behind it (missing in app, balance mismatch, or extra
+// in app), so an operator can SEE why a customer's outstanding differs from Zoho.
+async function handleArReconcileClient(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) return json({ error: "Zoho Books is not connected yet." }, 400);
+  const id = decodeURIComponent(path.split("/").slice(-2)[0]);
+  let token: string;
+  try { token = await zohoGetToken(env, fetch); } catch (e) { return json({ error: `Could not reach Zoho: ${String(e)}` }, 502); }
+  // Pull all of this customer's invoices from Zoho (paginated), keyed by invoice_id.
+  const zoho: Record<string, { number: string; balance: number; status: string }> = {};
+  try {
+    for (let page = 1; page <= 50; page++) {
+      const qs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID || "", per_page: "200", page: String(page), customer_id: id });
+      const res = await fetch(`https://www.zohoapis.${zohoDc(env)}/books/v3/invoices?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+      if (!res.ok) return json({ error: `Zoho invoices read returned HTTP ${res.status}` }, 502);
+      const data = await res.json().catch(() => ({})) as Record<string, unknown> & { page_context?: { has_more_page?: boolean } };
+      const items = Array.isArray(data.invoices) ? data.invoices as Record<string, unknown>[] : [];
+      for (const z of items) {
+        const iid = String(z.invoice_id ?? ""); if (!iid) continue;
+        const st = String(z.status ?? "").toLowerCase();
+        zoho[iid] = { number: String(z.invoice_number ?? iid), balance: toPaise(z.balance as string | number), status: st };
+      }
+      if (!data.page_context?.has_more_page) break;
+    }
+  } catch (e) { return json({ error: `Zoho read failed: ${String(e)}` }, 502); }
+
+  // App mirror for this client.
+  const appRows = ((await env.DB.prepare(
+    "SELECT id, number, balance, status FROM ar_invoices WHERE client_id=?"
+  ).bind(id).all()).results || []) as Array<{ id: string; number: string; balance: number; status: string }>;
+  const app: Record<string, { number: string; balance: number; status: string }> = {};
+  for (const r of appRows) app[r.id] = { number: r.number, balance: r.balance || 0, status: r.status };
+
+  const isOpen = (s: string) => s !== "void" && s !== "voided";
+  const zohoTotal = Object.values(zoho).reduce((s, z) => s + (isOpen(z.status) ? z.balance : 0), 0);
+  const appTotal = appRows.reduce((s, r) => s + (isOpen(r.status) ? (r.balance || 0) : 0), 0);
+
+  const missing_in_app: Array<Record<string, unknown>> = [];
+  const mismatched: Array<Record<string, unknown>> = [];
+  for (const [iid, z] of Object.entries(zoho)) {
+    if (!isOpen(z.status)) continue;
+    const a = app[iid];
+    if (!a) { if (z.balance !== 0) missing_in_app.push({ invoice: z.number, zoho_balance: z.balance }); continue; }
+    if (a.balance !== z.balance) mismatched.push({ invoice: z.number, zoho_balance: z.balance, app_balance: a.balance, diff: z.balance - a.balance });
+  }
+  const extra_in_app: Array<Record<string, unknown>> = [];
+  for (const r of appRows) {
+    if (!isOpen(r.status) || (r.balance || 0) <= 0) continue;
+    if (!zoho[r.id]) extra_in_app.push({ invoice: r.number, app_balance: r.balance });
+  }
+  return json({
+    client_id: id, zoho_total: zohoTotal, app_total: appTotal, diff: zohoTotal - appTotal,
+    zoho_invoice_count: Object.keys(zoho).length, app_invoice_count: appRows.length,
+    missing_in_app, mismatched, extra_in_app,
+    last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
+    backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1",
+  });
 }
 
 // ── Full statement (ledger) — PRD §8C-B ────────────────────────────────
