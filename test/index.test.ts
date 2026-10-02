@@ -4924,7 +4924,7 @@ describe("AP vendor pull + sync cross-check", () => {
     const res = await booksFetch(booksEnv(), "tok", "vendors", { page: 1 }, impl);
     expect(res.items.length).toBe(1);
     const url = calls.find(c => c.url.includes("/books/v3/contacts"))?.url || "";
-    expect(url).toContain("contact_type=vendors"); // Zoho list filter is the PLURAL value
+    expect(url).toContain("contact_type=vendor"); // Zoho contact_type filter is the SINGULAR value
   });
 
   it("a backfill run mirrors a vendor contact into ap_vendors", async () => {
@@ -4954,5 +4954,28 @@ describe("Books find diagnostic endpoint", () => {
     expect(forbidden.status).toBe(403);
     const r = await get("/api/finance/books/find?q=CHHAVI", adminToken);
     expect([400, 502]).toContain(r.status); // test env has no Zoho org id → "not connected"
+  });
+});
+
+describe("Books sync resilience — vendor pull failure is non-fatal", () => {
+  it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_bf_stage", "0");
+    for (const e of ["contacts", "vendors", "invoices", "creditnotes", "customerpayments", "bills", "vendorpayments"]) {
+      await setCfg(`books_bf_page_${e}`, "1"); await setCfg(`books_cursor_${e}`, "0");
+    }
+    // Zoho stand-in: the vendors stage (/contacts?contact_type=vendor) returns HTTP 400;
+    // every other entity returns an empty page (200).
+    const impl = (async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : (url as URL).toString();
+      if (u.includes("/oauth/v2/token")) return new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }), { status: 200 });
+      if (u.includes("contact_type=vendor")) return new Response("bad request", { status: 400 });
+      const m = u.match(/\/books\/v3\/([a-z]+)\b/);
+      if (m) return new Response(JSON.stringify({ [m[1]]: [], page_context: { has_more_page: false, total: 0 } }), { status: 200 });
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    let done = false;
+    for (let i = 0; i < 20 && !done; i++) { const r = await runBooksBackfillStep(booksEnv(), impl); done = r.backfill_complete; }
+    expect(done).toBe(true); // backfill finalized despite the vendor-stage 400
   });
 });
