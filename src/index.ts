@@ -4523,6 +4523,7 @@ export default {
       if (path.match(/^\/api\/finance\/ar\/[^/]+\/hold$/) && method==="POST") return handleArHold(request,env,path);
       if (path==="/api/finance/ap/bills"    && method==="GET") return handleApBills(request,env);
       if (path==="/api/finance/ap/summary"  && method==="GET") return handleApSummary(request,env);
+      if (path==="/api/finance/ap/by-vendor" && method==="GET") return handleApByVendor(request,env);
       if (path.match(/^\/api\/finance\/ap\/vendor\/[^/]+$/) && method==="GET") return handleApVendorStatement(request,env,path);
       if (path==="/api/finance/reconcile/run"       && method==="POST") return handleReconcileRun(request,env);
       if (path==="/api/finance/reconcile/exceptions"&& method==="GET")  return handleReconcileExceptions(request,env);
@@ -9536,6 +9537,29 @@ async function handleApSummary(request: Request, env: Env): Promise<Response> {
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : undefined;
   return json({ by_currency: await _apSummaryRows(env, null, { asOf }), as_of: asOf || istToday(), stale: await finStaleInfo(env), last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null });
 }
+// GET /api/finance/ap/by-vendor — one row per vendor (billed / paid / outstanding /
+// overdue / bill counts). LEFT JOIN from ap_vendors, so a vendor with NO bills (e.g. a
+// ₹0-balance supplier) still appears — the bill list alone can never show it.
+async function handleApByVendor(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
+  const { results } = await env.DB.prepare(
+    `SELECT v.vendor_id, COALESCE(v.name, v.vendor_id) AS name, v.email AS email, v.currency_code AS currency_code,
+       COALESCE(SUM(CASE WHEN b.status != 'void' THEN b.total ELSE 0 END),0) AS billed,
+       COALESCE(SUM(CASE WHEN b.status != 'void' AND b.balance > ${dust} THEN b.balance ELSE 0 END),0) AS outstanding,
+       COALESCE(SUM(CASE WHEN b.status != 'void' AND b.balance > ${dust} AND COALESCE(b.effective_due_date, b.due_date) < ? THEN b.balance ELSE 0 END),0) AS overdue,
+       COUNT(CASE WHEN b.status != 'void' THEN b.id END) AS bills,
+       COALESCE(SUM(CASE WHEN b.status != 'void' AND b.balance > ${dust} THEN 1 ELSE 0 END),0) AS open_bills,
+       MIN(CASE WHEN b.status != 'void' AND b.balance > ${dust} THEN COALESCE(b.effective_due_date, b.due_date) ELSE NULL END) AS oldest_due
+     FROM ap_vendors v LEFT JOIN ap_bills b ON b.vendor_id = v.vendor_id
+     GROUP BY v.vendor_id
+     ORDER BY outstanding DESC, name`
+  ).bind(today).all();
+  const vendors = ((results || []) as Record<string, unknown>[]).map(r => ({ ...r, paid: (Number(r.billed) || 0) - (Number(r.outstanding) || 0) }));
+  return json({ vendors, stale: await finStaleInfo(env) });
+}
 async function handleApVendorStatement(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);   // no client access to AP
@@ -9755,6 +9779,7 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
       invoices: await num("SELECT COUNT(*) AS n FROM ar_invoices"),
       bills: await num("SELECT COUNT(*) AS n FROM ap_bills"),
       customers: await num("SELECT COUNT(*) AS n FROM ar_clients"),
+      vendors: await num("SELECT COUNT(*) AS n FROM ap_vendors"),
     },
   };
 }

@@ -31,7 +31,8 @@ const _AGING_LABEL = { current: 'Current', '1-30': '1–30', '31-60': '31–60',
 // In-memory cache of the last-loaded lists + active search text, so the search
 // box and the CSV export both work off the same data without a re-fetch.
 const _FIN = { ar: [], ap: [], followups: [], arQ: '', apQ: '', foQ: '', arSort: null, apSort: null, arPage: 1, apPage: 1,
-  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '', kpiPeriod: 90, arAll: false, apAll: false };
+  customers: [], custQ: '', custSort: { col: 'total_due_now', dir: 'desc' }, custPage: 1, asOf: '', kpiPeriod: 90, arAll: false, apAll: false,
+  vendors: [], venQ: '', venSort: { col: 'outstanding', dir: 'desc' }, venPage: 1 };
 
 // Print the given HTML as a PDF via the browser (Ctrl/Cmd+P → Save as PDF). CSP-safe:
 // a print-only container + @media print stylesheet, then window.print().
@@ -72,6 +73,7 @@ function financePage(kind, delta) {
   if (kind === 'ar') { _FIN.arPage = Math.max(1, (_FIN.arPage || 1) + delta); _renderArTable(); }
   else if (kind === 'ap') { _FIN.apPage = Math.max(1, (_FIN.apPage || 1) + delta); _renderApTable(); }
   else if (kind === 'cust') { _FIN.custPage = Math.max(1, (_FIN.custPage || 1) + delta); _renderCustTable(); }
+  else if (kind === 'ven') { _FIN.venPage = Math.max(1, (_FIN.venPage || 1) + delta); _renderVenTable(); }
 }
 // Colored, theme-safe status pill (bordered, text-colored). open = fully due → red.
 function _finStatusPill(status) {
@@ -129,6 +131,7 @@ function financeSort(kind, col) {
   if (kind === 'ar') { _FIN.arSort = _finToggleSort(_FIN.arSort, col); _FIN.arPage = 1; _renderArTable(); }
   else if (kind === 'ap') { _FIN.apSort = _finToggleSort(_FIN.apSort, col); _FIN.apPage = 1; _renderApTable(); }
   else if (kind === 'cust') { _FIN.custSort = _finToggleSort(_FIN.custSort, col); _FIN.custPage = 1; _renderCustTable(); }
+  else if (kind === 'ven') { _FIN.venSort = _finToggleSort(_FIN.venSort, col); _FIN.venPage = 1; _renderVenTable(); }
 }
 function _renderArTable() {
   const host = document.getElementById('ar-table-host'); if (!host) return;
@@ -175,7 +178,7 @@ function _finSyncedLine(iso) {
 // A search + export toolbar. `kind` drives which filter/export target fires.
 function _finToolbar(kind, placeholder, withExport) {
   const q = kind === 'ar' ? _FIN.arQ : kind === 'ap' ? _FIN.apQ : kind === 'cust' ? _FIN.custQ : _FIN.foQ;
-  const filterFn = kind === 'ar' ? 'financeFilterAr' : kind === 'ap' ? 'financeFilterAp' : kind === 'cust' ? 'financeFilterCust' : 'financeFilterFollowups';
+  const filterFn = kind === 'ar' ? 'financeFilterAr' : kind === 'ap' ? 'financeFilterAp' : kind === 'cust' ? 'financeFilterCust' : kind === 'ven' ? 'financeFilterVen' : 'financeFilterFollowups';
   const exportBtn = withExport
     ? `<button class="btn btn-secondary" ${dataAct('financeExportCsv', kind)} title="Download this list as a CSV spreadsheet">Export CSV</button>`
     : '';
@@ -382,7 +385,7 @@ function _custTable(rows, page) {
 }
 // A sort header that dispatches financeSort(kind,col) with a kind-specific arrow.
 function _sortableThKind(kind, col, label, alignRight) {
-  const cur = kind === 'cust' ? _FIN.custSort : null;
+  const cur = kind === 'cust' ? _FIN.custSort : kind === 'ven' ? _FIN.venSort : null;
   const arrow = cur && cur.col === col ? (cur.dir === 'asc' ? ' ▲' : ' ▼') : '';
   const style = `padding:8px 12px;${alignRight ? 'text-align:right' : 'text-align:left'}`;
   return `<th style="${style}"><button ${dataAct('financeSort', kind, col)} title="Sort by ${h(label)}" style="background:none;border:none;padding:0;font:inherit;font-weight:600;cursor:pointer;color:inherit">${h(label)}<span style="color:var(--blue,#1d6fa4)">${arrow}</span></button></th>`;
@@ -657,6 +660,7 @@ async function renderPayables(main) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h2 style="margin:0">Payables</h2>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" ${dataAct('renderApVendors')}>By vendor ▸</button>
         <button class="btn btn-secondary" ${dataAct('financeToggleApAll')}>${_FIN.apAll ? 'Outstanding only' : 'Include paid'}</button>
         <button class="btn btn-secondary" ${dataAct('financeRefresh')}>Refresh</button></div></div>
     ${_finSyncedLine(summary.last_sync_at)}
@@ -668,6 +672,76 @@ async function renderPayables(main) {
 function financeFilterAp(q) {
   _FIN.apQ = q || ''; _FIN.apPage = 1;
   _renderApTable();
+}
+
+// ── Vendor-wise Payables ───────────────────────────────────────────────
+// A vendor list (not a bill list), so a vendor with NO bills / ₹0 payable still shows.
+function _venView() {
+  let rows = (_FIN.vendors || []).filter(v => _finRowMatch(v, _FIN.venQ));
+  const s = _FIN.venSort;
+  if (s && s.col) {
+    const dir = s.dir === 'desc' ? -1 : 1;
+    const val = (r, c) => c === 'name' ? String(r.name || r.vendor_id || '').toLowerCase() : Number(r[c] || 0);
+    rows = rows.slice().sort((a, b) => { const va = val(a, s.col), vb = val(b, s.col); return va < vb ? -dir : va > vb ? dir : 0; });
+  }
+  return rows;
+}
+function _venTable(rows, page) {
+  if (!rows.length) return `<div class="card" style="padding:20px;color:var(--muted)">No vendors.</div>`;
+  const th = (col, label, r) => _sortableThKind('ven', col, label, r);
+  const start = (page - 1) * _FIN_RENDER_CAP;
+  const shown = rows.slice(start, start + _FIN_RENDER_CAP);
+  const body = shown.map(v => {
+    const nameBtn = v.vendor_id
+      ? `<button ${dataAct('financeViewVendor', v.vendor_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(v.name || v.vendor_id)}</button>`
+      : h(v.name || '');
+    const num = (val, danger) => `<td style="padding:8px 12px;text-align:right;font-variant-numeric:tabular-nums;${danger && (val || 0) > 0 ? 'color:var(--danger,#b3261e)' : ''}">${h(_fmtPaise(val, v.currency_code))}</td>`;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 12px">${nameBtn}${(v.bills || 0) === 0 ? ' <span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 6px">no bills</span>' : ''}</td>
+      ${num(v.billed)}${num(v.paid)}
+      <td style="padding:8px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${h(_fmtPaise(v.outstanding, v.currency_code))}</td>
+      ${num(v.overdue, true)}
+      <td style="padding:8px 12px;text-align:right">${h(String(v.open_bills || 0))}</td>
+      <td style="padding:8px 12px"><button class="btn btn-secondary btn-sm" ${dataAct('financeViewVendor', v.vendor_id)}>Open ▸</button></td></tr>`;
+  }).join('');
+  return `<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+      ${th('name', 'Vendor')}${th('billed', 'Billed', true)}${th('paid', 'Paid', true)}${th('outstanding', 'Outstanding', true)}
+      ${th('overdue', 'Overdue', true)}${th('open_bills', 'Open', true)}<th></th></tr></thead>
+    <tbody>${body}</tbody></table>${_finPager('ven', page, rows.length)}</div>`;
+}
+function _renderVenTable() {
+  const host = document.getElementById('ven-table-host'); if (!host) return;
+  const rows = _venView();
+  const pages = Math.max(1, Math.ceil(rows.length / _FIN_RENDER_CAP));
+  _FIN.venPage = Math.min(Math.max(1, _FIN.venPage || 1), pages);
+  host.innerHTML = _venTable(rows, _FIN.venPage);
+}
+function financeFilterVen(q) { _FIN.venQ = q || ''; _FIN.venPage = 1; _renderVenTable(); }
+async function renderApVendors() {
+  const main = document.getElementById('main-content'); if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading vendors…</p></div>`;
+  const data = await api('/finance/ap/by-vendor');
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load vendors.</div>`; return; }
+  _FIN.vendors = data.vendors || []; _FIN.venPage = 1;
+  const total = _FIN.vendors.length;
+  const withDues = _FIN.vendors.filter(v => (v.outstanding || 0) > 0).length;
+  const totalOut = _FIN.vendors.reduce((s, v) => s + (v.outstanding || 0), 0);
+  const kpi = (label, val, danger) => `<div class="card" style="flex:1;min-width:150px;padding:14px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">${h(label)}</div>
+    <div style="font-size:1.4rem;font-weight:600;margin-top:4px;${danger ? 'color:var(--danger,#b3261e)' : ''}">${h(val)}</div></div>`;
+  main.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Payables by Vendor</h2>
+      <button class="btn btn-secondary" ${dataAct('financeRefresh')}>← Back to bills</button>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${kpi('Vendors', String(total))}
+      ${kpi('Vendors with dues', String(withDues))}
+      ${kpi('Total outstanding', _fmtPaise(totalOut), true)}
+    </div>
+    ${_finToolbar('ven', 'Search vendors…', false)}
+    <div id="ven-table-host">${_venTable(_venView(), _FIN.venPage)}</div>`;
 }
 // Drill-in: any one vendor's full statement (finance/ops only).
 async function financeViewVendor(vendorId) {
@@ -766,7 +840,7 @@ async function renderFinanceSetup(main) {
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeResyncAll') : 'disabled'} title="Rebuild everything from Books — re-pulls every invoice/bill and refreshes paid/due status. Use if paid documents still show as due.">Rebuild from Books</button>
         <button class="btn btn-secondary" ${s.zoho.configured ? dataAct('financeCheckCounts') : 'disabled'} title="Compare the totals Zoho reports against what the app has mirrored — confirms every vendor, customer, invoice and bill came across.">Check sync vs Zoho</button>
-        <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
+        <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · <strong>${h(String(s.counts.vendors ?? 0))}</strong> vendors · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div id="fin-counts" style="margin-top:10px"></div>
       ${s.zoho.configured ? `<div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">

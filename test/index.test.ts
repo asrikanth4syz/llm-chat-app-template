@@ -4979,3 +4979,23 @@ describe("Books sync resilience — vendor pull failure is non-fatal", () => {
     expect(done).toBe(true); // backfill finalized despite the vendor-stage 400
   });
 });
+
+describe("AP by-vendor — vendors with no bills still appear", () => {
+  it("lists a zero-bill vendor and aggregates a billed vendor", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ap_vendors (vendor_id,name,email,currency_code) VALUES ('VNB','No Bills Vendor','nb@x.com','INR')").run();
+    await db.prepare("INSERT OR REPLACE INTO ap_vendors (vendor_id,name,currency_code) VALUES ('VWB','Has Bills','INR')").run();
+    await db.prepare("INSERT OR REPLACE INTO ap_bills (id,zoho_bill_id,number,vendor_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('BWB','BWB','BWB','VWB','2026-01-01','2026-01-31',50000,50000,'INR','open','open')").run();
+    const r = await get("/api/finance/ap/by-vendor", adminToken);
+    expect(r.status).toBe(200);
+    const body = await r.json() as { vendors: Array<Record<string, number>> };
+    const nb = body.vendors.find(v => v.vendor_id as unknown as string === "VNB")!;
+    expect(nb).toBeTruthy();                 // a vendor with NO bills is still listed
+    expect(nb.billed).toBe(0); expect(nb.outstanding).toBe(0); expect(nb.bills).toBe(0);
+    const wb = body.vendors.find(v => v.vendor_id as unknown as string === "VWB")!;
+    expect(wb.billed).toBe(50000); expect(wb.outstanding).toBe(50000); expect(wb.bills).toBe(1);
+    const forbidden = await get("/api/finance/ap/by-vendor", clientToken);
+    expect(forbidden.status).toBe(403);
+  });
+});
