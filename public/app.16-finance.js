@@ -938,9 +938,11 @@ async function renderFinanceSetup(main) {
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeRunBooksSync') : 'disabled'} title="${s.books_sync_enabled && s.zoho.configured ? 'Runs a full sync now (may take a few minutes)' : 'Turn sync on and connect Zoho first'}">Run full sync now</button>
         <button class="btn btn-secondary" ${s.books_sync_enabled && s.zoho.configured ? dataAct('financeResyncAll') : 'disabled'} title="Rebuild everything from Books — re-pulls every invoice/bill and refreshes paid/due status. Use if paid documents still show as due.">Rebuild from Books</button>
         <button class="btn btn-secondary" ${s.zoho.configured ? dataAct('financeCheckCounts') : 'disabled'} title="Compare the totals Zoho reports against what the app has mirrored — confirms every vendor, customer, invoice and bill came across.">Check sync vs Zoho</button>
+        <button class="btn btn-secondary" ${s.backfill_complete ? dataAct('financePruneOrphans') : 'disabled'} title="Remove invoices/bills deleted in Zoho that still linger in the app. Shows a count first; you confirm before anything is deleted.">Reconcile deletions</button>
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · <strong>${h(String(s.counts.vendors ?? 0))}</strong> vendors · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div id="fin-counts" style="margin-top:10px"></div>
+      <div id="fin-prune" style="margin-top:10px"></div>
       ${s.zoho.configured ? `<div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <input type="text" id="fin-find-q" placeholder="Find a contact in Zoho by name…" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;min-width:240px">
         <button class="btn btn-secondary btn-sm" ${dataAct('financeFindContact')} title="Search Zoho directly for a name and see its contact type + whether it synced">Find in Zoho</button>
@@ -1025,6 +1027,28 @@ async function financeCheckCounts() {
           <th style="padding:6px 12px">Entity</th><th style="padding:6px 12px;text-align:right">In Zoho</th><th style="padding:6px 12px;text-align:right">In app</th><th style="padding:6px 12px">Status</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px">Checked ${h(_finWhen(r.checked_at))}${!r.backfill_complete ? ' · backfill still in progress' : ''}${anyMissing ? ' · run <strong>Rebuild from Books</strong> if a shortfall persists' : ''}</div>`;
+}
+// Reconcile deletions: remove app documents that the last full rebuild didn't re-see
+// (deleted in Zoho). Dry-run first → shows the count → explicit confirm → deletes.
+async function financePruneOrphans() {
+  const box = document.getElementById('fin-prune');
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Checking for orphaned (deleted-in-Zoho) records…</span>';
+  const dry = await api('/finance/books/prune', { method: 'POST', body: JSON.stringify({ dry_run: true }) });
+  if (!dry) { if (box) box.innerHTML = ''; return; }
+  if (dry.error) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--danger,#b3261e)">${h(dry.error)}</div>`; return; }
+  const c = dry.counts || {};
+  const breakdown = Object.keys(c).filter(k => c[k] > 0).map(k => `${c[k]} ${k.replace('ar_', '').replace('ap_', '').replace('fin_', '')}`).join(', ');
+  if (!dry.total) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--success,#2e6e12)">✓ No orphans — every app document still exists in Zoho.</div>`; return; }
+  if (!confirm(`Reconcile deletions?\n\nThis will permanently remove ${dry.total} record(s) that were deleted in Zoho but still linger in the app:\n${breakdown}\n\nThis cannot be undone (a later sync will not bring them back, because they no longer exist in Zoho).`)) {
+    if (box) box.innerHTML = `<div style="font-size:12px;color:var(--muted)">Cancelled — nothing was deleted. ${h(String(dry.total))} orphan(s) found: ${h(breakdown)}.</div>`;
+    return;
+  }
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Removing orphans…</span>';
+  const done = await api('/finance/books/prune', { method: 'POST', body: JSON.stringify({ dry_run: false }) });
+  if (!done || done.error) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--danger,#b3261e)">${h((done && done.error) || 'Prune failed.')}</div>`; return; }
+  showToast(`Removed ${done.total} orphaned record(s)`, 'success');
+  if (box) box.innerHTML = `<div style="font-size:12px;color:var(--success,#2e6e12)">✓ Removed ${h(String(done.total))} orphaned record(s). App counts now match Zoho.</div>`;
+  renderFinanceSetup(document.getElementById('main-content'));
 }
 // Diagnostic: search Zoho directly for a name → shows its contact_type, status and where
 // (if anywhere) it synced in the app. Answers "why isn't this vendor/customer showing?".

@@ -5023,6 +5023,31 @@ describe("Sales Analytics — super-admin only overview", () => {
   });
 });
 
+describe("Books prune — reconcile deletions (orphans)", () => {
+  it("removes mirror documents not re-seen by the last full rebuild, super-admin only", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await setCfg("initial_backfill_complete", "1");
+    await setCfg("books_bf_started_at", "2026-06-01T00:00:00.000Z");
+    // ORPH's stamp predates the rebuild start → deleted in Zoho. LIVE's is after → still exists.
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status,zoho_synced_at) VALUES ('ORPH','ORPH','ORPH','PX','2026-01-01',500000,0,'paid','paid','2026-05-01T00:00:00.000Z')").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status,zoho_synced_at) VALUES ('LIVE','LIVE','LIVE','PX','2026-01-01',500000,0,'paid','paid','2026-07-01T00:00:00.000Z')").run();
+
+    expect((await post("/api/finance/books/prune", { dry_run: true }, opsToken)).status).toBe(403);
+
+    const dry = await (await post("/api/finance/books/prune", { dry_run: true }, adminToken)).json() as { dry_run: boolean; counts: Record<string, number>; total: number };
+    expect(dry.dry_run).toBe(true);
+    expect(dry.counts.ar_invoices).toBeGreaterThanOrEqual(1);
+    // dry-run must NOT delete
+    expect(await db.prepare("SELECT id FROM ar_invoices WHERE id='ORPH'").first()).toBeTruthy();
+
+    const done = await (await post("/api/finance/books/prune", { dry_run: false }, adminToken)).json() as { dry_run: boolean; total: number };
+    expect(done.dry_run).toBe(false);
+    expect(await db.prepare("SELECT id FROM ar_invoices WHERE id='ORPH'").first()).toBeFalsy(); // orphan removed
+    expect(await db.prepare("SELECT id FROM ar_invoices WHERE id='LIVE'").first()).toBeTruthy(); // live kept
+  });
+});
+
 describe("Sales Analytics — draft invoices are excluded", () => {
   it("does not count Zoho drafts in sales KPIs or client performance", async () => {
     const db = env.DB as D1Database;

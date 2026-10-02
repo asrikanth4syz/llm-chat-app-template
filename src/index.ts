@@ -3421,7 +3421,7 @@ async function upsertMirror(
   const stmts: D1PreparedStatement[] = [];
   for (const r of rows) {
     const row: Record<string, unknown> = { ...r };
-    if (!("zoho_synced_at" in row) && ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments"].includes(table)) row.zoho_synced_at = stamp;
+    if (!("zoho_synced_at" in row) && ["ar_clients", "ar_invoices", "ar_credit_notes", "fin_payments", "ap_bills", "ap_vendors"].includes(table)) row.zoho_synced_at = stamp;
     const key = String(row[keyCol]);
     const cols = Object.keys(row);
     if (existing.has(key)) {
@@ -4566,6 +4566,7 @@ export default {
       if (path==="/api/finance/zoho/test"           && method==="GET")  return handleZohoTest(request,env);
       if (path==="/api/finance/books/resync"        && method==="POST") return handleBooksResync(request,env);
       if (path==="/api/finance/books/counts"        && method==="GET")  return handleBooksCounts(request,env);
+      if (path==="/api/finance/books/prune"         && method==="POST") return handleBooksPrune(request,env);
       if (path==="/api/finance/books/find"          && method==="GET")  return handleBooksFind(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
@@ -10267,10 +10268,53 @@ async function handleZohoUseSecret(request: Request, env: Env): Promise<Response
 // a zero watermark (a full re-mirror). Shared by Resync and by a manual full sync.
 async function resetBooksBackfill(env: Env, actor: string): Promise<void> {
   await setConfig(env, "initial_backfill_complete", "0", actor);
+  // Mark the moment the full pull begins. Every live Zoho row re-pulled during this
+  // rebuild gets a zoho_synced_at AFTER this instant; rows NOT re-seen (deleted in Zoho)
+  // keep their older stamp — that is how the prune finds orphans.
+  await setConfig(env, "books_bf_started_at", new Date().toISOString(), actor);
   await setConfig(env, "books_bf_stage", "0", actor);
   for (const e of BOOKS_ENTITIES) { await setConfig(env, `books_bf_page_${e}`, "1", actor); await setConfig(env, `books_cursor_${e}`, "0", actor); }
   await setConfig(env, "books_last_sync_error", "", actor);
   await setConfig(env, "books_last_sync_error_at", "", actor);
+}
+// Document tables that mirror Zoho and carry zoho_synced_at. Contacts/vendors are
+// intentionally NOT pruned (deleting one with activity would orphan joins).
+const BOOKS_PRUNE_TABLES = ["ar_invoices", "ap_bills", "ar_credit_notes", "fin_payments"] as const;
+// Orphan = a mirrored document NOT re-seen during the last full rebuild (its zoho_synced_at
+// predates the rebuild start) → deleted in Zoho. `null < startedAt` is false in SQL, so rows
+// that were never stamped are left untouched (conservative). del=false counts, true deletes.
+async function _booksPrune(env: Env, startedAt: string, del: boolean): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const t of BOOKS_PRUNE_TABLES) {
+    if (del) {
+      const r = await env.DB.prepare(`DELETE FROM ${t} WHERE zoho_synced_at < ?`).bind(startedAt).run();
+      out[t] = r.meta?.changes || 0;
+    } else {
+      const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE zoho_synced_at < ?`).bind(startedAt).first() as { n: number } | null;
+      out[t] = row?.n || 0;
+    }
+  }
+  return out;
+}
+// POST /api/finance/books/prune — reconcile deletions. Removes mirrored documents that the
+// last full rebuild did not re-see (i.e. deleted in Zoho), so the app's counts match Zoho.
+// Destructive → super-admin only, dry-run by default, audited. Requires a COMPLETED rebuild.
+async function handleBooksPrune(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may prune mirror data" }, 403);
+  const startedAt = (await getConfig(env, "books_bf_started_at", "")).trim();
+  const complete = (await getConfig(env, "initial_backfill_complete", "0")) === "1";
+  if (!complete) return json({ error: "A full rebuild is still running — wait for it to finish before pruning." }, 409);
+  if (!startedAt) return json({ error: "No completed rebuild on record. Run Finance Setup → Rebuild from Books once, then prune." }, 409);
+  const body = await request.json().catch(() => ({})) as { dry_run?: boolean };
+  const dryRun = body.dry_run !== false; // default dry-run; must pass {dry_run:false} to delete
+  const counts = await _booksPrune(env, startedAt, !dryRun);
+  const total = Object.values(counts).reduce((s, n) => s + n, 0);
+  if (!dryRun) {
+    await setConfig(env, "books_last_prune_at", new Date().toISOString(), user!.sub);
+    await audit(env, user, "BOOKS_PRUNE", "ar_invoices", "orphans", undefined, JSON.stringify({ started_at: startedAt, counts, total }));
+  }
+  return json({ dry_run: dryRun, rebuild_started_at: startedAt, counts, total });
 }
 // GET /api/finance/books/counts — cross-check sync completeness: for each entity, the
 // total Zoho reports vs the rows mirrored in the app. Lets an operator confirm every
