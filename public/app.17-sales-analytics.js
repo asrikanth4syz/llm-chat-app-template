@@ -4,7 +4,7 @@
 // every endpoint is gated to super_admin server-side. Built on the invoice
 // mirror; no product-line data (Phase 2). Money arrives as INTEGER paise.
 // ════════════════════════════════════════════════════════════════════════
-const _SA = { period: 90, tab: 'dashboard', excMonth: '', excLookback: 6 };
+const _SA = { period: 90, tab: 'dashboard', excMonth: '', excLookback: 6, c360Id: '', c360Q: '', _clients: null };
 
 // ── Hub shell: one nav entry, tabbed sections ──────────────────────────
 async function renderSalesAnalytics(main) {
@@ -14,12 +14,13 @@ async function renderSalesAnalytics(main) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Sales Analytics</h2>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}</div>
     </div>
     <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books.</p>
     <div id="sa-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
   const body = document.getElementById('sa-body');
   if (tab === 'exceptions') return _saExceptions(body);
+  if (tab === 'client360') return _saClient360(body);
   return _saDashboard(body);
 }
 function salesSetTab(id) { _SA.tab = id; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
@@ -66,7 +67,7 @@ async function _saDashboard(body) {
   const perf = data.client_performance || [];
   const periodBtn = (n, label) => `<button class="btn ${period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
   const perfRows = perf.slice(0, 100).map(c => `<tr style="border-top:1px solid var(--border)">
-    <td style="padding:7px 12px">${h(c.name || c.client_id)}</td>
+    <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.prev))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${h(_fmtPaise(c.curr))}</td>
     <td style="padding:7px 12px;text-align:right">${_saStatusChip(c.status, c.growth_pct)}</td></tr>`).join('');
@@ -107,7 +108,7 @@ async function _saExceptions(body) {
   if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
   const c = data.counts || {};
   const rows = (data.exceptions || []).map(e => `<tr style="border-top:1px solid var(--border)">
-    <td style="padding:7px 12px">${h(e.name || e.client_id)}</td>
+    <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', e.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(e.name || e.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.expected))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.actual))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;color:var(--danger,#b3261e);font-weight:600">${h(_fmtPaise(e.gap))}</td>
@@ -176,3 +177,89 @@ async function salesViewException(clientId) {
     </div>`;
 }
 function salesCloseException() { const b = document.getElementById('sa-exc-detail'); if (b) b.innerHTML = ''; }
+
+// ── Tab 3: Client 360 — a sales-lens profile of one client ─────────────
+function salesOpenClient360(id) { _SA.c360Id = id; _SA.tab = 'client360'; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesClearClient360() { _SA.c360Id = ''; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesClient360Search(q) {
+  _SA.c360Q = q || '';
+  const host = document.getElementById('sa-c360-list'); if (!host) return;
+  host.innerHTML = _saClient360ListHtml();
+}
+function _saHealthChip(status) {
+  const map = { stable: ['🟢 Stable', 'var(--success,#2e6e12)'], attention: ['🟡 Attention', 'var(--warning,#8a5a00)'], at_risk: ['🔴 At risk', 'var(--danger,#b3261e)'] };
+  const [label, col] = map[status] || map.stable;
+  return `<span style="font-weight:700;color:${col}">${h(label)}</span>`;
+}
+function _saClient360ListHtml() {
+  const q = (_SA.c360Q || '').toLowerCase();
+  const list = (_SA._clients || []).filter(c => !q || String(c.name || c.client_id).toLowerCase().includes(q)).slice(0, 60);
+  if (!list.length) return `<div style="padding:16px;color:var(--muted)">No matching clients.</div>`;
+  return list.map(c => `<button ${dataAct('salesOpenClient360', c.client_id)} style="display:flex;justify-content:space-between;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--border);padding:9px 12px;font:inherit;cursor:pointer;color:inherit">
+    <span>${h(c.name || c.client_id)}</span>
+    <span style="color:var(--muted);font-variant-numeric:tabular-nums">${h(_fmtPaise(c.outstanding || 0))} open</span></button>`).join('');
+}
+async function _saClient360(body) {
+  // Detail view when a client is picked.
+  if (_SA.c360Id) return _saClient360Detail(body, _SA.c360Id);
+  // Otherwise a searchable picker (client list reused from the AR by-customer feed).
+  if (!_SA._clients) {
+    const d = await api('/finance/ar/by-customer');
+    _SA._clients = (d && d.customers) ? d.customers.slice().sort((a, b) => (b.outstanding || 0) - (a.outstanding || 0)) : [];
+  }
+  body.innerHTML = `
+    <div style="margin-bottom:10px">
+      <div style="position:relative;display:flex;align-items:center;max-width:420px">
+        <span aria-hidden="true" style="position:absolute;left:12px;font-size:15px;color:var(--muted);pointer-events:none">🔍</span>
+        <input type="search" data-input="salesClient360Search" data-val value="${h(_SA.c360Q || '')}" placeholder="Search a client to open their 360…"
+          aria-label="Search clients" style="width:100%;padding:10px 12px 10px 36px;border:2px solid var(--border);border-radius:8px;font:inherit;background:var(--bg,#fff);color:inherit">
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden"><div id="sa-c360-list">${_saClient360ListHtml()}</div></div>`;
+}
+async function _saClient360Detail(body, id) {
+  body.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading client 360…</p></div>`;
+  const d = await api('/analytics/client/' + encodeURIComponent(id));
+  if (!d || d.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  const m = d.metrics || {};
+  const trend = d.trend || [];
+  const max = Math.max(1, ...trend.map(t => t.net_sales));
+  const bars = trend.map(t => `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${h(t.month)} · ${h(_fmtPaise(t.net_sales))}">
+    <div style="width:100%;display:flex;align-items:flex-end;height:90px"><div style="width:100%;background:${t.net_sales ? 'var(--blue,#1d6fa4)' : 'var(--border)'};border-radius:3px 3px 0 0;height:${Math.max(2, Math.round((t.net_sales / max) * 100))}%"></div></div>
+    <div style="font-size:9px;color:var(--muted)">${h(t.month.slice(5))}</div></div>`).join('');
+  const recent = (d.recent_invoices || []).map(i => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:5px 10px">${h(i.number || '')}</td><td style="padding:5px 10px;color:var(--muted)">${h(i.date || '')}</td>
+    <td style="padding:5px 10px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(i.total))}</td>
+    <td style="padding:5px 10px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(i.balance))}</td>
+    <td style="padding:5px 10px;color:var(--muted)">${h(i.status || '')}</td></tr>`).join('');
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <button class="btn btn-secondary btn-sm" ${dataAct('salesClearClient360')}>← All clients</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('financeViewClient', id)}>Open AR statement ▸</button>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="font-size:1.2rem;font-weight:800">${h(d.name || id)}</div>${_saHealthChip((d.health || {}).status)}
+      </div>
+      <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--muted)">${((d.health || {}).reasons || []).map(r => `<li>${h(r)}</li>`).join('')}</ul>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${_saKpi('Sales (12m)', _fmtPaise(m.total_12m), 'billed last 12 months')}
+      ${_saKpi('Avg / month', _fmtPaise(m.avg_monthly), `${m.active_months_12m || 0} active months`)}
+      ${_saKpi('Avg invoice', _fmtPaise(m.avg_invoice), `${m.invoices || 0} invoices total`)}
+      ${_saKpi('Billing cadence', (m.avg_interval_days || 0) + 'd', 'avg gap between invoices')}
+      ${_saKpi('Outstanding', _fmtPaise(m.outstanding), 'open balance now')}
+      ${_saKpi('Last billed', m.last_billing || '—', (m.days_since_last != null ? m.days_since_last + ' days ago' : ''))}
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">12-month sales</div>
+      <div style="display:flex;gap:3px;align-items:flex-end">${bars}</div></div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <div style="padding:14px 16px 0;font-size:13px;font-weight:600">Recent invoices</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:6px 10px">Invoice</th><th style="padding:6px 10px">Date</th>
+          <th style="padding:6px 10px;text-align:right">Total</th><th style="padding:6px 10px;text-align:right">Balance</th><th style="padding:6px 10px">Status</th></tr></thead>
+        <tbody>${recent || `<tr><td colspan="5" style="padding:14px;color:var(--muted)">No invoices.</td></tr>`}</tbody>
+      </table></div>`;
+}
