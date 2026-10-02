@@ -10026,7 +10026,7 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
   // Zoho's OWN customer-level figures (the number shown on the customer page). These let
   // us tell a data gap (invoices differ) apart from a definitional gap (Zoho's receivable
   // counts unapplied credits/advances that the sum of invoice balances does not).
-  let contact: { receivable: number | null; unused_credits: number | null; name: string } = { receivable: null, unused_credits: null, name: "" };
+  let contact: { receivable: number | null; unused_credits: number | null; opening_balance: number | null; name: string } = { receivable: null, unused_credits: null, opening_balance: null, name: "" };
   try {
     const cqs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID || "" });
     const cres = await fetch(`https://www.zohoapis.${zohoDc(env)}/books/v3/contacts/${encodeURIComponent(id)}?${cqs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
@@ -10035,6 +10035,15 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
       const c = cdata.contact || {};
       if (c.outstanding_receivable_amount != null) contact.receivable = toPaise(c.outstanding_receivable_amount as string | number);
       if (c.unused_credits_receivable_amount != null) contact.unused_credits = toPaise(c.unused_credits_receivable_amount as string | number);
+      // Opening balance is a pre-Zoho carried-forward amount set on the contact, NOT an
+      // invoice — so it never appears in /invoices and the app's invoice-based total can't
+      // see it. Zoho exposes it on the contact detail (field name has varied across API
+      // versions), so read the known spellings defensively.
+      const ob = c.opening_balance_amount ?? c.opening_balance ?? c.opening_balances_amount
+        ?? (Array.isArray(c.opening_balances)
+            ? (c.opening_balances as Record<string, unknown>[]).reduce((s, o) => s + Number(o.opening_balance_amount ?? o.amount ?? 0), 0)
+            : undefined);
+      if (ob != null && ob !== "") contact.opening_balance = toPaise(ob as string | number);
       contact.name = String(c.contact_name ?? "");
     }
   } catch { /* contact-level figure is advisory; the invoice diff stands on its own */ }
@@ -10079,8 +10088,11 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
     zoho_total: zohoTotal, app_total: appTotal, diff: zohoTotal - appTotal,
     zoho_invoice_count: Object.keys(zoho).length, app_invoice_count: appRows.length,
     zoho_contact_receivable: contact.receivable, zoho_unused_credits: contact.unused_credits,
+    zoho_opening_balance: contact.opening_balance,
     // If Zoho's customer figure exceeds the sum of its own open invoices, the remainder is
-    // definitional (typically unapplied credits/advances), NOT a sync gap.
+    // NOT a sync gap — it is an amount Zoho counts that is not an invoice. The usual cause
+    // is an opening balance carried forward from before Zoho (which the app, being
+    // invoice-based, does not track); unapplied credits/advances can also contribute.
     definitional_gap: contact.receivable != null ? contact.receivable - zohoTotal : null,
     missing_in_app, mismatched, extra_in_app, lines,
     last_sync_at: (await getConfig(env, "books_last_sync_at", "")) || null,
