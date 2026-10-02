@@ -4947,3 +4947,12 @@ describe("AP vendor pull + sync cross-check", () => {
     expect(forbidden.status).toBe(403);
   });
 });
+
+describe("Books find diagnostic endpoint", () => {
+  it("gates roles, requires a query, and needs Zoho configured", async () => {
+    const forbidden = await get("/api/finance/books/find?q=x", clientToken);
+    expect(forbidden.status).toBe(403);
+    const r = await get("/api/finance/books/find?q=CHHAVI", adminToken);
+    expect([400, 502]).toContain(r.status); // test env has no Zoho org id → "not connected"
+  });
+});

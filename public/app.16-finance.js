@@ -769,6 +769,10 @@ async function renderFinanceSetup(main) {
         <span style="font-size:13px;color:var(--muted)">Synced: <strong>${h(String(s.counts.invoices))}</strong> invoices · <strong>${h(String(s.counts.bills))}</strong> bills · <strong>${h(String(s.counts.customers))}</strong> customers · Backfill ${s.backfill_complete ? '<strong style="color:var(--success,#2e6e12)">complete</strong>' : 'pending'}</span>
       </div>
       <div id="fin-counts" style="margin-top:10px"></div>
+      ${s.zoho.configured ? `<div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="fin-find-q" placeholder="Find a contact in Zoho by name…" style="padding:5px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;min-width:240px">
+        <button class="btn btn-secondary btn-sm" ${dataAct('financeFindContact')} title="Search Zoho directly for a name and see its contact type + whether it synced">Find in Zoho</button>
+      </div><div id="fin-find" style="margin-top:8px"></div>` : ''}
       <div id="fin-sync-progress" style="font-size:12px;color:var(--blue,#1d6fa4);margin-top:8px"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Last synced: <strong>${h(_finAgo(s.last_sync_at))}</strong></div>
       <div style="font-size:12px;color:var(--muted);margin-top:4px">Zoho login: <strong>${s.zoho_token_source === 'connect' ? 'in-app Connect token' : s.zoho_token_source === 'secret' ? 'Worker secret (ZOHO_REFRESH_TOKEN)' : 'not set'}</strong>
@@ -834,6 +838,32 @@ async function financeCheckCounts() {
           <th style="padding:6px 12px">Entity</th><th style="padding:6px 12px;text-align:right">In Zoho</th><th style="padding:6px 12px;text-align:right">In app</th><th style="padding:6px 12px">Status</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px">Checked ${h(_finWhen(r.checked_at))}${!r.backfill_complete ? ' · backfill still in progress' : ''}${anyMissing ? ' · run <strong>Rebuild from Books</strong> if a shortfall persists' : ''}</div>`;
+}
+// Diagnostic: search Zoho directly for a name → shows its contact_type, status and where
+// (if anywhere) it synced in the app. Answers "why isn't this vendor/customer showing?".
+async function financeFindContact() {
+  const q = (document.getElementById('fin-find-q') || {}).value || '';
+  const box = document.getElementById('fin-find');
+  if (!q.trim()) { if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Type a name first.</span>'; return; }
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--muted)">Searching Zoho…</span>';
+  const r = await api('/finance/books/find?q=' + encodeURIComponent(q.trim()));
+  if (!r) { if (box) box.innerHTML = ''; return; }
+  if (r.error) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--danger,#b3261e)">${h(r.error)}</div>`; return; }
+  if (!r.results.length) { if (box) box.innerHTML = `<div style="font-size:12px;color:var(--muted)">No contact in Zoho matches “${h(q)}”.</div>`; return; }
+  const synced = v => v === 'NOT SYNCED'
+    ? '<span style="color:var(--danger,#b3261e);font-weight:600">NOT SYNCED</span>'
+    : `<span style="color:var(--success,#2e6e12)">${h(v)}</span>`;
+  const rows = r.results.map(x => `<tr>
+      <td style="padding:5px 12px">${h(x.name)}</td>
+      <td style="padding:5px 12px">${h(String(x.contact_type))}</td>
+      <td style="padding:5px 12px">${h(String(x.status || ''))}</td>
+      <td style="padding:5px 12px">${synced(x.in_app)}</td></tr>`).join('');
+  if (box) box.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;max-width:560px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:6px 12px">Name (in Zoho)</th><th style="padding:6px 12px">Type</th><th style="padding:6px 12px">Status</th><th style="padding:6px 12px">In app</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
 }
 async function financeRunBooksSync() {
   showToast('Syncing from Zoho Books…', 'info');

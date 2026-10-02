@@ -4519,6 +4519,7 @@ export default {
       if (path==="/api/finance/zoho/test"           && method==="GET")  return handleZohoTest(request,env);
       if (path==="/api/finance/books/resync"        && method==="POST") return handleBooksResync(request,env);
       if (path==="/api/finance/books/counts"        && method==="GET")  return handleBooksCounts(request,env);
+      if (path==="/api/finance/books/find"          && method==="GET")  return handleBooksFind(request,env);
       if (path==="/api/integrations/zoho-books/sync" && method==="POST") return handleBooksSync(request,env);
       if (path==="/api/finance/reminders/rules"        && method==="GET")  return handleReminderRules(request,env);
       if (path==="/api/finance/reminders/runs"         && method==="GET")  return handleReminderRuns(request,env);
@@ -9864,6 +9865,44 @@ async function handleBooksCounts(request: Request, env: Env): Promise<Response> 
     rows.push({ entity: s.label, zoho, app, ok: zoho == null ? null : app >= zoho });
   }
   return json({ checked_at: new Date().toISOString(), rows, backfill_complete: (await getConfig(env, "initial_backfill_complete", "0")) === "1" });
+}
+
+// GET /api/finance/books/find?q=<name> — diagnostic: search Zoho Books contacts by name
+// and show how each is represented (contact_type, status) and whether it synced into the
+// app (ar_clients / ap_vendors). Cuts through "why isn't this vendor here?" by revealing
+// exactly what Zoho returns for that name.
+async function handleBooksFind(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  if (!env.ZOHO_BOOKS_ORG_ID || !(await zohoConfigured(env))) return json({ error: "Zoho Books is not connected yet." }, 400);
+  const q = (new URL(request.url).searchParams.get("q") || "").trim();
+  if (!q) return json({ error: "Enter a name to search for." }, 400);
+  let token: string;
+  try { token = await zohoGetToken(env, fetch); } catch (e) { return json({ error: `Could not reach Zoho: ${String(e)}` }, 502); }
+  // Direct contacts search (search_text spans name/company) — NOT filtered by contact_type
+  // or status, so it finds the contact however Zoho classifies it.
+  const qs = new URLSearchParams({ organization_id: env.ZOHO_BOOKS_ORG_ID || "", per_page: "50", page: "1", search_text: q });
+  let items: Record<string, unknown>[] = [];
+  try {
+    const res = await fetch(`https://www.zohoapis.${zohoDc(env)}/books/v3/contacts?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+    if (!res.ok) return json({ error: `Zoho contacts search returned HTTP ${res.status}` }, 502);
+    const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+    items = Array.isArray(data.contacts) ? data.contacts as Record<string, unknown>[] : [];
+  } catch (e) { return json({ error: `Zoho search failed: ${String(e)}` }, 502); }
+  const results: Array<Record<string, unknown>> = [];
+  for (const z of items) {
+    const cid = String(z.contact_id ?? "");
+    const inVendors = !!(await env.DB.prepare("SELECT 1 FROM ap_vendors WHERE vendor_id=?").bind(cid).first());
+    const inClients = !!(await env.DB.prepare("SELECT 1 FROM ar_clients WHERE client_id=?").bind(cid).first());
+    results.push({
+      contact_id: cid,
+      name: z.contact_name ?? z.company_name ?? "",
+      contact_type: z.contact_type ?? "(none)",
+      status: z.status ?? "",
+      in_app: inVendors ? "ap_vendors" : inClients ? "ar_clients" : "NOT SYNCED",
+    });
+  }
+  return json({ q, count: results.length, results });
 }
 
 async function handleBooksResync(request: Request, env: Env): Promise<Response> {
