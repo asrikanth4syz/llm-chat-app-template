@@ -2829,6 +2829,10 @@ async function ensureArSchema(env: Env): Promise<void> {
     `ALTER TABLE ar_invoices ADD COLUMN due_override_date TEXT`,
     `ALTER TABLE ap_bills ADD COLUMN effective_due_date TEXT`,
     `ALTER TABLE ap_bills ADD COLUMN due_source TEXT`,
+    // Opening balance: a pre-Zoho carried-forward amount set on the Zoho contact (NOT an
+    // invoice). Captured from the contact payload / the reconcile detail call. Only folded
+    // into a client's outstanding when fin_include_opening_balance is on.
+    `ALTER TABLE ar_clients ADD COLUMN opening_balance INTEGER DEFAULT 0`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Config defaults — reminders ship OFF and stay disabled until backfill completes.
@@ -3450,6 +3454,14 @@ function mapBooksContact(z: Record<string, unknown>): { row: Record<string, unkn
   _put(row, "currency_code", z.currency_code);
   const cd = _num(z.payment_terms);
   if (cd !== undefined) row.credit_days = Math.max(0, Math.round(cd));
+  // Opening balance (pre-Zoho carry-forward), if the payload carries it. Field spelling has
+  // varied across Zoho API versions, so read the known ones; left unset otherwise (the
+  // reconcile detail call backfills it on demand).
+  const ob = z.opening_balance_amount ?? z.opening_balance
+    ?? (Array.isArray(z.opening_balances)
+        ? (z.opening_balances as Record<string, unknown>[]).reduce((s, o) => s + Number(o.opening_balance_amount ?? o.amount ?? 0), 0)
+        : undefined);
+  if (ob !== undefined && ob !== null && ob !== "") row.opening_balance = toPaise(ob as string | number);
   // NB: dunning_opt_out is app-owned — deliberately never set here.
   return { row };
 }
@@ -9311,17 +9323,29 @@ async function handleArByCustomer(request: Request, env: Env): Promise<Response>
      GROUP BY i.client_id, i.currency_code
      ORDER BY outstanding DESC`
   ).bind(asOf, asOf, asOf, asOf7).all();
+  // Opening balances (pre-Zoho carry-forward) are folded into outstanding/total-due-now
+  // only when the workspace opts in — they have no invoice or due date, so they count as
+  // "due now" but never carry a DPD and never feed automated dunning.
+  const includeOpening = (await getConfig(env, "fin_include_opening_balance", "0")) === "1";
+  const openingByClient: Record<string, number> = {};
+  if (includeOpening) {
+    for (const r of (((await env.DB.prepare("SELECT client_id, opening_balance FROM ar_clients WHERE opening_balance > 0").all()).results) || []) as Array<{ client_id: string; opening_balance: number }>)
+      openingByClient[r.client_id] = r.opening_balance || 0;
+  }
   const customers = ((results || []) as Record<string, unknown>[]).map(r => {
     const overdue = Number(r.overdue) || 0, dueToday = Number(r.due_today) || 0;
     const oldest = r.oldest_due ? String(r.oldest_due) : null;
+    const opening = includeOpening ? (openingByClient[String(r.client_id)] || 0) : 0;
     return {
       ...r,
+      opening_balance: opening,
+      outstanding: (Number(r.outstanding) || 0) + opening,
       paid: (Number(r.billed) || 0) - (Number(r.outstanding) || 0),
-      total_due_now: overdue + dueToday,
+      total_due_now: overdue + dueToday + opening,
       oldest_dpd: oldest ? Math.max(0, daysBetweenIST(oldest, asOf)) : 0,
     };
   });
-  return json({ as_of: asOf, stale: await finStaleInfo(env), customers });
+  return json({ as_of: asOf, stale: await finStaleInfo(env), include_opening_balance: includeOpening, customers });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
@@ -9337,7 +9361,19 @@ async function handleArClientStatement(request: Request, env: Env, path: string)
   const { results } = await env.DB.prepare(
     `SELECT id, number, date, due_date, effective_due_date, due_source, total, amount_paid, credited, balance, currency_code, status, age_bucket FROM ar_invoices WHERE client_id=? AND status != 'void' ORDER BY balance DESC, due_date LIMIT 1000`
   ).bind(id).all();
-  return json({ client_id: id, invoices: results || [], by_currency: await _arSummaryRows(env, id) });
+  const by_currency = await _arSummaryRows(env, id);
+  // Opening balance (pre-Zoho) shown as a distinct line; folded into the outstanding of the
+  // client's own currency only when the workspace opts in.
+  const includeOpening = (await getConfig(env, "fin_include_opening_balance", "0")) === "1";
+  const cli = await env.DB.prepare("SELECT opening_balance, currency_code FROM ar_clients WHERE client_id=?").bind(id).first() as { opening_balance: number; currency_code: string } | null;
+  const opening = (cli?.opening_balance as number) || 0;
+  if (includeOpening && opening > 0) {
+    const cur = cli?.currency_code || String((results || [])[0] ? (results as Record<string, unknown>[])[0].currency_code : "INR") || "INR";
+    const block = by_currency.find(b => (b.currency as string) === cur);
+    if (block) block.outstanding = (Number(block.outstanding) || 0) + opening;
+    else by_currency.push({ currency: cur, outstanding: opening, overdue: 0, due_this_week: 0, buckets: { current: opening, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0 }, dso: 0 });
+  }
+  return json({ client_id: id, invoices: results || [], by_currency, opening_balance: opening, include_opening_balance: includeOpening });
 }
 
 // Statement-of-account email body (outstanding invoices + total). Plain, non-dunning.
@@ -9775,6 +9811,7 @@ async function _financeStatus(env: Env): Promise<Record<string, unknown>> {
       dust_cutoff_paise: await finCfgInt(env, "fin_dust_cutoff_paise", 100),
       default_credit_days: await finCfgInt(env, "fin_default_credit_days", 30),
       stale_days: await finCfgInt(env, "fin_stale_days", 3),
+      include_opening_balance: (await getConfig(env, "fin_include_opening_balance", "0")) === "1",
     },
     counts: {
       invoices: await num("SELECT COUNT(*) AS n FROM ar_invoices"),
@@ -9794,7 +9831,11 @@ async function handleFinanceStatus(request: Request, env: Env): Promise<Response
 async function handleFinanceSettings(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may change finance settings" }, 403);
-  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number; kpi_period_days?: number; target_dso?: number; target_cei?: number; target_acp?: number; target_overdue_pct?: number; max_reminders_per_week?: number; overdue_autosend?: boolean };
+  const body = await request.json().catch(() => ({})) as { books_sync_enabled?: boolean; reminders_mode?: string; dust_cutoff_paise?: number; default_credit_days?: number; stale_days?: number; kpi_period_days?: number; target_dso?: number; target_cei?: number; target_acp?: number; target_overdue_pct?: number; max_reminders_per_week?: number; overdue_autosend?: boolean; include_opening_balance?: boolean };
+  if (body.include_opening_balance !== undefined) {
+    await setConfig(env, "fin_include_opening_balance", body.include_opening_balance ? "1" : "0", user!.sub);
+    await audit(env, user, "FIN_INCLUDE_OPENING_BALANCE", "app_config", "fin_include_opening_balance", undefined, body.include_opening_balance ? "1" : "0");
+  }
   // KPI period + targets (PRD §14) — plain integer settings, audited.
   const kpiInt = async (field: keyof typeof body, key: string, max = 100000) => {
     if (body[field] === undefined) return;
@@ -10083,8 +10124,14 @@ async function handleArReconcileClient(request: Request, env: Env, path: string)
     }
   }
   lines.sort((a, b) => Math.abs(Number(b.diff) || 0) - Math.abs(Number(a.diff) || 0));
+  // Backfill the stored opening balance from this authoritative detail call, so the
+  // by-customer view can fold it in without its own live fetch.
+  if (contact.opening_balance != null) {
+    try { await env.DB.prepare("UPDATE ar_clients SET opening_balance=? WHERE client_id=?").bind(contact.opening_balance, id).run(); } catch { /* non-fatal */ }
+  }
+  const includeOpening = (await getConfig(env, "fin_include_opening_balance", "0")) === "1";
   return json({
-    client_id: id, customer_name: contact.name || null,
+    client_id: id, customer_name: contact.name || null, include_opening_balance: includeOpening,
     zoho_total: zohoTotal, app_total: appTotal, diff: zohoTotal - appTotal,
     zoho_invoice_count: Object.keys(zoho).length, app_invoice_count: appRows.length,
     zoho_contact_receivable: contact.receivable, zoho_unused_credits: contact.unused_credits,

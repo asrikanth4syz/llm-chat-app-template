@@ -539,6 +539,7 @@ async function financeViewClient(clientId) {
     <h2 style="margin:0 0 12px">${h(name)} — Statement</h2>
     <div id="fin-reconcile" style="margin-bottom:12px"></div>
     ${byCur.length ? byCur.map(_financeCurrencyBlock).join('') : `<div class="card" style="padding:20px;color:var(--muted)">Nothing outstanding for this customer.</div>`}
+    ${data.include_opening_balance && data.opening_balance > 0 ? `<div style="font-size:12px;color:var(--muted);margin:-4px 0 12px;padding:6px 10px;background:var(--bg-subtle,#f5f5f5);border-radius:6px">Includes an opening balance of <b>${h(_fmtPaise(data.opening_balance))}</b> (carried forward from before Zoho — not an invoice).</div>` : ''}
     <h3 style="margin:18px 0 10px">Open invoices (${open.length})</h3>
     ${_financeInvoiceTable(open, false)}
     <h3 style="margin:22px 0 10px;color:var(--muted)">Paid / settled (${paid.length})</h3>
@@ -967,7 +968,22 @@ async function renderFinanceSetup(main) {
         ${modeBtn('live', 'Live', 'Really emails customers (pre-due & on-due automatically).')}
       </div>
       <p style="font-size:12px;color:var(--muted);margin:12px 0 0">Overdue follow-ups are never automatic — a person sends them from the <a href="#reminders" style="color:var(--blue,#1d6fa4)">Payment Reminders</a> worklist.</p>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div style="font-weight:600;margin-bottom:6px">Step 3 · Opening balances</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px">An <strong>opening balance</strong> is what a customer owed before you moved to Zoho — it sits on the customer in Zoho, not on any invoice. Turn this on to <strong>include it in each customer's Total Outstanding</strong> so the app ties out to the figure on Zoho's customer page. Left off, the app shows only invoice balances (what you dun on). Either way, opening balances never trigger automatic reminders.</p>
+      <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer">
+        <input type="checkbox" ${(s.dues_settings && s.dues_settings.include_opening_balance) ? 'checked' : ''} ${dataActEl('financeToggleOpeningBalance')} style="width:18px;height:18px">
+        <span>Include opening balances in Total Outstanding</span>
+      </label>
+      <p style="font-size:12px;color:var(--muted);margin:10px 0 0">A customer's opening balance is captured whenever you run <strong>⚖ Reconcile with Zoho</strong> on their statement (and on sync when Zoho sends it).</p>
     </div>`;
+}
+async function financeToggleOpeningBalance(el) {
+  const on = !!(el && el.checked);
+  const r = await api('/finance/settings', { method: 'POST', body: JSON.stringify({ include_opening_balance: on }) });
+  if (r) { showToast('Opening balances ' + (on ? 'included in' : 'excluded from') + ' outstanding', 'info'); renderFinanceSetup(document.getElementById('main-content')); }
 }
 async function financeToggleBooksSync(on) {
   const r = await api('/finance/settings', { method: 'POST', body: JSON.stringify({ books_sync_enabled: !!on }) });

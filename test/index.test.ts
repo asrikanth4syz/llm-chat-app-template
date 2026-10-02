@@ -4966,6 +4966,32 @@ describe("AR per-customer reconcile with Zoho", () => {
   });
 });
 
+describe("Opening balance — optional inclusion in outstanding", () => {
+  it("is excluded by default and folded into total_due_now/outstanding when enabled", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code,opening_balance) VALUES ('COB','Opening Co','INR',1810665)").run();
+    // one open invoice so the client appears in the by-customer aggregation
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,effective_due_date,total,balance,currency_code,status,books_status) VALUES ('IOB','IOB','IOB','COB','2026-01-01','2099-12-31','2099-12-31',500000,500000,'INR','open','open')").run();
+
+    await setCfg("fin_include_opening_balance", "0");
+    const off = await (await get("/api/finance/ar/by-customer", adminToken)).json() as { include_opening_balance: boolean; customers: Array<Record<string, number>> };
+    expect(off.include_opening_balance).toBe(false);
+    const cOff = off.customers.find(c => (c.client_id as unknown as string) === "COB")!;
+    expect(cOff.outstanding).toBe(500000);        // opening balance NOT included
+    expect(cOff.opening_balance).toBe(0);
+
+    await setCfg("fin_include_opening_balance", "1");
+    const on = await (await get("/api/finance/ar/by-customer", adminToken)).json() as { include_opening_balance: boolean; customers: Array<Record<string, number>> };
+    expect(on.include_opening_balance).toBe(true);
+    const cOn = on.customers.find(c => (c.client_id as unknown as string) === "COB")!;
+    expect(cOn.opening_balance).toBe(1810665);
+    expect(cOn.outstanding).toBe(500000 + 1810665); // folded into outstanding
+    expect(cOn.total_due_now).toBe(1810665);        // the invoice is not yet due → only opening balance is "due now"
+    await setCfg("fin_include_opening_balance", "0");
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
