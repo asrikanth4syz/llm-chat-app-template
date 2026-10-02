@@ -14,13 +14,15 @@ async function renderSalesAnalytics(main) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Sales Analytics</h2>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}${tabBtn('reps', 'Salespeople')}${tabBtn('setup', 'Setup')}</div>
     </div>
     <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books.</p>
     <div id="sa-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
   const body = document.getElementById('sa-body');
   if (tab === 'exceptions') return _saExceptions(body);
   if (tab === 'client360') return _saClient360(body);
+  if (tab === 'reps') return _saReps(body);
+  if (tab === 'setup') return _saSetup(body);
   return _saDashboard(body);
 }
 function salesSetTab(id) { _SA.tab = id; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
@@ -262,4 +264,117 @@ async function _saClient360Detail(body, id) {
           <th style="padding:6px 10px;text-align:right">Total</th><th style="padding:6px 10px;text-align:right">Balance</th><th style="padding:6px 10px">Status</th></tr></thead>
         <tbody>${recent || `<tr><td colspan="5" style="padding:14px;color:var(--muted)">No invoices.</td></tr>`}</tbody>
       </table></div>`;
+}
+
+// ── Tab 4: Salespeople — revenue attributed by client owner + region split ──
+async function _saReps(body) {
+  const period = _SA.period || 90;
+  const [byRep, byRegion] = await Promise.all([
+    api('/analytics/sales/by-rep?period=' + period),
+    api('/analytics/sales/by-region?period=' + period),
+  ]);
+  if (!byRep || byRep.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((byRep && byRep.error) || 'Unable to load.')}</div>`; return; }
+  const periodBtn = (n, label) => `<button class="btn ${period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
+  const repRows = (byRep.reps || []).map(r => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:7px 12px">${h(r.name)}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${h(_fmtPaise(r.net_sales))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(String(r.invoices || 0))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(String(r.clients_billed || 0))} / ${h(String(r.clients || 0))}</td></tr>`).join('');
+  const regionRows = ((byRegion && byRegion.regions) || []).map(r => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:7px 12px">${h(r.region)}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${h(_fmtPaise(r.net))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(String(r.invoices || 0))}</td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(String(r.clients || 0))}</td></tr>`).join('');
+  const unassignedRep = (byRep.reps || []).find(r => !r.rep_id);
+  body.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      ${periodBtn(30, '30d')}${periodBtn(90, '90d')}${periodBtn(180, '180d')}${periodBtn(365, '1y')}
+      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
+    </div>
+    ${(unassignedRep && unassignedRep.net_sales > 0) ? `<div class="card" style="padding:10px 14px;margin-bottom:12px;border-left:4px solid var(--warning,#8a5a00);font-size:13px">
+      <b>${h(_fmtPaise(unassignedRep.net_sales))}</b> of sales is from clients with no salesperson assigned. Assign owners under <b>Setup</b> for full attribution.</div>` : ''}
+    <div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
+      <div style="padding:14px 16px 0;font-size:13px;font-weight:600">By salesperson — last ${h(String(period))} days</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:8px 12px">Salesperson</th><th style="padding:8px 12px;text-align:right">Sales</th>
+          <th style="padding:8px 12px;text-align:right">Invoices</th><th style="padding:8px 12px;text-align:right">Clients billed / owned</th></tr></thead>
+        <tbody>${repRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No salespeople yet — add them under Setup.</td></tr>`}</tbody>
+      </table></div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <div style="padding:14px 16px 0;font-size:13px;font-weight:600">By region — last ${h(String(period))} days</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:8px 12px">Region</th><th style="padding:8px 12px;text-align:right">Sales</th>
+          <th style="padding:8px 12px;text-align:right">Invoices</th><th style="padding:8px 12px;text-align:right">Clients</th></tr></thead>
+        <tbody>${regionRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No region data.</td></tr>`}</tbody>
+      </table></div>`;
+}
+
+// ── Tab 5: Setup — manage salespeople + assign clients (owner + region) ──
+async function _saSetup(body) {
+  const d = await api('/analytics/assignments');
+  if (!d || d.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  _SA._setup = d;
+  const repsData = await api('/analytics/reps');
+  const reps = (repsData && repsData.reps) || [];
+  const repList = reps.map(r => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:6px 12px">${h(r.name)}${r.active ? '' : ' <span style="color:var(--muted)">(inactive)</span>'}</td>
+    <td style="padding:6px 12px;color:var(--muted)">${h(r.email || '')}</td>
+    <td style="padding:6px 12px;text-align:right"><button class="btn btn-secondary btn-sm" ${dataAct('salesToggleRep', r.id, r.active ? 0 : 1)}>${r.active ? 'Deactivate' : 'Reactivate'}</button></td></tr>`).join('');
+  body.innerHTML = `
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:8px">Salespeople</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <input id="sa-rep-name" placeholder="Name" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+        <input id="sa-rep-email" placeholder="Email (optional)" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+        <button class="btn btn-primary btn-sm" ${dataAct('salesAddRep')}>+ Add</button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>${repList || `<tr><td style="padding:8px 12px;color:var(--muted)">No salespeople yet.</td></tr>`}</tbody></table>
+    </div>
+    <div class="card" style="padding:16px">
+      <div style="font-weight:600;margin-bottom:4px">Assign clients</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">Set each client's owning salesperson and region. Changes save immediately and are preserved across Zoho syncs.</p>
+      <div style="position:relative;display:flex;align-items:center;max-width:360px;margin-bottom:10px">
+        <span aria-hidden="true" style="position:absolute;left:12px;color:var(--muted)">🔍</span>
+        <input type="search" data-input="salesSetupSearch" data-val value="${h(_SA.setupQ || '')}" placeholder="Search clients…" style="width:100%;padding:9px 12px 9px 34px;border:2px solid var(--border);border-radius:8px;font:inherit;background:var(--bg,#fff);color:inherit">
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px">Salesperson</th><th style="padding:8px 12px">Region</th></tr></thead>
+        <tbody id="sa-assign-rows">${_saAssignRowsHtml()}</tbody></table></div>
+    </div>`;
+}
+function _saAssignRowsHtml() {
+  const d = _SA._setup; if (!d) return '';
+  const q = (_SA.setupQ || '').toLowerCase();
+  const reps = d.reps || [];
+  const clients = (d.clients || []).filter(c => !q || String(c.name || c.client_id).toLowerCase().includes(q)).slice(0, 100);
+  return clients.map(c => {
+    const opts = `<option value="">— Unassigned —</option>` + reps.map(r => `<option value="${h(r.id)}" ${c.salesperson_id === r.id ? 'selected' : ''}>${h(r.name)}</option>`).join('');
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 12px">${h(c.name || c.client_id)}</td>
+      <td style="padding:6px 12px"><select ${dataChangeVal('salesAssignRep', c.client_id)} style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit;max-width:200px">${opts}</select></td>
+      <td style="padding:6px 12px"><input data-change="salesAssignRegion" data-args="${h(JSON.stringify([c.client_id]))}" data-val value="${h(c.region || '')}" placeholder="Region" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit;max-width:160px"></td></tr>`;
+  }).join('');
+}
+function salesSetupSearch(q) { _SA.setupQ = q || ''; const host = document.getElementById('sa-assign-rows'); if (host) host.innerHTML = _saAssignRowsHtml(); }
+async function salesAddRep() {
+  const name = (document.getElementById('sa-rep-name') || {}).value || '';
+  const email = (document.getElementById('sa-rep-email') || {}).value || '';
+  if (!name.trim()) { showToast('Enter a name', 'error'); return; }
+  const r = await api('/analytics/reps', { method: 'POST', body: JSON.stringify({ name: name.trim(), email: email.trim() }) });
+  if (r && r.ok) { showToast('Salesperson added', 'success'); const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+}
+async function salesToggleRep(id, active) {
+  const r = await api('/analytics/reps/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify({ active: !!active }) });
+  if (r && r.ok) { showToast('Updated', 'info'); const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+}
+async function salesAssignRep(clientId, repId) {
+  const r = await api('/analytics/client-assignment', { method: 'POST', body: JSON.stringify({ client_id: clientId, salesperson_id: repId || null }) });
+  if (r && r.ok) { showToast('Owner updated', 'success'); if (_SA._setup) { const c = (_SA._setup.clients || []).find(x => x.client_id === clientId); if (c) c.salesperson_id = repId || null; } }
+}
+async function salesAssignRegion(clientId, region) {
+  const r = await api('/analytics/client-assignment', { method: 'POST', body: JSON.stringify({ client_id: clientId, region: region || null }) });
+  if (r && r.ok) { showToast('Region updated', 'success'); if (_SA._setup) { const c = (_SA._setup.clients || []).find(x => x.client_id === clientId); if (c) c.region = region || null; } }
 }

@@ -5078,6 +5078,45 @@ describe("Client 360 analytics", () => {
   });
 });
 
+describe("Sales Analytics — salespeople + regions (super-admin only)", () => {
+  it("creates a rep, assigns a client, and attributes revenue by owner and region", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('RC1','Rep Client','INR')").run();
+    const today = new Date().toISOString().slice(0, 10);
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('RI1','RI1','RI1','RC1',?,?,120000,0,'INR','paid','paid')").bind(today, today).run();
+
+    // gating
+    expect((await get("/api/analytics/sales/by-rep", opsToken)).status).toBe(403);
+    expect((await post("/api/analytics/reps", { name: "Raj" }, opsToken)).status).toBe(403);
+
+    // create rep (super-admin)
+    const created = await (await post("/api/analytics/reps", { name: "Raj", email: "raj@x.com" }, adminToken)).json() as { ok: boolean; id: string };
+    expect(created.ok).toBe(true);
+    const repId = created.id;
+
+    // before assignment: revenue sits under "Unassigned"
+    let byRep = await (await get("/api/analytics/sales/by-rep?period=365", adminToken)).json() as { reps: Array<Record<string, unknown>> };
+    const unassigned = byRep.reps.find(r => r.rep_id === null)!;
+    expect(unassigned.net_sales).toBeGreaterThanOrEqual(120000);
+
+    // assign owner + region
+    const asg = await post("/api/analytics/client-assignment", { client_id: "RC1", salesperson_id: repId, region: "Bangalore" }, adminToken);
+    expect(asg.status).toBe(200);
+
+    byRep = await (await get("/api/analytics/sales/by-rep?period=365", adminToken)).json() as { reps: Array<Record<string, unknown>> };
+    const raj = byRep.reps.find(r => r.rep_id === repId)!;
+    expect(raj.name).toBe("Raj");
+    expect(raj.net_sales).toBe(120000);
+    expect(raj.clients).toBe(1);
+
+    const byRegion = await (await get("/api/analytics/sales/by-region?period=365", adminToken)).json() as { regions: Array<Record<string, unknown>> };
+    const blr = byRegion.regions.find(r => r.region === "Bangalore")!;
+    expect(blr).toBeTruthy();
+    expect(blr.net).toBe(120000);
+  });
+});
+
 describe("Books sync resilience — vendor pull failure is non-fatal", () => {
   it("a 400 on the vendors stage is skipped and the backfill still completes", async () => {
     await ensureArSchema(env);
