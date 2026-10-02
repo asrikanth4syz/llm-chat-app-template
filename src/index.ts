@@ -4530,6 +4530,8 @@ export default {
       if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
       if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
       if (path==="/api/analytics/sales/overview" && method==="GET") return handleSalesOverview(request,env);
+      if (path==="/api/analytics/billing-exceptions" && method==="GET") return handleBillingExceptions(request,env);
+      if (path.match(/^\/api\/analytics\/billing-exceptions\/[^/]+$/) && method==="GET") return handleBillingExceptionDetail(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/email-statement$/) && method==="POST") return handleEmailStatement(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/ledger$/) && method==="GET") return handleArLedger(request,env,path);
       if (path.match(/^\/api\/finance\/ar\/client\/[^/]+\/reconcile$/) && method==="GET") return handleArReconcileClient(request,env,path);
@@ -9428,6 +9430,95 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
     },
     trend, client_performance,
   });
+}
+
+// ── Billing Exceptions — "who didn't get billed?" (super-admin only) ────
+// Detects regular buyers who went quiet or dropped sharply, from the invoice
+// mirror alone (same id space as clients — reliable). Order-not-billed (Level 1)
+// is deferred to the orders phase, where the app-order vs Zoho-contact id spaces
+// can be reconciled. Thresholds are config-tunable with sensible defaults.
+async function _billingExceptions(env: Env, targetMonth: string, lookback: number): Promise<Record<string, unknown>[]> {
+  const minActive = await finCfgInt(env, "sa_exc_min_active_months", 3);
+  const criticalPaise = await finCfgInt(env, "sa_exc_critical_paise", 5000000); // ₹50k
+  const declinePct = await finCfgInt(env, "sa_exc_decline_pct", 50);
+  const windowStart = _ymOffset(targetMonth, lookback); // lookback months before target
+  // Monthly billed totals per client across [windowStart .. targetMonth].
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym,
+            COALESCE(SUM(i.total),0) AS net, MAX(i.date) AS last_date
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE i.status!='void' AND substr(i.date,1,7) >= ? AND substr(i.date,1,7) <= ?
+      GROUP BY i.client_id, ym`
+  ).bind(windowStart, targetMonth).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number; last_date: string }>;
+  const agg: Record<string, { name: string; months: Record<string, number>; last_date: string }> = {};
+  for (const r of rows) {
+    const e = agg[r.client_id] || (agg[r.client_id] = { name: r.name, months: {}, last_date: "" });
+    e.months[r.ym] = r.net || 0;
+    if ((r.last_date || "") > e.last_date) e.last_date = r.last_date || "";
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const [client_id, e] of Object.entries(agg)) {
+    const current = e.months[targetMonth] || 0;
+    // History = the lookback months strictly before the target month.
+    const histMonths = Array.from({ length: lookback }, (_, i) => _ymOffset(targetMonth, i + 1));
+    const histVals = histMonths.map(m => e.months[m] || 0);
+    const activeVals = histVals.filter(v => v > 0);
+    const monthsActive = activeVals.length;
+    const avg = activeVals.length ? Math.round(activeVals.reduce((s, v) => s + v, 0) / activeVals.length) : 0;
+    let reason = "", severity = "";
+    if (monthsActive >= minActive && current === 0) {
+      reason = "not_billed"; severity = avg >= criticalPaise ? "critical" : "attention";
+    } else if (current > 0 && avg > 0 && current < avg * (1 - declinePct / 100)) {
+      reason = "below_average"; severity = avg >= criticalPaise ? "attention" : "monitor";
+    } else continue; // not an exception
+    out.push({
+      client_id, name: e.name, expected: avg, actual: current, gap: Math.max(0, avg - current),
+      reason, severity, months_active: monthsActive, last_billing: e.last_date || null,
+    });
+  }
+  const sev = (s: string) => s === "critical" ? 0 : s === "attention" ? 1 : 2;
+  out.sort((a, b) => sev(a.severity as string) - sev(b.severity as string) || (Number(b.gap) || 0) - (Number(a.gap) || 0));
+  return out;
+}
+// GET /api/analytics/billing-exceptions?month=YYYY-MM&lookback=N
+async function handleBillingExceptions(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const url = new URL(request.url);
+  const mRaw = url.searchParams.get("month") || "";
+  const month = /^\d{4}-\d{2}$/.test(mRaw) ? mRaw : istToday().slice(0, 7);
+  const lookback = Math.min(24, Math.max(2, parseInt(url.searchParams.get("lookback") || "6", 10) || 6));
+  const exceptions = await _billingExceptions(env, month, lookback);
+  const totals: Record<string, number> = {};
+  for (const e of exceptions) {
+    const s = e.severity as string; totals[s] = (totals[s] || 0) + 1;
+    totals.gap = (totals.gap || 0) + (Number(e.gap) || 0);
+  }
+  return json({ month, lookback, counts: { critical: totals.critical || 0, attention: totals.attention || 0, monitor: totals.monitor || 0, total: exceptions.length }, potential_gap: totals.gap || 0, exceptions });
+}
+// GET /api/analytics/billing-exceptions/:clientId?month=YYYY-MM — drill-down.
+async function handleBillingExceptionDetail(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const id = decodeURIComponent(path.split("/").pop()!);
+  const url = new URL(request.url);
+  const mRaw = url.searchParams.get("month") || "";
+  const month = /^\d{4}-\d{2}$/.test(mRaw) ? mRaw : istToday().slice(0, 7);
+  const client = await env.DB.prepare("SELECT client_id, name FROM ar_clients WHERE client_id=?").bind(id).first() as { client_id: string; name: string } | null;
+  // 12-month billing history ending at the target month.
+  const histStart = _ymOffset(month, 11);
+  const rows = (((await env.DB.prepare(
+    `SELECT substr(date,1,7) AS ym, COALESCE(SUM(total),0) AS net, COUNT(*) AS cnt
+       FROM ar_invoices WHERE status!='void' AND client_id=? AND substr(date,1,7) >= ? AND substr(date,1,7) <= ? GROUP BY ym`
+  ).bind(id, histStart, month).all()).results) || []) as Array<{ ym: string; net: number; cnt: number }>;
+  const hm: Record<string, { net: number; cnt: number }> = {};
+  for (const r of rows) hm[r.ym] = { net: r.net || 0, cnt: r.cnt || 0 };
+  const history = Array.from({ length: 12 }, (_, i) => { const ym = _ymOffset(month, 11 - i); return { month: ym, net_sales: hm[ym]?.net || 0, invoices: hm[ym]?.cnt || 0 }; });
+  const recent = (((await env.DB.prepare(
+    `SELECT number, date, total, balance, status FROM ar_invoices WHERE status!='void' AND client_id=? ORDER BY date DESC LIMIT 5`
+  ).bind(id).all()).results) || []) as Array<Record<string, unknown>>;
+  const [one] = await _billingExceptions(env, month, 6).then(xs => xs.filter(x => x.client_id === id));
+  return json({ client_id: id, name: client?.name || id, month, history, recent_invoices: recent, exception: one || null });
 }
 
 // GET /api/finance/ar/client/:id — statement. finance/ops see any client; a
