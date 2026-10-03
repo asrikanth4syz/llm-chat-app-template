@@ -10094,19 +10094,26 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Forbidden" }, 403);
   if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return json({ status: "disabled" });
   const body = await request.json().catch(() => ({})) as { full?: boolean };
-  // A manual full sync mints a FRESH Zoho access token first, so a just-rotated
-  // refresh token or a newly-added Books scope takes effect immediately instead of
-  // waiting out the ~1h access-token cache (otherwise a correct fix still 401s).
-  if (body.full) { await setConfig(env, "zoho_token", "", user!.sub); await setConfig(env, "zoho_token_exp", "0", user!.sub); }
   // A full re-pull of a large org in one invocation exceeds the Worker CPU/subrequest
   // budget and is killed before it can stamp "last synced" — data lands but the
   // timestamp never advances. So a manual FULL sync routes through the RESUMABLE
-  // stepper: reset the backfill once (only when it was already complete — the SPA
-  // re-sends full:true each iteration, so guard on backfillDone to reset just once),
-  // then step in bounded chunks that commit + stamp as they go. A non-full run is a
-  // normal delta; an in-progress backfill simply continues.
+  // stepper: reset the backfill ONCE at the start (only when it was already complete —
+  // the SPA re-sends full:true on every stepped iteration, so guard on backfillDone to
+  // act just once), then step in bounded chunks that commit + stamp as they go. A
+  // non-full run is a normal delta; an in-progress backfill simply continues.
+  //
+  // Clear the cached access token in that SAME once-per-rebuild block — not on every
+  // full:true call. A fresh mint at the start lets a just-rotated refresh token or a
+  // newly-added Books scope take effect immediately (otherwise a correct fix waits out
+  // the ~1h cache and still 401s); later steps reuse that cached token. Clearing it on
+  // every step forced a brand-new mint per chunk, and a large org's many chunks trip
+  // Zoho's access-token generation limit, failing the whole rebuild with "Access Denied".
   const backfillDone = (await getConfig(env, "initial_backfill_complete", "0")) === "1";
-  if (body.full && backfillDone) await resetBooksBackfill(env, user!.sub);
+  if (body.full && backfillDone) {
+    await setConfig(env, "zoho_token", "", user!.sub);
+    await setConfig(env, "zoho_token_exp", "0", user!.sub);
+    await resetBooksBackfill(env, user!.sub);
+  }
   const stepped = (await getConfig(env, "initial_backfill_complete", "0")) !== "1";
   const result: BooksSyncResult | BackfillStepResult = stepped
     ? await runBooksBackfillStep(env)
