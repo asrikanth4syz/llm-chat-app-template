@@ -1270,10 +1270,20 @@ async function dispatchDCModal(dcId) {
     .map(s=>`<option value="${s.id}" ${dc&&dc.staff_id===s.id?'selected':''}>${h(s.name)}</option>`).join('');
   const dcNumber = (dc && (dc.dc_number||dc.id)) || dcId;
   const v = (x)=> x==null ? '' : String(x);
+  // The DC number used in Zoho is set HERE, at dispatch. Back-office warehouse/ops roles may
+  // type it; everyone else sees it read-only. (The delivery executive confirms delivery later
+  // but never assigns the document number.)
+  const DC_NUMBER_EDIT_ROLES = ['super_admin','ops_admin','ops_manager','warehouse_exec'];
+  const canEditDcNum = APP.user && DC_NUMBER_EDIT_ROLES.includes(APP.user.role);
+  const dcNumField = canEditDcNum
+    ? `<div class="form-group"><label>DC Number <span style="color:var(--text-muted);font-weight:400">— the number used in Zoho</span></label>
+         <input type="text" id="dp-dcnum" maxlength="40" placeholder="e.g. 425-10272" value="${h(v(dc&&dc.dc_number))}">
+         <div style="font-size:.75rem;color:var(--text-muted);margin-top:3px">Leave as-is to keep the system number. This becomes the challan's number everywhere.</div></div>`
+    : `<div class="form-group"><label>DC Number <span style="color:var(--text-muted);font-weight:400">— system-assigned</span></label>
+         <input type="text" value="${h(dcNumber)}" disabled style="background:var(--surface-2);color:var(--text-muted)"></div>`;
   openModal(`Dispatch DC — ${dcNumber}`,
     `<p style="margin-bottom:12px;color:var(--text-muted)">Confirm the vehicle and driver to dispatch this challan. The challan moves to <b>In Transit</b> and the order to <b>In Shipment</b>.</p>
-     <div class="form-group"><label>DC Number <span style="color:var(--text-muted);font-weight:400">— system-assigned</span></label>
-       <input type="text" value="${h(dcNumber)}" disabled style="background:var(--surface-2);color:var(--text-muted)"></div>
+     ${dcNumField}
      <div class="form-group"><label>Assign Staff</label><select id="dp-staff"><option value="">— Unassigned —</option>${staffOpts}</select></div>
      <div class="form-group"><label>Scheduled Time</label><input type="time" id="dp-time" value="${v(dc&&dc.scheduled_time)}"></div>
      <div class="form-group"><label>Vehicle Number</label><input type="text" id="dp-vehicle" placeholder="e.g. MH12-AB-1234" value="${v(dc&&dc.vehicle_no)}"></div>
@@ -1281,7 +1291,7 @@ async function dispatchDCModal(dcId) {
      <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655" value="${v(dc&&dc.driver_phone)}"></div>
      <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected" value="${v(dc&&dc.expected_delivery_date)}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-primary" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
+     <button class="btn btn-primary" id="dp-confirm-btn" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
 }
 
 async function confirmDispatch(dcId) {
@@ -1291,9 +1301,16 @@ async function confirmDispatch(dcId) {
   const expected_delivery_date = document.getElementById('dp-expected').value;
   const staff_id               = document.getElementById('dp-staff').value;
   const scheduled_time         = document.getElementById('dp-time').value;
+  const dcNumEl                = document.getElementById('dp-dcnum');
+  const dc_number              = dcNumEl ? dcNumEl.value.trim() : '';
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
   if (APP._dcDispatching) return; // guard against a double-click double-dispatching
   APP._dcDispatching = true;
+  // Visible busy feedback so the operator knows the click registered (best practice:
+  // disable + relabel the button while the request is in flight).
+  const btn = document.getElementById('dp-confirm-btn');
+  const btnLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.setAttribute('aria-busy','true'); btn.textContent = 'Dispatching…'; }
   // One atomic dispatch call carries every logistics field — no follow-up PATCH.
   let res;
   try {
@@ -1302,10 +1319,14 @@ async function confirmDispatch(dcId) {
       body: JSON.stringify({
         vehicle_no, driver_name, driver_phone,
         staff_id: staff_id||null, scheduled_time: scheduled_time||null,
-        expected_delivery_date: expected_delivery_date||null
+        expected_delivery_date: expected_delivery_date||null,
+        dc_number: dc_number||undefined
       })
     });
-  } finally { APP._dcDispatching = false; }
+  } finally {
+    APP._dcDispatching = false;
+    if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = btnLabel; }
+  }
   closeModal();
   if (!res) return;
   showToast(`DC ${dcId} dispatched — in transit`);
@@ -1353,14 +1374,14 @@ async function saveReassignDriver(dcId) {
 
 // Roles allowed to set the DC number (the number used in Zoho) at delivery time.
 // Delivery executives confirm the delivery but do not assign the document number.
-const DC_NUMBER_EDIT_ROLES = ['super_admin','ops_admin','ops_manager','warehouse_exec'];
+// DC number is now set at DISPATCH (when the driver is assigned), not here. At delivery we
+// only DISPLAY it for context — read-only, no edit.
 function dcNumberField(curDcNum) {
-  if (!DC_NUMBER_EDIT_ROLES.includes(APP.user?.role||'')) return '';
+  if (!curDcNum) return '';
   return `
-    <div style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg,var(--surface-2))">
-      <label for="deliver-dcnum" style="display:block;font-size:.82rem;font-weight:700;color:var(--navy);margin-bottom:4px">DC number (as entered in Zoho)</label>
-      <input type="text" id="deliver-dcnum" class="form-control form-control-sm" value="${h(curDcNum||'')}" placeholder="e.g. your Zoho DC / invoice number" maxlength="40" style="max-width:280px">
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Overwrites the auto number${curDcNum?` (<b>${h(curDcNum)}</b>)`:''} shown on this challan everywhere. Leave as-is to keep it.</div>
+    <div style="margin-bottom:14px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg,var(--surface-2))">
+      <span style="font-size:.78rem;color:var(--text-muted)">DC number (set at dispatch):</span>
+      <span style="font-weight:700;margin-left:6px">${h(curDcNum)}</span>
     </div>`;
 }
 
@@ -1445,10 +1466,8 @@ async function confirmDelivery(dcId) {
   const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
   const items = inputs.map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
   const discrepancy = inputs.some(inp => (parseInt(inp.value)||0) !== (parseInt(inp.dataset.expected)||0));
-  // Optional operator-entered DC number (the number used in Zoho) — server accepts it
-  // only from back-office roles and ignores a blank value.
-  const dcNumEl = document.getElementById('deliver-dcnum');
-  const dcNumber = dcNumEl ? dcNumEl.value.trim() : '';
+  // DC number is set at dispatch now — not sent from here.
+  const dcNumber = '';
 
   if (discrepancy) {
     if (!APP._deliveryVoice) { showToast('Record a voice explanation for the short/excess delivery', 'error'); return; }
