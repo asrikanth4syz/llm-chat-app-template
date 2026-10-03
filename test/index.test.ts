@@ -4997,11 +4997,11 @@ describe("Sales Analytics — super-admin only overview", () => {
     const db = env.DB as D1Database;
     await ensureArSchema(env);
     await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('SAC','Sales Client','INR')").run();
-    const today = new Date().toISOString().slice(0, 10);
-    const thisMonth = today.slice(0, 7);
-    const prevMonth = (() => { const [y, m] = thisMonth.split("-").map(Number); const d = new Date(Date.UTC(y, m - 2, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; })();
-    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI1','SI1','SI1','SAC',?,?,100000,0,'INR','paid','paid')").bind(prevMonth + "-10", prevMonth + "-25").run();
-    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI2','SI2','SI2','SAC',?,?,150000,150000,'INR','open','open')").bind(thisMonth + "-05", thisMonth + "-20").run();
+    // Comparison uses the two most recent COMPLETE months: recent = M-1, prior = M-2.
+    const ymBack = (n: number) => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    const prior = ymBack(2), recent = ymBack(1);
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI1','SI1','SI1','SAC',?,?,100000,0,'INR','paid','paid')").bind(prior + "-10", prior + "-25").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('SI2','SI2','SI2','SAC',?,?,150000,150000,'INR','open','open')").bind(recent + "-05", recent + "-20").run();
 
     // ops_manager (finance-capable) must NOT see sales data — super-admin only.
     const forbidden = await get("/api/analytics/sales/overview", opsToken);
@@ -5053,17 +5053,18 @@ describe("Sales Analytics — draft invoices are excluded", () => {
     const db = env.DB as D1Database;
     await ensureArSchema(env);
     await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('DRC','Draft Co','INR')").run();
-    const prevYm = (() => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, m - 2, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; })();
+    // Put them in the most recent COMPLETE month (M-1), which the comparison labels "curr".
+    const recent = (() => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - 1, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; })();
     // One REAL (overdue→open) invoice and three DRAFT versions of the same supply.
-    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('DR_REAL','DR_REAL','426-00644','DRC',?,?,15438362,15438362,'INR','open','overdue')").bind(prevYm + "-15", prevYm + "-30").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES ('DR_REAL','DR_REAL','426-00644','DRC',?,?,15438362,15438362,'INR','open','overdue')").bind(recent + "-15", recent + "-30").run();
     for (let i = 0; i < 3; i++) {
       await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,due_date,total,balance,currency_code,status,books_status) VALUES (?,?,?,'DRC',?,?,18636233,18636233,'INR','open','draft')")
-        .bind("DR_D" + i, "DR_D" + i, "425-" + i, prevYm + "-26", prevYm + "-30").run();
+        .bind("DR_D" + i, "DR_D" + i, "425-" + i, recent + "-26", recent + "-30").run();
     }
     const r = await (await get("/api/analytics/sales/overview?period=365", adminToken)).json() as { client_performance: Array<Record<string, number>> };
     const row = r.client_performance.find(c => (c.client_id as unknown as string) === "DRC")!;
     // Only the single real invoice counts — the three drafts (₹1.86L each) are excluded.
-    expect(row.prev).toBe(15438362);
+    expect(row.curr).toBe(15438362);
   });
 });
 

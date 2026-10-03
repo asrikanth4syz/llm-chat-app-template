@@ -86,12 +86,13 @@ async function _saDashboard(body) {
     </div>
     ${_saTrendChart(data.trend || [])}
     <div class="card" style="padding:0;margin-top:14px;overflow-x:auto">
-      <div style="padding:14px 16px 0;font-size:13px;font-weight:600">Client performance — ${h(data.previous_month || '')} → ${h(data.current_month || '')}</div>
+      <div style="padding:14px 16px 0;font-size:13px;font-weight:600">Client performance — last two complete months</div>
+      <div style="padding:2px 16px 0;font-size:11px;color:var(--muted)">The current month is excluded until it ends, so an early-month partial never looks like a crash.</div>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px">
         <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
-          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px;text-align:right">Last month</th>
-          <th style="padding:8px 12px;text-align:right">This month</th><th style="padding:8px 12px;text-align:right">Movement</th></tr></thead>
-        <tbody>${perfRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No billing in the last two months.</td></tr>`}</tbody>
+          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px;text-align:right">${h(data.previous_month || 'Earlier')}</th>
+          <th style="padding:8px 12px;text-align:right">${h(data.current_month || 'Latest')}</th><th style="padding:8px 12px;text-align:right">Movement</th></tr></thead>
+        <tbody>${perfRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No billing in the last two complete months.</td></tr>`}</tbody>
       </table></div>`;
 }
 function salesSetPeriod(n) { _SA.period = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
