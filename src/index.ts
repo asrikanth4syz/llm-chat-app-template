@@ -7655,10 +7655,22 @@ async function handleDispatchDC(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string;staff_id?:string;scheduled_time?:string};
+  const body = await request.json() as {vehicle_no?:string;driver_name?:string;driver_phone?:string;expected_delivery_date?:string;staff_id?:string;scheduled_time?:string;dc_number?:string};
 
   const dc = await env.DB.prepare("SELECT order_id, status, dc_number FROM delivery_challans WHERE id=?").bind(id).first() as {order_id?:string;status?:string;dc_number?:string}|null;
   if (!dc) return json({error:"Delivery challan not found"}, 404);
+
+  // Operator-entered DC number (the number used in Zoho) is set HERE, at dispatch — when
+  // the driver is assigned and the document physically goes out — not at the later deliver
+  // step. The internal `id` stays the stable key, so this is a pure relabel. Only back-office
+  // warehouse/ops roles may set it.
+  const DC_NUMBER_EDIT_ROLES = ["super_admin", "ops_admin", "ops_manager", "warehouse_exec"];
+  const typedDcNumber = typeof body.dc_number === "string" ? body.dc_number.trim().slice(0, 40) : "";
+  if (typedDcNumber && typedDcNumber !== dc.dc_number && DC_NUMBER_EDIT_ROLES.includes(user!.role)) {
+    await env.DB.prepare("UPDATE delivery_challans SET dc_number=? WHERE id=?").bind(typedDcNumber, id).run();
+    await audit(env, user, "SET_DC_NUMBER", "delivery_challan", id, String(dc.dc_number||""), typedDcNumber);
+    dc.dc_number = typedDcNumber; // so the dispatch notification carries the Zoho number
+  }
   if (dc.status === "IN_TRANSIT" || dc.status === "DELIVERED") {
     return json({error:`Challan already ${dc.status.toLowerCase().replace('_',' ')}`, code:"ALREADY_DISPATCHED"}, 409);
   }

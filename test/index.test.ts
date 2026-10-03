@@ -4733,6 +4733,35 @@ describe("DC number entry at delivery (the number used in Zoho)", () => {
   });
 });
 
+describe("DC number entry at DISPATCH (when the driver is assigned)", () => {
+  it("warehouse/ops may set the DC number at dispatch — it replaces the series number", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DSP1','c1','tst-ops','PICKED',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-dsp1-i1','OD-DSP1','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,dc_number,total_qty) VALUES ('DSP-DCN','OD-DSP1','SCHEDULED','DCN-00050',5)").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('dsp1-di1','DSP-DCN','SKU001','Rice',5,0)").run();
+    const r = await post("/api/delivery-challans/DSP-DCN/dispatch", { vehicle_no: "KA01AB1234", driver_name: "Ravi", dc_number: "ZB/2026/5001" }, opsToken);
+    expect(r.status).toBe(200);
+    const row = await db.prepare("SELECT dc_number, status FROM delivery_challans WHERE id='DSP-DCN'").first() as { dc_number: string; status: string };
+    expect(row.status).toBe("IN_TRANSIT");
+    expect(row.dc_number).toBe("ZB/2026/5001"); // Zoho number set at dispatch replaced the series number
+  });
+
+  it("delivery executives cannot set the DC number at dispatch — dispatch still succeeds, number unchanged", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES ('tst-dex2','dex2@sp.test','SEED:dex123','delivery_exec','Dex Two','SmartPantry','DX',1)").run();
+    const execToken = await login("dex2@sp.test", "dex123");
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-DSP2','c1','tst-ops','PICKED',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-dsp2-i1','OD-DSP2','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,dc_number,total_qty) VALUES ('DSP-DCN2','OD-DSP2','SCHEDULED','DCN-00051',5)").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('dsp2-di1','DSP-DCN2','SKU001','Rice',5,0)").run();
+    const r = await post("/api/delivery-challans/DSP-DCN2/dispatch", { vehicle_no: "KA02CD5678", driver_name: "Anil", dc_number: "HACK-001" }, execToken);
+    expect(r.status).toBe(200);
+    const row = await db.prepare("SELECT dc_number FROM delivery_challans WHERE id='DSP-DCN2'").first() as { dc_number: string };
+    expect(row.dc_number).toBe("DCN-00051"); // exec's dc_number was ignored
+  });
+});
+
 describe("Tier 1 dues logic — effective due date, dust cutoff, as-of, staleness", () => {
   it("resolveEffectiveDue applies manual → Zoho → client → default precedence", () => {
     expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "2026-01-20", overrideDate: "2026-02-02", defaultCreditDays: 30 }))
