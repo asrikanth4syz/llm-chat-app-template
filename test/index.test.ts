@@ -4410,14 +4410,17 @@ describe("finance/finance-setup — sync error is surfaced with a hint", () => {
   });
 });
 
-describe("finance/books-sync — manual full sync mints a fresh Zoho token", () => {
-  it("clears the cached Zoho access token before a full sync so a rotated token takes effect", async () => {
+describe("finance/books-sync — rebuild from Books mints a fresh Zoho token", () => {
+  it("clears the cached Zoho access token at rebuild start so a rotated token takes effect", async () => {
     await ensureArSchema(env);
     await setCfg("books_sync_enabled", "1");
     await setCfg("zoho_token", "stale-cached-token");
     await setCfg("zoho_token_exp", String(Math.floor(Date.now() / 1000) + 3600)); // not yet expired
-    // Full manual sync must invalidate the cache up-front (regardless of the sync's
-    // own outcome, which is not_configured in the test env).
+    // A rebuild START (a prior backfill was complete) must invalidate the cache up-front
+    // so a just-rotated refresh token / new scope takes effect (regardless of the sync's
+    // own outcome, which is not_configured in the test env). It clears ONCE here, not on
+    // every stepped iteration — see the "cleared once, not per step" test.
+    await setCfg("initial_backfill_complete", "1");
     await post("/api/integrations/zoho-books/sync", { full: true }, adminToken);
     expect(await getCfg("zoho_token")).toBe("");
     expect(await getCfg("zoho_token_exp")).toBe("0");
@@ -5066,6 +5069,31 @@ describe("Books prune — reconcile deletions (orphans)", () => {
     expect(done.dry_run).toBe(false);
     expect(await db.prepare("SELECT id FROM ar_invoices WHERE id='ORPH'").first()).toBeFalsy(); // orphan removed
     expect(await db.prepare("SELECT id FROM ar_invoices WHERE id='LIVE'").first()).toBeTruthy(); // live kept
+  });
+});
+
+describe("Books rebuild — access-token cache cleared once, not per step", () => {
+  it("clears the cache on rebuild start but leaves it intact on continuation steps", async () => {
+    await ensureArSchema(env);
+    await setCfg("books_sync_enabled", "1");
+    // Prime a valid, unexpired cached access token.
+    await setCfg("zoho_token", "CACHED");
+    await setCfg("zoho_token_exp", String(Math.floor(Date.now() / 1000) + 3600));
+
+    // Continuation step (backfill already in progress, complete=0): the SPA re-sends
+    // full:true, but it must NOT clear the cache — re-minting every chunk is what tripped
+    // Zoho's token-generation limit ("Access Denied"). (Books org is unset in the test
+    // env, so the stepper returns not_configured without any network call.)
+    await setCfg("initial_backfill_complete", "0");
+    await post("/api/integrations/zoho-books/sync", { full: true }, adminToken);
+    expect(await getCfg("zoho_token")).toBe("CACHED");
+
+    // Rebuild start (a prior backfill was complete=1): full:true clears the cache ONCE
+    // and resets the backfill (flipping complete back to 0).
+    await setCfg("initial_backfill_complete", "1");
+    await post("/api/integrations/zoho-books/sync", { full: true }, adminToken);
+    expect(await getCfg("zoho_token")).toBe("");
+    expect(await getCfg("initial_backfill_complete")).toBe("0");
   });
 });
 
