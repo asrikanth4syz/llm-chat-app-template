@@ -3202,6 +3202,9 @@ function resolveTaxIds(rawGstin: unknown, rawPan: unknown):
 // trigger — a drift test (Group 5) reads wrangler.jsonc and asserts this literal.
 const SEND_HOUR_IST = 8;
 const SEND_CRON = "30 2 * * *";
+// Nightly Zoho Books delta sync. 23:00 IST = 17:30 UTC. Must stay byte-identical to the
+// matching wrangler.jsonc trigger — the scheduled() dispatch branches on this literal.
+const BOOKS_SYNC_CRON = "30 17 * * *";
 // Batch bound for the daily reminder pass (continuation cursor across ticks).
 const MAX_CUSTOMERS_PER_RUN = 200;
 
@@ -4284,7 +4287,7 @@ export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSer
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
-         SEND_CRON, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
+         SEND_CRON, BOOKS_SYNC_CRON, runBooksScheduledDelta, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
 
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
@@ -4296,6 +4299,14 @@ export default {
       if ((controller.cron || "") === SEND_CRON) {
         try { await runReminderPass(env, controller.cron || ""); }
         catch (e) { console.error("reminder pass cron error:", String(e)); }
+        return;
+      }
+      // Nightly Zoho Books delta (23:00 IST). Runs ONLY the finance-mirror refresh — no
+      // delivery reminders or inventory pull on this tick — so it stays a focused, bounded job.
+      if ((controller.cron || "") === BOOKS_SYNC_CRON) {
+        await fixCategoryNames(env); // ensure finance tables exist before the delta writes
+        try { await runBooksScheduledDelta(env); }
+        catch (e) { console.error("books nightly delta cron error:", String(e)); }
         return;
       }
       await fixCategoryNames(env); // make sure columns/tables exist first
@@ -10108,6 +10119,23 @@ async function handleBooksSync(request: Request, env: Env): Promise<Response> {
   await setConfig(env, "books_last_sync_error", stored, user!.sub);
   await setConfig(env, "books_last_sync_error_at", failed ? new Date().toISOString() : "", user!.sub);
   return json({ ...result, hint: failed ? _booksSyncHint(stored) : "" });
+}
+
+// Nightly Books delta, driven by the BOOKS_SYNC_CRON tick. Keeps the finance mirror
+// (invoices/bills/payments/credit notes) current with Zoho once a day, mirroring
+// handleBooksSync's guards and error-persistence so Finance Setup still shows the outcome.
+// It never auto-rebuilds: a delta runs ONLY once the initial backfill is complete, and is a
+// silent no-op while the sync is disabled, unconfigured, or still backfilling. A first full
+// pull and any deletion-accurate reconcile stay the operator's manual Rebuild from Books +
+// Reconcile deletions — a delta does not detect rows deleted in Zoho.
+async function runBooksScheduledDelta(env: Env): Promise<void> {
+  if ((await getConfig(env, "books_sync_enabled", "0")) !== "1") return; // ships disabled → no-op
+  if ((await getConfig(env, "initial_backfill_complete", "0")) !== "1") return; // never rebuilt → skip
+  const result = await runBooksSync(env, { full: false });
+  const errText = (result.errors || []).slice(0, 3).join(" | ");
+  const failed = result.status === "error" || result.status === "not_configured";
+  await setConfig(env, "books_last_sync_error", failed ? `${result.status}${errText ? ": " + errText : ""}` : "", "system");
+  await setConfig(env, "books_last_sync_error_at", failed ? new Date().toISOString() : "", "system");
 }
 
 // Map a raw Books-sync failure to a plain-language fix. Order matters: a refresh-token

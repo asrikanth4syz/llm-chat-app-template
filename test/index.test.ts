@@ -4,6 +4,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import {
   istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
   agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES, SEND_CRON,
+  BOOKS_SYNC_CRON, runBooksScheduledDelta,
 } from "../src/index";
 // Slice 1, Group 2 — Books mirror.
 import {
@@ -3554,6 +3555,26 @@ describe("finance-ar/1.A aging + tier + DSO", () => {
 describe("finance-ar/1.D schema self-heal", () => {
   it("SEND_CRON is the 08:00 IST (02:30 UTC) daily expression", () => {
     expect(SEND_CRON).toBe("30 2 * * *");
+  });
+  it("BOOKS_SYNC_CRON is the 23:00 IST (17:30 UTC) nightly expression", () => {
+    expect(BOOKS_SYNC_CRON).toBe("30 17 * * *");
+  });
+  it("nightly Books delta no-ops while disabled or backfill-pending (no network, no error written)", async () => {
+    await ensureArSchema(env);
+    // Sentinel we can prove the no-op path never overwrites.
+    await setCfg("books_last_sync_error", "SENTINEL");
+
+    // (1) Sync disabled → returns before any Zoho call, sentinel untouched.
+    await setCfg("books_sync_enabled", "0");
+    await setCfg("initial_backfill_complete", "1");
+    await runBooksScheduledDelta(env);
+    expect(await getCfg("books_last_sync_error")).toBe("SENTINEL");
+
+    // (2) Enabled but no completed rebuild → still a no-op (never auto-rebuilds).
+    await setCfg("books_sync_enabled", "1");
+    await setCfg("initial_backfill_complete", "0");
+    await runBooksScheduledDelta(env);
+    expect(await getCfg("books_last_sync_error")).toBe("SENTINEL");
   });
   it("ensureArSchema creates the AR + reminder tables idempotently", async () => {
     const db = env.DB as D1Database;
