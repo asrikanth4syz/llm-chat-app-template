@@ -1554,11 +1554,27 @@ function _dispatchAct(e) {
   // Only async handlers (the write flows) get locked; sync UI actions run freely.
   if (ret && typeof ret.then === 'function') {
     _actInFlight.add(key);
+    // App-wide busy feedback for every async action button: disable, gray out, and (when
+    // the element carries data-busy="…") swap its label to that text while the request is in
+    // flight. One structured pattern so every button — dispatch, confirm delivery, every
+    // write flow — looks and behaves the same; restored on settle (no-op if detached).
     const wasDisabled = el.disabled;
-    try { el.disabled = true; el.setAttribute('aria-busy', 'true'); } catch { /* non-button */ }
+    const busyLabel = el.getAttribute && el.getAttribute('data-busy');
+    const prevText = (busyLabel != null) ? el.textContent : null;
+    const prevOpacity = el.style ? el.style.opacity : '';
+    const prevCursor = el.style ? el.style.cursor : '';
+    try {
+      el.disabled = true; el.setAttribute('aria-busy', 'true');
+      if (el.style) { el.style.opacity = '0.6'; el.style.cursor = 'not-allowed'; }
+      if (busyLabel != null) el.textContent = busyLabel;
+    } catch { /* non-button */ }
     Promise.resolve(ret).finally(() => {
       _actInFlight.delete(key);
-      try { el.disabled = wasDisabled; el.removeAttribute('aria-busy'); } catch { /* detached */ }
+      try {
+        el.disabled = wasDisabled; el.removeAttribute('aria-busy');
+        if (el.style) { el.style.opacity = prevOpacity; el.style.cursor = prevCursor; }
+        if (prevText != null) el.textContent = prevText;
+      } catch { /* detached */ }
     });
   }
 }

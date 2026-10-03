@@ -1291,7 +1291,7 @@ async function dispatchDCModal(dcId) {
      <div class="form-group"><label>Driver Phone</label><input type="text" id="dp-phone" placeholder="e.g. +91-9988776655" value="${v(dc&&dc.driver_phone)}"></div>
      <div class="form-group"><label>Expected Delivery Date</label><input type="date" id="dp-expected" value="${v(dc&&dc.expected_delivery_date)}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-primary" id="dp-confirm-btn" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
+     <button class="btn btn-primary" id="dp-confirm-btn" data-busy="Dispatching…" ${dataAct('confirmDispatch', dcId)}>Dispatch Now</button>`);
 }
 
 async function confirmDispatch(dcId) {
@@ -1306,11 +1306,8 @@ async function confirmDispatch(dcId) {
   if (!vehicle_no || !driver_name) { showToast('Vehicle number and driver name required','error'); return; }
   if (APP._dcDispatching) return; // guard against a double-click double-dispatching
   APP._dcDispatching = true;
-  // Visible busy feedback so the operator knows the click registered (best practice:
-  // disable + relabel the button while the request is in flight).
-  const btn = document.getElementById('dp-confirm-btn');
-  const btnLabel = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.setAttribute('aria-busy','true'); btn.textContent = 'Dispatching…'; btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed'; }
+  // Button busy/disabled/gray feedback is handled centrally by the delegated-action
+  // dispatcher (the button carries data-busy="Dispatching…").
   // One atomic dispatch call carries every logistics field — no follow-up PATCH.
   let res;
   try {
@@ -1323,10 +1320,7 @@ async function confirmDispatch(dcId) {
         dc_number: dc_number||undefined
       })
     });
-  } finally {
-    APP._dcDispatching = false;
-    if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = btnLabel; btn.style.opacity = ''; btn.style.cursor = ''; }
-  }
+  } finally { APP._dcDispatching = false; }
   closeModal();
   if (!res) return;
   showToast(`DC ${dcId} dispatched — in transit`);
@@ -1354,7 +1348,7 @@ async function reassignDriverModal(dcId) {
      <div class="form-group"><label>Driver Name</label><input type="text" id="ra-driver" placeholder="e.g. Rajesh Kumar" value="${h(v(dc.driver_name))}"></div>
      <div class="form-group"><label>Driver Phone</label><input type="tel" id="ra-phone" placeholder="e.g. +91-9988776655" value="${h(v(dc.driver_phone))}"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-primary" ${dataAct('saveReassignDriver', dcId)}>Save</button>`);
+     <button class="btn btn-primary" data-busy="Saving…" ${dataAct('saveReassignDriver', dcId)}>Save</button>`);
 }
 
 async function saveReassignDriver(dcId) {
@@ -1401,7 +1395,7 @@ async function markDelivered(dcId) {
       ${dcNumberField(curDcNum)}
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-        <button class="btn btn-success" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
+        <button class="btn btn-success" data-busy="Confirming…" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
       </div>`);
     return;
   }
@@ -1440,7 +1434,7 @@ async function markDelivered(dcId) {
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-      <button class="btn btn-success" id="deliver-confirm-btn" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
+      <button class="btn btn-success" id="deliver-confirm-btn" data-busy="Confirming…" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
     </div>
   `);
 }
@@ -1598,8 +1592,8 @@ async function reviewDeliveryModal(dcId) {
     ${players}
   `,
   `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-   <button class="btn btn-danger" ${dataAct('confirmDeliveryDecision', dcId, 'reject')}>Reject</button>
-   <button class="btn btn-success" ${dataAct('confirmDeliveryDecision', dcId, 'approve')}>Approve &amp; Deliver</button>`);
+   <button class="btn btn-danger" data-busy="Rejecting…" ${dataAct('confirmDeliveryDecision', dcId, 'reject')}>Reject</button>
+   <button class="btn btn-success" data-busy="Approving…" ${dataAct('confirmDeliveryDecision', dcId, 'approve')}>Approve &amp; Deliver</button>`);
 }
 
 async function confirmDeliveryDecision(dcId, decision) {
