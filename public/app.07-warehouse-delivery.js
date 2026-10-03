@@ -1310,7 +1310,7 @@ async function confirmDispatch(dcId) {
   // disable + relabel the button while the request is in flight).
   const btn = document.getElementById('dp-confirm-btn');
   const btnLabel = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.setAttribute('aria-busy','true'); btn.textContent = 'Dispatching…'; }
+  if (btn) { btn.disabled = true; btn.setAttribute('aria-busy','true'); btn.textContent = 'Dispatching…'; btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed'; }
   // One atomic dispatch call carries every logistics field — no follow-up PATCH.
   let res;
   try {
@@ -1325,7 +1325,7 @@ async function confirmDispatch(dcId) {
     });
   } finally {
     APP._dcDispatching = false;
-    if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = btnLabel; }
+    if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = btnLabel; btn.style.opacity = ''; btn.style.cursor = ''; }
   }
   closeModal();
   if (!res) return;
