@@ -9403,8 +9403,11 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   const today = istToday();
   const periodStart = addDaysIST(today, -period);
   const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
-  const curYm = today.slice(0, 7);
-  const prevYm = _ymOffset(today, 1);
+  // Client performance compares the two most recent COMPLETE calendar months. The current
+  // month is excluded so an early-in-the-month partial (e.g. day 2 of 30) never fakes a
+  // crash: curYm = last complete month, prevYm = the one before it.
+  const curYm = _ymOffset(today, 1);
+  const prevYm = _ymOffset(today, 2);
   const trendStart = _ymOffset(today, 11) + "-01";
 
   // KPIs over the trailing period (sales = billed invoice total; outstanding is current).
