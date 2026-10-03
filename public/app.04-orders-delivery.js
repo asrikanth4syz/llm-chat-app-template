@@ -1209,12 +1209,16 @@ async function viewOrderDrilldown(orderId) {
 
   // The old "LINES · QTY  6/41 · 454/3458" cell was ambiguous — you couldn't tell which
   // number was lines vs qty, or ordered vs delivered. Split it into two labelled rows.
+  // Still-due = lines with a positive outstanding qty (clamped; over-delivery never goes negative).
+  const dueLines = (lines||[]).filter(l=>(Number(l.qty_due)||0)>0).length;
+  const dueQty = (lines||[]).reduce((s,l)=>s+Math.max(0,Number(l.qty_due)||0),0);
   const ordDelCell = `
     <div style="padding:14px 18px;min-width:0">
       <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Ordered vs Delivered</div>
       <div style="font-size:.86rem;line-height:1.55">
         <div style="color:var(--navy);font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Ord</span>${summary.total_lines} lines · ${ordQty} qty</div>
         <div style="color:#10b981;font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Del</span>${summary.delivered_lines} lines · ${delQty} qty</div>
+        <div style="color:${dueQty>0?'var(--red)':'var(--text-muted)'};font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Due</span>${dueLines} lines · ${dueQty} qty</div>
       </div>
     </div>`;
 
@@ -1266,6 +1270,7 @@ async function viewOrderDrilldown(orderId) {
     <div style="display:inline-flex;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px">
       <button class="dd-tab" data-ddview="item" ${dataAct('ddSetReconView','item')} style="border:0;border-radius:7px;padding:6px 14px;font-size:.82rem;font-weight:700;cursor:pointer;background:var(--surface);color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,.12)">By item</button>
       <button class="dd-tab" data-ddview="challan" ${dataAct('ddSetReconView','challan')} style="border:0;border-radius:7px;padding:6px 14px;font-size:.82rem;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted)">By challan</button>
+      <button class="dd-tab" data-ddview="due" ${dataAct('ddSetReconView','due')} style="border:0;border-radius:7px;padding:6px 14px;font-size:.82rem;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted)">Due list${dueQty>0?` <span style="background:var(--red);color:#fff;border-radius:999px;padding:0 6px;font-size:.68rem;margin-left:2px">${dueLines}</span>`:''}</button>
     </div>
     <div id="dd-recon-caption" style="font-weight:700;font-size:.88rem;color:var(--navy)">Line-item reconciliation <span style="font-weight:400;color:var(--text-muted)">— by item</span></div>
   </div>
@@ -1346,12 +1351,39 @@ function renderDDByChallan() {
   }).join('');
 }
 
+// Due list: only the items still outstanding (qty_due > 0) — "what's left to deliver".
+function renderDDByDue() {
+  const d = APP._dd; if (!d) return '';
+  const due = (d.lines||[]).filter(l => (Number(l.qty_due)||0) > 0)
+    .sort((a,b)=>(Number(b.qty_due)||0)-(Number(a.qty_due)||0));
+  if (!due.length) return '<div style="text-align:center;color:#10b981;font-weight:600;padding:28px">✓ Nothing due — every ordered item has been fully delivered.</div>';
+  const rows = due.map(l => `<tr>
+      <td><b>${h(l.name||l.sku)}</b><div class="u-subtiny" style="font-family:monospace">${h(l.sku)}</div></td>
+      <td class="u-right">${l.qty_ordered}</td>
+      <td style="text-align:right;color:#10b981;font-weight:600">${l.qty_delivered}</td>
+      <td style="text-align:right;color:var(--red);font-weight:800">${l.qty_due}</td>
+      <td class="u-right">${fmt(l.unit_price)}</td>
+      <td style="text-align:right;color:var(--red);font-weight:700">${fmt(l.value_due)}</td>
+    </tr>`).join('');
+  const totQty = due.reduce((s,l)=>s+(Number(l.qty_due)||0),0);
+  const totVal = due.reduce((s,l)=>s+(Number(l.value_due)||0),0);
+  return `<div style="overflow-x:auto"><table class="table" style="font-size:.82rem;margin:0">
+    <thead><tr><th>Item still due</th><th class="u-right">Ord</th><th class="u-right">Deliv</th><th class="u-right">Due</th><th class="u-right">Unit ₹</th><th class="u-right">Due ₹</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--border);font-weight:800">
+      <td>Total due · ${due.length} item${due.length===1?'':'s'}</td><td></td><td></td>
+      <td style="text-align:right;color:var(--red)">${totQty}</td><td></td>
+      <td style="text-align:right;color:var(--red)">${fmt(totVal)}</td></tr></tfoot>
+  </table></div>`;
+}
+
 function ddSetReconView(view) {
   if (APP._dd) APP._dd.view = view;
   const box = document.getElementById('dd-recon');
-  if (box) box.innerHTML = view==='challan' ? renderDDByChallan() : renderDDByItem();
+  if (box) box.innerHTML = view==='challan' ? renderDDByChallan() : view==='due' ? renderDDByDue() : renderDDByItem();
   const cap = document.getElementById('dd-recon-caption');
-  if (cap) cap.innerHTML = `Line-item reconciliation <span style="font-weight:400;color:var(--text-muted)">— by ${view}</span>`;
+  const capText = view==='due' ? 'Items still due' : `Line-item reconciliation <span style="font-weight:400;color:var(--text-muted)">— by ${view}</span>`;
+  if (cap) cap.innerHTML = capText;
   document.querySelectorAll('.dd-tab').forEach(b => {
     const on = b.dataset.ddview === view;
     b.style.background = on ? 'var(--surface)' : 'transparent';
