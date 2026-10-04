@@ -657,6 +657,44 @@ describe("Admin — purge all POs (test-data cleanup)", () => {
   });
 });
 
+describe("Admin — hard-delete orders (test-data cleanup)", () => {
+  it("POST /api/orders/purge — super-admin only, cascades children, and guards billed orders", async () => {
+    const vdb = env.DB as D1Database;
+    // A clean test order with items + a scheduled challan (safe to purge).
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total,subtotal,gst) VALUES ('ORD-PURGE1','CL-1','tst-admin','DRAFT',1000,900,100)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('OI-P1','ORD-PURGE1','SKU1','Item',2,450,900)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('DC-PURGE1','ORD-PURGE1','SCHEDULED',2,'990001')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('DCI-P1','DC-PURGE1','SKU1','Item',2,0)").run();
+
+    // A protected order — has a billed challan — must NOT be deletable.
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total) VALUES ('ORD-KEEP1','CL-1','tst-admin','DELIVERED',2000)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,billed) VALUES ('DC-KEEP1','ORD-KEEP1','DELIVERED',1,1)").run();
+
+    // A client user may not purge.
+    const forbidden = await post("/api/orders/purge", { ids: ["ORD-PURGE1"] }, clientToken);
+    expect(forbidden.status).toBe(403);
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM orders WHERE id='ORD-PURGE1'").first() as {n:number}).n).toBe(1);
+
+    const res = await post("/api/orders/purge", { ids: ["ORD-PURGE1", "ORD-KEEP1"] }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { deleted: number; blocked: number; results: {id:string;deleted:boolean;reason?:string}[] };
+    expect(body.deleted).toBe(1);
+    expect(body.blocked).toBe(1);
+
+    // The clean order and every child row are gone.
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM orders WHERE id='ORD-PURGE1'").first() as {n:number}).n).toBe(0);
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM order_items WHERE order_id='ORD-PURGE1'").first() as {n:number}).n).toBe(0);
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM delivery_challans WHERE order_id='ORD-PURGE1'").first() as {n:number}).n).toBe(0);
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM dc_items WHERE dc_id='DC-PURGE1'").first() as {n:number}).n).toBe(0);
+
+    // The protected order survived, with an explanatory reason.
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM orders WHERE id='ORD-KEEP1'").first() as {n:number}).n).toBe(1);
+    const keep = body.results.find(r => r.id === "ORD-KEEP1");
+    expect(keep?.deleted).toBe(false);
+    expect(keep?.reason).toMatch(/billed/);
+  });
+});
+
 describe("DC Number Series (Phase 0)", () => {
   it("currentFY + dcClassForCategory map correctly", () => {
     expect(currentFY(new Date("2026-09-12T00:00:00Z"))).toBe("2026-27"); // Apr–Mar FY
