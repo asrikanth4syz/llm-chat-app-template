@@ -6,7 +6,8 @@
 // ════════════════════════════════════════════════════════════════════════
 const _SA = { period: 90, tab: 'dashboard', c360Id: '', c360Q: '', _clients: null,
   excGrain: 'month', excYoy: false, excFrom: '', excTo: '',
-  kpiFrom: '', kpiTo: '' };
+  kpiFrom: '', kpiTo: '',
+  matMode: 'rev', matMonths: 12, wfMonth: '' };
 
 // ── Hub shell: one nav entry, tabbed sections ──────────────────────────
 async function renderSalesAnalytics(main) {
@@ -16,11 +17,13 @@ async function renderSalesAnalytics(main) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Sales Analytics</h2>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}${tabBtn('reps', 'Salespeople')}${tabBtn('setup', 'Setup')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('matrix', 'Matrix')}${tabBtn('movement', 'Movement')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}${tabBtn('reps', 'Salespeople')}${tabBtn('setup', 'Setup')}</div>
     </div>
     <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books.</p>
     <div id="sa-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
   const body = document.getElementById('sa-body');
+  if (tab === 'matrix') return _saMatrix(body);
+  if (tab === 'movement') return _saWaterfall(body);
   if (tab === 'exceptions') return _saExceptions(body);
   if (tab === 'client360') return _saClient360(body);
   if (tab === 'reps') return _saReps(body);
@@ -422,4 +425,103 @@ async function salesAssignRep(clientId, repId) {
 async function salesAssignRegion(clientId, region) {
   const r = await api('/analytics/client-assignment', { method: 'POST', body: JSON.stringify({ client_id: clientId, region: region || null }) });
   if (r && r.ok) { showToast('Region updated', 'success'); if (_SA._setup) { const c = (_SA._setup.clients || []).find(x => x.client_id === clientId); if (c) c.region = region || null; } }
+}
+
+// ── Tab: Matrix — all clients × month revenue heatmap ──────────────────
+function salesMatSetMode(m) { _SA.matMode = m; const el = document.getElementById('main-content'); if (el) renderSalesAnalytics(el); }
+function _matShort(ym) { const [y, m] = ym.split('-'); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m,10)-1] + "'" + y.slice(2); }
+function _matMomPct(vals, i) { if (i === 0) return null; const p = vals[i-1], c = vals[i]; if (p <= 0 && c <= 0) return null; if (p <= 0) return 999; if (c <= 0) return -100; return Math.round((c - p) / p * 100); }
+async function _saMatrix(body) {
+  const mode = _SA.matMode || 'rev';
+  const data = await api('/analytics/sales/matrix?months=' + (_SA.matMonths || 12));
+  if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
+  const months = data.months || [], clients = (data.clients || []);
+  const maxAll = Math.max(1, ...clients.flatMap(c => c.values));
+  const modeBtn = (id, label) => `<button class="btn ${mode === id ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesMatSetMode', id)}>${h(label)}</button>`;
+  const cellStyle = (v, pct) => {
+    if (mode === 'rev') { const a = v > 0 ? (0.10 + 0.82 * (v / maxAll)) : 0; return `background:rgba(37,99,235,${a.toFixed(3)});color:${a > 0.55 ? '#fff' : 'inherit'}`; }
+    if (pct === null) return 'background:transparent';
+    const mag = Math.min(1, Math.abs(pct) / 80), a = (0.12 + 0.78 * mag);
+    const rgb = pct >= 0 ? '16,122,70' : '192,57,43';
+    return `background:rgba(${rgb},${a.toFixed(3)});color:${a > 0.5 ? '#fff' : 'inherit'}`;
+  };
+  const cellText = (v, pct) => mode === 'rev' ? (v ? _fmtPaise(v) : '') : (pct === null ? '' : (pct > 0 ? '+' : '') + pct + '%');
+  const rows = clients.map(c => {
+    const cells = c.values.map((v, i) => {
+      const pct = _matMomPct(c.values, i);
+      const title = `${c.name} · ${_matShort(months[i])} · ${_fmtPaise(v)}${pct === null ? '' : ` · ${pct > 0 ? '+' : ''}${pct}% MoM`}`;
+      return `<td ${dataAct('salesOpenClient360', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
+    }).join('');
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap"><button ${dataAct('salesOpenClient360', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:170px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom" title="${h(c.name)}">${h(c.name)}</button></td>${cells}</tr>`;
+  }).join('');
+  const legend = mode === 'rev'
+    ? `<span style="font-size:11px;color:var(--muted)">Low</span><span style="display:inline-flex;height:11px;border:1px solid var(--border);border-radius:3px;overflow:hidden">${[0.1,0.3,0.5,0.7,0.9].map(a=>`<i style="width:24px;background:rgba(37,99,235,${a})"></i>`).join('')}</span><span style="font-size:11px;color:var(--muted)">High monthly revenue</span>`
+    : `<span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(192,57,43,.8);display:inline-block"></i>Down</span><span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(16,122,70,.8);display:inline-block"></i>Up vs previous month</span>`;
+  body.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--muted);font-weight:600">Colour by:</span>${modeBtn('rev','Revenue')}${modeBtn('mom','MoM change')}
+      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">${clients.length} clients · click any cell to drill in</span>
+    </div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m=>`<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
+        <tbody>${rows || `<tr><td style="padding:16px;color:var(--muted)">No billing in this window.</td></tr>`}</tbody>
+      </table></div>
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">${legend}</div>`;
+}
+
+// ── Tab: Movement — MoM waterfall (New + Growth − Decline − Lost) ───────
+function _saWfBucketColor(k) { return { new: 'var(--success,#2e6e12)', growth: 'var(--success,#2e6e12)', decline: 'var(--danger,#b3261e)', lost: 'var(--danger,#b3261e)' }[k]; }
+async function _saWaterfall(body) {
+  const data = await api('/analytics/sales/waterfall' + (_SA.wfMonth ? '?month=' + encodeURIComponent(_SA.wfMonth) : ''));
+  if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
+  const b = data.buckets || {}, H = 180;
+  const steps = [
+    { label: _matShort(data.prev), val: data.prev_total, from: 0, to: data.prev_total, color: 'var(--muted)', abs: true },
+    { label: 'New', val: b.new, color: _saWfBucketColor('new') },
+    { label: 'Growth', val: b.growth, color: _saWfBucketColor('growth') },
+    { label: 'Decline', val: b.decline, color: _saWfBucketColor('decline') },
+    { label: 'Lost', val: b.lost, color: _saWfBucketColor('lost') },
+    { label: _matShort(data.target), val: data.curr_total, from: 0, to: data.curr_total, color: 'var(--blue,#1d6fa4)', abs: true },
+  ];
+  let cum = data.prev_total;
+  for (const s of steps) { if (!s.abs) { s.from = cum; s.to = cum + s.val; cum = s.to; } }
+  const scale = Math.max(1, data.prev_total, data.curr_total, ...steps.map(s => Math.max(s.from, s.to))) * 1.08;
+  const bars = steps.map(s => {
+    const lo = Math.min(s.from, s.to), hi = Math.max(s.from, s.to);
+    const bottom = (lo / scale) * H, height = Math.max(2, ((hi - lo) / scale) * H);
+    const sign = s.abs ? '' : (s.val > 0 ? '+' : s.val < 0 ? '−' : '');
+    const amt = s.abs ? _fmtPaise(s.val) : (s.val ? sign + _fmtPaise(Math.abs(s.val)) : '—');
+    return `<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px">
+      <div style="font-size:11px;font-weight:700;color:${s.val < 0 && !s.abs ? 'var(--danger,#b3261e)' : s.val > 0 && !s.abs ? 'var(--success,#2e6e12)' : 'var(--text)'};white-space:nowrap">${h(amt)}</div>
+      <div style="position:relative;width:100%;height:${H}px">
+        <div style="position:absolute;left:14%;right:14%;bottom:${bottom}px;height:${height}px;background:${s.color};border-radius:3px"></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);text-align:center;white-space:nowrap">${h(s.label)}</div>
+    </div>`;
+  }).join('');
+  const moverList = (k, title) => {
+    const list = (data.movers && data.movers[k]) || [];
+    if (!list.length) return '';
+    return `<div class="card" style="padding:12px 14px;flex:1;min-width:200px">
+      <div style="font-size:12px;font-weight:700;color:${_saWfBucketColor(k)};margin-bottom:6px">${h(title)}</div>
+      ${list.map(m => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px solid var(--border)">
+        <button ${dataAct('salesOpenClient360', m.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(m.name)}</button>
+        <span style="font-variant-numeric:tabular-nums;font-weight:600;color:${m.delta >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${m.delta >= 0 ? '+' : '−'}${h(_fmtPaise(Math.abs(m.delta)))}</span></div>`).join('')}
+    </div>`;
+  };
+  const net = data.net || 0;
+  body.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <span style="font-size:13px;color:var(--muted)">What moved revenue from <b>${h(_matShort(data.prev))}</b> to <b>${h(_matShort(data.target))}</b></span>
+      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
+      <span style="margin-left:auto;font-size:13px;font-weight:700;color:${net >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">Net ${net >= 0 ? '+' : '−'}${h(_fmtPaise(Math.abs(net)))}</span>
+    </div>
+    <div class="card" style="padding:18px 16px 14px;margin-bottom:14px">
+      <div style="display:flex;gap:4px;align-items:flex-end">${bars}</div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${moverList('growth','▲ Grew most')}${moverList('new','＋ New billing')}${moverList('decline','▼ Declined most')}${moverList('lost','✕ Lost (billed before, nothing now)')}
+    </div>`;
 }
