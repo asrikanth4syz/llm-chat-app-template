@@ -5155,6 +5155,29 @@ describe("Books rebuild — access-token cache cleared once, not per step", () =
   });
 });
 
+describe("Billing Exceptions — period grains (quarter / YoY / custom)", () => {
+  it("grain=quarter&yoy flags a client that billed the same quarter last year but not this quarter", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('QY','Quarter YoY Co','INR')").run();
+    const d = new Date();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dateLastYear = `${d.getUTCFullYear() - 1}-${mm}-15`; // same month/quarter, one year ago
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('QY1','QY1','QY1','QY',?,900000,0,'paid','paid')").bind(dateLastYear).run();
+    const r = await (await get("/api/analytics/billing-exceptions?grain=quarter&yoy=1", adminToken)).json() as { grain: string; yoy: boolean; exceptions: Array<Record<string, unknown>> };
+    expect(r.grain).toBe("quarter");
+    expect(r.yoy).toBe(true);
+    const row = r.exceptions.find(e => (e.client_id as string) === "QY")!;
+    expect(row).toBeTruthy();
+    expect(row.reason).toBe("not_billed"); // billed that quarter last year, nothing this quarter
+  });
+
+  it("grain=custom validates the date range", async () => {
+    const bad = await get("/api/analytics/billing-exceptions?grain=custom&from=2026-05-01&to=2026-01-01", adminToken);
+    expect(bad.status).toBe(400); // from must be <= to
+  });
+});
+
 describe("Sales Analytics — draft invoices are excluded", () => {
   it("does not count Zoho drafts in sales KPIs or client performance", async () => {
     const db = env.DB as D1Database;
