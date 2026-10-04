@@ -695,6 +695,56 @@ describe("Admin — hard-delete orders (test-data cleanup)", () => {
   });
 });
 
+describe("Client data isolation (IDOR) — cross-client access is denied", () => {
+  it("a client cannot read or modify another client's order or challan, but can its own", async () => {
+    const vdb = env.DB as D1Database;
+    // A second client 'c2' with an order + challan that client c1 (clientToken) must never see.
+    await vdb.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active) VALUES ('c2','Rival Corp','admin@rival.test',1)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total) VALUES ('ORD-C2','c2','tst-ops','APPROVED',9999)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('OI-C2','ORD-C2','SKU001','Basmati Rice 5kg',1,450,450)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('DC-C2','ORD-C2','SCHEDULED',1,'C2-0001')").run();
+
+    // client c1 is denied c2's order across every single-resource endpoint (404, no existence leak).
+    expect((await get("/api/orders/ORD-C2", clientToken)).status).toBe(404);
+    expect((await get("/api/orders/ORD-C2/drilldown", clientToken)).status).toBe(404);
+    expect((await get("/api/orders/ORD-C2/lifecycle", clientToken)).status).toBe(404);
+    expect((await get("/api/orders/ORD-C2/comments", clientToken)).status).toBe(404);
+    expect((await get("/api/delivery-challans/DC-C2", clientToken)).status).toBe(404);
+    expect((await get("/api/delivery-challans/DC-C2/items", clientToken)).status).toBe(404);
+    expect((await get("/api/delivery-challans/DC-C2/documents", clientToken)).status).toBe(404);
+
+    // ...and cannot write to it.
+    expect((await patch("/api/orders/ORD-C2", { notes: "pwned" }, clientToken)).status).toBe(404);
+    expect((await post("/api/orders/ORD-C2/comments", { message: "hi" }, clientToken)).status).toBe(404);
+    const note = await vdb.prepare("SELECT notes FROM orders WHERE id='ORD-C2'").first() as { notes?: string } | null;
+    expect(note?.notes ?? null).toBe(null);
+
+    // Control: client c1 CAN read its own order, and internal ops can read c2's.
+    expect(ok((await get("/api/orders/TST-ORDER-001", clientToken)).status)).toBe(true);
+    expect(ok((await get("/api/orders/ORD-C2", opsToken)).status)).toBe(true);
+
+    // Budget: a client reads only its own; another client's is denied.
+    expect((await get("/api/clients/c2/budget", clientToken)).status).toBe(404);
+    expect(ok((await get("/api/clients/c1/budget", clientToken)).status)).toBe(true);
+
+    // Client records are 4SYZ-managed: a client cannot edit any client (not even its own).
+    const patchOwn = await patch("/api/clients/c1", { approval_threshold: 0, monthly_budget: 99999999 }, clientToken);
+    expect(patchOwn.status).toBe(403);
+    const patchOther = await patch("/api/clients/c2", { active: 0 }, clientToken);
+    expect(patchOther.status).toBe(403);
+    // Internal admin still can.
+    expect(ok((await patch("/api/clients/c2", { health_score: 80 }, adminToken)).status)).toBe(true);
+
+    // Client directory: a client sees only its own row, never the full list.
+    const dir = await (await get("/api/clients", clientToken)).json() as Array<{ id: string }>;
+    expect(dir.every(c => c.id === "c1")).toBe(true);
+    expect(dir.some(c => c.id === "c2")).toBe(false);
+    // Internal ops sees both.
+    const allDir = await (await get("/api/clients", opsToken)).json() as Array<{ id: string }>;
+    expect(allDir.some(c => c.id === "c1") && allDir.some(c => c.id === "c2")).toBe(true);
+  });
+});
+
 describe("Terminal orders are frozen (no ETA / date edits)", () => {
   it("PATCH /api/orders/:id is refused on a cancelled order but allowed on a live one", async () => {
     const vdb = env.DB as D1Database;
