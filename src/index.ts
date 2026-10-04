@@ -2661,6 +2661,10 @@ const ORDER_FSM: Record<string, string[]> = {
   PARTIALLY_CLOSED: ["READY_TO_PICK","CLOSED","CANCELLED"],
   CLOSED: [], CANCELLED: [],
 };
+// Terminal order states — no field on the order (ETA/dates/notes/line status) may be
+// changed once an order is here. Status transitions are already blocked by ORDER_FSM
+// (both map to []); this guards the handlers that write order fields directly.
+const ORDER_TERMINAL = ["CANCELLED", "CLOSED"];
 
 // ════════════════════════════════════════════════════════════════════
 // MAIN HANDLER
@@ -5006,9 +5010,10 @@ async function handleSetOrderItemDelay(request: Request, env: Env, path: string)
   const parts = path.split("/"); // ['', 'api', 'orders', <id>, 'items', <itemId>, 'delay']
   const orderId = parts[3], itemId = parts[5];
   const order = await env.DB.prepare(
-    "SELECT o.id AS id, c.delay_tracking_enabled AS flag FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
-  ).bind(orderId).first() as { id?: string; flag?: number } | null;
+    "SELECT o.id AS id, o.status AS status, c.delay_tracking_enabled AS flag FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
+  ).bind(orderId).first() as { id?: string; status?: string; flag?: number } | null;
   if (!order?.id) return json({ error: "Order not found" }, 404);
+  if (ORDER_TERMINAL.includes(String(order.status))) return json({ error: `This order is ${String(order.status).toLowerCase()} — its delivery schedule can no longer be changed.`, code: "ORDER_TERMINAL" }, 409);
   if (Number(order.flag) !== 1) return json({ error: "Per-item delivery updates are not enabled for this client." }, 403);
   const body = await request.json() as Record<string, unknown>;
   const status = LINE_DELAY_STATUSES.includes(String(body.line_status)) ? String(body.line_status) : "on_track";
@@ -6400,6 +6405,10 @@ async function handlePatchOrder(request: Request, env: Env, path: string): Promi
   if (denied) return denied;
   const id = path.split("/").pop()!;
   const body = await request.json() as {notes?:string; predicted_delivery_date?:string; need_by_date?:string};
+  // A cancelled/closed order is terminal — its dates, ETA and notes are frozen.
+  const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
+  if (!cur) return json({ error: "Not found" }, 404);
+  if (ORDER_TERMINAL.includes(String(cur.status))) return json({ error: `This order is ${String(cur.status).toLowerCase()} — it can no longer be modified.`, code: "ORDER_TERMINAL" }, 409);
   const fields: string[] = [];
   const vals: unknown[] = [];
   if ('notes' in body)                   { fields.push("notes=?");                   vals.push(body.notes||null); }
