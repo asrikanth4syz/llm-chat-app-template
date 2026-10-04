@@ -7760,6 +7760,10 @@ async function handleCancelDC(request: Request, env: Env, path: string): Promise
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may cancel a delivery challan" }, 403);
+  // Self-heal the cancel columns: ensureFeatureTables (which adds cancel_reason/cancelled_by/
+  // cancelled_at to delivery_challans) only runs on finance routes, so a freshly deployed DB
+  // may not have them yet on this delivery route.
+  await ensureFeatureTables(env);
   const id = path.split("/").slice(-2)[0];
   const body = await request.json().catch(() => ({})) as { reason?: string };
   const reason = String(body.reason || "").trim().slice(0, 200);
