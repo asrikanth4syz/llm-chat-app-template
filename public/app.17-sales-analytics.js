@@ -4,7 +4,9 @@
 // every endpoint is gated to super_admin server-side. Built on the invoice
 // mirror; no product-line data (Phase 2). Money arrives as INTEGER paise.
 // ════════════════════════════════════════════════════════════════════════
-const _SA = { period: 90, tab: 'dashboard', excMonth: '', excLookback: 6, c360Id: '', c360Q: '', _clients: null };
+const _SA = { period: 90, tab: 'dashboard', c360Id: '', c360Q: '', _clients: null,
+  excGrain: 'month', excYoy: false, excFrom: '', excTo: '',
+  kpiFrom: '', kpiTo: '' };
 
 // ── Hub shell: one nav entry, tabbed sections ──────────────────────────
 async function renderSalesAnalytics(main) {
@@ -63,11 +65,13 @@ function _saKpi(label, value, sub) {
 }
 async function _saDashboard(body) {
   const period = _SA.period || 90;
-  const data = await api('/analytics/sales/overview?period=' + period);
+  const custom = _SA.kpiFrom && _SA.kpiTo;
+  const data = await api('/analytics/sales/overview?period=' + period + (custom ? '&from=' + encodeURIComponent(_SA.kpiFrom) + '&to=' + encodeURIComponent(_SA.kpiTo) : ''));
   if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
   const k = data.kpis || {};
   const perf = data.client_performance || [];
-  const periodBtn = (n, label) => `<button class="btn ${period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
+  const periodBtn = (n, label) => `<button class="btn ${!custom && period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
+  const kpiRangeLabel = custom ? _SA.kpiFrom + ' → ' + _SA.kpiTo : period + 'd';
   const perfRows = perf.slice(0, 100).map(c => `<tr style="border-top:1px solid var(--border)">
     <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.prev))}</td>
@@ -76,10 +80,16 @@ async function _saDashboard(body) {
   body.innerHTML = `
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
       ${periodBtn(30, '30d')}${periodBtn(90, '90d')}${periodBtn(180, '180d')}${periodBtn(365, '1y')}
+      <span style="width:1px;height:20px;background:var(--border);margin:0 2px"></span>
+      <input type="date" value="${h(_SA.kpiFrom || '')}" ${dataChangeVal('salesSetKpiFrom')} style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+      <span style="font-size:12px;color:var(--muted)">→</span>
+      <input type="date" value="${h(_SA.kpiTo || '')}" ${dataChangeVal('salesSetKpiTo')} style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+      <button class="btn ${custom ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesApplyKpiRange')}>Custom</button>
+      ${custom ? `<button class="btn btn-secondary btn-sm" ${dataAct('salesClearKpiRange')}>✕ clear</button>` : ''}
       <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')} Refresh</button>
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      ${_saKpi('Sales (' + period + 'd)', _fmtPaise(k.net_sales), 'billed invoice value')}
+      ${_saKpi('Sales (' + kpiRangeLabel + ')', _fmtPaise(k.net_sales), 'billed invoice value')}
       ${_saKpi('Invoices', String(k.invoices || 0), 'in period')}
       ${_saKpi('Active clients', String(k.active_clients || 0), 'billed in period')}
       ${_saKpi('Outstanding', _fmtPaise(k.outstanding), 'open balance now')}
@@ -95,7 +105,11 @@ async function _saDashboard(body) {
         <tbody>${perfRows || `<tr><td colspan="4" style="padding:16px;color:var(--muted)">No billing in the last two complete months.</td></tr>`}</tbody>
       </table></div>`;
 }
-function salesSetPeriod(n) { _SA.period = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesSetPeriod(n) { _SA.period = parseInt(n, 10) || 90; _SA.kpiFrom = ''; _SA.kpiTo = ''; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesSetKpiFrom(v) { _SA.kpiFrom = v || ''; }
+function salesSetKpiTo(v) { _SA.kpiTo = v || ''; }
+function salesApplyKpiRange() { if (!_SA.kpiFrom || !_SA.kpiTo) { showToast('Pick both from and to dates', 'error'); return; } const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesClearKpiRange() { _SA.kpiFrom = ''; _SA.kpiTo = ''; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
 
 // ── Tab 2: Billing Exceptions — "who didn't get billed?" ───────────────
 function _saSevChip(sev) {
@@ -103,13 +117,42 @@ function _saSevChip(sev) {
   const [label, col] = map[sev] || ['—', 'var(--muted)'];
   return `<span style="font-weight:600;color:${col};white-space:nowrap">${h(label)}</span>`;
 }
-const _SA_REASON = { not_billed: 'No invoice this month', below_average: 'Below normal average' };
+const _SA_REASON = { not_billed: 'No billing in period', below_average: 'Below normal average' };
+// Period-filter controls for Billing Exceptions: grain (month/quarter/year), a YoY toggle,
+// and a custom from/to range.
+function salesExcSetGrain(g) { _SA.excGrain = g; if (g !== 'custom') _SA.excYoy = _SA.excYoy && g !== 'custom'; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesExcToggleYoy() { _SA.excYoy = !_SA.excYoy; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m); }
+function salesExcSetFrom(v) { _SA.excFrom = v || ''; }
+function salesExcSetTo(v) { _SA.excTo = v || ''; }
+function salesExcApplyCustom() {
+  if (!_SA.excFrom || !_SA.excTo) { showToast('Pick both from and to dates', 'error'); return; }
+  _SA.excGrain = 'custom'; const m = document.getElementById('main-content'); if (m) renderSalesAnalytics(m);
+}
+function _saExcControls() {
+  const g = _SA.excGrain || 'month';
+  const yoy = !!_SA.excYoy;
+  const gb = (id, label) => `<button class="btn ${g === id ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesExcSetGrain', id)}>${h(label)}</button>`;
+  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--muted);font-weight:600">Period:</span>
+      ${gb('month', 'Month')}${gb('quarter', 'Quarter')}${gb('year', 'Year')}
+      ${g !== 'custom' ? `<button class="btn ${yoy ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesExcToggleYoy')} title="Compare this period to the same period one year earlier">YoY</button>` : ''}
+      <span style="width:1px;height:20px;background:var(--border);margin:0 2px"></span>
+      <input type="date" value="${h(_SA.excFrom || '')}" ${dataChangeVal('salesExcSetFrom')} style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+      <span style="font-size:12px;color:var(--muted)">→</span>
+      <input type="date" value="${h(_SA.excTo || '')}" ${dataChangeVal('salesExcSetTo')} style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--bg,#fff);color:inherit">
+      <button class="btn ${g === 'custom' ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesExcApplyCustom')}>Custom range</button>
+    </div>`;
+}
 async function _saExceptions(body) {
-  const month = _SA.excMonth || '';
-  const qs = '?lookback=' + (_SA.excLookback || 6) + (month ? '&month=' + encodeURIComponent(month) : '');
+  const g = _SA.excGrain || 'month';
+  let qs;
+  if (g === 'custom') qs = '?grain=custom&from=' + encodeURIComponent(_SA.excFrom || '') + '&to=' + encodeURIComponent(_SA.excTo || '');
+  else qs = '?grain=' + g + (_SA.excYoy ? '&yoy=1' : '');
   const data = await api('/analytics/billing-exceptions' + qs);
-  if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
+  if (!data) { body.innerHTML = _saExcControls() + `<div class="card" style="padding:20px;color:var(--muted)">Unable to load.</div>`; return; }
+  if (data.error) { body.innerHTML = _saExcControls() + `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h(data.error)}</div>`; return; }
   const c = data.counts || {};
+  const baseDesc = data.yoy ? 'the same period last year' : `the prior ${data.lookback} ${g === 'year' ? 'years' : g === 'quarter' ? 'quarters' : g === 'custom' ? 'periods' : 'months'}`;
   const rows = (data.exceptions || []).map(e => `<tr style="border-top:1px solid var(--border)">
     <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', e.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(e.name || e.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.expected))}</td>
@@ -119,8 +162,9 @@ async function _saExceptions(body) {
     <td style="padding:7px 12px">${_saSevChip(e.severity)}</td>
     <td style="padding:7px 12px"><button class="btn btn-secondary btn-sm" ${dataAct('salesViewException', e.client_id)}>View ▸</button></td></tr>`).join('');
   body.innerHTML = `
+    ${_saExcControls()}
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-      <span style="font-size:13px;color:var(--muted)">Comparing <b>${h(data.month)}</b> against the prior <b>${h(String(data.lookback))}</b> months.</span>
+      <span style="font-size:13px;color:var(--muted)">Comparing <b>${h(data.month)}</b> against ${h(baseDesc)}.</span>
       <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">

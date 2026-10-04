@@ -9465,7 +9465,12 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   const url = new URL(request.url);
   const period = Math.min(3650, Math.max(1, parseInt(url.searchParams.get("period") || "90", 10) || 90));
   const today = istToday();
-  const periodStart = addDaysIST(today, -period);
+  // KPI window: a custom from/to range wins; otherwise the trailing `period` days.
+  const ymd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const cFrom = url.searchParams.get("from") || "", cTo = url.searchParams.get("to") || "";
+  const customRange = ymd(cFrom) && ymd(cTo) && cFrom <= cTo;
+  const periodStart = customRange ? cFrom : addDaysIST(today, -period);
+  const periodEnd = customRange ? cTo : today;
   const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
   // Client performance compares the two most recent COMPLETE calendar months. The current
   // month is excluded so an early-in-the-month partial (e.g. day 2 of 30) never fakes a
@@ -9477,8 +9482,8 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
   // KPIs over the trailing period (sales = billed invoice total; outstanding is current).
   const kpiRow = await env.DB.prepare(
     `SELECT COALESCE(SUM(total),0) AS net_sales, COUNT(*) AS invoices, COUNT(DISTINCT client_id) AS active_clients
-       FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND date >= ?`
-  ).bind(periodStart).first() as { net_sales: number; invoices: number; active_clients: number } | null;
+       FROM ar_invoices WHERE ${SALES_REAL_INVOICE} AND date >= ? AND date <= ?`
+  ).bind(periodStart, periodEnd).first() as { net_sales: number; invoices: number; active_clients: number } | null;
   const outRow = await env.DB.prepare(
     `SELECT COALESCE(SUM(balance),0) AS outstanding FROM ar_invoices WHERE status!='void' AND balance > ?`
   ).bind(dust).first() as { outstanding: number } | null;
@@ -9513,6 +9518,7 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
 
   return json({
     period_days: period, as_of: today, current_month: curYm, previous_month: prevYm,
+    custom_range: customRange, kpi_from: periodStart, kpi_to: periodEnd,
     kpis: {
       net_sales: kpiRow?.net_sales || 0, invoices: kpiRow?.invoices || 0,
       active_clients: kpiRow?.active_clients || 0, outstanding: outRow?.outstanding || 0,
@@ -9569,21 +9575,116 @@ async function _billingExceptions(env: Env, targetMonth: string, lookback: numbe
   out.sort((a, b) => sev(a.severity as string) - sev(b.severity as string) || (Number(b.gap) || 0) - (Number(a.gap) || 0));
   return out;
 }
-// GET /api/analytics/billing-exceptions?month=YYYY-MM&lookback=N
+// ── Period windows for analytics filters (month / quarter / year / custom) ──
+type SalesWindow = { from: string; to: string; label: string };
+function _lastDayUTC(y: number, m0: number): number { return new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate(); }
+// The calendar window (month/quarter/year) that CONTAINS the reference date.
+function _salesWindow(grain: string, ref: Date): SalesWindow {
+  const y = ref.getUTCFullYear(), m0 = ref.getUTCMonth();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (grain === "year") return { from: `${y}-01-01`, to: `${y}-12-31`, label: String(y) };
+  if (grain === "quarter") {
+    const q = Math.floor(m0 / 3), sm = q * 3, em = sm + 2;
+    return { from: `${y}-${pad(sm + 1)}-01`, to: `${y}-${pad(em + 1)}-${pad(_lastDayUTC(y, em))}`, label: `${y}-Q${q + 1}` };
+  }
+  return { from: `${y}-${pad(m0 + 1)}-01`, to: `${y}-${pad(m0 + 1)}-${pad(_lastDayUTC(y, m0))}`, label: `${y}-${pad(m0 + 1)}` };
+}
+// Shift a reference date back n whole grains (anchored mid-month to avoid day overflow).
+function _shiftRef(grain: string, ref: Date, n: number): Date {
+  const d = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), 15));
+  if (grain === "year") d.setUTCFullYear(d.getUTCFullYear() - n);
+  else if (grain === "quarter") d.setUTCMonth(d.getUTCMonth() - 3 * n);
+  else d.setUTCMonth(d.getUTCMonth() - n);
+  return d;
+}
+const _YOY_STEP: Record<string, number> = { month: 12, quarter: 4, year: 1 };
+// Window-based exception engine: compare a TARGET window against one or more BASELINE
+// windows. not_billed = active in ≥required baselines but zero in target; below_average =
+// target well under the active-baseline average. Reasons/severity as before.
+async function _billingExceptionsWindows(env: Env, target: SalesWindow, baselines: SalesWindow[]): Promise<Record<string, unknown>[]> {
+  const minActiveCfg = await finCfgInt(env, "sa_exc_min_active_months", 3);
+  const criticalPaise = await finCfgInt(env, "sa_exc_critical_paise", 5000000);
+  const declinePct = await finCfgInt(env, "sa_exc_decline_pct", 50);
+  const required = Math.max(1, Math.min(minActiveCfg, baselines.length));
+  const spanFrom = [target.from, ...baselines.map(b => b.from)].sort()[0];
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, i.date AS date, COALESCE(i.total,0) AS total
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE ${SALES_REAL_INVOICE_I} AND i.date >= ? AND i.date <= ?`
+  ).bind(spanFrom, target.to).all()).results) || []) as Array<{ client_id: string; name: string; date: string; total: number }>;
+  const inWin = (d: string, w: SalesWindow) => d >= w.from && d <= w.to;
+  const agg: Record<string, { name: string; target: number; base: number[]; last: string }> = {};
+  for (const r of rows) {
+    const e = agg[r.client_id] || (agg[r.client_id] = { name: r.name, target: 0, base: baselines.map(() => 0), last: "" });
+    if (inWin(r.date, target)) e.target += r.total || 0;
+    for (let i = 0; i < baselines.length; i++) if (inWin(r.date, baselines[i])) e.base[i] += r.total || 0;
+    if ((r.date || "") > e.last) e.last = r.date || "";
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const [client_id, e] of Object.entries(agg)) {
+    const active = e.base.filter(v => v > 0);
+    const nActive = active.length;
+    const avg = active.length ? Math.round(active.reduce((s, v) => s + v, 0) / active.length) : 0;
+    let reason = "", severity = "";
+    if (nActive >= required && e.target === 0) { reason = "not_billed"; severity = avg >= criticalPaise ? "critical" : "attention"; }
+    else if (e.target > 0 && avg > 0 && e.target < avg * (1 - declinePct / 100)) { reason = "below_average"; severity = avg >= criticalPaise ? "attention" : "monitor"; }
+    else continue;
+    out.push({ client_id, name: e.name, expected: avg, actual: e.target, gap: Math.max(0, avg - e.target),
+      reason, severity, months_active: nActive, windows_active: nActive, last_billing: e.last || null });
+  }
+  const sev = (s: string) => s === "critical" ? 0 : s === "attention" ? 1 : 2;
+  out.sort((a, b) => sev(a.severity as string) - sev(b.severity as string) || (Number(b.gap) || 0) - (Number(a.gap) || 0));
+  return out;
+}
+// GET /api/analytics/billing-exceptions?grain=month|quarter|year|custom&anchor=&from=&to=&lookback=N&yoy=1
 async function handleBillingExceptions(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
   const url = new URL(request.url);
-  const mRaw = url.searchParams.get("month") || "";
-  const month = /^\d{4}-\d{2}$/.test(mRaw) ? mRaw : istToday().slice(0, 7);
-  const lookback = Math.min(24, Math.max(2, parseInt(url.searchParams.get("lookback") || "6", 10) || 6));
-  const exceptions = await _billingExceptions(env, month, lookback);
-  const totals: Record<string, number> = {};
-  for (const e of exceptions) {
-    const s = e.severity as string; totals[s] = (totals[s] || 0) + 1;
-    totals.gap = (totals.gap || 0) + (Number(e.gap) || 0);
+  const q = url.searchParams;
+  const ymd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const yoy = q.get("yoy") === "1";
+  // Legacy callers pass ?month=YYYY-MM (&lookback); honor it as a month-grain anchor.
+  let grain = (q.get("grain") || "month").toLowerCase();
+  if (!["month", "quarter", "year", "custom"].includes(grain)) grain = "month";
+  let target: SalesWindow, baselines: SalesWindow[];
+  if (grain === "custom") {
+    const from = q.get("from") || "", to = q.get("to") || "";
+    if (!ymd(from) || !ymd(to) || from > to) return json({ error: "Custom range needs valid from/to dates (from ≤ to)." }, 400);
+    target = { from, to, label: `${from} → ${to}` };
+    // Baselines = equal-length windows stepping back; YoY = same range one year earlier.
+    const span = Math.max(1, daysBetweenIST(from, to) + 1);
+    if (yoy) {
+      const f = addDaysIST(from, -365), t = addDaysIST(to, -365);
+      baselines = [{ from: f, to: t, label: `${f} → ${t}` }];
+    } else {
+      const n = Math.min(12, Math.max(1, parseInt(q.get("lookback") || "3", 10) || 3));
+      baselines = Array.from({ length: n }, (_, i) => {
+        const f = addDaysIST(from, -span * (i + 1)), t = addDaysIST(to, -span * (i + 1));
+        return { from: f, to: t, label: `${f} → ${t}` };
+      });
+    }
+  } else {
+    const mRaw = q.get("month") || "";
+    const anchorRef = (grain === "month" && /^\d{4}-\d{2}$/.test(mRaw))
+      ? new Date(`${mRaw}-15T00:00:00Z`)
+      : (ymd(q.get("anchor") || "") ? new Date(`${q.get("anchor")}T00:00:00Z`) : new Date(`${istToday()}T00:00:00Z`));
+    target = _salesWindow(grain, anchorRef);
+    const defLb = grain === "year" ? 3 : grain === "quarter" ? 4 : 6;
+    const n = Math.min(24, Math.max(1, parseInt(q.get("lookback") || String(defLb), 10) || defLb));
+    baselines = yoy
+      ? [_salesWindow(grain, _shiftRef(grain, anchorRef, _YOY_STEP[grain]))]
+      : Array.from({ length: n }, (_, i) => _salesWindow(grain, _shiftRef(grain, anchorRef, i + 1)));
   }
-  return json({ month, lookback, counts: { critical: totals.critical || 0, attention: totals.attention || 0, monitor: totals.monitor || 0, total: exceptions.length }, potential_gap: totals.gap || 0, exceptions });
+  const exceptions = await _billingExceptionsWindows(env, target, baselines);
+  const totals: Record<string, number> = {};
+  for (const e of exceptions) { const s = e.severity as string; totals[s] = (totals[s] || 0) + 1; totals.gap = (totals.gap || 0) + (Number(e.gap) || 0); }
+  return json({
+    grain, yoy, month: target.label, target: { from: target.from, to: target.to, label: target.label },
+    baseline_labels: baselines.map(b => b.label), lookback: baselines.length,
+    counts: { critical: totals.critical || 0, attention: totals.attention || 0, monitor: totals.monitor || 0, total: exceptions.length },
+    potential_gap: totals.gap || 0, exceptions,
+  });
 }
 // GET /api/analytics/billing-exceptions/:clientId?month=YYYY-MM — drill-down.
 async function handleBillingExceptionDetail(request: Request, env: Env, path: string): Promise<Response> {
