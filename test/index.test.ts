@@ -695,6 +695,26 @@ describe("Admin — hard-delete orders (test-data cleanup)", () => {
   });
 });
 
+describe("Terminal orders are frozen (no ETA / date edits)", () => {
+  it("PATCH /api/orders/:id is refused on a cancelled order but allowed on a live one", async () => {
+    const vdb = env.DB as D1Database;
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total) VALUES ('ORD-CANX','CL-1','tst-admin','CANCELLED',500)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total) VALUES ('ORD-LIVE','CL-1','tst-admin','APPROVED',500)").run();
+
+    const blocked = await patch("/api/orders/ORD-CANX", { predicted_delivery_date: "2026-12-01" }, adminToken);
+    expect(blocked.status).toBe(409);
+    const berr = await blocked.json() as { code?: string };
+    expect(berr.code).toBe("ORDER_TERMINAL");
+    // The ETA was not written.
+    const row = await vdb.prepare("SELECT predicted_delivery_date FROM orders WHERE id='ORD-CANX'").first() as { predicted_delivery_date?: string } | null;
+    expect(row?.predicted_delivery_date ?? null).toBe(null);
+
+    // A live order still accepts the ETA.
+    const okRes = await patch("/api/orders/ORD-LIVE", { predicted_delivery_date: "2026-12-01" }, adminToken);
+    expect(ok(okRes.status)).toBe(true);
+  });
+});
+
 describe("Document branding config", () => {
   it("GET is open to any authed user; POST is super-admin only and persists fields", async () => {
     // Any authenticated user may read the branding (client-side exports need it).
