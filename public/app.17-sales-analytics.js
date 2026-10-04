@@ -7,7 +7,7 @@
 const _SA = { period: 90, tab: 'dashboard', c360Id: '', c360Q: '', _clients: null,
   excGrain: 'month', excYoy: false, excFrom: '', excTo: '',
   kpiFrom: '', kpiTo: '',
-  matMode: 'rev', matMonths: 12, wfMonth: '' };
+  matMode: 'rev', matMonths: 12, matView: 'grid', matFilter: null, wfMonth: '' };
 
 // ── Hub shell: one nav entry, tabbed sections ──────────────────────────
 async function renderSalesAnalytics(main) {
@@ -434,13 +434,46 @@ async function salesAssignRegion(clientId, region) {
 function salesMatSetMode(m) { _SA.matMode = m; const el = document.getElementById('main-content'); if (el) renderSalesAnalytics(el); }
 function _matShort(ym) { const [y, m] = ym.split('-'); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m,10)-1] + "'" + y.slice(2); }
 function _matMomPct(vals, i) { if (i === 0) return null; const p = vals[i-1], c = vals[i]; if (p <= 0 && c <= 0) return null; if (p <= 0) return 999; if (c <= 0) return -100; return Math.round((c - p) / p * 100); }
+// Per-client movement status from the two most recent COMPLETE months (last column is the
+// in-progress current month, so compare values[len-2] vs values[len-3]).
+const _SA_MSTATUS = { grow: ['Growing', 'var(--success,#2e6e12)'], steady: ['Steady', 'var(--faint,#9a988f)'], soft: ['Softening', 'var(--warning,#8a5a00)'], slip: ['Declining', 'var(--danger,#b3261e)'], lost: ['Lost', 'var(--danger,#b3261e)'], new: ['New', 'var(--blue,#1d6fa4)'] };
+function _matStatus(v) {
+  const n = v.length, recent = v[n - 2] || 0, prior = v[n - 3] || 0;
+  if (prior > 0 && recent <= 0) return 'lost';
+  if (prior <= 0 && recent > 0) return 'new';
+  if (prior > 0) { const d = (recent - prior) / prior; if (d >= 0.05) return 'grow'; if (d <= -0.25) return 'slip'; if (d <= -0.05) return 'soft'; }
+  return 'steady';
+}
+function salesMatSetView(v) { _SA.matView = v; const el = document.getElementById('main-content'); if (el) renderSalesAnalytics(el); }
+function salesMatSetFilter(k) { _SA.matFilter = (_SA.matFilter === k ? null : k); const el = document.getElementById('main-content'); if (el) renderSalesAnalytics(el); }
 async function _saMatrix(body) {
-  const mode = _SA.matMode || 'rev';
+  const mode = _SA.matMode || 'rev', view = _SA.matView || 'grid', filter = _SA.matFilter;
   const data = await api('/analytics/sales/matrix?months=' + (_SA.matMonths || 12));
   if (!data || data.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((data && data.error) || 'Unable to load.')}</div>`; return; }
-  const months = data.months || [], clients = (data.clients || []);
-  const maxAll = Math.max(1, ...clients.flatMap(c => c.values));
+  const months = data.months || [], all = (data.clients || []).map(c => ({ ...c, status: _matStatus(c.values) }));
+  const recentIdx = months.length - 2, priorIdx = months.length - 3;
+  const recentYm = months[recentIdx], priorYm = months[priorIdx];
+  const maxAll = Math.max(1, ...all.flatMap(c => c.values));
+  const clients = filter ? all.filter(c => c.status === filter) : all;
+  // KPI row (on the last complete month).
+  const recSum = all.reduce((s, c) => s + (c.values[recentIdx] || 0), 0);
+  const priSum = all.reduce((s, c) => s + (c.values[priorIdx] || 0), 0);
+  const mom = priSum > 0 ? Math.round((recSum - priSum) / priSum * 100) : null;
+  const counts = { grow: 0, steady: 0, soft: 0, slip: 0, lost: 0, new: 0 }; all.forEach(c => counts[c.status]++);
+  const activeN = all.filter(c => (c.values[recentIdx] || 0) > 0).length;
+  const needs = counts.soft + counts.slip + counts.lost;
+  const kpis = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+    ${_saKpi(_matShort(recentYm) + ' revenue', _fmtPaise(recSum), mom == null ? 'last complete month' : (mom >= 0 ? '▲ +' : '▼ ') + mom + '% vs ' + _matShort(priorYm))}
+    ${_saKpi('Active clients', String(activeN), 'billed in ' + _matShort(recentYm))}
+    ${_saKpi('Growing', String(counts.grow), 'up vs prior month')}
+    ${_saKpi('Needs attention', String(needs), counts.slip + ' declining · ' + counts.lost + ' lost')}
+  </div>`;
   const modeBtn = (id, label) => `<button class="btn ${mode === id ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesMatSetMode', id)}>${h(label)}</button>`;
+  const viewBtn = (id, label) => `<button class="btn ${view === id ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesMatSetView', id)}>${h(label)}</button>`;
+  const chipRow = `<div style="display:flex;gap:7px;flex-wrap:wrap">${['grow','steady','soft','slip','lost','new'].map(k => {
+    const [lbl, col] = _SA_MSTATUS[k]; const on = filter === k;
+    return `<button ${dataAct('salesMatSetFilter', k)} style="border:1px solid ${on ? col : 'var(--border)'};${on ? 'box-shadow:inset 0 0 0 1px ' + col + ';' : ''}background:var(--surface,var(--bg,#fff));border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;color:inherit;display:inline-flex;gap:6px;align-items:center"><span style="width:8px;height:8px;border-radius:50%;background:${col}"></span>${h(lbl)}<span style="color:var(--muted)">${counts[k]}</span></button>`;
+  }).join('')}</div>`;
   const cellStyle = (v, pct) => {
     if (mode === 'rev') { const a = v > 0 ? (0.10 + 0.82 * (v / maxAll)) : 0; return `background:rgba(37,99,235,${a.toFixed(3)});color:${a > 0.55 ? '#fff' : 'inherit'}`; }
     if (pct === null) return 'background:transparent';
@@ -449,29 +482,38 @@ async function _saMatrix(body) {
     return `background:rgba(${rgb},${a.toFixed(3)});color:${a > 0.5 ? '#fff' : 'inherit'}`;
   };
   const cellText = (v, pct) => mode === 'rev' ? (v ? _fmtPaise(v) : '') : (pct === null ? '' : (pct > 0 ? '+' : '') + pct + '%');
-  const rows = clients.map(c => {
-    const cells = c.values.map((v, i) => {
-      const pct = _matMomPct(c.values, i);
-      const title = `${c.name} · ${_matShort(months[i])} · ${_fmtPaise(v)}${pct === null ? '' : ` · ${pct > 0 ? '+' : ''}${pct}% MoM`}`;
-      return `<td ${dataAct('salesDrill', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
+  const nameCell = c => `<button ${dataAct('salesDrill', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:170px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom" title="${h(c.name)}"><span style="width:8px;height:8px;border-radius:50%;background:${_SA_MSTATUS[c.status][1]};display:inline-block;margin-right:6px"></span>${h(c.name)}</button>`;
+  let table;
+  if (view === 'table') {
+    table = `<table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;text-align:right;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
+      <tbody>${clients.map(c => `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${c.values.map(v => `<td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${v ? _fmtPaise(v) : '—'}</td>`).join('')}</tr>`).join('') || `<tr><td style="padding:16px;color:var(--muted)">No clients.</td></tr>`}</tbody></table>`;
+  } else {
+    const rows = clients.map(c => {
+      const cells = c.values.map((v, i) => {
+        const pct = _matMomPct(c.values, i);
+        const title = `${c.name} · ${_matShort(months[i])} · ${_fmtPaise(v)}${pct === null ? '' : ` · ${pct > 0 ? '+' : ''}${pct}% MoM`}`;
+        return `<td ${dataAct('salesDrill', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
+      }).join('');
+      return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${cells}</tr>`;
     }).join('');
-    return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap"><button ${dataAct('salesDrill', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:170px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom" title="${h(c.name)}">${h(c.name)}</button></td>${cells}</tr>`;
-  }).join('');
-  const legend = mode === 'rev'
+    table = `<table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
+      <tbody>${rows || `<tr><td style="padding:16px;color:var(--muted)">No clients.</td></tr>`}</tbody></table>`;
+  }
+  const legend = view === 'table' ? '' : (mode === 'rev'
     ? `<span style="font-size:11px;color:var(--muted)">Low</span><span style="display:inline-flex;height:11px;border:1px solid var(--border);border-radius:3px;overflow:hidden">${[0.1,0.3,0.5,0.7,0.9].map(a=>`<i style="width:24px;background:rgba(37,99,235,${a})"></i>`).join('')}</span><span style="font-size:11px;color:var(--muted)">High monthly revenue</span>`
-    : `<span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(192,57,43,.8);display:inline-block"></i>Down</span><span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(16,122,70,.8);display:inline-block"></i>Up vs previous month</span>`;
+    : `<span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(192,57,43,.8);display:inline-block"></i>Down</span><span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px"><i style="width:14px;height:11px;border-radius:3px;background:rgba(16,122,70,.8);display:inline-block"></i>Up vs previous month</span>`);
   body.innerHTML = `
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-      <span style="font-size:12px;color:var(--muted);font-weight:600">Colour by:</span>${modeBtn('rev','Revenue')}${modeBtn('mom','MoM change')}
-      <button class="btn btn-secondary btn-sm" ${dataAct('renderSalesAnalyticsRefresh')}>Refresh</button>
-      <span style="margin-left:auto;font-size:12px;color:var(--muted)">${clients.length} clients · click any cell to drill in</span>
+    ${kpis}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <div style="display:inline-flex;gap:4px">${modeBtn('rev','Revenue')}${modeBtn('mom','MoM change')}</div>
+      ${chipRow}
+      <span style="margin-left:auto;display:inline-flex;gap:4px">${viewBtn('grid','Matrix')}${viewBtn('table','Table')}</span>
     </div>
-    <div class="card" style="padding:0;overflow-x:auto">
-      <table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
-        <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m=>`<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
-        <tbody>${rows || `<tr><td style="padding:16px;color:var(--muted)">No billing in this window.</td></tr>`}</tbody>
-      </table></div>
-    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">${legend}</div>`;
+    <div class="card" style="padding:0;overflow-x:auto">${table}</div>
+    ${legend ? `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">${legend}</div>` : ''}
+    <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">${clients.length}${filter ? ' of ' + all.length : ''} clients · sorted by latest month · click any client or cell to drill in. Status compares ${h(_matShort(recentYm))} vs ${h(_matShort(priorYm))} (complete months).</p>`;
 }
 
 // ── Tab: Movement — MoM waterfall (New + Growth − Decline − Lost) ───────
