@@ -5155,6 +5155,41 @@ describe("Books rebuild — access-token cache cleared once, not per step", () =
   });
 });
 
+describe("Sales Analytics — matrix + waterfall", () => {
+  it("matrix returns a month grid and a client row; super-admin only", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('MX','Matrix Co','INR')").run();
+    const ym = (n: number) => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('MX1','MX1','MX1','MX',?,400000,0,'paid','paid')").bind(ym(1) + "-10").run();
+    expect((await get("/api/analytics/sales/matrix", opsToken)).status).toBe(403);
+    const r = await (await get("/api/analytics/sales/matrix?months=12", adminToken)).json() as { months: string[]; clients: Array<Record<string, unknown>> };
+    expect(r.months.length).toBe(12);
+    const row = r.clients.find(c => (c.client_id as string) === "MX")!;
+    expect(row).toBeTruthy();
+    expect((row.values as number[]).length).toBe(12);
+    expect((row.values as number[]).reduce((s, v) => s + v, 0)).toBe(400000);
+  });
+
+  it("waterfall decomposition sums to the net change", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    const target = "2025-11", prev = "2025-10";
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('WG','Grower','INR'),('WN','Newbie','INR'),('WL','Lostone','INR')").run();
+    // grower: 100k → 150k; new: 0 → 80k; lost: 60k → 0
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('WG0','WG0','WG0','WG',?,100000,0,'paid','paid')").bind(prev + "-10").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('WG1','WG1','WG1','WG',?,150000,0,'paid','paid')").bind(target + "-10").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('WN1','WN1','WN1','WN',?,80000,0,'paid','paid')").bind(target + "-10").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('WL0','WL0','WL0','WL',?,60000,0,'paid','paid')").bind(prev + "-10").run();
+    const r = await (await get("/api/analytics/sales/waterfall?month=" + target, adminToken)).json() as { prev_total: number; curr_total: number; net: number; buckets: Record<string, number> };
+    const b = r.buckets;
+    expect(b.new + b.growth + b.decline + b.lost).toBe(r.net);     // decomposition is exact
+    expect(r.curr_total - r.prev_total).toBe(r.net);
+    expect(b.growth).toBeGreaterThanOrEqual(50000);                 // grower contributed +50k
+    expect(b.new).toBeGreaterThanOrEqual(80000);                    // newbie contributed +80k
+  });
+});
+
 describe("Billing Exceptions — period grains (quarter / YoY / custom)", () => {
   it("grain=quarter&yoy flags a client that billed the same quarter last year but not this quarter", async () => {
     const db = env.DB as D1Database;

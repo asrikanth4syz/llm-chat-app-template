@@ -4551,6 +4551,8 @@ export default {
       if (path==="/api/finance/ar/by-customer" && method==="GET") return handleArByCustomer(request,env);
       if (path==="/api/finance/kpis"         && method==="GET") return handleFinanceKpis(request,env);
       if (path==="/api/analytics/sales/overview" && method==="GET") return handleSalesOverview(request,env);
+      if (path==="/api/analytics/sales/matrix" && method==="GET") return handleSalesMatrix(request,env);
+      if (path==="/api/analytics/sales/waterfall" && method==="GET") return handleSalesWaterfall(request,env);
       if (path==="/api/analytics/billing-exceptions" && method==="GET") return handleBillingExceptions(request,env);
       if (path.match(/^\/api\/analytics\/billing-exceptions\/[^/]+$/) && method==="GET") return handleBillingExceptionDetail(request,env,path);
       if (path.match(/^\/api\/analytics\/client\/[^/]+$/) && method==="GET") return handleClientAnalytics(request,env,path);
@@ -9525,6 +9527,67 @@ async function handleSalesOverview(request: Request, env: Env): Promise<Response
     },
     trend, client_performance,
   });
+}
+
+// GET /api/analytics/sales/matrix?months=N — client × month revenue grid (super-admin).
+async function handleSalesMatrix(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const months = Math.min(24, Math.max(3, parseInt(new URL(request.url).searchParams.get("months") || "12", 10) || 12));
+  // Oldest → newest; the last column is the current (in-progress) month.
+  const monthList = Array.from({ length: months }, (_, i) => _ymOffset(today, months - 1 - i));
+  const start = monthList[0] + "-01";
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym, COALESCE(SUM(i.total),0) AS net
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE ${SALES_REAL_INVOICE_I} AND i.date >= ? GROUP BY i.client_id, ym`
+  ).bind(start).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number }>;
+  const idx: Record<string, number> = {}; monthList.forEach((m, i) => idx[m] = i);
+  const byClient: Record<string, { name: string; values: number[] }> = {};
+  for (const r of rows) {
+    const e = byClient[r.client_id] || (byClient[r.client_id] = { name: r.name, values: monthList.map(() => 0) });
+    const i = idx[r.ym]; if (i != null) e.values[i] = r.net || 0;
+  }
+  const clients = Object.entries(byClient).map(([client_id, e]) => ({
+    client_id, name: e.name, values: e.values,
+    latest: e.values[e.values.length - 1] || 0, total: e.values.reduce((s, v) => s + v, 0),
+  })).sort((a, b) => b.latest - a.latest || b.total - a.total).slice(0, 150);
+  return json({ months: monthList, clients });
+}
+
+// GET /api/analytics/sales/waterfall?month=YYYY-MM — decompose one month's change vs the
+// month before into New + Growth − Decline − Lost (super-admin).
+async function handleSalesWaterfall(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const mRaw = new URL(request.url).searchParams.get("month") || "";
+  const target = /^\d{4}-\d{2}$/.test(mRaw) ? mRaw : _ymOffset(today, 1); // default: last complete month
+  const prev = _ymOffset(target, 1);
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, substr(i.date,1,7) AS ym, COALESCE(SUM(i.total),0) AS net
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE ${SALES_REAL_INVOICE_I} AND substr(i.date,1,7) IN (?,?) GROUP BY i.client_id, ym`
+  ).bind(prev, target).all()).results) || []) as Array<{ client_id: string; name: string; ym: string; net: number }>;
+  const agg: Record<string, { name: string; prev: number; curr: number }> = {};
+  for (const r of rows) { const e = agg[r.client_id] || (agg[r.client_id] = { name: r.name, prev: 0, curr: 0 }); if (r.ym === target) e.curr = r.net || 0; else e.prev = r.net || 0; }
+  const buckets = { new: 0, growth: 0, decline: 0, lost: 0 };
+  const movers: Record<string, Array<{ client_id: string; name: string; delta: number }>> = { new: [], growth: [], decline: [], lost: [] };
+  let prevTotal = 0, currTotal = 0;
+  for (const [client_id, e] of Object.entries(agg)) {
+    prevTotal += e.prev; currTotal += e.curr;
+    let k = "", delta = 0;
+    if (e.prev <= 0 && e.curr > 0) { k = "new"; delta = e.curr; }
+    else if (e.prev > 0 && e.curr <= 0) { k = "lost"; delta = -e.prev; }
+    else if (e.curr > e.prev) { k = "growth"; delta = e.curr - e.prev; }
+    else if (e.curr < e.prev) { k = "decline"; delta = -(e.prev - e.curr); }
+    else continue;
+    buckets[k as keyof typeof buckets] += delta;
+    movers[k].push({ client_id, name: e.name, delta });
+  }
+  for (const k of Object.keys(movers)) movers[k].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).splice(8);
+  return json({ target, prev, prev_total: prevTotal, curr_total: currTotal, net: currTotal - prevTotal, buckets, movers });
 }
 
 // ── Billing Exceptions — "who didn't get billed?" (super-admin only) ────
