@@ -4553,6 +4553,8 @@ export default {
       if (path==="/api/analytics/sales/overview" && method==="GET") return handleSalesOverview(request,env);
       if (path==="/api/analytics/sales/matrix" && method==="GET") return handleSalesMatrix(request,env);
       if (path==="/api/analytics/sales/waterfall" && method==="GET") return handleSalesWaterfall(request,env);
+      if (path==="/api/analytics/sales/health" && method==="GET") return handleSalesHealth(request,env);
+      if (path==="/api/analytics/sales/retention" && method==="GET") return handleSalesRetention(request,env);
       if (path==="/api/analytics/billing-exceptions" && method==="GET") return handleBillingExceptions(request,env);
       if (path.match(/^\/api\/analytics\/billing-exceptions\/[^/]+$/) && method==="GET") return handleBillingExceptionDetail(request,env,path);
       if (path.match(/^\/api\/analytics\/client\/[^/]+$/) && method==="GET") return handleClientAnalytics(request,env,path);
@@ -9588,6 +9590,76 @@ async function handleSalesWaterfall(request: Request, env: Env): Promise<Respons
   }
   for (const k of Object.keys(movers)) movers[k].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).splice(8);
   return json({ target, prev, prev_total: prevTotal, curr_total: currTotal, net: currTotal - prevTotal, buckets, movers });
+}
+
+// GET /api/analytics/sales/health — churn radar: every client scored Stable / Attention /
+// At-risk on recency + consistency + trend (super-admin). Batched Client-360 health.
+async function handleSalesHealth(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const today = istToday();
+  const histStart = _ymOffset(today, 11) + "-01";
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, COALESCE(c.name, i.client_id) AS name, i.date AS date, substr(i.date,1,7) AS ym, COALESCE(i.total,0) AS total
+       FROM ar_invoices i LEFT JOIN ar_clients c ON c.client_id=i.client_id
+      WHERE ${SALES_REAL_INVOICE_I} AND i.date >= ?`
+  ).bind(histStart).all()).results) || []) as Array<{ client_id: string; name: string; date: string; ym: string; total: number }>;
+  const months = Array.from({ length: 12 }, (_, i) => _ymOffset(today, 11 - i)); // oldest→newest
+  const idx: Record<string, number> = {}; months.forEach((m, i) => idx[m] = i);
+  const agg: Record<string, { name: string; v: number[]; last: string; total: number }> = {};
+  for (const r of rows) {
+    const e = agg[r.client_id] || (agg[r.client_id] = { name: r.name, v: months.map(() => 0), last: "", total: 0 });
+    const i = idx[r.ym]; if (i != null) e.v[i] += r.total || 0;
+    e.total += r.total || 0; if ((r.date || "") > e.last) e.last = r.date || "";
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const [client_id, e] of Object.entries(agg)) {
+    const active = e.v.filter(x => x > 0).length;
+    const last3 = e.v.slice(9).reduce((s, x) => s + x, 0), prev3 = e.v.slice(6, 9).reduce((s, x) => s + x, 0);
+    const daysSince = e.last ? daysBetweenIST(e.last, today) : 999;
+    const reasons: string[] = []; let status = "stable";
+    if (daysSince > 60) { status = "at_risk"; reasons.push(`No billing for ${daysSince} days`); }
+    if (prev3 > 0 && last3 < prev3 * 0.5) { status = "at_risk"; reasons.push(`Last 3 months down ${Math.round((1 - last3 / prev3) * 100)}% vs the 3 before`); }
+    else if (prev3 > 0 && last3 < prev3 * 0.8 && status !== "at_risk") { status = "attention"; reasons.push(`Softening — last 3 months down ${Math.round((1 - last3 / prev3) * 100)}%`); }
+    if (active <= 3 && status === "stable") { status = "attention"; reasons.push(`Billed in only ${active} of 12 months`); }
+    if (!reasons.length) reasons.push("Steady cadence and volume");
+    out.push({ client_id, name: e.name, status, reasons, last_billing: e.last || null, days_since_last: daysSince === 999 ? null : daysSince, total_12m: e.total, active_months_12m: active });
+  }
+  const rank = (s: string) => s === "at_risk" ? 0 : s === "attention" ? 1 : 2;
+  out.sort((a, b) => rank(a.status as string) - rank(b.status as string) || (Number(b.total_12m) || 0) - (Number(a.total_12m) || 0));
+  const counts = { at_risk: 0, attention: 0, stable: 0 }; for (const c of out) counts[c.status as keyof typeof counts]++;
+  return json({ counts, clients: out });
+}
+
+// GET /api/analytics/sales/retention — new-client cohort retention (super-admin). Clients
+// grouped by first-billed month; each row shows how many kept billing in later months.
+async function handleSalesRetention(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== SALES_ANALYTICS_ROLE) return json({ error: "Forbidden" }, 403);
+  const today = istToday(); const curYm = today.slice(0, 7);
+  const rows = (((await env.DB.prepare(
+    `SELECT i.client_id, substr(i.date,1,7) AS ym FROM ar_invoices i WHERE ${SALES_REAL_INVOICE_I} GROUP BY i.client_id, ym`
+  ).all()).results) || []) as Array<{ client_id: string; ym: string }>;
+  const present: Record<string, Set<string>> = {}; const first: Record<string, string> = {};
+  for (const r of rows) {
+    (present[r.client_id] = present[r.client_id] || new Set()).add(r.ym);
+    if (!first[r.client_id] || r.ym < first[r.client_id]) first[r.client_id] = r.ym;
+  }
+  // Cohorts = first-billed months within the last 12 months; offsets up to 11 (bounded by today).
+  const cohortMonths = Array.from({ length: 12 }, (_, i) => _ymOffset(today, 11 - i));
+  const monthsFwd = (ym: string, k: number) => _ymOffset(ym, -k); // k months after ym
+  const cohorts = cohortMonths.map(cm => {
+    const members = Object.keys(first).filter(cid => first[cid] === cm);
+    let maxOff = 0; while (maxOff < 11 && monthsFwd(cm, maxOff + 1) <= curYm) maxOff++;
+    const retention = [];
+    for (let k = 0; k <= maxOff; k++) {
+      const mm = monthsFwd(cm, k);
+      const active = members.filter(cid => present[cid].has(mm)).length;
+      retention.push({ offset: k, active, pct: members.length ? Math.round(active / members.length * 100) : 0 });
+    }
+    return { month: cm, size: members.length, retention };
+  }).filter(c => c.size > 0);
+  return json({ cohorts });
 }
 
 // ── Billing Exceptions — "who didn't get billed?" (super-admin only) ────

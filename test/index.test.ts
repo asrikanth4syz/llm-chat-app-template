@@ -5190,6 +5190,39 @@ describe("Sales Analytics — matrix + waterfall", () => {
   });
 });
 
+describe("Sales Analytics — churn radar + retention", () => {
+  it("health flags a client quiet for >60 days as at_risk; super-admin only", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('HR','Risky Co','INR')").run();
+    const d = new Date(); d.setUTCDate(d.getUTCDate() - 95);
+    const old = d.toISOString().slice(0, 10);
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('HR1','HR1','HR1','HR',?,300000,0,'paid','paid')").bind(old).run();
+    expect((await get("/api/analytics/sales/health", opsToken)).status).toBe(403);
+    const r = await (await get("/api/analytics/sales/health", adminToken)).json() as { counts: Record<string, number>; clients: Array<Record<string, unknown>> };
+    const row = r.clients.find(x => (x.client_id as string) === "HR")!;
+    expect(row).toBeTruthy();
+    expect(row.status).toBe("at_risk");
+    expect((row.days_since_last as number)).toBeGreaterThan(60);
+  });
+
+  it("retention groups clients by first-billed month with offset-0 at 100%", async () => {
+    const db = env.DB as D1Database;
+    await ensureArSchema(env);
+    await db.prepare("INSERT OR REPLACE INTO ar_clients (client_id,name,currency_code) VALUES ('RET','Cohort Co','INR')").run();
+    const ym = (n: number) => { const [y, m] = new Date().toISOString().slice(0, 7).split("-").map(Number); const d = new Date(Date.UTC(y, (m - 1) - n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
+    const firstM = ym(4);
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('RET1','RET1','RET1','RET',?,100000,0,'paid','paid')").bind(firstM + "-10").run();
+    await db.prepare("INSERT OR REPLACE INTO ar_invoices (id,zoho_invoice_id,number,client_id,date,total,balance,status,books_status) VALUES ('RET2','RET2','RET2','RET',?,100000,0,'paid','paid')").bind(ym(3) + "-10").run();
+    const r = await (await get("/api/analytics/sales/retention", adminToken)).json() as { cohorts: Array<{ month: string; size: number; retention: Array<{ offset: number; pct: number }> }> };
+    const coh = r.cohorts.find(c => c.month === firstM)!;
+    expect(coh).toBeTruthy();
+    expect(coh.size).toBeGreaterThanOrEqual(1);
+    expect(coh.retention[0].pct).toBe(100);        // everyone active in their first month
+    expect(coh.retention[1].pct).toBe(100);        // and the next month too (RET billed again)
+  });
+});
+
 describe("Billing Exceptions — period grains (quarter / YoY / custom)", () => {
   it("grain=quarter&yoy flags a client that billed the same quarter last year but not this quarter", async () => {
     const db = env.DB as D1Database;
