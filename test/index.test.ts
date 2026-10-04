@@ -4762,6 +4762,35 @@ describe("DC number entry at DISPATCH (when the driver is assigned)", () => {
   });
 });
 
+describe("Cancel (void) a pre-dispatch challan — super-admin only", () => {
+  it("voids a SCHEDULED challan with a reason; role-gated, reason-required, status-guarded", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-CAN','c1','tst-ops','READY_TO_PICK',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-can-i1','OD-CAN','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,dc_number,total_qty) VALUES ('CAN-DC','OD-CAN','SCHEDULED','DCN-00015',5)").run();
+
+    expect((await post("/api/delivery-challans/CAN-DC/cancel", { reason: "dup" }, opsToken)).status).toBe(403); // non-super forbidden
+    expect((await post("/api/delivery-challans/CAN-DC/cancel", {}, adminToken)).status).toBe(400); // reason required
+
+    const r = await post("/api/delivery-challans/CAN-DC/cancel", { reason: "created in error" }, adminToken);
+    expect(r.status).toBe(200);
+    const row = await db.prepare("SELECT status, cancel_reason FROM delivery_challans WHERE id='CAN-DC'").first() as { status: string; cancel_reason: string };
+    expect(row.status).toBe("CANCELLED");
+    expect(row.cancel_reason).toBe("created in error"); // number stays in the register, auditable
+
+    // already cancelled → not cancellable again
+    expect((await post("/api/delivery-challans/CAN-DC/cancel", { reason: "again" }, adminToken)).status).toBe(409);
+  });
+
+  it("refuses to cancel a challan that has already been dispatched", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-CAN2','c1','tst-ops','IN_SHIPMENT',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,dc_number,total_qty) VALUES ('CAN-DC2','OD-CAN2','IN_TRANSIT','DCN-00017',5)").run();
+    const r = await post("/api/delivery-challans/CAN-DC2/cancel", { reason: "too late" }, adminToken);
+    expect(r.status).toBe(409); // goods are moving — must not void
+  });
+});
+
 describe("Tier 1 dues logic — effective due date, dust cutoff, as-of, staleness", () => {
   it("resolveEffectiveDue applies manual → Zoho → client → default precedence", () => {
     expect(resolveEffectiveDue({ invoiceDate: "2026-01-01", zohoDue: "2026-01-20", overrideDate: "2026-02-02", defaultCreditDays: 30 }))

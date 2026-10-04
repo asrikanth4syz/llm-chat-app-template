@@ -3041,7 +3041,9 @@ async function fixCategoryNames(env: Env): Promise<void> {
     // Phase 2: billing — invoice details recorded when a DC is marked billed.
     "invoice_no TEXT", "invoice_date TEXT",
     // Phase 3: returnable-sample lifecycle — stamped when the sample comes back.
-    "sample_returned_at TEXT"]) {
+    "sample_returned_at TEXT",
+    // Cancellation (void) audit — set when a super admin cancels a pre-dispatch challan.
+    "cancel_reason TEXT", "cancelled_by TEXT", "cancelled_at TEXT"]) {
     try { await env.DB.prepare(`ALTER TABLE delivery_challans ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   try {
@@ -4673,6 +4675,7 @@ export default {
 
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/dispatch$/) && method==="POST") return handleDispatchDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/reassign$/) && method==="POST") return handleReassignDC(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/cancel$/) && method==="POST") return handleCancelDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/items$/) && method==="GET") return handleListDCItems(request,env,path);
       if (path==="/api/stock-movements" && method==="GET") return handleListStockMovements(request,env);
 
@@ -7745,6 +7748,40 @@ async function handleReassignDC(request: Request, env: Env, path: string): Promi
   await env.DB.prepare(`UPDATE delivery_challans SET ${fields.join(",")} WHERE id=?`).bind(...vals).run();
   await audit(env, user, "REASSIGN", "delivery_challan", id, `${dc.driver_name || dc.staff_id || "unassigned"}`, JSON.stringify({ staff_id: staffId, driver_name: driverName }));
   return json({ id, driver_name: driverName, staff_id: staffId });
+}
+
+// POST /api/delivery-challans/:id/cancel — VOID a pre-dispatch challan created in error.
+// ERP-correct soft delete: the challan moves to CANCELLED (its DC number stays in the
+// register, gap-free and auditable) rather than being physically removed. Super-admin only,
+// requires a reason, and is allowed ONLY before the goods move (SCHEDULED/READY) — never on
+// a dispatched/delivered/already-cancelled challan. If it belonged to an order, the order is
+// re-opened from IN_SHIPMENT only when it has no other live challan.
+async function handleCancelDC(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may cancel a delivery challan" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { reason?: string };
+  const reason = String(body.reason || "").trim().slice(0, 200);
+  if (!reason) return json({ error: "A cancellation reason is required" }, 400);
+  const dc = await env.DB.prepare("SELECT status, dc_number, order_id FROM delivery_challans WHERE id=?").bind(id).first() as { status?: string; dc_number?: string; order_id?: string } | null;
+  if (!dc) return json({ error: "Delivery challan not found" }, 404);
+  const cancellable = ["SCHEDULED", "READY"];
+  if (!cancellable.includes(String(dc.status || ""))) {
+    return json({ error: `Only a scheduled (pre-dispatch) challan can be cancelled — this one is ${String(dc.status || "unknown").toLowerCase().replace(/_/g, " ")}.`, code: "NOT_CANCELLABLE" }, 409);
+  }
+  await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED', cancel_reason=?, cancelled_by=?, cancelled_at=datetime('now') WHERE id=?")
+    .bind(reason, user!.sub, id).run();
+  await audit(env, user, "CANCEL_DC", "delivery_challan", id, String(dc.dc_number || id), reason);
+  // If the order had advanced to IN_SHIPMENT only because of this challan, drop it back to
+  // READY_TO_PICK when no other live (non-cancelled) challan remains.
+  if (dc.order_id) {
+    const live = await env.DB.prepare("SELECT COUNT(*) AS n FROM delivery_challans WHERE order_id=? AND status!='CANCELLED'").bind(dc.order_id).first() as { n: number } | null;
+    if ((live?.n || 0) === 0) {
+      await env.DB.prepare("UPDATE orders SET status='READY_TO_PICK', updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(dc.order_id).run();
+    }
+  }
+  return json({ id, status: "CANCELLED", dc_number: dc.dc_number || id });
 }
 
 async function handleListDCItems(request: Request, env: Env, path: string): Promise<Response> {
