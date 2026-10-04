@@ -695,6 +695,29 @@ describe("Admin — hard-delete orders (test-data cleanup)", () => {
   });
 });
 
+describe("Document branding config", () => {
+  it("GET is open to any authed user; POST is super-admin only and persists fields", async () => {
+    // Any authenticated user may read the branding (client-side exports need it).
+    const asClient = await get("/api/branding", clientToken);
+    expect(asClient.status).toBe(200);
+
+    // A client user may not change it.
+    const forbidden = await post("/api/branding", { company_name: "Hacked" }, clientToken);
+    expect(forbidden.status).toBe(403);
+
+    // Super admin sets fields and they persist.
+    const save = await post("/api/branding", { company_name: "4SYZ Foods", gstin: "29ABCDE1234F1Z5", accent: "#0a3d62" }, adminToken);
+    expect(save.status).toBe(200);
+    const body = await save.json() as Record<string,string>;
+    expect(body.company_name).toBe("4SYZ Foods");
+    expect(body.gstin).toBe("29ABCDE1234F1Z5");
+
+    const after = await (await get("/api/branding", adminToken)).json() as Record<string,string>;
+    expect(after.company_name).toBe("4SYZ Foods");
+    expect(after.accent).toBe("#0a3d62");
+  });
+});
+
 describe("DC Number Series (Phase 0)", () => {
   it("currentFY + dcClassForCategory map correctly", () => {
     expect(currentFY(new Date("2026-09-12T00:00:00Z"))).toBe("2026-27"); // Apr–Mar FY
