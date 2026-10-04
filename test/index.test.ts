@@ -825,6 +825,26 @@ describe("Document branding config", () => {
     expect(after.company_name).toBe("4SYZ Foods");
     expect(after.accent).toBe("#0a3d62");
   });
+
+  it("ships seeded 4SYZ identity defaults and persists statutory fields (CIN/GSTIN/PAN)", async () => {
+    // Seeded defaults make the app identify as 4SYZ out of the box (reset the stored
+    // value first, since the test above set a custom company_name).
+    await post("/api/branding", { company_name: "", legal_name: "" }, adminToken);
+    const seeded = await (await get("/api/branding", clientToken)).json() as Record<string,string>;
+    expect(seeded.company_name).toBe("4SYZ");
+    expect(seeded.legal_name).toBe("4SYZ Workplace Solutions");
+    // Statutory IDs are blank by default — never invented.
+    expect(seeded.cin).toBe("");
+    expect(seeded.gstin).toBe("");
+
+    // A super admin sets the real registered statutory values and they persist.
+    const save = await post("/api/branding", { cin: "U74999KA2020PTC012345", gstin: "29ABCDE1234F1Z5", pan: "ABCDE1234F", state_code: "29" }, adminToken);
+    expect(save.status).toBe(200);
+    const after = await (await get("/api/branding", adminToken)).json() as Record<string,string>;
+    expect(after.cin).toBe("U74999KA2020PTC012345");
+    expect(after.pan).toBe("ABCDE1234F");
+    expect(after.state_code).toBe("29");
+  });
 });
 
 describe("DC Number Series (Phase 0)", () => {

@@ -785,7 +785,7 @@ const SETTINGS_NAV = [
   { id:'hsngst',        icon:'🧾', label:'HSN → GST',        desc:'HSN code to GST slab map' },
   { id:'pipeline_sla',  icon:'⏱️', label:'Pipeline SLA',      desc:'Per-stage SLA targets' },
   { id:'zones',         icon:'📍', label:'Location Zones',    desc:'Delivery / client zones' },
-  { id:'branding',      icon:'🎨', label:'Branding',          desc:'Letterhead on PDFs & exports', superOnly:true },
+  { id:'branding',      icon:'🏢', label:'Company Profile',    desc:'Legal identity & letterhead', superOnly:true },
   { id:'cleanup',       icon:'🧹', label:'Order Cleanup',     desc:'Delete test / old orders', superOnly:true },
 ];
 
@@ -1297,27 +1297,48 @@ async function renderBrandingTab(el) {
   if (b && !b.error) APP.branding = b;                       // keep live helpers in sync
   const v = k => h(b[k] || '');
   const inp = 'width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font:inherit';
+  const lbl = 'font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:8px 0 4px';
   el.innerHTML = `
   <div class="card">
-    <div class="card-header"><span>🎨 Document Branding</span>
-      <span style="font-size:.82rem;color:var(--text-muted)">Letterhead on every downloadable PDF & export</span>
+    <div class="card-header"><span>🏢 Company Profile &amp; Branding</span>
+      <span style="font-size:.82rem;color:var(--text-muted)">4SYZ statutory identity on every document</span>
     </div>
-    <div class="card-body" style="padding:20px;display:grid;gap:14px;max-width:640px">
+    <div class="card-body" style="padding:20px;display:grid;gap:12px;max-width:660px">
       <div class="alert alert-info" style="font-size:.82rem;margin:0">
-        These details stamp the letterhead on downloadable PDFs (delivery breakdowns, finance statements &amp; ledgers) and a title block on CSV / Excel exports. Leave the logo URL blank to use a <b>${h(brandInfo().company_name)}</b> text wordmark.
+        This is 4SYZ's single company record. It stamps the letterhead on downloadable PDFs (delivery breakdowns, finance statements &amp; ledgers) and the title block on CSV / Excel exports. Fill the <b>statutory fields</b> with your real registered values before go-live — they ship blank on purpose.
       </div>
-      <div class="form-group" style="margin:0"><label>Company name</label><input id="br-company_name" value="${v('company_name')}" placeholder="4SYZ" style="${inp}"></div>
-      <div class="form-group" style="margin:0"><label>Tagline</label><input id="br-tagline" value="${v('tagline')}" placeholder="SmartPantry ERP" style="${inp}"></div>
-      <div class="form-group" style="margin:0"><label>Registered address</label><input id="br-address" value="${v('address')}" placeholder="Office address printed on documents" style="${inp}"></div>
+
+      <div style="${lbl}">Identity</div>
+      <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:12px">
+        <div class="form-group" style="margin:0"><label>Trade name (wordmark)</label><input id="br-company_name" value="${v('company_name')}" placeholder="4SYZ" style="${inp}"></div>
+        <div class="form-group" style="margin:0"><label>Legal entity name</label><input id="br-legal_name" value="${v('legal_name')}" placeholder="4SYZ Workplace Solutions Pvt Ltd" style="${inp}"></div>
+      </div>
+      <div class="form-group" style="margin:0"><label>Tagline</label><input id="br-tagline" value="${v('tagline')}" placeholder="Corporate pantry & workplace supplies" style="${inp}"></div>
+
+      <div style="${lbl}">Statutory registration</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="form-group" style="margin:0"><label>GSTIN</label><input id="br-gstin" value="${v('gstin')}" placeholder="29ABCDE1234F1Z5" style="${inp}"></div>
-        <div class="form-group" style="margin:0"><label>Contact</label><input id="br-contact" value="${v('contact')}" placeholder="phone · email" style="${inp}"></div>
+        <div class="form-group" style="margin:0"><label>CIN</label><input id="br-cin" value="${v('cin')}" placeholder="U74999KA2020PTC000000" style="${inp}"></div>
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group" style="margin:0"><label>PAN</label><input id="br-pan" value="${v('pan')}" placeholder="ABCDE1234F" style="${inp}"></div>
+        <div class="form-group" style="margin:0"><label>GST state code</label><input id="br-state_code" value="${v('state_code')}" placeholder="29 (Karnataka)" style="${inp}"></div>
+      </div>
+
+      <div style="${lbl}">Registered office &amp; contact</div>
+      <div class="form-group" style="margin:0"><label>Registered address</label><input id="br-address" value="${v('address')}" placeholder="Building, street, city, state, PIN" style="${inp}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group" style="margin:0"><label>Contact (phone · email)</label><input id="br-contact" value="${v('contact')}" placeholder="+91 … · accounts@4syz.com" style="${inp}"></div>
+        <div class="form-group" style="margin:0"><label>Website</label><input id="br-website" value="${v('website')}" placeholder="www.4syz.com" style="${inp}"></div>
+      </div>
+
+      <div style="${lbl}">Document styling</div>
       <div style="display:grid;grid-template-columns:1fr 130px;gap:12px;align-items:end">
-        <div class="form-group" style="margin:0"><label>Logo URL (optional)</label><input id="br-logo_url" value="${v('logo_url')}" placeholder="https://…/logo.png" style="${inp}"></div>
-        <div class="form-group" style="margin:0"><label>Accent colour</label><input id="br-accent" type="color" value="${b.accent || '#1e293b'}" style="width:100%;height:38px;padding:2px;border:1px solid var(--border);border-radius:6px"></div>
+        <div class="form-group" style="margin:0"><label>Logo URL (optional)</label><input id="br-logo_url" value="${v('logo_url')}" placeholder="https://…/logo.png — blank = text wordmark" style="${inp}"></div>
+        <div class="form-group" style="margin:0"><label>Accent colour</label><input id="br-accent" type="color" value="${b.accent || '#16284a'}" style="width:100%;height:38px;padding:2px;border:1px solid var(--border);border-radius:6px"></div>
       </div>
-      <div><button class="btn btn-primary" ${dataAct('saveBranding')}>Save branding</button></div>
+
+      <div style="margin-top:4px"><button class="btn btn-primary" ${dataAct('saveBranding')}>Save company profile</button></div>
       <div>
         <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:6px">Letterhead preview (reflects last saved values)</div>
         <div style="border:1px solid var(--border);border-radius:8px;padding:16px;background:#fff">${typeof brandLetterheadHTML === 'function' ? brandLetterheadHTML() : ''}</div>
@@ -1328,8 +1349,10 @@ async function renderBrandingTab(el) {
 async function saveBranding() {
   const get = id => { const e = document.getElementById(id); return e ? e.value.trim() : ''; };
   const payload = {
-    company_name: get('br-company_name'), tagline: get('br-tagline'), address: get('br-address'),
-    gstin: get('br-gstin'), contact: get('br-contact'), logo_url: get('br-logo_url'), accent: get('br-accent'),
+    company_name: get('br-company_name'), legal_name: get('br-legal_name'), tagline: get('br-tagline'),
+    cin: get('br-cin'), gstin: get('br-gstin'), pan: get('br-pan'), state_code: get('br-state_code'),
+    address: get('br-address'), contact: get('br-contact'), website: get('br-website'),
+    logo_url: get('br-logo_url'), accent: get('br-accent'),
   };
   const res = await api('/branding', { method: 'POST', body: JSON.stringify(payload) });
   if (!res || res.error) { showToast((res && res.error) || 'Save failed', 'error'); return; }
