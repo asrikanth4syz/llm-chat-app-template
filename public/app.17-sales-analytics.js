@@ -17,13 +17,16 @@ async function renderSalesAnalytics(main) {
   main.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Sales Analytics</h2>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('dashboard', 'Dashboard')}${tabBtn('matrix', 'Matrix')}${tabBtn('movement', 'Movement')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}${tabBtn('reps', 'Salespeople')}${tabBtn('setup', 'Setup')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${tabBtn('summary', 'Summary')}${tabBtn('dashboard', 'Dashboard')}${tabBtn('matrix', 'Matrix')}${tabBtn('movement', 'Movement')}${tabBtn('risk', 'Risk')}${tabBtn('retention', 'Retention')}${tabBtn('exceptions', 'Billing Exceptions')}${tabBtn('client360', 'Client 360')}${tabBtn('reps', 'Salespeople')}${tabBtn('setup', 'Setup')}</div>
     </div>
     <p style="font-size:12px;color:var(--muted);margin:0 0 14px">Super-admin only. Figures are billed invoice value from Zoho Books.</p>
     <div id="sa-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
   const body = document.getElementById('sa-body');
+  if (tab === 'summary') return _saSummary(body);
   if (tab === 'matrix') return _saMatrix(body);
   if (tab === 'movement') return _saWaterfall(body);
+  if (tab === 'risk') return _saRisk(body);
+  if (tab === 'retention') return _saRetention(body);
   if (tab === 'exceptions') return _saExceptions(body);
   if (tab === 'client360') return _saClient360(body);
   if (tab === 'reps') return _saReps(body);
@@ -76,7 +79,7 @@ async function _saDashboard(body) {
   const periodBtn = (n, label) => `<button class="btn ${!custom && period === n ? 'btn-primary' : 'btn-secondary'} btn-sm" ${dataAct('salesSetPeriod', n)}>${h(label)}</button>`;
   const kpiRangeLabel = custom ? _SA.kpiFrom + ' → ' + _SA.kpiTo : period + 'd';
   const perfRows = perf.slice(0, 100).map(c => `<tr style="border-top:1px solid var(--border)">
-    <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button></td>
+    <td style="padding:7px 12px"><button ${dataAct('salesDrill', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(c.name || c.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(c.prev))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600">${h(_fmtPaise(c.curr))}</td>
     <td style="padding:7px 12px;text-align:right">${_saStatusChip(c.status, c.growth_pct)}</td></tr>`).join('');
@@ -157,7 +160,7 @@ async function _saExceptions(body) {
   const c = data.counts || {};
   const baseDesc = data.yoy ? 'the same period last year' : `the prior ${data.lookback} ${g === 'year' ? 'years' : g === 'quarter' ? 'quarters' : g === 'custom' ? 'periods' : 'months'}`;
   const rows = (data.exceptions || []).map(e => `<tr style="border-top:1px solid var(--border)">
-    <td style="padding:7px 12px"><button ${dataAct('salesOpenClient360', e.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(e.name || e.client_id)}</button></td>
+    <td style="padding:7px 12px"><button ${dataAct('salesDrill', e.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;text-decoration:underline">${h(e.name || e.client_id)}</button></td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.expected))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(e.actual))}</td>
     <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums;color:var(--danger,#b3261e);font-weight:600">${h(_fmtPaise(e.gap))}</td>
@@ -450,9 +453,9 @@ async function _saMatrix(body) {
     const cells = c.values.map((v, i) => {
       const pct = _matMomPct(c.values, i);
       const title = `${c.name} · ${_matShort(months[i])} · ${_fmtPaise(v)}${pct === null ? '' : ` · ${pct > 0 ? '+' : ''}${pct}% MoM`}`;
-      return `<td ${dataAct('salesOpenClient360', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
+      return `<td ${dataAct('salesDrill', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
     }).join('');
-    return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap"><button ${dataAct('salesOpenClient360', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:170px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom" title="${h(c.name)}">${h(c.name)}</button></td>${cells}</tr>`;
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap"><button ${dataAct('salesDrill', c.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:170px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom" title="${h(c.name)}">${h(c.name)}</button></td>${cells}</tr>`;
   }).join('');
   const legend = mode === 'rev'
     ? `<span style="font-size:11px;color:var(--muted)">Low</span><span style="display:inline-flex;height:11px;border:1px solid var(--border);border-radius:3px;overflow:hidden">${[0.1,0.3,0.5,0.7,0.9].map(a=>`<i style="width:24px;background:rgba(37,99,235,${a})"></i>`).join('')}</span><span style="font-size:11px;color:var(--muted)">High monthly revenue</span>`
@@ -507,7 +510,7 @@ async function _saWaterfall(body) {
     return `<div class="card" style="padding:12px 14px;flex:1;min-width:200px">
       <div style="font-size:12px;font-weight:700;color:${_saWfBucketColor(k)};margin-bottom:6px">${h(title)}</div>
       ${list.map(m => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px solid var(--border)">
-        <button ${dataAct('salesOpenClient360', m.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(m.name)}</button>
+        <button ${dataAct('salesDrill', m.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(m.name)}</button>
         <span style="font-variant-numeric:tabular-nums;font-weight:600;color:${m.delta >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${m.delta >= 0 ? '+' : '−'}${h(_fmtPaise(Math.abs(m.delta)))}</span></div>`).join('')}
     </div>`;
   };
@@ -524,4 +527,173 @@ async function _saWaterfall(body) {
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       ${moverList('growth','▲ Grew most')}${moverList('new','＋ New billing')}${moverList('decline','▼ Declined most')}${moverList('lost','✕ Lost (billed before, nothing now)')}
     </div>`;
+}
+
+// ── Sliding drill-down panel (as in the mock) — opens over the current tab ──
+// Clicking any client (matrix cell, waterfall mover, dashboard/exception row) slides this
+// in from the right without losing the tab's state. Uses the existing Client 360 feed.
+function _saEnsureDrill() {
+  if (document.getElementById('sa-drill-panel')) return;
+  const scrim = document.createElement('div');
+  scrim.id = 'sa-drill-scrim';
+  scrim.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.34);opacity:0;pointer-events:none;transition:opacity .2s;z-index:3000';
+  scrim.addEventListener('click', salesDrillClose);
+  const panel = document.createElement('aside');
+  panel.id = 'sa-drill-panel';
+  panel.setAttribute('aria-label', 'Client detail');
+  panel.style.cssText = 'position:fixed;top:0;right:0;height:100%;width:min(440px,94vw);background:var(--surface,var(--bg,#fff));border-left:1px solid var(--border);transform:translateX(100%);transition:transform .22s ease;z-index:3001;overflow-y:auto;padding:20px;box-shadow:-8px 0 24px rgba(0,0,0,.12)';
+  document.body.appendChild(scrim);
+  document.body.appendChild(panel);
+  if (!window._saDrillKey) { window._saDrillKey = true; document.addEventListener('keydown', e => { if (e.key === 'Escape') salesDrillClose(); }); }
+}
+function salesDrillClose() {
+  const p = document.getElementById('sa-drill-panel'), s = document.getElementById('sa-drill-scrim');
+  if (p) p.style.transform = 'translateX(100%)';
+  if (s) { s.style.opacity = '0'; s.style.pointerEvents = 'none'; }
+}
+function _saSparkSVG(trend) {
+  const arr = trend.map(t => t.net_sales || 0), w = 390, hh = 96, pad = 6, max = Math.max(1, ...arr);
+  if (arr.length < 2) return '';
+  const pts = arr.map((v, i) => [pad + i * (w - 2 * pad) / (arr.length - 1), hh - pad - (v / max) * (hh - 2 * pad)]);
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const area = `M${pts[0][0].toFixed(1)} ${hh - pad} ` + pts.map(p => 'L' + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ') + ` L${pts[pts.length - 1][0].toFixed(1)} ${hh - pad} Z`;
+  const last = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${w} ${hh}" width="100%" height="96" preserveAspectRatio="none" role="img" aria-label="12-month revenue trend">
+    <path d="${area}" fill="var(--blue,#1d6fa4)" opacity="0.12"></path>
+    <path d="${line}" fill="none" stroke="var(--blue,#1d6fa4)" stroke-width="2.4" stroke-linejoin="round"></path>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.5" fill="var(--blue,#1d6fa4)"></circle></svg>`;
+}
+async function salesDrill(id) {
+  _saEnsureDrill();
+  const panel = document.getElementById('sa-drill-panel'), scrim = document.getElementById('sa-drill-scrim');
+  panel.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>';
+  scrim.style.opacity = '1'; scrim.style.pointerEvents = 'auto'; panel.style.transform = 'none';
+  const d = await api('/analytics/client/' + encodeURIComponent(id));
+  if (!d || d.error) { panel.innerHTML = `<button class="btn btn-secondary btn-sm" ${dataAct('salesDrillClose')}>✕ Close</button><div style="padding:18px 2px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  const m = d.metrics || {}, health = d.health || {};
+  const chipMap = { stable: ['🟢 Stable', 'var(--success,#2e6e12)'], attention: ['🟡 Attention', 'var(--warning,#8a5a00)'], at_risk: ['🔴 At risk', 'var(--danger,#b3261e)'] };
+  const [hl, hc] = chipMap[health.status] || chipMap.stable;
+  const recent = (d.recent_invoices || []).map(i => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:4px 8px">${h(i.number || '')}</td><td style="padding:4px 8px;color:var(--muted)">${h(i.date || '')}</td>
+    <td style="padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(i.total))}</td>
+    <td style="padding:4px 8px;color:var(--muted)">${h(i.status || '')}</td></tr>`).join('');
+  const stat = (l, v) => `<div style="background:var(--bg-subtle,#f5f5f5);border-radius:9px;padding:9px 11px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${h(l)}</div><div style="font-size:1.05rem;font-weight:800;margin-top:2px">${v}</div></div>`;
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${hc}">${h(hl)}</div>
+        <div style="font-size:1.15rem;font-weight:800;line-height:1.25;margin-top:2px">${h(d.name || id)}</div></div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('salesDrillClose')} aria-label="Close">✕</button>
+    </div>
+    <div style="margin:12px 0">${_saSparkSVG(d.trend || [])}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+      ${stat('Sales (12m)', _fmtPaise(m.total_12m))}${stat('Avg / month', _fmtPaise(m.avg_monthly))}
+      ${stat('Outstanding', _fmtPaise(m.outstanding))}${stat('Last billed', (m.last_billing || '—') + (m.days_since_last != null ? ' · ' + m.days_since_last + 'd' : ''))}
+      ${stat('Billing cadence', (m.avg_interval_days || 0) + 'd')}${stat('Active months', (m.active_months_12m || 0) + ' / 12')}
+    </div>
+    <div style="font-size:12px;font-weight:700;margin:14px 0 4px">Why this status</div>
+    <ul style="list-style:none;padding:0;margin:0;font-size:12.5px">${(health.reasons || []).map(r => `<li style="padding:6px 0;border-top:1px solid var(--border)">${h(r)}</li>`).join('')}</ul>
+    ${recent ? `<div style="font-size:12px;font-weight:700;margin:14px 0 4px">Recent invoices</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${recent}</tbody></table>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn btn-secondary btn-sm" ${dataAct('financeViewClient', id)}>Open AR statement →</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('salesDrillFull', id)}>Full Client 360 →</button>
+    </div>`;
+}
+function salesDrillFull(id) { salesDrillClose(); salesOpenClient360(id); }
+
+// ── Tab: Summary — exec one-screen (KPIs + trend + top movers + exceptions) ──
+async function _saSummary(body) {
+  const [ov, wf, exc] = await Promise.all([
+    api('/analytics/sales/overview?period=90'),
+    api('/analytics/sales/waterfall'),
+    api('/analytics/billing-exceptions?grain=month'),
+  ]);
+  if (!ov || ov.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((ov && ov.error) || 'Unable to load.')}</div>`; return; }
+  const k = ov.kpis || {}, c = (exc && exc.counts) || {}, m = (wf && wf.movers) || {};
+  const gainers = [...(m.growth || []), ...(m.new || [])].sort((a, b) => b.delta - a.delta).slice(0, 5);
+  const losers = [...(m.decline || []), ...(m.lost || [])].sort((a, b) => a.delta - b.delta).slice(0, 5);
+  const net = wf ? (wf.net || 0) : 0;
+  const moverRow = x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:13px">
+    <button ${dataAct('salesDrill', x.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(x.name)}</button>
+    <span style="font-variant-numeric:tabular-nums;font-weight:700;color:${x.delta >= 0 ? 'var(--success,#2e6e12)' : 'var(--danger,#b3261e)'}">${x.delta >= 0 ? '+' : '−'}${h(_fmtPaise(Math.abs(x.delta)))}</span></div>`;
+  body.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${_saKpi('Sales (90d)', _fmtPaise(k.net_sales), 'billed invoice value')}
+      ${_saKpi('Active clients', String(k.active_clients || 0), 'billed in period')}
+      ${_saKpi('Outstanding', _fmtPaise(k.outstanding), 'open balance now')}
+      ${_saKpi('Needs attention', String((c.critical || 0) + (c.attention || 0)), (c.critical || 0) + ' critical · billing exceptions')}
+    </div>
+    ${_saTrendChart(ov.trend || [])}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px">
+      <div class="card" style="padding:14px 16px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px">Last month movement <span style="font-weight:400;color:var(--muted)">(net ${net >= 0 ? '+' : '−'}${h(_fmtPaise(Math.abs(net)))})</span></div>
+        <div style="font-size:12px;font-weight:700;color:var(--success,#2e6e12);margin-top:8px">▲ Gained most</div>
+        ${gainers.length ? gainers.map(moverRow).join('') : '<div style="font-size:12px;color:var(--muted);padding:4px 0">—</div>'}
+        <div style="font-size:12px;font-weight:700;color:var(--danger,#b3261e);margin-top:10px">▼ Lost / declined most</div>
+        ${losers.length ? losers.map(moverRow).join('') : '<div style="font-size:12px;color:var(--muted);padding:4px 0">—</div>'}
+      </div>
+      <div class="card" style="padding:14px 16px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px">Billing exceptions (this month)</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${_saKpi('🔴 Critical', String(c.critical || 0), 'not billed')}
+          ${_saKpi('🟠 Attention', String(c.attention || 0), 'drop / not billed')}
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px">Potential gap <b style="color:var(--danger,#b3261e)">${h(_fmtPaise((exc && exc.potential_gap) || 0))}</b></div>
+        <button class="btn btn-secondary btn-sm" ${dataAct('salesSetTab', 'exceptions')} style="margin-top:10px">Open Billing Exceptions →</button>
+      </div>
+    </div>`;
+}
+
+// ── Tab: Risk — churn radar (Stable / Attention / At-risk) ─────────────
+function _saRiskChip(s) { const map = { at_risk: ['🔴 At risk', 'var(--danger,#b3261e)'], attention: ['🟡 Attention', 'var(--warning,#8a5a00)'], stable: ['🟢 Stable', 'var(--success,#2e6e12)'] }; return map[s] || map.stable; }
+async function _saRisk(body) {
+  const d = await api('/analytics/sales/health');
+  if (!d || d.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  const c = d.counts || {};
+  const row = x => { const [lbl, col] = _saRiskChip(x.status); return `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:7px 12px"><button ${dataAct('salesDrill', x.client_id)} style="background:none;border:none;padding:0;font:inherit;color:var(--blue,#1d6fa4);cursor:pointer">${h(x.name)}</button></td>
+    <td style="padding:7px 12px;white-space:nowrap"><span style="font-weight:700;color:${col}">${h(lbl)}</span></td>
+    <td style="padding:7px 12px;text-align:right;font-variant-numeric:tabular-nums">${h(_fmtPaise(x.total_12m))}</td>
+    <td style="padding:7px 12px;text-align:right">${x.days_since_last == null ? '—' : x.days_since_last + 'd'}</td>
+    <td style="padding:7px 12px;font-size:12px;color:var(--muted)">${h((x.reasons || [])[0] || '')}</td></tr>`; };
+  body.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${_saKpi('🔴 At risk', String(c.at_risk || 0), 'quiet or dropping sharply')}
+      ${_saKpi('🟡 Attention', String(c.attention || 0), 'softening / sparse')}
+      ${_saKpi('🟢 Stable', String(c.stable || 0), 'steady')}
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Ranked by risk, then size. Click a client to drill in. Scored on recency + consistency + 3-month trend.</p>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5);text-align:left">
+          <th style="padding:8px 12px">Client</th><th style="padding:8px 12px">Status</th>
+          <th style="padding:8px 12px;text-align:right">Sales (12m)</th><th style="padding:8px 12px;text-align:right">Last billed</th>
+          <th style="padding:8px 12px">Why</th></tr></thead>
+        <tbody>${(d.clients || []).map(row).join('') || `<tr><td colspan="5" style="padding:16px;color:var(--muted)">No client history.</td></tr>`}</tbody>
+      </table></div>`;
+}
+
+// ── Tab: Retention — new-client cohort grid ────────────────────────────
+function _saRetHeat(pct) { if (pct <= 0) return 'background:var(--surface-2,transparent);color:var(--muted)'; const a = 0.12 + 0.8 * (pct / 100); return `background:rgba(16,122,70,${a.toFixed(3)});color:${a > 0.55 ? '#fff' : 'inherit'}`; }
+async function _saRetention(body) {
+  const d = await api('/analytics/sales/retention');
+  if (!d || d.error) { body.innerHTML = `<div class="card" style="padding:20px;color:var(--danger,#b3261e)">${h((d && d.error) || 'Unable to load.')}</div>`; return; }
+  const cohorts = (d.cohorts || []);
+  const maxLen = Math.max(1, ...cohorts.map(c => c.retention.length));
+  const headCols = Array.from({ length: maxLen }, (_, i) => `<th style="padding:6px 8px;color:var(--muted);font-weight:600;font-size:11px">M+${i}</th>`).join('');
+  const rows = cohorts.map(c => {
+    const cells = Array.from({ length: maxLen }, (_, i) => {
+      const r = c.retention[i];
+      if (!r) return `<td style="padding:6px 8px"></td>`;
+      return `<td title="${h(c.month)} +${i}mo · ${r.active}/${c.size} active" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;${_saRetHeat(r.pct)}">${r.pct}%</td>`;
+    }).join('');
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;white-space:nowrap;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border)"><b>${h(c.month)}</b> <span style="color:var(--muted);font-size:11px">· ${c.size}</span></td>${cells}</tr>`;
+  }).join('');
+  body.innerHTML = `
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px">Each row is the clients whose <b>first</b> invoice fell in that month (count after the ·). Columns show how many were still billing that many months later — how well new wins stick.</p>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table style="border-collapse:collapse;width:100%;min-width:620px;font-size:12px">
+        <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Cohort · size</th>${headCols}</tr></thead>
+        <tbody>${rows || `<tr><td style="padding:16px;color:var(--muted)">No cohort data.</td></tr>`}</tbody>
+      </table></div>`;
 }
