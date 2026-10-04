@@ -5428,12 +5428,17 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
 
+  // Clients should not see cancelled challans in their order breakdown (count + "By
+  // challan" list) — cancellation is super-admin-only, so this hides only internal noise.
+  const isClient = ["client_admin","client_approver","client_user"].includes(user!.role);
+  const dcStatusClause = isClient ? " AND dc.status != 'CANCELLED'" : "";
+
   const [order, {results: orderItems}, {results: dcs}] = await Promise.all([
     env.DB.prepare(`SELECT o.*,c.name as client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`).bind(id).first(),
     env.DB.prepare("SELECT * FROM order_items WHERE order_id=? ORDER BY name").bind(id).all(),
     env.DB.prepare(`SELECT dc.id, dc.status, dc.dc_number, dc.dispatched_at, dc.delivered_at,
       dc.total_qty, dc.delivered_qty, dc.driver_name, dc.vehicle_no
-      FROM delivery_challans dc WHERE dc.order_id=? ORDER BY dc.dispatched_at`).bind(id).all(),
+      FROM delivery_challans dc WHERE dc.order_id=?${dcStatusClause} ORDER BY dc.dispatched_at`).bind(id).all(),
   ]);
   if (!order) return json({error:"Not found"}, 404);
 
@@ -7325,6 +7330,10 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
   const params: string[] = [];
 
   if (isClient) {
+    // Cancelled challans are internal noise to a client — challan cancellation is
+    // super-admin-only (handleCancelDC), so a client never cancels one and nothing
+    // of theirs is hidden. Keep the client view to live/delivered challans only.
+    query += " AND dc.status != 'CANCELLED'";
     if (user!.client_id) {
       query += " AND o.client_id=?"; params.push(user!.client_id);
     } else {
