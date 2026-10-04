@@ -7,7 +7,7 @@
 const _SA = { period: 90, tab: 'dashboard', c360Id: '', c360Q: '', _clients: null,
   excGrain: 'month', excYoy: false, excFrom: '', excTo: '',
   kpiFrom: '', kpiTo: '',
-  matMode: 'rev', matMonths: 12, matView: 'grid', matFilter: null, wfMonth: '' };
+  matMode: 'rev', matMonths: 12, matView: 'grid', matFilter: null, matQ: '', wfMonth: '' };
 
 // ── Hub shell: one nav entry, tabbed sections ──────────────────────────
 async function renderSalesAnalytics(main) {
@@ -486,8 +486,8 @@ async function _saMatrix(body) {
   let table;
   if (view === 'table') {
     table = `<table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
-      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;text-align:right;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
-      <tbody>${clients.map(c => `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${c.values.map(v => `<td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${v ? _fmtPaise(v) : '—'}</td>`).join('')}</tr>`).join('') || `<tr><td style="padding:16px;color:var(--muted)">No clients.</td></tr>`}</tbody></table>`;
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;top:0;z-index:3;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;text-align:right;white-space:nowrap;position:sticky;top:0;z-index:2;background:var(--bg-subtle,#f5f5f5)">${h(_matShort(m))}</th>`).join('')}</tr></thead>
+      <tbody>${clients.map(c => `<tr data-search="${h(c.name.toLowerCase())}" style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;z-index:1;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${c.values.map(v => `<td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${v ? _fmtPaise(v) : '—'}</td>`).join('')}</tr>`).join('') || `<tr><td style="padding:16px;color:var(--muted)">No clients.</td></tr>`}</tbody></table>`;
   } else {
     const rows = clients.map(c => {
       const cells = c.values.map((v, i) => {
@@ -495,10 +495,10 @@ async function _saMatrix(body) {
         const title = `${c.name} · ${_matShort(months[i])} · ${_fmtPaise(v)}${pct === null ? '' : ` · ${pct > 0 ? '+' : ''}${pct}% MoM`}`;
         return `<td ${dataAct('salesDrill', c.client_id)} title="${h(title)}" style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${cellStyle(v, pct)}">${h(cellText(v, pct))}</td>`;
       }).join('');
-      return `<tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${cells}</tr>`;
+      return `<tr data-search="${h(c.name.toLowerCase())}" style="border-top:1px solid var(--border)"><td style="padding:6px 10px;position:sticky;left:0;z-index:1;background:var(--bg,#fff);border-right:1px solid var(--border);white-space:nowrap">${nameCell(c)}</td>${cells}</tr>`;
     }).join('');
     table = `<table style="border-collapse:collapse;width:100%;min-width:720px;font-size:12px">
-      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;white-space:nowrap">${h(_matShort(m))}</th>`).join('')}</tr></thead>
+      <thead><tr style="background:var(--bg-subtle,#f5f5f5)"><th style="padding:7px 10px;text-align:left;position:sticky;left:0;top:0;z-index:3;background:var(--bg-subtle,#f5f5f5)">Client</th>${months.map(m => `<th style="padding:7px 6px;color:var(--muted);font-weight:600;font-size:10.5px;white-space:nowrap;position:sticky;top:0;z-index:2;background:var(--bg-subtle,#f5f5f5)">${h(_matShort(m))}</th>`).join('')}</tr></thead>
       <tbody>${rows || `<tr><td style="padding:16px;color:var(--muted)">No clients.</td></tr>`}</tbody></table>`;
   }
   const legend = view === 'table' ? '' : (mode === 'rev'
@@ -511,9 +511,20 @@ async function _saMatrix(body) {
       ${chipRow}
       <span style="margin-left:auto;display:inline-flex;gap:4px">${viewBtn('grid','Matrix')}${viewBtn('table','Table')}</span>
     </div>
-    <div class="card" style="padding:0;overflow-x:auto">${table}</div>
+    <div style="margin-bottom:10px"><input type="text" id="sa-mat-search" placeholder="🔍 Search client…" value="${h(_SA.matQ || '')}" ${dataInputVal('salesMatSearch')} style="width:100%;max-width:320px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font:inherit"></div>
+    <div class="card" id="sa-mat-table" style="padding:0;overflow:auto;max-height:70vh">${table}</div>
     ${legend ? `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">${legend}</div>` : ''}
-    <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">${clients.length}${filter ? ' of ' + all.length : ''} clients · sorted by latest month · click any client or cell to drill in. Status compares ${h(_matShort(recentYm))} vs ${h(_matShort(priorYm))} (complete months).</p>`;
+    <p style="font-size:12px;color:var(--muted);margin:8px 2px 0"><span id="sa-mat-count">${clients.length}</span>${filter ? ' of ' + all.length : ''} clients · sorted by latest month · click any client or cell to drill in. Status compares ${h(_matShort(recentYm))} vs ${h(_matShort(priorYm))} (complete months).</p>`;
+  if (_SA.matQ) salesMatSearch(_SA.matQ);
+}
+// Client-side search over the rendered matrix rows (toggles row visibility, preserves input focus).
+function salesMatSearch(q) {
+  _SA.matQ = q || '';
+  const term = _SA.matQ.toLowerCase().trim();
+  const rows = document.querySelectorAll('#sa-mat-table tbody tr[data-search]');
+  let visible = 0;
+  rows.forEach(r => { const match = !term || (r.dataset.search || '').includes(term); r.style.display = match ? '' : 'none'; if (match) visible++; });
+  const cnt = document.getElementById('sa-mat-count'); if (cnt) cnt.textContent = String(visible);
 }
 
 // ── Tab: Movement — MoM waterfall (New + Growth − Decline − Lost) ───────
