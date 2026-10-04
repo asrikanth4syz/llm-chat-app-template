@@ -4371,6 +4371,7 @@ export default {
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);
       if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
       if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
+      if (path==="/api/orders/purge"           && method==="POST") return handlePurgeOrders(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
@@ -5420,6 +5421,77 @@ async function handleDeleteZone(request: Request, env: Env, path: string): Promi
   await setConfig(env, "location_zones", JSON.stringify(zones), user!.sub);
   await audit(env, user, "DELETE", "config", "location_zones", code, undefined);
   return json({ ok: true, zones });
+}
+
+// POST /api/orders/purge — super-admin HARD delete of orders (test-data cleanup).
+// Guarded: an order that ever reached finance/procurement (a billed challan, a synced Zoho
+// invoice, or a linked purchase order) is REFUSED, so genuine transactional history can never
+// be destroyed here — use cancel/void for those. Everything else cascades atomically: the
+// order, its items/history/allocations/comments/amendments, its challans (+ their items,
+// documents and returns), and related approval/SLA/dunning rows. It deliberately does NOT
+// touch the stock_movements ledger or inventory counts — that is an append-only record; if a
+// purged test order had moved stock, correct it with a stock adjustment, not a silent rewrite.
+async function handlePurgeOrders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may delete orders" }, 403);
+  await ensureFeatureTables(env);
+  const body = await request.json().catch(() => ({})) as { ids?: unknown };
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map(s => s.trim()).filter(Boolean))].slice(0, 200) : [];
+  if (!ids.length) return json({ error: "No order ids supplied" }, 400);
+
+  const results: { id: string; deleted: boolean; reason?: string }[] = [];
+  for (const id of ids) {
+    const order = await env.DB.prepare("SELECT id, client_id, grand_total, status FROM orders WHERE id=?").bind(id)
+      .first() as { id: string; client_id?: string; grand_total?: number; status?: string } | null;
+    if (!order) { results.push({ id, deleted: false, reason: "not found" }); continue; }
+
+    // Guards — never destroy anything that reached finance or procurement.
+    const billed = await env.DB.prepare("SELECT COUNT(*) AS n FROM delivery_challans WHERE order_id=? AND COALESCE(billed,0)=1").bind(id).first() as { n: number } | null;
+    if ((billed?.n || 0) > 0) { results.push({ id, deleted: false, reason: "has a billed challan — cancel/void instead" }); continue; }
+    const inv = await env.DB.prepare("SELECT COUNT(*) AS n FROM ar_invoices WHERE order_id=?").bind(id).first() as { n: number } | null;
+    if ((inv?.n || 0) > 0) { results.push({ id, deleted: false, reason: "has a synced Zoho invoice" }); continue; }
+    const po = await env.DB.prepare("SELECT COUNT(*) AS n FROM purchase_orders WHERE order_id=?").bind(id).first() as { n: number } | null;
+    if ((po?.n || 0) > 0) { results.push({ id, deleted: false, reason: "has a linked purchase order" }); continue; }
+
+    // Challan ids for the DC-keyed child cascades.
+    const { results: dcRows } = await env.DB.prepare("SELECT id FROM delivery_challans WHERE order_id=?").bind(id).all() as { results: { id: string }[] };
+    const dcIds = dcRows.map(r => r.id);
+    const dcIn = `(${dcIds.map(() => "?").join(",")})`;
+
+    // standing_order_events is created lazily (not by ensureFeatureTables), so clear it
+    // best-effort outside the atomic batch — a missing table must never block a purge.
+    try { await env.DB.prepare("DELETE FROM standing_order_events WHERE order_id=?").bind(id).run(); } catch { /* table absent */ }
+
+    const stmts = [
+      ...(dcIds.length ? [
+        env.DB.prepare(`DELETE FROM dc_items WHERE dc_id IN ${dcIn}`).bind(...dcIds),
+        env.DB.prepare(`DELETE FROM dc_documents WHERE dc_id IN ${dcIn}`).bind(...dcIds),
+        env.DB.prepare(`DELETE FROM delivery_returns WHERE dc_id IN ${dcIn}`).bind(...dcIds),
+      ] : []),
+      env.DB.prepare("DELETE FROM delivery_challans WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM order_history WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM order_comments WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM order_amendments WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM dunning_events WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM returns WHERE order_id=?").bind(id),
+      env.DB.prepare("DELETE FROM approval_chain_actions WHERE instance_id IN (SELECT id FROM approval_chain_instances WHERE entity_id=? AND entity_type='order')").bind(id),
+      env.DB.prepare("DELETE FROM approval_chain_instances WHERE entity_id=? AND entity_type='order'").bind(id),
+      env.DB.prepare("DELETE FROM sla_breaches WHERE entity_id=? AND entity_type='order'").bind(id),
+      env.DB.prepare("DELETE FROM orders WHERE id=?").bind(id),
+    ];
+    try {
+      await env.DB.batch(stmts);
+      await audit(env, user, "PURGE_ORDER", "order", id, `${order.status || ""} · client ${order.client_id || "?"} · ₹${order.grand_total || 0} · ${dcIds.length} challan(s)`, undefined);
+      results.push({ id, deleted: true });
+    } catch (e) {
+      results.push({ id, deleted: false, reason: "delete failed: " + ((e as Error)?.message || "error") });
+    }
+  }
+  const deleted = results.filter(r => r.deleted).length;
+  return json({ deleted, blocked: results.length - deleted, results });
 }
 
 // GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)

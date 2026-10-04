@@ -785,6 +785,7 @@ const SETTINGS_NAV = [
   { id:'hsngst',        icon:'🧾', label:'HSN → GST',        desc:'HSN code to GST slab map' },
   { id:'pipeline_sla',  icon:'⏱️', label:'Pipeline SLA',      desc:'Per-stage SLA targets' },
   { id:'zones',         icon:'📍', label:'Location Zones',    desc:'Delivery / client zones' },
+  { id:'cleanup',       icon:'🧹', label:'Order Cleanup',     desc:'Delete test / old orders', superOnly:true },
 ];
 
 async function renderSettings(el) {
@@ -793,7 +794,7 @@ async function renderSettings(el) {
   ${pageHeader('Platform Settings', 'System configuration & administration')}
   <div style="display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start">
     <div class="card" style="padding:8px">
-      ${SETTINGS_NAV.map(n=>`
+      ${SETTINGS_NAV.filter(n=>!n.superOnly || APP.user?.role==='super_admin').map(n=>`
       <button ${dataActEl('settingsTab', n.id)} class="settings-nav-btn ${APP._settingsTab===n.id?'active':''}"
         style="width:100%;text-align:left;background:${APP._settingsTab===n.id?'var(--primary)':'transparent'};color:${APP._settingsTab===n.id?'#fff':'inherit'};border:none;border-radius:8px;padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:2px;transition:background .15s">
         <span style="font-size:1.1rem;flex-shrink:0">${n.icon}</span>
@@ -1274,6 +1275,139 @@ async function settingsTab(tab, btn) {
       ${zonesManagerHTML(Array.isArray(zones) ? zones : [])}
     </div>`;
   }
+
+  else if (tab === 'cleanup') {
+    await renderOrderCleanupTab(el);
+  }
+}
+
+// ── Order Cleanup (super-admin) — hard-delete test / old orders ────────────
+// Backed by POST /api/orders/purge, which refuses any order that reached finance
+// or procurement (billed challan, synced invoice, or linked PO).
+async function renderOrderCleanupTab(el) {
+  if (APP.user?.role !== 'super_admin') {
+    el.innerHTML = `<div class="alert alert-warning">Order cleanup is restricted to super admins.</div>`;
+    return;
+  }
+  APP._cleanupSel = APP._cleanupSel || new Set();
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+  const orders = await api('/orders') || [];
+  // Oldest first — the stale test orders you want to clear sit at the top.
+  const rows = (Array.isArray(orders) ? orders : []).slice().sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+  APP._cleanupRows = rows;
+  // Drop any stale selections no longer in the list.
+  const ids = new Set(rows.map(o=>o.id));
+  APP._cleanupSel.forEach(id=>{ if(!ids.has(id)) APP._cleanupSel.delete(id); });
+
+  const rowHtml = o => {
+    const sel = APP._cleanupSel.has(o.id);
+    return `<tr data-cleanup-row="${h(o.id)}" data-search="${h(((o.id||'')+' '+(o.client_name||'')).toLowerCase())}">
+      <td style="text-align:center"><input type="checkbox" ${sel?'checked':''} ${dataActEl('cleanupToggle', o.id)}></td>
+      <td><b style="font-family:monospace">${h(o.id)}</b></td>
+      <td>${h(o.client_name||'—')}</td>
+      <td>${statusBadge ? statusBadge(o.status) : h(o.status||'')}</td>
+      <td>${o.created_at?fmtDate(o.created_at):'—'}</td>
+      <td class="u-right">${o.item_count||0}</td>
+      <td class="u-right">${typeof fmt==='function'?fmt(o.grand_total||0):(o.grand_total||0)}</td>
+    </tr>`;
+  };
+
+  el.innerHTML = `
+  <div class="card">
+    <div class="card-header"><span>🧹 Order Cleanup</span>
+      <span style="font-size:.82rem;color:var(--text-muted)">Super-admin · permanently deletes selected orders</span>
+    </div>
+    <div class="card-body" style="padding:20px;display:grid;gap:14px">
+      <div class="alert alert-warning" style="font-size:.82rem;margin:0">
+        <b>This permanently deletes orders and their challans, items, history and comments.</b>
+        Orders that reached finance or procurement are automatically protected — any order with a
+        <b>billed challan</b>, a <b>synced Zoho invoice</b>, or a <b>linked purchase order</b> is refused.
+        The inventory ledger is left untouched. Use this only to clear test or abandoned orders.
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="cleanup-search" placeholder="🔍 Filter by order # or client…" ${dataInputVal('cleanupFilter')}
+          style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:inherit">
+        <button class="btn btn-secondary btn-sm" ${dataAct('cleanupSelectAll')}>Select all shown</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('cleanupClearSel')}>Clear</button>
+        <button class="btn btn-primary btn-sm" id="cleanup-del-btn" style="margin-left:auto;background:var(--danger,#b3261e);border-color:var(--danger,#b3261e)" ${dataAct('cleanupDeleteSelected')}>
+          🗑 Delete selected (<span id="cleanup-sel-count">${APP._cleanupSel.size}</span>)
+        </button>
+      </div>
+      <div class="table-wrap" style="max-height:62vh;overflow:auto">
+        <table class="table" style="font-size:.84rem;margin:0">
+          <thead><tr>
+            <th style="width:38px"></th><th>Order #</th><th>Client</th><th>Status</th><th>Created</th><th class="u-right">Items</th><th class="u-right">Value</th>
+          </tr></thead>
+          <tbody id="cleanup-tbody">${rows.map(rowHtml).join('')||'<tr><td colspan="7" class="u-empty">No orders found.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div style="font-size:.78rem;color:var(--text-muted)">Showing the ${rows.length} most recent orders (oldest first). Deletions are logged to the audit trail.</div>
+    </div>
+  </div>`;
+}
+
+function _cleanupUpdateCount() {
+  const c = document.getElementById('cleanup-sel-count');
+  if (c) c.textContent = String((APP._cleanupSel||new Set()).size);
+}
+function cleanupToggle(id, el) {
+  APP._cleanupSel = APP._cleanupSel || new Set();
+  if (el && el.checked) APP._cleanupSel.add(id); else APP._cleanupSel.delete(id);
+  _cleanupUpdateCount();
+}
+function cleanupFilter(q) {
+  const term = (q||'').toLowerCase().trim();
+  document.querySelectorAll('#cleanup-tbody tr[data-search]').forEach(r=>{
+    r.style.display = !term || (r.dataset.search||'').includes(term) ? '' : 'none';
+  });
+}
+function cleanupSelectAll() {
+  APP._cleanupSel = APP._cleanupSel || new Set();
+  document.querySelectorAll('#cleanup-tbody tr[data-cleanup-row]').forEach(r=>{
+    if (r.style.display === 'none') return;             // only rows currently visible
+    const id = r.getAttribute('data-cleanup-row');
+    APP._cleanupSel.add(id);
+    const cb = r.querySelector('input[type=checkbox]'); if (cb) cb.checked = true;
+  });
+  _cleanupUpdateCount();
+}
+function cleanupClearSel() {
+  APP._cleanupSel = new Set();
+  document.querySelectorAll('#cleanup-tbody input[type=checkbox]').forEach(cb=>{ cb.checked = false; });
+  _cleanupUpdateCount();
+}
+function cleanupDeleteSelected() {
+  const ids = [...(APP._cleanupSel||new Set())];
+  if (!ids.length) { showToast('Select at least one order first', 'error'); return; }
+  openModal('Delete ' + ids.length + ' order' + (ids.length>1?'s':'') + '?',
+    `<p style="margin-bottom:10px;font-size:.88rem">This <b>permanently deletes</b> the selected order${ids.length>1?'s':''} and all their challans, items, history and comments. Orders with a billed challan, synced invoice, or linked PO will be skipped and reported.</p>
+     <p style="margin-bottom:6px;font-size:.84rem;color:var(--text-muted)">Type <b>DELETE</b> to confirm:</p>
+     <input type="text" id="cleanup-confirm-input" placeholder="DELETE" autocomplete="off"
+       style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box">`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" style="background:var(--danger,#b3261e);border-color:var(--danger,#b3261e)" ${dataAct('cleanupConfirmDelete')}>Delete permanently</button>`);
+}
+async function cleanupConfirmDelete() {
+  const input = document.getElementById('cleanup-confirm-input');
+  if (!input || input.value.trim().toUpperCase() !== 'DELETE') { showToast('Type DELETE to confirm', 'error'); return; }
+  const ids = [...(APP._cleanupSel||new Set())];
+  const res = await api('/orders/purge', { method:'POST', body: JSON.stringify({ ids }) });
+  closeModal();
+  if (!res || res.error) { showToast((res && res.error) || 'Delete failed', 'error'); return; }
+  APP._cleanupSel = new Set();
+  const blocked = (res.results||[]).filter(r=>!r.deleted);
+  showToast(`Deleted ${res.deleted} order${res.deleted===1?'':'s'}${res.blocked?` · ${res.blocked} skipped`:''}`, res.deleted?'success':'error');
+  if (blocked.length) {
+    openModal('Some orders were kept',
+      `<p style="font-size:.86rem;margin-bottom:10px">${res.deleted} deleted. The following ${blocked.length} order${blocked.length>1?'s were':' was'} protected and left untouched:</p>
+       <div class="table-wrap"><table class="table" style="font-size:.82rem;margin:0">
+         <thead><tr><th>Order #</th><th>Reason</th></tr></thead>
+         <tbody>${blocked.map(b=>`<tr><td style="font-family:monospace">${h(b.id)}</td><td>${h(b.reason||'—')}</td></tr>`).join('')}</tbody>
+       </table></div>`,
+      `<button class="btn btn-primary" ${dataAct('closeModal')}>Close</button>`);
+  }
+  const host = document.getElementById('settings-content');
+  if (host) renderOrderCleanupTab(host);
 }
 
 // Shared zones manager (form + table) used by the standalone page and the
