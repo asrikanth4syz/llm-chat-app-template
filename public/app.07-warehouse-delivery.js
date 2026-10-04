@@ -742,12 +742,14 @@ async function renderDelivery(el) {
   const overdue   = transit.filter(d => d.expected_delivery_date && new Date(d.expected_delivery_date) < today);
   const pendingPOD  = delivered.filter(d => !d.pod_uploaded).length;
   const pendingBill = delivered.filter(d => !d.billed).length;
+  const pendingApproval = dcs.filter(d => d.delivery_approval === 'PENDING').length;
 
   const kpis = `
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:22px">
     ${[
       {label:'Scheduled',val:scheduled.length,sub:'ready to dispatch',color:scheduled.length?'var(--primary)':'var(--success)'},
       {label:'In Transit',val:transit.length,sub:overdue.length?`${overdue.length} overdue`:'all on time',color:overdue.length?'var(--danger)':transit.length?'var(--warning)':'var(--success)'},
+      {label:'Pending Approval',val:pendingApproval,sub:'short/excess, awaiting review',color:pendingApproval?'var(--danger)':'var(--success)'},
       {label:'Pending POD/Scan',val:pendingPOD,sub:'delivered, docs missing',color:pendingPOD?'var(--warning)':'var(--success)'},
       {label:'Unbilled',val:pendingBill,sub:'delivered but not billed',color:pendingBill?'var(--danger)':'var(--success)'},
     ].map(k=>`
@@ -789,6 +791,7 @@ async function renderDelivery(el) {
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
+          ${APP.user?.role === 'super_admin' ? `<button class="btn btn-secondary btn-sm" ${dataAct('cancelDCModal', dc.id, dc.dc_number||dc.id)} title="Void this challan (created in error). It moves to Cancelled — the number stays in the register.">Cancel</button>` : ''}
           ${canDispatch ? `<button class="btn btn-primary btn-sm" ${dataAct('dispatchDCModal', dc.id)}>Dispatch →</button>` : ''}
         </div>
       </div>
@@ -989,6 +992,7 @@ async function switchDeliveryTab(tab, btn) {
             </div>
             <div style="display:flex;gap:6px">
               <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
+              ${APP.user?.role === 'super_admin' ? `<button class="btn btn-secondary btn-sm" ${dataAct('cancelDCModal', dc.id, dc.dc_number||dc.id)} title="Void this challan (created in error). It moves to Cancelled — the number stays in the register.">Cancel</button>` : ''}
               <button class="btn btn-primary btn-sm" ${dataAct('dispatchDCModal', dc.id)}>Dispatch →</button>
             </div>
           </div>
@@ -1328,6 +1332,29 @@ async function confirmDispatch(dcId) {
   // operator is never re-prompted for the same challan.
   if (APP.page === 'deliveries' || APP.page === 'warehouse') navigate(APP.page);
   else switchDeliveryTab('transit', document.querySelectorAll('#dc-tabs .tab-btn')[1]);
+}
+
+// Cancel (void) a pre-dispatch challan created in error — super-admin only. ERP-correct
+// soft delete: the challan moves to Cancelled, its number stays in the register (auditable),
+// nothing is physically removed. A reason is required.
+function cancelDCModal(dcId, dcNumber) {
+  openModal(`Cancel challan — ${h(dcNumber||dcId)}`,
+    `<p style="margin-bottom:10px;color:var(--text-muted);font-size:.86rem">This voids the challan (use for one created in error). It moves to <b>Cancelled</b> — the DC number stays in the register for audit, and nothing is deleted. Only possible before dispatch.</p>
+     <div class="form-group"><label>Reason <span style="color:var(--danger)">*</span></label>
+       <input type="text" id="cancel-reason" maxlength="200" placeholder="e.g. created in error / duplicate of DCN-00014" autofocus></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep it</button>
+     <button class="btn btn-danger" data-busy="Cancelling…" ${dataAct('cancelDC', dcId)}>Cancel challan</button>`);
+}
+async function cancelDC(dcId) {
+  const reason = (document.getElementById('cancel-reason')?.value || '').trim();
+  if (!reason) { showToast('Enter a reason', 'error'); return; }
+  const res = await api('/delivery-challans/' + encodeURIComponent(dcId) + '/cancel', { method:'POST', body: JSON.stringify({ reason }) });
+  if (!res) return;
+  closeModal();
+  if (res.error) { showToast(res.error, 'error'); return; }
+  showToast(`Challan ${res.dc_number||dcId} cancelled`, 'success');
+  if (APP.page === 'deliveries' || APP.page === 'warehouse') navigate(APP.page);
+  else switchDeliveryTab('scheduled', document.querySelectorAll('#dc-tabs .tab-btn')[0]);
 }
 
 // Reassign the delivery person AFTER dispatch (wrong driver picked, or the driver
