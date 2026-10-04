@@ -104,6 +104,38 @@ function requireUser(u: JWTPayload | null): Response | null {
 const EXTERNAL_ROLES = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"];
 function isExternalRole(role: string): boolean { return EXTERNAL_ROLES.includes(role); }
 
+// ── Client data isolation (IDOR guard) ────────────────────────────────
+// A client-role user may only ever touch rows belonging to their own client. List
+// endpoints add "AND client_id=?"; single-resource endpoints that take an :id must
+// confirm ownership through these helpers before returning or mutating the row.
+const CLIENT_ROLES = ["client_admin", "client_approver", "client_user"];
+function isClientRole(role: string): boolean { return CLIENT_ROLES.includes(role); }
+// The client_id a client-role user is confined to: the explicit account link, else a
+// match on their email domain (same fallback the list endpoints use).
+async function resolveClientScope(env: Env, user: JWTPayload): Promise<string | null> {
+  if (user.client_id) return String(user.client_id);
+  const domain = (user.email || "").split("@")[1];
+  if (!domain) return null;
+  const c = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as { id?: string } | null;
+  return c?.id ? String(c.id) : null;
+}
+// For a client-role user, deny access to a resource owned by another client. Returns a
+// 404 Response to deny (never leaking whether the row exists), or null to allow. Internal
+// (4SYZ ops/finance) and vendor roles pass through — their own scoping lives elsewhere.
+async function denyClientCrossAccess(env: Env, user: JWTPayload, resourceClientId: unknown): Promise<Response | null> {
+  if (!isClientRole(user.role)) return null;
+  const mine = await resolveClientScope(env, user);
+  if (!mine || String(resourceClientId ?? "") !== mine) return json({ error: "Not found" }, 404);
+  return null;
+}
+// Convenience: deny a client-role user access to an order (and its sub-resources) that
+// isn't theirs, by the order id. No DB hit for internal roles.
+async function denyClientOrderAccess(env: Env, user: JWTPayload, orderId: string): Promise<Response | null> {
+  if (!isClientRole(user.role)) return null;
+  const o = await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(orderId).first() as { client_id?: string } | null;
+  return denyClientCrossAccess(env, user, o?.client_id);
+}
+
 // Roles that may approve/reject a purchase order held for approval (G8).
 const PO_APPROVER_ROLES = ["super_admin","ops_admin","procurement_manager","finance_admin"];
 
@@ -4975,6 +5007,7 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
   const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,c.delay_tracking_enabled AS client_delay_tracking,u.name as creator_name
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first();
   if (!order) return json({error:"Not found"}, 404);
+  const cross = await denyClientCrossAccess(env, user!, (order as Record<string, unknown>).client_id); if (cross) return cross;
 
   const [{results:items},{results:history},{results:comments},{results:amendments}] = await Promise.all([
     env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all(),
@@ -5085,8 +5118,8 @@ async function handleOrderLifecycle(request: Request, env: Env, path: string): P
       u.name AS creator_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id
       WHERE o.id=?`).bind(id).first() as Record<string,unknown> | null;
   if (!order) return json({error:"Not found"}, 404);
-  // External roles only see their own client's orders.
-  if (isExternalRole(user!.role) && user!.client_id && order.client_id !== user!.client_id) return json({error:"Forbidden"}, 403);
+  // Client roles only see their own client's orders (covers domain-fallback users too).
+  const cross = await denyClientCrossAccess(env, user!, order.client_id); if (cross) return cross;
 
   const [{results:history},{results:pos},{results:dcs}] = await Promise.all([
     env.DB.prepare("SELECT from_status,to_status,actor_name,note,created_at FROM order_history WHERE order_id=? ORDER BY created_at").bind(id).all(),
@@ -5551,6 +5584,7 @@ async function handleOrderDrilldown(request: Request, env: Env, path: string): P
       FROM delivery_challans dc WHERE dc.order_id=?${dcStatusClause} ORDER BY dc.dispatched_at`).bind(id).all(),
   ]);
   if (!order) return json({error:"Not found"}, 404);
+  const cross = await denyClientCrossAccess(env, user!, (order as Record<string, unknown>).client_id); if (cross) return cross;
 
   // Aggregate delivered qty per SKU across all DELIVERED DCs
   const deliveredBySku: Record<string, number> = {};
@@ -6406,8 +6440,9 @@ async function handlePatchOrder(request: Request, env: Env, path: string): Promi
   const id = path.split("/").pop()!;
   const body = await request.json() as {notes?:string; predicted_delivery_date?:string; need_by_date?:string};
   // A cancelled/closed order is terminal — its dates, ETA and notes are frozen.
-  const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
+  const cur = await env.DB.prepare("SELECT status, client_id FROM orders WHERE id=?").bind(id).first() as { status?: string; client_id?: string } | null;
   if (!cur) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, cur.client_id); if (cross) return cross;
   if (ORDER_TERMINAL.includes(String(cur.status))) return json({ error: `This order is ${String(cur.status).toLowerCase()} — it can no longer be modified.`, code: "ORDER_TERMINAL" }, 409);
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -6427,6 +6462,7 @@ async function handleListComments(request: Request, env: Env, path: string): Pro
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const cross = await denyClientOrderAccess(env, user!, id); if (cross) return cross;
   const {results} = await env.DB.prepare("SELECT * FROM order_comments WHERE order_id=? ORDER BY created_at").bind(id).all();
   return json(results);
 }
@@ -6436,6 +6472,7 @@ async function handleAddComment(request: Request, env: Env, path: string): Promi
   const denied = requireUser(user);
   if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  const cross = await denyClientOrderAccess(env, user!, id); if (cross) return cross;
   const {message} = await request.json() as {message:string};
   if (!message?.trim()) return json({error:"Message required"}, 400);
   const cid = uid();
@@ -7473,13 +7510,15 @@ async function handleGetDC(request: Request, env: Env, path: string): Promise<Re
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
   const dc = await env.DB.prepare(
-    `SELECT dc.*, c.name as client_name,
+    `SELECT dc.*, c.name as client_name, o.client_id AS _owner_client_id,
        c.address AS client_address, c.location AS client_location, c.zone AS client_zone,
        c.map_pin AS client_map_pin, c.contact_name AS client_contact_name, c.contact_phone AS client_contact_phone
      FROM delivery_challans dc
      LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id WHERE dc.id=?`
-  ).bind(id).first();
+  ).bind(id).first() as Record<string, unknown> | null;
   if (!dc) return json({error:"Not found"}, 404);
+  const cross = await denyClientCrossAccess(env, user!, dc._owner_client_id); if (cross) return cross;
+  delete dc._owner_client_id;
   return json(dc);
 }
 
@@ -7919,6 +7958,10 @@ async function handleListDCItems(request: Request, env: Env, path: string): Prom
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  if (isClientRole(user!.role)) {
+    const owner = await env.DB.prepare("SELECT o.client_id AS cid FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id WHERE dc.id=?").bind(id).first() as { cid?: string } | null;
+    const cross = await denyClientCrossAccess(env, user!, owner?.cid); if (cross) return cross;
+  }
   const {results} = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=? ORDER BY name").bind(id).all() as {results: Record<string,unknown>[]};
 
   // Enrich each item with the order-wide remaining balance so the UI can cap
@@ -8050,6 +8093,10 @@ async function handleListDCDocs(request: Request, env: Env, path: string): Promi
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/")[3];
+  if (isClientRole(user!.role)) {
+    const owner = await env.DB.prepare("SELECT o.client_id AS cid FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id WHERE dc.id=?").bind(id).first() as { cid?: string } | null;
+    const cross = await denyClientCrossAccess(env, user!, owner?.cid); if (cross) return cross;
+  }
   try {
     const { results } = await env.DB.prepare(
       `SELECT id, dc_id, doc_type, filename, mime_type, content_b64, file_size, uploaded_at, uploaded_by
@@ -8257,13 +8304,24 @@ async function handleStockTransfer(request: Request, env: Env): Promise<Response
 async function handleListClients(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // The client directory (contacts, GSTIN, budgets, spend) is internal. A client role
+  // sees only its own row; vendor roles see nothing; 4SYZ internal roles see all.
+  let where = "c.active=1";
+  const params: string[] = [];
+  if (isClientRole(user!.role)) {
+    const mine = await resolveClientScope(env, user!);
+    if (!mine) return json([]);
+    where += " AND c.id=?"; params.push(mine);
+  } else if (isExternalRole(user!.role)) {
+    return json([]);                         // vendor_* — no access to the client list
+  }
   // spent_this_month computed live from orders — the stored column is stale seed data
   const {results} = await env.DB.prepare(`
     SELECT c.*,
       COALESCE((SELECT SUM(o.grand_total) FROM orders o
         WHERE o.client_id=c.id AND o.status NOT IN ('CANCELLED','DRAFT')
         AND strftime('%Y-%m',o.created_at)=strftime('%Y-%m','now')),0) AS spent_this_month
-    FROM clients c WHERE c.active=1 ORDER BY c.name`).all();
+    FROM clients c WHERE ${where} ORDER BY c.name`).bind(...params).all();
   return json(results);
 }
 
@@ -8284,6 +8342,8 @@ async function handleClientBudget(request: Request, env: Env, path: string): Pro
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
+  // A client may read only their own budget; internal roles may read any.
+  const cross = await denyClientCrossAccess(env, user!, id); if (cross) return cross;
   const client = await env.DB.prepare(`
     SELECT monthly_budget, approval_threshold,
       COALESCE((SELECT SUM(o.grand_total) FROM orders o
@@ -8294,9 +8354,13 @@ async function handleClientBudget(request: Request, env: Env, path: string): Pro
   return json({ monthly_budget: client.monthly_budget, used: client.spent_this_month, approval_threshold: client.approval_threshold });
 }
 
+const CLIENT_ADMIN_ROLES = ["super_admin", "ops_admin", "ops_manager"];
 async function handlePatchClient(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // Client records (budget, approval threshold, active flag, GSTIN…) are 4SYZ-managed
+  // controls — only internal admins may change them, never the client themselves.
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
   const id = path.split("/").pop()!;
   const body = await request.json() as Record<string,unknown>;
   const fields: string[] = [];
