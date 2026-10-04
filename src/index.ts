@@ -136,6 +136,27 @@ async function denyClientOrderAccess(env: Env, user: JWTPayload, orderId: string
   return denyClientCrossAccess(env, user, o?.client_id);
 }
 
+// ── Vendor data isolation (mirror of the client guards) ────────────────
+// A vendor user may only ever touch rows for their own vendor. Vendor users carry no
+// explicit vendor_id in the JWT, so they resolve to the vendor rows whose contact email
+// shares their domain — the same basis the PO/ticket list endpoints already use.
+const VENDOR_ROLES = ["vendor_admin", "vendor_user"];
+function isVendorRole(role: string): boolean { return VENDOR_ROLES.includes(role); }
+async function resolveVendorScopeIds(env: Env, user: JWTPayload): Promise<string[]> {
+  const domain = (user.email || "").split("@")[1];
+  if (!domain) return [];
+  const { results } = await env.DB.prepare("SELECT id FROM vendors WHERE contact_email LIKE ?").bind(`%${domain}%`).all() as { results: { id: string }[] };
+  return results.map(r => String(r.id));
+}
+// For a vendor-role user, deny access to another vendor's resource (404, no existence
+// leak). Internal and client roles pass through — client access is blocked separately.
+async function denyVendorCrossAccess(env: Env, user: JWTPayload, resourceVendorId: unknown): Promise<Response | null> {
+  if (!isVendorRole(user.role)) return null;
+  const ids = await resolveVendorScopeIds(env, user);
+  if (!ids.length || !ids.includes(String(resourceVendorId ?? ""))) return json({ error: "Not found" }, 404);
+  return null;
+}
+
 // Roles that may approve/reject a purchase order held for approval (G8).
 const PO_APPROVER_ROLES = ["super_admin","ops_admin","procurement_manager","finance_admin"];
 
@@ -6827,6 +6848,17 @@ async function handlePatchInventory(request: Request, env: Env, path: string): P
 async function handleListVendors(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // The vendor directory (bank details, GSTIN, spend, catalogue) is internal. A client
+  // has no business here; a vendor sees only its own row; 4SYZ internal roles see all.
+  let vendorWhere = "";
+  const vParams: string[] = [];
+  if (isClientRole(user!.role)) return json([]);
+  if (isVendorRole(user!.role)) {
+    const ids = await resolveVendorScopeIds(env, user!);
+    if (!ids.length) return json([]);
+    vendorWhere = `WHERE v.id IN (${ids.map(() => "?").join(",")})`;
+    vParams.push(...ids);
+  }
   // Enrich each vendor with purchase-order aggregates: committed spend, PO count,
   // delivered-PO count (drives the "New — no history" rule), and last order date.
   // product_names / product_skus: a searchable blob of each vendor's catalogue
@@ -6854,7 +6886,8 @@ async function handleListVendors(request: Request, env: Env): Promise<Response> 
         GROUP_CONCAT(COALESCE(sku,''), ' ') AS product_skus
       FROM vendor_products GROUP BY vendor_id
     ) vp ON vp.vendor_id = v.id
-    ORDER BY v.name`).all();
+    ${vendorWhere}
+    ORDER BY v.name`).bind(...vParams).all();
   return json(results);
 }
 
@@ -7128,6 +7161,14 @@ async function handlePatchVendor(request: Request, env: Env, path: string): Prom
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").pop()!;
   const body = await request.json() as Record<string,unknown>;
+  // Clients never touch the vendor master. A vendor may edit only its OWN record, and
+  // never the 4SYZ-controlled approval fields (active, onboarding_status) — otherwise a
+  // vendor could self-approve or redirect another vendor's bank details (fraud vector).
+  if (isClientRole(user!.role)) return json({ error: "Forbidden" }, 403);
+  if (isVendorRole(user!.role)) {
+    const cross = await denyVendorCrossAccess(env, user!, id); if (cross) return cross;
+    delete body.active; delete body.onboarding_status;
+  }
   const fields: string[] = [];
   const vals: unknown[] = [];
   if (body.name          !== undefined) { fields.push("name=?");          vals.push(body.name||''); }
@@ -7174,6 +7215,10 @@ async function handleListVendorDocuments(request: Request, env: Env, path: strin
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const vid = path.split("/")[3];
+  // Vendor documents (bank proof, GST/PAN, FSSAI) are sensitive — a client sees none, a
+  // vendor only its own.
+  if (isClientRole(user!.role)) return json([]);
+  const vcross = await denyVendorCrossAccess(env, user!, vid); if (vcross) return vcross;
   const { results } = await env.DB.prepare("SELECT id,kind,filename,mime,size,data,expiry_date,uploaded_at FROM vendor_documents WHERE vendor_id=? ORDER BY uploaded_at").bind(vid).all();
   for (const r of (results || []) as Array<Record<string, unknown>>) r.data = await docGet(env, r.data as string | null);
   return json(results);
@@ -7183,6 +7228,8 @@ async function handleListVendorProducts(request: Request, env: Env, path: string
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const vid = path.split("/")[3];
+  if (isClientRole(user!.role)) return json([]);
+  const vcross = await denyVendorCrossAccess(env, user!, vid); if (vcross) return vcross;
   const { results } = await env.DB.prepare("SELECT id,sku,name,pack,moq,rate,lead_days,status FROM vendor_products WHERE vendor_id=? ORDER BY name").bind(vid).all();
   return json(results);
 }
@@ -7418,6 +7465,10 @@ async function handlePatchPO(request: Request, env: Env, path: string): Promise<
   const body = await request.json() as {status?:string;invoice_url?:string};
   const po = await env.DB.prepare("SELECT * FROM purchase_orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!po) return json({error:"Not found"}, 404);
+  // Clients have no PO surface; a vendor may act only on its OWN purchase order
+  // (accept / reject / dispatch). Internal roles pass through.
+  if (isClientRole(user!.role)) return json({ error: "Forbidden" }, 403);
+  const vcross = await denyVendorCrossAccess(env, user!, po.vendor_id); if (vcross) return vcross;
 
   // G8: approving/rejecting a held PO is restricted to procurement/finance leads.
   if (po.status === "PENDING_APPROVAL") {
@@ -12312,6 +12363,9 @@ async function handleListVendorFeedback(request: Request, env: Env, path: string
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   const vendorId = path.split("/")[3];
+  // Clients see none; a vendor sees only its own scorecard; internal roles see all.
+  if (isClientRole(user!.role)) return json([]);
+  const vcross = await denyVendorCrossAccess(env, user!, vendorId); if (vcross) return vcross;
   const {results} = await env.DB.prepare(
     "SELECT * FROM vendor_feedback WHERE vendor_id=? ORDER BY created_at DESC"
   ).bind(vendorId).all();
@@ -12321,6 +12375,8 @@ async function handleListVendorFeedback(request: Request, env: Env, path: string
 async function handleCreateVendorFeedback(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // Vendor scorecards are rated by 4SYZ staff, never by external users.
+  if (isExternalRole(user!.role)) return json({ error: "Forbidden" }, 403);
   const vendorId = path.split("/")[3];
   const body = await request.json() as Record<string,unknown>;
   const id = uid();

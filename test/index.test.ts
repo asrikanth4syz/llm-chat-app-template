@@ -745,6 +745,45 @@ describe("Client data isolation (IDOR) — cross-client access is denied", () =>
   });
 });
 
+describe("Vendor data isolation (IDOR) — cross-vendor access is denied", () => {
+  it("a vendor cannot touch another vendor's PO, documents, products, scorecard or record", async () => {
+    const vdb = env.DB as D1Database;
+    // Vendor A (the caller) and its portal user (resolved by email domain).
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,contact_email,active) VALUES ('vA','Acme Supply','Grocery','sales@acmesupply.test',1)").run();
+    await vdb.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active) VALUES ('u-vend','portal@acmesupply.test','SEED:vend123','vendor_admin','Acme Portal','Acme Supply','AP',1)").run();
+    // Vendor B (the victim) with a PO, a product and a scorecard entry.
+    await vdb.prepare("INSERT OR REPLACE INTO vendors (id,name,category,contact_email,active) VALUES ('vB','Rival Supply','Grocery','sales@rivalsupply.test',1)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO purchase_orders (id,vendor_id,status,grand_total) VALUES ('PO-VB','vB','SENT',5000)").run();
+    await vdb.prepare("INSERT OR REPLACE INTO vendor_products (id,vendor_id,sku,name,status) VALUES ('vp-b','vB','SKU001','Rival Rice','active')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO vendor_feedback (id,vendor_id,quality_rating,delivery_rating,service_rating,submitted_by) VALUES ('vf-b','vB',5,5,5,'tst-ops')").run();
+
+    const vendTok = await login("portal@acmesupply.test", "vend123");
+
+    // Cannot act on vendor B's PO — and it stays unchanged.
+    expect((await patch("/api/purchase-orders/PO-VB", { status: "ACCEPTED" }, vendTok)).status).toBe(404);
+    expect((await vdb.prepare("SELECT status FROM purchase_orders WHERE id='PO-VB'").first() as {status?:string}).status).toBe("SENT");
+
+    // Cannot read vendor B's documents, products or scorecard.
+    expect((await get("/api/vendors/vB/documents", vendTok)).status).toBe(404);
+    expect((await get("/api/vendors/vB/products", vendTok)).status).toBe(404);
+    expect((await get("/api/vendors/vB/feedback", vendTok)).status).toBe(404);
+
+    // Cannot edit vendor B's record (bank/GST tampering vector).
+    expect((await patch("/api/vendors/vB", { bank_account_no: "999" }, vendTok)).status).toBe(404);
+
+    // The vendor directory shows only vendor A, never vendor B.
+    const dir = await (await get("/api/vendors", vendTok)).json() as Array<{ id: string }>;
+    expect(dir.some(v => v.id === "vA")).toBe(true);
+    expect(dir.some(v => v.id === "vB")).toBe(false);
+
+    // Control: vendor A can update its OWN record and read its own products; ops sees both.
+    expect(ok((await patch("/api/vendors/vA", { notes: "updated by vendor" }, vendTok)).status)).toBe(true);
+    expect(ok((await get("/api/vendors/vA/products", vendTok)).status)).toBe(true);
+    const all = await (await get("/api/vendors", opsToken)).json() as Array<{ id: string }>;
+    expect(all.some(v => v.id === "vA") && all.some(v => v.id === "vB")).toBe(true);
+  });
+});
+
 describe("Terminal orders are frozen (no ETA / date edits)", () => {
   it("PATCH /api/orders/:id is refused on a cancelled order but allowed on a live one", async () => {
     const vdb = env.DB as D1Database;
