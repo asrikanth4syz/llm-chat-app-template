@@ -244,13 +244,34 @@ async function setConfig(env: Env, key: string, value: string, actor?: string): 
   ).bind(key, value, actor ?? null).run();
 }
 
-// ── Document branding (4SYZ letterhead on PDFs / prints / CSVs) ────────
-// Company identity used to stamp every downloadable document. Stored per-field in
-// app_config under brand_*; super-admin edits it in Settings → Branding.
-const BRAND_KEYS = ["company_name", "tagline", "address", "gstin", "contact", "logo_url", "accent"] as const;
+// ── Company profile & document branding (4SYZ statutory identity) ──────
+// The single source of truth for 4SYZ's own identity — the legal entity that issues
+// every document (statements, invoices, challans, POs). Stored per-field in app_config
+// under brand_*; super-admin edits it in Settings → Company Profile. It carries both the
+// statutory fields (legal name, CIN, GSTIN, PAN, registered address, GST state code) and
+// the display/branding fields (trade name, tagline, logo, accent) so the letterhead and
+// CSV/PDF exports read it from one place.
+const BRAND_KEYS = [
+  "company_name", "legal_name", "tagline",
+  "cin", "gstin", "pan", "state_code",
+  "address", "contact", "website",
+  "logo_url", "accent",
+] as const;
+// Seeded defaults so the app ships already identified as 4SYZ. Only non-statutory,
+// publicly-known values are seeded; the statutory identifiers (CIN, GSTIN, PAN, the
+// registered address and GST state code) are deliberately left blank for a super-admin
+// to enter their real registered values in Settings — they are never invented here.
+const COMPANY_SEED: Record<string, string> = {
+  company_name: "4SYZ",
+  legal_name: "4SYZ Workplace Solutions",
+  tagline: "Corporate pantry & workplace supplies",
+  contact: "accounts@4syz.com",
+  website: "www.4syz.com",
+  accent: "#16284a",
+};
 async function readBranding(env: Env): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  for (const k of BRAND_KEYS) out[k] = await getConfig(env, "brand_" + k, "");
+  for (const k of BRAND_KEYS) out[k] = (await getConfig(env, "brand_" + k, "")) || (COMPANY_SEED[k] || "");
   return out;
 }
 // GET /api/branding — any authenticated user (exports need it client-side).

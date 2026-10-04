@@ -1677,7 +1677,16 @@ function removeClosestRow(el) { const tr = el.closest('tr'); if (tr) tr.remove()
 // ── 4SYZ document branding (letterhead on prints / PDFs / CSVs) ─────────
 // Editable in Settings → Branding (super-admin), stored server-side. The defaults
 // keep documents branded even before the config loads or before anything is set.
-const BRAND_DEFAULTS = { company_name: '4SYZ', tagline: 'SmartPantry ERP', address: '', gstin: '', contact: '', logo_url: '', accent: '#1e293b' };
+// 4SYZ company profile defaults — mirrors the server seed (COMPANY_SEED). Statutory IDs
+// (CIN/GSTIN/PAN/registered address/state code) stay blank until a super-admin enters the
+// real registered values in Settings → Company Profile.
+const BRAND_DEFAULTS = {
+  company_name: '4SYZ', legal_name: '4SYZ Workplace Solutions',
+  tagline: 'Corporate pantry & workplace supplies',
+  cin: '', gstin: '', pan: '', state_code: '',
+  address: '', contact: 'accounts@4syz.com', website: 'www.4syz.com',
+  logo_url: '', accent: '#16284a',
+};
 function brandInfo() {
   const b = { ...BRAND_DEFAULTS, ...(APP.branding || {}) };
   if (!b.company_name) b.company_name = BRAND_DEFAULTS.company_name;   // never blank
@@ -1695,10 +1704,12 @@ function _hexToRgb(hex) {
 // Title-block rows (arrays) to prepend to any CSV export.
 function brandCsvRows() {
   const b = brandInfo();
-  const rows = [[b.company_name + (b.tagline ? ' — ' + b.tagline : '')]];
+  const rows = [[b.legal_name || b.company_name]];
   if (b.address) rows.push([b.address]);
-  const l2 = [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact || ''].filter(Boolean).join('   ');
-  if (l2) rows.push([l2]);
+  const ids = [b.gstin ? 'GSTIN: ' + b.gstin : '', b.cin ? 'CIN: ' + b.cin : '', b.pan ? 'PAN: ' + b.pan : ''].filter(Boolean).join('   ');
+  if (ids) rows.push([ids]);
+  const l3 = [b.contact || '', b.website || ''].filter(Boolean).join('   ');
+  if (l3) rows.push([l3]);
   rows.push(['Generated', new Date().toLocaleString()]);
   rows.push([]);                                  // blank separator before the data
   return rows;
@@ -1712,10 +1723,11 @@ function brandLetterheadHTML() {
   const logo = b.logo_url
     ? `<img src="${h(b.logo_url)}" alt="${h(b.company_name)}" style="height:46px;max-width:200px;object-fit:contain">`
     : `<div style="font-size:24px;font-weight:800;letter-spacing:.04em;color:${h(b.accent)}">${h(b.company_name)}</div>`;
-  const details = [b.address, [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact].filter(Boolean).join(' · ')]
+  const ids = [b.gstin ? 'GSTIN ' + b.gstin : '', b.cin ? 'CIN ' + b.cin : '', b.pan ? 'PAN ' + b.pan : ''].filter(Boolean).join(' · ');
+  const details = [b.address, ids, [b.contact, b.website].filter(Boolean).join(' · ')]
     .filter(Boolean).map(s => `<div>${h(s)}</div>`).join('');
   return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid ${h(b.accent)};padding-bottom:10px;margin-bottom:14px">
-    <div>${logo}${b.tagline ? `<div style="font-size:11px;color:#666;margin-top:3px">${h(b.tagline)}</div>` : ''}</div>
+    <div>${logo}<div style="font-size:12.5px;font-weight:700;color:${h(b.accent)};margin-top:4px">${h(b.legal_name || b.company_name)}</div>${b.tagline ? `<div style="font-size:11px;color:#666;margin-top:1px">${h(b.tagline)}</div>` : ''}</div>
     <div style="text-align:right;font-size:11px;color:#444;line-height:1.5">${details}</div>
   </div>`;
 }
@@ -1727,7 +1739,9 @@ function brandPdfHeader(pdf, title, subtitleLines) {
   pdf.text(b.company_name, 14, 16);
   pdf.setFont(undefined, 'normal'); pdf.setFontSize(8); pdf.setTextColor(90);
   let ry = 12;
-  [b.tagline, b.address, [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact].filter(Boolean).join('  ')]
+  [b.legal_name, b.address,
+   [b.gstin ? 'GSTIN ' + b.gstin : '', b.cin ? 'CIN ' + b.cin : ''].filter(Boolean).join('  '),
+   [b.contact, b.website].filter(Boolean).join('  ')]
     .filter(Boolean).forEach(l => { pdf.text(String(l), right, ry, { align: 'right' }); ry += 4; });
   pdf.setDrawColor(a[0], a[1], a[2]); pdf.setLineWidth(0.8); pdf.line(14, 22, right, 22);
   pdf.setTextColor(0); pdf.setFont(undefined, 'bold'); pdf.setFontSize(13); pdf.text(String(title || ''), 14, 30);
