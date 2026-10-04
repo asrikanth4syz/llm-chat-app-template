@@ -605,6 +605,7 @@ function initApp() {
   // Back/forward and manual hash edits re-route (idempotent: same listener ref).
   window.addEventListener('hashchange', onHashChange);
   loadServerCart();        // reconcile with the server-saved draft cart (cross-device)
+  loadBranding();          // document letterhead details; async, non-blocking
   loadNotifications();
   startNotificationPolling();
 
@@ -1673,6 +1674,82 @@ function clickEl(id) { const e = document.getElementById(id); if (e) e.click(); 
 function scrollToEl(id) { const e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth' }); }
 function toggleParentOpen(el) { el.parentElement.classList.toggle('open'); }
 function removeClosestRow(el) { const tr = el.closest('tr'); if (tr) tr.remove(); }
+// ── 4SYZ document branding (letterhead on prints / PDFs / CSVs) ─────────
+// Editable in Settings → Branding (super-admin), stored server-side. The defaults
+// keep documents branded even before the config loads or before anything is set.
+const BRAND_DEFAULTS = { company_name: '4SYZ', tagline: 'SmartPantry ERP', address: '', gstin: '', contact: '', logo_url: '', accent: '#1e293b' };
+function brandInfo() {
+  const b = { ...BRAND_DEFAULTS, ...(APP.branding || {}) };
+  if (!b.company_name) b.company_name = BRAND_DEFAULTS.company_name;   // never blank
+  if (!b.accent) b.accent = BRAND_DEFAULTS.accent;
+  return b;
+}
+async function loadBranding() {
+  const b = await api('/branding').catch(() => null);
+  if (b && !b.error) APP.branding = b;
+}
+function _hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex || '').trim());
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [30, 41, 59];
+}
+// Title-block rows (arrays) to prepend to any CSV export.
+function brandCsvRows() {
+  const b = brandInfo();
+  const rows = [[b.company_name + (b.tagline ? ' — ' + b.tagline : '')]];
+  if (b.address) rows.push([b.address]);
+  const l2 = [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact || ''].filter(Boolean).join('   ');
+  if (l2) rows.push([l2]);
+  rows.push(['Generated', new Date().toLocaleString()]);
+  rows.push([]);                                  // blank separator before the data
+  return rows;
+}
+function _csvEscCell(v) { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+// Same title block rendered as raw CSV text lines (for helpers that take a string).
+function brandCsvPrefix() { return brandCsvRows().map(r => r.map(_csvEscCell).join(',')).join('\n') + '\n'; }
+// Letterhead HTML block for print-to-PDF documents (logo or wordmark + details + accent rule).
+function brandLetterheadHTML() {
+  const b = brandInfo();
+  const logo = b.logo_url
+    ? `<img src="${h(b.logo_url)}" alt="${h(b.company_name)}" style="height:46px;max-width:200px;object-fit:contain">`
+    : `<div style="font-size:24px;font-weight:800;letter-spacing:.04em;color:${h(b.accent)}">${h(b.company_name)}</div>`;
+  const details = [b.address, [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact].filter(Boolean).join(' · ')]
+    .filter(Boolean).map(s => `<div>${h(s)}</div>`).join('');
+  return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid ${h(b.accent)};padding-bottom:10px;margin-bottom:14px">
+    <div>${logo}${b.tagline ? `<div style="font-size:11px;color:#666;margin-top:3px">${h(b.tagline)}</div>` : ''}</div>
+    <div style="text-align:right;font-size:11px;color:#444;line-height:1.5">${details}</div>
+  </div>`;
+}
+// Draw a branded header on a jsPDF doc; returns the Y to start content at.
+function brandPdfHeader(pdf, title, subtitleLines) {
+  const b = brandInfo(), a = _hexToRgb(b.accent);
+  const right = pdf.internal.pageSize.getWidth() - 14;
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(18); pdf.setTextColor(a[0], a[1], a[2]);
+  pdf.text(b.company_name, 14, 16);
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(8); pdf.setTextColor(90);
+  let ry = 12;
+  [b.tagline, b.address, [b.gstin ? 'GSTIN: ' + b.gstin : '', b.contact].filter(Boolean).join('  ')]
+    .filter(Boolean).forEach(l => { pdf.text(String(l), right, ry, { align: 'right' }); ry += 4; });
+  pdf.setDrawColor(a[0], a[1], a[2]); pdf.setLineWidth(0.8); pdf.line(14, 22, right, 22);
+  pdf.setTextColor(0); pdf.setFont(undefined, 'bold'); pdf.setFontSize(13); pdf.text(String(title || ''), 14, 30);
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(9); pdf.setTextColor(90);
+  let y = 35;
+  (subtitleLines || []).forEach(l => { pdf.text(String(l), 14, y); y += 5; });
+  pdf.setTextColor(0);
+  return y + 2;
+}
+// Stamp every page of a jsPDF doc with a branded footer (call just before save).
+function brandPdfFooter(pdf) {
+  const b = brandInfo();
+  const pages = pdf.internal.getNumberOfPages();
+  const w = pdf.internal.pageSize.getWidth(), hgt = pdf.internal.pageSize.getHeight();
+  for (let i = 1; i <= pages; i++) {
+    pdf.setPage(i); pdf.setFontSize(7); pdf.setTextColor(140);
+    pdf.text(`Generated by ${b.company_name}${b.tagline ? ' · ' + b.tagline : ''} · ${new Date().toLocaleDateString()}`, 14, hgt - 6);
+    pdf.text(`Page ${i} of ${pages}`, w - 14, hgt - 6, { align: 'right' });
+  }
+  pdf.setTextColor(0);
+}
+
 function printPage() { window.print(); }
 function invShowAll() { APP._invShowAll = true; refreshInvTable(); }
 function goImportVendors() { APP._importDefaultTab = 'vendors'; navigate('import_data'); }

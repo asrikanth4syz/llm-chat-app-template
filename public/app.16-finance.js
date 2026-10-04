@@ -44,7 +44,8 @@ function financePrint(title, innerHtml) {
   style.textContent = '@media print{body>*{display:none!important}#fin-print{display:block!important}}#fin-print{font-family:Arial,Helvetica,sans-serif;color:#111}#fin-print table{border-collapse:collapse;width:100%;font-size:12px}#fin-print th,#fin-print td{border:1px solid #ccc;padding:5px 8px;text-align:left}#fin-print td.n,#fin-print th.n{text-align:right}';
   const div = document.createElement('div');
   div.id = 'fin-print'; div.style.display = 'none';
-  div.innerHTML = `<h2 style="margin:0 0 4px">${h(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:10px">Generated ${h(new Date().toLocaleString())}</div>${innerHtml}`;
+  const letterhead = (typeof brandLetterheadHTML === 'function') ? brandLetterheadHTML() : '';
+  div.innerHTML = `${letterhead}<h2 style="margin:0 0 4px">${h(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:10px">Generated ${h(new Date().toLocaleString())}</div>${innerHtml}`;
   document.body.appendChild(style); document.body.appendChild(div);
   window.print();
   setTimeout(() => { div.remove(); style.remove(); }, 800);
@@ -205,7 +206,8 @@ function _csvCell(v) {
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 function _downloadCsv(filename, rows) {
-  const csv = rows.map(r => r.map(_csvCell).join(',')).join('\r\n');
+  const branded = (typeof brandCsvRows === 'function') ? [...brandCsvRows(), ...rows] : rows;
+  const csv = branded.map(r => r.map(_csvCell).join(',')).join('\r\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

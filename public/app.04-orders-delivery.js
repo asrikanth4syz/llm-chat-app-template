@@ -1417,13 +1417,14 @@ async function ddExportPDF() {
     if (!(jsPDF.API && jsPDF.API.autoTable)) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js');
     const rupee = v => 'Rs ' + Number(v||0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
     const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    pdf.setFontSize(13); pdf.text(`Delivery Breakdown — ${d.orderId}`, 14, 14);
-    pdf.setFontSize(9); pdf.setTextColor(90);
-    pdf.text(`${d.order.client_name||''}`, 14, 20);
-    pdf.text(`Ordered: ${d.summary.total_lines} lines / ${d.ordQty} qty    Delivered: ${d.summary.delivered_lines} lines / ${d.delQty} qty    Completion: ${d.qtyRate}% of units`, 14, 25);
-    pdf.setTextColor(0);
+    const startY = (typeof brandPdfHeader === 'function')
+      ? brandPdfHeader(pdf, `Delivery Breakdown — ${d.orderId}`, [
+          d.order.client_name || '',
+          `Ordered: ${d.summary.total_lines} lines / ${d.ordQty} qty    Delivered: ${d.summary.delivered_lines} lines / ${d.delQty} qty    Completion: ${d.qtyRate}% of units`,
+        ])
+      : 30;
     pdf.autoTable({
-      startY: 30,
+      startY,
       head: [['Item','SKU','Ord','Deliv','Due','Unit','Ordered','Delivered','Due','Delivered via','Status']],
       body: (d.lines||[]).map(l => {
         const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join('\n') || '—';
@@ -1433,6 +1434,7 @@ async function ddExportPDF() {
       headStyles: { fillColor: [30, 41, 59], textColor: 255 },
       columnStyles: { 0: { cellWidth: 46 }, 9: { cellWidth: 40 } },
     });
+    if (typeof brandPdfFooter === 'function') brandPdfFooter(pdf);
     pdf.save(`delivery-breakdown-${d.orderId}.pdf`);
   } catch (e) {
     showToast('PDF generation failed: ' + (e && e.message ? e.message : e), 'error');

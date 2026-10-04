@@ -191,6 +191,37 @@ async function setConfig(env: Env, key: string, value: string, actor?: string): 
   ).bind(key, value, actor ?? null).run();
 }
 
+// ── Document branding (4SYZ letterhead on PDFs / prints / CSVs) ────────
+// Company identity used to stamp every downloadable document. Stored per-field in
+// app_config under brand_*; super-admin edits it in Settings → Branding.
+const BRAND_KEYS = ["company_name", "tagline", "address", "gstin", "contact", "logo_url", "accent"] as const;
+async function readBranding(env: Env): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const k of BRAND_KEYS) out[k] = await getConfig(env, "brand_" + k, "");
+  return out;
+}
+// GET /api/branding — any authenticated user (exports need it client-side).
+async function handleGetBranding(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  return json(await readBranding(env));
+}
+// POST /api/branding — super-admin only; sets any supplied brand_* fields.
+async function handleSaveBranding(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may change branding" }, 403);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  for (const k of BRAND_KEYS) {
+    if (body[k] === undefined) continue;
+    // logo_url may carry a small inline data: URL, so allow it more room than the text fields.
+    const cap = k === "logo_url" ? 500000 : 500;
+    await setConfig(env, "brand_" + k, String(body[k] ?? "").slice(0, cap), user!.sub);
+  }
+  await audit(env, user, "UPDATE", "config", "branding", undefined, undefined);
+  return json(await readBranding(env));
+}
+
 // GST slab for an HSN code, from the hsn_gst_rates map. Tries the exact code
 // then falls back to shorter headings (8→6→4→2 digits), since GST is usually
 // set at chapter/heading level. Returns null when nothing matches.
@@ -4524,6 +4555,8 @@ export default {
       // Gap 11: Settings
       if (path==="/api/settings"            && method==="GET")  return handleGetSettings(request,env);
       if (path==="/api/settings"            && method==="POST") return handleSaveSettings(request,env);
+      if (path==="/api/branding"            && method==="GET")  return handleGetBranding(request,env);
+      if (path==="/api/branding"            && method==="POST") return handleSaveBranding(request,env);
 
       // Gap 4: Zoho Books webhook
       if (path==="/api/integrations/zoho/webhook" && method==="POST") return handleZohoWebhook(request,env);
