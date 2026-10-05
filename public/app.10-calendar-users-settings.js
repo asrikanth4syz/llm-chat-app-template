@@ -1405,6 +1405,17 @@ async function renderOrderCleanupTab(el) {
         <b>billed challan</b>, a <b>synced Zoho invoice</b>, or a <b>linked purchase order</b> is refused.
         The inventory ledger is left untouched. Use this only to clear test or abandoned orders.
       </div>
+
+      <div style="border:1px solid var(--border);border-radius:9px;padding:14px 16px;background:var(--bg,var(--surface-2))">
+        <div style="font-weight:700;font-size:.9rem;margin-bottom:4px">🗓 Purge by date</div>
+        <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px">Permanently deletes every order <b>created on or before</b> the chosen date, along with the challans attached to those orders. Finance-protected orders are skipped and reported. Standalone/ad-hoc challans are not affected.</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:.82rem;color:var(--text-muted)">On or before
+            <input type="date" id="cleanup-before" value="2026-09-05" style="margin-left:6px;padding:6px 9px;border:1px solid var(--border);border-radius:7px;font:inherit"></label>
+          <button class="btn btn-primary btn-sm" style="background:var(--danger,#b3261e);border-color:var(--danger,#b3261e)" ${dataAct('cleanupPurgeByDate')}>🗑 Delete orders on/before date</button>
+        </div>
+      </div>
+
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <input type="text" id="cleanup-search" placeholder="🔍 Filter by order # or client…" ${dataInputVal('cleanupFilter')}
           style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:inherit">
@@ -1487,6 +1498,48 @@ async function cleanupConfirmDelete() {
        </table></div>`,
       `<button class="btn btn-primary" ${dataAct('closeModal')}>Close</button>`);
   }
+  const host = document.getElementById('settings-content');
+  if (host) renderOrderCleanupTab(host);
+}
+
+// Date-cutoff purge: delete every order created on/before a date (+ their challans).
+function cleanupPurgeByDate() {
+  const el = document.getElementById('cleanup-before');
+  const before = el ? el.value : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(before)) { showToast('Pick a valid date', 'error'); return; }
+  APP._cleanupBefore = before;
+  openModal('Delete all orders on or before ' + before + '?',
+    `<p style="margin-bottom:10px;font-size:.88rem">This <b>permanently deletes every order created on or before ${h(before)}</b> and the challans attached to those orders. Orders with a billed challan, synced invoice, or linked PO are skipped and reported. This cannot be undone.</p>
+     <p style="margin-bottom:6px;font-size:.84rem;color:var(--text-muted)">Type <b>DELETE</b> to confirm:</p>
+     <input type="text" id="cleanup-date-confirm" placeholder="DELETE" autocomplete="off"
+       style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box">`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" style="background:var(--danger,#b3261e);border-color:var(--danger,#b3261e)" ${dataAct('cleanupConfirmPurgeByDate')}>Delete permanently</button>`);
+}
+async function cleanupConfirmPurgeByDate() {
+  const input = document.getElementById('cleanup-date-confirm');
+  if (!input || input.value.trim().toUpperCase() !== 'DELETE') { showToast('Type DELETE to confirm', 'error'); return; }
+  const before = APP._cleanupBefore;
+  closeModal();
+  let totalDeleted = 0, lastBlocked = [];
+  // The server deletes in bounded batches; loop while it keeps making progress.
+  for (let guard = 0; guard < 40; guard++) {
+    const res = await api('/orders/purge', { method: 'POST', body: JSON.stringify({ before }) });
+    if (!res || res.error) { showToast((res && res.error) || 'Delete failed', 'error'); break; }
+    totalDeleted += res.deleted || 0;
+    lastBlocked = (res.results || []).filter(r => !r.deleted);
+    showToast(`Deleted ${totalDeleted} so far${res.remaining ? ' · ' + res.remaining + ' remaining' : ''}`, 'success');
+    // Stop when nothing left, or when a batch made no progress (only guarded orders remain).
+    if (!res.remaining || !res.deleted) break;
+  }
+  openModal('Purge complete',
+    `<p style="font-size:.9rem;margin-bottom:10px"><b>${totalDeleted}</b> order${totalDeleted === 1 ? '' : 's'} (and their challans) created on or before ${h(before)} were permanently deleted.</p>
+     ${lastBlocked.length ? `<p style="font-size:.84rem;color:var(--text-muted);margin-bottom:8px">${lastBlocked.length} order${lastBlocked.length > 1 ? 's were' : ' was'} protected and kept (finance/procurement records):</p>
+       <div class="table-wrap"><table class="table" style="font-size:.82rem;margin:0">
+         <thead><tr><th>Order #</th><th>Reason</th></tr></thead>
+         <tbody>${lastBlocked.map(b => `<tr><td style="font-family:monospace">${h(b.id)}</td><td>${h(b.reason || '—')}</td></tr>`).join('')}</tbody>
+       </table></div>` : '<p style="font-size:.84rem;color:var(--success,#1f8a5b)">Nothing was skipped.</p>'}`,
+    `<button class="btn btn-primary" ${dataAct('closeModal')}>Close</button>`);
   const host = document.getElementById('settings-content');
   if (host) renderOrderCleanupTab(host);
 }

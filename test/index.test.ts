@@ -657,6 +657,40 @@ describe("Admin — purge all POs (test-data cleanup)", () => {
   });
 });
 
+describe("Admin — purge orders by date cutoff", () => {
+  it("POST /api/orders/purge {before} — deletes orders on/before the date, keeps later ones and guarded ones", async () => {
+    const vdb = env.DB as D1Database;
+    // Two old test orders (on/before 2026-09-05) and one newer order that must survive.
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total,created_at) VALUES ('ORD-OLD1','CL-1','tst-admin','DRAFT',100,'2026-09-01 10:00:00')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('DC-OLD1','ORD-OLD1','SCHEDULED',1,'OLD-1')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total,created_at) VALUES ('ORD-OLD2','CL-1','tst-admin','DRAFT',100,'2026-09-05 23:59:00')").run();
+    // On/before the cutoff but finance-guarded (billed challan) → must be kept.
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total,created_at) VALUES ('ORD-OLDB','CL-1','tst-admin','DELIVERED',100,'2026-09-02 10:00:00')").run();
+    await vdb.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,billed) VALUES ('DC-OLDB','ORD-OLDB','DELIVERED',1,1)").run();
+    // After the cutoff → must survive.
+    await vdb.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,grand_total,created_at) VALUES ('ORD-NEW1','CL-1','tst-admin','DRAFT',100,'2026-09-06 00:01:00')").run();
+
+    // A client user may not purge.
+    expect((await post("/api/orders/purge", { before: "2026-09-05" }, clientToken)).status).toBe(403);
+    // Bad date is rejected.
+    expect((await post("/api/orders/purge", { before: "05-09-2026" }, adminToken)).status).toBe(400);
+
+    const res = await post("/api/orders/purge", { before: "2026-09-05" }, adminToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { deleted: number; blocked: number; remaining: number };
+    expect(body.deleted).toBe(2);              // ORD-OLD1, ORD-OLD2
+    expect(body.blocked).toBe(1);              // ORD-OLDB (billed) kept
+    expect(body.remaining).toBe(1);            // the guarded one would re-select; UI stops on no progress
+
+    const gone = async (id: string) => (await vdb.prepare("SELECT COUNT(*) AS n FROM orders WHERE id=?").bind(id).first() as {n:number}).n;
+    expect(await gone("ORD-OLD1")).toBe(0);
+    expect(await gone("ORD-OLD2")).toBe(0);
+    expect((await vdb.prepare("SELECT COUNT(*) AS n FROM delivery_challans WHERE id='DC-OLD1'").first() as {n:number}).n).toBe(0);
+    expect(await gone("ORD-OLDB")).toBe(1);    // billed → kept
+    expect(await gone("ORD-NEW1")).toBe(1);    // after cutoff → kept
+  });
+});
+
 describe("Admin — hard-delete orders (test-data cleanup)", () => {
   it("POST /api/orders/purge — super-admin only, cascades children, and guards billed orders", async () => {
     const vdb = env.DB as D1Database;
