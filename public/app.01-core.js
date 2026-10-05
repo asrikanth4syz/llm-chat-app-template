@@ -1763,6 +1763,37 @@ function brandPdfFooter(pdf) {
   }
   pdf.setTextColor(0);
 }
+// Faint company watermark on every page of a jsPDF doc (call after the content, before
+// save). A rotated wordmark at ~5% opacity — present on each page, never impedes the data.
+function brandPdfWatermark(pdf) {
+  const b = brandInfo();
+  const text = String(b.company_name || '4SYZ').toUpperCase();
+  const w = pdf.internal.pageSize.getWidth(), hgt = pdf.internal.pageSize.getHeight();
+  const pages = pdf.internal.getNumberOfPages();
+  const G = pdf.GState ? (o) => { try { pdf.setGState(new pdf.GState(o)); } catch (_) {} } : () => {};
+  for (let i = 1; i <= pages; i++) {
+    pdf.setPage(i);
+    G({ opacity: 0.05 });
+    pdf.setTextColor(90); pdf.setFont(undefined, 'bold'); pdf.setFontSize(w > 200 ? 90 : 70);
+    try { pdf.text(text, w / 2, hgt / 2, { align: 'center', angle: 28 }); } catch (_) { pdf.text(text, w / 2, hgt / 2, { align: 'center' }); }
+    G({ opacity: 1 });
+  }
+  pdf.setTextColor(0); pdf.setFont(undefined, 'normal'); pdf.setFontSize(9);
+}
+// Faint per-page logo watermark for print-to-PDF (HTML) documents. position:fixed repeats
+// it on every printed page; grayscale + ~5% opacity keeps every figure readable. Renders
+// nothing when no logo is configured.
+function brandWatermarkHTML() {
+  const b = brandInfo();
+  if (!b.logo_url) return '';
+  return `<div class="brand-wm" aria-hidden="true"><img src="${h(b.logo_url)}" alt=""></div>`;
+}
+function brandWatermarkCSS(containerId) {
+  const c = '#' + (containerId || 'fin-print');
+  return `${c}{position:relative}${c}>*{position:relative;z-index:1}`
+    + `${c} .brand-wm{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:0}`
+    + `${c} .brand-wm img{width:55%;max-width:420px;filter:grayscale(1);opacity:.05}`;
+}
 
 function printPage() { window.print(); }
 function invShowAll() { APP._invShowAll = true; refreshInvTable(); }
