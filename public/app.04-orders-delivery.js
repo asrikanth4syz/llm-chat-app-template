@@ -1422,47 +1422,204 @@ function ddLoadScript(src) {
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
 }
 
-async function ddExportPDF() {
+// Delivery breakdown PDF — rendered as a branded HTML document (print → Save as PDF) so it
+// matches the agreed mock: navy letterhead band, gold rule, order-summary band, status
+// chips, a line table with NO item-id column, and a faint per-page watermark.
+function ddExportPDF() {
   const d = APP._dd; if (!d) { showToast('Open an order first', 'error'); return; }
-  showToast('Generating PDF…');
-  try {
-    if (!window.jspdf) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-    const { jsPDF } = window.jspdf;
-    if (!(jsPDF.API && jsPDF.API.autoTable)) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js');
-    const rupee = v => 'Rs ' + Number(v||0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    const s = d.summary || {};
-    const ov = s.total_ordered_value || 0, dv = s.total_delivered_value || 0, duev = s.total_due_value || 0;
-    const dueQty = Math.max(0, (d.ordQty || 0) - (d.delQty || 0));
-    const dueLines = (s.due_lines != null) ? s.due_lines : ((s.total_lines || 0) - (s.delivered_lines || 0));
-    const statusLabel = d.qtyRate >= 100 ? 'Fully delivered' : (d.delQty > 0 ? 'Partially delivered' : 'Not delivered');
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    // Order summary on top (no item-id column in the table below).
-    const startY = (typeof brandPdfHeader === 'function')
-      ? brandPdfHeader(pdf, `Delivery Breakdown — ${d.orderId}`, [
-          `Client: ${d.order.client_name || '—'}      Status: ${statusLabel}      Completion: ${d.qtyRate}% of units`,
-          `Ordered  ${s.total_lines || 0} lines / ${d.ordQty || 0} qty      Delivered  ${s.delivered_lines || 0} / ${d.delQty || 0}      Due  ${dueLines} / ${dueQty}`,
-          `Value   Ordered ${rupee(ov)}      Delivered ${rupee(dv)}      Due ${rupee(duev)}`,
-        ])
-      : 30;
-    pdf.autoTable({
-      startY,
-      head: [['Item','Ord','Deliv','Due','Unit','Ordered','Delivered','Due','Delivered via','Status']],
-      body: (d.lines||[]).map(l => {
-        const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join('\n') || '—';
-        return [l.name, l.qty_ordered, l.qty_delivered, l.qty_due, rupee(l.unit_price), rupee(l.value_ordered), rupee(l.value_delivered), rupee(l.value_due), via, ddStatusLabel(l.status)];
-      }),
-      foot: [['Totals', d.ordQty || 0, d.delQty || 0, dueQty, '', rupee(ov), rupee(dv), rupee(duev), '', '']],
-      styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
-      headStyles: { fillColor: [22, 40, 74], textColor: 255 },
-      footStyles: { fillColor: [240, 240, 236], textColor: [22, 40, 74], fontStyle: 'bold' },
-      columnStyles: { 0: { cellWidth: 52 }, 8: { cellWidth: 42 } },
-    });
-    if (typeof brandPdfWatermark === 'function') brandPdfWatermark(pdf);
-    if (typeof brandPdfFooter === 'function') brandPdfFooter(pdf);
-    pdf.save(`delivery-breakdown-${d.orderId}.pdf`);
-  } catch (e) {
-    showToast('PDF generation failed: ' + (e && e.message ? e.message : e), 'error');
+  const b = (typeof brandInfo === 'function') ? brandInfo() : { company_name: '4SYZ', accent: '#16284a' };
+  const rupee = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const s = d.summary || {};
+  const ov = s.total_ordered_value || 0, dv = s.total_delivered_value || 0, duev = s.total_due_value || 0;
+  const dueQty = Math.max(0, (d.ordQty || 0) - (d.delQty || 0));
+  const dueLines = (s.due_lines != null) ? s.due_lines : ((s.total_lines || 0) - (s.delivered_lines || 0));
+  const statusLabel = d.qtyRate >= 100 ? 'Fully delivered' : (d.delQty > 0 ? 'Partially delivered' : 'Not delivered');
+  const dcs = d.dcs || [];
+  const delDc = dcs.filter(x => x.status === 'DELIVERED').length;
+  const transitDc = dcs.filter(x => x.status === 'IN_TRANSIT').length;
+  const dcSub = [delDc ? delDc + ' delivered' : '', transitDc ? transitDc + ' in transit' : ''].filter(Boolean).join(' · ');
+  const chipClass = st => ({ fully_delivered: 'ok', partial: 'part', not_delivered: 'no', over_delivered: 'over' }[st] || 'no');
+
+  const ids = [b.gstin ? 'GSTIN ' + b.gstin : '', b.cin ? 'CIN ' + b.cin : '', b.pan ? 'PAN ' + b.pan : ''].filter(Boolean).join(' · ');
+  const brandBlock = b.logo_url
+    ? `<img class="ddp-logo" src="${h(b.logo_url)}" alt="">`
+    : `<div class="ddp-word">${h(b.company_name || '4SYZ')}</div>`;
+  const wm = b.logo_url
+    ? `<div class="ddp-wm"><img src="${h(b.logo_url)}" alt=""></div>`
+    : `<div class="ddp-wm ddp-wm-text">${h(b.company_name || '4SYZ')}</div>`;
+
+  const rows = (d.lines || []).map(l => {
+    const via = (d.deliveredVia[l.sku] || []).map(v => `<div><b>${h(v.dc)}</b> ×${v.qty}${v.date ? ' · ' + fmtDate(v.date) : ''}</div>`).join('') || '<span class="muted">—</span>';
+    return `<tr>
+      <td class="item">${h(l.name || l.sku)}</td>
+      <td class="n">${l.qty_ordered}</td>
+      <td class="n">${l.qty_delivered || '—'}</td>
+      <td class="n">${l.qty_due || '—'}</td>
+      <td class="n">${rupee(l.unit_price)}</td>
+      <td class="n">${rupee(l.value_ordered)}</td>
+      <td class="n">${rupee(l.value_delivered)}</td>
+      <td class="n">${rupee(l.value_due)}</td>
+      <td class="via">${via}</td>
+      <td class="c"><span class="chip ${chipClass(l.status)}">${h(ddStatusLabel(l.status))}</span></td>
+    </tr>`;
+  }).join('');
+
+  const acc = h(b.accent || '#16284a');
+  const doc = `
+  <div class="ddp-wrap">
+    ${wm}
+    <div class="ddp-head">
+      <div class="ddp-brand">
+        ${brandBlock}
+        <div class="ddp-legal">${h(b.legal_name || b.company_name || '4SYZ')}</div>
+        ${b.tagline ? `<div class="ddp-tag">${h(b.tagline)}</div>` : ''}
+      </div>
+      <div class="ddp-co">
+        ${b.address ? h(b.address) + '<br>' : ''}
+        ${ids ? ids + '<br>' : ''}
+        ${[b.contact, b.website].filter(Boolean).map(h).join(' · ')}
+      </div>
+    </div>
+    <div class="ddp-rule"></div>
+
+    <div class="ddp-title">
+      <div><span>Order fulfilment</span>Delivery Breakdown</div>
+      <div class="ddp-meta">
+        <div><em>Order</em> ${h(d.orderId)}</div>
+        <div><em>Ordered</em> ${d.order.created_at ? fmtDate(d.order.created_at) : '—'}</div>
+        <div><em>Generated</em> ${fmtDate(new Date().toISOString())}</div>
+      </div>
+    </div>
+
+    <div class="ddp-sum">
+      <div class="ddp-sumhead">
+        <div class="cell"><div class="k">Client</div><div class="v">${h(d.order.client_name || '—')}</div></div>
+        <div class="cell"><div class="k">Order</div><div class="v">${h(d.orderId)}</div></div>
+        <div class="cell"><div class="k">Challans</div><div class="v">${dcs.length}${dcSub ? ` <span class="muted">(${dcSub})</span>` : ''}</div></div>
+        <div class="cell"><div class="k">Status</div><div class="v"><span class="status">${h(statusLabel)}</span></div></div>
+      </div>
+      <div class="ddp-sumbody">
+        <div class="odd">
+          <div class="r ord"><span class="lab">Ord</span><b>${s.total_lines || 0} lines · ${d.ordQty || 0} qty</b></div>
+          <div class="r del"><span class="lab">Del</span><b>${s.delivered_lines || 0} lines · ${d.delQty || 0} qty</b></div>
+          <div class="r due"><span class="lab">Due</span><b>${dueLines} lines · ${dueQty} qty</b></div>
+          <div class="vals">
+            <div class="val ord"><div class="k">Ordered value</div><div class="n">${rupee(ov)}</div></div>
+            <div class="val del"><div class="k">Delivered</div><div class="n">${rupee(dv)}</div></div>
+            <div class="val due"><div class="k">Due</div><div class="n">${rupee(duev)}</div></div>
+          </div>
+        </div>
+        <div class="comp">
+          <div class="top"><span class="k">Delivery completion</span><span class="pct">${d.qtyRate}%</span></div>
+          <div class="track"><div class="fill" style="width:${d.qtyRate}%"></div></div>
+          <div class="cap">${d.delQty || 0} of ${d.ordQty || 0} units delivered. Measured on quantity, not line count.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ddp-sech"><h2>Line reconciliation</h2><div class="hr"></div></div>
+    <table class="ddp-tbl">
+      <thead><tr>
+        <th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th>
+        <th class="n">Unit price</th><th class="n">Ordered value</th><th class="n">Delivered value</th><th class="n">Due value</th>
+        <th>Delivered via</th><th class="c">Status</th>
+      </tr></thead>
+      <tbody>${rows || '<tr><td colspan="10" class="muted" style="padding:14px">No lines.</td></tr>'}</tbody>
+      <tfoot><tr>
+        <td class="lbl">Totals</td><td class="n">${d.ordQty || 0}</td><td class="n">${d.delQty || 0}</td><td class="n">${dueQty}</td>
+        <td></td><td class="n">${rupee(ov)}</td><td class="n">${rupee(dv)}</td><td class="n">${rupee(duev)}</td><td></td><td></td>
+      </tr></tfoot>
+    </table>
+
+    <div class="ddp-foot">
+      <span>${h(b.legal_name || b.company_name || '4SYZ')}${b.contact ? ' · ' + h(b.contact) : ''}</span>
+      <span class="gold">Confidential</span>
+      <span>Generated ${fmtDate(new Date().toISOString())}</span>
+    </div>
+  </div>`;
+
+  // All selectors are scoped under #dd-print so nothing bleeds into the live app UI while
+  // the (hidden) print container is mounted.
+  const css = `
+  @media print{body>*{display:none!important}#dd-print{display:block!important}@page{size:A4 landscape;margin:12mm}}
+  #dd-print{font-family:'Space Grotesk','Schibsted Grotesk',-apple-system,Segoe UI,Roboto,sans-serif;color:#1c2433;position:relative}
+  #dd-print *{box-sizing:border-box}
+  #dd-print .ddp-wrap{position:relative}
+  #dd-print .ddp-wrap>*{position:relative;z-index:1}
+  #dd-print .ddp-wm{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:0}
+  #dd-print .ddp-wm img{width:55%;max-width:460px;filter:grayscale(1);opacity:.05}
+  #dd-print .ddp-wm-text{font-weight:800;font-size:150px;color:#16284a;opacity:.045;transform:rotate(-26deg);letter-spacing:.04em}
+  #dd-print .ddp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;background:linear-gradient(155deg,#16284a,#0f1c33);color:#fff;padding:22px 26px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #dd-print .ddp-brand .ddp-logo{height:40px;max-width:170px;object-fit:contain;filter:brightness(0) invert(1)}
+  #dd-print .ddp-brand .ddp-word{font-size:24px;font-weight:800;letter-spacing:.22em;color:#c79a4b;text-transform:uppercase}
+  #dd-print .ddp-legal{margin-top:6px;font-size:14px;font-weight:700}
+  #dd-print .ddp-tag{margin-top:2px;font-size:11px;color:#aeb8cc}
+  #dd-print .ddp-co{text-align:right;font-size:10.5px;line-height:1.6;color:#c6cfde;max-width:300px}
+  #dd-print .ddp-rule{height:3px;background:linear-gradient(90deg,#c79a4b 0 62%,transparent 62%);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #dd-print .ddp-title{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;padding:16px 26px 0}
+  #dd-print .ddp-title>div:first-child{font:700 20px/1 'Space Grotesk',sans-serif;color:#16284a;text-transform:uppercase}
+  #dd-print .ddp-title span{display:block;font-size:10.5px;letter-spacing:.16em;color:#c79a4b;text-transform:uppercase;margin-bottom:3px;font-weight:600}
+  #dd-print .ddp-meta{display:flex;gap:16px;font-size:11px;color:#6b7488;flex-wrap:wrap}
+  #dd-print .ddp-meta em{font-style:normal;color:#99a0ad;margin-right:5px}
+  #dd-print .ddp-meta div{font-variant-numeric:tabular-nums}
+  #dd-print .ddp-sum{margin:14px 26px 0;border:1px solid #e6e4dc;border-radius:8px;overflow:hidden}
+  #dd-print .ddp-sumhead{display:grid;grid-template-columns:repeat(4,1fr);background:#f7f6f1;border-bottom:1px solid #e6e4dc;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #dd-print .ddp-sumhead .cell{padding:10px 14px;border-right:1px solid #e6e4dc}
+  #dd-print .ddp-sumhead .cell:last-child{border-right:0}
+  #dd-print .cell .k{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#99a0ad;font-weight:600}
+  #dd-print .cell .v{margin-top:4px;font-weight:700;color:#16284a;font-size:13px}
+  #dd-print .status{display:inline-block;font-weight:700;font-size:11px;padding:3px 10px;border-radius:100px;background:#f6ecd6;color:#9a6a12}
+  #dd-print .ddp-sumbody{display:grid;grid-template-columns:1.25fr 1fr}
+  #dd-print .odd{padding:12px 14px;border-right:1px solid #e6e4dc}
+  #dd-print .odd .r{display:flex;align-items:center;gap:10px;font-size:12.5px;padding:2px 0}
+  #dd-print .odd .r .lab{width:40px;font-size:10px;font-weight:600;color:#99a0ad;text-transform:uppercase}
+  #dd-print .odd .r b{font-variant-numeric:tabular-nums}
+  #dd-print .odd .r.ord b{color:#16284a}#dd-print .odd .r.del b{color:#1f8a5b}#dd-print .odd .r.due b{color:#b3261e}
+  #dd-print .vals{display:flex;gap:8px;margin-top:7px}
+  #dd-print .vals .val{flex:1;text-align:center;background:#faf9f5;border:1px solid #eceae3;border-radius:6px;padding:7px 4px}
+  #dd-print .vals .val .k{font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:#99a0ad;font-weight:600}
+  #dd-print .vals .val .n{margin-top:3px;font-weight:700;font-size:12.5px;font-variant-numeric:tabular-nums}
+  #dd-print .vals .val.ord .n{color:#16284a}#dd-print .vals .val.del .n{color:#1f8a5b}#dd-print .vals .val.due .n{color:#b3261e}
+  #dd-print .comp{padding:12px 16px;display:flex;flex-direction:column;justify-content:center;gap:8px}
+  #dd-print .comp .top{display:flex;justify-content:space-between;align-items:baseline}
+  #dd-print .comp .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#99a0ad;font-weight:600}
+  #dd-print .comp .pct{font-weight:700;font-size:22px;color:#1f8a5b;font-variant-numeric:tabular-nums}
+  #dd-print .track{height:8px;background:#eceae3;border-radius:6px;overflow:hidden}
+  #dd-print .fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#2fa36b,#1f8a5b);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #dd-print .comp .cap{font-size:11px;color:#6b7488}
+  #dd-print .ddp-sech{display:flex;align-items:center;gap:10px;padding:18px 26px 0}
+  #dd-print .ddp-sech h2{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#16284a;margin:0;font-weight:600}
+  #dd-print .ddp-sech .hr{flex:1;height:1px;background:#e6e4dc}
+  #dd-print .ddp-tbl{border-collapse:collapse;font-size:11.5px;margin:8px 26px 0;width:calc(100% - 52px)}
+  #dd-print .ddp-tbl thead th{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:#6b7488;text-align:left;padding:8px 8px;border-bottom:2px solid #16284a;font-weight:600}
+  #dd-print .ddp-tbl th.n,#dd-print .ddp-tbl td.n{text-align:right;font-variant-numeric:tabular-nums}
+  #dd-print .ddp-tbl th.c,#dd-print .ddp-tbl td.c{text-align:center}
+  #dd-print .ddp-tbl tbody td{padding:7px 8px;border-bottom:1px solid #eceae3;vertical-align:top}
+  #dd-print .ddp-tbl .item{font-weight:600}
+  #dd-print .ddp-tbl .via{font-size:10px;color:#6b7488;line-height:1.5}
+  #dd-print .ddp-tbl .via b{color:#16284a}
+  #dd-print .muted{color:#99a0ad}
+  #dd-print .chip{display:inline-block;font-weight:700;font-size:10px;padding:2px 9px;border-radius:100px;white-space:nowrap}
+  #dd-print .chip.ok{color:#1f8a5b;background:#e4f3ea}#dd-print .chip.part{color:#9a6a12;background:#f6ecd6}
+  #dd-print .chip.no{color:#b3261e;background:#f7e2e0}#dd-print .chip.over{color:#6b4ea8;background:#efeaf7}
+  #dd-print .ddp-tbl tfoot td{padding:9px 8px;border-top:2px solid #16284a;font-weight:700;color:#16284a;font-variant-numeric:tabular-nums}
+  #dd-print .ddp-tbl tfoot td.lbl{text-transform:uppercase;font-size:10px;letter-spacing:.08em;color:#6b7488}
+  #dd-print .ddp-foot{margin:18px 26px 0;background:#f7f6f1;border-top:1px solid #e6e4dc;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;font-size:10.5px;color:#6b7488}
+  #dd-print .ddp-foot .gold{color:#c79a4b;font-weight:600;letter-spacing:.1em;text-transform:uppercase}`;
+
+  // Load Space Grotesk once (best-effort; falls back to system font if it hasn't loaded).
+  if (!document.getElementById('ddp-font')) {
+    const lk = document.createElement('link'); lk.id = 'ddp-font'; lk.rel = 'stylesheet';
+    lk.href = 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap';
+    document.head.appendChild(lk);
   }
+  document.getElementById('dd-print')?.remove();
+  document.getElementById('dd-print-style')?.remove();
+  const style = document.createElement('style'); style.id = 'dd-print-style'; style.textContent = css;
+  const div = document.createElement('div'); div.id = 'dd-print'; div.style.display = 'none'; div.innerHTML = doc;
+  document.body.appendChild(style); document.body.appendChild(div);
+  showToast('Opening print — choose "Save as PDF"');
+  setTimeout(() => { window.print(); setTimeout(() => { div.remove(); style.remove(); }, 800); }, 250);
 }
 
 /* ============================================================

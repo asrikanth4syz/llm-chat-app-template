@@ -698,7 +698,19 @@ function financePrintStatement() {
   const st = APP._finStmt || {};
   const host = document.getElementById('main-content');
   const table = host ? host.querySelector('table') : null;
-  financePrint((st.name || 'Customer') + ' — Statement', table ? `<table>${table.innerHTML}</table>` : '<p>No invoices to print.</p>');
+  const name = st.name || 'Customer';
+  const fmtMoney = v => (typeof _fmtPaise === 'function') ? _fmtPaise(v, st.currency) : v;
+  // Prominent, bold client block (matches the statement mock).
+  const meta = [st.gstin ? 'GSTIN ' + st.gstin : '', st.email || '', st.phone || ''].filter(Boolean).join(' · ');
+  const header = `
+    <div style="margin:0 0 14px">
+      <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#99a0ad;font-weight:700">Statement for</div>
+      <div style="font-size:24px;font-weight:800;color:#16284a;line-height:1.1">${h(name)}</div>
+      <div style="width:46px;height:3px;background:#c79a4b;margin:8px 0 6px;border-radius:2px;-webkit-print-color-adjust:exact;print-color-adjust:exact"></div>
+      ${meta ? `<div style="font-size:12px;color:#6b7488">${h(meta)}</div>` : ''}
+      ${st.outstanding != null ? `<div style="margin-top:8px;font-size:13px;color:#6b7488"><b style="color:#b3261e;font-size:17px">${h(fmtMoney(st.outstanding))}</b> total outstanding${st.overdue != null ? ` · <b style="color:#9a6a12">${h(fmtMoney(st.overdue))}</b> overdue` : ''}</div>` : ''}
+    </div>`;
+  financePrint(name + ' — Statement', header + (table ? `<table>${table.innerHTML}</table>` : '<p>No invoices to print.</p>'));
 }
 
 // ── Payables (finance/ops): per-vendor aging + DPO + bills due ─────────
