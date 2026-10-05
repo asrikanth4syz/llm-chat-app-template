@@ -1396,12 +1396,26 @@ function ddSetReconView(view) {
 function ddExportCSV() {
   const d = APP._dd; if (!d) { showToast('Open an order first', 'error'); return; }
   const esc = v => { const s = String(v==null?'':v); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
-  const head = ['SKU','Item','Ordered','Delivered','Due','Unit Price','Ordered Value','Delivered Value','Due Value','Delivered Via','Status'];
+  const s = d.summary || {};
+  const dueQty = Math.max(0, (d.ordQty || 0) - (d.delQty || 0));
+  const dueLines = (s.due_lines != null) ? s.due_lines : ((s.total_lines || 0) - (s.delivered_lines || 0));
+  const statusLabel = d.qtyRate >= 100 ? 'Fully delivered' : (d.delQty > 0 ? 'Partially delivered' : 'Not delivered');
+  // Order summary on top, then the line reconciliation — no SKU/item-id column.
+  const summary = [
+    ['Delivery Breakdown', d.orderId],
+    ['Client', d.order.client_name || ''],
+    ['Status', statusLabel, '', 'Completion', `${d.qtyRate}% of units`],
+    ['Ordered', `${s.total_lines || 0} lines / ${d.ordQty || 0} qty`, '', 'Ordered value', s.total_ordered_value || 0],
+    ['Delivered', `${s.delivered_lines || 0} lines / ${d.delQty || 0} qty`, '', 'Delivered value', s.total_delivered_value || 0],
+    ['Due', `${dueLines} lines / ${dueQty} qty`, '', 'Due value', s.total_due_value || 0],
+    [],
+  ].map(r => r.map(esc).join(','));
+  const head = ['Item','Ordered','Delivered','Due','Unit Price','Ordered Value','Delivered Value','Due Value','Delivered Via','Status'];
   const body = (d.lines||[]).map(l => {
     const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join(' | ');
-    return [l.sku,l.name,l.qty_ordered,l.qty_delivered,l.qty_due,l.unit_price,l.value_ordered,l.value_delivered,l.value_due,via,ddStatusLabel(l.status)].map(esc).join(',');
+    return [l.name,l.qty_ordered,l.qty_delivered,l.qty_due,l.unit_price,l.value_ordered,l.value_delivered,l.value_due,via,ddStatusLabel(l.status)].map(esc).join(',');
   });
-  _downloadCSV(`delivery-breakdown-${d.orderId}`, [head.map(esc).join(','), ...body].join('\n'));
+  _downloadCSV(`delivery-breakdown-${d.orderId}`, [...summary, head.map(esc).join(','), ...body].join('\n'));
 }
 
 function ddLoadScript(src) {
@@ -1416,24 +1430,34 @@ async function ddExportPDF() {
     const { jsPDF } = window.jspdf;
     if (!(jsPDF.API && jsPDF.API.autoTable)) await ddLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js');
     const rupee = v => 'Rs ' + Number(v||0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const s = d.summary || {};
+    const ov = s.total_ordered_value || 0, dv = s.total_delivered_value || 0, duev = s.total_due_value || 0;
+    const dueQty = Math.max(0, (d.ordQty || 0) - (d.delQty || 0));
+    const dueLines = (s.due_lines != null) ? s.due_lines : ((s.total_lines || 0) - (s.delivered_lines || 0));
+    const statusLabel = d.qtyRate >= 100 ? 'Fully delivered' : (d.delQty > 0 ? 'Partially delivered' : 'Not delivered');
     const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    // Order summary on top (no item-id column in the table below).
     const startY = (typeof brandPdfHeader === 'function')
       ? brandPdfHeader(pdf, `Delivery Breakdown — ${d.orderId}`, [
-          d.order.client_name || '',
-          `Ordered: ${d.summary.total_lines} lines / ${d.ordQty} qty    Delivered: ${d.summary.delivered_lines} lines / ${d.delQty} qty    Completion: ${d.qtyRate}% of units`,
+          `Client: ${d.order.client_name || '—'}      Status: ${statusLabel}      Completion: ${d.qtyRate}% of units`,
+          `Ordered  ${s.total_lines || 0} lines / ${d.ordQty || 0} qty      Delivered  ${s.delivered_lines || 0} / ${d.delQty || 0}      Due  ${dueLines} / ${dueQty}`,
+          `Value   Ordered ${rupee(ov)}      Delivered ${rupee(dv)}      Due ${rupee(duev)}`,
         ])
       : 30;
     pdf.autoTable({
       startY,
-      head: [['Item','SKU','Ord','Deliv','Due','Unit','Ordered','Delivered','Due','Delivered via','Status']],
+      head: [['Item','Ord','Deliv','Due','Unit','Ordered','Delivered','Due','Delivered via','Status']],
       body: (d.lines||[]).map(l => {
         const via = (d.deliveredVia[l.sku]||[]).map(v=>`${v.dc} x${v.qty}${v.date?' ('+fmtDate(v.date)+')':''}`).join('\n') || '—';
-        return [l.name, l.sku, l.qty_ordered, l.qty_delivered, l.qty_due, rupee(l.unit_price), rupee(l.value_ordered), rupee(l.value_delivered), rupee(l.value_due), via, ddStatusLabel(l.status)];
+        return [l.name, l.qty_ordered, l.qty_delivered, l.qty_due, rupee(l.unit_price), rupee(l.value_ordered), rupee(l.value_delivered), rupee(l.value_due), via, ddStatusLabel(l.status)];
       }),
+      foot: [['Totals', d.ordQty || 0, d.delQty || 0, dueQty, '', rupee(ov), rupee(dv), rupee(duev), '', '']],
       styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
-      headStyles: { fillColor: [30, 41, 59], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 46 }, 9: { cellWidth: 40 } },
+      headStyles: { fillColor: [22, 40, 74], textColor: 255 },
+      footStyles: { fillColor: [240, 240, 236], textColor: [22, 40, 74], fontStyle: 'bold' },
+      columnStyles: { 0: { cellWidth: 52 }, 8: { cellWidth: 42 } },
     });
+    if (typeof brandPdfWatermark === 'function') brandPdfWatermark(pdf);
     if (typeof brandPdfFooter === 'function') brandPdfFooter(pdf);
     pdf.save(`delivery-breakdown-${d.orderId}.pdf`);
   } catch (e) {

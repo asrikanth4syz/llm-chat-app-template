@@ -41,11 +41,13 @@ function financePrint(title, innerHtml) {
   document.getElementById('fin-print-style')?.remove();
   const style = document.createElement('style');
   style.id = 'fin-print-style';
-  style.textContent = '@media print{body>*{display:none!important}#fin-print{display:block!important}}#fin-print{font-family:Arial,Helvetica,sans-serif;color:#111}#fin-print table{border-collapse:collapse;width:100%;font-size:12px}#fin-print th,#fin-print td{border:1px solid #ccc;padding:5px 8px;text-align:left}#fin-print td.n,#fin-print th.n{text-align:right}';
+  const wmCss = (typeof brandWatermarkCSS === 'function') ? brandWatermarkCSS('fin-print') : '';
+  style.textContent = '@media print{body>*{display:none!important}#fin-print{display:block!important}}#fin-print{font-family:Arial,Helvetica,sans-serif;color:#111}#fin-print table{border-collapse:collapse;width:100%;font-size:12px}#fin-print th,#fin-print td{border:1px solid #ccc;padding:5px 8px;text-align:left}#fin-print td.n,#fin-print th.n{text-align:right}' + wmCss;
   const div = document.createElement('div');
   div.id = 'fin-print'; div.style.display = 'none';
   const letterhead = (typeof brandLetterheadHTML === 'function') ? brandLetterheadHTML() : '';
-  div.innerHTML = `${letterhead}<h2 style="margin:0 0 4px">${h(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:10px">Generated ${h(new Date().toLocaleString())}</div>${innerHtml}`;
+  const watermark = (typeof brandWatermarkHTML === 'function') ? brandWatermarkHTML() : '';
+  div.innerHTML = `${watermark}${letterhead}<h2 style="margin:0 0 4px">${h(title)}</h2><div style="font-size:12px;color:#555;margin-bottom:10px">Generated ${h(new Date().toLocaleString())}</div>${innerHtml}`;
   document.body.appendChild(style); document.body.appendChild(div);
   window.print();
   setTimeout(() => { div.remove(); style.remove(); }, 800);
