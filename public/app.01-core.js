@@ -1720,16 +1720,20 @@ function brandCsvPrefix() { return brandCsvRows().map(r => r.map(_csvEscCell).jo
 // Letterhead HTML block for print-to-PDF documents (logo or wordmark + details + accent rule).
 function brandLetterheadHTML() {
   const b = brandInfo();
+  // Navy letterhead band + gold rule (matches the document mocks). Inline styles plus an
+  // explicit print-color-adjust so the band actually prints. The logo is forced white for
+  // the navy band; with no logo a gold wordmark is used.
   const logo = b.logo_url
-    ? `<img src="${h(b.logo_url)}" alt="${h(b.company_name)}" style="height:46px;max-width:200px;object-fit:contain">`
-    : `<div style="font-size:24px;font-weight:800;letter-spacing:.04em;color:${h(b.accent)}">${h(b.company_name)}</div>`;
+    ? `<img src="${h(b.logo_url)}" alt="${h(b.company_name)}" style="height:40px;max-width:180px;object-fit:contain;filter:brightness(0) invert(1)">`
+    : `<div style="font-size:23px;font-weight:800;letter-spacing:.2em;color:#c79a4b;text-transform:uppercase">${h(b.company_name)}</div>`;
   const ids = [b.gstin ? 'GSTIN ' + b.gstin : '', b.cin ? 'CIN ' + b.cin : '', b.pan ? 'PAN ' + b.pan : ''].filter(Boolean).join(' · ');
   const details = [b.address, ids, [b.contact, b.website].filter(Boolean).join(' · ')]
     .filter(Boolean).map(s => `<div>${h(s)}</div>`).join('');
-  return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid ${h(b.accent)};padding-bottom:10px;margin-bottom:14px">
-    <div>${logo}<div style="font-size:12.5px;font-weight:700;color:${h(b.accent)};margin-top:4px">${h(b.legal_name || b.company_name)}</div>${b.tagline ? `<div style="font-size:11px;color:#666;margin-top:1px">${h(b.tagline)}</div>` : ''}</div>
-    <div style="text-align:right;font-size:11px;color:#444;line-height:1.5">${details}</div>
-  </div>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;background:linear-gradient(155deg,#16284a,#0f1c33);color:#fff;padding:18px 22px;border-radius:6px 6px 0 0;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+    <div>${logo}<div style="margin-top:6px;font-size:13.5px;font-weight:700">${h(b.legal_name || b.company_name)}</div>${b.tagline ? `<div style="font-size:11px;color:#aeb8cc;margin-top:1px">${h(b.tagline)}</div>` : ''}</div>
+    <div style="text-align:right;font-size:10.5px;line-height:1.6;color:#c6cfde;max-width:300px">${details}</div>
+  </div>
+  <div style="height:3px;background:linear-gradient(90deg,#c79a4b 0 62%,transparent 62%);-webkit-print-color-adjust:exact;print-color-adjust:exact;margin-bottom:12px"></div>`;
 }
 // Draw a branded header on a jsPDF doc; returns the Y to start content at.
 function brandPdfHeader(pdf, title, subtitleLines) {
