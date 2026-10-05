@@ -5549,9 +5549,23 @@ async function handlePurgeOrders(request: Request, env: Env): Promise<Response> 
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({ error: "Only a super admin may delete orders" }, 403);
   await ensureFeatureTables(env);
-  const body = await request.json().catch(() => ({})) as { ids?: unknown };
-  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map(s => s.trim()).filter(Boolean))].slice(0, 200) : [];
-  if (!ids.length) return json({ error: "No order ids supplied" }, 400);
+  const body = await request.json().catch(() => ({})) as { ids?: unknown; before?: unknown };
+  // Two modes: an explicit id list, or a date cutoff that selects every order created on or
+  // before a date (orders + their challans only; standalone/ad-hoc challans are untouched).
+  const DATE_BATCH = 150;   // bounded per call so a large cleanup stays within subrequest limits
+  let ids: string[] = [];
+  let remaining = 0;
+  const before = typeof body.before === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.before) ? body.before : null;
+  if (before) {
+    const tot = await env.DB.prepare("SELECT COUNT(*) AS n FROM orders WHERE date(created_at) <= ?").bind(before).first() as { n: number } | null;
+    const { results } = await env.DB.prepare("SELECT id FROM orders WHERE date(created_at) <= ? ORDER BY created_at LIMIT ?").bind(before, DATE_BATCH).all() as { results: { id: string }[] };
+    ids = results.map(r => String(r.id));
+    remaining = Math.max(0, (tot?.n || 0) - ids.length);
+  } else {
+    ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map(s => s.trim()).filter(Boolean))].slice(0, 200) : [];
+  }
+  if (typeof body.before !== "undefined" && !before) return json({ error: "before must be a date (YYYY-MM-DD)" }, 400);
+  if (!ids.length) return json({ error: before ? "No orders on or before " + before : "No order ids supplied", deleted: 0, blocked: 0, results: [], remaining: 0 }, before ? 200 : 400);
 
   const results: { id: string; deleted: boolean; reason?: string }[] = [];
   for (const id of ids) {
@@ -5604,7 +5618,11 @@ async function handlePurgeOrders(request: Request, env: Env): Promise<Response> 
     }
   }
   const deleted = results.filter(r => r.deleted).length;
-  return json({ deleted, blocked: results.length - deleted, results });
+  // In date mode, `remaining` counts matches beyond this batch PLUS any blocked ones
+  // (blocked orders stay and would be re-selected), so the UI can stop re-running once
+  // only guarded orders are left.
+  const blocked = results.length - deleted;
+  return json({ deleted, blocked, results, remaining: before ? remaining + blocked : 0 });
 }
 
 // GET /api/orders/:id/drilldown — full line-item reconciliation (ordered vs delivered vs due)
