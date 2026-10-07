@@ -1400,9 +1400,12 @@ async function dcRecurringGenerate(id) {
 }
 
 // ── Ad-hoc DC register + create form (Phase 1) ──
-function dcAdhocPanelHTML(list, dcSeries) {
+function dcAdhocPanelHTML(list, dcSeries, clients) {
   const rows = list || [];
   const needsSeries = dcSeries && dcSeries.needs_series;
+  const clientOpts = (Array.isArray(clients) ? clients : [])
+    .filter(c => c && c.name).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .map(c => `<option value="${h(c.name)}">${h(c.name)}</option>`).join('');
   const clsChip = c => c==='GIFTING'
     ? '<span style="font-family:ui-monospace,monospace;font-size:.62rem;font-weight:700;color:#b06a12;background:#faedda;border-radius:5px;padding:1px 6px">8xxxxx</span>'
     : '<span style="font-family:ui-monospace,monospace;font-size:.62rem;font-weight:700;color:#0e7c86;background:#e0f2f3;border-radius:5px;padding:1px 6px">7xxxxx</span>';
@@ -1424,7 +1427,10 @@ function dcAdhocPanelHTML(list, dcSeries) {
         <select id="adhoc-cat" style="display:block;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px">
           <option>Consumables</option><option>Non-Returnable</option><option>Gifting</option><option>Returnable-Sample</option>
         </select></div>
-      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Client</label><input id="adhoc-client" placeholder="Client name" style="display:block;width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
+      <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Client</label>
+        <select id="adhoc-client" style="display:block;width:200px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px">
+          <option value="">Select client…</option>${clientOpts}
+        </select></div>
       <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Items</label><input id="adhoc-items" placeholder="e.g. Water 20L ×40" style="display:block;width:180px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
       <div class="form-group" style="margin:0"><label class="u-b600" style="font-size:.72rem">Delivery person</label><input id="adhoc-person" placeholder="Optional" style="display:block;width:150px;border:1.5px solid var(--border);border-radius:8px;padding:7px 10px"></div>
       <button class="btn btn-gold btn-sm" ${dataAct('dcCreateAdHoc')}>+ Create DC</button>
@@ -1451,13 +1457,16 @@ async function dcCreateAdHoc() {
 
 // ── DC Manager page (Phase 5) — all Delivery-Challan tools in one place ──
 async function renderDCManager(el) {
-  const [dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring, dcRouteCands, dcRoutes] = await Promise.all([
+  const [dcSeries, dcAdhoc, dcBilling, dcSamples, dcRecurring, dcRouteCands, dcRoutes, dcClients] = await Promise.all([
     api('/dc-series'), api('/delivery-challans/ad-hoc'), api('/dc-billing/pending'),
     api('/dc-samples'), api('/dc-recurring'), api('/dc-routes/candidates'), api('/dc-routes'),
+    api('/clients').catch(() => []),
   ]);
   if (!dcSeries) return;
+  // Assign/Create DC is the primary action, so it leads the page.
   el.innerHTML = `
   ${pageHeader('DC Manager', 'Delivery-Challan lifecycle — numbering · billing · samples · routes · recurring', '')}
+  ${dcAdhocPanelHTML(dcAdhoc, dcSeries, dcClients)}
   ${dcSeriesPanelHTML(dcSeries)}
   ${dcReportsPanelHTML()}
   ${dcBillingPanelHTML(dcBilling)}
@@ -1465,7 +1474,6 @@ async function renderDCManager(el) {
   ${dcRoutePanelHTML(dcRouteCands, dcRoutes)}
   ${dcRecurringPanelHTML(dcRecurring, dcSeries)}
   ${dcImportPanelHTML()}
-  ${dcAdhocPanelHTML(dcAdhoc, dcSeries)}
   `;
 }
 
