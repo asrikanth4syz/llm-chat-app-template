@@ -1732,6 +1732,50 @@ async function renderTrackDelivery(el) {
 /* ============================================================
    ORDER QUEUE (Ops)
    ============================================================ */
+// ── Order Queue buckets (shared by the Orders-tab top tiles and the Operator tab) ──
+// Plain, outcome-based names a non-technical operator reads instantly. Defined on real
+// statuses/dates so the counts are trustworthy.
+const OQ_CLOSED = ['CLOSED', 'CANCELLED', 'DELIVERED', 'RECEIVED', 'REJECTED'];
+function oqIsOpen(o) { return !OQ_CLOSED.includes(o.status); }
+function oqDueDate(o) { return (o.need_by_date || o.predicted_delivery_date || '').slice(0, 10); }
+function oqBucketMatch(o, key) {
+  const today = new Date().toISOString().slice(0, 10);
+  const due = oqDueDate(o);
+  switch (key) {
+    case 'pending':  return oqIsOpen(o);
+    case 'duetoday': return oqIsOpen(o) && !!due && due === today;
+    case 'overdue':  return oqIsOpen(o) && !!due && due < today;
+    case 'ready':    return ['READY_TO_PICK', 'PICKED', 'QUALITY_CHECK'].includes(o.status);
+    case 'partial':  return o.status === 'PARTIALLY_CLOSED';
+    default:         return true;
+  }
+}
+// [key, label, hint, dot-colour]
+const OQ_BUCKETS = [
+  ['pending',  'Pending',   'all open',         'var(--navy)'],
+  ['duetoday', 'Due Today', 'deliver by today', 'var(--blue)'],
+  ['overdue',  'Overdue',   'past the date',    'var(--danger)'],
+  ['ready',    'Ready',     'picked & checked', 'var(--success)'],
+  ['partial',  'Partial',   'some delivered',   'var(--warning)'],
+];
+// The month/type/client-filtered order set (the common base for the top tiles and both tabs).
+function oqBase() {
+  let res = APP._oqOrders || [];
+  if (APP._oqMonth) res = res.filter(o => (o.created_at || '').startsWith(APP._oqMonth));
+  if (APP._oqTypeFilter) res = res.filter(o => (o.order_type || 'Regular') === APP._oqTypeFilter);
+  if (APP._oqClient) { const q = APP._oqClient.toLowerCase(); res = res.filter(o => (o.client_name || '').toLowerCase().includes(q)); }
+  return res;
+}
+// One mock-style tile (coloured dot + label + big count + hint), used for buckets and types.
+function oqTileHtml(dot, label, count, hint, act, on) {
+  const ring = on ? 'border-color:var(--navy);box-shadow:0 0 0 2px color-mix(in srgb,var(--navy) 22%,transparent),0 1px 3px rgba(18,32,56,.07)' : 'border-color:var(--border);box-shadow:0 1px 3px rgba(18,32,56,.07)';
+  return `<button ${act} aria-pressed="${on ? 'true' : 'false'}" style="text-align:left;background:var(--surface,#fff);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer;${ring}">
+    <div style="display:flex;align-items:center;gap:7px;font-size:.78rem;font-weight:600;color:var(--text-muted)"><span style="width:9px;height:9px;border-radius:50%;background:${dot};flex:none"></span>${label}</div>
+    <div style="font-size:1.55rem;font-weight:800;color:var(--navy);line-height:1;margin-top:7px;font-variant-numeric:tabular-nums">${count}</div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:3px">${hint}</div>
+  </button>`;
+}
+
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
@@ -1763,65 +1807,21 @@ async function renderOrderQueue(el) {
 
   function oqKpiHtml(fOrders) {
     const allForType = APP._oqMonth ? orders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : orders;
-    const active = fOrders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status));
-    const byS = s => fOrders.filter(o=>o.status===s);
-    const nSubmitted = byS('SUBMITTED').length, nPending = byS('PENDING_APPROVAL').length, nApproved = byS('APPROVED').length;
-    const needsAction  = nSubmitted + nPending + nApproved;
-    const needsBreakdown = [
-      nSubmitted && `${nSubmitted} submitted`,
-      nPending   && `${nPending} pending`,
-      nApproved  && `${nApproved} approved`,
-    ].filter(Boolean).join(' · ') || 'all clear';
-    const inShipment   = byS('IN_SHIPMENT').length + byS('PARTIALLY_CLOSED').length;
-    const toPick       = byS('ACKNOWLEDGED').length + byS('READY_TO_PICK').length;
-    const totalValue   = active.reduce((s,o)=>s+(o.grand_total||0),0);
-    const byType = t => allForType.filter(o=>(o.order_type||'Regular')===t);
-    const typeCfg = [
-      {type:'Regular', color:'var(--blue)',   icon:'📋'},
-      {type:'Urgent',  color:'var(--danger)', icon:'🚨'},
-      {type:'Ad-Hoc',  color:'#d97706',       icon:'⚡'},
-    ];
+    const bucket = APP._oqBucket || null;
+    const bcount = k => fOrders.filter(o => oqBucketMatch(o, k)).length;
+    const buckets = OQ_BUCKETS
+      .map(([k, label, hint, dot]) => oqTileHtml(dot, label, bcount(k), hint, dataAct('oqSetBucket', k), bucket === k))
+      .join('');
+    const typeCfg = [['Regular', 'var(--blue)'], ['Urgent', 'var(--danger)'], ['Ad-Hoc', '#d97706']];
+    const types = typeCfg.map(([type, color]) => {
+      const grp = allForType.filter(o => (o.order_type || 'Regular') === type);
+      return oqTileHtml(color, type, grp.length, fmt(grp.reduce((s, o) => s + (o.grand_total || 0), 0)),
+        dataAct('oqFilterByType', type), APP._oqTypeFilter === type);
+    }).join('');
     return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-bottom:12px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue);margin-bottom:0;cursor:pointer" ${dataAct('switchOQMainTab', 'orders')}>
-        <div class="u-label">Active Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${active.length}</div>
-        <div class="u-sub">${fmt(totalValue)}</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${needsAction?'var(--warning)':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'PENDING_APPROVAL')}>
-        <div class="u-label">Needs Attention</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${needsAction?'var(--warning)':'var(--navy)'};line-height:1">${needsAction}</div>
-        <div class="u-sub">${needsBreakdown}</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--violet);margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'IN_SHIPMENT')}>
-        <div class="u-label">In Shipment</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inShipment}</div>
-        <div class="u-sub">en route to client</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" ${dataAct('oqGoto', 'ACKNOWLEDGED')}>
-        <div class="u-label">To Pick</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${toPick}</div>
-        <div class="u-sub">in warehouse queue</div>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
-      ${typeCfg.map(({type,color,icon})=>{
-        const cnt = byType(type).length;
-        const val = byType(type).reduce((s,o)=>s+(o.grand_total||0),0);
-        const active = APP._oqTypeFilter===type;
-        return `<div class="card" ${dataAct('oqFilterByType', type)}
-          style="padding:12px 16px;border-top:3px solid ${color};margin-bottom:0;cursor:pointer;
-          ${active?`background:${color}10;box-shadow:0 0 0 2px ${color}40`:''}">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-            <span style="font-size:.9rem">${icon}</span>
-            <span style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${color}">${type}</span>
-            ${active?`<span style="margin-left:auto;font-size:.65rem;color:${color};font-weight:700">✕ clear</span>`:''}
-          </div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--navy);line-height:1">${cnt}</div>
-          <div style="font-size:.72rem;color:var(--text-muted);margin-top:3px">${fmt(val)}</div>
-        </div>`;
-      }).join('')}
-    </div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:12px">${buckets}</div>
+    <div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin:2px 2px 6px">By order type</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px">${types}</div>`;
   }
 
   function monthPickerHtml() {
@@ -1868,6 +1868,7 @@ async function renderOrderQueue(el) {
     if (!tab || tab === 'All') filtered = fOrders;
     else if (tab.startsWith('phase:')) { const ph = ORDER_PHASES.find(p => p.key === tab.slice(6)); filtered = ph ? fOrders.filter(o => ph.statuses.includes(o.status)) : fOrders; }
     else filtered = fOrders.filter(o=>o.status===tab);
+    if (APP._oqBucket) filtered = filtered.filter(o => oqBucketMatch(o, APP._oqBucket));
     const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
@@ -1927,26 +1928,39 @@ async function renderOrderQueue(el) {
   <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
 
   <div class="tabs" style="margin-bottom:16px">
-    <button class="tab-btn${APP._oqTab==='orders'?' active':''}" ${dataAct('switchOQMainTab', 'orders')}>Orders</button>
-    <button class="tab-btn${APP._oqTab==='items'?' active':''}" ${dataAct('switchOQMainTab', 'items')}>Line Items</button>
+    <button class="tab-btn${APP._oqTab==='orders'?' active':''}" data-oqtab="orders" ${dataAct('switchOQMainTab', 'orders')}>Orders</button>
+    <button class="tab-btn${APP._oqTab==='items'?' active':''}" data-oqtab="items" ${dataAct('switchOQMainTab', 'items')}>Line Items</button>
+    <button class="tab-btn${APP._oqTab==='operator'?' active':''}" data-oqtab="operator" ${dataAct('switchOQMainTab', 'operator')}>👤 Operator</button>
   </div>
 
-  <div id="oq-main-content">
-    ${APP._oqTab === 'orders' ? `
+  <div id="oq-main-content">${oqMainContentHtml(APP._oqTab)}</div>`;
+
+  if (APP._oqTab === 'items') oqLoadItems();
+  else if (APP._oqTab === 'operator') renderOperatorTab();
+}
+
+// The orders table card (phase stepper + table). Shared by the first render and
+// tab switching so the two never drift.
+function oqOrdersTableHtml() {
+  return `
     <div class="card" style="overflow:hidden">
       <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-        <div id="oq-tabs">${oqTabsHtml()}</div>
+        <div id="oq-tabs">${APP._oqTabsHtml ? APP._oqTabsHtml() : ''}</div>
       </div>
       <div class="table-wrap">
         <table class="table table-cards table-cards-2up" style="margin:0">
           <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
-          ${oqTableHtml(APP._oqStatusTab)}
+          ${APP._oqTableHtml ? APP._oqTableHtml(APP._oqStatusTab) : ''}
         </table>
       </div>
-    </div>` : '<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>'}
-  </div>`;
+    </div>`;
+}
 
-  if (APP._oqTab === 'items') oqLoadItems();
+// Body for #oq-main-content for the given main tab.
+function oqMainContentHtml(tab) {
+  if (tab === 'items')    return '<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>';
+  if (tab === 'operator') return '<div id="oq-operator-area"><div class="loading-state"><div class="spinner"></div><p>Loading worklist…</p></div></div>';
+  return oqOrdersTableHtml();
 }
 
 function oqSetMonth(m) {
@@ -1960,41 +1974,40 @@ function oqSetMonth(m) {
     const f = APP._oqOrders ? (APP._oqMonth ? APP._oqOrders.filter(o=>(o.created_at||'').startsWith(APP._oqMonth)) : APP._oqOrders) : [];
     sub.textContent = `${f.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders`;
   }
-  if (APP._oqTab === 'orders') {
+  if (APP._oqTab === 'operator') {
+    renderOperatorTab();
+  } else if (APP._oqTab === 'items') {
+    oqLoadItems();
+  } else {
     const tabsEl = document.getElementById('oq-tabs');
     if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
     const tbody = document.getElementById('oq-tbody');
     if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab);
-  } else {
-    oqLoadItems();
   }
 }
 
 function switchOQMainTab(tab) {
   APP._oqTab = tab;
-  document.querySelectorAll('.tabs .tab-btn').forEach(b => {
-    if (b.textContent.trim()==='Orders'||b.textContent.trim()==='Line Items')
-      b.classList.toggle('active', (tab==='orders'&&b.textContent.trim()==='Orders')||(tab==='items'&&b.textContent.trim()==='Line Items'));
-  });
+  document.querySelectorAll('.tabs .tab-btn[data-oqtab]').forEach(b =>
+    b.classList.toggle('active', b.getAttribute('data-oqtab') === tab));
   const contentEl = document.getElementById('oq-main-content');
   if (!contentEl) return;
-  if (tab === 'orders') {
-    contentEl.innerHTML = `
-    <div class="card" style="overflow:hidden">
-      <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-        <div id="oq-tabs">${APP._oqTabsHtml?APP._oqTabsHtml():''}</div>
-      </div>
-      <div class="table-wrap">
-        <table class="table table-cards table-cards-2up" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
-          ${APP._oqTableHtml?APP._oqTableHtml(APP._oqStatusTab):''}
-        </table>
-      </div>
-    </div>`;
-  } else {
-    contentEl.innerHTML = `<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>`;
-    oqLoadItems();
-  }
+  contentEl.innerHTML = oqMainContentHtml(tab);
+  if (tab === 'items') oqLoadItems();
+  else if (tab === 'operator') renderOperatorTab();
+}
+
+// Top-tile bucket filter (Pending / Due Today / Overdue / Ready / Partial).
+// Clicking the active bucket again clears it. Refreshes the tiles and whichever
+// main tab is open so the Orders table and the Operator worklist stay in sync.
+function oqSetBucket(key) {
+  APP._oqBucket = APP._oqBucket === key ? null : key;
+  const kpiEl = document.getElementById('oq-kpi');
+  if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(oqBase());
+  if (APP._oqTab === 'operator') { renderOperatorTab(); return; }
+  if (APP._oqTab === 'items') return;
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
 }
 
 function switchOQTab(tab) {
@@ -2032,6 +2045,7 @@ function oqSetClient(val) {
   const forKpi = APP._oqTypeFilter ? clientF.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter) : clientF;
   const kpiEl = document.getElementById('oq-kpi'); if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(forKpi);
   const sub = document.getElementById('oq-subtitle'); if (sub) sub.textContent = `${forKpi.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders`;
+  if (APP._oqTab === 'operator') { renderOperatorTab(); return; }
   const tabsEl = document.getElementById('oq-tabs'); if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody'); if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
 }
@@ -2045,6 +2059,7 @@ function oqFilterByType(type) {
   if (kpiEl && APP._oqKpiHtml) kpiEl.innerHTML = APP._oqKpiHtml(
     APP._oqTypeFilter ? allForType.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter) : allForType
   );
+  if (APP._oqTab === 'operator') { renderOperatorTab(); return; }
   const tabsEl = document.getElementById('oq-tabs');
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
