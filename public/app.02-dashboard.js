@@ -258,17 +258,9 @@ async function renderClientDashboard(el) {
     </div>
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
-      <div class="u-label">Due Items</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1" id="due-items-count">—</div>
-      <div class="u-sub">items pending delivery</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'fulfilment')}>
-      <div class="u-label">Fulfilment Rate</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1" id="client-fulfilment-pct">—</div>
-      <div class="u-sub">this month</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:1fr 1fr;margin-bottom:0">
+    ${tileHtml({label:'Due Items',value:'<span id="due-items-count">—</span>',sub:'items pending delivery',accent:'var(--danger)',act:dataAct('navigate','fulfilment')})}
+    ${tileHtml({label:'Fulfilment Rate',value:'<span id="client-fulfilment-pct">—</span>',sub:'this month',accent:'var(--primary)',act:dataAct('navigate','fulfilment')})}
   </div>`;
 
   // Load async KPIs
@@ -325,27 +317,11 @@ async function renderClientBudget(el) {
   </div>
 
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${color}">
-      <div class="u-label2">Spent This Month</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(spent)}</div>
-      <div class="u-subtiny">${pct}% of budget</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div class="u-label2">Monthly Budget</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(budget)}</div>
-      <div class="u-subtiny">${fmt(remain)} remaining</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'}">
-      <div class="u-label2">Health Score</div>
-      <div style="font-size:1.6rem;font-weight:800;color:${health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'};margin-top:6px">${health}/100</div>
-      <div class="u-subtiny">${health>=80?'Excellent':health>=60?'Good':'Needs attention'}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div class="u-label2">Total Orders</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${(orders||[]).length}</div>
-      <div class="u-subtiny">${active.length} active · ${closed.length} closed</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr)">
+    ${tileHtml({label:'Spent This Month',value:fmt(spent),sub:`${pct}% of budget`,accent:color})}
+    ${tileHtml({label:'Monthly Budget',value:fmt(budget),sub:`${fmt(remain)} remaining`,accent:'var(--primary)'})}
+    ${tileHtml({label:'Health Score',value:`${health}/100`,sub:health>=80?'Excellent':health>=60?'Good':'Needs attention',accent:health>=80?'var(--success)':health>=60?'var(--warning)':'var(--danger)'})}
+    ${tileHtml({label:'Total Orders',value:(orders||[]).length,sub:`${active.length} active · ${closed.length} closed`,accent:'var(--success)'})}
   </div>
 
   <!-- Budget bar -->
@@ -1002,7 +978,7 @@ async function renderVendorDashboard(el) {
 
   el.innerHTML = `
   ${pageHeader('Vendor Dashboard', vendor?.name || 'Vendor Portal')}
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
     ${(()=>{
       const onTime = vendor?.on_time_rate||0;
       const fillRate = vendor?.fill_rate||0;
@@ -1012,26 +988,10 @@ async function renderVendorDashboard(el) {
       const fillColor   = fillRate>=90?'var(--success)':fillRate>=70?'#d97706':'var(--danger)';
       const leadColor   = leadDays<=3?'var(--success)':leadDays<=7?'#d97706':'var(--danger)';
       return `
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${onTimeColor};margin-bottom:0">
-        <div class="u-label">On-time Rate</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${onTimeColor};line-height:1">${pct(onTime)}</div>
-        <div class="u-sub">last 90 days</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${fillColor};margin-bottom:0">
-        <div class="u-label">Fill Rate</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${fillColor};line-height:1">${pct(fillRate)}</div>
-        <div class="u-sub">order completeness</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${leadColor};margin-bottom:0">
-        <div class="u-label">Avg Lead Time</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${leadDays}d</div>
-        <div style="font-size:.75rem;color:${leadColor};margin-top:6px">${leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement'}</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${pendingCount>0?'var(--warning)':'var(--success)'};margin-bottom:0;cursor:pointer" ${dataAct('navigate', 'vendor_pos')}>
-        <div class="u-label">Pending POs</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${pendingCount>0?'var(--warning)':'var(--navy)'};line-height:1">${pendingCount}</div>
-        <div style="font-size:.75rem;color:${pendingCount>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${pendingCount>0?'awaiting action':'all clear'}</div>
-      </div>`;
+      ${tileHtml({label:'On-time Rate',value:pct(onTime),sub:'last 90 days',accent:onTimeColor})}
+      ${tileHtml({label:'Fill Rate',value:pct(fillRate),sub:'order completeness',accent:fillColor})}
+      ${tileHtml({label:'Avg Lead Time',value:`${leadDays}d`,sub:leadDays<=3?'Excellent':leadDays<=7?'Acceptable':'Needs improvement',accent:leadColor})}
+      ${tileHtml({label:'Pending POs',value:pendingCount,sub:pendingCount>0?'awaiting action':'all clear',accent:pendingCount>0?'var(--warning)':'var(--success)',act:dataAct('navigate','vendor_pos')})}`;
     })()}
   </div>
   <div class="card">

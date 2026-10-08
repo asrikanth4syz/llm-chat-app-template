@@ -66,27 +66,11 @@ async function switchFulfilTab(tab, btn) {
     if (!data) return;
     const critical = data.filter(r => r.due_ageing_days >= 15).length;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Critical (15+ days)</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
-        <div style="font-size:.75rem;color:${critical>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical>0?'immediate action needed':'none critical'}</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div class="u-label">Total Due Items</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div class="u-sub">items pending</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Total Due Qty</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.reduce((s,r)=>s+(r.due_qty||0),0)}</div>
-        <div class="u-sub">units outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Due Value</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0))}</div>
-        <div class="u-sub">estimated at cost</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Critical (15+ days)',value:critical,sub:critical>0?'immediate action needed':'none critical',accent:critical>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Total Due Items',value:data.length,sub:'items pending',accent:'var(--warning)'})}
+      ${tileHtml({label:'Total Due Qty',value:data.reduce((s,r)=>s+(r.due_qty||0),0),sub:'units outstanding',accent:'var(--primary)'})}
+      ${tileHtml({label:'Due Value',value:fmt(data.reduce((s,r)=>s+(r.due_qty||0)*(r.unit_price||0),0)),sub:'estimated at cost',accent:'var(--navy)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Due Items</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'due-items')}>&#8595; CSV</button></div>
@@ -114,32 +98,12 @@ async function switchFulfilTab(tab, btn) {
     const data = await api('/reports/pending-supply');
     if (!data) return;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Open Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.open_orders}</div>
-        <div class="u-sub">in progress</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div class="u-label">Partial Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${data.kpis.partial_orders}</div>
-        <div class="u-sub">partly delivered</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
-        <div class="u-label">Due Quantity</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${data.kpis.due_qty}</div>
-        <div class="u-sub">units outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--danger);margin-bottom:0">
-        <div class="u-label">Due Value</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--danger);line-height:1">${fmt(data.kpis.due_value)}</div>
-        <div class="u-sub">at risk</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Delayed Deliveries</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.delayed_deliveries>0?'var(--warning)':'var(--navy)'};line-height:1">${data.kpis.delayed_deliveries}</div>
-        <div class="u-sub">past expected date</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(155px,1fr))">
+      ${tileHtml({label:'Open Orders',value:data.kpis.open_orders,sub:'in progress',accent:'var(--navy)'})}
+      ${tileHtml({label:'Partial Orders',value:data.kpis.partial_orders,sub:'partly delivered',accent:'var(--warning)'})}
+      ${tileHtml({label:'Due Quantity',value:data.kpis.due_qty,sub:'units outstanding',accent:'var(--danger)'})}
+      ${tileHtml({label:'Due Value',value:fmt(data.kpis.due_value),sub:'at risk',accent:'var(--danger)'})}
+      ${tileHtml({label:'Delayed Deliveries',value:data.kpis.delayed_deliveries,sub:'past expected date',accent:data.kpis.delayed_deliveries>0?'var(--warning)':'var(--success)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Client Drilldown</span></div>
@@ -164,27 +128,11 @@ async function switchFulfilTab(tab, btn) {
     const critical      = data.find(r=>r.age_bucket==='15+ Days');
     const totalOrders   = data.reduce((s,r)=>s+(r.order_count||0),0);
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical?.order_count?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Critical (15+ days)</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${critical?.order_count?'var(--danger)':'var(--navy)'};line-height:1">${critical?.order_count||0}</div>
-        <div style="font-size:.75rem;color:${critical?.order_count?'var(--danger)':'var(--text-muted)'};margin-top:6px">${fmt(critical?.due_value||0)} at risk</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Total Due Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalOrders}</div>
-        <div class="u-sub">across all buckets</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div class="u-label">Total Due Qty</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDueQty}</div>
-        <div class="u-sub">units outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Total Due Value</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueValue)}</div>
-        <div class="u-sub">estimated at cost</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Critical (15+ days)',value:critical?.order_count||0,sub:`${fmt(critical?.due_value||0)} at risk`,accent:critical?.order_count?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Total Due Orders',value:totalOrders,sub:'across all buckets',accent:'var(--navy)'})}
+      ${tileHtml({label:'Total Due Qty',value:totalDueQty,sub:'units outstanding',accent:'var(--warning)'})}
+      ${tileHtml({label:'Total Due Value',value:fmt(totalDueValue),sub:'estimated at cost',accent:'var(--primary)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Due Ageing Report</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'ageing')}>&#8595; CSV</button></div>
@@ -209,27 +157,11 @@ async function switchFulfilTab(tab, btn) {
     const totalDue = data.reduce((s,r)=>s+(r.due_qty||0),0);
     const avgFill  = data.length ? Math.round(data.reduce((s,r)=>s+(r.fulfilment_pct||0),0)/data.length) : 100;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${critical>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Critical Brands (&lt;70%)</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${critical>0?'var(--danger)':'var(--navy)'};line-height:1">${critical}</div>
-        <div class="u-sub">of ${data.length} brands</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};margin-bottom:0">
-        <div class="u-label">Avg Fulfilment</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'};line-height:1">${avgFill}%</div>
-        <div class="u-sub">across all brands</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Total Due Units</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
-        <div class="u-sub">outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Brands Tracked</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div class="u-sub">last 30 days</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Critical Brands (&lt;70%)',value:critical,sub:`of ${data.length} brands`,accent:critical>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Avg Fulfilment',value:`${avgFill}%`,sub:'across all brands',accent:avgFill>=90?'var(--success)':avgFill>=70?'var(--warning)':'var(--danger)'})}
+      ${tileHtml({label:'Total Due Units',value:totalDue,sub:'outstanding',accent:totalDue>0?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'Brands Tracked',value:data.length,sub:'last 30 days',accent:'var(--navy)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Brand Shortfall Report</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'brand-shortfall')}>&#8595; CSV</button></div>
@@ -256,27 +188,11 @@ async function switchFulfilTab(tab, btn) {
     const totalSuggestedPO = data.reduce((s,r)=>s+(r.suggested_po_qty||0),0);
     const brandsWithShortfall = data.filter(r=>(r.shortfall_qty||0)>0).length;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${brandsWithShortfall>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Brands w/ Shortfall</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${brandsWithShortfall>0?'var(--warning)':'var(--navy)'};line-height:1">${brandsWithShortfall}</div>
-        <div class="u-sub">of ${data.length} brands</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalShortfall>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Total Shortfall Qty</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${totalShortfall>0?'var(--danger)':'var(--navy)'};line-height:1">${totalShortfall}</div>
-        <div class="u-sub">units to procure</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Suggested PO Qty</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
-        <div class="u-sub">total units to order</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Brands Tracked</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div class="u-sub">last 30 days</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Brands w/ Shortfall',value:brandsWithShortfall,sub:`of ${data.length} brands`,accent:brandsWithShortfall>0?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'Total Shortfall Qty',value:totalShortfall,sub:'units to procure',accent:totalShortfall>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Suggested PO Qty',value:totalSuggestedPO,sub:'total units to order',accent:'var(--primary)'})}
+      ${tileHtml({label:'Brands Tracked',value:data.length,sub:'last 30 days',accent:'var(--navy)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Consolidated Brand Procurement</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'brand-procurement')}>&#8595; CSV</button></div>
@@ -303,27 +219,11 @@ async function switchFulfilTab(tab, btn) {
     const totalDueVal = data.reduce((s,r)=>s+(r.due_value||0),0);
     const avgDelivery = data.filter(r=>r.avg_delivery_days).length ? Math.round(data.filter(r=>r.avg_delivery_days).reduce((s,r)=>s+(r.avg_delivery_days||0),0)/data.filter(r=>r.avg_delivery_days).length*10)/10 : null;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${atRisk>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">At-Risk Clients</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${atRisk>0?'var(--danger)':'var(--navy)'};line-height:1">${atRisk}</div>
-        <div style="font-size:.75rem;color:${atRisk>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">fulfilment &lt;70%</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Avg Fulfilment</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'};line-height:1">${avgFill}%</div>
-        <div class="u-sub">across all clients</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDueVal>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Total Due Value</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${fmt(totalDueVal)}</div>
-        <div class="u-sub">outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Avg Delivery Time</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${avgDelivery!=null?avgDelivery+'d':'—'}</div>
-        <div class="u-sub">days from order</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'At-Risk Clients',value:atRisk,sub:'fulfilment &lt;70%',accent:atRisk>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Avg Fulfilment',value:`${avgFill}%`,sub:'across all clients',accent:avgFill<70?'var(--danger)':avgFill<90?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'Total Due Value',value:fmt(totalDueVal),sub:'outstanding',accent:totalDueVal>0?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'Avg Delivery Time',value:avgDelivery!=null?avgDelivery+'d':'—',sub:'days from order',accent:'var(--primary)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Client Fulfilment Scorecard</span><button class="btn btn-secondary btn-sm" ${dataAct('exportFulfilCSV', 'client-scorecard')}>&#8595; CSV</button></div>
@@ -352,27 +252,11 @@ async function switchFulfilTab(tab, btn) {
     const data = await api(`/reports/dc-per-order?from=${from30}&to=${today}`);
     if (!data) return;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Total Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.totalOrders}</div>
-        <div class="u-sub">last 30 days</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div class="u-label">Single DC Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.singleDC}</div>
-        <div style="font-size:.75rem;color:var(--success);margin-top:6px">one-shot delivery</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.multiDC>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Multi-DC Orders</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.multiDC}</div>
-        <div class="u-sub">split deliveries</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Avg DCs per Order</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.avgDCsPerOrder}</div>
-        <div class="u-sub">delivery challans</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Total Orders',value:data.kpis.totalOrders,sub:'last 30 days',accent:'var(--navy)'})}
+      ${tileHtml({label:'Single DC Orders',value:data.kpis.singleDC,sub:'one-shot delivery',accent:'var(--success)'})}
+      ${tileHtml({label:'Multi-DC Orders',value:data.kpis.multiDC,sub:'split deliveries',accent:data.kpis.multiDC>0?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'Avg DCs per Order',value:data.kpis.avgDCsPerOrder,sub:'delivery challans',accent:'var(--primary)'})}
     </div>
     <div class="card" style="padding:0;overflow:hidden">
       <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
@@ -429,27 +313,11 @@ async function switchFulfilTab(tab, btn) {
     const data = await api(`/reports/dc-reconciliation?from=${from30}&to=${today}`);
     if (!data) return;
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Total DCs</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.total_dcs}</div>
-        <div class="u-sub">last 30 days</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div class="u-label">POD Uploaded</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.kpis.pod_uploaded}</div>
-        <div style="font-size:.75rem;color:var(--success);margin-top:6px">proof of delivery</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_pod>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Missing POD</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_pod}</div>
-        <div style="font-size:.75rem;color:${data.kpis.missing_pod>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_pod>0?'upload required':'all clear'}</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Missing DC Scan</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--navy)'};line-height:1">${data.kpis.missing_dc_scan}</div>
-        <div style="font-size:.75rem;color:${data.kpis.missing_dc_scan>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${data.kpis.missing_dc_scan>0?'scan required':'all clear'}</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Total DCs',value:data.kpis.total_dcs,sub:'last 30 days',accent:'var(--navy)'})}
+      ${tileHtml({label:'POD Uploaded',value:data.kpis.pod_uploaded,sub:'proof of delivery',accent:'var(--success)'})}
+      ${tileHtml({label:'Missing POD',value:data.kpis.missing_pod,sub:data.kpis.missing_pod>0?'upload required':'all clear',accent:data.kpis.missing_pod>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Missing DC Scan',value:data.kpis.missing_dc_scan,sub:data.kpis.missing_dc_scan>0?'scan required':'all clear',accent:data.kpis.missing_dc_scan>0?'var(--danger)':'var(--success)'})}
     </div>
     <div class="card">
       <div class="card-header"><span>Delivery Challan Reconciliation</span></div>
@@ -478,27 +346,11 @@ async function switchFulfilTab(tab, btn) {
     const stockout         = data.filter(r=>r.current_stock<(r.due_qty||0)).length;
     const totalDue         = data.reduce((s,r)=>s+(r.due_qty||0),0);
     el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${stockout>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Stockout Risk</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${stockout>0?'var(--danger)':'var(--navy)'};line-height:1">${stockout}</div>
-        <div style="font-size:.75rem;color:${stockout>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">stock &lt; due qty</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-        <div class="u-label">Items Needing PO</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${data.length}</div>
-        <div class="u-sub">to be procured</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-        <div class="u-label">Total Due Qty</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDue}</div>
-        <div class="u-sub">units outstanding</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-        <div class="u-label">Total PO Qty Needed</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalSuggestedPO}</div>
-        <div class="u-sub">suggested order</div>
-      </div>
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+      ${tileHtml({label:'Stockout Risk',value:stockout,sub:'stock &lt; due qty',accent:stockout>0?'var(--danger)':'var(--success)'})}
+      ${tileHtml({label:'Items Needing PO',value:data.length,sub:'to be procured',accent:'var(--warning)'})}
+      ${tileHtml({label:'Total Due Qty',value:totalDue,sub:'units outstanding',accent:'var(--primary)'})}
+      ${tileHtml({label:'Total PO Qty Needed',value:totalSuggestedPO,sub:'suggested order',accent:'var(--navy)'})}
     </div>
     <div class="card">
       <div class="card-header">
@@ -576,32 +428,12 @@ function renderOVDTable(data) {
 
   return `
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Total Orders</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1">${total}</div>
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">in period</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Fully Delivered</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--success);line-height:1">${complete}</div>
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">${total?Math.round(complete/total*100):0}% of orders</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--amber);margin-bottom:0">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Partially Delivered</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--warning);line-height:1">${partial}</div>
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">balance pending</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${open>0?'var(--danger)':'var(--gray-light)'};margin-bottom:0">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Not Started</div>
-      <div style="font-size:2rem;font-weight:800;color:${open>0?'var(--danger)':'var(--navy)'};line-height:1">${open}</div>
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">no delivery yet</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${totalDue>0?'var(--danger)':'var(--gray-light)'};margin-bottom:0">
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Due Value</div>
-      <div style="font-size:1.4rem;font-weight:800;color:${totalDue>0?'var(--danger)':'var(--navy)'};line-height:1">${fmt(totalDue)}</div>
-      <div style="font-size:.72rem;color:var(--text-muted);margin-top:5px">undelivered</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(155px,1fr))">
+    ${tileHtml({label:'Total Orders',value:total,sub:'in period',accent:'var(--primary)'})}
+    ${tileHtml({label:'Fully Delivered',value:complete,sub:`${total?Math.round(complete/total*100):0}% of orders`,accent:'var(--success)'})}
+    ${tileHtml({label:'Partially Delivered',value:partial,sub:'balance pending',accent:'var(--amber)'})}
+    ${tileHtml({label:'Not Started',value:open,sub:'no delivery yet',accent:open>0?'var(--danger)':'var(--gray-light)'})}
+    ${tileHtml({label:'Due Value',value:fmt(totalDue),sub:'undelivered',accent:totalDue>0?'var(--danger)':'var(--gray-light)'})}
   </div>
 
   <!-- Order summary table -->
@@ -678,23 +510,11 @@ async function drillOrderDCs(orderId, label) {
 
   const body = `
   <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:16px">
-    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--primary)">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Challans</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${dcs.length}</div>
-    </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--violet)">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Lines</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${totalLines}</div>
-    </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--blue)">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Ordered Units</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:4px">${totalOrdered}</div>
-    </div>
-    <div style="background:var(--bg);border-radius:8px;padding:12px;border-top:2px solid var(--success)">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Delivered Units</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--success);margin-top:4px">${totalDelivered}</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">
+    ${tileHtml({label:'Challans',value:dcs.length,accent:'var(--primary)'})}
+    ${tileHtml({label:'Total Lines',value:totalLines,accent:'var(--violet)'})}
+    ${tileHtml({label:'Ordered Units',value:totalOrdered,accent:'var(--blue)'})}
+    ${tileHtml({label:'Delivered Units',value:totalDelivered,accent:'var(--success)'})}
   </div>
 
   <!-- DC detail table -->
@@ -908,15 +728,11 @@ async function renderStaff(el) {
   </div>
 
   <!-- Role summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:18px">
     ${Object.entries(byRole).map(([role, members])=>{
       const rc = STAFF_ROLE_COLOR[role]||'#6b7280';
       const activeCount = members.filter(s=>s.active).length;
-      return `<div style="background:var(--surface);border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${rc}">
-        <div style="font-size:.7rem;font-weight:700;color:${rc};text-transform:uppercase;letter-spacing:.06em">${STAFF_ROLE_LABEL[role]||role}</div>
-        <div style="font-size:1.8rem;font-weight:800;color:var(--navy);margin-top:4px">${activeCount}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">active · ${members.length} total</div>
-      </div>`;
+      return tileHtml({label:STAFF_ROLE_LABEL[role]||role,value:activeCount,sub:`active · ${members.length} total`,accent:rc});
     }).join('')}
   </div>
 
@@ -1034,32 +850,12 @@ async function renderTodaysSchedule(el) {
   ${pageHeader("Today's Delivery Schedule", today,
     `<button class="btn btn-secondary" ${dataAct('refreshDeliveryView', 'renderTodaysSchedule')}>&#8635; Refresh</button>`)}
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--navy);margin-bottom:0">
-      <div class="u-label">Total DCs</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${totalDCs}</div>
-      <div class="u-sub">${staffCount} staff on route</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div class="u-label">Delivered</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--success);line-height:1">${delivered}</div>
-      <div style="font-size:.75rem;color:var(--success);margin-top:6px">${donePct}% complete</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--warning);margin-bottom:0">
-      <div class="u-label">In Transit</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--warning);line-height:1">${inTransit}</div>
-      <div class="u-sub">out for delivery</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-      <div class="u-label">Scheduled</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${pending}</div>
-      <div class="u-sub">not yet started</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${unassigned.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-      <div class="u-label">Unassigned</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${unassigned.length>0?'var(--warning)':'var(--navy)'};line-height:1">${unassigned.length}</div>
-      <div style="font-size:.75rem;color:${unassigned.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${unassigned.length?'needs staff':'all assigned'}</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(155px,1fr))">
+    ${tileHtml({label:'Total DCs',value:totalDCs,sub:`${staffCount} staff on route`,accent:'var(--navy)'})}
+    ${tileHtml({label:'Delivered',value:delivered,sub:`${donePct}% complete`,accent:'var(--success)'})}
+    ${tileHtml({label:'In Transit',value:inTransit,sub:'out for delivery',accent:'var(--warning)'})}
+    ${tileHtml({label:'Scheduled',value:pending,sub:'not yet started',accent:'var(--primary)'})}
+    ${tileHtml({label:'Unassigned',value:unassigned.length,sub:unassigned.length?'needs staff':'all assigned',accent:unassigned.length>0?'var(--warning)':'var(--success)'})}
   </div>
 
   <div style="margin:12px 0 20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
@@ -1185,19 +981,13 @@ async function renderConsolidatedOrders(el) {
   ${pageHeader('Procurement View', 'Consolidated view of items needed across all orders',
     `${totalDue > 0 ? `<button class="btn btn-gold" ${dataAct('raisePOFromConsolidated')}>${iconPlus(14)} Raise PO from demand</button>` : ''}
      <button class="btn btn-secondary" ${dataAct('exportConsolidated')}>Export CSV</button>`)}
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:22px">
     ${[
-      {label:'Items with Due Qty',val:data.filter(r=>r.total_due_qty>0).length,sub:`of ${data.length} items`,color:'var(--danger)'},
-      {label:'Total Units Due',val:totalDue,sub:'pending delivery',color:totalDue?'var(--warning)':'var(--success)'},
-      {label:'Total Ordered',val:totalOrdered,sub:'units across orders',color:'var(--navy)'},
-      {label:'Total Delivered',val:totalDelivered,sub:`${totalOrdered?Math.round(totalDelivered/totalOrdered*100):100}% fulfillment`,color:'var(--success)'},
-    ].map(k=>`
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
-        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
-        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
-      </div>
-    `).join('')}
+      {label:'Items with Due Qty',value:data.filter(r=>r.total_due_qty>0).length,sub:`of ${data.length} items`,accent:'var(--danger)'},
+      {label:'Total Units Due',value:totalDue,sub:'pending delivery',accent:totalDue?'var(--warning)':'var(--success)'},
+      {label:'Total Ordered',value:totalOrdered,sub:'units across orders',accent:'var(--navy)'},
+      {label:'Total Delivered',value:totalDelivered,sub:`${totalOrdered?Math.round(totalDelivered/totalOrdered*100):100}% fulfillment`,accent:'var(--success)'},
+    ].map(tileHtml).join('')}
   </div>
   <div class="card">
     <div class="table-wrap">
@@ -1253,19 +1043,13 @@ async function renderConsolidatedDue(el) {
   el.innerHTML = `
   ${pageHeader('Due Items', 'Pending line items not yet delivered to clients',
     `<button class="btn btn-secondary" ${dataAct('exportDue')}>Export CSV</button>`)}
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:22px">
     ${[
-      {label:'Pending Line Items',val:data.length,sub:'unfulfilled items',color:data.length?'var(--danger)':'var(--success)'},
-      {label:'Total Due Units',val:totalDueQty,sub:'units outstanding',color:totalDueQty?'var(--warning)':'var(--success)'},
-      {label:'Critical (>7d)',val:critical7,sub:'severely overdue',color:critical7?'var(--danger)':'var(--success)'},
-      {label:'Max Age',val:maxDays?maxDays+'d':'—',sub:'oldest pending item',color:maxDays>7?'var(--danger)':maxDays>3?'var(--warning)':'var(--success)'},
-    ].map(k=>`
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
-        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
-        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
-      </div>
-    `).join('')}
+      {label:'Pending Line Items',value:data.length,sub:'unfulfilled items',accent:data.length?'var(--danger)':'var(--success)'},
+      {label:'Total Due Units',value:totalDueQty,sub:'units outstanding',accent:totalDueQty?'var(--warning)':'var(--success)'},
+      {label:'Critical (>7d)',value:critical7,sub:'severely overdue',accent:critical7?'var(--danger)':'var(--success)'},
+      {label:'Max Age',value:maxDays?maxDays+'d':'—',sub:'oldest pending item',accent:maxDays>7?'var(--danger)':maxDays>3?'var(--warning)':'var(--success)'},
+    ].map(tileHtml).join('')}
   </div>
   <div class="card">
     <div class="table-wrap">
@@ -1325,19 +1109,13 @@ async function renderPorterExpenses(el) {
 
   el.innerHTML = `
   ${pageHeader('Porter Expenses', 'Track delivery trip costs and driver expenses')}
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:22px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:22px">
     ${[
-      {label:'Total Trips',val:exps.length,sub:'logged',color:'var(--navy)'},
-      {label:'Total Spent',val:fmt(total),sub:'all time',color:'var(--primary)'},
-      {label:'Avg per Trip',val:fmt(avg),sub:'per delivery',color:'var(--blue)'},
-      {label:'This Week',val:fmt(thisWeek),sub:'last 7 days',color:'var(--warning)'},
-    ].map(k=>`
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
-        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
-        <div style="font-size:1.6rem;font-weight:700;line-height:1">${k.val}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
-      </div>
-    `).join('')}
+      {label:'Total Trips',value:exps.length,sub:'logged',accent:'var(--navy)'},
+      {label:'Total Spent',value:fmt(total),sub:'all time',accent:'var(--primary)'},
+      {label:'Avg per Trip',value:fmt(avg),sub:'per delivery',accent:'var(--blue)'},
+      {label:'This Week',value:fmt(thisWeek),sub:'last 7 days',accent:'var(--warning)'},
+    ].map(tileHtml).join('')}
   </div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span>Log New Trip</span></div>
