@@ -574,9 +574,13 @@ button { font-family: var(--font); cursor: pointer; }
   background: var(--surface); border: 1.5px solid var(--border);
   border-radius: 12px; padding: 12px 14px;
   box-shadow: 0 1px 3px rgba(18, 32, 56, .07);
+  transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-button.tile { cursor: pointer; font: inherit; color: inherit; transition: border-color .15s, box-shadow .15s; }
-button.tile:hover { border-color: var(--text-light); }
+/* Uniform hover highlight on every tile — clickable or not — so the whole
+   grid reacts the same way under the cursor. */
+.tile:hover { border-color: var(--text-light); box-shadow: 0 2px 8px rgba(18, 32, 56, .10); }
+button.tile { cursor: pointer; font: inherit; color: inherit; }
+button.tile:hover { transform: translateY(-1px); }
 .tile[aria-pressed="true"] { border-color: var(--navy); box-shadow: 0 0 0 2px color-mix(in srgb, var(--navy) 22%, transparent), 0 1px 3px rgba(18, 32, 56, .07); }
 .tile-label { display: flex; align-items: center; gap: 7px; font-size: .78rem; font-weight: 600; color: var(--text-muted); }
 .tile-dot   { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--navy); }
