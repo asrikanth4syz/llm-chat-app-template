@@ -28,27 +28,11 @@ async function renderDeliveryExecDashboard(el) {
   </div>
 
   <!-- KPI row -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">In Transit</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${inTransit.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${totalItems} items to deliver</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Overdue</div>
-      <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};line-height:1.2;margin-top:6px">${overdue.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${overdue.length?'requires attention':'on track'}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Delivered Today</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${delivToday.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">completed runs</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--warning)">
-      <div style="font-size:.7rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase">Scheduled</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:6px">${scheduled.length}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">pending dispatch</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+    ${tileHtml({label:'In Transit',value:inTransit.length,sub:`${totalItems} items to deliver`,accent:'var(--primary)'})}
+    ${tileHtml({label:'Overdue',value:overdue.length,sub:overdue.length?'requires attention':'on track',accent:overdue.length?'var(--danger)':'var(--gray-light)'})}
+    ${tileHtml({label:'Delivered Today',value:delivToday.length,sub:'completed runs',accent:'var(--success)'})}
+    ${tileHtml({label:'Scheduled',value:scheduled.length,sub:'pending dispatch',accent:'var(--warning)'})}
   </div>
 
   <!-- In-transit delivery cards -->
@@ -333,26 +317,11 @@ async function renderClients(el) {
   </div>
 
   <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div class="u-label2">Total Clients</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${clients.length}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div class="u-label2">Total Budget</div>
-      <div style="font-size:1.5rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalBudget)}</div>
-      <div class="u-subtiny">${fmt(totalSpent)} spent this month</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overBudget?'var(--warning)':'var(--gray-light)'}">
-      <div class="u-label2">Near Budget Limit</div>
-      <div style="font-size:2rem;font-weight:800;color:${overBudget?'var(--warning)':'var(--navy)'};margin-top:6px">${overBudget}</div>
-      <div class="u-subtiny">&gt;90% budget used</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
-      <div class="u-label2">At Risk</div>
-      <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
-      <div class="u-subtiny">health score &lt;70</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+    ${tileHtml({label:'Total Clients',value:clients.length,accent:'var(--blue)'})}
+    ${tileHtml({label:'Total Budget',value:fmt(totalBudget),sub:`${fmt(totalSpent)} spent this month`,accent:'var(--success)'})}
+    ${tileHtml({label:'Near Budget Limit',value:overBudget,sub:'&gt;90% budget used',accent:overBudget?'var(--warning)':'var(--gray-light)'})}
+    ${tileHtml({label:'At Risk',value:atRisk,sub:'health score &lt;70',accent:atRisk?'var(--danger)':'var(--gray-light)'})}
   </div>
 
   <!-- Client cards grid -->
@@ -1270,32 +1239,16 @@ async function renderServiceDesk(el) {
     </div>
   </div>
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
     ${(()=>{
       const openHigh = openT.filter(t=>t.priority==='HIGH').length;
       const activeHigh = tickets.filter(t=>t.priority==='HIGH'&&t.status!=='RESOLVED').length;
       const resolveRate = tickets.length ? Math.round(resolvedT.length/tickets.length*100) : 0;
       return `
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${openT.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">Open</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${openT.length}</div>
-        <div style="font-size:.75rem;color:${openHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${openHigh} high priority</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--blue-bright);margin-bottom:0">
-        <div class="u-label">In Progress</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${inProgT.length}</div>
-        <div class="u-sub">being handled</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-        <div class="u-label">Resolved</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${resolvedT.length}</div>
-        <div style="font-size:.75rem;color:var(--success);margin-top:6px">${resolveRate}% resolution rate</div>
-      </div>
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${activeHigh>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-        <div class="u-label">High Priority</div>
-        <div style="font-size:1.9rem;font-weight:700;color:${activeHigh>0?'var(--danger)':'var(--navy)'};line-height:1">${activeHigh}</div>
-        <div style="font-size:.75rem;color:${activeHigh>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${activeHigh>0?'needs immediate attention':'all clear'}</div>
-      </div>`;
+      ${tileHtml({label:'Open',value:openT.length,sub:`${openHigh} high priority`,accent:openT.length>0?'var(--warning)':'var(--success)'})}
+      ${tileHtml({label:'In Progress',value:inProgT.length,sub:'being handled',accent:'var(--blue-bright)'})}
+      ${tileHtml({label:'Resolved',value:resolvedT.length,sub:`${resolveRate}% resolution rate`,accent:'var(--success)'})}
+      ${tileHtml({label:'High Priority',value:activeHigh,sub:activeHigh>0?'needs immediate attention':'all clear',accent:activeHigh>0?'var(--danger)':'var(--success)'})}`;
     })()}
   </div>
 
@@ -1510,22 +1463,10 @@ async function renderApprovals(el) {
   </div>
 
   <!-- Summary tiles -->
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
-      <div class="u-label2">Pending Approval</div>
-      <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
-      <div class="u-subtiny">awaiting decision</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--primary)">
-      <div class="u-label2">In Progress</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${approved.length}</div>
-      <div class="u-subtiny">approved & processing</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div class="u-label2">Pending Value</div>
-      <div style="font-size:1.4rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(pending.reduce((s,o)=>s+(o.grand_total||0),0))}</div>
-      <div class="u-subtiny">total value pending</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+    ${tileHtml({label:'Pending Approval',value:pending.length,sub:'awaiting decision',accent:pending.length?'var(--amber)':'var(--gray-light)'})}
+    ${tileHtml({label:'In Progress',value:approved.length,sub:'approved & processing',accent:'var(--primary)'})}
+    ${tileHtml({label:'Pending Value',value:fmt(pending.reduce((s,o)=>s+(o.grand_total||0),0)),sub:'total value pending',accent:'var(--success)'})}
   </div>
 
   <!-- Pending approvals -->

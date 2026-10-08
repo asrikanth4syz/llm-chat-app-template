@@ -1838,15 +1838,10 @@ async function renderClientConsumption(el) {
   _cons._rows = rows;
   const t = data.totals || { received: 0, consumed: 0, in_stock: 0, low_stock: 0, items: 0 };
 
-  const tile = (label, val, color, sub) => `
-    <div class="card" style="padding:14px 16px;border-top:3px solid ${color};margin-bottom:0">
-      <div class="u-label">${label}</div>
-      <div style="font-size:1.7rem;font-weight:800;color:${color};line-height:1.1">${val}</div>
-      ${sub ? `<div class="u-sub">${sub}</div>` : ''}
-    </div>`;
+  const tile = (label, val, color, sub) => tileHtml({ label, value: val, sub, accent: color });
 
   body.innerHTML = `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+  <div class="tile-grid">
     ${tile('Items', t.items, 'var(--navy)', 'in this period')}
     ${tile('Received', t.received, 'var(--primary)', 'units delivered')}
     ${tile('Consumed', t.consumed, 'var(--warning)', 'units used')}

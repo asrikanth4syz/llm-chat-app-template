@@ -131,15 +131,12 @@ function renderWHOverview(el, warehouses, bins, inv, grns) {
   const grnColor   = pendingGRNs>0 ? '#d97706' : 'var(--success)';
   const whColor    = activeWH === warehouses.length ? 'var(--navy)' : '#d97706';
 
-  const kpiTile = (label, value, sub, subColor, borderColor) => `
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${borderColor};margin-bottom:0">
-      <div class="u-label">${label}</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${value}</div>
-      <div style="font-size:.75rem;color:${subColor};margin-top:6px">${sub}</div>
-    </div>`;
+  // Canonical tile; the accent dot (borderColor) carries the status signal the
+  // old coloured sub-line used to.
+  const kpiTile = (label, value, sub, _subColor, borderColor) => tileHtml({ label, value, sub, accent: borderColor });
 
   el.innerHTML = `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
     ${kpiTile('Active Warehouses', activeWH, `${warehouses.length} total configured`, 'var(--text-muted)', whColor)}
     ${kpiTile('Total SKUs', totalSKUs,
       outOfStock>0 ? `${outOfStock} out of stock` : lowStock>0 ? `${lowStock} below reorder` : 'All levels healthy',
@@ -745,20 +742,14 @@ async function renderDelivery(el) {
   const pendingApproval = dcs.filter(d => d.delivery_approval === 'PENDING').length;
 
   const kpis = `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:22px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));margin-bottom:22px">
     ${[
-      {label:'Scheduled',val:scheduled.length,sub:'ready to dispatch',color:scheduled.length?'var(--primary)':'var(--success)'},
-      {label:'In Transit',val:transit.length,sub:overdue.length?`${overdue.length} overdue`:'all on time',color:overdue.length?'var(--danger)':transit.length?'var(--warning)':'var(--success)'},
-      {label:'Pending Approval',val:pendingApproval,sub:'short/excess, awaiting review',color:pendingApproval?'var(--danger)':'var(--success)'},
-      {label:'Pending POD/Scan',val:pendingPOD,sub:'delivered, docs missing',color:pendingPOD?'var(--warning)':'var(--success)'},
-      {label:'Unbilled',val:pendingBill,sub:'delivered but not billed',color:pendingBill?'var(--danger)':'var(--success)'},
-    ].map(k=>`
-      <div class="card" style="padding:16px 18px;border-top:3px solid ${k.color}">
-        <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
-        <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
-        <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
-      </div>
-    `).join('')}
+      {label:'Scheduled',value:scheduled.length,sub:'ready to dispatch',accent:scheduled.length?'var(--primary)':'var(--success)'},
+      {label:'In Transit',value:transit.length,sub:overdue.length?`${overdue.length} overdue`:'all on time',accent:overdue.length?'var(--danger)':transit.length?'var(--warning)':'var(--success)'},
+      {label:'Pending Approval',value:pendingApproval,sub:'short/excess, awaiting review',accent:pendingApproval?'var(--danger)':'var(--success)'},
+      {label:'Pending POD/Scan',value:pendingPOD,sub:'delivered, docs missing',accent:pendingPOD?'var(--warning)':'var(--success)'},
+      {label:'Unbilled',value:pendingBill,sub:'delivered but not billed',accent:pendingBill?'var(--danger)':'var(--success)'},
+    ].map(tileHtml).join('')}
   </div>`;
 
   APP._dcData = dcs;
@@ -877,25 +868,11 @@ async function renderDelivery(el) {
       const podDone  = delivered.filter(d => d.pod_uploaded).length;
       const scanDone = delivered.filter(d => d.dc_scan_uploaded).length;
       return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
-        <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary)">
-          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Delivered</div>
-          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${delivered.length}</div>
-        </div>
-        <div class="card" style="padding:14px 16px;border-top:3px solid ${podDone===delivered.length?'var(--success)':'var(--warning)'}">
-          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">POD Uploaded</div>
-          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
-        </div>
-        <div class="card" style="padding:14px 16px;border-top:3px solid ${scanDone===delivered.length?'var(--success)':'var(--warning)'}">
-          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">DC Scanned</div>
-          <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
-        </div>
-        <div class="card" style="padding:14px 16px;border-top:3px solid ${delivered.length-Math.max(podDone,scanDone)===0?'var(--success)':'var(--danger)'}">
-          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Pending Action</div>
-          <div style="font-size:1.8rem;font-weight:700;margin-top:4px;color:${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length?'var(--danger)':'var(--success)'}">
-            ${delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length}
-          </div>
-        </div>
+      <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+        ${tileHtml({label:'Total Delivered',value:delivered.length,accent:'var(--primary)'})}
+        ${tileHtml({label:'POD Uploaded',value:`${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`,accent:podDone===delivered.length?'var(--success)':'var(--warning)'})}
+        ${tileHtml({label:'DC Scanned',value:`${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`,accent:scanDone===delivered.length?'var(--success)':'var(--warning)'})}
+        ${tileHtml({label:'Pending Action',value:delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length,accent:delivered.length-Math.max(podDone,scanDone)===0?'var(--success)':'var(--danger)'})}
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
         <div style="position:relative;flex:1;max-width:400px">
@@ -1070,23 +1047,11 @@ async function switchDeliveryTab(tab, btn) {
         content.innerHTML = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📄</div>No delivered challans yet</div>`;
       } else {
         content.innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
-          <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary)">
-            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Total Delivered</div>
-            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${delivered.length}</div>
-          </div>
-          <div class="card" style="padding:14px 16px;border-top:3px solid ${podDone===delivered.length?'var(--success)':'var(--warning)'}">
-            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">POD Uploaded</div>
-            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
-          </div>
-          <div class="card" style="padding:14px 16px;border-top:3px solid ${scanDone===delivered.length?'var(--success)':'var(--warning)'}">
-            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">DC Scanned</div>
-            <div style="font-size:1.8rem;font-weight:700;margin-top:4px">${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span></div>
-          </div>
-          <div class="card" style="padding:14px 16px;border-top:3px solid ${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length===0?'var(--success)':'var(--danger)'}">
-            <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)">Pending Action</div>
-            <div style="font-size:1.8rem;font-weight:700;margin-top:4px;color:${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length?'var(--danger)':'var(--success)'}">${delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length}</div>
-          </div>
+        <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+          ${tileHtml({label:'Total Delivered',value:delivered.length,accent:'var(--primary)'})}
+          ${tileHtml({label:'POD Uploaded',value:`${podDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`,accent:podDone===delivered.length?'var(--success)':'var(--warning)'})}
+          ${tileHtml({label:'DC Scanned',value:`${scanDone} <span style="font-size:.9rem;color:var(--text-muted)">/ ${delivered.length}</span>`,accent:scanDone===delivered.length?'var(--success)':'var(--warning)'})}
+          ${tileHtml({label:'Pending Action',value:delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length,accent:delivered.filter(d=>!d.pod_uploaded||!d.dc_scan_uploaded).length===0?'var(--success)':'var(--danger)'})}
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <div style="position:relative;flex:1;max-width:400px">

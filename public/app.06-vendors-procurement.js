@@ -225,24 +225,11 @@ async function renderVendors(el) {
   </div>
 
   <!-- Summary tiles — auto-fit so they wrap 4 → 2 → 1 as the screen narrows -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div class="u-label2">Total Vendors</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${totalVendors}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgOnTime)}">
-      <div class="u-label2">Avg On-time Rate</div>
-      <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgOnTime)};margin-top:6px">${avgOnTime}%</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${scoreColor(avgFill)}">
-      <div class="u-label2">Avg Fill Rate</div>
-      <div style="font-size:2rem;font-weight:800;color:${scoreColor(avgFill)};margin-top:6px">${avgFill}%</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${atRisk?'var(--danger)':'var(--gray-light)'}">
-      <div class="u-label2">At Risk</div>
-      <div style="font-size:2rem;font-weight:800;color:${atRisk?'var(--danger)':'var(--navy)'};margin-top:6px">${atRisk}</div>
-      <div class="u-subtiny">below performance threshold</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));margin-bottom:18px">
+    ${tileHtml({label:'Total Vendors',value:totalVendors,accent:'var(--blue)'})}
+    ${tileHtml({label:'Avg On-time Rate',value:avgOnTime+'%',accent:scoreColor(avgOnTime)})}
+    ${tileHtml({label:'Avg Fill Rate',value:avgFill+'%',accent:scoreColor(avgFill)})}
+    ${tileHtml({label:'At Risk',value:atRisk,sub:'below performance threshold',accent:atRisk?'var(--danger)':'var(--gray-light)'})}
   </div>
 
   <!-- Vendor list — server-paged + server-sorted -->

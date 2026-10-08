@@ -72,27 +72,11 @@ async function renderVendorPOs(el) {
   </div>
 
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--amber);cursor:pointer" ${dataAct('scrollToEl', 'vpo-sent')}>
-      <div class="u-label2">Action Required</div>
-      <div style="font-size:2rem;font-weight:800;color:${sentPOs.length?'var(--warning)':'var(--navy)'};margin-top:6px">${sentPOs.length}</div>
-      <div class="u-subtiny">${fmt(totalValue)} pending</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue-bright)">
-      <div class="u-label2">Accepted</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${acceptedPOs.length}</div>
-      <div class="u-subtiny">preparing to dispatch</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--violet)">
-      <div class="u-label2">Dispatched</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${dispatchedPOs.length}</div>
-      <div class="u-subtiny">awaiting invoice</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div class="u-label2">Invoiced</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoicedPOs.length}</div>
-      <div class="u-subtiny">payment pending</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+    ${tileHtml({label:'Action Required',value:sentPOs.length,sub:`${fmt(totalValue)} pending`,accent:'var(--amber)',act:dataAct('scrollToEl','vpo-sent')})}
+    ${tileHtml({label:'Accepted',value:acceptedPOs.length,sub:'preparing to dispatch',accent:'var(--blue-bright)'})}
+    ${tileHtml({label:'Dispatched',value:dispatchedPOs.length,sub:'awaiting invoice',accent:'var(--violet)'})}
+    ${tileHtml({label:'Invoiced',value:invoicedPOs.length,sub:'payment pending',accent:'var(--success)'})}
   </div>
 
   ${sentPOs.length ? `
@@ -215,22 +199,10 @@ async function renderVendorInvoices(el) {
   </div>
 
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--success)">
-      <div class="u-label2">Invoices Submitted</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${invoiced.length}</div>
-      <div class="u-subtiny">${fmt(totalInv)} total</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${pending.length?'var(--amber)':'var(--gray-light)'}">
-      <div class="u-label2">Awaiting Upload</div>
-      <div style="font-size:2rem;font-weight:800;color:${pending.length?'var(--warning)':'var(--navy)'};margin-top:6px">${pending.length}</div>
-      <div class="u-subtiny">dispatched, no invoice yet</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div class="u-label2">Net-30 Terms</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">30d</div>
-      <div class="u-subtiny">avg payment cycle</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
+    ${tileHtml({label:'Invoices Submitted',value:invoiced.length,sub:`${fmt(totalInv)} total`,accent:'var(--success)'})}
+    ${tileHtml({label:'Awaiting Upload',value:pending.length,sub:'dispatched, no invoice yet',accent:pending.length?'var(--amber)':'var(--gray-light)'})}
+    ${tileHtml({label:'Net-30 Terms',value:'30d',sub:'avg payment cycle',accent:'var(--blue)'})}
   </div>
 
   ${pending.length ? `
@@ -296,27 +268,11 @@ async function renderVendorPayments(el) {
   </div>
 
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--warning)'}">
-      <div class="u-label2">Pending Receivable</div>
-      <div style="font-size:1.6rem;font-weight:800;color:var(--navy);margin-top:6px">${fmt(totalPending)}</div>
-      <div class="u-subtiny">${invoiced.length} invoice${invoiced.length===1?'':'s'}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${overdue.length?'var(--danger)':'var(--gray-light)'}">
-      <div class="u-label2">Overdue</div>
-      <div style="font-size:2rem;font-weight:800;color:${overdue.length?'var(--danger)':'var(--navy)'};margin-top:6px">${overdue.length}</div>
-      <div class="u-subtiny">${fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${dueSoon.length?'var(--amber)':'var(--gray-light)'}">
-      <div class="u-label2">Due This Week</div>
-      <div style="font-size:2rem;font-weight:800;color:${dueSoon.length?'var(--warning)':'var(--navy)'};margin-top:6px">${dueSoon.length}</div>
-      <div class="u-subtiny">${fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div class="u-label2">Payment Terms</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">Net-30</div>
-      <div class="u-subtiny">from invoice date</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+    ${tileHtml({label:'Pending Receivable',value:fmt(totalPending),sub:`${invoiced.length} invoice${invoiced.length===1?'':'s'}`,accent:overdue.length?'var(--danger)':'var(--warning)'})}
+    ${tileHtml({label:'Overdue',value:overdue.length,sub:fmt(overdue.reduce((s,p)=>s+(p.grand_total||0),0)),accent:overdue.length?'var(--danger)':'var(--gray-light)'})}
+    ${tileHtml({label:'Due This Week',value:dueSoon.length,sub:fmt(dueSoon.reduce((s,p)=>s+(p.grand_total||0),0)),accent:dueSoon.length?'var(--amber)':'var(--gray-light)'})}
+    ${tileHtml({label:'Payment Terms',value:'Net-30',sub:'from invoice date',accent:'var(--blue)'})}
   </div>
 
   ${invoiced.length===0 ? `
@@ -1286,27 +1242,11 @@ async function renderSLADashboard(el) {
   </div>
 
   <!-- KPI tiles -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--blue)">
-      <div class="u-label2">SLA Rules</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length}</div>
-      <div class="u-subtiny">active monitoring rules</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${activeBreaches.length?'var(--danger)':'var(--success)'}">
-      <div class="u-label2">Active Breaches</div>
-      <div style="font-size:2rem;font-weight:800;color:${activeBreaches.length?'var(--danger)':'var(--success)'};margin-top:6px">${activeBreaches.length}</div>
-      <div class="u-subtiny">${activeBreaches.length?'require action':'all clear'}</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid ${criticalBreaches.length?'var(--danger)':'var(--gray-light)'}">
-      <div class="u-label2">Critical (24h+)</div>
-      <div style="font-size:2rem;font-weight:800;color:${criticalBreaches.length?'var(--danger)':'var(--navy)'};margin-top:6px">${criticalBreaches.length}</div>
-      <div class="u-subtiny">breached over 24h ago</div>
-    </div>
-    <div style="background:var(--surface);border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);border-top:3px solid var(--navy)">
-      <div class="u-label2">Max SLA Hours</div>
-      <div style="font-size:2rem;font-weight:800;color:var(--navy);margin-top:6px">${rules.length ? Math.max(...rules.map(r=>r.max_hours||0)) : '—'}</div>
-      <div class="u-subtiny">longest configured rule</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+    ${tileHtml({label:'SLA Rules',value:rules.length,sub:'active monitoring rules',accent:'var(--blue)'})}
+    ${tileHtml({label:'Active Breaches',value:activeBreaches.length,sub:activeBreaches.length?'require action':'all clear',accent:activeBreaches.length?'var(--danger)':'var(--success)'})}
+    ${tileHtml({label:'Critical (24h+)',value:criticalBreaches.length,sub:'breached over 24h ago',accent:criticalBreaches.length?'var(--danger)':'var(--gray-light)'})}
+    ${tileHtml({label:'Max SLA Hours',value:rules.length ? Math.max(...rules.map(r=>r.max_hours||0)) : '—',sub:'longest configured rule',accent:'var(--navy)'})}
   </div>
 
   <!-- Breaches alert -->

@@ -46,9 +46,8 @@ async function loadPIQueue(body) {
   const tasks = data.tasks || [];
   const counts = data.counts || {};
   const conflicts = counts.conflicts != null ? counts.conflicts : tasks.filter(t => String(t.screened_result || '').startsWith('conflict')).length;
-  const kpi = (l, n, c) => `<div class="card" style="padding:14px 16px;border-top:3px solid ${c};margin-bottom:0">
-      <div class="u-label">${l}</div><div style="font-size:1.9rem;font-weight:800;color:var(--navy);line-height:1">${n}</div></div>`;
-  const kpiRow = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+  const kpi = (l, n, c) => tileHtml({ label: l, value: n, accent: c });
+  const kpiRow = `<div class="tile-grid">
       ${kpi('Conflicts', conflicts, 'var(--danger,#dc2626)')}
       ${kpi('Open claims', counts.open != null ? counts.open : tasks.length, 'var(--warning,#d97706)')}
       ${kpi('Evidence requested', counts.evidence_requested || 0, '#0d9488')}

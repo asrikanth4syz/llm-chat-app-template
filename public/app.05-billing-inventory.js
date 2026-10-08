@@ -58,27 +58,11 @@ async function renderDCBilling(el) {
       const billedMonthValue = billedThisMonth.reduce((s,d)=>s+(d.order_value||0),0);
       const criticalValue = critical.reduce((s,d)=>s+(d.order_value||0),0);
       return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
-        <div class="card" style="padding:16px 18px;border-top:3px solid ${unbilled.length>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-          <div class="u-label">Pending Billing</div>
-          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${unbilled.length}</div>
-          <div style="font-size:.75rem;color:${unbilled.length>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">${fmt(pendingValue)} outstanding</div>
-        </div>
-        <div class="card" style="padding:16px 18px;border-top:3px solid ${critical.length>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-          <div class="u-label">Critical (16+ days)</div>
-          <div style="font-size:1.9rem;font-weight:700;color:${critical.length>0?'var(--danger)':'var(--navy)'};line-height:1">${critical.length}</div>
-          <div style="font-size:.75rem;color:${critical.length>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${critical.length>0?fmt(criticalValue)+' at risk':'All within 15 days'}</div>
-        </div>
-        <div class="card" style="padding:16px 18px;border-top:3px solid var(--primary);margin-bottom:0">
-          <div class="u-label">Billed Today</div>
-          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedToday.length}</div>
-          <div class="u-sub">${fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0))}</div>
-        </div>
-        <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-          <div class="u-label">Billed This Month</div>
-          <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${billedThisMonth.length}</div>
-          <div style="font-size:.75rem;color:var(--success);margin-top:6px">${fmt(billedMonthValue)}</div>
-        </div>
+      <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
+        ${tileHtml({label:'Pending Billing',value:unbilled.length,sub:`${fmt(pendingValue)} outstanding`,accent:unbilled.length>0?'var(--warning)':'var(--success)'})}
+        ${tileHtml({label:'Critical (16+ days)',value:critical.length,sub:critical.length>0?fmt(criticalValue)+' at risk':'All within 15 days',accent:critical.length>0?'var(--danger)':'var(--success)'})}
+        ${tileHtml({label:'Billed Today',value:billedToday.length,sub:fmt(billedToday.reduce((s,d)=>s+(d.order_value||0),0)),accent:'var(--primary)'})}
+        ${tileHtml({label:'Billed This Month',value:billedThisMonth.length,sub:fmt(billedMonthValue),accent:'var(--success)'})}
       </div>
       ${critical.length>0?`<div style="background:#fef3cd;border:1px solid var(--amber);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:var(--amber-text);display:flex;gap:10px;align-items:center"><span style="font-size:1.1rem">⚠️</span><span><strong>${critical.length}</strong> DC${critical.length>1?'s':''} unbilled for over 16 days — <strong>${fmt(criticalValue)}</strong> at risk of delayed payment.</span></div>`:''}
       <div class="card">
@@ -149,16 +133,11 @@ async function renderDCBilling(el) {
 
       const BUCKET_BORDER = { success:'var(--success)', warning:'#d97706', danger:'var(--danger)', info:'#3b82f6' };
       return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+      <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
         ${buckets.map(b=>{
           const items = billed.filter(d=>{ const age=ageDays(d); return age>=b.min && age<=b.max; });
           const bColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--border)';
-          const valColor = items.length ? BUCKET_BORDER[b.cls] : 'var(--text-muted)';
-          return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bColor};margin-bottom:0">
-            <div class="u-label">${b.label}</div>
-            <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
-            <div style="font-size:.75rem;color:${valColor};margin-top:6px">${fmt(items.reduce((s,d)=>s+(d.order_value||0),0))}</div>
-          </div>`;
+          return tileHtml({label:b.label,value:items.length,sub:fmt(items.reduce((s,d)=>s+(d.order_value||0),0)),accent:bColor});
         }).join('')}
       </div>
       ${overdue.length ? `<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
@@ -280,15 +259,11 @@ function renderAPAging(pos) {
   });
 
   return `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
     ${(()=>{ const BCLR={success:'var(--success)',warning:'#d97706',danger:'var(--danger)'}; return buckets.map(b=>{
       const items=open.filter(p=>{const a=ageDays(p);return a>=b.min&&a<=b.max;});
       const bc=items.length?BCLR[b.cls]:'var(--border)';
-      return `<div class="card" style="padding:16px 18px;border-top:3px solid ${bc};margin-bottom:0">
-        <div class="u-label">${b.label}</div>
-        <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${items.length}</div>
-        <div style="font-size:.75rem;color:${items.length?bc:'var(--text-muted)'};margin-top:6px">${fmt(items.reduce((s,p)=>s+(p.grand_total||0),0))}</div>
-      </div>`;
+      return tileHtml({label:b.label,value:items.length,sub:fmt(items.reduce((s,p)=>s+(p.grand_total||0),0)),accent:bc});
     }).join(''); })()}
   </div>
   ${overdue.length ? `<div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.83rem;color:#b91c1c">
@@ -368,27 +343,11 @@ function renderMarginAnalysis(inv) {
   const bottomItems = [...priced].sort((a,b)=>marginOf(a)-marginOf(b)).slice(0,10);
 
   return `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px">
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${marginColor(overallMargin)};margin-bottom:0">
-      <div class="u-label">Avg Margin</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${marginColor(overallMargin)};line-height:1">${overallMargin}%</div>
-      <div class="u-sub">${priced.length} priced SKUs</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid var(--success);margin-bottom:0">
-      <div class="u-label">High Margin (≥30%)</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${highMargin}</div>
-      <div style="font-size:.75rem;color:var(--success);margin-top:6px">SKUs</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${lowMargin>0?'var(--warning)':'var(--success)'};margin-bottom:0">
-      <div class="u-label">Low Margin (&lt;15%)</div>
-      <div style="font-size:1.9rem;font-weight:700;color:var(--navy);line-height:1">${lowMargin}</div>
-      <div style="font-size:.75rem;color:${lowMargin>0?'var(--warning)':'var(--text-muted)'};margin-top:6px">SKUs</div>
-    </div>
-    <div class="card" style="padding:16px 18px;border-top:3px solid ${negative>0?'var(--danger)':'var(--success)'};margin-bottom:0">
-      <div class="u-label">Below Cost</div>
-      <div style="font-size:1.9rem;font-weight:700;color:${negative>0?'var(--danger)':'var(--navy)'};line-height:1">${negative}</div>
-      <div style="font-size:.75rem;color:${negative>0?'var(--danger)':'var(--text-muted)'};margin-top:6px">${negative>0?'selling at a loss':'none'}</div>
-    </div>
+  <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));margin-bottom:20px">
+    ${tileHtml({label:'Avg Margin',value:overallMargin+'%',sub:`${priced.length} priced SKUs`,accent:marginColor(overallMargin)})}
+    ${tileHtml({label:'High Margin (≥30%)',value:highMargin,sub:'SKUs',accent:'var(--success)'})}
+    ${tileHtml({label:'Low Margin (&lt;15%)',value:lowMargin,sub:'SKUs',accent:lowMargin>0?'var(--warning)':'var(--success)'})}
+    ${tileHtml({label:'Below Cost',value:negative,sub:negative>0?'selling at a loss':'none',accent:negative>0?'var(--danger)':'var(--success)'})}
   </div>
 
   <div class="card" style="margin-bottom:14px">
