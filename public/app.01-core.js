@@ -1532,6 +1532,22 @@ function dataActEl(fn, ...args) {
 function dataActClose(fn, ...args) {
   return `${dataAct(fn, ...args)} data-close`;
 }
+
+// Canonical KPI / stat tile — the one tile look across the whole app (see the
+// `.tile` block in app.css). A coloured accent dot + label, a large value, and
+// an optional sub-line. Pass `act` (a dataAct(...)/dataActEl(...) string) to make
+// it a clickable button; pass `active:true` for the pressed/selected state used
+// by filter tiles. Values/labels are inserted as-is, so callers escape (h()) any
+// user-supplied text, exactly as before.
+function tileHtml({ label, value, sub = '', accent = 'var(--navy)', active = false, act = '' } = {}) {
+  const tag = act ? 'button' : 'div';
+  const pressed = act ? ` aria-pressed="${active ? 'true' : 'false'}"` : '';
+  return `<${tag} class="tile"${act ? ' ' + act : ''}${pressed}>
+    <div class="tile-label"><span class="tile-dot" style="background:${accent}"></span>${label}</div>
+    <div class="tile-value">${value}</div>
+    ${sub ? `<div class="tile-sub">${sub}</div>` : ''}
+  </${tag}>`;
+}
 // Actions currently running. A write action (one whose handler returns a Promise)
 // is keyed by name+args and stays here until it settles, so a second click on the
 // same action while it's in flight is a no-op. This is the app-wide guarantee that

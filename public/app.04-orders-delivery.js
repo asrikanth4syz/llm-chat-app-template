@@ -1766,14 +1766,10 @@ function oqBase() {
   if (APP._oqClient) { const q = APP._oqClient.toLowerCase(); res = res.filter(o => (o.client_name || '').toLowerCase().includes(q)); }
   return res;
 }
-// One mock-style tile (coloured dot + label + big count + hint), used for buckets and types.
+// The Order Queue buckets/type tiles now render through the app-wide canonical
+// tile (tileHtml in app.01-core). Thin shim keeps the two call sites unchanged.
 function oqTileHtml(dot, label, count, hint, act, on) {
-  const ring = on ? 'border-color:var(--navy);box-shadow:0 0 0 2px color-mix(in srgb,var(--navy) 22%,transparent),0 1px 3px rgba(18,32,56,.07)' : 'border-color:var(--border);box-shadow:0 1px 3px rgba(18,32,56,.07)';
-  return `<button ${act} aria-pressed="${on ? 'true' : 'false'}" style="text-align:left;background:var(--surface,#fff);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer;${ring}">
-    <div style="display:flex;align-items:center;gap:7px;font-size:.78rem;font-weight:600;color:var(--text-muted)"><span style="width:9px;height:9px;border-radius:50%;background:${dot};flex:none"></span>${label}</div>
-    <div style="font-size:1.55rem;font-weight:800;color:var(--navy);line-height:1;margin-top:7px;font-variant-numeric:tabular-nums">${count}</div>
-    <div style="font-size:.72rem;color:var(--text-muted);margin-top:3px">${hint}</div>
-  </button>`;
+  return tileHtml({ label, value: count, sub: hint, accent: dot, active: on, act });
 }
 
 async function renderOrderQueue(el) {
