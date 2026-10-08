@@ -1691,17 +1691,13 @@ function ocRenderSummary(data) {
   const delivered = data.reduce((s, r) => s + (r.delivered_qty || 0), 0);
   const due       = data.reduce((s, r) => s + (r.due_qty || 0), 0);
   el.innerHTML = `
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:16px">
+  <div class="tile-grid">
     ${[
-      { label: 'Products',        val: data.length, sub: 'distinct products', color: 'var(--navy)' },
-      { label: 'Total Ordered',   val: ordered,     sub: ocPeriodLabel(), color: 'var(--primary)' },
-      { label: 'Total Delivered', val: delivered,   sub: `${ordered ? Math.round(delivered / ordered * 100) : 0}% fulfilled`, color: 'var(--success)' },
-      { label: 'Total Due',       val: due,         sub: 'pending delivery', color: due ? 'var(--warning)' : 'var(--success)' },
-    ].map(k => `<div class="card" style="padding:16px 18px;border-top:3px solid ${k.color};margin:0">
-      <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px">${k.label}</div>
-      <div style="font-size:1.9rem;font-weight:700;line-height:1">${k.val}</div>
-      <div style="font-size:.75rem;color:var(--text-muted);margin-top:4px">${k.sub}</div>
-    </div>`).join('')}
+      { label: 'Products',        value: data.length, sub: 'distinct products', accent: 'var(--navy)' },
+      { label: 'Total Ordered',   value: ordered,     sub: ocPeriodLabel(), accent: 'var(--primary)' },
+      { label: 'Total Delivered', value: delivered,   sub: `${ordered ? Math.round(delivered / ordered * 100) : 0}% fulfilled`, accent: 'var(--success)' },
+      { label: 'Total Due',       value: due,         sub: 'pending delivery', accent: due ? 'var(--warning)' : 'var(--success)' },
+    ].map(tileHtml).join('')}
   </div>`;
 }
 

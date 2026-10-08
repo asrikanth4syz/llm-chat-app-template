@@ -562,6 +562,27 @@ button { font-family: var(--font); cursor: pointer; }
 .kpi-trend      { height: 4px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 8px; }
 .kpi-trend-fill { height: 100%; border-radius: 3px; }
 
+/* ── Canonical tile ──────────────────────────────────────────
+   One look for every KPI / stat tile in the app: a coloured accent dot
+   + label, a large value, and an optional sub-line. Built from theme
+   tokens so it tracks light/dark. Render via the tileHtml() helper.
+   Accent is carried by the dot (inline colour), not a border bar, so
+   every tile shares the same frame. */
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile {
+  display: block; width: 100%; text-align: left; margin: 0;
+  background: var(--surface); border: 1.5px solid var(--border);
+  border-radius: 12px; padding: 12px 14px;
+  box-shadow: 0 1px 3px rgba(18, 32, 56, .07);
+}
+button.tile { cursor: pointer; font: inherit; color: inherit; transition: border-color .15s, box-shadow .15s; }
+button.tile:hover { border-color: var(--text-light); }
+.tile[aria-pressed="true"] { border-color: var(--navy); box-shadow: 0 0 0 2px color-mix(in srgb, var(--navy) 22%, transparent), 0 1px 3px rgba(18, 32, 56, .07); }
+.tile-label { display: flex; align-items: center; gap: 7px; font-size: .78rem; font-weight: 600; color: var(--text-muted); }
+.tile-dot   { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--navy); }
+.tile-value { font-size: 1.55rem; font-weight: 800; color: var(--navy); line-height: 1; margin-top: 7px; font-variant-numeric: tabular-nums; }
+.tile-sub   { font-size: .72rem; color: var(--text-muted); margin-top: 3px; }
+
 /* ═══════════════════════════════════════════════════════════
    CHARTS
    ═══════════════════════════════════════════════════════════ */
