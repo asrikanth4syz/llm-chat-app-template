@@ -1,6 +1,7 @@
 # Product Specification: Smart Paste Order (V1)
 
-> Moniker: `004-smart-paste-order` · Status: DRAFT (awaiting spec-validation) · Owner: Product
+> Moniker: `004-smart-paste-order` · Status: DRAFT — revised after spec-validation r1 (re-run recommended) · Owner: Product
+> **The "🔧 Revisions from spec-validation r1" section at the end is AUTHORITATIVE and overrides any earlier clause it conflicts with.**
 > Scope boundary: **V1 is deterministic parse + history-weighted fuzzy match + human review.**
 > Knowledge graph, alias auto-learning, AI natural-language parser and semantic/embedding
 > matching are **explicitly out of scope for V1** (see §Non-Goals) and sequenced as follow-ons.
@@ -223,3 +224,46 @@ These metrics are also the readiness signal for V2 (alias learning): once we hav
 - V4 — **AI natural-language parser** (`env.AI`) for lines the deterministic parser flags, gated behind it.
 - V5 — **"Same as last week"** reconstruction from history/standing orders.
 - V6 — semantic/embedding fallback for the long tail; graph only if real multi-hop needs appear.
+
+---
+
+## 🔧 Revisions from spec-validation r1 (AUTHORITATIVE — overrides earlier clauses on conflict)
+
+> Source: `adversarial-reviews/spec-validation.md` (3 independent skeptics, 2-of-3 gate; security items at any-one).
+> Each item cites its finding id. Where this section conflicts with the original text above, **this section wins.**
+
+### A. Security & tenancy
+- **A1 `client-scope-auth` (🔴):** `parse-paste` and the Confirm/draft call MUST authorize the caller against the specific `client_id`, not just by role. `super_admin`/`ops_admin` may act for any client; a `client_admin` may act **only** for a client they are bound to — mismatch returns **404** (not 403, to avoid existence disclosure). The ownership check runs **before** any catalogue/history read. Add an acceptance scenario proving a `client_admin` cannot parse-paste for a client they do not own.
+- **A2 `confirm-sku-not-revalidated` (🔴, security):** On Confirm the server MUST re-derive the client candidate pool and **reject (422) any `chosen_sku` not in that client's `client_catalog ∪ approved-order history`**; quantities MUST be integers ≥ 1. Client-scoping (D2) is enforced at **write** time, never trusted from the request.
+- **A3 `manual-search-scope` (🟠, security):** the manual "resolve unmatched line" SKU search box MUST query the **same client-scoped pool** as the auto-matcher. Out-of-catalogue SKUs cannot be attached to a line. (If a future need requires adding a brand-new SKU to the client, that is a separate, explicit flow — not V1.)
+
+### B. Parsing (replaces §Parsing rules and D5 where in conflict)
+- **B1 `header-line-silent-drop` (🔴):** V1 performs **no heuristic header detection**. Every non-blank line becomes a review row; a line with no extractable quantity is `needs_qty`, never discarded. (Blank lines — zero non-whitespace chars — are the only lines skipped, and they are not logged.)
+- **B2 `parse-adjacency-x` (🟠):** a number is **unit-bound** iff a unit token abuts it with at most one optional space, matched case-insensitively: `/\d+\s?(unit)/i` or `/(unit)\s?\d+/i`. The `x`/`×` multiplier: a **leading** `^\s*\d+\s*[x×]\s+` is the quantity; an **embedded/trailing** `\d+\s*[x×]\s*\d+` is a pack expression kept wholly in product text. Fixtures required for `Sugar 5 kg`, `Milk 2 l`, `Coke 300ml x 24 - 5`, `5 x Water`, `Water x 5`.
+- **B3 `unit-list-divergence` + `unit-list-incomplete`:** there is **one normative unit set**, case-insensitive, plural-tolerant (optional trailing `s`): `g, kg, mg, ml, l, ltr, litre, pc, pcs, pack, pkt, case, carton, ctn, box, bag, bottle, btl, tin, jar, strip, bundle, dozen, nos, no`. The inline D5 list is superseded by this one. The set is defined in one constant so it is extensible.
+- **B4 `list-marker-as-quantity`:** leading list markers — bullets (`-,*,•`) and **ordinals (`N.`)** — are stripped **before** quantity extraction; a stripped ordinal's digits are never eligible to be the quantity.
+- **B5 `decimal-quantity-misparse`:** quantity is a numeric token that may include a decimal point or thousands separators (`2.5`, `1,000`); V1 **accepts decimals** and passes them through (display + draft honour the entered precision). A token that is not a clean number → `needs_qty`.
+- **B6 `e1-fixture-self-ambiguous`:** deterministic tie-break when a line has multiple bare numbers — **if a separator (`-`, `:`, `|`, tab) splits name from quantity, the quantity is the bare numeric token after the LAST separator**; otherwise the last bare non-unit-bound number. `Goodday 100 - 10` → productText `Goodday 100`, qty `10` (deterministic; the word "ambiguous" is removed from the fixture). A line with two bare numbers and no separator → still parse (last wins) **and** set `parse_flags:["low_confidence_parse"]`.
+
+### C. Matching
+- **C1 `single-candidate-margin` (🟠):** if fewer than two candidates clear `MATCH_MIN`, the margin test is **auto-satisfied** — a sole candidate ≥ `MATCH_MIN` is `matched`. The margin test applies only when ≥ 2 candidates clear `MATCH_MIN`.
+- **C2 `confidence-boost-undefined` (🔴):** confidence is a defined, bounded function: `confidence = min(99, round(score×100) + boost)` where `boost = min(15, round(5 × ln(1 + order_count)))` and `order_count` = times this client ordered that SKU in approved history. **Score normalisation is specified**: token set from `normNameForMatch`, Jaccard overlap. The Goodday fixture is reconciled: because raw token overlap of "Goodday 100" vs "Britannia Good Day 100g" is low, V1 adds a **substring/bigram assist** to the score (define: +0.3 to score when a candidate name contains the pasted head token as a substring, pre-boost) — or, if that is out of appetite, the acceptance threshold for that fixture is lowered to the value the function actually yields and the fixture states the computed number. Pick one in planning; the fixture MUST assert a number derived from the final function.
+- **C3 `history-sku-price-contradiction` (🟠):** candidate pool = **current `client_catalog` SKUs only**. History **ranks/boosts** catalogue SKUs; it never introduces a SKU absent from the current catalogue. History is scoped to orders in approved/terminal statuses (exclude `DRAFT`, `CANCELLED`, `REJECTED`) within the last 12 months. This removes the D2/E6 conflict: every candidate has a current client price, so E6's "price —" path is now an exception only for genuinely price-missing catalogue rows.
+- **C4 `perf-budget-pool-cap` (🟠):** target **p95 ≤ 50 ms CPU** for a 100-line paste against a 2,000-SKU pool (acceptance-tested). If the pool exceeds 2,000, cap by **history-frequency desc, then exact-prefix, then name asc**, and return a `pool_truncated:true` flag the UI surfaces. The **manual search box always queries the full catalogue**, never the capped pool.
+
+### D. Confirm, output & data
+- **D1-rev `resolved-requires-qty` (🔴):** a line is **resolved** iff it has exactly one selected catalogue SKU **AND** an integer quantity ≥ 1. Confirm is enabled only when every line is resolved or explicitly removed.
+- **D2-rev `empty-zero-line-draft` (🟠):** "non-empty" means ≥ 1 parseable non-blank line, else **400**. Confirm is disabled, and the draft call rejects, when there would be **zero** resolved lines. An empty draft is never created.
+- **D3-rev `confirm-atomicity` (🔴):** draft creation and **all** `paste_match_log` rows for one Confirm are a **single D1 batch/transaction**; on any failure nothing persists and the operator sees a retriable error; `order_id` is set in the same unit; a retried Confirm is idempotent on the draft id.
+- **D4-rev `source-tag-vs-no-orders-change` (🟠):** resolve by adding a nullable `orders.source TEXT` column (additive migration, now **in scope**) set to `'smart_paste'`. The "No change to orders" line is amended to permit this one additive column. (Success metrics may still join via `paste_match_log.order_id`.)
+- **D5-rev `duplicate-sku-merge` (🟠):** if two resolved lines share a SKU and the operator does not merge, the draft call MUST **sum** their quantities into one order line (never create duplicate rows or error). Add a `merged` value to the `action` enum; each source line is logged with `action:"merged"` and the surviving quantity recorded.
+- **D6-rev `input-limit-counting` (🟡):** split input on `/\r\n|\r|\n/`; count raw lines and **Unicode code points** of the raw submitted `text` **before** any filtering; both the 200-line and 20,000-char limits apply to that raw text; exceeding either → 400 with no parsing performed. The vacuous "no partial parse" clause is removed (parse is read-only by E7).
+- **D7-rev `line-no-basis` (🟡):** `line_no` = 1-based index into the original newline-split text (preserved across skipped blank lines); blank lines are not logged; "one row per original line" means one row per **surviving parsed** line.
+
+### E. Response contract & metrics
+- **E1-rev `status-enum-parse-flags` (🟠):** each response line gains `parse_flags: string[]` (allowed: `low_confidence_parse`, `multi_number`, `decimal_qty`, `pool_truncated`); the review UI MUST visibly mark flagged rows. All status/flag names use underscores (`needs_qty`). `status` stays `matched | unmatched | needs_qty`.
+- **E2-rev `unmatched-action-metric` (🟠):** `paste_match_log` is written at **Confirm** for resolved/removed lines **and** an initial per-line row is written at **parse time** capturing the parse-time status (including `unmatched`), so the "Unmatched rate" metric is computable. (Parse-time logging is the one exception to E7's "only Confirm writes"; these rows carry `order_id = NULL` until/unless a draft is confirmed. Reconcile E7 wording accordingly.) Alternatively, compute Unmatched-rate from a lightweight parse-event counter — decide in planning, but the metric MUST have a data source.
+
+### Follow-up for planning
+- The parsing and matching sections changed materially → **re-run `spec-validator` on this revision (`spec-validation-r2.md`) before the architect plans.**
+- Confirm during planning that the **existing order-draft endpoint** accepts the SKU set and the summed-quantity/`source` tag writes (finding `draft-path-rejects-history-sku` is mitigated by C3 restricting the pool to catalogue, but the write path must still be verified).
