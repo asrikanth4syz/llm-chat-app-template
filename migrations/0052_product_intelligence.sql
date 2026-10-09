@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS pi_rule_dict ( id TEXT PRIMARY KEY, dict TEXT NOT NUL
 ALTER TABLE inventory ADD COLUMN brand_id TEXT;
 ALTER TABLE inventory ADD COLUMN product_type TEXT;
 ALTER TABLE inventory ADD COLUMN barcode_gtin TEXT;
-ALTER TABLE inventory ADD COLUMN pack_size TEXT;
+-- pack_size already added by migration 0009 (ALTER TABLE inventory ADD COLUMN
+-- pack_size INTEGER DEFAULT 1). Re-adding it here fails a fresh `wrangler d1
+-- migrations apply` with "duplicate column name: pack_size" (the vitest harness
+-- swallowed it, wrangler does not). The column exists already — nothing to add.
 ALTER TABLE inventory ADD COLUMN units_per_carton INTEGER;
 ALTER TABLE inventory ADD COLUMN moq INTEGER;
 ALTER TABLE inventory ADD COLUMN case_config TEXT;

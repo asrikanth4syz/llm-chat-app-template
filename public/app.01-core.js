@@ -172,6 +172,7 @@ const NAV = {
     // hub (#orders/pipeline, #orders/due). They stay reachable off-nav via
     // ACTION_PAGES so existing deep links / shortcuts keep working.
     { id:'orders',              label:'Orders',       icon:iconOrders,  badge:'!' },
+    { id:'smart_paste',         label:'Smart Paste',  icon:iconCart,    badge:null },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,   badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery, badge:null },
@@ -220,6 +221,7 @@ const NAV = {
     { id:'next_actions',        label:'Today',            icon:iconToday,     badge:null },
     // Phase 2: Pipeline + Due Items fold into the Orders hub (addressable tabs).
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
+    { id:'smart_paste',         label:'Smart Paste',      icon:iconCart,      badge:null },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,    badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
