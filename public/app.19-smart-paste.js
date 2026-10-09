@@ -8,15 +8,35 @@
 // smoke test's "all delegated targets resolve" check covers this file.
 //
 // State lives on APP._sp for the lifetime of one paste session:
-//   { rootEl, clientId, clients[], sessionId, idemKey, lines[] }
-// Each line carries the server's parsed shape plus client-side review overrides
-// (chosen_sku, qty, action, merge_group, removed). Editing the product TEXT does
-// not re-run matching in V1 — use "🔍 Search" to re-match an unmatched/changed
-// line (stated in the PR; the open plan item is resolved this way).
+//   { rootEl, clientId, clients[], sessionId, idemKey, text, lines[] }
+// and is MIRRORED to localStorage (SP_LS_KEY) after every change, so a review
+// in progress survives navigation and reloads until the operator clears it or a
+// draft is created. Each line carries the server's parsed shape plus client-side
+// review overrides (chosen_sku, qty, action, merge_group, removed). Editing the
+// product TEXT does not re-run matching in V1 — use "🔍 Search" to re-match.
 // ============================================================================
 
-// Order statuses the backend counts as history are its concern; the UI only ever
-// sends line decisions. Confidence banding for the chip colour.
+const SP_LS_KEY = 'sp_draft_v1';
+
+// ── Persistence (per-viewer convenience; never the source of truth) ──────────
+// localStorage can throw (private mode / blocked) or be absent — every access is
+// guarded and the page renders correctly with nothing saved.
+function spPersist() {
+  const sp = APP._sp || {};
+  try {
+    localStorage.setItem(SP_LS_KEY, JSON.stringify({
+      clientId: sp.clientId || '', sessionId: sp.sessionId || null,
+      idemKey: sp.idemKey || null, text: sp.text || '', lines: sp.lines || [],
+    }));
+  } catch { /* storage unavailable — in-memory state still works */ }
+}
+function spLoadDraft() {
+  try { const raw = localStorage.getItem(SP_LS_KEY); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
+}
+function spForget() { try { localStorage.removeItem(SP_LS_KEY); } catch { /* ignore */ } }
+
+// Confidence banding for the chip colour.
 function _spConfColor(c) {
   if (c >= 85) return 'var(--success, #15803d)';
   if (c >= 60) return 'var(--gold, #b45309)';
@@ -45,19 +65,51 @@ function _spAction(l) {
   return 'accepted';
 }
 
+// ── Reconciliation counts: pasted vs mapped, for items AND quantity ──────────
+// pasted   = every line the paste produced (what the operator handed us)
+// mapped   = non-removed lines now tied to a catalogue SKU
+// qtyPasted= Σ parsed quantity across all lines (needs-qty lines count 0)
+// qtyMapped= Σ current quantity across resolved lines (what the order will carry)
+function spCounts() {
+  const lines = (APP._sp.lines || []);
+  let pasted = lines.length, mapped = 0, removed = 0, unresolved = 0, qtyPasted = 0, qtyMapped = 0;
+  for (const l of lines) {
+    const q0 = Number(l.quantity); if (Number.isFinite(q0)) qtyPasted += q0;
+    if (l.removed) { removed++; continue; }
+    if (l.chosen_sku) mapped++;
+    if (_spResolved(l)) qtyMapped += Number(l.qty); else unresolved++;
+  }
+  return { pasted, mapped, removed, unresolved, qtyPasted, qtyMapped, active: pasted - removed };
+}
+
 async function renderSmartPaste(el) {
   const sp = (APP._sp = APP._sp || {});
   sp.rootEl = el;
+
+  // Restore an in-progress draft (survives navigation / reload until cleared).
+  if (!sp._restored) {
+    const saved = spLoadDraft();
+    if (saved) {
+      sp.clientId = saved.clientId || sp.clientId || '';
+      sp.sessionId = saved.sessionId || null;
+      sp.idemKey = saved.idemKey || null;
+      sp.text = saved.text || '';
+      sp.lines = Array.isArray(saved.lines) ? saved.lines : [];
+    }
+    sp._restored = true;
+  }
+
   // Client list (scoped server-side: a client role gets exactly its own row).
   const clients = await api('/clients');
   if (!clients) return; // api() already toasted / logged out
   sp.clients = clients;
-  // Default the client: keep a prior choice, else auto-pick when there is only one
-  // (the client-admin case), else leave unchosen so ops explicitly selects.
+  // Default the client: keep the restored/prior choice if still valid, else
+  // auto-pick when there is only one (the client-admin case), else leave unchosen.
   if (!sp.clientId || !clients.some(c => c.id === sp.clientId)) {
     sp.clientId = clients.length === 1 ? clients[0].id : '';
   }
   sp.lines = sp.lines || [];
+  sp.text = sp.text || '';
 
   const picker = clients.length === 1
     ? `<div style="font-weight:700;color:var(--navy)">${h(clients[0].name)}</div>`
@@ -66,13 +118,18 @@ async function renderSmartPaste(el) {
          ${clients.map(c => `<option value="${h(c.id)}"${c.id === sp.clientId ? ' selected' : ''}>${h(c.name)}</option>`).join('')}
        </select>`;
 
+  const hasDraft = sp.lines.length > 0 || !!sp.text.trim();
+
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">📋 Smart Paste Order</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">Paste a free-text item + quantity list, review the matches, and create a draft order.</div>
     </div>
-    <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>Orders</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${hasDraft ? `<button class="btn btn-secondary btn-sm" ${dataAct('spClear')}>Clear draft</button>` : ''}
+      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'orders')}>Orders</button>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:14px"><div class="card-body" style="padding:18px">
@@ -84,9 +141,9 @@ async function renderSmartPaste(el) {
     </div>
     <label style="display:block;font-size:.75rem;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px">Paste items</label>
     <textarea id="sp-text" rows="8" placeholder="One item per line, e.g.&#10;Premium Coffee Beans - 4&#10;Green Tea Sachets x 2&#10;Sugar 5 kg"
-      style="width:100%;box-sizing:border-box;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;outline:none"></textarea>
+      style="width:100%;box-sizing:border-box;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;outline:none">${h(sp.text)}</textarea>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px;flex-wrap:wrap">
-      <div style="font-size:.75rem;color:var(--text-muted)">Up to 200 lines. Quantities are whole numbers; a line with only a measure (e.g. “5 kg”) asks you for a count.</div>
+      <div style="font-size:.75rem;color:var(--text-muted)">Up to 200 lines. Quantities are whole numbers; a line with only a measure (e.g. “5 kg”) asks you for a count.${hasDraft ? ' <span style="color:var(--success,#15803d)">· Draft saved — it stays here until you clear it.</span>' : ''}</div>
       <button class="btn btn-gold btn-sm" ${dataAct('spRunParse')} data-busy="Parsing…">Parse &amp; match →</button>
     </div>
   </div></div>
@@ -101,6 +158,7 @@ function spSetClient(value) {
   sp.clientId = value || '';
   sp.lines = [];
   sp.sessionId = null;
+  spPersist();
   const rev = document.getElementById('sp-review');
   if (rev) rev.innerHTML = '';
 }
@@ -117,6 +175,7 @@ async function spRunParse() {
   });
   if (!res) return; // api() surfaced the error (400 limits, 403/404, …)
 
+  sp.text = text;
   sp.sessionId = res.parse_session_id;
   // A stable idempotency key for THIS session's Confirm — reused on retry so a
   // network hiccup can never create two drafts.
@@ -129,10 +188,22 @@ async function spRunParse() {
     removed: false,
     _searched: false,
   }));
-  spRenderReview();
+  spPersist();
+  // Re-render the whole page so the header (Clear button + "saved" hint) appears.
+  renderSmartPaste(sp.rootEl);
 }
 
-// Re-render the whole review section (table + footer).
+// Clear the whole session — the only thing that discards a saved draft.
+function spClear() {
+  const sp = APP._sp || {};
+  sp.lines = []; sp.text = ''; sp.sessionId = null; sp.idemKey = null;
+  spForget();
+  // Clear the review instantly; renderSmartPaste rebuilds the rest after /clients.
+  const rev = document.getElementById('sp-review'); if (rev) rev.innerHTML = '';
+  renderSmartPaste(sp.rootEl);
+}
+
+// Re-render just the review section (table + footer).
 function spRenderReview() {
   const rev = document.getElementById('sp-review');
   if (rev) rev.innerHTML = spReviewHtml();
@@ -142,10 +213,24 @@ function spReviewHtml() {
   const sp = APP._sp || {};
   const lines = sp.lines || [];
   if (!lines.length) return '';
+  const c = spCounts();
+
+  // Reconciliation strip above the table — pasted vs mapped at a glance.
+  const recon = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-weight:800;color:var(--navy)">Review matches</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;color:var(--text-muted)">
+        <span><b style="color:var(--navy)">${c.mapped}</b> of <b style="color:var(--navy)">${c.pasted}</b> items mapped</span>
+        <span>Qty <b style="color:var(--navy)">${c.qtyMapped}</b> of <b style="color:var(--navy)">${c.qtyPasted}</b> mapped</span>
+        ${c.unresolved ? `<span style="color:var(--gold,#b45309)">${c.unresolved} to resolve</span>` : ''}
+        ${c.removed ? `<span>${c.removed} removed</span>` : ''}
+      </div>
+    </div>`;
 
   const rows = lines.map(spRowHtml).join('');
   return `
   <div class="card"><div class="card-body" style="padding:0">
+    ${recon}
     <div class="table-wrap"><table class="table" style="margin:0">
       <thead><tr>
         <th style="width:34px">#</th>
@@ -174,8 +259,6 @@ function spRowHtml(l) {
   const opts = [`<option value="">— none —</option>`]
     .concat((l.candidates || []).map(c =>
       `<option value="${h(c.sku)}"${c.sku === l.chosen_sku ? ' selected' : ''}>${h(c.name)} · ${h(c.sku)}</option>`));
-  // A chosen SKU that came from search is already unshifted into candidates, so the
-  // select always lists the current choice.
   const matchCell = `
     <select ${dataChangeVal('spPickCandidate', l.line_no)} style="max-width:260px;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px"${l.removed ? ' disabled' : ''}>
       ${opts.join('')}
@@ -226,6 +309,7 @@ function spFooterHtml() {
   const resolved = active.filter(_spResolved);
   const unresolved = active.filter(l => !_spResolved(l));
   const dupGroupsExist = spDuplicateSkus(resolved).length > 0;
+  const c = spCounts();
 
   // Subtotal over resolved lines that have a price; count the unpriced ones aside.
   let subtotal = 0, unpriced = 0;
@@ -240,20 +324,24 @@ function spFooterHtml() {
     ? `${unresolved.length} line${unresolved.length > 1 ? 's' : ''} still need a match or quantity — resolve or remove ${unresolved.length > 1 ? 'them' : 'it'} to confirm.`
     : (resolved.length ? 'All lines resolved — ready to create the draft.' : 'Nothing to order yet.');
 
+  // Pasted-vs-mapped KPI tiles (same tileHtml component as the rest of the app).
   const tiles = [
-    tileHtml({ label: 'Resolved', value: `${resolved.length} of ${active.length}`, accent: 'var(--navy)' }),
+    tileHtml({ label: 'Items (mapped / pasted)', value: `${c.mapped} / ${c.pasted}`, sub: c.removed ? `${c.removed} removed` : '', accent: 'var(--navy)' }),
+    tileHtml({ label: 'Qty (mapped / pasted)', value: `${c.qtyMapped} / ${c.qtyPasted}`, accent: 'var(--navy)' }),
     tileHtml({ label: 'Subtotal', value: fmt(subtotal), sub: unpriced ? `excludes ${unpriced} unpriced` : '', accent: 'var(--gold,#b45309)' }),
   ].join('');
 
   return `
-  <div class="card" style="margin-top:14px;position:sticky;bottom:0;z-index:5"><div class="card-body" style="padding:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${tiles}</div>
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <div style="font-size:.8rem;color:var(--text-muted);max-width:340px">${hint}</div>
-      ${dupGroupsExist
-        ? `<button class="btn btn-secondary btn-sm" ${dataAct('spToggleMerge')}>${spAnyMerged() ? 'Unmerge duplicates' : 'Merge duplicate SKUs'}</button>`
-        : ''}
-      <button class="btn btn-gold" ${dataAct('spConfirm')} data-busy="Creating…" ${canConfirm ? '' : 'disabled style="opacity:.5;cursor:not-allowed"'}>Create draft order</button>
+  <div class="card" style="margin-top:14px;position:sticky;bottom:0;z-index:5"><div class="card-body" style="padding:16px">
+    <div class="tile-grid" style="margin:0 0 12px 0">${tiles}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+      <div style="font-size:.8rem;color:var(--text-muted);max-width:420px">${hint}</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        ${dupGroupsExist
+          ? `<button class="btn btn-secondary btn-sm" ${dataAct('spToggleMerge')}>${spAnyMerged() ? 'Unmerge duplicates' : 'Merge duplicate SKUs'}</button>`
+          : ''}
+        <button class="btn btn-gold" ${dataAct('spConfirm')} data-busy="Creating…" ${canConfirm ? '' : 'disabled style="opacity:.5;cursor:not-allowed"'}>Create draft order</button>
+      </div>
     </div>
   </div></div>`;
 }
@@ -271,11 +359,27 @@ function spSetQty(lineNo, value) {
   if (!l) return;
   const n = parseInt(value, 10);
   l.qty = (value === '' || isNaN(n)) ? '' : n;
-  // Refresh only the footer + this row's status cell so the number input keeps focus.
+  spPersist();
+  // Refresh the footer + reconciliation + this row's status, keeping input focus.
   const st = document.getElementById('sp-status-' + lineNo);
   if (st) st.innerHTML = spStatusHtml(l);
   const ft = document.getElementById('sp-footer');
   if (ft) ft.innerHTML = spFooterHtml();
+  spRefreshRecon();
+}
+
+// Update just the reconciliation numbers in place (no full re-render → keeps focus).
+function spRefreshRecon() {
+  const rev = document.getElementById('sp-review');
+  const strip = rev && rev.querySelector('.card .card-body > div:first-child');
+  if (!strip) return;
+  const c = spCounts();
+  const nums = strip.querySelector('div:last-child');
+  if (nums) nums.innerHTML = `
+    <span><b style="color:var(--navy)">${c.mapped}</b> of <b style="color:var(--navy)">${c.pasted}</b> items mapped</span>
+    <span>Qty <b style="color:var(--navy)">${c.qtyMapped}</b> of <b style="color:var(--navy)">${c.qtyPasted}</b> mapped</span>
+    ${c.unresolved ? `<span style="color:var(--gold,#b45309)">${c.unresolved} to resolve</span>` : ''}
+    ${c.removed ? `<span>${c.removed} removed</span>` : ''}`;
 }
 
 function spPickCandidate(lineNo, value) {
@@ -283,6 +387,7 @@ function spPickCandidate(lineNo, value) {
   if (!l) return;
   l.chosen_sku = value || '';
   if (l.chosen_sku) l._searched = false; // chosen from the ranked list, not a search
+  spPersist();
   spRenderReview();
 }
 
@@ -290,12 +395,14 @@ function spRemoveLine(lineNo) {
   const l = (APP._sp.lines || []).find(x => x.line_no === lineNo);
   if (!l) return;
   l.removed = true; l.merge_group = null;
+  spPersist();
   spRenderReview();
 }
 function spRestoreLine(lineNo) {
   const l = (APP._sp.lines || []).find(x => x.line_no === lineNo);
   if (!l) return;
   l.removed = false;
+  spPersist();
   spRenderReview();
 }
 
@@ -310,12 +417,12 @@ function spToggleMerge() {
     const dups = spDuplicateSkus(resolved);
     for (const sku of dups) for (const l of resolved) if (l.chosen_sku === sku) l.merge_group = 'm:' + sku;
   }
+  spPersist();
   spRenderReview();
 }
 
 // Inline SKU search — reuses parse-paste on a single search term so the candidate
-// list is scored by the exact same client-scoped matcher. Lets an operator resolve
-// an unmatched line or override a match.
+// list is scored by the exact same client-scoped matcher.
 function spSearchSku(lineNo) {
   const l = (APP._sp.lines || []).find(x => x.line_no === lineNo);
   if (!l) return;
@@ -349,7 +456,6 @@ async function spSearchRun(lineNo) {
       </div>
       <button class="btn btn-gold btn-sm" ${dataActClose('spSearchPick', lineNo, h(c.sku))}>Choose</button>
     </div>`).join('');
-  // Register the candidate objects so the pick can attach price/why to the line.
   APP._sp._searchCands = cands;
 }
 
@@ -358,12 +464,11 @@ function spSearchPick(lineNo, sku) {
   const l = (sp.lines || []).find(x => x.line_no === lineNo);
   const cand = (sp._searchCands || []).find(c => c.sku === sku);
   if (!l || !cand) return;
-  // Put the chosen candidate at the front of the line's candidate list so the
-  // Match <select>, price, and confidence all resolve to it.
   l.candidates = [cand, ...(l.candidates || []).filter(c => c.sku !== sku)];
   l.chosen_sku = sku;
   l._searched = true;
   sp._searchCands = null;
+  spPersist();
   spRenderReview();
 }
 
@@ -396,8 +501,8 @@ async function spConfirm() {
   if (!res || !res.id) return; // api() surfaced any 422/400
 
   showToast(`Draft order ${res.id} created`, 'success');
-  // Fresh session for the next paste; then jump to the order the operator submits.
-  APP._sp.lines = [];
-  APP._sp.sessionId = null;
+  // The draft became an order — discard the saved session and jump to it.
+  sp.lines = []; sp.text = ''; sp.sessionId = null; sp.idemKey = null;
+  spForget();
   navigate('orders', { tab: 'all' });
 }
