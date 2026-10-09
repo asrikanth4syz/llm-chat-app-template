@@ -22,6 +22,7 @@
 ## 📋 Task Execution (Parallel Groups)
 
 ### Group 1 — foundations (parallel; different files, fully independent)
+> Parallel-safe ONLY with the plan-validation fix: Task 1.B **duplicates** the 6-line `normNameForMatch` into `src/smart_paste.ts` (does NOT move it out of `src/index.ts`), so 1.B never touches `src/index.ts`. 1.A owns the only `src/index.ts` edit in this group.
 - [ ] **Task 1.A — Schema:** `migrations/0053_smart_paste.sql` + append to `ensureFeatureTables` in `src/index.ts`.
 - [ ] **Task 1.B — Pure logic module + unit tests:** `src/smart_paste.ts` + `test/smart_paste.test.ts`.
 
@@ -145,3 +146,18 @@ Run the existing suite first to capture a green baseline: `npm test` (vitest) an
 ## Open items for the Engineer to confirm (flagged, do not silently choose)
 - The `Water x 5` and `Sugar 5 kg` fixture results (R2-C6): pick the result, encode it in `test/smart_paste.test.ts`, and note it in the PR.
 - Whether editing product text re-runs matching (spec unconfirmed `edit-product-text-no-rematch`): V1 may leave edited-text lines to the manual SKU search; state the choice in 3.A.
+
+---
+
+## 🔧 Revisions from plan-validation r1 (AUTHORITATIVE — overrides the task bodies above on conflict)
+
+> Source: `adversarial-reviews/plan-validation.md` (3 skeptics read the code; 2-of-3 gate). 2 confirmed (both 🔴) + 6 adopted single-votes. The passed-checks confirmed the atomicity, matcher numbers, tenancy, and route-safety assumptions hold — these are additive fixes, not a redesign.
+
+- **PV-1 `missing-idempotency-key-column` (🔴 first domino).** Add a `paste_idempotency(idempotency_key PK, order_id, client_id, created_at)` table (data-model §1b) to migration 0053 AND `ensureFeatureTables.stmts[]`. **Task 2.B:** pre-check `SELECT order_id FROM paste_idempotency WHERE idempotency_key=?` → replay on hit; on miss, INSERT it as one statement of the from-paste batch. **Task 2.D:** the idempotency test now has a real column to assert against.
+- **PV-2 `smart-paste-page-unreachable` (🔴).** **Task 3.B:** register `smart_paste` in **both** `PAGE_MAP` and `ACTION_PAGES` (app.01-core.js:~782) with `['super_admin','ops_admin','client_admin']` (matching the endpoint role gate). Add a **Task 4.A assertion** that `canAccessPage('smart_paste')` is true for each allowed role and false otherwise — the existing smoke navGuard does NOT catch a reach-by-nobody page. (Modal-without-a-page is the alternative; if chosen, drop the PAGE_MAP entry and state it.)
+- **PV-3 `client-price-not-self-healed`.** **Task 1.A:** add `ALTER TABLE client_catalog ADD COLUMN client_price REAL` to `ensureFeatureTables.alters[]` (prod self-heals via ensureFeatureTables, which lacks this column today → `COALESCE(cc.client_price,…)` 500s in prod). Also mirror into migration 0053 is unnecessary (0017 already has it); the fix is the runtime alters[] only.
+- **PV-4 `schema-selfheal-not-awaited`.** **Tasks 2.A & 2.B:** first line of each handler is `await ensureFeatureTables(env)` (mirror `await ensurePiSchema` at src/index.ts:4457), so `paste_match_log`/`paste_idempotency`/`orders.source`/`client_catalog.client_price` exist on a cold isolate's first hit (it currently runs fire-and-forget via `ctx.waitUntil`, src/index.ts:4438).
+- **PV-5 `confirm-update-orphan-noop`.** **Task 2.B:** the confirm-phase write is an **UPSERT** on `paste_match_log(parse_session_id,line_no)`, not a bare UPDATE — manual-search/merge/added lines have no parse-phase row, and a no-op UPDATE would drop their confirm row and break the "one row per line" metric. `parse_session_id` is part of the from-paste request (api-contracts §2); note the spec R2-D4 body omits it — the api-contract is authoritative.
+- **PV-6 `tilehtml-not-table-rows`.** **Task 3.A:** build the review table as a hand-rolled `<table>` with existing table styles; use `tileHtml` ONLY for the footer KPI tiles. `tileHtml` renders a single KPI tile, not rows.
+- **PV-7 `normnameformatch-mrp-strip`.** **Task 1.B:** `normNameForMatch` also strips an inline `MRP <n>` tag (beyond the spec's stated normalisation). Keep it (desirable) and add a unit fixture pinning it (e.g. a name containing `-MRP 95`).
+- **PV-8 (surfaced) `place-order-acl-excludes-client-admin`.** `place_order`'s ACTION_PAGES is ops-only, so a Smart-Paste entry button there is unreachable for `client_admin` despite the API allowing them. V1 persona is ops-first — acceptable; the dedicated `smart_paste` page (PV-2) is the client_admin-reachable surface. State this in the PR.

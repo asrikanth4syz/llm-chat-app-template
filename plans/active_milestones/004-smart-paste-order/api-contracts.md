@@ -67,12 +67,13 @@ Role gate for both: `super_admin | ops_admin | client_admin` → else **403**. T
 - `merge_group`: lines sharing a non-null `merge_group` the operator chose to merge are summed into one `order_items` line (R2-D3, operator-confirmed).
 
 ### Server behaviour — ALL in one `env.DB.batch([...])` (R2-D4/D3-rev)
+0. `await ensureFeatureTables(env)` at entry (cold-isolate schema guarantee).
 1. Role gate + `denyClientCrossAccess`.
-2. **Idempotency:** if a row exists for `(idempotency_key)` → return its `order_id` (201, replayed) and write nothing.
+2. **Idempotency:** `SELECT order_id FROM paste_idempotency WHERE idempotency_key=?` → on hit return that `order_id` (201, replayed), write nothing. On miss, the INSERT into `paste_idempotency` is one statement of the batch in step 6, so a concurrent/retried replay cannot create a second order.
 3. Re-derive the client's candidate pool = current `client_catalog` SKUs (R2-C2). For every non-removed line: reject **422** if `chosen_sku ∉ pool` or `quantity` is not an integer ≥ 1 (name the offending `line_no`s; create no draft — R2-C14 TOCTOU).
 4. Price each line `COALESCE(cc.client_price, inv.unit_price)`; apply operator merges (sum qty per `merge_group`).
 5. Require ≥ 1 resolved line else 400 (R2-C14).
-6. Batch: INSERT `orders` (`status='DRAFT'`, `source='smart_paste'`, `subtotal`, `gst` via `computeOrderGst`, SP- id) + one `order_items` per resolved/merged line + `order_history` DRAFT row + UPDATE each `paste_match_log (parse_session_id,line_no)` row to `phase='confirm'` with `order_id`, `chosen_sku`, `action`.
+6. Batch: INSERT `orders` (`status='DRAFT'`, `source='smart_paste'`, `subtotal`, `gst` via `computeOrderGst`, SP- id) + INSERT `paste_idempotency(idempotency_key, order_id, client_id)` + one `order_items` per resolved/merged line + `order_history` DRAFT row + **UPSERT** each `paste_match_log` row to `phase='confirm'` with `order_id`, `chosen_sku`, `action`. **UPSERT, not bare UPDATE:** a line added via manual search / merge may have no parse-phase `(parse_session_id,line_no)` row, so INSERT a confirm row when none exists — otherwise the confirm row is lost and the "one row per line" metric breaks.
 7. Return `{ "id": "SP-…", "status": "DRAFT", "grand_total": 1234 }` (201). The UI then `navigate`s to the normal order screen for that id (R2-D6).
 
 ### Errors
