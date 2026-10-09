@@ -23,21 +23,21 @@
 
 ### Group 1 — foundations (parallel; different files, fully independent)
 > Parallel-safe ONLY with the plan-validation fix: Task 1.B **duplicates** the 6-line `normNameForMatch` into `src/smart_paste.ts` (does NOT move it out of `src/index.ts`), so 1.B never touches `src/index.ts`. 1.A owns the only `src/index.ts` edit in this group.
-- [ ] **Task 1.A — Schema:** `migrations/0053_smart_paste.sql` + append to `ensureFeatureTables` in `src/index.ts`.
-- [ ] **Task 1.B — Pure logic module + unit tests:** `src/smart_paste.ts` + `test/smart_paste.test.ts`.
+- [x] **Task 1.A — Schema:** `migrations/0053_smart_paste.sql` + append to `ensureFeatureTables` in `src/index.ts`.
+- [x] **Task 1.B — Pure logic module + unit tests:** `src/smart_paste.ts` + `test/smart_paste.test.ts`.
 
 ### Group 2 — backend endpoints (sequential; all edit `src/index.ts`, depends on Group 1)
-- [ ] **Task 2.A — `handleParsePaste`** (uses 1.B parser/scorer; reads pool; writes parse-phase log).
-- [ ] **Task 2.B — `handleFromPaste`** (atomic batch; tenancy; revalidation; merge; source tag; confirm-phase log UPDATE).
-- [ ] **Task 2.C — Route registration + config keys** (2 routes near 4480; `getConfig` reads).
-- [ ] **Task 2.D — Endpoint integration tests** in `test/index.test.ts`.
+- [x] **Task 2.A — `handleParsePaste`** (uses 1.B parser/scorer; reads pool; writes parse-phase log).
+- [x] **Task 2.B — `handleFromPaste`** (atomic batch; tenancy; revalidation; merge; source tag; confirm-phase log UPDATE).
+- [x] **Task 2.C — Route registration + config keys** (2 routes near 4480; `getConfig` reads).
+- [x] **Task 2.D — Endpoint integration tests** in `test/index.test.ts`.
 
 ### Group 3 — UI (depends on Group 2)
-- [ ] **Task 3.A — `public/app.19-smart-paste.js`** (render + review table + delegated handlers + `from-paste` call + navigate).
-- [ ] **Task 3.B — Wire-up:** `index.html` script tag + cache-bust; `app.03` entry button.
+- [x] **Task 3.A — `public/app.19-smart-paste.js`** (render + review table + delegated handlers + `from-paste` call + navigate).
+- [x] **Task 3.B — Wire-up:** `index.html` script tag + cache-bust; `app.03` entry button.
 
 ### Group 4 — verification (depends on Group 3)
-- [ ] **Task 4.A — Smoke + typecheck + full suite** and acceptance-scenario checks.
+- [x] **Task 4.A — Smoke + typecheck + full suite** and acceptance-scenario checks.
 
 ---
 

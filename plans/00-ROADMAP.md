@@ -38,7 +38,7 @@
 
 ## 📦 Release v0.3.0 — Faster Order Entry — STATUS: PENDING
 
-- [ ] **Milestone 4: Smart Paste Order (V1)** — STATUS: BUILDING (Group 1 pure module + schema shipped #126; Group 2 parse-paste/from-paste endpoints + integration tests shipped; Group 3 UI + Group 4 verification sweep remaining)
+- [x] **Milestone 4: Smart Paste Order (V1)** — STATUS: COMPLETED (Group 1 pure module + schema #126; Group 2 parse-paste/from-paste endpoints + integration tests #127; Group 3 paste→review→DRAFT UI; Group 4 verification sweep — tsc/smoke/vitest all green, smart_paste ACL pinned in smoke)
   - *Description:* Paste a free-text item+quantity list and get a reviewable DRAFT order. Deterministic
     unit-aware parser + history-weighted fuzzy match (reuses `normNameForMatch`) scoped to the selected
     client's catalogue ∪ order history, with visible confidence and "why this match". Every line is

@@ -162,6 +162,16 @@ const result = await page.evaluate(async (actTargets) => {
         if (!allowed && (inNav || orphanAllowed)) out.navGuardFails.push(`${role}: canAccessPage('${pg}')=false but permitted`);
       }
     }
+    // 3. Smart Paste Order (004) is an off-nav page: canAccessPage must grant it to
+    //    exactly its endpoint-gate roles and deny everyone else (PV-2 reach-check).
+    const SP_ALLOWED = new Set(["super_admin", "ops_admin", "client_admin"]);
+    out.smartPasteAclFails = [];
+    for (const [role, meta] of Object.entries(ROLES)) {
+      APP.user = { role, nav: meta.nav };
+      const got = canAccessPage("smart_paste");
+      const want = SP_ALLOWED.has(role);
+      if (got !== want) out.smartPasteAclFails.push(`${role}: canAccessPage('smart_paste')=${got}, want ${want}`);
+    }
     APP.user = null;
   } catch (e) { out.aclErr = String(e.message); }
   return out;
@@ -176,6 +186,7 @@ check("vendorViewHTML escapes user text", result.escapesUserText === true);
 check(`all ${result.actCount || 0} delegated targets resolve`, Array.isArray(result.unresolvedActs) && result.unresolvedActs.length === 0 || (console.log("    unresolved:", result.unresolvedActs), false));
 check("no role has an off-nav quick action", Array.isArray(result.aclLeaks) && result.aclLeaks.length === 0 || (console.log("    leaks:", result.aclLeaks), false));
 check("canAccessPage gates every role correctly", Array.isArray(result.navGuardFails) && result.navGuardFails.length === 0 || (console.log("    guard fails:", result.navGuardFails), false));
+check("smart_paste reachable by exactly its endpoint-gate roles", Array.isArray(result.smartPasteAclFails) && result.smartPasteAclFails.length === 0 || (console.log("    acl fails:", result.smartPasteAclFails), false));
 if (result.aclErr) console.log("    acl error:", result.aclErr);
 if (result.modalErr) console.log("    modal error:", result.modalErr);
 if (result.renderErr) console.log("    render error:", result.renderErr);
