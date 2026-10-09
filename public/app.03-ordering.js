@@ -29,6 +29,7 @@ async function renderPlaceOrder(el) {
       <div style="display:flex;gap:8px">
         <button class="btn btn-gold btn-sm" ${dataAct('showAdhocOrderModal')}>⚡ Quick / Ad-hoc Request</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('showCSVUploadModal')}>📋 Order via Spreadsheet</button>
+        ${canAccessPage('smart_paste') ? `<button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'smart_paste')}>📋 Smart Paste</button>` : ''}
         <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'my_orders')}>My Orders</button>
       </div>
     </div>

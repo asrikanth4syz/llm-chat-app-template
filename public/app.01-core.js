@@ -797,6 +797,9 @@ const ACTION_PAGES = {
   todays_schedule:   ['super_admin', 'ops_admin', 'delivery_manager'],
   delivery_calendar: ['super_admin', 'ops_admin', 'delivery_manager'],
   delivery_routes:   ['super_admin'],
+  // Smart Paste Order (004): ops/admin place a draft for a chosen client; a
+  // client_admin for their own. Matches the parse-paste/from-paste role gate.
+  smart_paste:       ['super_admin', 'ops_admin', 'client_admin'],
 };
 
 function getDefaultPage() {
@@ -1095,6 +1098,9 @@ const PAGE_MAP = {
   my_statement: 'renderMyStatement',
   // Sales Analytics (app.17) — super-admin only (platform nav).
   sales_analytics: 'renderSalesAnalytics',
+  // Smart Paste Order (app.19) — off-nav page reached via the ordering surface;
+  // ACL lives in ACTION_PAGES (matches the endpoint role gate).
+  smart_paste: 'renderSmartPaste',
 };
 
 // Phase 2: pages folded into a hub redirect to the hub on their tab, so every
