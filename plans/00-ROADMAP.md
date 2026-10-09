@@ -35,3 +35,16 @@
     Reminders — first shippable slice, reminder-first)
   - *Plan:* `plans/active_milestones/003-finance-ar/plan.md`
   - *Context:* `plans/active_milestones/003-finance-ar/context.md`
+
+## 📦 Release v0.3.0 — Faster Order Entry — STATUS: PENDING
+
+- [ ] **Milestone 4: Smart Paste Order (V1)** — STATUS: SPEC DRAFTED (awaiting spec-validation)
+  - *Description:* Paste a free-text item+quantity list and get a reviewable DRAFT order. Deterministic
+    unit-aware parser + history-weighted fuzzy match (reuses `normNameForMatch`) scoped to the selected
+    client's catalogue ∪ order history, with visible confidence and "why this match". Every line is
+    human-reviewed (no auto-commit); unmatched lines are preserved with manual SKU search; Confirm
+    creates a DRAFT via the existing order path. New `paste_match_log` captures confirmations as the
+    seed for later alias learning. Knowledge graph, alias auto-learning, AI parser and embeddings are
+    explicitly deferred to V2+.
+  - *Moniker:* `004-smart-paste-order`
+  - *Spec:* `plans/active_milestones/004-smart-paste-order/spec.md`
