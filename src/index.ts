@@ -2818,9 +2818,18 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     // Config-driven screening dictionaries (animal_derived, preservative, sweetener…)
     // so the rule library is editable, per spec §12.
     `CREATE TABLE IF NOT EXISTS pi_rule_dict ( id TEXT PRIMARY KEY, dict TEXT NOT NULL, term TEXT NOT NULL, meta_json TEXT, active INTEGER DEFAULT 1 );`,
+    // Smart Paste Order (milestone 004): per-line confirmation log + idempotency store.
+    `CREATE TABLE IF NOT EXISTS paste_match_log ( id TEXT PRIMARY KEY, parse_session_id TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'parse', client_id TEXT NOT NULL, order_id TEXT, line_no INTEGER NOT NULL, raw_text TEXT NOT NULL, product_text TEXT, parsed_qty INTEGER, status TEXT, needs_qty INTEGER NOT NULL DEFAULT 0, parse_flags TEXT, candidates_json TEXT, top_sku TEXT, chosen_sku TEXT, confidence REAL, action TEXT, actor_id TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_pml_session ON paste_match_log (parse_session_id, line_no);`,
+    `CREATE INDEX IF NOT EXISTS idx_pml_metrics ON paste_match_log (phase, client_id, created_at);`,
+    `CREATE TABLE IF NOT EXISTS paste_idempotency ( idempotency_key TEXT PRIMARY KEY, order_id TEXT NOT NULL, client_id TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
+    // Smart Paste Order (004): provenance tag + self-heal client_price (added by
+    // migration 0017 but absent on self-healed DBs that never ran migrations).
+    `ALTER TABLE orders ADD COLUMN source TEXT`,
+    `ALTER TABLE client_catalog ADD COLUMN client_price REAL`,
     `ALTER TABLE po_items ADD COLUMN qty_received INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE grn_records ADD COLUMN status TEXT DEFAULT 'POSTED'`,
     `ALTER TABLE grn_records ADD COLUMN received_by_name TEXT`,
