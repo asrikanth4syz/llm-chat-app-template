@@ -253,7 +253,7 @@ function spFooterHtml() {
       ${dupGroupsExist
         ? `<button class="btn btn-secondary btn-sm" ${dataAct('spToggleMerge')}>${spAnyMerged() ? 'Unmerge duplicates' : 'Merge duplicate SKUs'}</button>`
         : ''}
-      <button class="btn btn-gold" ${dataAct('spConfirm')} data-busy="Creating…" ${canConfirm ? '' : 'disabled'}>Create draft order</button>
+      <button class="btn btn-gold" ${dataAct('spConfirm')} data-busy="Creating…" ${canConfirm ? '' : 'disabled style="opacity:.5;cursor:not-allowed"'}>Create draft order</button>
     </div>
   </div></div>`;
 }
