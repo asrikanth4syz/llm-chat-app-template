@@ -38,7 +38,7 @@
 
 ## 📦 Release v0.3.0 — Faster Order Entry — STATUS: PENDING
 
-- [ ] **Milestone 4: Smart Paste Order (V1)** — STATUS: SPEC DRAFTED (awaiting spec-validation)
+- [ ] **Milestone 4: Smart Paste Order (V1)** — STATUS: PLANNED (spec validated r1+r2; plan drafted — awaiting plan-validation)
   - *Description:* Paste a free-text item+quantity list and get a reviewable DRAFT order. Deterministic
     unit-aware parser + history-weighted fuzzy match (reuses `normNameForMatch`) scoped to the selected
     client's catalogue ∪ order history, with visible confidence and "why this match". Every line is
