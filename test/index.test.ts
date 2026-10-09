@@ -5626,3 +5626,154 @@ describe("AP by-vendor — vendors with no bills still appear", () => {
     expect(forbidden.status).toBe(403);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// SMART PASTE ORDER (milestone 004, Group 2) — parse-paste + from-paste
+// Catalogue for c1: SKU001 "Premium Coffee Beans" @850, SKU002 "Green Tea Sachets" @320.
+// ════════════════════════════════════════════════════════════════════
+describe("Smart Paste Order — POST /api/orders/parse-paste", () => {
+  it("parses + matches catalogue lines and returns a parse_session_id", async () => {
+    const text = "Premium Coffee Beans - 4\nGreen Tea Sachets - 2\nNonexistent Product Zzz - 1";
+    const r = await post("/api/orders/parse-paste", { client_id: "c1", text }, adminToken);
+    expect(r.status).toBe(200);
+    const b = await r.json() as {
+      client_id: string; parse_session_id: string;
+      lines: Array<{ line_no: number; product_text: string; quantity: number | null; status: string; selected_sku: string | null; candidates: unknown[] }>;
+      summary: { total: number; matched: number; unmatched: number; needs_qty: number; pool_truncated: boolean };
+    };
+    expect(b.client_id).toBe("c1");
+    expect(b.parse_session_id).toBeTruthy();
+    expect(b.summary).toEqual({ total: 3, matched: 2, unmatched: 1, needs_qty: 0, pool_truncated: false });
+
+    const l1 = b.lines.find(l => l.product_text === "Premium Coffee Beans")!;
+    expect(l1.quantity).toBe(4);
+    expect(l1.status).toBe("matched");
+    expect(l1.selected_sku).toBe("SKU001");
+
+    const l3 = b.lines.find(l => l.product_text.startsWith("Nonexistent"))!;
+    expect(l3.status).toBe("unmatched");
+    expect(l3.selected_sku).toBeNull();
+    expect(l3.candidates).toHaveLength(0);
+  });
+
+  it("writes one phase='parse' log row per surviving line, no order", async () => {
+    const before = await env.DB.prepare("SELECT COUNT(*) AS n FROM orders").first() as { n: number };
+    const r = await post("/api/orders/parse-paste", { client_id: "c1", text: "Premium Coffee Beans - 4\nGreen Tea Sachets - 2" }, adminToken);
+    const b = await r.json() as { parse_session_id: string };
+    const rows = await env.DB.prepare("SELECT phase, status FROM paste_match_log WHERE parse_session_id=?").bind(b.parse_session_id).all() as { results: Array<{ phase: string; status: string }> };
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results.every(x => x.phase === "parse")).toBe(true);
+    const after = await env.DB.prepare("SELECT COUNT(*) AS n FROM orders").first() as { n: number };
+    expect(after.n).toBe(before.n); // created no order
+  });
+
+  it("403 for a role outside {super_admin, ops_admin, client_admin}", async () => {
+    const r = await post("/api/orders/parse-paste", { client_id: "c1", text: "Rice 5" }, opsToken); // ops_manager
+    expect(r.status).toBe(403);
+  });
+
+  it("404 for a client_admin reaching another client's scope", async () => {
+    const r = await post("/api/orders/parse-paste", { client_id: "c-other", text: "Rice 5" }, clientToken);
+    expect(r.status).toBe(404);
+  });
+
+  it("400 on missing client_id / no parseable lines / too many lines", async () => {
+    expect((await post("/api/orders/parse-paste", { text: "Rice 5" }, adminToken)).status).toBe(400);
+    expect((await post("/api/orders/parse-paste", { client_id: "c1", text: "   \n  " }, adminToken)).status).toBe(400);
+    const many = Array.from({ length: 201 }, (_, i) => `Item ${i} 1`).join("\n");
+    expect((await post("/api/orders/parse-paste", { client_id: "c1", text: many }, adminToken)).status).toBe(400);
+  });
+});
+
+describe("Smart Paste Order — POST /api/orders/from-paste", () => {
+  const key = () => `idem-${Math.random().toString(36).slice(2)}`;
+
+  it("confirms reviewed lines into a DRAFT order tagged source=smart_paste", async () => {
+    const idem = key();
+    const lines = [
+      { line_no: 1, chosen_sku: "SKU001", quantity: 4, action: "accepted", merge_group: null },
+      { line_no: 2, chosen_sku: "SKU002", quantity: 2, action: "accepted", merge_group: null },
+    ];
+    const r = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    expect(r.status).toBe(201);
+    const b = await r.json() as { id: string; status: string; grand_total: number };
+    expect(b.status).toBe("DRAFT");
+    // SKU001 4×850=3400, SKU002 2×320=640 → subtotal 4040; 18% GST → 727; grand_total 4767
+    expect(b.grand_total).toBe(4767);
+
+    const ord = await env.DB.prepare("SELECT source, status FROM orders WHERE id=?").bind(b.id).first() as { source: string; status: string };
+    expect(ord.source).toBe("smart_paste");
+    expect(ord.status).toBe("DRAFT");
+    const items = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=? ORDER BY sku").bind(b.id).all() as { results: Array<{ sku: string; qty: number }> };
+    expect(items.results).toEqual([{ sku: "SKU001", qty: 4 }, { sku: "SKU002", qty: 2 }]);
+    const idemRow = await env.DB.prepare("SELECT order_id FROM paste_idempotency WHERE idempotency_key=?").bind(idem).first() as { order_id: string };
+    expect(idemRow.order_id).toBe(b.id);
+  });
+
+  it("is idempotent — a replayed key returns the same order and creates no second one", async () => {
+    const idem = key();
+    const lines = [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "accepted", merge_group: null }];
+    const r1 = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    const b1 = await r1.json() as { id: string };
+    const r2 = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    expect(r2.status).toBe(201);
+    const b2 = await r2.json() as { id: string; replayed?: boolean };
+    expect(b2.id).toBe(b1.id);
+    expect(b2.replayed).toBe(true);
+    const cnt = await env.DB.prepare("SELECT COUNT(*) AS n FROM orders WHERE id=?").bind(b1.id).first() as { n: number };
+    expect(cnt.n).toBe(1);
+  });
+
+  it("sums operator-confirmed merge_group lines into one order_items row", async () => {
+    const lines = [
+      { line_no: 1, chosen_sku: "SKU001", quantity: 4, action: "merged", merge_group: "g1" },
+      { line_no: 2, chosen_sku: "SKU001", quantity: 6, action: "merged", merge_group: "g1" },
+    ];
+    const r = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: key(), lines }, adminToken);
+    const b = await r.json() as { id: string };
+    const items = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(b.id).all() as { results: Array<{ sku: string; qty: number }> };
+    expect(items.results).toEqual([{ sku: "SKU001", qty: 10 }]);
+  });
+
+  it("422 (no draft) when a chosen SKU is not in the catalogue or qty is invalid", async () => {
+    const r = await post("/api/orders/from-paste", {
+      client_id: "c1", idempotency_key: key(),
+      lines: [
+        { line_no: 1, chosen_sku: "BOGUS", quantity: 1, action: "accepted" },
+        { line_no: 2, chosen_sku: "SKU001", quantity: 0, action: "accepted" },
+      ],
+    }, adminToken);
+    expect(r.status).toBe(422);
+    const b = await r.json() as { sku_not_in_catalogue: number[]; invalid_quantity: number[] };
+    expect(b.sku_not_in_catalogue).toContain(1);
+    expect(b.invalid_quantity).toContain(2);
+  });
+
+  it("drops the session's parse rows and writes confirm-phase rows on success", async () => {
+    const parse = await post("/api/orders/parse-paste", { client_id: "c1", text: "Premium Coffee Beans - 4\nGreen Tea Sachets - 2" }, adminToken);
+    const ps = (await parse.json() as { parse_session_id: string }).parse_session_id;
+    const r = await post("/api/orders/from-paste", {
+      client_id: "c1", parse_session_id: ps, idempotency_key: key(),
+      lines: [
+        { line_no: 1, chosen_sku: "SKU001", quantity: 4, action: "accepted" },
+        { line_no: 2, chosen_sku: "SKU002", quantity: 2, action: "accepted" },
+      ],
+    }, adminToken);
+    expect(r.status).toBe(201);
+    const rows = await env.DB.prepare("SELECT phase FROM paste_match_log WHERE parse_session_id=?").bind(ps).all() as { results: Array<{ phase: string }> };
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results.every(x => x.phase === "confirm")).toBe(true);
+  });
+
+  it("gates role (403) and tenancy (404) like parse-paste; 400 on zero resolvable lines", async () => {
+    const lines = [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "accepted" }];
+    expect((await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: key(), lines }, opsToken)).status).toBe(403);
+    expect((await post("/api/orders/from-paste", { client_id: "c-other", idempotency_key: key(), lines }, clientToken)).status).toBe(404);
+    // all lines removed → nothing to order → 400
+    const r = await post("/api/orders/from-paste", {
+      client_id: "c1", idempotency_key: key(),
+      lines: [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "removed" }],
+    }, adminToken);
+    expect(r.status).toBe(400);
+  });
+});
