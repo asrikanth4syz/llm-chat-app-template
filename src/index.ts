@@ -1,4 +1,5 @@
 import { Env, JWTPayload } from "./types";
+import { parsePasteText, rankCandidates, type Candidate } from "./smart_paste";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4490,6 +4491,8 @@ export default {
       if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
       if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
       if (path==="/api/orders/purge"           && method==="POST") return handlePurgeOrders(request,env);
+      if (path==="/api/orders/parse-paste"     && method==="POST") return handleParsePaste(request,env);
+      if (path==="/api/orders/from-paste"      && method==="POST") return handleFromPaste(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
@@ -6153,6 +6156,259 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   await pushNotification(env, "ops_admin", awaitingPricing ? `New ad-hoc order ${id} needs pricing` : `New order ${id} submitted — ${status}`);
   await audit(env, user, "CREATE", "order", id, undefined, `status:${status},total:${grand_total}`);
   return json({id, status, grand_total}, 201);
+}
+
+// ============================================================================
+// Smart Paste Order (milestone 004) — Group 2 handlers.
+// Pure parse/scoring logic lives in ./smart_paste; these two endpoints wire it
+// to the DB. Authority: spec.md R2-* + api-contracts.md. Role gate for both:
+// super_admin | ops_admin | client_admin, then denyClientCrossAccess.
+// ============================================================================
+const SMART_PASTE_HISTORY_STATUSES = [
+  "APPROVED","ACKNOWLEDGED","INVENTORY_CHECK","VENDOR_PO_RAISED","READY_TO_PICK",
+  "PICKED","QUALITY_CHECK","IN_SHIPMENT","PARTIALLY_CLOSED","CLOSED",
+];
+
+// POST /api/orders/parse-paste — parse pasted text + match it against the
+// client's catalogue. Writes parse-phase log rows only; creates NO order.
+async function handleParsePaste(request: Request, env: Env): Promise<Response> {
+  await ensureFeatureTables(env);
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const body = await request.json().catch(() => null) as { client_id?: string; text?: string } | null;
+  if (!body) return json({error:"Malformed request body"}, 400);
+  const clientId = String(body.client_id ?? "").trim();
+  const text = typeof body.text === "string" ? body.text : "";
+  if (!clientId) return json({error:"client_id required"}, 400);
+
+  const cross = await denyClientCrossAccess(env, user!, clientId); if (cross) return cross;
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
+  if (!client) return json({error:"Not found"}, 404); // uniform 404 (R2-C1)
+
+  // Raw-size limits, counted BEFORE filtering blanks (R2 D6-rev).
+  const rawLines = text.split(/\r\n|\r|\n/);
+  if (rawLines.length > 200) return json({error:"Too many lines — paste at most 200 lines"}, 400);
+  if ([...text].length > 20000) return json({error:"Too much text — paste at most 20,000 characters"}, 400);
+
+  const parsed = parsePasteText(text);
+  if (parsed.length === 0) return json({error:"No parseable lines found"}, 400);
+
+  // Thresholds (R2-D1): clamp match_min to [0.3,0.9]; tolerate bad config, never crash.
+  const rawMin = parseFloat(await getConfig(env, "smartpaste_match_min", "0.5"));
+  const matchMin = Math.min(0.9, Math.max(0.3, isNaN(rawMin) ? 0.5 : rawMin));
+  const rawMargin = parseFloat(await getConfig(env, "smartpaste_match_margin", "0.05"));
+  const matchMargin = isNaN(rawMargin) ? 0.05 : rawMargin;
+
+  // Candidate pool = active catalogue SKUs for this client, priced with the
+  // client override when present.
+  const poolRows = ((await env.DB.prepare(
+    `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price
+       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
+      WHERE cc.client_id = ? AND i.active = 1`
+  ).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+
+  // History (last 365d, fulfilment-track statuses): order frequency + latest qty.
+  const ph = SMART_PASTE_HISTORY_STATUSES.map(() => "?").join(",");
+  const histRows = ((await env.DB.prepare(
+    `SELECT oi.sku AS sku, COUNT(DISTINCT o.id) AS n
+       FROM orders o JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
+      GROUP BY oi.sku`
+  ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; n: number }>;
+  const histMap = new Map(histRows.map(h => [h.sku, Number(h.n)]));
+
+  const qtyRows = ((await env.DB.prepare(
+    `SELECT oi.sku AS sku, oi.qty AS qty
+       FROM orders o JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
+      ORDER BY o.created_at DESC`
+  ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; qty: number }>;
+  const lastQty = new Map<string, number>();
+  for (const r of qtyRows) if (!lastQty.has(r.sku)) lastQty.set(r.sku, Number(r.qty));
+
+  const POOL_CAP = 2000;
+  let poolTruncated = false;
+  let pool: Candidate[] = poolRows.map(r => ({ sku: r.sku, name: r.name, price: r.price, order_count: histMap.get(r.sku) || 0 }));
+  if (pool.length > POOL_CAP) {
+    pool = pool.slice().sort((a, b) => (b.order_count! - a.order_count!) || a.name.localeCompare(b.name)).slice(0, POOL_CAP);
+    poolTruncated = true;
+  }
+
+  const parseSessionId = uid();
+  const summary = { total: parsed.length, matched: 0, unmatched: 0, needs_qty: 0, pool_truncated: poolTruncated };
+
+  const logStmts: ReturnType<typeof env.DB.prepare>[] = [];
+  const lines = parsed.map(p => {
+    const ranked = p.product_text ? rankCandidates(p.product_text, pool, { matchMin, matchMargin, limit: 3 }) : [];
+    const status = ranked.length ? "matched" : "unmatched";
+    const selectedSku = status === "matched" ? ranked[0].sku : null;
+    const flags = [...p.parse_flags];
+    let qtySuggested: number | null = null;
+    if (p.needs_qty && selectedSku != null && lastQty.has(selectedSku)) {
+      qtySuggested = lastQty.get(selectedSku)!;
+      if (!flags.includes("qty_suggested")) flags.push("qty_suggested");
+    }
+    if (status === "matched") summary.matched++; else summary.unmatched++;
+    if (p.needs_qty) summary.needs_qty++;
+
+    const candidates = ranked.map(r => ({
+      sku: r.sku, name: r.name, price: r.price,
+      confidence: r.confidence, tier: r.tier, why: r.why,
+    }));
+
+    logStmts.push(env.DB.prepare(
+      `INSERT INTO paste_match_log
+         (id, parse_session_id, phase, client_id, order_id, line_no, raw_text, product_text,
+          parsed_qty, status, needs_qty, parse_flags, candidates_json, top_sku, chosen_sku,
+          confidence, action, actor_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      uid(), parseSessionId, "parse", clientId, null, p.line_no, p.raw, p.product_text,
+      p.quantity, status, p.needs_qty ? 1 : 0, JSON.stringify(flags),
+      JSON.stringify(candidates), selectedSku, null,
+      candidates.length ? candidates[0].confidence : null, null, user!.sub,
+    ));
+
+    return {
+      line_no: p.line_no, raw: p.raw, product_text: p.product_text,
+      quantity: p.quantity, qty_suggested: qtySuggested, unit_hint: p.unit_hint,
+      status, needs_qty: p.needs_qty, parse_flags: flags,
+      candidates, selected_sku: selectedSku,
+    };
+  });
+
+  if (logStmts.length) await env.DB.batch(logStmts);
+  return json({ client_id: clientId, parse_session_id: parseSessionId, lines, summary });
+}
+
+// POST /api/orders/from-paste — confirm reviewed lines into a DRAFT order.
+// Everything (order + idempotency + items + history + confirm log) ships in one
+// env.DB.batch so a replay or crash can never leave a half-written order (R2-D4).
+async function handleFromPaste(request: Request, env: Env): Promise<Response> {
+  await ensureFeatureTables(env);
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const body = await request.json().catch(() => null) as {
+    client_id?: string; parse_session_id?: string; idempotency_key?: string;
+    lines?: Array<{ line_no: number; chosen_sku?: string | null; quantity?: number; action?: string; merge_group?: string | number | null }>;
+    notes?: string;
+  } | null;
+  if (!body) return json({error:"Malformed request body"}, 400);
+  const clientId = String(body.client_id ?? "").trim();
+  const idemKey = String(body.idempotency_key ?? "").trim();
+  const parseSessionId = String(body.parse_session_id ?? "").trim();
+  const inLines = Array.isArray(body.lines) ? body.lines : [];
+  if (!clientId) return json({error:"client_id required"}, 400);
+  if (!idemKey) return json({error:"idempotency_key required"}, 400);
+  if (!inLines.length) return json({error:"lines required"}, 400);
+
+  const cross = await denyClientCrossAccess(env, user!, clientId); if (cross) return cross;
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
+  if (!client) return json({error:"Not found"}, 404);
+
+  // Idempotency replay (R2-D4): a repeated key returns the first order, writes nothing.
+  const prior = await env.DB.prepare("SELECT order_id FROM paste_idempotency WHERE idempotency_key=?").bind(idemKey).first() as { order_id: string } | null;
+  if (prior?.order_id) {
+    const o = await env.DB.prepare("SELECT status, grand_total FROM orders WHERE id=?").bind(prior.order_id).first() as { status: string; grand_total: number } | null;
+    return json({ id: prior.order_id, status: o?.status ?? "DRAFT", grand_total: o?.grand_total ?? 0, replayed: true }, 201);
+  }
+
+  // Re-derive the pool fresh — the catalogue may have changed since parse (TOCTOU, R2-C14).
+  const poolRows = ((await env.DB.prepare(
+    `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price, i.active AS active
+       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
+      WHERE cc.client_id = ?`
+  ).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null; active: number }>;
+  const poolMap = new Map(poolRows.filter(r => Number(r.active) === 1).map(r => [r.sku, r]));
+
+  const ALLOWED_ACTIONS = new Set(["accepted","changed","searched","removed","merged"]);
+  const badActions: number[] = [], badSku: number[] = [], badQty: number[] = [];
+
+  type Resolved = { line_no: number; sku: string; qty: number; merge_group: string | null; action: string };
+  const resolved: Resolved[] = [];
+  const allForLog: Array<{ line_no: number; sku: string | null; qty: number | null; action: string }> = [];
+  for (const l of inLines) {
+    const action = String(l.action ?? "accepted");
+    if (!ALLOWED_ACTIONS.has(action)) { badActions.push(l.line_no); continue; }
+    if (action === "removed") { allForLog.push({ line_no: l.line_no, sku: (l.chosen_sku ?? null) as string | null, qty: null, action }); continue; }
+    const sku = String(l.chosen_sku ?? "").trim();
+    const qty = Number(l.quantity);
+    let ok = true;
+    if (!sku || !poolMap.has(sku)) { badSku.push(l.line_no); ok = false; }
+    if (!Number.isInteger(qty) || qty < 1) { badQty.push(l.line_no); ok = false; }
+    if (!ok) continue;
+    const mg = l.merge_group == null ? null : String(l.merge_group);
+    resolved.push({ line_no: l.line_no, sku, qty, merge_group: mg, action });
+    allForLog.push({ line_no: l.line_no, sku, qty, action });
+  }
+
+  if (badActions.length) return json({ error: "Invalid action on lines", line_nos: badActions }, 400);
+  if (badSku.length || badQty.length) {
+    return json({ error: "Some lines could not be confirmed", sku_not_in_catalogue: badSku, invalid_quantity: badQty }, 422);
+  }
+  if (!resolved.length) return json({ error: "No resolvable lines to order" }, 400);
+
+  // Apply operator-confirmed merges: lines sharing a non-null merge_group are summed (R2-D3).
+  const orderLines = new Map<string, { sku: string; name: string; price: number; qty: number }>();
+  for (const r of resolved) {
+    const key = r.merge_group != null ? `g:${r.merge_group}:${r.sku}` : `l:${r.line_no}`;
+    const p = poolMap.get(r.sku)!;
+    const price = Number(p.price) || 0;
+    const existing = orderLines.get(key);
+    if (existing) existing.qty += r.qty;
+    else orderLines.set(key, { sku: r.sku, name: p.name, price, qty: r.qty });
+  }
+  const items = [...orderLines.values()];
+
+  const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
+  const gst = await computeOrderGst(env, items.map(i => ({ sku: i.sku, qty: i.qty, unit_price: i.price })));
+  const grand_total = subtotal + gst;
+  const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
+  const orderPeriod = new Date().toISOString().slice(0, 7);
+  const notes = typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null;
+
+  const stmts: ReturnType<typeof env.DB.prepare>[] = [];
+  stmts.push(env.DB.prepare(
+    `INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,order_period,source)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, clientId, user!.sub, "DRAFT", subtotal, gst, grand_total, notes, "Regular", orderPeriod, "smart_paste"));
+  stmts.push(env.DB.prepare(
+    `INSERT INTO paste_idempotency (idempotency_key, order_id, client_id) VALUES (?,?,?)`
+  ).bind(idemKey, id, clientId));
+  for (const it of items) {
+    stmts.push(env.DB.prepare(
+      `INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`
+    ).bind(uid(), id, it.sku, it.name, it.qty, it.price, it.qty * it.price, null));
+  }
+  stmts.push(env.DB.prepare(
+    `INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`
+  ).bind(uid(), id, "DRAFT", user!.sub, user!.name, "Created from Smart Paste"));
+  // Confirm-phase log: drop this session's parse rows, write one confirm row per
+  // submitted line (UPSERT-equivalent; covers manual/merged lines — R2-C10).
+  if (parseSessionId) {
+    stmts.push(env.DB.prepare("DELETE FROM paste_match_log WHERE parse_session_id=? AND phase='parse'").bind(parseSessionId));
+  }
+  for (const l of allForLog) {
+    stmts.push(env.DB.prepare(
+      `INSERT INTO paste_match_log
+         (id, parse_session_id, phase, client_id, order_id, line_no, raw_text, product_text,
+          parsed_qty, status, needs_qty, parse_flags, candidates_json, top_sku, chosen_sku,
+          confidence, action, actor_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      uid(), parseSessionId || id, "confirm", clientId, id, l.line_no, "", null,
+      l.qty, l.action === "removed" ? "removed" : "ordered", 0, null, null,
+      null, l.sku, null, l.action, user!.sub,
+    ));
+  }
+
+  await env.DB.batch(stmts);
+  await audit(env, user, "CREATE", "order", id, undefined, `status:DRAFT,total:${grand_total},source:smart_paste`);
+  return json({ id, status: "DRAFT", grand_total }, 201);
 }
 
 // POST /api/orders/:id/reprice — Ops sets unit prices on an ad-hoc order that
