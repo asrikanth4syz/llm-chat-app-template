@@ -3,7 +3,7 @@
 // from the DB. Every r2 parsing fixture has an asserted output.
 import { describe, it, expect } from "vitest";
 import {
-  parsePasteText, scoreCandidate, confidenceOf, rankCandidates,
+  parsePasteText, scoreCandidate, confidenceOf, rankCandidates, searchCandidates,
   normNameForMatch,
 } from "../src/smart_paste";
 
@@ -209,5 +209,54 @@ describe("rankCandidates (R2-C1/C2)", () => {
 
   it("empty product text → no candidates", () => {
     expect(rankCandidates("", pool)).toHaveLength(0);
+  });
+});
+
+describe("searchCandidates — forgiving manual catalogue lookup", () => {
+  const pool = [
+    { sku: "A", name: "Diet Coke 330ml", price: 40, order_count: 8 },
+    { sku: "B", name: "Coke Zero 300ml", price: 38, order_count: 2 },
+    { sku: "C", name: "Premium Coffee Beans", price: 850, order_count: 0 },
+    { sku: "D", name: "Sprite 300ml", price: 38, order_count: 0 },
+  ];
+
+  it("a short substring query finds every product containing it (the bug fix)", () => {
+    // "coke" clears NOTHING under the strict Jaccard matcher…
+    expect(rankCandidates("coke", pool)).toHaveLength(0);
+    // …but search finds both Coke products by substring.
+    const r = searchCandidates("coke", pool);
+    const skus = r.map(c => c.sku);
+    expect(skus).toContain("A");
+    expect(skus).toContain("B");
+    expect(skus).not.toContain("C");
+    expect(skus).not.toContain("D");
+  });
+
+  it("partial single word matches ('coffee' → Premium Coffee Beans)", () => {
+    const r = searchCandidates("coffee", pool);
+    expect(r[0].sku).toBe("C");
+    expect(r[0].tier).toBe("contains");
+  });
+
+  it("case-insensitive and ranks history higher among equal tiers", () => {
+    const r = searchCandidates("COKE", pool);
+    expect(r[0].sku).toBe("A"); // order_count 8 > 2, both 'contains'
+    expect(r[0].why.some(w => w.startsWith("ordered"))).toBe(true);
+  });
+
+  it("exact SKU or whole-name query scores 100", () => {
+    expect(searchCandidates("A", pool)[0].confidence).toBe(100);
+    expect(searchCandidates("Sprite 300ml", pool)[0].sku).toBe("D");
+    expect(searchCandidates("Sprite 300ml", pool)[0].confidence).toBe(100);
+  });
+
+  it("prefix-of-token matches ('bean' → Premium Coffee Beans)", () => {
+    expect(searchCandidates("bean", pool)[0].sku).toBe("C");
+  });
+
+  it("no match and empty query return nothing", () => {
+    expect(searchCandidates("xyzzy", pool)).toHaveLength(0);
+    expect(searchCandidates("", pool)).toHaveLength(0);
+    expect(searchCandidates("   ", pool)).toHaveLength(0);
   });
 });

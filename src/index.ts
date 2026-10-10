@@ -1,5 +1,5 @@
 import { Env, JWTPayload } from "./types";
-import { parsePasteText, rankCandidates, type Candidate } from "./smart_paste";
+import { parsePasteText, rankCandidates, searchCandidates, type Candidate } from "./smart_paste";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4492,6 +4492,7 @@ export default {
       if (path==="/api/orders/items-summary"   && method==="GET")  return handleOrderItemsSummary(request,env);
       if (path==="/api/orders/purge"           && method==="POST") return handlePurgeOrders(request,env);
       if (path==="/api/orders/parse-paste"     && method==="POST") return handleParsePaste(request,env);
+      if (path==="/api/orders/paste-search"    && method==="POST") return handlePasteSearch(request,env);
       if (path==="/api/orders/from-paste"      && method==="POST") return handleFromPaste(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
@@ -6281,6 +6282,49 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
 
   if (logStmts.length) await env.DB.batch(logStmts);
   return json({ client_id: clientId, parse_session_id: parseSessionId, lines, summary });
+}
+
+// POST /api/orders/paste-search — forgiving manual catalogue lookup for the Smart
+// Paste review. Unlike parse-paste (strict auto-matcher), this does substring /
+// prefix search so typing part of a name ("coffee", "tea", "coke") finds it. Same
+// client-scoped pool + history weighting; writes nothing.
+async function handlePasteSearch(request: Request, env: Env): Promise<Response> {
+  await ensureFeatureTables(env);
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
+
+  const body = await request.json().catch(() => null) as { client_id?: string; q?: string } | null;
+  if (!body) return json({error:"Malformed request body"}, 400);
+  const clientId = String(body.client_id ?? "").trim();
+  const q = typeof body.q === "string" ? body.q : "";
+  if (!clientId) return json({error:"client_id required"}, 400);
+
+  const cross = await denyClientCrossAccess(env, user!, clientId); if (cross) return cross;
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
+  if (!client) return json({error:"Not found"}, 404);
+  if (!q.trim()) return json({ client_id: clientId, query: q, candidates: [] });
+
+  const poolRows = ((await env.DB.prepare(
+    `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price
+       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
+      WHERE cc.client_id = ? AND i.active = 1`
+  ).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+
+  const ph = SMART_PASTE_HISTORY_STATUSES.map(() => "?").join(",");
+  const histRows = ((await env.DB.prepare(
+    `SELECT oi.sku AS sku, COUNT(DISTINCT o.id) AS n
+       FROM orders o JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
+      GROUP BY oi.sku`
+  ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; n: number }>;
+  const histMap = new Map(histRows.map(h => [h.sku, Number(h.n)]));
+  const pool: Candidate[] = poolRows.map(r => ({ sku: r.sku, name: r.name, price: r.price, order_count: histMap.get(r.sku) || 0 }));
+
+  const candidates = searchCandidates(q, pool, { limit: 25 }).map(r => ({
+    sku: r.sku, name: r.name, price: r.price, confidence: r.confidence, tier: r.tier, why: r.why,
+  }));
+  return json({ client_id: clientId, query: q, candidates });
 }
 
 // POST /api/orders/from-paste — confirm reviewed lines into a DRAFT order.
