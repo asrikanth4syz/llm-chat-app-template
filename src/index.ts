@@ -6170,10 +6170,48 @@ const SMART_PASTE_HISTORY_STATUSES = [
   "PICKED","QUALITY_CHECK","IN_SHIPMENT","PARTIALLY_CLOSED","CLOSED",
 ];
 
+// Scoped, once-per-isolate self-heal for Smart Paste. The shared ensureFeatureTables
+// runs ~80 DDL statements on EVERY call — on remote D1 that is ~80 network round
+// trips, which made each parse/confirm/search take 1-3s. These handlers only need
+// their own 6 objects, and only on a cold isolate, so we guard it with a flag and
+// run just those. All 6 are also in migration 0053 / 0017, so a migrated DB is a
+// no-op; the guard makes every call after the first an in-memory boolean check.
+let _spSchemaReady = false;
+async function ensureSmartPasteSchema(env: Env): Promise<void> {
+  if (_spSchemaReady) return;
+  const ddl = [
+    `CREATE TABLE IF NOT EXISTS paste_match_log ( id TEXT PRIMARY KEY, parse_session_id TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'parse', client_id TEXT NOT NULL, order_id TEXT, line_no INTEGER NOT NULL, raw_text TEXT NOT NULL, product_text TEXT, parsed_qty INTEGER, status TEXT, needs_qty INTEGER NOT NULL DEFAULT 0, parse_flags TEXT, candidates_json TEXT, top_sku TEXT, chosen_sku TEXT, confidence REAL, action TEXT, actor_id TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_pml_session ON paste_match_log (parse_session_id, line_no);`,
+    `CREATE INDEX IF NOT EXISTS idx_pml_metrics ON paste_match_log (phase, client_id, created_at);`,
+    `CREATE TABLE IF NOT EXISTS paste_idempotency ( idempotency_key TEXT PRIMARY KEY, order_id TEXT NOT NULL, client_id TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
+    `ALTER TABLE orders ADD COLUMN source TEXT`,
+    `ALTER TABLE client_catalog ADD COLUMN client_price REAL`,
+  ];
+  for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  _spSchemaReady = true;
+}
+
+// The client's priced catalogue pool. COALESCE needs client_catalog.client_price
+// (migration 0017 / self-heal); on a DB without it, fall back to the list price so
+// a read-only path never has to run DDL first.
+async function smartPastePool(env: Env, clientId: string): Promise<Array<{ sku: string; name: string; price: number | null }>> {
+  const withPrice = `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price
+       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
+      WHERE cc.client_id = ? AND i.active = 1`;
+  try {
+    return ((await env.DB.prepare(withPrice).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+  } catch {
+    const listOnly = `SELECT cc.sku AS sku, i.name AS name, i.unit_price AS price
+       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
+      WHERE cc.client_id = ? AND i.active = 1`;
+    return ((await env.DB.prepare(listOnly).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+  }
+}
+
 // POST /api/orders/parse-paste — parse pasted text + match it against the
 // client's catalogue. Writes parse-phase log rows only; creates NO order.
 async function handleParsePaste(request: Request, env: Env): Promise<Response> {
-  await ensureFeatureTables(env);
+  await ensureSmartPasteSchema(env);
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
@@ -6204,11 +6242,7 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
 
   // Candidate pool = active catalogue SKUs for this client, priced with the
   // client override when present.
-  const poolRows = ((await env.DB.prepare(
-    `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price
-       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
-      WHERE cc.client_id = ? AND i.active = 1`
-  ).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+  const poolRows = await smartPastePool(env, clientId);
 
   // History (last 365d, fulfilment-track statuses): order frequency + latest qty.
   const ph = SMART_PASTE_HISTORY_STATUSES.map(() => "?").join(",");
@@ -6289,7 +6323,7 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
 // prefix search so typing part of a name ("coffee", "tea", "coke") finds it. Same
 // client-scoped pool + history weighting; writes nothing.
 async function handlePasteSearch(request: Request, env: Env): Promise<Response> {
-  await ensureFeatureTables(env);
+  // Read-only lookup over base tables only — no schema self-heal on the hot path.
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
@@ -6305,11 +6339,7 @@ async function handlePasteSearch(request: Request, env: Env): Promise<Response> 
   if (!client) return json({error:"Not found"}, 404);
   if (!q.trim()) return json({ client_id: clientId, query: q, candidates: [] });
 
-  const poolRows = ((await env.DB.prepare(
-    `SELECT cc.sku AS sku, i.name AS name, COALESCE(cc.client_price, i.unit_price) AS price
-       FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
-      WHERE cc.client_id = ? AND i.active = 1`
-  ).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+  const poolRows = await smartPastePool(env, clientId);
 
   const ph = SMART_PASTE_HISTORY_STATUSES.map(() => "?").join(",");
   const histRows = ((await env.DB.prepare(
@@ -6331,7 +6361,7 @@ async function handlePasteSearch(request: Request, env: Env): Promise<Response> 
 // Everything (order + idempotency + items + history + confirm log) ships in one
 // env.DB.batch so a replay or crash can never leave a half-written order (R2-D4).
 async function handleFromPaste(request: Request, env: Env): Promise<Response> {
-  await ensureFeatureTables(env);
+  await ensureSmartPasteSchema(env);
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
   if (!["super_admin","ops_admin","client_admin"].includes(user!.role)) return json({error:"Forbidden"}, 403);
