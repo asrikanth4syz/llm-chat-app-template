@@ -145,3 +145,52 @@ Config keys (via existing `getConfig`): `smartpaste_learn_enabled` (default `"1"
 - `tsc`, `node test/smoke.mjs`, `npx vitest run` all green.
 - No regression to V1 behaviour or the #133 latency fix.
 - Honest-confidence and no-auto-commit invariants demonstrably intact.
+
+---
+
+## 🔧 Revisions from spec-validation r1 (AUTHORITATIVE — overrides the body above on conflict)
+
+> Source: `adversarial-reviews/spec-validation.md` (3 skeptics read the shipped V1 **code**, 2-of-3 gate). 14 confirmed + 10 adopted single-votes. The central discovery: **V1's `handleFromPaste` writes confirm-phase `paste_match_log` rows with `product_text=null`, `raw_text=""`, `needs_qty=0`, `status∈{ordered,removed}`, `confidence=null`, no tier, and DELETEs the parse rows** (the only place `product_text`/parse-status live); the from-paste request body carries no `product_text`; and no 30-day purge job exists. So learning and all metrics must change how confirm-time data is sourced/persisted. These revisions are authoritative.
+
+### V2-D. Data-source & persistence (the first domino)
+- **V2-D1 `learn-from-parse-rows`:** On Confirm, learning derives each alias key from the **server-side parse rows**, not from caller input. `handleFromPaste` SELECTs the parse rows for `parse_session_id` (by `line_no`) **before** the batch's `DELETE … WHERE phase='parse'`, and computes `alias_norm = normNameForMatch(parse_row.product_text)`. The from-paste request is **not** trusted for product text. `parse_session_id` becomes **required** when `smartpaste_learn_enabled="1"` (400 if absent).
+- **V2-D2 `persist-on-confirm`:** The confirm-phase write changes to persist, per line: the real `product_text` (from the parse row), the **parse-time** `status` and `needs_qty`, and the **winning `tier` + `confidence`** (the candidate the operator kept). These columns already exist on `paste_match_log`; V2 stops writing them null/zero. This is the single source for metrics.
+- **V2-D3 `empty-norm-skip`:** A line whose `normNameForMatch(product_text)` yields an **empty token set** (e.g. "MRP 95", "- 5", "!!!") is **not** learned (mirrors R2-C13). Removed lines and `action="removed"` are not learned.
+- **V2-D4 `hits-per-order`:** `hits` counts **distinct confirmed orders**, not lines. Dedupe alias upserts within a single Confirm so a repeated phrase in one order increments `hits` by exactly 1. "learned from N" = distinct orders.
+
+### V2-L. Learning write (atomicity)
+- **V2-L1 `learning-in-batch`:** Learning is **part of the same `env.DB.batch`** as the order. `alias_norm` is computed in JS from the pre-loaded parse rows, then an alias UPSERT is appended per learned line: `INSERT INTO paste_alias(client_id,alias_norm,sku,hits,last_used_at,created_by) VALUES(?,?,?,1,datetime('now'),?) ON CONFLICT(client_id,alias_norm,sku) DO UPDATE SET hits=hits+1, last_used_at=datetime('now')`. It is atomic + idempotent (the V1 replay short-circuit writes nothing new). **Delete** the body's "best-effort / errors swallowed / ride where possible" — learning is not best-effort; it commits with the order or not at all.
+- **V2-L2 `learn-kill-switch`:** `smartpaste_learn_enabled` is read as `getConfig(...)==="1"` (default `"1"`). When `"0"` it disables **both** alias writes **and** the alias read-boost in parse-paste (one clean kill switch). `smartpaste_alias_min_hits` default is **`"2"`**.
+
+### V2-M. Matching pipeline (deterministic, honest)
+- **V2-M1 `pipeline-order`:** parse-paste per line runs, in order: (1) parse (V1); (2) **alias lookup** on `norm(product_text)` — the *raw* normalised text, **before** any synonym rewrite, so a learned alias on a nickname still hits; (3) **synonym rewrite** of the normalised token run → candidates via the V1 matcher; (4) V1 Jaccard/exact over the pool; (5) merge all candidates, dedupe by sku keeping the highest, rank, truncate to 3.
+- **V2-M2 `tiers`:** add `"learned"` and `"synonym"` to `MatchTier`. `tier_rank`: exact=4, learned=3, synonym=3, history-fuzzy=2, fuzzy=1. Rank by `tier_rank` desc, then confidence desc, then order_count desc, then **`sku` asc** (guaranteed-unique total order → deterministic).
+- **V2-M3 `learned-confidence`:** `learned_confidence = min(99, 85 + min(14, round(5·ln(1+hits))))`. A **1-hit** alias (below `alias_min_hits`) is advisory: capped **≤ 70**, shown as a candidate but **never** pre-selected over a higher-confidence history/exact candidate. `selected_sku` = top-ranked candidate once a learned candidate qualifies (hits ≥ min_hits); if only a sub-threshold alias exists, `selected_sku` falls through to the best qualifying non-alias candidate, else is left `null` with `status="unmatched"`. Learned candidates are **additive** to the pool, then the whole list is re-ranked and truncated to 3.
+- **V2-M4 `synonym-confidence`:** a candidate reached **via a synonym rewrite** is `tier="synonym"`, confidence = the underlying matcher's confidence **capped ≤ 90**, **never** `tier="exact"`/100 even when the rewritten text equals a catalogue name. A `"via synonym: X → Y"` why-chip is mandatory and never replaced by "exact name match".
+- **V2-M5 `exact-still-wins`:** a genuine exact catalogue-name match (no rewrite) stays tier `exact`, confidence 100, ranked first.
+- **V2-M6 `alias-conflict-order`:** conflicting aliases (same `alias_norm`, different `sku`, both in the active pool) are ordered `hits` desc, `last_used_at` desc, `sku` asc; top is `selected_sku`.
+- **V2-M7 `parse-perf`:** parse-paste p95 ≤ **50 ms CPU** for 100 lines × 2,000-SKU pool **including** alias lookup + up to 50 applicable synonyms, measured over 200 sampled runs (R2-C12 method).
+
+### V2-S. Synonyms (deterministic rewrite + storage)
+- **V2-S1 `synonym-cap`:** consider at most **50** applicable active synonyms per line, ordered by `phrase_norm` **token-length desc, then `phrase_norm` asc, then `id` asc**; the 51st by that order is dropped.
+- **V2-S2 `synonym-apply`:** "longest" = token count then char length; match **contiguous** token runs; apply **left-to-right longest-match at each position with span consumption** (a rewritten span is never re-rewritten), over the original normalised token run; single pass.
+- **V2-S3 `synonym-precedence`:** for a given `phrase_norm`, a client-scoped synonym for the active client **suppresses** any global synonym with the same `phrase_norm`; exactly one replacement fires per token run.
+- **V2-S4 `synonym-unique`:** `paste_synonym` gets `UNIQUE(phrase_norm, client_scope)` where `client_scope = COALESCE(client_id,'*')` (stored column); create = UPSERT on that key (no duplicate actives).
+- **V2-S5 `synonym-validation`:** `phrase` and `replacement` required, each ≤ 120 chars; **both** rejected (400) if they normalise to an empty token set; a replacement may contribute **≤ 8** tokens. A non-null `client_id` must reference an existing client (404 otherwise).
+
+### V2-A. API contracts & RBAC (enumerated like V1)
+- **V2-A1:** New endpoints, each with explicit request/response (to be detailed in api-contracts.md by the architect):
+  `POST /api/orders/paste-synonyms` (create/upsert), `GET /api/orders/paste-synonyms` (list), `PATCH /api/orders/paste-synonyms/:id` (edit/toggle), `DELETE /api/orders/paste-synonyms/:id`, and `GET /api/orders/paste-metrics`.
+- **V2-A2 `rbac`:** synonym create/update/delete = `{super_admin, ops_admin}` only (else 403). Synonym **list** + **metrics** read = `{super_admin, ops_admin}` (all clients, or filtered by a `client_id` param) and `{client_admin}` (own client only). Every client-side role is confined via `denyClientCrossAccess`; all other roles default-deny. Check order on every endpoint: `401 → 403 role → 404 tenancy` (consistent with R2-C1; cross-tenant is 404, not 403).
+
+### V2-X. Metrics (defined sources)
+- **V2-X1 `metrics-sources`:** over confirm-phase rows (now carrying parse-time `status`/`needs_qty`, `product_text`, winning `tier`/`confidence`) within the window: `total` = confirm lines; `% matched` = status≠'unmatched'; `% unmatched` = status='unmatched'; `% needs-qty` = needs_qty=1; `alias-hit rate` = tier='learned' ÷ total. `top unmatched phrases` = `GROUP BY product_text` where parse-time status='unmatched', ordered by count desc (∪ surviving abandoned parse rows).
+- **V2-X2 `retention`:** confirm rows retained ≥ the max metrics window; **parse rows retained 30 days and V2 ships the 30-day purge job** (absent today). Metrics window default 30 days, **max 90 days**; window-spanning metrics read confirm rows (retained), never relying on purged parse rows.
+- **V2-X3 `metrics-index`:** add an index supporting the `GROUP BY product_text` aggregation, e.g. `(phase, client_id, created_at, product_text)`. "Typical tenant" fixture for the perf assertion = 50k `paste_match_log` rows over 90 days; metrics p95 ≤ 100 ms CPU.
+
+### V2 schema deltas (additive; via `ensureSmartPasteSchema` + a new migration)
+- `paste_alias (client_id, alias_norm, sku, hits, last_used_at, created_at, created_by, PRIMARY KEY(client_id, alias_norm, sku))` + `INDEX idx_alias_lookup (client_id, alias_norm)`.
+- `paste_synonym (id PK, phrase_norm, replacement, client_id, client_scope GENERATED/stored = COALESCE(client_id,'*'), active, created_at, created_by)` + `UNIQUE(phrase_norm, client_scope)` + `INDEX idx_syn_scope (active, client_id)`.
+- `paste_match_log`: no new columns needed — V2 **starts persisting** the existing `product_text`, `status`, `needs_qty`, (new) `tier`, `confidence` on confirm rows. If `tier` is not already a column, add `ALTER TABLE paste_match_log ADD COLUMN tier TEXT` (self-healed).
+- new `INDEX idx_pml_phrase (phase, client_id, created_at, product_text)` for the metrics aggregation.
+- Config keys: `smartpaste_learn_enabled` (`"1"`), `smartpaste_alias_min_hits` (`"2"`).
