@@ -5777,3 +5777,33 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe("Smart Paste Order — POST /api/orders/paste-search (manual lookup)", () => {
+  it("substring/prefix search finds items the strict matcher misses", async () => {
+    // Single short word that fails strict auto-match…
+    const parse = await post("/api/orders/parse-paste", { client_id: "c1", text: "coffee" }, adminToken);
+    const pl = (await parse.json() as { lines: Array<{ status: string }> }).lines[0];
+    expect(pl.status).toBe("unmatched");
+    // …but manual search finds "Premium Coffee Beans".
+    const r = await post("/api/orders/paste-search", { client_id: "c1", q: "coffee" }, adminToken);
+    expect(r.status).toBe(200);
+    const b = await r.json() as { candidates: Array<{ sku: string; tier: string; confidence: number }> };
+    expect(b.candidates.map(c => c.sku)).toContain("SKU001");
+    expect(b.candidates[0].confidence).toBeGreaterThan(0);
+  });
+
+  it("matches by sub-token and SKU; empty query returns none", async () => {
+    const tea = await (await post("/api/orders/paste-search", { client_id: "c1", q: "tea" }, adminToken)).json() as { candidates: Array<{ sku: string }> };
+    expect(tea.candidates.map(c => c.sku)).toContain("SKU002");
+    const sku = await (await post("/api/orders/paste-search", { client_id: "c1", q: "SKU001" }, adminToken)).json() as { candidates: Array<{ sku: string; confidence: number }> };
+    expect(sku.candidates[0].sku).toBe("SKU001");
+    expect(sku.candidates[0].confidence).toBe(100);
+    const empty = await (await post("/api/orders/paste-search", { client_id: "c1", q: "   " }, adminToken)).json() as { candidates: unknown[] };
+    expect(empty.candidates).toHaveLength(0);
+  });
+
+  it("gates role (403) and tenancy (404)", async () => {
+    expect((await post("/api/orders/paste-search", { client_id: "c1", q: "tea" }, opsToken)).status).toBe(403);
+    expect((await post("/api/orders/paste-search", { client_id: "c-other", q: "tea" }, clientToken)).status).toBe(404);
+  });
+});

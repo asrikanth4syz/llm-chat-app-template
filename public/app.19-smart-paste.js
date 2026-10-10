@@ -443,9 +443,11 @@ async function spSearchRun(lineNo) {
   const box = document.getElementById('sp-search-results');
   if (!q) { if (box) box.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem">Type a product name to search.</div>'; return; }
   if (box) box.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem">Searching…</div>';
-  const res = await api('/orders/parse-paste', { method: 'POST', body: JSON.stringify({ client_id: sp.clientId, text: q }) });
+  // Forgiving substring/prefix search over the client's catalogue (not the strict
+  // paste auto-matcher), so a partial name like "coffee" or "coke" finds items.
+  const res = await api('/orders/paste-search', { method: 'POST', body: JSON.stringify({ client_id: sp.clientId, q }) });
   if (!res) return;
-  const cands = (res.lines && res.lines[0] && res.lines[0].candidates) || [];
+  const cands = res.candidates || [];
   if (!box) return;
   if (!cands.length) { box.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem">No catalogue items matched. Try a different name.</div>'; return; }
   box.innerHTML = cands.map(c => `

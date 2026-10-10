@@ -223,7 +223,7 @@ export function scoreCandidate(inputText: string, candidateName: string): number
   return union ? inter / union : 0;
 }
 
-export type MatchTier = "exact" | "history" | "fuzzy";
+export type MatchTier = "exact" | "history" | "fuzzy" | "contains";
 
 // Confidence: exact tier is always 100; fuzzy applies the bounded formula with
 // an order-frequency boost (R2-D1/C2).
@@ -285,4 +285,68 @@ export function rankCandidates(
     return qualifiers.slice(0, limit);
   }
   return qualifiers.slice(0, limit);
+}
+
+// ── Manual catalogue search (R2-C1 "manual SKU search") ──────────────────────
+// The operator's search box is NOT the auto-matcher: a short query like "coke"
+// or "coffee" almost never clears the Jaccard threshold against a multi-word
+// product name, so rankCandidates returns nothing. A search box must be
+// forgiving — substring/prefix first, token overlap as a fallback — so typing
+// part of a name finds it. Pure + unit-tested.
+//
+// Tiers (highest first): exact (SKU or whole name) → contains (name/SKU contains
+// the query, or query word is a prefix of a name word) → fuzzy (token overlap).
+// Brand synonyms (e.g. "coke" → "Coca-Cola") are a V2 alias-learning concern and
+// are deliberately out of scope here.
+export function searchCandidates(
+  query: string,
+  pool: Candidate[],
+  opts: { limit?: number } = {},
+): RankedCandidate[] {
+  const limit = opts.limit ?? 25;
+  const qRaw = String(query ?? "").trim();
+  if (!qRaw) return [];
+  const qNorm = normNameForMatch(qRaw);
+  const qCompact = qRaw.toLowerCase().replace(/\s+/g, " ").trim();
+  const qTokens = [...tokenSet(qRaw)];
+
+  const TIER_RANK: Record<string, number> = { exact: 3, contains: 2, fuzzy: 1 };
+
+  const scored = pool.map(c => {
+    const nameNorm = normNameForMatch(c.name);
+    const nameLower = String(c.name ?? "").toLowerCase();
+    const skuLower = String(c.sku ?? "").toLowerCase();
+    const nameTokens = [...tokenSet(c.name)];
+
+    let tier: MatchTier | null = null;
+    let base = 0;
+    if (skuLower === qCompact || (qNorm && nameNorm === qNorm)) { tier = "exact"; base = 100; }
+    else if ((qNorm && nameNorm.includes(qNorm)) || nameLower.includes(qCompact) || skuLower.includes(qCompact)) { tier = "contains"; base = 85; }
+    else if (qTokens.length && qTokens.every(qt => nameTokens.some(nt => nt.startsWith(qt) || qt.startsWith(nt)))) { tier = "contains"; base = 78; }
+    else {
+      const s = scoreCandidate(qRaw, c.name);
+      if (s > 0) { tier = "fuzzy"; base = Math.round(s * 70); }
+    }
+    if (!tier) return null;
+
+    const oc = c.order_count ?? 0;
+    const boost = Math.min(10, Math.round(3 * Math.log(1 + Math.max(0, oc))));
+    const why: string[] = [];
+    if (oc > 0) why.push(`ordered ${oc}×`);
+    return {
+      ...c, tier,
+      score: base / 100,
+      confidence: tier === "exact" ? 100 : Math.min(99, base + boost),
+      why,
+      _rank: TIER_RANK[tier],
+    } as RankedCandidate & { _rank: number };
+  }).filter(Boolean) as (RankedCandidate & { _rank: number })[];
+
+  scored.sort((a, b) =>
+    b._rank - a._rank ||
+    b.confidence - a.confidence ||
+    (b.order_count ?? 0) - (a.order_count ?? 0) ||
+    a.name.localeCompare(b.name));
+
+  return scored.slice(0, limit).map(({ _rank, ...c }) => c);
 }
