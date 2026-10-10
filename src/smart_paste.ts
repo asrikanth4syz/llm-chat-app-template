@@ -223,7 +223,7 @@ export function scoreCandidate(inputText: string, candidateName: string): number
   return union ? inter / union : 0;
 }
 
-export type MatchTier = "exact" | "history" | "fuzzy" | "contains";
+export type MatchTier = "exact" | "history" | "fuzzy" | "contains" | "learned" | "synonym";
 
 // Confidence: exact tier is always 100; fuzzy applies the bounded formula with
 // an order-frequency boost (R2-D1/C2).
@@ -349,4 +349,89 @@ export function searchCandidates(
     a.name.localeCompare(b.name));
 
   return scored.slice(0, limit).map(({ _rank, ...c }) => c);
+}
+
+// ── V2 Slice 1: learned-alias ranking (milestone 005) ────────────────────────
+// Confidence for a learned alias with `hits` past confirmations: starts at 85,
+// rises with hits, saturates below 100 (an alias is a strong-but-not-certain
+// signal, never the dishonest "exact" 100). Pure.
+export function learnedConfidence(hits: number): number {
+  return Math.min(99, 85 + Math.min(14, Math.round(5 * Math.log(1 + Math.max(0, hits)))));
+}
+
+function _tierRank(t: MatchTier, qualifies = true): number {
+  switch (t) {
+    case "exact": return 4;
+    case "learned": return qualifies ? 3 : 1; // sub-threshold alias is advisory (rank by confidence)
+    case "synonym": return 3;
+    case "history": return 2;
+    default: return 1; // fuzzy / contains
+  }
+}
+
+/**
+ * Rank one parsed line against the client's catalogue pool PLUS its learned
+ * aliases (V2-M). `aliasHits` maps sku → hit count for THIS line's normalised
+ * product text (built by the caller from paste_alias). An alias sku absent from
+ * the pool is dropped (dead-SKU guard). A qualifying learned alias (hits ≥
+ * minHits) ranks above history/fuzzy but below a genuine exact catalogue match;
+ * a sub-threshold alias is capped ≤70 and only ranks among fuzzy by confidence,
+ * so one mis-click never outranks a strong history/exact match (V2-M3).
+ * Deterministic total order ends in sku asc.
+ */
+export function rankLine(
+  productText: string,
+  pool: Candidate[],
+  aliasHits: Map<string, number> | null | undefined,
+  opts: { matchMin?: number; matchMargin?: number; limit?: number; minHits?: number } = {},
+): RankedCandidate[] {
+  const matchMin = opts.matchMin ?? 0.5;
+  const limit = opts.limit ?? 3;
+  const minHits = opts.minHits ?? 2;
+  const normInput = normNameForMatch(productText);
+
+  type Ranked = RankedCandidate & { _rank: number };
+  const byId = new Map<string, Ranked>();
+  const put = (c: Ranked) => {
+    const prev = byId.get(c.sku);
+    if (!prev || c._rank > prev._rank || (c._rank === prev._rank && c.confidence > prev.confidence)) byId.set(c.sku, c);
+  };
+
+  // Catalogue matches (exact / history / fuzzy), only when there is input text.
+  if (normInput) {
+    for (const c of pool) {
+      const exact = normNameForMatch(c.name) === normInput;
+      const score = exact ? 1 : scoreCandidate(productText, c.name);
+      if (!exact && score < matchMin) continue;
+      const oc = c.order_count ?? 0;
+      const tier: MatchTier = exact ? "exact" : oc > 0 ? "history" : "fuzzy";
+      const why: string[] = [];
+      if (exact) why.push("exact name match");
+      if (oc > 0) why.push(`ordered ${oc}×`);
+      put({ ...c, score, tier, confidence: confidenceOf(score, oc, tier), why, _rank: _tierRank(tier) });
+    }
+  }
+
+  // Learned aliases — the alias IS the match signal (independent of token score).
+  if (aliasHits && aliasHits.size) {
+    const poolBySku = new Map(pool.map(c => [c.sku, c]));
+    for (const [sku, hits] of aliasHits) {
+      const c = poolBySku.get(sku);
+      if (!c) continue; // not in the client's current active catalogue → drop
+      const qualifies = hits >= minHits;
+      const conf = qualifies ? learnedConfidence(hits) : Math.min(70, learnedConfidence(hits));
+      const oc = c.order_count ?? 0;
+      const why = [`learned from ${hits} past order${hits === 1 ? "" : "s"}`];
+      if (oc > 0) why.push(`ordered ${oc}×`);
+      put({ ...c, score: conf / 100, tier: "learned", confidence: conf, why, _rank: _tierRank("learned", qualifies) });
+    }
+  }
+
+  const list = [...byId.values()];
+  list.sort((a, b) =>
+    b._rank - a._rank ||
+    b.confidence - a.confidence ||
+    (b.order_count ?? 0) - (a.order_count ?? 0) ||
+    a.sku.localeCompare(b.sku));
+  return list.slice(0, limit).map(({ _rank, ...c }) => c);
 }

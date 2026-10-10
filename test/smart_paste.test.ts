@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parsePasteText, scoreCandidate, confidenceOf, rankCandidates, searchCandidates,
-  normNameForMatch,
+  normNameForMatch, learnedConfidence, rankLine,
 } from "../src/smart_paste";
 
 // Helper: parse a single line and return its one ParsedLine.
@@ -258,5 +258,64 @@ describe("searchCandidates — forgiving manual catalogue lookup", () => {
     expect(searchCandidates("xyzzy", pool)).toHaveLength(0);
     expect(searchCandidates("", pool)).toHaveLength(0);
     expect(searchCandidates("   ", pool)).toHaveLength(0);
+  });
+});
+
+describe("learnedConfidence (V2-M3)", () => {
+  it("rises with hits, starts at 88 (1), caps below 100", () => {
+    expect(learnedConfidence(1)).toBe(88);
+    expect(learnedConfidence(3)).toBe(92);
+    expect(learnedConfidence(10)).toBe(97);
+    expect(learnedConfidence(100000)).toBe(99); // saturates below 100
+    expect(learnedConfidence(0)).toBe(85);
+  });
+});
+
+describe("rankLine — catalogue + learned aliases (V2-M2/M3/M5)", () => {
+  const pool = [
+    { sku: "GD", name: "Britannia Good Day 100g", price: 42, order_count: 0 },
+    { sku: "COF", name: "Premium Coffee Beans", price: 850, order_count: 8 },
+    { sku: "TEA", name: "Green Tea Sachets", price: 320, order_count: 2 },
+  ];
+
+  it("a qualifying learned alias surfaces with an honest 'learned from N' reason", () => {
+    // "goodday 100" cannot be token-matched to "Britannia Good Day 100g" (V1 honest 0)
+    expect(rankCandidates("goodday 100", pool)).toHaveLength(0);
+    const r = rankLine("goodday 100", pool, new Map([["GD", 3]]), { minHits: 2 });
+    expect(r[0].sku).toBe("GD");
+    expect(r[0].tier).toBe("learned");
+    expect(r[0].confidence).toBe(92);
+    expect(r[0].why.some(w => w.startsWith("learned from 3"))).toBe(true);
+  });
+
+  it("an exact catalogue match still outranks a learned alias to a different sku", () => {
+    const r = rankLine("Green Tea Sachets", pool, new Map([["GD", 9]]), { minHits: 2 });
+    expect(r[0].sku).toBe("TEA");
+    expect(r[0].tier).toBe("exact");
+    expect(r[0].confidence).toBe(100);
+  });
+
+  it("a 1-hit (sub-threshold) alias is advisory (≤70) and never outranks a strong history match", () => {
+    // Paste text that history-fuzzy-matches COF strongly, plus a 1-hit alias to GD.
+    const r = rankLine("Premium Coffee", pool, new Map([["GD", 1]]), { minHits: 2 });
+    expect(r[0].sku).toBe("COF");              // history beats the advisory alias
+    const gd = r.find(c => c.sku === "GD");
+    expect(gd && gd.confidence).toBeLessThanOrEqual(70);
+  });
+
+  it("a learned alias whose sku is not in the pool is dropped (dead-SKU guard)", () => {
+    expect(rankLine("whatever", pool, new Map([["GONE", 5]])).some(c => c.sku === "GONE")).toBe(false);
+  });
+
+  it("deterministic: full ties break by sku asc; limit honoured", () => {
+    const flat = [
+      { sku: "B", name: "Item B", price: 1, order_count: 0 },
+      { sku: "A", name: "Item A", price: 1, order_count: 0 },
+      { sku: "C", name: "Item C", price: 1, order_count: 0 },
+    ];
+    const r = rankLine("", flat, new Map([["B", 3], ["A", 3], ["C", 3]]), { minHits: 2, limit: 2 });
+    expect(r).toHaveLength(2);
+    // all learned, equal hits/confidence/order_count → final tie-break sku asc
+    expect(r.map(c => c.sku)).toEqual(["A", "B"]);
   });
 });

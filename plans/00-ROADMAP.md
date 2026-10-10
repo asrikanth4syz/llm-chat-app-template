@@ -49,7 +49,7 @@
   - *Moniker:* `004-smart-paste-order`
   - *Spec:* `plans/active_milestones/004-smart-paste-order/spec.md`
 
-- [ ] **Milestone 5: Smart Paste Order V2 — Alias Learning & Smarter Matching** — STATUS: SPEC (spec written; awaiting spec-validation → architect)
+- [ ] **Milestone 5: Smart Paste Order V2 — Alias Learning & Smarter Matching** — STATUS: BUILDING (spec validated r1; Slice 1 alias-learning core built + green — learned tier surfaces honestly; synonym layer, metrics, admin UI, purge = later slices)
   - *Description:* Turn the V1 `paste_match_log` exhaust into a learning layer. Client-scoped
     learned aliases (`norm(product_text) → sku`, created/strengthened on Confirm) plus an
     ops-curated synonym layer (e.g. `coke → coca cola`, global or per-client) feed the existing
