@@ -1,5 +1,5 @@
 import { Env, JWTPayload } from "./types";
-import { parsePasteText, rankCandidates, searchCandidates, type Candidate } from "./smart_paste";
+import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -6186,6 +6186,10 @@ async function ensureSmartPasteSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS paste_idempotency ( idempotency_key TEXT PRIMARY KEY, order_id TEXT NOT NULL, client_id TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
     `ALTER TABLE orders ADD COLUMN source TEXT`,
     `ALTER TABLE client_catalog ADD COLUMN client_price REAL`,
+    // V2 Slice 1 (005) — alias learning.
+    `CREATE TABLE IF NOT EXISTS paste_alias ( client_id TEXT NOT NULL, alias_norm TEXT NOT NULL, sku TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 1, last_used_at TEXT DEFAULT (datetime('now')), created_at TEXT DEFAULT (datetime('now')), created_by TEXT, PRIMARY KEY (client_id, alias_norm, sku) );`,
+    `CREATE INDEX IF NOT EXISTS idx_alias_lookup ON paste_alias (client_id, alias_norm);`,
+    `ALTER TABLE paste_match_log ADD COLUMN tier TEXT`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   _spSchemaReady = true;
@@ -6239,6 +6243,10 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
   const matchMin = Math.min(0.9, Math.max(0.3, isNaN(rawMin) ? 0.5 : rawMin));
   const rawMargin = parseFloat(await getConfig(env, "smartpaste_match_margin", "0.05"));
   const matchMargin = isNaN(rawMargin) ? 0.05 : rawMargin;
+  // V2 learning (005): aliases boost matching; the kill switch gates reads too.
+  const learnEnabled = (await getConfig(env, "smartpaste_learn_enabled", "1")) === "1";
+  const rawMinHits = parseInt(await getConfig(env, "smartpaste_alias_min_hits", "2"), 10);
+  const minHits = Number.isInteger(rawMinHits) && rawMinHits >= 1 ? rawMinHits : 2;
 
   // Candidate pool = active catalogue SKUs for this client, priced with the
   // client override when present.
@@ -6271,14 +6279,36 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
     poolTruncated = true;
   }
 
+  // Learned aliases for this client (V2-M): norm(product_text) → Map<sku,hits>.
+  // One query over every distinct non-empty line norm; skipped when learning is off.
+  const aliasByNorm = new Map<string, Map<string, number>>();
+  if (learnEnabled) {
+    const norms = [...new Set(parsed.map(p => normNameForMatch(p.product_text)).filter(Boolean))];
+    if (norms.length) {
+      const inPh = norms.map(() => "?").join(",");
+      const aliasRows = ((await env.DB.prepare(
+        `SELECT alias_norm, sku, hits FROM paste_alias WHERE client_id=? AND alias_norm IN (${inPh})`
+      ).bind(clientId, ...norms).all()).results || []) as Array<{ alias_norm: string; sku: string; hits: number }>;
+      for (const a of aliasRows) {
+        if (!aliasByNorm.has(a.alias_norm)) aliasByNorm.set(a.alias_norm, new Map());
+        aliasByNorm.get(a.alias_norm)!.set(a.sku, Number(a.hits));
+      }
+    }
+  }
+
   const parseSessionId = uid();
   const summary = { total: parsed.length, matched: 0, unmatched: 0, needs_qty: 0, pool_truncated: poolTruncated };
 
   const logStmts: ReturnType<typeof env.DB.prepare>[] = [];
   const lines = parsed.map(p => {
-    const ranked = p.product_text ? rankCandidates(p.product_text, pool, { matchMin, matchMargin, limit: 3 }) : [];
-    const status = ranked.length ? "matched" : "unmatched";
-    const selectedSku = status === "matched" ? ranked[0].sku : null;
+    const ranked = p.product_text
+      ? rankLine(p.product_text, pool, aliasByNorm.get(normNameForMatch(p.product_text)) || null, { matchMin, matchMargin, limit: 3, minHits })
+      : [];
+    // A sub-threshold (1-hit) learned alias is advisory — shown but not auto-selected
+    // over nothing better (V2-M3). It is identifiable as tier 'learned' capped ≤70.
+    const selectable = ranked.find(c => !(c.tier === "learned" && c.confidence <= 70));
+    const status = selectable ? "matched" : "unmatched";
+    const selectedSku = selectable ? selectable.sku : null;
     const flags = [...p.parse_flags];
     let qtySuggested: number | null = null;
     if (p.needs_qty && selectedSku != null && lastQty.has(selectedSku)) {
@@ -6383,6 +6413,11 @@ async function handleFromPaste(request: Request, env: Env): Promise<Response> {
   const cross = await denyClientCrossAccess(env, user!, clientId); if (cross) return cross;
   const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
   if (!client) return json({error:"Not found"}, 404);
+  // V2 learning (005): the alias key comes from the server's parse rows, so a
+  // session link is required when learning is on (V2-D1). After the 403/404 gates
+  // so tenancy precedence (R2-C1) is preserved.
+  const learnEnabled = (await getConfig(env, "smartpaste_learn_enabled", "1")) === "1";
+  if (learnEnabled && !parseSessionId) return json({error:"parse_session_id required"}, 400);
 
   // Idempotency replay (R2-D4): a repeated key returns the first order, writes nothing.
   const prior = await env.DB.prepare("SELECT order_id FROM paste_idempotency WHERE idempotency_key=?").bind(idemKey).first() as { order_id: string } | null;
@@ -6438,6 +6473,29 @@ async function handleFromPaste(request: Request, env: Env): Promise<Response> {
   }
   const items = [...orderLines.values()];
 
+  // Load the parse rows for this session BEFORE the batch deletes them — the only
+  // server-side source of product_text / parse-time status for learning and for
+  // persisting on the confirm rows (V2-D1/D2). Keyed by line_no.
+  const parseRowMap = new Map<number, { product_text: string | null; status: string | null; needs_qty: number; candidates_json: string | null }>();
+  if (parseSessionId) {
+    const prows = ((await env.DB.prepare(
+      `SELECT line_no, product_text, status, needs_qty, candidates_json FROM paste_match_log WHERE parse_session_id=? AND phase='parse'`
+    ).bind(parseSessionId).all()).results || []) as Array<{ line_no: number; product_text: string | null; status: string | null; needs_qty: number; candidates_json: string | null }>;
+    for (const r of prows) parseRowMap.set(Number(r.line_no), r);
+  }
+  // The winning tier/confidence for a confirmed line = the chosen candidate within
+  // the parse row's candidates_json; a manually searched/changed pick is 'manual'.
+  const tierOf = (lineNo: number, sku: string | null): { tier: string | null; confidence: number | null } => {
+    if (!sku) return { tier: null, confidence: null };
+    const cj = parseRowMap.get(lineNo)?.candidates_json;
+    if (!cj) return { tier: "manual", confidence: null };
+    try {
+      const arr = JSON.parse(cj) as Array<{ sku: string; tier?: string; confidence?: number }>;
+      const m = arr.find(c => c.sku === sku);
+      return m ? { tier: m.tier ?? null, confidence: m.confidence ?? null } : { tier: "manual", confidence: null };
+    } catch { return { tier: "manual", confidence: null }; }
+  };
+
   const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
   const gst = await computeOrderGst(env, items.map(i => ({ sku: i.sku, qty: i.qty, unit_price: i.price })));
   const grand_total = subtotal + gst;
@@ -6467,17 +6525,45 @@ async function handleFromPaste(request: Request, env: Env): Promise<Response> {
     stmts.push(env.DB.prepare("DELETE FROM paste_match_log WHERE parse_session_id=? AND phase='parse'").bind(parseSessionId));
   }
   for (const l of allForLog) {
+    const prow = parseRowMap.get(l.line_no);
+    const productText = prow?.product_text ?? null;
+    // Persist the PARSE-TIME status + needs_qty (the metrics source, V2-D2/X1);
+    // 'removed' lines keep their parse status but are marked via `action`.
+    const parseStatus = prow?.status ?? "matched";
+    const needsQty = prow ? (Number(prow.needs_qty) ? 1 : 0) : 0;
+    const { tier, confidence } = l.action === "removed" ? { tier: null, confidence: null } : tierOf(l.line_no, l.sku);
     stmts.push(env.DB.prepare(
       `INSERT INTO paste_match_log
          (id, parse_session_id, phase, client_id, order_id, line_no, raw_text, product_text,
           parsed_qty, status, needs_qty, parse_flags, candidates_json, top_sku, chosen_sku,
-          confidence, action, actor_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          confidence, action, actor_id, tier)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      uid(), parseSessionId || id, "confirm", clientId, id, l.line_no, "", null,
-      l.qty, l.action === "removed" ? "removed" : "ordered", 0, null, null,
-      null, l.sku, null, l.action, user!.sub,
+      uid(), parseSessionId || id, "confirm", clientId, id, l.line_no, "", productText,
+      l.qty, parseStatus, needsQty, null, null,
+      null, l.sku, confidence, l.action, user!.sub, tier,
     ));
+  }
+
+  // Learn aliases (V2-L1): part of the SAME atomic batch, deduped per order
+  // (V2-D4), keyed on the server-parsed product_text (never caller input, V2-D1),
+  // skipping removed lines and empty-norm text (V2-D3). Gated by the kill switch.
+  if (learnEnabled) {
+    const learnedPairs = new Set<string>();
+    for (const r of resolved) {
+      if (!["accepted", "changed", "searched", "merged"].includes(r.action)) continue;
+      const ptext = parseRowMap.get(r.line_no)?.product_text ?? "";
+      const aliasNorm = normNameForMatch(ptext);
+      if (!aliasNorm) continue; // empty token set → not learned (V2-D3)
+      const key = aliasNorm + "\u0000" + r.sku;
+      if (learnedPairs.has(key)) continue; // one hit per order per (phrase, sku)
+      learnedPairs.add(key);
+      stmts.push(env.DB.prepare(
+        `INSERT INTO paste_alias (client_id, alias_norm, sku, hits, last_used_at, created_by)
+         VALUES (?,?,?,1,datetime('now'),?)
+         ON CONFLICT(client_id, alias_norm, sku) DO UPDATE SET hits = hits + 1, last_used_at = datetime('now')`
+      ).bind(clientId, aliasNorm, r.sku, user!.sub));
+    }
   }
 
   await env.DB.batch(stmts);

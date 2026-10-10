@@ -5694,7 +5694,7 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
       { line_no: 1, chosen_sku: "SKU001", quantity: 4, action: "accepted", merge_group: null },
       { line_no: 2, chosen_sku: "SKU002", quantity: 2, action: "accepted", merge_group: null },
     ];
-    const r = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    const r = await post("/api/orders/from-paste", { client_id: "c1", parse_session_id: "v1sess", idempotency_key: idem, lines }, adminToken);
     expect(r.status).toBe(201);
     const b = await r.json() as { id: string; status: string; grand_total: number };
     expect(b.status).toBe("DRAFT");
@@ -5713,9 +5713,9 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
   it("is idempotent — a replayed key returns the same order and creates no second one", async () => {
     const idem = key();
     const lines = [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "accepted", merge_group: null }];
-    const r1 = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    const r1 = await post("/api/orders/from-paste", { client_id: "c1", parse_session_id: "v1sess", idempotency_key: idem, lines }, adminToken);
     const b1 = await r1.json() as { id: string };
-    const r2 = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: idem, lines }, adminToken);
+    const r2 = await post("/api/orders/from-paste", { client_id: "c1", parse_session_id: "v1sess", idempotency_key: idem, lines }, adminToken);
     expect(r2.status).toBe(201);
     const b2 = await r2.json() as { id: string; replayed?: boolean };
     expect(b2.id).toBe(b1.id);
@@ -5729,7 +5729,7 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
       { line_no: 1, chosen_sku: "SKU001", quantity: 4, action: "merged", merge_group: "g1" },
       { line_no: 2, chosen_sku: "SKU001", quantity: 6, action: "merged", merge_group: "g1" },
     ];
-    const r = await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: key(), lines }, adminToken);
+    const r = await post("/api/orders/from-paste", { client_id: "c1", parse_session_id: "v1sess", idempotency_key: key(), lines }, adminToken);
     const b = await r.json() as { id: string };
     const items = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(b.id).all() as { results: Array<{ sku: string; qty: number }> };
     expect(items.results).toEqual([{ sku: "SKU001", qty: 10 }]);
@@ -5737,7 +5737,7 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
 
   it("422 (no draft) when a chosen SKU is not in the catalogue or qty is invalid", async () => {
     const r = await post("/api/orders/from-paste", {
-      client_id: "c1", idempotency_key: key(),
+      client_id: "c1", parse_session_id: "v1sess", idempotency_key: key(),
       lines: [
         { line_no: 1, chosen_sku: "BOGUS", quantity: 1, action: "accepted" },
         { line_no: 2, chosen_sku: "SKU001", quantity: 0, action: "accepted" },
@@ -5767,11 +5767,11 @@ describe("Smart Paste Order — POST /api/orders/from-paste", () => {
 
   it("gates role (403) and tenancy (404) like parse-paste; 400 on zero resolvable lines", async () => {
     const lines = [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "accepted" }];
-    expect((await post("/api/orders/from-paste", { client_id: "c1", idempotency_key: key(), lines }, opsToken)).status).toBe(403);
+    expect((await post("/api/orders/from-paste", { client_id: "c1", parse_session_id: "v1sess", idempotency_key: key(), lines }, opsToken)).status).toBe(403);
     expect((await post("/api/orders/from-paste", { client_id: "c-other", idempotency_key: key(), lines }, clientToken)).status).toBe(404);
     // all lines removed → nothing to order → 400
     const r = await post("/api/orders/from-paste", {
-      client_id: "c1", idempotency_key: key(),
+      client_id: "c1", parse_session_id: "v1sess", idempotency_key: key(),
       lines: [{ line_no: 1, chosen_sku: "SKU001", quantity: 1, action: "removed" }],
     }, adminToken);
     expect(r.status).toBe(400);
@@ -5805,5 +5805,92 @@ describe("Smart Paste Order — POST /api/orders/paste-search (manual lookup)", 
   it("gates role (403) and tenancy (404)", async () => {
     expect((await post("/api/orders/paste-search", { client_id: "c1", q: "tea" }, opsToken)).status).toBe(403);
     expect((await post("/api/orders/paste-search", { client_id: "c-other", q: "tea" }, clientToken)).status).toBe(404);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// SMART PASTE ORDER V2 — Slice 1: alias learning (milestone 005)
+// c1 catalogue: SKU001 "Premium Coffee Beans", SKU002 "Green Tea Sachets".
+// ════════════════════════════════════════════════════════════════════
+describe("Smart Paste V2 — alias learning on confirm", () => {
+  const key = () => `v2-${Math.random().toString(36).slice(2)}`;
+  const parse = async (text: string) => (await (await post("/api/orders/parse-paste", { client_id: "c1", text }, adminToken)).json()) as { parse_session_id: string; lines: Array<{ line_no: number; product_text: string; status: string; selected_sku: string | null; candidates: Array<{ sku: string; tier: string; why: string[] }> }> };
+  const confirm = async (sessionId: string, lines: unknown[], idem = key()) => post("/api/orders/from-paste", { client_id: "c1", parse_session_id: sessionId, idempotency_key: idem, lines }, adminToken);
+  const aliasHits = async (norm: string, sku: string) => (await env.DB.prepare("SELECT hits FROM paste_alias WHERE client_id='c1' AND alias_norm=? AND sku=?").bind(norm, sku).first()) as { hits: number } | null;
+
+  it("learns norm(product_text)→sku on confirm and persists product_text on the confirm row", async () => {
+    const p = await parse("Premium Coffee Beans - 4");
+    const r = await confirm(p.parse_session_id, [{ line_no: p.lines[0].line_no, chosen_sku: "SKU001", quantity: 4, action: "accepted", merge_group: null }]);
+    expect(r.status).toBe(201);
+    const id = (await r.json() as { id: string }).id;
+    expect((await aliasHits("premium coffee beans", "SKU001"))?.hits).toBe(1);
+    const crow = await env.DB.prepare("SELECT product_text, tier FROM paste_match_log WHERE phase='confirm' AND order_id=? LIMIT 1").bind(id).first() as { product_text: string | null; tier: string | null };
+    expect(crow.product_text).toBe("Premium Coffee Beans"); // no longer null (V2-D2)
+  });
+
+  it("strengthens hits across orders but counts once per order", async () => {
+    const p1 = await parse("Premium Coffee Beans - 4");
+    await confirm(p1.parse_session_id, [{ line_no: p1.lines[0].line_no, chosen_sku: "SKU001", quantity: 4, action: "accepted" }]);
+    const p2 = await parse("Premium Coffee Beans - 2");
+    await confirm(p2.parse_session_id, [{ line_no: p2.lines[0].line_no, chosen_sku: "SKU001", quantity: 2, action: "accepted" }]);
+    expect((await aliasHits("premium coffee beans", "SKU001"))?.hits).toBe(2);
+    // Same phrase twice in ONE order → +1 only.
+    const p3 = await parse("Premium Coffee Beans - 1\nPremium Coffee Beans - 3");
+    await confirm(p3.parse_session_id, p3.lines.map(l => ({ line_no: l.line_no, chosen_sku: "SKU001", quantity: 1, action: "accepted" })));
+    expect((await aliasHits("premium coffee beans", "SKU001"))?.hits).toBe(3); // 2 + 1 (deduped)
+  });
+
+  it("does not learn removed or empty-normalising lines", async () => {
+    const p = await parse("Premium Coffee Beans - 4\nGreen Tea Sachets - 2");
+    const [l1, l2] = p.lines;
+    await confirm(p.parse_session_id, [
+      { line_no: l1.line_no, chosen_sku: "SKU001", quantity: 4, action: "removed" },
+      { line_no: l2.line_no, chosen_sku: "SKU002", quantity: 2, action: "accepted" },
+    ]);
+    expect(await aliasHits("premium coffee beans", "SKU001")).toBeNull(); // removed → not learned
+    expect((await aliasHits("green tea sachets", "SKU002"))?.hits).toBe(1);
+    // Empty-normalising product text ("!!!") is never learned.
+    const p2 = await parse("!!! - 2\nGreen Tea Sachets - 1");
+    const e = p2.lines.find(x => x.product_text === "!!!")!;
+    const g = p2.lines.find(x => x.product_text !== "!!!")!;
+    await confirm(p2.parse_session_id, [
+      { line_no: e.line_no, chosen_sku: "SKU001", quantity: 2, action: "searched" },
+      { line_no: g.line_no, chosen_sku: "SKU002", quantity: 1, action: "accepted" },
+    ]);
+    const empties = await env.DB.prepare("SELECT COUNT(*) AS n FROM paste_alias WHERE client_id='c1' AND alias_norm=''").first() as { n: number };
+    expect(empties.n).toBe(0);
+  });
+
+  it("replay (same idempotency_key) does not double-learn", async () => {
+    const p = await parse("Premium Coffee Beans - 4");
+    const idem = key();
+    await confirm(p.parse_session_id, [{ line_no: p.lines[0].line_no, chosen_sku: "SKU001", quantity: 4, action: "accepted" }], idem);
+    const r2 = await confirm(p.parse_session_id, [{ line_no: p.lines[0].line_no, chosen_sku: "SKU001", quantity: 4, action: "accepted" }], idem);
+    expect((await r2.json() as { replayed?: boolean }).replayed).toBe(true);
+    expect((await aliasHits("premium coffee beans", "SKU001"))?.hits).toBe(1); // unchanged
+  });
+
+  it("a learned phrase surfaces + auto-selects on a later paste once it qualifies (hits≥2)", async () => {
+    // "my fav coffee" never catalogue-matches; teach it via manual search, twice.
+    for (const q of [1, 2]) {
+      const p = await parse(`my fav coffee - ${q}`);
+      expect(p.lines[0].status).toBe("unmatched");
+      await confirm(p.parse_session_id, [{ line_no: p.lines[0].line_no, chosen_sku: "SKU001", quantity: q, action: "searched" }]);
+    }
+    const p3 = await parse("my fav coffee - 5");
+    const line = p3.lines[0];
+    expect(line.status).toBe("matched");
+    expect(line.selected_sku).toBe("SKU001");
+    const cand = line.candidates.find(c => c.sku === "SKU001")!;
+    expect(cand.tier).toBe("learned");
+    expect(cand.why.some(w => w.startsWith("learned from 2"))).toBe(true);
+  });
+
+  it("the kill switch stops both learning and the boost", async () => {
+    await env.DB.prepare("INSERT INTO app_config (key,value) VALUES ('smartpaste_learn_enabled','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+    const p = await parse("Premium Coffee Beans - 4"); // still catalogue-matches exact
+    const r = await confirm(p.parse_session_id, [{ line_no: p.lines[0].line_no, chosen_sku: "SKU001", quantity: 4, action: "accepted" }]);
+    expect(r.status).toBe(201);
+    expect(await aliasHits("premium coffee beans", "SKU001")).toBeNull(); // nothing learned
   });
 });

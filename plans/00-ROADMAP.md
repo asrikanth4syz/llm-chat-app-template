@@ -48,3 +48,15 @@
     explicitly deferred to V2+.
   - *Moniker:* `004-smart-paste-order`
   - *Spec:* `plans/active_milestones/004-smart-paste-order/spec.md`
+
+- [ ] **Milestone 5: Smart Paste Order V2 — Alias Learning & Smarter Matching** — STATUS: BUILDING (spec validated r1; Slice 1 alias-learning core built + green — learned tier surfaces honestly; synonym layer, metrics, admin UI, purge = later slices)
+  - *Description:* Turn the V1 `paste_match_log` exhaust into a learning layer. Client-scoped
+    learned aliases (`norm(product_text) → sku`, created/strengthened on Confirm) plus an
+    ops-curated synonym layer (e.g. `coke → coca cola`, global or per-client) feed the existing
+    parse-paste ranking with new `learned`/`synonym` tiers and honest "why", closing the brand-
+    synonym gap the bare matcher can't. Adds a synonyms admin (ops/admin) and a match-quality
+    metrics view over `idx_pml_metrics` (match rate, unresolved %, top unmatched phrases). All V1
+    guardrails preserved: operator review, honest confidence, no auto-commit. Embeddings, LLM
+    parser and full knowledge graph remain deferred to V3.
+  - *Moniker:* `005-smart-paste-v2`
+  - *Spec:* `plans/active_milestones/005-smart-paste-v2/spec.md`
