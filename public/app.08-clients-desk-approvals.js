@@ -608,7 +608,7 @@ function renderCCSearchResults() {
   const matches = _ccAllInventory.filter(i =>
     !assignedSkus.has(i.sku) &&
     (!cat || i.category === cat) &&
-    (!q || i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q))
+    itemSearchMatch(q, i.name, i.sku)
   ).slice(0, 25);
 
   if (!q && !cat) { container.style.display='none'; return; }
