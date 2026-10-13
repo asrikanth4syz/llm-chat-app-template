@@ -597,8 +597,7 @@ function getFilteredCatalog() {
   let items = APP._catalog || [];
   if (APP._catFilter && APP._catFilter !== 'All') items = items.filter(i => i.category === APP._catFilter);
   if (APP._catalogSearch) {
-    const q = APP._catalogSearch;
-    items = items.filter(i => i.name.toLowerCase().includes(q) || (i.sku||'').toLowerCase().includes(q) || (i.category||'').toLowerCase().includes(q));
+    items = items.filter(i => itemSearchMatch(APP._catalogSearch, i.name, i.sku, i.category));
   }
   return items;
 }

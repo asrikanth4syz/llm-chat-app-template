@@ -1345,6 +1345,27 @@ function closeNotifications() {
 }
 
 // ── Helpers ────────────────────────────────────────────────
+// Item search normalisation + matcher. A naive `name.includes(query)` fails the
+// moment the typed text carries extra words a stored name doesn't — a pasted
+// label with "(MRP 20)", a different pack-size spacing ("250ml" vs "250 ML"), or
+// reordered words. searchNorm() drops "(MRP 20)"-style price noise and punctuation;
+// itemSearchMatch() requires EVERY query token to appear in the combined fields,
+// as a plain substring OR against the space-removed haystack (so "250ml" matches a
+// stored "250 ML"). Order-independent and noise-tolerant; an empty query matches all.
+function searchNorm(s) {
+  return String(s == null ? '' : s).toLowerCase()
+    .replace(/\(?\s*mrp\s*[-:]?\s*\d+(?:\.\d+)?\s*\)?/gi, ' ') // drop "(MRP 20)" / "mrp 20"
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function itemSearchMatch(query, ...fields) {
+  const tokens = searchNorm(query).split(' ').filter(Boolean);
+  if (!tokens.length) return true;
+  const hay = searchNorm(fields.join(' '));
+  const compact = hay.replace(/ /g, '');
+  return tokens.every(t => hay.includes(t) || compact.includes(t));
+}
 function fmt(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
 function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
 function pct(n) { return (+(n || 0)).toFixed(1) + '%'; }

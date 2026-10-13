@@ -1104,8 +1104,7 @@ function amendSearchResults() {
   const box = document.getElementById('amend-search-results');
   if (!box) return;
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
-  const matches = (APP._amendInv || []).filter(i =>
-    (i.name || '').toLowerCase().includes(q) || (i.sku || '').toLowerCase().includes(q)).slice(0, 12);
+  const matches = (APP._amendInv || []).filter(i => itemSearchMatch(q, i.name, i.sku)).slice(0, 12);
   box.style.display = 'block';
   box.innerHTML = matches.length
     ? matches.map(i => `<div ${dataAct('amendAddFromSearch', i.sku)}

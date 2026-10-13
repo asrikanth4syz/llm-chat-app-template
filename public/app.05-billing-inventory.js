@@ -460,7 +460,7 @@ async function renderInventory(el) {
     let items = inv;
     if (APP._invFilter !== 'All') items = items.filter(i => i.category === APP._invFilter);
     if (APP._invSubFilter !== 'All') items = items.filter(i => (i.sub_category||'Normal') === APP._invSubFilter);
-    if (APP._invSearch) { const q = APP._invSearch.toLowerCase(); items = items.filter(i => i.name.toLowerCase().includes(q)||i.sku.toLowerCase().includes(q)||(i.brand||'').toLowerCase().includes(q)); }
+    if (APP._invSearch) { items = items.filter(i => itemSearchMatch(APP._invSearch, i.name, i.sku, i.brand)); }
     const { col, dir } = APP._invSort;
     if (col) {
       items = [...items].sort((a,b) => {
