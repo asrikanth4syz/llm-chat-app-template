@@ -779,7 +779,7 @@ async function piCatalogQuery(env: Env, user: JWTPayload, sp: URLSearchParams): 
 
   const params: unknown[] = [];
   let where = " WHERE i.active=1";
-  if (q)   { where += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+  if (q)   { const s = nameSearchClause(q, ["i.name", "i.sku"]); if (s.clause) { where += " AND " + s.clause; params.push(...s.params); } }
   if (cat) { where += " AND i.category=?"; params.push(cat); }
   if (brandId) { where += " AND i.brand_id=?"; params.push(brandId); }
 
@@ -2420,6 +2420,30 @@ function normNameForMatch(s: unknown): string {
     .replace(/\s+/g, " ");
 }
 
+// Token-AND LIKE clause for product/item-name search. Splits the query into
+// normalised tokens — dropping "(MRP 20)"-style price noise and punctuation like
+// & and () — and requires EVERY token to LIKE-match at least one of `columns`.
+// Order-independent and punctuation-tolerant, unlike a whole-string
+// `col LIKE '%rawquery%'`, which fails the moment the typed label carries extra
+// words/punctuation the stored name lacks (e.g. "Chips with Coconut Oil & Rock
+// Salt (MRP 30)"). Tokens are alphanumeric only, so no LIKE wildcards leak in;
+// values are bound. Returns an empty clause when the query normalises to nothing.
+function nameSearchClause(q: unknown, columns: string[]): { clause: string; params: string[] } {
+  const norm = String(q ?? "").toLowerCase()
+    .replace(/\(?\s*mrp\s*[-:]?\s*\d+(?:\.\d+)?\s*\)?/gi, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const tokens = norm ? norm.split(/\s+/) : [];
+  if (!tokens.length) return { clause: "", params: [] };
+  const params: string[] = [];
+  const perToken = tokens.map(t => {
+    const ors = columns.map(c => `${c} LIKE ?`).join(" OR ");
+    for (let i = 0; i < columns.length; i++) params.push(`%${t}%`);
+    return `(${ors})`;
+  });
+  return { clause: perToken.join(" AND "), params };
+}
+
 // Read-only: how well the non-Zoho (seed) items match Zoho-owned items by normalised
 // name. Lets us confirm a safe merge before re-pointing any client assignments.
 async function handleZohoMergePreview(request: Request, env: Env): Promise<Response> {
@@ -2581,12 +2605,14 @@ async function handleInventoryLookup(request: Request, env: Env): Promise<Respon
   if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
   const q = (new URL(request.url).searchParams.get("q") || "").trim();
   if (!q) return json({ error: "q (SKU or name) required" }, 400);
-  const like = `%${q}%`;
+  const s = nameSearchClause(q, ["name", "sku", "CAST(zoho_item_id AS TEXT)"]);
+  const whereSql = s.clause || "(name LIKE ? OR sku LIKE ? OR CAST(zoho_item_id AS TEXT) LIKE ?)";
+  const whereParams = s.clause ? s.params : [`%${q}%`, `%${q}%`, `%${q}%`];
   const { results } = await env.DB.prepare(
     `SELECT sku,name,active,category,unit_price,mrp,stock,zoho_item_id,zoho_synced_at
-       FROM inventory WHERE name LIKE ? OR sku LIKE ? OR CAST(zoho_item_id AS TEXT) LIKE ?
+       FROM inventory WHERE ${whereSql}
        ORDER BY name LIMIT 25`
-  ).bind(like, like, like).all();
+  ).bind(...whereParams).all();
   const rows = results as Record<string, unknown>[];
   for (const r of rows) {
     try {
@@ -6987,7 +7013,7 @@ async function handleListInventory(request: Request, env: Env): Promise<Response
 
   const params: string[] = [];
   let baseFilter = includeInactive ? " WHERE 1=1" : " WHERE i.active=1";
-  if (q)   { baseFilter += " AND (i.name LIKE ? OR i.sku LIKE ?)"; params.push(`%${q}%`,`%${q}%`); }
+  if (q)   { const s = nameSearchClause(q, ["i.name", "i.sku"]); if (s.clause) { baseFilter += " AND " + s.clause; params.push(...s.params); } }
   if (cat) { baseFilter += " AND i.category=?"; params.push(cat); }
   if (isClientRole && user!.client_id) {
     try {
@@ -9975,7 +10001,7 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
     {results:clients}, {results:tickets}
   ] = await Promise.all([
     env.DB.prepare("SELECT id,'order' as type,id as title,status as subtitle FROM orders WHERE id LIKE ? OR status LIKE ? LIMIT 5").bind(like,like).all(),
-    env.DB.prepare("SELECT sku as id,'inventory' as type,name as title,category as subtitle FROM inventory WHERE name LIKE ? OR sku LIKE ? LIMIT 5").bind(like,like).all(),
+    (() => { const s = nameSearchClause(q, ["name", "sku"]); const w = s.clause || "(name LIKE ? OR sku LIKE ?)"; const p = s.clause ? s.params : [like, like]; return env.DB.prepare(`SELECT sku as id,'inventory' as type,name as title,category as subtitle FROM inventory WHERE ${w} LIMIT 5`).bind(...p).all(); })(),
     env.DB.prepare("SELECT id,'vendor' as type,name as title,category as subtitle FROM vendors WHERE name LIKE ? OR category LIKE ? LIMIT 5").bind(like,like).all(),
     env.DB.prepare("SELECT id,'client' as type,name as title,contact_email as subtitle FROM clients WHERE name LIKE ? OR contact_email LIKE ? LIMIT 5").bind(like,like).all(),
     env.DB.prepare("SELECT id,'ticket' as type,subject as title,status as subtitle FROM tickets WHERE subject LIKE ? OR id LIKE ? LIMIT 5").bind(like,like).all(),

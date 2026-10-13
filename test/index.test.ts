@@ -5894,3 +5894,22 @@ describe("Smart Paste V2 — alias learning on confirm", () => {
     expect(await aliasHits("premium coffee beans", "SKU001")).toBeNull(); // nothing learned
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Product search — punctuation / MRP / word-order tolerant (server, GET /api/catalog/products)
+// ════════════════════════════════════════════════════════════════════
+describe("Product search — handles & ( ) and MRP suffixes, order-independent", () => {
+  it("finds an item with & and () in its name from an MRP-suffixed / reordered query", async () => {
+    await env.DB.prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock,active,gst_rate) VALUES (?,?,?,?,?,?,?)")
+      .bind("SKU-KBC", "Kerala Banana Chips with Coconut Oil & Rock Salt", "Snacks", 30, 50, 1, 12).run();
+    const finds = async (q: string) => {
+      const r = await get("/api/catalog/products?q=" + encodeURIComponent(q), adminToken);
+      const b = await r.json() as { products?: Array<{ sku: string }> };
+      return (b.products || []).some(p => p.sku === "SKU-KBC");
+    };
+    expect(await finds("Kerala Banana chips with Coconut oil & Rock Salt (MRP 30)")).toBe(true); // the reported case
+    expect(await finds("coconut rock salt")).toBe(true);   // reordered subset, no punctuation
+    expect(await finds("kerala & salt (mrp 30)")).toBe(true); // & and MRP ignored
+    expect(await finds("kerala banana zzz")).toBe(false);  // an extra non-matching token excludes it
+  });
+});

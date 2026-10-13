@@ -415,8 +415,8 @@ async function loadPICollections(body) {
 function piRenderCollectionList(q) {
   const wrap = document.getElementById('pi-col-list'); if (!wrap) return;
   const all = APP._piCollections || [];
-  const term = (q || '').trim().toLowerCase();
-  const cols = term ? all.filter(c => String(c.name || '').toLowerCase().includes(term)) : all;
+  const term = (q || '').trim();
+  const cols = term ? all.filter(c => itemSearchMatch(term, c.name)) : all;
   wrap.innerHTML = cols.length
     ? `<div style="display:flex;flex-direction:column;gap:9px">${cols.map(piCollectionRow).join('')}</div>`
     : (all.length
