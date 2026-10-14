@@ -33,8 +33,8 @@ module.
    weighted margin, or rounding policy. → `src/quote_calc.ts` (pure, 18 PRD calc vectors).
 2. **Immutable hashed versions + hash-chained audit** — enforce in app-layer `env.DB.batch()`,
    **NOT SQL triggers** (self-heal runner splits on `;` and breaks on trigger bodies).
-3. **Separation-of-duties parallel approvals** — Ops→Manager always; +Finance when `itc_claimable=No`
-   OR grand total ≥ ₹5,00,000. Creator ≠ approver.
+3. **Separation-of-duties approvals** — **Manager leg always; Finance leg** when `itc_claimable=No`
+   OR grand total ≥ ₹5,00,000 (two legs only; ops holds no approval leg). Approver ∉ author set.
 4. **Reminders/follow-ups** — 3-step cadence, dedup, snooze, Lost state, follow-up log, Today page, bell badge.
 5. **Cost/margin redaction** — Operations quote-role must never receive cost/margin fields
    (server-side strip, mirroring existing client-vs-internal price redaction).

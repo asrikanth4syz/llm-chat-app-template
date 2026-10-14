@@ -47,9 +47,11 @@ below, never by SQL triggers.
 | grand_total_paise | INTEGER | cache from current version; refreshed in the CAS UPDATE; INTEGER paise |
 
 **Authoritative read for pricing/tax/approval is always the current `quote_versions.payload_json`.** The
-header columns `place_of_supply`/`itc_claimable_all`/`grand_total_paise` are caches kept in sync by being
-set **in the same CAS UPDATE** that advances `current_version`; submit and the Finance-leg test read them
-from (or re-derive them from) the current version, never from a stale header. (Resolves `header-version-desync`.)
+header columns `place_of_supply`/`itc_claimable_all`/`grand_total_paise` are display caches: the **v1 create
+batch MUST populate all three** from the v1 computation, and each version-append CAS UPDATE refreshes them.
+**submit always re-derives `itc_claimable_all` and `grand_total_paise` from the current version payload** (it
+never trusts the header cache), so a created-then-submitted v1 quote cannot skip the Finance leg via a null
+cache (resolves `header-version-desync`, `create-v1-header-cache-unset`).
 | created_by | TEXT NOT NULL | SoD anchor |
 | valid_until | TEXT NOT NULL | `YYYY-MM-DD`, end-of-day **Asia/Kolkata**; default `send_date + settings.default_validity_days` |
 | lost_reason | TEXT NULL | required when `LOST` (≤500 chars) |
@@ -66,7 +68,7 @@ lines **appends a new version** (recomputed + rehashed) rather than mutating the
 | account_id / quote_id | TEXT NOT NULL | |
 | version | INTEGER NOT NULL | **UNIQUE(quote_id, version)** — blocks the concurrent-append fork |
 | payload_json | TEXT | full computed snapshot (money as integer paise); canonicalized before hashing |
-| content_hash | TEXT NOT NULL | `sha256Hex(canonical(payload_json))`; **UNIQUE(quote_id, version)** already serializes |
+| content_hash | TEXT NOT NULL | `sha256Hex(canonical([account_id, quote_id, version, genesis_salt, payload_json]))` — **domain-separated** like the audit chain so a version row cannot be transplanted across quotes/accounts and still verify (resolves `version-hash-no-domain-separation`); **UNIQUE(quote_id, version)** also serializes |
 | prev_hash | TEXT NULL | previous version's `content_hash` (NULL for v1) |
 | created_by | TEXT NOT NULL | version author — part of SoD contributor set |
 | created_at | TEXT | |
@@ -107,23 +109,35 @@ Cost/margin columns are **deep-redacted** server-side for non-cost quote-roles (
 | acted_at | TEXT NULL | |
 
 **SoD + author-authority rule** (per product decision; resolves `sod-sole-approver-deadlock`,
-`sod-author-set-inconsistent`). The *author set* = `{quotes.created_by} ∪ {every quote_versions.created_by
-for the quote}` (ALL versions, not just current). Per leg:
-1. **Manager leg** — if any member of the author set holds the `commercial_manager` quote-role, the leg is
-   recorded `AUTO_SATISFIED` at submit with `actor_id` = that author (the authoring manager's authority
-   covers it; *"if the editor himself is a manager, no additional approval is needed"*). Otherwise a user
-   with `commercial_manager` who is **not** in the author set must APPROVE it; if none exists, the configured
-   **fallback approver** (`quote.settings.fallback_approver_id`, below) may APPROVE it; if neither exists,
-   submit is rejected **409 `E_NO_ELIGIBLE_APPROVER`**.
-2. **Finance leg** (required iff `!itc_claimable_all` OR grand ≥ threshold) — **not** auto-satisfied by an
-   authoring finance user (confirmed product decision): it is the high-value ITC/₹5L control, so it always
-   needs a distinct `finance` approver ∉ author set (else the fallback approver, else 409).
+`sod-author-set-inconsistent`, `manager-autosatisfy-scope`). The *author set* = `{quotes.created_by} ∪
+{every quote_versions.created_by for the quote}` (ALL versions, used for the **disqualify-from-approving**
+test). Per leg:
+1. **Manager leg** — `AUTO_SATISFIED` at submit **only if the author of the _current_ version holds
+   `commercial_manager`** (not merely any historical author — stops a single cosmetic manager edit from
+   waiving review for all later versions; *"if the editor himself is a manager, no additional approval is
+   needed"* applies to the person who actually priced the current version). Otherwise a `commercial_manager`
+   ∉ author set must APPROVE; else the fallback approver (constraints below); else **409 `E_NO_ELIGIBLE_APPROVER`**.
+2. **Finance leg** (required iff `!itc_claimable_all` OR grand ≥ threshold) — **never** auto-satisfied
+   (confirmed): always a distinct `finance` approver ∉ author set; else a **finance-qualified** fallback; else 409.
+
+**Fallback approver** (`quote.settings.fallback_approver_id`; resolves `fallback-approver-unreachable`,
+`fallback-both-legs`, `fallback-in-author-set-deadlock`):
+- Must be a `quote.enabled_users` member holding an **approver role** (`commercial_manager` or `finance`) —
+  validated at settings PUT (422 otherwise) — so `requireQuoteAccess` + the capability matrix let them reach
+  `approve`/`reject` through the normal gates (no magic bypass).
+- May stand in for the **Manager** leg if they hold either approver role; may stand in for the **Finance**
+  leg **only if they hold `finance`** (keeps the finance control from being cleared by a non-finance user).
+- Is eligible only when **∉ author set** and **has not already satisfied the other leg of this quote**;
+  if the only available fallback is in the author set or would take both legs, submit emits **409
+  `E_NO_ELIGIBLE_APPROVER`** up front (no silent PENDING deadlock).
 
 On reject or any version append, all prior `PENDING`/`APPROVED`/`AUTO_SATISFIED` rows → `SUPERSEDED`;
-completion (all `required` legs in `APPROVED`∪`AUTO_SATISFIED`) is computed only over rows where
-`version == quotes.current_version`, via a guarded conditional UPDATE inside the approving batch (resolves
-`approval-completion-race`). Eligibility is re-checked at act time with the **same** author set as submit,
-so a revoke-after-submit that empties a leg falls back to the fallback approver rather than deadlocking.
+completion = all `required` legs in `APPROVED`∪`AUTO_SATISFIED` for `version == quotes.current_version`.
+**Completion is evaluated both inside each approve batch AND at the end of the submit batch**, so a quote
+whose every required leg is `AUTO_SATISFIED` at submit transitions **directly to `APPROVED`** rather than
+stalling in `PENDING_APPROVAL` (resolves `submit-all-auto-satisfied-never-completes`, `approval-completion-race`).
+Eligibility is re-checked at act time with the same author set, so a revoke-after-submit falls back to the
+(valid) fallback approver rather than deadlocking.
 
 ## `quote_audit` (hash-chained, append-only — tamper-evident)
 | col | type | notes |
@@ -142,9 +156,14 @@ exposed via `GET /:id/versions` and `/audit` as `{verified, first_broken_version
 `no-chain-verifier`).
 
 ## `quote_entitlement_audit` (hash-chained — config changes)
-Config grants/revokes have no `quote_id`, so they append here (same chaining, keyed on `account_id`),
-giving entitlement changes the same tamper-evidence as quotes (resolves the `admin-self-grant` audit gap).
+Config grants/revokes have no `quote_id`, so they append here (keyed on `account_id`), giving entitlement
+changes the same tamper-evidence as quotes (resolves `admin-self-grant` audit gap + `entitlement-chain-salt-undefined`).
 | id | account_id | seq (UNIQUE per account) | action (`grant`\|`revoke`\|`settings_change`) | actor_id | before_json | after_json | entry_hash | prev_hash | created_at |
+**Per-account salt** lives in a dedicated `quote_account_salt(account_id PK, salt TEXT NOT NULL)` row minted
+once per account. `entry_hash = sha256Hex(canonical([account_id, seq, action, actor_id, before_json,
+after_json, prev_hash, account_salt]))` — the same length-prefixed, domain-separated framing as `quote_audit`.
+`verifyQuoteChain` (or a sibling `verifyEntitlementChain`) recomputes and links this chain too; a `GET
+/api/admin/quote-access` includes `{ verified, first_broken_seq }`.
 
 ## `quote_documents` (immutable customer doc — mirrors `dc_documents`)
 | col | type | notes |
@@ -158,8 +177,10 @@ giving entitlement changes the same tamper-evidence as quotes (resolves the `adm
 
 ## `quote_reminders` (3-step cadence — explicit state machine)
 Per product decision: **3 rules** — `R1 = send_date + 2d`, `R2 = send_date + 7d`, `R3 = valid_until − 2d`
-(IST). **No post-expiry nudge** (this removes the R8-vs-expiry ordering problem entirely). If an offset
-computes to ≤ `send_date` (very short validity), that rule is skipped at seed time (not bunch-fired).
+(IST). **No post-expiry nudge.** At seed time a rule is **skipped** if its computed `due_date ≤ send_date`
+**or `due_date ≥ valid_until`** — i.e. no reminder may be due on/after expiry, so a short-validity quote
+cannot fire a nudge on the day it expires (resolves `reminder-overshoot-post-expiry`). This invariant
+(`send_date < due_date < valid_until` for every seeded rule) makes the fire-then-expire cron ordering safe.
 | col | type | notes |
 |---|---|---|
 | id | TEXT PK | |
@@ -192,9 +213,12 @@ is IST (Apr 1). Create retries on `UNIQUE(account_id, quote_no)` conflict.
 — PK(account_id, user_id, **resolved route incl. `:id`**, key). The mutation **reserves the key by INSERTing
 the PK row with `status=IN_PROGRESS` inside the same `batch()` as the write**; a concurrent second request
 with the same key fails the PK and is served the reservation (replay/`409`), so double-click can never
-create two quotes/approvals. On success the row flips to `DONE` with `response_json`/`status_code`. Replay
-same key+body → cached response; same key + different `request_hash` → **409**. TTL 24h; an expired key is
-treated as absent (documented: a replay after 24h may re-execute).
+create two quotes/approvals. On success the row flips to `DONE` with `response_json`/`status_code`. Replay:
+a `DONE` row with same `request_hash` → cached response; same key + different `request_hash` → **409**; an
+**`IN_PROGRESS` row → 409 `E_IN_PROGRESS` + `Retry-After`** (never a null body). The `IN_PROGRESS` row
+carries a short **lease** (`lease_until`, ~30s): a row still `IN_PROGRESS` past its lease is treated as
+abandoned (crashed worker) and the key becomes re-executable, so a committed-but-unflipped mutation is not
+bricked for the full 24h TTL (resolves `idempotency-in-progress-semantics`). TTL 24h; expired key treated as absent.
 
 ## Config keys (`app_config`, per-tenant)
 - `quote.enabled_users:<account_id>` → `{ "_ver": <int>, "users": { "<userId>": "<quoteRole>" } }`,
@@ -202,14 +226,17 @@ treated as absent (documented: a replay after 24h may re-execute).
   Empty/unset ⇒ feature OFF. `_ver` gives optimistic concurrency (resolves `config-rmw-lost-update`); PUT
   sends expected `_ver`, 409 on mismatch. Malformed JSON ⇒ treated as empty (fail-closed) + admin warning
   (resolves `malformed-config-fail-closed`).
-- `quote.settings:<account_id>` → `{ "_ver": <int>, seller_state_code, freight_default_paise,
-  branding_default_paise, approval_threshold_paise:50000000, default_validity_days,
+- `quote.settings:<account_id>` → `{ "_ver": <int>, seller_state_code, freight_default_paise:0,
+  branding_default_paise:0, approval_threshold_paise:50000000, default_validity_days:30,
   reminder_rules:{R1_send_plus_days:2, R2_send_plus_days:7, R3_valid_minus_days:2},
   expiring_window_days:3, fallback_approver_id:<userId|null>, number_prefix }`. Same `_ver` optimistic
-  concurrency as above (resolves `settings-config-no-ver`); PUT validates the full blob shape, 422 on
-  invalid `seller_state_code`. `fallback_approver_id` is the user who may approve a leg when no eligible
-  non-author approver exists (resolves the sole-approver escape hatch); `expiring_window_days` feeds the
-  Today "expiring" bucket (resolves `expiring-window-days-missing-from-settings`).
+  concurrency (resolves `settings-config-no-ver`). PUT validates the full blob and **value constraints**
+  (422 otherwise): `seller_state_code` valid; `default_validity_days` positive integer (**default 30** when
+  omitted — resolves `default-validity-days-no-default`); `reminder_rules` offsets non-negative, `R1≤R2`,
+  and none that would place a `due_date ≥ valid_until` for the default validity (resolves
+  `reminder-rules-values-unvalidated`); `fallback_approver_id`, if set, resolves to an entitled user holding
+  an approver role (resolves `fallback-approver-unreachable`). `expiring_window_days` feeds the Today
+  "expiring" bucket.
 
 ## Indexes
 `idx_quotes_acct_client`, `idx_quotes_acct_status`, `idx_qv_quote`, `idx_qlines_quote`,

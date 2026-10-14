@@ -132,8 +132,13 @@ at the edge. **No float percent is computed or stored** (upholds §0 I0). All op
 ## 6. GST-rate authority (resolves `gst-rate-authority`)
 - For a line with a non-null `sku` that exists in the catalogue: `sale_gst_bp` and `purchase_gst_bp` are
   **server-resolved** from `inventory`/`client_catalog.gst_rate` (converted to bp via `pctToBp` once); a
-  client-supplied rate on a catalogued SKU is **ignored** (server value authoritative — no 422). The handler
-  fills these as bp integers before calling the pure engine.
+  client-supplied rate on a catalogued SKU is **ignored** (server value authoritative). The handler fills
+  these as bp integers before calling the pure engine.
+- **Slab check applies to server-resolved rates too** (resolves `catalogue-rate-off-slab`): if a catalogued
+  SKU's stored `gst_rate` converts to a bp value **not** in the allowed set (§7), the calc/create request
+  returns **422 `E_UNSUPPORTED_GST_SLAB`** naming the SKU — surfaced, never silently bypassed — until that
+  slab is added to the set (other slabs are a planned follow-up). This keeps the whitelist honest for every
+  line rather than exempting catalogue lines.
 - For an ad-hoc line (`sku == null`): the client supplies `sale_gst_bp`, constrained to the allowed slab set
   `{0,500,1200,1800,2800,4000}` bp (§7);
   `purchase_gst_bp` defaults to it.
@@ -151,11 +156,13 @@ integer (§0 I0) — a non-integer `*_paise`/`*_bp` is itself a 422.
 - `sale_gst_bp`/`purchase_gst_bp` ∈ the allowed GST-slab set in bp: **{0, 500, 1200, 1800, 2800, 4000}**
   (= 0/5/12/18/28/40%). Other slabs (3%, 0.25%, cess, etc.) are deferred — add to this set when needed.
 - `seller_state_code` set (else `E_SELLER_STATE_UNSET`).
-- **Magnitude (input and computed):** every input money value `<= 10^12` paise (**₹10 crore** = 10^10 paise…
-  note: 10^12 paise = ₹1,000 crore; the cap is 10^12 paise ≈ ₹1,000 crore), AND the engine asserts every
-  **computed** value (`unit_price_paise`, `line_taxable_paise`, totals) is `<= 10^12` paise and
-  `Number.isSafeInteger(...)` — a breach is a 422, never silent precision loss. This closes
-  `unbounded-markup-qty-overflow`.
+- **Magnitude (input and computed):** the money cap is **10^12 paise (= ₹1,000 crore)**. Every input money
+  value is `≤ 10^12`, AND the engine asserts every **computed** value — `unit_price_paise`,
+  `line_taxable_paise`, all totals, **and the weighted-margin numerator `(Σ line_margin_paise) * 10000` plus
+  its `×2` inside `roundHalfAwayFromZero`** — is `Number.isSafeInteger(...)` and within range; a breach is a
+  **422**, never silent precision loss. (The bp numerator is the one path that can exceed 2^53 below the
+  money cap, so it is guarded explicitly — closes `weighted-margin-numerator-overflow` and
+  `unbounded-markup-qty-overflow`.) A boundary vector sits near 10^12 paise.
 
 ## 8. Worked example vector (V1 — canonical, all integer paise / bp)
 Seller state `KL`, `place_of_supply = KL` (intra-state), `qty = 1` each. All rates are bp integers.

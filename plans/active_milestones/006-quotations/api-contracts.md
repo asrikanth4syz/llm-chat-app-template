@@ -62,7 +62,7 @@ Every reachable action has a column; anything not ✅ → **403**. (view = list/
 ## Lifecycle + approvals (SoD) — full transition matrix (resolves `accept-lost-state-guards`)
 | endpoint | allowed source status | result |
 |---|---|---|
-| `POST /:id/submit` | DRAFT | PENDING_APPROVAL (or 409 — see deadlock) |
+| `POST /:id/submit` | DRAFT | PENDING_APPROVAL, **or APPROVED directly if every required leg auto-satisfies**, or 409 if no eligible approver |
 | `POST /:id/approve` `{leg,comments?}` | PENDING_APPROVAL | APPROVED when all required legs done |
 | `POST /:id/reject` `{leg,comments}` | PENDING_APPROVAL | DRAFT; **all approval rows → SUPERSEDED** |
 | `POST /:id/send` | APPROVED | SENT; gen document; seed R1–R3 reminders |
@@ -75,12 +75,19 @@ Any other source status → **409**.
   GST-inclusive `grand_total_paise ≥ settings.approval_threshold_paise` (default 50000000 paise = ₹5,00,000,
   inclusive). Then applies the **SoD + author-authority rule** (see data-model `quote_approvals`):
   - *author set* = `{created_by} ∪ {every quote_versions.created_by}` (ALL versions).
-  - **Manager leg** → `AUTO_SATISFIED` if any author holds `commercial_manager`; else a non-author
-    `commercial_manager` must approve; else `settings.fallback_approver_id`; else **409 `E_NO_ELIGIBLE_APPROVER`**.
-  - **Finance leg** → **never** auto-satisfied by an authoring finance user (confirmed product decision —
-    preserves the ITC/₹5L control); a non-author `finance` user must approve; else the fallback approver; else 409.
-  - Eligibility is re-checked at **act time** with the same author set, so a revoke-after-submit falls back
-    to `fallback_approver_id` rather than deadlocking (resolves `sod-sole-approver-deadlock`).
+  - **Manager leg** → `AUTO_SATISFIED` only if the **current-version** author holds `commercial_manager`
+    (not any historical author — resolves `manager-autosatisfy-scope`); else a non-author `commercial_manager`
+    must approve; else a valid fallback; else **409 `E_NO_ELIGIBLE_APPROVER`**.
+  - **Finance leg** → **never** auto-satisfied (confirmed — preserves the ITC/₹5L control); a non-author
+    `finance` user must approve; else a **finance-holding** fallback; else 409.
+  - **Fallback** (`settings.fallback_approver_id`) is eligible only when it is an entitled approver-role user,
+    is **∉ author set**, holds `finance` if it covers the Finance leg, and is **not already taking the other
+    leg** of this quote; otherwise submit emits 409 up front (no silent PENDING). It reaches `approve`/`reject`
+    through the normal `requireQuoteAccess` + capability gates (no bypass), since it holds an approver role.
+  - **If every required leg is `AUTO_SATISFIED` at submit, the submit batch transitions the quote directly to
+    `APPROVED`** (resolves `submit-all-auto-satisfied-never-completes`).
+  - Eligibility is re-checked at **act time** with the same author set (resolves `sod-sole-approver-deadlock`).
+  - On submit, `pushNotification` is sent to each leg's assigned approver / fallback (not just the creator).
 - **approve** guard: `actor_id ∉` author set → **403 SoD** (unless the caller is `fallback_approver_id`
   standing in for the leg, and is not themselves in the author set); caller's quoteRole must match the leg
   (or caller is the fallback approver). Completion = all `required` legs in `APPROVED`∪`AUTO_SATISFIED` for
@@ -96,9 +103,12 @@ Reminders are the **3-step cadence** (`R1=send+2d`, `R2=send+7d`, `R3=valid_unti
 - `GET  /api/quotes/today` → `{ due_reminders, followups_due, expiring }` where `due_reminders` =
   reminders due per the state machine (PENDING & `due_date ≤ today(IST)`, or SNOOZED & `snooze_until ≤
   today(IST)`); `followups_due` = `next_action_date ≤ today(IST)`; `expiring` = SENT quotes with
-  `valid_until` within `settings.expiring_window_days` (default 3).
-- `GET  /api/quotes/bell` → `{ count }` = my PENDING approval legs (leg matches my quoteRole & I ∉ author
-  set) + my follow-ups due today(IST).
+  `today(IST) ≤ valid_until ≤ today(IST) + settings.expiring_window_days` (default 3; inclusive both ends;
+  already-past `valid_until` SENT quotes are excluded — they become EXPIRED on the sweep — resolves
+  `expiring-bucket-predicate`).
+- `GET  /api/quotes/bell` → `{ count }` = PENDING approval legs assigned to me — `(leg matches my quoteRole
+  OR I am the leg's fallback approver)` AND I ∉ author set — plus my follow-ups due today(IST). (Fallback
+  legs are counted + notified so the escape-hatch approver sees pending work — resolves `fallback-no-bell`.)
 - `POST /api/quotes/:id/reminders/:rid/snooze` `{ until }` — valid **only from PENDING** → SNOOZED with a
   future `snooze_until` (a SENT rule cannot be snoozed → 409; resolves `reminder-snooze-state-machine`).
 - `POST /api/quotes/:id/followups` `{ channel, note, next_action_date? }` → append + audit.
@@ -112,8 +122,10 @@ Reminders are the **3-step cadence** (`R1=send+2d`, `R2=send+7d`, `R3=valid_unti
 lost/followups/snooze/admin PUTs). Scoped `(account_id, user_id, resolved-route-incl-:id, key)`. The handler
 **reserves the key by INSERTing the `quote_idempotency` PK row (`IN_PROGRESS`) inside the same `batch()` as
 the mutation**, so a concurrent same-key request fails the PK and is served the reservation (never double-
-executes). On success the row flips to `DONE` with the cached response. Replay same key+body → cached
-response; same key + different `request_hash` → **409**; TTL 24h (expired key treated as absent).
+executes). On success the row flips to `DONE` with the cached response. Replay of a `DONE` row with same
+body → cached response; same key + different `request_hash` → **409**; a still-`IN_PROGRESS` row → **409
+`E_IN_PROGRESS` + `Retry-After`** (never a null body); an `IN_PROGRESS` row past its ~30s lease is treated
+as abandoned and becomes re-executable (resolves `idempotency-in-progress-semantics`). TTL 24h (expired key absent).
 
 ## Error conventions
 `401` no/invalid JWT · `403` authenticated but role/SoD/self-grant denies · `404` not entitled OR

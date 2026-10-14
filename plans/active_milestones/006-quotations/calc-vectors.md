@@ -12,6 +12,11 @@ Line input shorthand: `mode | pc=purchase_cost_paise, mk=markup_bp, mrp=mrp_pais
 fr=freight_alloc_paise, br=branding_cost_paise, pg=purchase_gst_bp, sg=sale_gst_bp, itc, qty`.
 Line expected: `landed, unit, taxable, gst, cgst, sgst, igst, margin` (all paise).
 
+**Loader invariant (every vector):** the fixtures loader asserts, per vector, `grand_total_paise ==
+subtotal_paise + cgst_total + sgst_total + igst_total + round_off_paise` AND `grand_total_paise % 100 == 0`
+AND every numeric field is an integer. (This check catches an inconsistent oracle entry — it is what would
+have caught the original V8 `round_off` slip.)
+
 ### V1 — intra, two-line mixed (cost_markup + mrp_discount)
 - L1 `cost_markup pc=10000, mk=2000, fr=500, br=0, pg=1800, sg=1800, itc=Y, qty=1` → landed 10500, unit 12000, taxable 12000, gst 2160, cgst 1080, sgst 1080, igst 0, margin 1500
 - L2 `mrp_discount pc=3500, mrp=5000, dsc=1000, fr=0, br=0, pg=1200, sg=1200, itc=N, qty=1` → landed 3920, unit 4500, taxable 4500, gst 540, cgst 270, sgst 270, igst 0, margin 580
@@ -49,7 +54,7 @@ Line expected: `landed, unit, taxable, gst, cgst, sgst, igst, margin` (all paise
 
 ### V8 — odd-paisa CGST/SGST split
 - L1 `cost_markup pc=3006, mk=0, fr=0, br=0, pg=1800, sg=1800, itc=Y, qty=1` → landed 3006, unit 3006, taxable 3006, gst 541, cgst 271, sgst 270, igst 0, margin 0  _(applyBp(3006,1800)=round(541.08)=541; ceilHalf(541)=271)_
-- totals: subtotal 3006, cgst 271, sgst 270, igst 0, grand 3500, round_off -6, weighted_margin_bp 0, negative_margin false; itc_all true
+- totals: subtotal 3006, cgst 271, sgst 270, igst 0, grand 3500, round_off -47, weighted_margin_bp 0, negative_margin false; itc_all true  _(pre_round 3547 → roundToRupee 3500; round_off = 3500−3547 = −47)_
 
 ### V9 — round-off UP (50-paisa tie → up)
 - L1 `cost_markup pc=10050, mk=0, fr=0, br=0, pg=0, sg=0, itc=Y, qty=1` → landed 10050, unit 10050, taxable 10050, gst 0, cgst 0, sgst 0, igst 0, margin 0
