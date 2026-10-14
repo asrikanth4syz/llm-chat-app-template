@@ -1,5 +1,11 @@
 import { Env, JWTPayload } from "./types";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
+import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
+import {
+  parseEnabledUsers, resolveQuoteRole, accessDecision, applyAccessChange,
+  validateFallbackApprover, revokeBreaksFallback, seesCost, QuoteAccessError,
+  type EnabledUsers, type QuoteRole,
+} from "./quote_access";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4436,6 +4442,187 @@ export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
          SEND_CRON, BOOKS_SYNC_CRON, runBooksScheduledDelta, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
 
+// ============================================================================
+// Milestone 006 — Quotations: entitlement gate (Slice 2).
+// Config-driven per-user access ("assign the feature to specific users,
+// configurable") + the first guarded route (calc preview, reusing the Slice-1
+// pure engine). Pure decision logic lives in src/quote_access.ts; here is the
+// DB/HTTP wiring. Single platform tenant for now, but keys are per-account to
+// match the data model (plans/.../data-model.md).
+// ============================================================================
+const QUOTE_ACCOUNT = "default";
+const QUOTE_ENABLED_KEY = `quote.enabled_users:${QUOTE_ACCOUNT}`;
+const QUOTE_SETTINGS_KEY = `quote.settings:${QUOTE_ACCOUNT}`;
+
+interface QuoteSettings {
+  _ver: number;
+  seller_state_code: string;
+  default_validity_days: number;
+  approval_threshold_paise: number;
+  expiring_window_days: number;
+  fallback_approver_id: string | null;
+  number_prefix: string;
+  reminder_rules: { R1_send_plus_days: number; R2_send_plus_days: number; R3_valid_minus_days: number };
+}
+const DEFAULT_QUOTE_SETTINGS: QuoteSettings = {
+  _ver: 0, seller_state_code: "", default_validity_days: 30, approval_threshold_paise: 50000000,
+  expiring_window_days: 3, fallback_approver_id: null, number_prefix: "GZ",
+  reminder_rules: { R1_send_plus_days: 2, R2_send_plus_days: 7, R3_valid_minus_days: 2 },
+};
+
+async function getQuoteEnabledUsers(env: Env): Promise<EnabledUsers> {
+  return parseEnabledUsers(await getConfig(env, QUOTE_ENABLED_KEY, "") || null);
+}
+async function getQuoteSettings(env: Env): Promise<QuoteSettings> {
+  const raw = await getConfig(env, QUOTE_SETTINGS_KEY, "");
+  if (!raw) return { ...DEFAULT_QUOTE_SETTINGS };
+  try {
+    const o = JSON.parse(raw);
+    return {
+      ...DEFAULT_QUOTE_SETTINGS, ...o,
+      reminder_rules: { ...DEFAULT_QUOTE_SETTINGS.reminder_rules, ...(o.reminder_rules || {}) },
+    };
+  } catch { return { ...DEFAULT_QUOTE_SETTINGS }; }
+}
+
+// Returns {user, quoteRole} or a Response (401/404 hide-convention). NOT used by
+// GET /api/quotes/access, which is exempt (always 200 for an authed user).
+async function requireQuoteAccess(request: Request, env: Env): Promise<{ user: JWTPayload; quoteRole: QuoteRole } | Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user);
+  if (denied) return denied;
+  const role = resolveQuoteRole(await getQuoteEnabledUsers(env), user!.sub);
+  if (!role) return json({ error: "Not found" }, 404);
+  return { user: user!, quoteRole: role };
+}
+function requireQuoteAdmin(user: JWTPayload | null): Response | null {
+  if (!user) return json({ error: "Unauthorized" }, 401);
+  if (user.role !== "super_admin" && user.role !== "ops_admin") return json({ error: "Forbidden" }, 403);
+  return null;
+}
+
+// Allowlist-shaped redaction for the calc preview: a role that does not see cost
+// receives only price/tax fields — no landed cost, margin, or weighted margin.
+function redactCalcForRole(result: QuoteCalcResult, role: QuoteRole): unknown {
+  if (seesCost(role)) return result;
+  return {
+    itc_claimable_all: result.itc_claimable_all,
+    lines: result.lines.map((l) => ({
+      unit_price_paise: l.unit_price_paise, line_taxable_paise: l.line_taxable_paise,
+      line_gst_paise: l.line_gst_paise, cgst_paise: l.cgst_paise, sgst_paise: l.sgst_paise, igst_paise: l.igst_paise,
+    })),
+    totals: {
+      subtotal_paise: result.totals.subtotal_paise, cgst_total: result.totals.cgst_total,
+      sgst_total: result.totals.sgst_total, igst_total: result.totals.igst_total,
+      grand_total_paise: result.totals.grand_total_paise, round_off_paise: result.totals.round_off_paise,
+    },
+  };
+}
+
+// GET /api/quotes/access — EXEMPT guard; 200 {enabled, quoteRole} for any authed user.
+async function handleQuoteAccess(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  return json(accessDecision(await getQuoteEnabledUsers(env), user!.sub));
+}
+
+// POST /api/quotes/calc — guarded pricing preview (reuses the pure engine).
+async function handleQuoteCalc(request: Request, env: Env): Promise<Response> {
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const settings = await getQuoteSettings(env);
+  try {
+    const result = computeQuote({ ...body, seller_state_code: settings.seller_state_code });
+    return json(redactCalcForRole(result, acc.quoteRole));
+  } catch (e) {
+    if (e instanceof QuoteCalcError) return json({ error: e.message, code: e.code, field: e.field }, 422);
+    throw e;
+  }
+}
+
+// GET /api/admin/quote-access — admin: the entitled map + candidate users + _ver.
+async function handleAdminQuoteAccessGet(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireQuoteAdmin(user); if (denied) return denied;
+  const enabled = await getQuoteEnabledUsers(env);
+  const settings = await getQuoteSettings(env);
+  const { results } = await env.DB.prepare(
+    "SELECT id, name, role, email FROM users WHERE active=1 ORDER BY name"
+  ).all();
+  const fbValid = !settings.fallback_approver_id ||
+    !revokeBreaksFallback(settings.fallback_approver_id, enabled, settings.fallback_approver_id);
+  return json({ users: results, enabled: enabled.users, _ver: enabled.ver, fallback_valid: fbValid });
+}
+
+// PUT /api/admin/quote-access — grant/remove a quote-role for one user.
+async function handleAdminQuoteAccessPut(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireQuoteAdmin(user); if (denied) return denied;
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const current = await getQuoteEnabledUsers(env);
+  try {
+    const next = applyAccessChange(current,
+      { userId: String(body.userId ?? ""), quoteRole: (body.quoteRole ?? null) as QuoteRole | null, expectedVer: Number(body._ver) },
+      user!.sub);
+    const settings = await getQuoteSettings(env);
+    if (settings.fallback_approver_id && revokeBreaksFallback(settings.fallback_approver_id, next, String(body.userId))) {
+      return json({ error: "would strand the fallback approver — repoint quote.settings.fallback_approver_id first", code: "E_FALLBACK_STRANDED" }, 409);
+    }
+    await setConfig(env, QUOTE_ENABLED_KEY, JSON.stringify({ _ver: next.ver, users: next.users }), user!.sub);
+    await audit(env, user, "quote_access_change", "quote_entitlement", String(body.userId),
+      JSON.stringify(current.users[String(body.userId)] ?? null), JSON.stringify(body.quoteRole ?? null));
+    return json({ ok: true, _ver: next.ver });
+  } catch (e) {
+    if (e instanceof QuoteAccessError) return json({ error: e.message, code: e.code, field: e.field }, e.status);
+    throw e;
+  }
+}
+
+// GET /api/admin/quote-settings
+async function handleAdminQuoteSettingsGet(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireQuoteAdmin(user); if (denied) return denied;
+  return json(await getQuoteSettings(env));
+}
+
+// PUT /api/admin/quote-settings — full-blob write with _ver + value validation.
+async function handleAdminQuoteSettingsPut(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireQuoteAdmin(user); if (denied) return denied;
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const current = await getQuoteSettings(env);
+  if (Number(body._ver) !== current._ver) return json({ error: `version conflict: expected ${current._ver}`, code: "E_VER_CONFLICT" }, 409);
+  const next: QuoteSettings = {
+    ...current, ...body,
+    reminder_rules: { ...current.reminder_rules, ...(body.reminder_rules || {}) },
+    _ver: current._ver + 1,
+  };
+  // value validation
+  if (typeof next.seller_state_code !== "string" || !next.seller_state_code.trim()) {
+    return json({ error: "seller_state_code is required", code: "E_VALIDATION", field: "seller_state_code" }, 422);
+  }
+  if (!Number.isInteger(next.default_validity_days) || next.default_validity_days <= 0) {
+    return json({ error: "default_validity_days must be a positive integer", code: "E_VALIDATION", field: "default_validity_days" }, 422);
+  }
+  const rr = next.reminder_rules;
+  if (![rr.R1_send_plus_days, rr.R2_send_plus_days, rr.R3_valid_minus_days].every((n) => Number.isInteger(n) && n >= 0) || rr.R1_send_plus_days > rr.R2_send_plus_days) {
+    return json({ error: "reminder_rules offsets must be non-negative integers with R1 <= R2", code: "E_VALIDATION", field: "reminder_rules" }, 422);
+  }
+  try {
+    validateFallbackApprover(await getQuoteEnabledUsers(env), next.fallback_approver_id ?? null);
+  } catch (e) {
+    if (e instanceof QuoteAccessError) return json({ error: e.message, code: e.code, field: e.field }, e.status);
+    throw e;
+  }
+  await setConfig(env, QUOTE_SETTINGS_KEY, JSON.stringify(next), user!.sub);
+  await audit(env, user, "quote_settings_change", "quote_settings", QUOTE_ACCOUNT, JSON.stringify(current), JSON.stringify(next));
+  return json({ ok: true, _ver: next._ver });
+}
+
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -4520,6 +4707,16 @@ export default {
       if (path==="/api/orders/parse-paste"     && method==="POST") return handleParsePaste(request,env);
       if (path==="/api/orders/paste-search"    && method==="POST") return handlePasteSearch(request,env);
       if (path==="/api/orders/from-paste"      && method==="POST") return handleFromPaste(request,env);
+
+      // Quotations (milestone 006) — entitlement gate (Slice 2). /access is EXEMPT
+      // from requireQuoteAccess; /calc is the first guarded route; admin routes
+      // configure the per-user allowlist + settings.
+      if (path==="/api/quotes/access"          && method==="GET")  return handleQuoteAccess(request,env);
+      if (path==="/api/quotes/calc"            && method==="POST") return handleQuoteCalc(request,env);
+      if (path==="/api/admin/quote-access"     && method==="GET")  return handleAdminQuoteAccessGet(request,env);
+      if (path==="/api/admin/quote-access"     && method==="PUT")  return handleAdminQuoteAccessPut(request,env);
+      if (path==="/api/admin/quote-settings"   && method==="GET")  return handleAdminQuoteSettingsGet(request,env);
+      if (path==="/api/admin/quote-settings"   && method==="PUT")  return handleAdminQuoteSettingsPut(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);

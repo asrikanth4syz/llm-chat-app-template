@@ -47,17 +47,19 @@
 - [x] Task 1.B: `test/quote_calc.test.ts` (vitest, repo convention) + `test/fixtures/quote_calc_vectors.json` — all 18 vectors byte-exact + rounding + validation (422) + I0-a integer guard; I0-b float-grep in `test/smoke.mjs`.
 - [x] Task 1.C: data-model.md/api-contracts.md field list final (r1–r4 folds).
 
-### Group 2 (Depends on Group 1 — schema + entitlement)
-- [ ] Task 2.A: `ensureQuoteSchema(env)` + `_quoteSchemaReady` guard + parity migration file. **Includes
-  `account_id` on every table and all UNIQUE constraints** (quote_id,version / quote_id,seq /
-  account_id,quote_no) that back the concurrency guarantees.
-- [ ] Task 2.B: `requireQuoteAccess` (+enum validation, fail-closed), `getQuoteEnabledUsers` (per-tenant key,
-  malformed→empty), admin access/settings endpoints (self-grant block, `_ver` optimistic concurrency,
-  `quote_entitlement_audit`), `GET /api/quotes/access` (**exempt from the guard**).
-- [ ] Task 2.C: `redactForQuoteRole()` — **allowlist-based, deep** (nested payload_json/detail_json); unit
-  test every role × every response path (list/detail/calc/versions/document/audit/today/bell).
-- [ ] Task 2.D: `canonical()` (RFC 8785) + `sha256Hex` + audit preimage builder + `verifyQuoteChain` with
-  unit test vector (payload→digest). Tenancy helper `requireQuoteTenant` wrapping `denyClientCrossAccess`.
+### Group 2 (Depends on Group 1 — schema + entitlement) — ⏳ Slice 2 entitlement gate BUILT (500 tests green)
+- [x] Task 2.B: `src/quote_access.ts` (pure: capability matrix, `parseEnabledUsers` fail-closed,
+  `resolveQuoteRole`, `applyAccessChange` with enum/`_ver`/self-grant, `validateFallbackApprover`,
+  `revokeBreaksFallback`) + Worker wiring in `src/index.ts`: `requireQuoteAccess`, `GET /api/quotes/access`
+  (exempt), `POST /api/quotes/calc` (first guarded route, ops-redacted), admin `GET/PUT /api/admin/quote-access`
+  + `GET/PUT /api/admin/quote-settings`. Tests: `test/quote_access.test.ts` (22 unit) + `test/quote_access.int.test.ts`
+  (10 integration — grant/revoke, 404-hide, 403 admin/self-grant, 409 `_ver`, 422 role/slab/seller-state, ops redaction).
+- [~] Task 2.C: calc-preview redaction (`redactCalcForRole`, allowlist-shaped) done; the **deep chokepoint
+  across list/detail/versions/document/audit/today/bell** lands with the CRUD slice (those paths don't exist yet).
+- [ ] Task 2.A: `ensureQuoteSchema(env)` + UNIQUE/`account_id` — deferred to the **CRUD+versions slice** (the
+  entitlement gate rides on `app_config` + `audit_logs`, no new tables needed yet).
+- [ ] Task 2.D: `canonical()`/`sha256Hex`/`verifyQuoteChain` + hash-chained `quote_entitlement_audit` —
+  deferred to the **hashing slice** (entitlement changes currently audit via host `audit_logs`).
 
 ### Group 3 (Depends on Group 2 — quote CRUD + immutable versions)
 - [ ] Task 3.A: Quote counter + `POST /api/quotes` (v1) + `GET` list/detail + hash helpers.
