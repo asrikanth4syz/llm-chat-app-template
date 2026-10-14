@@ -39,12 +39,13 @@ Line expected: `landed, unit, taxable, gst, cgst, sgst, igst, margin` (all paise
 - totals: subtotal 10000, cgst 900, sgst 900, igst 0, grand 11800, round_off 0, weighted_margin_bp -1800, negative_margin true; itc_all false
 - _(landed-cost delta vs V5 = +1800 = input GST folded)_
 
-### V7 — multi-rate basket (5/12/18/28%), all cost_markup mk=0 itc=Y qty=1 fr=0
+### V7 — multi-rate basket (5/12/18/28/40%), all cost_markup mk=0 itc=Y qty=1 fr=0
 - L_a `pc=10000, sg=500` → landed 10000, unit 10000, taxable 10000, gst 500, cgst 250, sgst 250, igst 0, margin 0
 - L_b `pc=10000, sg=1200` → gst 1200, cgst 600, sgst 600, (landed/unit/taxable 10000, margin 0)
 - L_c `pc=10000, sg=1800` → gst 1800, cgst 900, sgst 900
 - L_d `pc=10000, sg=2800` → gst 2800, cgst 1400, sgst 1400
-- totals: subtotal 40000, cgst 3150, sgst 3150, igst 0, grand 46300, round_off 0, weighted_margin_bp 0, negative_margin false; itc_all true
+- L_e `pc=10000, sg=4000` → gst 4000, cgst 2000, sgst 2000  _(exercises the 40% slab)_
+- totals: subtotal 50000, cgst 5150, sgst 5150, igst 0, grand 60300, round_off 0, weighted_margin_bp 0, negative_margin false; itc_all true
 
 ### V8 — odd-paisa CGST/SGST split
 - L1 `cost_markup pc=3006, mk=0, fr=0, br=0, pg=1800, sg=1800, itc=Y, qty=1` → landed 3006, unit 3006, taxable 3006, gst 541, cgst 271, sgst 270, igst 0, margin 0  _(applyBp(3006,1800)=round(541.08)=541; ceilHalf(541)=271)_

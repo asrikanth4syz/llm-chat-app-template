@@ -116,9 +116,8 @@ for the quote}` (ALL versions, not just current). Per leg:
    **fallback approver** (`quote.settings.fallback_approver_id`, below) may APPROVE it; if neither exists,
    submit is rejected **409 `E_NO_ELIGIBLE_APPROVER`**.
 2. **Finance leg** (required iff `!itc_claimable_all` OR grand ≥ threshold) — **not** auto-satisfied by an
-   authoring finance user: it is the high-value ITC/₹5L control, so it always needs a distinct `finance`
-   approver ∉ author set (else the fallback approver, else 409). _[Flagged for your confirmation — see chat;
-   this is the one place I did not auto-waive, to preserve the Finance control.]_
+   authoring finance user (confirmed product decision): it is the high-value ITC/₹5L control, so it always
+   needs a distinct `finance` approver ∉ author set (else the fallback approver, else 409).
 
 On reject or any version append, all prior `PENDING`/`APPROVED`/`AUTO_SATISFIED` rows → `SUPERSEDED`;
 completion (all `required` legs in `APPROVED`∪`AUTO_SATISFIED`) is computed only over rows where

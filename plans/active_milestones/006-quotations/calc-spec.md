@@ -54,7 +54,7 @@ Line {
   discount_bp?: Bp                  // required if mrp_discount; integer basis points; 0..10000 (0..100%)
   freight_alloc_paise: Paise        // >= 0, default 0 (integer paise; PER UNIT)
   branding_cost_paise: Paise        // >= 0, default 0 (integer paise; PER UNIT)
-  sale_gst_bp: Bp                   // basis points; one of {0,500,1200,1800,2800}; see §6 authority rule
+  sale_gst_bp: Bp                   // basis points; one of {0,500,1200,1800,2800,4000}; see §6 authority rule
   purchase_gst_bp: Bp               // basis points; defaults to sale_gst_bp if omitted
   itc_claimable: boolean            // PER LINE (resolves itc-per-quote-mixed-basket)
 }
@@ -134,7 +134,8 @@ at the edge. **No float percent is computed or stored** (upholds §0 I0). All op
   **server-resolved** from `inventory`/`client_catalog.gst_rate` (converted to bp via `pctToBp` once); a
   client-supplied rate on a catalogued SKU is **ignored** (server value authoritative — no 422). The handler
   fills these as bp integers before calling the pure engine.
-- For an ad-hoc line (`sku == null`): the client supplies `sale_gst_bp`, constrained to the allowed slab set;
+- For an ad-hoc line (`sku == null`): the client supplies `sale_gst_bp`, constrained to the allowed slab set
+  `{0,500,1200,1800,2800,4000}` bp (§7);
   `purchase_gst_bp` defaults to it.
 
 ## 7. Input validation (resolves `calc-input-validation-422`)
@@ -147,7 +148,8 @@ integer (§0 I0) — a non-integer `*_paise`/`*_bp` is itself a 422.
 - `mrp_discount`: `mrp_paise >= 0` (integer), `purchase_cost_paise >= 0` (integer — the cost basis, §3),
   `0 <= discount_bp <= 10000` (0..100%).
 - `freight_alloc_paise >= 0`, `branding_cost_paise >= 0` (integers; per unit).
-- `sale_gst_bp`/`purchase_gst_bp` ∈ the allowed GST-slab set in bp.
+- `sale_gst_bp`/`purchase_gst_bp` ∈ the allowed GST-slab set in bp: **{0, 500, 1200, 1800, 2800, 4000}**
+  (= 0/5/12/18/28/40%). Other slabs (3%, 0.25%, cess, etc.) are deferred — add to this set when needed.
 - `seller_state_code` set (else `E_SELLER_STATE_UNSET`).
 - **Magnitude (input and computed):** every input money value `<= 10^12` paise (**₹10 crore** = 10^10 paise…
   note: 10^12 paise = ₹1,000 crore; the cap is 10^12 paise ≈ ₹1,000 crore), AND the engine asserts every
@@ -183,7 +185,7 @@ Acceptance = **byte-exact** per vector; CI fails if `< 18` vectors present. The 
 fixtures file must reproduce that doc exactly. (Resolves `calc-vectors-not-inlined`.) Coverage:
 `V1` intra two-line mixed (§8); `V2` inter-state (IGST); `V3` cost_markup only; `V4` profitable mrp_discount
 (purchase_cost < discounted MRP); `V5` itc=Yes vs `V6` itc=No same inputs (landed-cost delta); `V7` multi-rate
-basket (500/1200/1800/2800 bp lines); `V8` odd-paisa split (`line_gst=541 → cgst 271 / sgst 270`); `V9`
+basket (500/1200/1800/2800/4000 bp lines); `V8` odd-paisa split (`line_gst=541 → cgst 271 / sgst 270`); `V9`
 round-off up (50-paisa tie → up); `V10` round-off down; `V11` freight+branding with `qty>1` (pins per-unit
 freight); `V12` 0-bp GST line; `V13` `discount_bp=10000` → unit_price 0; `V14` ₹-crore magnitude (asserts
 safe-integer); `V15` weighted margin across differing-margin lines; `V16` negative-margin line + flag;

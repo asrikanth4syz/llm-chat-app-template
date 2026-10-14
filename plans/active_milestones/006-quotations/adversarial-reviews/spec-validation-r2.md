@@ -181,6 +181,7 @@ independently recomputed by two skeptics and is internally correct (weighted_mar
   - `settings-config-no-ver`, `expiring-window-days-missing`, `access-endpoint-body-undefined`,
     `catalogue-gst-authority-ignored-or-422` (→ ignore client rate), `max-magnitude-unit-error`,
     `freight-branding-per-unit` → all folded.
-- [ ] **Deferred (low):** `gst-slab-set-too-narrow` (unconfirmed) — widen allowed GST slab set if the
-  catalogue carries 3%/0.25%/cess items; confirm with finance before building.
+- [x] `gst-slab-set-too-narrow` → slab set widened to **{0,5,12,18,28,40}%** per product decision; other
+  slabs (3%/0.25%/cess) deferred to a later change. Finance-leg auto-satisfy asymmetry confirmed (Finance
+  always needs a distinct approver).
 - [ ] Re-run panel on the revised corpus → `spec-validation-r3.md` (recommended, to confirm no new holes).

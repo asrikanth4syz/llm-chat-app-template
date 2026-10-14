@@ -77,8 +77,8 @@ Any other source status → **409**.
   - *author set* = `{created_by} ∪ {every quote_versions.created_by}` (ALL versions).
   - **Manager leg** → `AUTO_SATISFIED` if any author holds `commercial_manager`; else a non-author
     `commercial_manager` must approve; else `settings.fallback_approver_id`; else **409 `E_NO_ELIGIBLE_APPROVER`**.
-  - **Finance leg** → **never** auto-satisfied by an authoring finance user (preserves the ITC/₹5L control);
-    a non-author `finance` user must approve; else the fallback approver; else 409. _[flagged for confirmation]_
+  - **Finance leg** → **never** auto-satisfied by an authoring finance user (confirmed product decision —
+    preserves the ITC/₹5L control); a non-author `finance` user must approve; else the fallback approver; else 409.
   - Eligibility is re-checked at **act time** with the same author set, so a revoke-after-submit falls back
     to `fallback_approver_id` rather than deadlocking (resolves `sod-sole-approver-deadlock`).
 - **approve** guard: `actor_id ∉` author set → **403 SoD** (unless the caller is `fallback_approver_id`
