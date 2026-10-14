@@ -60,3 +60,26 @@
     parser and full knowledge graph remain deferred to V3.
   - *Moniker:* `005-smart-paste-v2`
   - *Spec:* `plans/active_milestones/005-smart-paste-v2/spec.md`
+
+## 📦 Release v0.4.0 — Quotations (GIFTSYZ) — STATUS: PLANNED (architecture only; not built)
+
+- [ ] **Milestone 6: Quotations — GIFTSYZ into Smart Pantry** — STATUS: PLANNED (fit-assessed +
+  architected; awaiting spec-validation + go-ahead to build)
+  - *Description:* Fold the GIFTSYZ B2B quotation workflow (PRD v2.1) into this app, reusing the
+    platform spine (JWT auth, clients/catalogue, approval engine, audit, document store + SHA-256, FY
+    numbering, cron + notifications, app_config). Net-new: a pure vector-tested pricing/landed-cost/GST
+    engine (`src/quote_calc.ts` — mixed cost+markup / MRP−discount, ITC-claimable, CGST/SGST-vs-IGST,
+    weighted margin, rounding policy), immutable hash-chained quote versions + audit (app-layer, no SQL
+    triggers), separation-of-duties approvals (Ops→Manager always + Finance when ITC=No or ≥₹5,00,000),
+    reminders R1–R8 + follow-ups + Today page + bell, and server-side cost/margin redaction for the Ops
+    role. **Added requirement:** the feature is assignable to specific users and configurable — an
+    `app_config` allowlist + per-user quote-role, admin-editable, enforced at nav + server guard +
+    approval routing, grant/revoke with no deploy. Sliced: calc engine → entitlement gate → quote
+    CRUD+versions → approvals/SoD → customer document+hash → reminders/Today/bell. Ships inert until an
+    admin populates `quote.enabled_users`.
+  - *Moniker:* `006-quotations`
+  - *Source PRD:* `GIFTSYZ_Quotation_App_PRD_v2.1.docx` (external; no `/giftsyz` code in this repo)
+  - *Assessment:* `plans/active_milestones/006-quotations/context.md`
+  - *Plan:* `plans/active_milestones/006-quotations/plan.md`
+  - *Data model:* `plans/active_milestones/006-quotations/data-model.md`
+  - *API contracts:* `plans/active_milestones/006-quotations/api-contracts.md`

@@ -1,0 +1,69 @@
+# Context & Fit Assessment: GIFTSYZ Quotations in Smart Pantry
+
+**Moniker:** `006-quotations`
+**Source:** `GIFTSYZ_Quotation_App_PRD_v2.1.docx` (external PRD; the "working app in /giftsyz" it
+references is a **separate codebase not present in this repo** — treat as net-new here).
+**Added requirement (beyond PRD):** the quote feature must be assignable to **specific users** and be
+**configurable** (per-user enablement + per-user quote-role), not role-hardcoded.
+
+## Verdict
+**Integrate — do not build a second standalone app.** The host platform fits well (auth, tenancy,
+clients, catalogue, approval engine, audit, document store, FY numbering, cron, config). The
+**pricing/calc engine is genuinely new** and is the center of gravity. Effort: **medium-large**;
+platform risk **low**; domain (calc/GST/ITC) risk **medium** — mitigated by a pure, vector-tested
+module.
+
+## Reuse map (verified against code)
+| PRD need | Host asset | Verdict |
+|---|---|---|
+| AuthN/Z, tenancy | `getUser`/`requireUser`/`denyClientCrossAccess`, JWT (`src/index.ts:95`) | Reuse. Adapt PRD cookie+CSRF → host JWT/Bearer. **Do not port cookies.** |
+| Customers | `clients` (GSTIN/state) | Reuse as quote customer. |
+| Catalogue + GST rate | `inventory`/`client_catalog.gst_rate` | Reuse rate lookup only. |
+| Approvals | `approval_chains/steps/instances/actions` (`migrations/0003_features.sql:111`) | Reuse engine; add quote chain + SoD + conditional Finance leg. |
+| Audit | `audit_logs` + `audit()` (`src/index.ts:185`) | Extend with SHA-256 hash-chain for quotes. |
+| Document blob + hash | `dc_documents.content_b64` (`migrations/0018`), `crypto.subtle` SHA-256 present (`src/index.ts:9`) | Reuse pattern for immutable customer doc. |
+| FY numbering | `allocateDCSeriesNumber`/`currentFY` (`src/index.ts:341,360`) | Reuse for quote no. + counters. |
+| Reminders | `scheduled()` + 3 crons (`src/index.ts:4441`; `wrangler.jsonc:31`), `pushNotification` (`:2695`) | Extend: 4th gated pass for R1–R8 + Today + bell. |
+| Settings store | `app_config` + `getConfig`/`setConfig` (`src/index.ts:236,242`) | Reuse for quote settings **and** the entitlement list. |
+| Self-heal schema | `ensureFeatureTables` (`:2777`), scoped guard `_spSchemaReady` (`:6205`) | Follow pattern — `ensureQuoteSchema` once-per-isolate. |
+
+## Gaps (net-new)
+1. **Pricing/calc engine** — host `computeOrderGst` (`src/index.ts:6082`) is flat `Σ qty·price·rate/100`.
+   No landed cost, mixed cost+markup / MRP−disc, ITC-claimable, CGST/SGST-vs-IGST by place-of-supply,
+   weighted margin, or rounding policy. → `src/quote_calc.ts` (pure, 18 PRD calc vectors).
+2. **Immutable hashed versions + hash-chained audit** — enforce in app-layer `env.DB.batch()`,
+   **NOT SQL triggers** (self-heal runner splits on `;` and breaks on trigger bodies).
+3. **Separation-of-duties parallel approvals** — Ops→Manager always; +Finance when `itc_claimable=No`
+   OR grand total ≥ ₹5,00,000. Creator ≠ approver.
+4. **Reminders/follow-ups** — R1–R8, dedup, snooze, Lost state, follow-up log, Today page, bell badge.
+5. **Cost/margin redaction** — Operations quote-role must never receive cost/margin fields
+   (server-side strip, mirroring existing client-vs-internal price redaction).
+
+## Configurable per-user assignment (the added requirement)
+No per-user entitlement exists today (RBAC is pure role). Design, no schema churn:
+- `app_config['quote.enabled_users']` = JSON `{ "<userId>": "<quoteRole>", ... }` where `quoteRole ∈
+  {sales, ops, commercial_manager, finance, auditor}`. Empty/unset ⇒ feature OFF for everyone.
+- `app_config['quote.settings']` = JSON (freight defaults, branding defaults, approval threshold,
+  reminder cadence, counters seed) — admin editable.
+- Enforced in **three** layers:
+  1. **Nav** — `ACTION_PAGES['quotations']` gated + runtime check against the allowlist so the tile
+     only shows for enabled users.
+  2. **Server** — `requireQuoteAccess(user, env)` guard on every `/api/quotes/*` route, returning the
+     caller's quote-role (or 404, matching host's tenancy-hide convention).
+  3. **Approvals** — SoD + leg routing keyed on quote-role, not platform role.
+- Admin UI: a Settings sub-page (super_admin/ops_admin) listing users with a toggle + quote-role
+  select; writes the two config keys via `setConfig`. Instant grant/revoke, **no deploy**.
+
+## Host conventions to honor
+- CSP forbids inline JS → delegated `data-act`/`data-input`/`data-change` → top-level globals;
+  `test/smoke.mjs` must resolve every handler + gate `PAGE_MAP`/`ACTION_PAGES`/`canAccessPage`.
+- New SPA module `public/app.NN-quotes.js` (pick next free NN), wired into `public/index.html` load
+  order and the smoke test's module list.
+- Schema via self-heal `ensureQuoteSchema` (idempotent `CREATE TABLE IF NOT EXISTS`, single-statement
+  per `.prepare`, once-per-isolate guard) — the prod DB is self-heal-managed; `migrations apply
+  --remote` is known-broken. A migration file is added for parity/local but self-heal is the source of
+  truth at runtime.
+
+## Explicitly out of scope for this milestone
+WhatsApp/SMS reminder channels; e-sign; multi-currency; PostgreSQL migration (PRD D-6); importing the
+external /giftsyz test suite. Deploy is **manual** (`npx wrangler deploy` by the user).
