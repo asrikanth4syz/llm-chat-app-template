@@ -1,0 +1,288 @@
+// ============================================================================
+// Quotations (milestone 006) — PURE pricing / GST / landed-cost / rounding engine.
+//
+// No DB / no `env`: every function here is deterministic and unit-tested in
+// isolation (test/quote_calc.test.ts) against the frozen oracle V1..V18 in
+// plans/active_milestones/006-quotations/calc-vectors.md.
+//
+// Authority: plans/active_milestones/006-quotations/calc-spec.md.
+//
+// INVARIANT I0 (calc-spec §0): money is INTEGER paise, rates are INTEGER basis
+// points (bp); nothing float is computed or returned. The ONLY division in this
+// file is BigInt division inside `roundHalfAwayFromZero` / `weightedMarginBp`
+// (BigInt is integral, so it is exempt from the no-float rule). The I0-test
+// greps this source to enforce that no bare `/`/`%`/parseFloat touches a Number.
+// ============================================================================
+
+/** Allowed GST slabs in basis points: 0/5/12/18/28/40 %. Other slabs deferred. */
+export const GST_SLAB_BP: readonly number[] = [0, 500, 1200, 1800, 2800, 4000];
+/** Money magnitude cap: 10^12 paise = ₹1,000 crore (calc-spec §7). */
+export const MAX_PAISE = 1_000_000_000_000;
+const MAX_QTY = 1_000_000;
+const MAX_MARKUP_BP = 1_000_000; // 0..10000 %
+
+export type PricingMode = "cost_markup" | "mrp_discount";
+
+export interface QuoteCalcLine {
+  sku: string | null;
+  qty: number;
+  pricing_mode: PricingMode;
+  purchase_cost_paise?: number; // required (both modes: it is the cost basis)
+  markup_bp?: number;           // required if cost_markup
+  mrp_paise?: number;           // required if mrp_discount
+  discount_bp?: number;         // required if mrp_discount
+  freight_alloc_paise?: number; // per unit, default 0
+  branding_cost_paise?: number; // per unit, default 0
+  sale_gst_bp: number;
+  purchase_gst_bp?: number;     // defaults to sale_gst_bp
+  itc_claimable: boolean;       // PER LINE
+}
+
+export interface QuoteCalcInput {
+  place_of_supply: string;
+  seller_state_code: string;
+  lines: QuoteCalcLine[];
+}
+
+export interface QuoteCalcLineOut {
+  landed_cost_paise: number;
+  unit_price_paise: number;
+  line_taxable_paise: number;
+  line_gst_paise: number;
+  cgst_paise: number;
+  sgst_paise: number;
+  igst_paise: number;
+  line_margin_paise: number;
+}
+
+export interface QuoteCalcTotals {
+  subtotal_paise: number;
+  cgst_total: number;
+  sgst_total: number;
+  igst_total: number;
+  grand_total_paise: number;
+  round_off_paise: number;
+  weighted_margin_bp: number;
+  negative_margin: boolean;
+}
+
+export interface QuoteCalcResult {
+  lines: QuoteCalcLineOut[];
+  totals: QuoteCalcTotals;
+  itc_claimable_all: boolean;
+}
+
+/** Validation / calc error → HTTP 422 at the handler boundary. */
+export class QuoteCalcError extends Error {
+  code: string;
+  field?: string;
+  constructor(code: string, message: string, field?: string) {
+    super(message);
+    this.name = "QuoteCalcError";
+    this.code = code;
+    this.field = field;
+  }
+}
+
+// ── The one rounding primitive (calc-spec §0). Exact half-away-from-zero over
+// integers, division done in BigInt so it is exact for every operand within the
+// magnitude cap (plain Math.trunc(n/d) could be off-by-one near 2^53). ────────
+export function roundHalfAwayFromZero(numerator: number, denominator: number): number {
+  if (!Number.isInteger(numerator) || !Number.isInteger(denominator)) {
+    throw new QuoteCalcError("E_CALC", "roundHalfAwayFromZero requires integer args");
+  }
+  if (denominator <= 0) {
+    throw new QuoteCalcError("E_CALC", "roundHalfAwayFromZero denominator must be > 0");
+  }
+  const n = BigInt(Math.abs(numerator));
+  const d = BigInt(denominator);
+  const q = (n * 2n + d) / (2n * d); // BigInt floor; |n|>=0 so floor == trunc == half-away-from-zero
+  const signed = numerator < 0 ? -q : q;
+  const out = Number(signed);
+  if (!Number.isSafeInteger(out)) {
+    throw new QuoteCalcError("E_OVERFLOW", "rounding result exceeds safe integer range");
+  }
+  return out;
+}
+
+/** Apply a basis-point rate to a paise base → integer paise (half-away-from-zero). */
+export function applyBp(basePaise: number, rateBp: number): number {
+  const product = basePaise * rateBp;
+  if (!Number.isSafeInteger(product)) {
+    throw new QuoteCalcError("E_OVERFLOW", "applyBp product exceeds safe integer range");
+  }
+  return roundHalfAwayFromZero(product, 10000);
+}
+
+/** Nearest rupee (100 paise), 50-paisa ties round up (toward +∞ for p>=0). */
+export function roundToRupee(paise: number): number {
+  return roundHalfAwayFromZero(paise, 100) * 100;
+}
+
+/** CGST = ceil(line_gst / 2); the odd paisa goes to CGST. Pure integer via the primitive. */
+function cgstHalf(lineGst: number): number {
+  return roundHalfAwayFromZero(lineGst, 2); // round(x/2) half-up == ceil(x/2) for integer x
+}
+
+/** Revenue-weighted margin in bp, computed entirely in BigInt (exact to the cap). */
+function weightedMarginBp(sumMarginPaise: number, subtotalPaise: number): number {
+  if (subtotalPaise === 0) return 0;
+  const neg = sumMarginPaise < 0;
+  const n = BigInt(Math.abs(sumMarginPaise)) * 10000n;
+  const d = BigInt(subtotalPaise);
+  const q = (n * 2n + d) / (2n * d);
+  const out = Number(neg ? -q : q);
+  if (!Number.isSafeInteger(out)) {
+    throw new QuoteCalcError("E_OVERFLOW", "weighted margin exceeds safe integer range");
+  }
+  return out;
+}
+
+function assertInt(v: unknown, field: string): number {
+  if (typeof v !== "number" || !Number.isInteger(v)) {
+    throw new QuoteCalcError("E_VALIDATION", `${field} must be an integer`, field);
+  }
+  return v;
+}
+function assertPaiseInRange(v: number, field: string): number {
+  if (v < 0 || v > MAX_PAISE) {
+    throw new QuoteCalcError("E_VALIDATION", `${field} out of range [0, ${MAX_PAISE}]`, field);
+  }
+  return v;
+}
+function assertSlab(bp: number, field: string): number {
+  assertInt(bp, field);
+  if (!GST_SLAB_BP.includes(bp)) {
+    throw new QuoteCalcError("E_UNSUPPORTED_GST_SLAB", `${field}=${bp} is not an allowed GST slab`, field);
+  }
+  return bp;
+}
+
+// ── The engine (calc-spec §1–§5). Validates (§7), computes, asserts magnitude. ─
+export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
+  if (!input || typeof input !== "object") {
+    throw new QuoteCalcError("E_VALIDATION", "input required");
+  }
+  const seller = String(input.seller_state_code ?? "").trim();
+  if (!seller) {
+    throw new QuoteCalcError("E_SELLER_STATE_UNSET", "seller_state_code is required");
+  }
+  const pos = String(input.place_of_supply ?? "").trim();
+  if (!pos) {
+    throw new QuoteCalcError("E_VALIDATION", "place_of_supply is required", "place_of_supply");
+  }
+  const intraState = pos.toLowerCase() === seller.toLowerCase();
+
+  const lines = input.lines;
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new QuoteCalcError("E_VALIDATION", "lines must be a non-empty array", "lines");
+  }
+  if (lines.length > 200) {
+    throw new QuoteCalcError("E_VALIDATION", "a quote may have at most 200 lines", "lines");
+  }
+
+  const out: QuoteCalcLineOut[] = [];
+  let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, sumMargin = 0;
+  let itcAll = true;
+
+  lines.forEach((ln, i) => {
+    const f = (name: string) => `lines[${i}].${name}`;
+    const qty = assertInt(ln.qty, f("qty"));
+    if (qty <= 0 || qty > MAX_QTY) {
+      throw new QuoteCalcError("E_VALIDATION", `${f("qty")} must be in 1..${MAX_QTY}`, f("qty"));
+    }
+    if (ln.pricing_mode !== "cost_markup" && ln.pricing_mode !== "mrp_discount") {
+      throw new QuoteCalcError("E_VALIDATION", `${f("pricing_mode")} invalid`, f("pricing_mode"));
+    }
+    const saleBp = assertSlab(ln.sale_gst_bp, f("sale_gst_bp"));
+    const purchaseBp = ln.purchase_gst_bp === undefined
+      ? saleBp
+      : assertSlab(ln.purchase_gst_bp, f("purchase_gst_bp"));
+    const freight = assertPaiseInRange(assertInt(ln.freight_alloc_paise ?? 0, f("freight_alloc_paise")), f("freight_alloc_paise"));
+    const branding = assertPaiseInRange(assertInt(ln.branding_cost_paise ?? 0, f("branding_cost_paise")), f("branding_cost_paise"));
+
+    // purchase_cost_paise is the cost basis in BOTH modes (mrp_discount uses a
+    // real purchase cost, never the discounted MRP — calc-spec §3).
+    const baseCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
+
+    let unitPrice: number;
+    if (ln.pricing_mode === "cost_markup") {
+      const markupBp = assertInt(ln.markup_bp ?? 0, f("markup_bp"));
+      if (markupBp < 0 || markupBp > MAX_MARKUP_BP) {
+        throw new QuoteCalcError("E_VALIDATION", `${f("markup_bp")} must be in 0..${MAX_MARKUP_BP}`, f("markup_bp"));
+      }
+      unitPrice = baseCost + applyBp(baseCost, markupBp);
+    } else {
+      const mrp = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
+      const discBp = assertInt(ln.discount_bp ?? 0, f("discount_bp"));
+      if (discBp < 0 || discBp > 10000) {
+        throw new QuoteCalcError("E_VALIDATION", `${f("discount_bp")} must be in 0..10000`, f("discount_bp"));
+      }
+      unitPrice = mrp - applyBp(mrp, discBp);
+    }
+    if (unitPrice < 0) {
+      throw new QuoteCalcError("E_VALIDATION", `${f("unit_price")} computed negative`, f("unit_price"));
+    }
+
+    const inputGst = applyBp(baseCost, purchaseBp);
+    const landed = baseCost + freight + branding + (ln.itc_claimable ? 0 : inputGst);
+
+    const taxable = unitPrice * qty;
+    if (!Number.isSafeInteger(taxable) || taxable > MAX_PAISE) {
+      throw new QuoteCalcError("E_OVERFLOW", `${f("line_taxable")} exceeds cap`, f("line_taxable"));
+    }
+    const lineGst = applyBp(taxable, saleBp);
+    const cgst = intraState ? cgstHalf(lineGst) : 0;
+    const sgst = intraState ? lineGst - cgst : 0;
+    const igst = intraState ? 0 : lineGst;
+    const landedTotal = landed * qty;
+    if (!Number.isSafeInteger(landedTotal)) {
+      throw new QuoteCalcError("E_OVERFLOW", `${f("landed_total")} exceeds safe integer`, f("landed_total"));
+    }
+    const margin = taxable - landedTotal;
+
+    if (!ln.itc_claimable) itcAll = false;
+    subtotal += taxable;
+    cgstTotal += cgst;
+    sgstTotal += sgst;
+    igstTotal += igst;
+    sumMargin += margin;
+
+    out.push({
+      landed_cost_paise: landed,
+      unit_price_paise: unitPrice,
+      line_taxable_paise: taxable,
+      line_gst_paise: lineGst,
+      cgst_paise: cgst,
+      sgst_paise: sgst,
+      igst_paise: igst,
+      line_margin_paise: margin,
+    });
+  });
+
+  if (!Number.isSafeInteger(subtotal) || subtotal > MAX_PAISE) {
+    throw new QuoteCalcError("E_OVERFLOW", "subtotal exceeds cap", "subtotal");
+  }
+  const taxTotal = cgstTotal + sgstTotal + igstTotal;
+  const preRound = subtotal + taxTotal;
+  if (!Number.isSafeInteger(preRound) || preRound > MAX_PAISE) {
+    throw new QuoteCalcError("E_OVERFLOW", "grand total exceeds cap", "grand_total");
+  }
+  const grand = roundToRupee(preRound);
+  const roundOff = grand - preRound;
+
+  return {
+    lines: out,
+    itc_claimable_all: itcAll,
+    totals: {
+      subtotal_paise: subtotal,
+      cgst_total: cgstTotal,
+      sgst_total: sgstTotal,
+      igst_total: igstTotal,
+      grand_total_paise: grand,
+      round_off_paise: roundOff,
+      weighted_margin_bp: weightedMarginBp(sumMargin, subtotal),
+      negative_margin: sumMargin < 0,
+    },
+  };
+}

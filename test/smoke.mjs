@@ -193,6 +193,31 @@ if (result.renderErr) console.log("    render error:", result.renderErr);
 
 await browser.close();
 
+// ── I0-b (milestone 006, calc-spec §0): the quote calc engine source carries NO
+// float math — no parseFloat/toFixed and no bare `/` or `%` on Numbers; the only
+// division allowed is BigInt (lines containing `2n`). Static guard so a later edit
+// can't reintroduce IEEE rounding drift into the money engine. ────────────────
+{
+  const qcPath = path.join(ROOT, "src", "quote_calc.ts");
+  if (existsSync(qcPath)) {
+    const src = readFileSync(qcPath, "utf8");
+    // Strip block comments (incl. /** JSDoc */) then line comments, so doc text
+    // that merely mentions "parseFloat" or "x / 2" is not flagged — only real code.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const bad = [];
+    if (/\bparseFloat\s*\(/.test(code)) bad.push("parseFloat(");
+    if (/\.toFixed\s*\(/.test(code)) bad.push("toFixed(");
+    code.split("\n").forEach((line, i) => {
+      // After comment-stripping, any `/` is division and any ` % ` is modulo
+      // (the engine uses no regex literals); both are allowed only on BigInt lines.
+      if ((/[^/]\/[^/]/.test(line) || / % /.test(line)) && !line.includes("2n")) {
+        bad.push(`L${i + 1}: ${line.trim()}`);
+      }
+    });
+    check("quote_calc.ts has no float math (I0-b)", bad.length === 0 || (console.log("    float math:", bad), false));
+  }
+}
+
 console.log("");
 if (failures.length) {
   console.error(`SMOKE FAILED — ${failures.length} check(s): ${failures.join("; ")}`);

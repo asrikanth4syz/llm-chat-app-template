@@ -42,10 +42,10 @@
 
 ## 📋 Task Execution (Parallel Groups)
 
-### Group 1 (Parallel — independent files)
-- [ ] Task 1.A: `src/quote_calc.ts` — pure pricing/landed-cost/GST/margin/rounding engine.
-- [ ] Task 1.B: `test/quote_calc.test.mjs` — 18 calc vectors + edge cases (written against 1.A's exported signatures; co-authored so they land together).
-- [ ] Task 1.C: `data-model.md`/`api-contracts.md` already drafted — no code; finalize field list only.
+### Group 1 (Parallel — independent files) — ✅ BUILT (468 tests green, tsc clean, smoke green)
+- [x] Task 1.A: `src/quote_calc.ts` — pure pricing/landed-cost/GST/margin/rounding engine (integer paise + bp, BigInt division).
+- [x] Task 1.B: `test/quote_calc.test.ts` (vitest, repo convention) + `test/fixtures/quote_calc_vectors.json` — all 18 vectors byte-exact + rounding + validation (422) + I0-a integer guard; I0-b float-grep in `test/smoke.mjs`.
+- [x] Task 1.C: data-model.md/api-contracts.md field list final (r1–r4 folds).
 
 ### Group 2 (Depends on Group 1 — schema + entitlement)
 - [ ] Task 2.A: `ensureQuoteSchema(env)` + `_quoteSchemaReady` guard + parity migration file. **Includes
