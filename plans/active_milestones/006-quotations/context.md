@@ -66,9 +66,14 @@ No per-user entitlement exists today (RBAC is pure role). Design, no schema chur
 
 ## Resolved decisions (folded from spec-validation r1 → r2)
 The adversarial panel confirmed 31 findings (`adversarial-reviews/spec-validation.md`). All are folded in:
-- **Pricing/GST/landed-cost/rounding/margin** → fully specified in `calc-spec.md` (integer-paise math,
-  explicit intra/inter-state rule keyed on `seller_state_code`, per-line ITC, CGST=⌈gst/2⌉ odd-paisa rule,
-  round-to-rupee-ties-up, revenue-weighted margin, 18 named vectors as the acceptance oracle).
+- **Pricing/GST/landed-cost/rounding/margin** → fully specified in `calc-spec.md`. **Integer-only money &
+  rates (§0 I0): no float anywhere** — money is integer paise, rates are integer basis points (`_bp`),
+  nothing float is stored/computed/hashed; a single `roundHalfAwayFromZero(int,int)` primitive (via
+  `applyBp`) is the only rounding op; `tsc`-branded `Paise`/`Bp` + an I0 grep test enforce it. Explicit
+  intra/inter-state rule keyed on `seller_state_code`, per-line ITC with a separate `purchase_cost_paise`
+  basis for `mrp_discount`, pure-integer `ceilHalf` odd-paisa CGST split, round-to-rupee-ties-up,
+  revenue-weighted `weighted_margin_bp`, computed-magnitude safe-integer guard, and 18 hand-authored named
+  vectors as the acceptance oracle.
 - **Tenancy** → `account_id` on every table + `denyClientCrossAccess` + per-tenant config keys.
 - **Concurrency** → UNIQUE(quote_id,version)/(quote_id,seq)/(account_id,quote_no) + CAS on `current_version`
   + counter `RETURNING` + retry.

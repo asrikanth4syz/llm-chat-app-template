@@ -6,13 +6,36 @@
 > This document is authoritative for `src/quote_calc.ts`. The engine is pure (no I/O). **All money is
 > integer paise** inside the engine and in storage; rupee strings are presentation only.
 
-## 0. Money representation (resolves `money-stored-as-real-float`)
-- Every monetary value is an **integer number of paise** (`₹1 = 100`). No `REAL`/float arithmetic anywhere
-  in the engine or in `quote_*` money columns (data-model stores INTEGER paise).
-- Percentages (`markup_pct`, `discount_pct`, `gst_rate`) are decimals with up to 2dp, passed as
-  **basis-points integers** internally (`18% → 1800`) to avoid float drift.
-- Rounding helper: `roundHalfAwayFromZero(numeratorPaise, denominator)` → integer paise; ties (exact .5)
-  round away from zero. This is the only rounding primitive; "half-up" everywhere means this.
+## 0. Money representation — integer paise only (resolves `money-stored-as-real-float`, `rates-stored-as-real-drift`, `round-primitive-and-rate-representation`)
+
+**Invariant (I0): no IEEE float (`REAL`, JS `number` used as a fraction) ever participates in a monetary
+computation, is stored in a money/rate column, or appears in any value that is hashed.** Every number that
+feeds the engine, the totals, `payload_json`, or a `content_hash` is an **integer** (paise or basis points).
+This is the single most load-bearing rule in the engine; the test suite asserts it (see I0-test below).
+
+- **Money = integer paise.** `₹1 = 100` paise. All amounts — inputs, intermediates, outputs, stored columns
+  — are JS safe integers of paise. Rupee/decimal strings are produced only at the presentation edge
+  (`fmtPaise(p) = `₹${(p/100)}`-style formatting in the SPA), never read back into a computation.
+- **Rates = basis-point integers (`_bp`).** `markup_pct`, `discount_pct`, `sale_gst_rate`,
+  `purchase_gst_rate` are carried and stored as **integer basis points**: `18% → 1800`, `2.5% → 250`,
+  `0% → 0`. There is **no `REAL`/float percent** anywhere in the engine, the API payloads, `payload_json`,
+  or the `quote_lines` columns (data-model names them `markup_bp`, `discount_bp`, `sale_gst_bp`,
+  `purchase_gst_bp`, all `INTEGER`). The API accepts a human percent at the boundary and converts to bp
+  with `pctToBp(p) = Math.round(p * 100)` once, rejecting any percent with >2dp (422) so the conversion is
+  lossless; everything downstream is bp integers.
+- **The one rounding primitive.** `roundHalfAwayFromZero(numerator: int, denominator: int) -> int` is the
+  **only** rounding operation in the engine. It takes two integers and returns an integer:
+  `q = (|numerator| * 2 + denominator) / (2 * denominator)` truncated, then signed — i.e. exact
+  half-away-from-zero with **no division performed in float**. Every rate application is written as this
+  primitive over integers, never as `x * rate / 100` in float:
+  - apply a bp rate to a paise base: `applyBp(base_paise, rate_bp) := roundHalfAwayFromZero(base_paise * rate_bp, 10000)`.
+  "half-up" / "round" everywhere in this doc means `roundHalfAwayFromZero`; a bare `/` never appears in a
+  money path.
+- **I0-test (acceptance):** `test/quote_calc.test.mjs` includes a guard that (a) every numeric field the
+  engine returns is `Number.isInteger(x) === true`, and (b) a grep/AST check fails if `src/quote_calc.ts`
+  contains a `/ 100`, `/ 10000`, `parseFloat`, `Number(`…`.`…`)`, or a non-`_bp`/non-`_paise` numeric field.
+  `tsc` types model money as a branded `Paise = number & {__paise}` and rates as `Bp = number & {__bp}` so a
+  raw float cannot be assigned into a money/rate position.
 
 ## 1. Inputs
 ```
@@ -25,16 +48,18 @@ Line {
   sku: string|null
   qty: integer                     // > 0
   pricing_mode: "cost_markup" | "mrp_discount"
-  purchase_cost_paise?: integer    // required if cost_markup; >= 0
-  markup_pct?: number              // required if cost_markup; >= 0 (no upper bound)
-  mrp_paise?: integer              // required if mrp_discount; >= 0
-  discount_pct?: number            // required if mrp_discount; 0..100
-  freight_alloc_paise: integer     // >= 0, default 0
-  branding_cost_paise: integer     // >= 0, default 0
-  sale_gst_rate: number            // one of {0,5,12,18,28}; see §6 authority rule
-  purchase_gst_rate: number        // one of {0,5,12,18,28}; defaults to sale_gst_rate if omitted
-  itc_claimable: boolean           // PER LINE (resolves itc-per-quote-mixed-basket)
+  purchase_cost_paise?: Paise       // required if cost_markup; >= 0 (integer paise)
+  markup_bp?: Bp                    // required if cost_markup; integer basis points; >= 0, <= markup cap (§7)
+  mrp_paise?: Paise                 // required if mrp_discount; >= 0 (integer paise)
+  discount_bp?: Bp                  // required if mrp_discount; integer basis points; 0..10000 (0..100%)
+  freight_alloc_paise: Paise        // >= 0, default 0 (integer paise; PER UNIT)
+  branding_cost_paise: Paise        // >= 0, default 0 (integer paise; PER UNIT)
+  sale_gst_bp: Bp                   // basis points; one of {0,500,1200,1800,2800}; see §6 authority rule
+  purchase_gst_bp: Bp               // basis points; defaults to sale_gst_bp if omitted
+  itc_claimable: boolean            // PER LINE (resolves itc-per-quote-mixed-basket)
 }
+// Paise and Bp are branded integer types; no float ever occupies these positions (see §0 I0).
+// The API boundary converts human percent → Bp once via pctToBp (reject >2dp → 422); the engine only sees Bp.
 ```
 `itc_claimable` is **per line**, not per quote. The quote-level flag used for the Finance-leg trigger is
 derived: `quote.itc_claimable_all := lines.every(l => l.itc_claimable)` and the Finance leg fires when
@@ -50,10 +75,11 @@ intraState := (place_of_supply == seller_state_code)   // case-insensitive, trim
 
 ## 3. Per-line landed cost (resolves `itc-landed-cost-fold-formula`)
 ```
+// All arithmetic is integer; applyBp(base_paise, rate_bp) := roundHalfAwayFromZero(base_paise * rate_bp, 10000)
 base_cost_paise :=
    pricing_mode == "cost_markup" ? purchase_cost_paise
- : /* mrp_discount */             mrp_paise - round(mrp_paise * discount_pct/100)   // the net purchase basis
-input_gst_paise := round(base_cost_paise * purchase_gst_rate / 100)
+ : /* mrp_discount */             purchase_cost_paise   // SEPARATE cost input (NOT the discounted MRP) — see §4/r2 fix
+input_gst_paise := applyBp(base_cost_paise, purchase_gst_bp)              // integer paise
 landed_cost_paise := base_cost_paise
                    + freight_alloc_paise
                    + branding_cost_paise
@@ -66,19 +92,20 @@ landed_cost_paise := base_cost_paise
 
 ## 4. Per-line sell price, taxable value, output GST
 ```
-// cost_markup: sell is cost + markup; mrp_discount: sell is MRP less discount
+// cost_markup: sell is cost + markup; mrp_discount: sell is MRP less discount (cost basis is purchase_cost_paise, §3)
 unit_price_paise :=
-   pricing_mode == "cost_markup" ? base_cost_paise + round(base_cost_paise * markup_pct/100)
- : /* mrp_discount */             mrp_paise - round(mrp_paise * discount_pct/100)
+   pricing_mode == "cost_markup" ? base_cost_paise + applyBp(base_cost_paise, markup_bp)
+ : /* mrp_discount */             mrp_paise - applyBp(mrp_paise, discount_bp)
 line_taxable_paise := unit_price_paise * qty                      // exact (integer * integer)
-line_gst_paise     := round(line_taxable_paise * sale_gst_rate / 100)
+line_gst_paise     := applyBp(line_taxable_paise, sale_gst_bp)    // integer paise
 cgst_paise := intraState ? ceilHalf(line_gst_paise) : 0           // odd paisa to CGST
 sgst_paise := intraState ? (line_gst_paise - cgst_paise) : 0
 igst_paise := intraState ? 0 : line_gst_paise
 line_total_paise := line_taxable_paise + line_gst_paise
 ```
-`ceilHalf(x) := (x + 1) >> 0` when x odd else x/2 — i.e. `Math.ceil(x/2)`, so CGST gets the odd paisa and
-`cgst + sgst == line_gst` always (resolves the CGST+SGST≠IGST concern).
+`ceilHalf(x) := (x + (x & 1)) / 2` — pure integer arithmetic (odd x → (x+1)/2, even x → x/2; **no bitshift**,
+so it is safe for ₹-crore `line_gst` beyond 2^31). CGST gets the odd paisa and `cgst + sgst == line_gst`
+always (resolves the CGST+SGST≠IGST concern). Example: `line_gst=541 → cgst=271, sgst=270`.
 
 ## 5. Quote totals, round-off, weighted margin (resolves `rounding-policy-underspecified`, `weighted-margin-undefined`)
 ```
@@ -94,56 +121,72 @@ round_off_paise   := grand_total_paise - pre_round_grand_paise   // signed; surf
 `roundToRupee(p)` → nearest 100 paise; exact 50-paise ties round **up** (toward +∞).
 ```
 line_margin_paise := line_taxable_paise - (landed_cost_paise * qty)
-weighted_margin_pct := subtotal_paise == 0 ? 0
-                     : round2( (Σ line_margin_paise) / subtotal_paise * 100 )   // revenue-weighted, 2dp
+// margin as INTEGER basis points (no float): revenue-weighted over pre-GST subtotal
+weighted_margin_bp := subtotal_paise == 0 ? 0
+                    : roundHalfAwayFromZero((Σ line_margin_paise) * 10000, subtotal_paise)   // e.g. 582 = 5.82%
 negative_margin := (Σ line_margin_paise) < 0        // boolean; also per-line line_margin_paise < 0
 ```
-`round2(x)` is half-away-from-zero to 2 decimal places (percentage display only; not money).
+`weighted_margin_bp` is an integer basis-point figure (582 → 5.82%); the SPA renders it as a percent string
+at the edge. **No float percent is computed or stored** (upholds §0 I0). All operands above are integers.
 
 ## 6. GST-rate authority (resolves `gst-rate-authority`)
-- For a line with a non-null `sku` that exists in the catalogue: `sale_gst_rate` and `purchase_gst_rate`
-  are **server-resolved** from `inventory`/`client_catalog.gst_rate`; any client-supplied value is ignored
-  (or validated-equal and 422 on mismatch). The handler fills these before calling the pure engine.
-- For an ad-hoc line (`sku == null`): the client supplies `sale_gst_rate`, constrained to {0,5,12,18,28};
-  `purchase_gst_rate` defaults to it.
+- For a line with a non-null `sku` that exists in the catalogue: `sale_gst_bp` and `purchase_gst_bp` are
+  **server-resolved** from `inventory`/`client_catalog.gst_rate` (converted to bp via `pctToBp` once); a
+  client-supplied rate on a catalogued SKU is **ignored** (server value authoritative — no 422). The handler
+  fills these as bp integers before calling the pure engine.
+- For an ad-hoc line (`sku == null`): the client supplies `sale_gst_bp`, constrained to the allowed slab set;
+  `purchase_gst_bp` defaults to it.
 
 ## 7. Input validation (resolves `calc-input-validation-422`)
 The handler validates **before** calling the engine; any violation → **422** with `{field, code}` (the pure
-engine also asserts and throws, never returns NaN/Infinity):
+engine also asserts and throws, never returns NaN/Infinity). Every monetary/rate input must already be an
+integer (§0 I0) — a non-integer `*_paise`/`*_bp` is itself a 422.
 - `lines` non-empty; a configurable max of **200 lines** per quote (resolves `unbounded-lines`).
-- `qty` integer `> 0`.
-- `cost_markup`: `purchase_cost_paise >= 0`, `markup_pct >= 0`.
-- `mrp_discount`: `mrp_paise >= 0`, `0 <= discount_pct <= 100`.
-- `freight_alloc_paise >= 0`, `branding_cost_paise >= 0`.
-- `sale_gst_rate`/`purchase_gst_rate` ∈ {0,5,12,18,28}.
+- `qty` integer `> 0`, `qty <= 1_000_000` (bounds computed magnitude — see below).
+- `cost_markup`: `purchase_cost_paise >= 0` (integer), `0 <= markup_bp <= 1_000_000` (0..10000%).
+- `mrp_discount`: `mrp_paise >= 0` (integer), `purchase_cost_paise >= 0` (integer — the cost basis, §3),
+  `0 <= discount_bp <= 10000` (0..100%).
+- `freight_alloc_paise >= 0`, `branding_cost_paise >= 0` (integers; per unit).
+- `sale_gst_bp`/`purchase_gst_bp` ∈ the allowed GST-slab set in bp.
 - `seller_state_code` set (else `E_SELLER_STATE_UNSET`).
-- Max magnitude: any money value `<= 10^12` paise (₹10 crore) to stay within safe integer range.
+- **Magnitude (input and computed):** every input money value `<= 10^12` paise (**₹10 crore** = 10^10 paise…
+  note: 10^12 paise = ₹1,000 crore; the cap is 10^12 paise ≈ ₹1,000 crore), AND the engine asserts every
+  **computed** value (`unit_price_paise`, `line_taxable_paise`, totals) is `<= 10^12` paise and
+  `Number.isSafeInteger(...)` — a breach is a 422, never silent precision loss. This closes
+  `unbounded-markup-qty-overflow`.
 
-## 8. Worked example vector (V1 — canonical, computed from the algorithm above)
-Seller state `KL`, `place_of_supply = KL` (intra-state), two lines:
+## 8. Worked example vector (V1 — canonical, all integer paise / bp)
+Seller state `KL`, `place_of_supply = KL` (intra-state), `qty = 1` each. All rates are bp integers.
 
-| Line | mode | inputs | landed (p) | unit_price (p) | taxable (p) | gst_rate | line_gst (p) | cgst (p) | sgst (p) |
-|---|---|---|---|---|---|---|---|---|---|
-| L1 | cost_markup | cost=10000, markup=20%, freight=500, brand=0, purch_gst=18, itc=Y | 10500 | 12000 | 12000 | 18 | 2160 | 1080 | 1080 |
-| L2 | mrp_discount | mrp=5000, disc=10%, freight=0, brand=0, purch_gst=12, itc=N | 5040 | 4500 | 4500 | 12 | 540 | 270 | 270 |
+| Line | mode | inputs (paise / bp) | landed_p | unit_price_p | taxable_p | sale_gst_bp | line_gst_p | cgst_p | sgst_p | margin_p |
+|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | cost_markup | purchase_cost=10000, markup_bp=2000, freight=500, brand=0, purch_gst_bp=1800, itc=Y | 10500 | 12000 | 12000 | 1800 | 2160 | 1080 | 1080 | 1500 |
+| L2 | mrp_discount | purchase_cost=3500, mrp=5000, discount_bp=1000, freight=0, brand=0, purch_gst_bp=1200, itc=N | 3920 | 4500 | 4500 | 1200 | 540 | 270 | 270 | 580 |
 
-`qty = 1` each. Totals: subtotal `16500`p, tax `2700`p, pre-round grand `19200`p →
-`grand_total 19200`p (already whole rupees, `round_off 0`). L1 margin `12000-10500=1500`p; L2 margin
-`4500-5040=-540`p; Σ margin `960`p; `weighted_margin_pct = round2(960/16500*100) = 5.82`;
-`negative_margin = false` (quote) but L2 is flagged line-negative.
-_(Inter-state variant V1b: same inputs with `place_of_supply=TN` → igst L1=2160, L2=540, cgst=sgst=0.)_
+Derivation (integer only): L1 `applyBp(10000,2000)=2000` → unit 12000; `applyBp(12000,1800)=2160`; itc=Y so
+input GST not folded → landed `10000+500=10500`; margin `12000−10500=1500`. L2 base_cost = purchase_cost 3500;
+`input_gst=applyBp(3500,1200)=420`, itc=N so folded → landed `3500+420=3920`; unit `5000−applyBp(5000,1000)=5000−500=4500`;
+`applyBp(4500,1200)=540`; margin `4500−3920=580`.
+Totals: `subtotal 16500`, `tax 2700`, `pre_round_grand 19200` → `grand_total_paise 19200` (whole rupees,
+`round_off_paise 0`). Σmargin `2080`; `weighted_margin_bp = roundHalfAwayFromZero(2080*10000, 16500) = 1261`
+(12.61%); `negative_margin false`.
+_(Inter-state variant V1b: `place_of_supply=TN` → `igst_p` L1=2160, L2=540, cgst=sgst=0.)_
 
 ## 9. The 18 named vectors (acceptance gate)
-`test/quote_calc.test.mjs` loads a fixtures file `test/fixtures/quote_calc_vectors.json` holding **18 named
-vectors V1..V18**, each `{name, input: QuoteCalcInput, expected: {lines:[{landed_cost_paise, unit_price_paise,
-line_taxable_paise, line_gst_paise, cgst_paise, sgst_paise, igst_paise}], totals:{subtotal_paise, cgst_total,
-sgst_total, igst_total, grand_total_paise, round_off_paise, weighted_margin_pct, negative_margin}}}`.
-Acceptance = **byte-exact** match per vector; CI fails if `< 18` vectors are present. The 18 must cover:
-`V1` intra two-line mixed (§8); `V2` inter-state (IGST); `V3` cost_markup only; `V4` mrp_discount only;
-`V5` itc=Yes vs `V6` itc=No same inputs (landed-cost delta); `V7` multi-rate basket (5/12/18/28 lines);
-`V8` odd-paisa CGST/SGST split; `V9` round-off up (ties); `V10` round-off down; `V11` freight+branding;
-`V12` 0% GST line; `V13` 100% discount → unit_price 0; `V14` large (₹-crore) magnitude; `V15` weighted
-margin across differing-margin lines; `V16` negative-margin line + flag; `V17` boundary grand_total
-= 500000 (Finance-leg); `V18` 499999 / 500001 boundary pair. The concrete expected numbers are derived by
-applying §1–§5 (this doc is the oracle); values that also appear in PRD §pricing must match the PRD, and any
+`test/quote_calc.test.mjs` loads `test/fixtures/quote_calc_vectors.json` holding **18 named vectors V1..V18**,
+each `{name, input: QuoteCalcInput, expected: {lines:[{landed_cost_paise, unit_price_paise, line_taxable_paise,
+line_gst_paise, cgst_paise, sgst_paise, igst_paise, line_margin_paise}], totals:{subtotal_paise, cgst_total,
+sgst_total, igst_total, grand_total_paise, round_off_paise, weighted_margin_bp, negative_margin}}}`. **Every
+numeric value is an integer** (paise or bp) — the I0-test (§0) rejects any non-integer in a vector.
+Acceptance = **byte-exact** per vector; CI fails if `< 18` vectors present. The expected objects must be
+**hand-computed and committed as a frozen oracle — never generated by running the engine** (that would make
+the gate self-certifying; this remains the one pre-build task). Coverage:
+`V1` intra two-line mixed (§8); `V2` inter-state (IGST); `V3` cost_markup only; `V4` profitable mrp_discount
+(purchase_cost < discounted MRP); `V5` itc=Yes vs `V6` itc=No same inputs (landed-cost delta); `V7` multi-rate
+basket (500/1200/1800/2800 bp lines); `V8` odd-paisa split (`line_gst=541 → cgst 271 / sgst 270`); `V9`
+round-off up (50-paisa tie → up); `V10` round-off down; `V11` freight+branding with `qty>1` (pins per-unit
+freight); `V12` 0-bp GST line; `V13` `discount_bp=10000` → unit_price 0; `V14` ₹-crore magnitude (asserts
+safe-integer); `V15` weighted margin across differing-margin lines; `V16` negative-margin line + flag;
+`V17` `grand_total_paise = 50000000` (Finance-leg boundary, asserted in the submit/lifecycle test, not here);
+`V18` `49999900 / 50000100` boundary pair. Values that also appear in PRD §pricing must match the PRD; any
 discrepancy is escalated to the user, not silently resolved.

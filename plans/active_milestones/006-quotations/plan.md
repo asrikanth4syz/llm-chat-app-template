@@ -118,11 +118,15 @@
 3. **Verification:** curl matrix — enabled user 200, disabled user 404, admin PUT grant→user now 200,
    revoke→404; assert in a small integration test.
 
-#### Task 2.C — Redaction chokepoint
-1. **Harness:** unit test `redactForQuoteRole('ops', payload)` strips `purchase_cost,markup_pct,margin,
-   landed_cost,itc_*`; other roles untouched.
-2. **Implementation:** single helper applied on list/detail/calc/document response builders.
-3. **Verification:** test + grep that no quote response serializes raw rows without passing through it.
+#### Task 2.C — Redaction chokepoint (allowlist, deep)
+1. **Harness:** unit test asserts an `ops` (or unknown) role response contains **only** the allowlisted keys —
+   i.e. none of `purchase_cost_paise, markup_bp, mrp_paise, discount_bp, freight_alloc_paise,
+   branding_cost_paise, landed_cost_paise, line_margin_paise, input_gst_paise, weighted_margin_bp, itc_*`
+   at **any** nesting depth (incl. nested `payload_json`/`detail_json`).
+2. **Implementation:** single allowlist helper applied on **all 8** response paths (list/detail/calc/versions/
+   document/audit/today/bell); deep-redacts nested JSON; unknown role → full redaction (fail-closed).
+3. **Verification:** per-role × per-path test + grep that no quote response serializes raw rows/payloads
+   without passing through it.
 
 #### Task 3.A / 3.B — Quote CRUD + immutable versions
 1. **Harness:** integration test — create quote (v1, has `content_hash`, `prev_hash=null`); edit→v2
@@ -174,9 +178,16 @@
 - **Smoke (`test/smoke.mjs`):** handler resolution + page gating + nav entitlement for the new module.
 
 ## 🎯 Success Criteria (r2)
+- **Integer-only money/rates (calc-spec §0 I0):** no `REAL` column, no float computation, nothing float
+  hashed; money is integer paise, rates are integer basis points (`_bp`). `tsc` brands `Paise`/`Bp` so a
+  raw float can't be assigned into a money/rate position, and the I0-test greps `src/quote_calc.ts` for
+  `/ 100`, `/ 10000`, `parseFloat`, float fields → fail. Every value the engine returns is
+  `Number.isInteger`.
 - `quote_calc.ts` passes all **18 named vectors** in `test/fixtures/quote_calc_vectors.json` **byte-exact**
-  (integer paise), covering intra/inter-state, per-line ITC fold, multi-rate basket, odd-paisa split,
-  round-off ties, and the ₹5L boundary — CI fails if < 18 vectors present; **before** any persistence code.
+  (all integers), covering intra/inter-state, per-line ITC fold, multi-rate basket, odd-paisa split
+  (`541→271/270`), round-off ties, per-unit freight (qty>1), and the ₹5L boundary (`50000000` paise, asserted
+  in the submit test) — fixtures **hand-authored, not engine-generated**; CI fails if < 18; **before** any
+  persistence code.
 - Every `quote_*` row carries `account_id`; a cross-tenant `:id` read/write returns 404 (test with two
   tenants); the feature config is per-tenant.
 - Two concurrent `PUT` version-appends (and two concurrent creates) never fork the chain or duplicate

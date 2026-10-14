@@ -144,8 +144,24 @@ independently recomputed by two skeptics and is internally correct (weighted_mar
 
 ## Actions Taken
 - [x] Wrote this r2 review (20 confirmed, 7 unconfirmed).
-- [ ] r3 touch-up: fix the 4 highs (ceilHalf→`Math.ceil`, boundary vectors in paise + move Finance assertion
-  to submit test, inline+hand-verify all 18 vectors, persist/drop genesis_salt) + the 14 mediums; then the
-  calc engine is safe to build test-first.
-- [ ] Re-run panel after r3 → `spec-validation-r3.md` _(recommended only for the calc-spec deltas; the rest
-  are mechanical)._
+- [x] **Integer-paise hardening pass** (folded into `calc-spec.md`/`data-model.md`/`plan.md`/`context.md`):
+  - `ceilhalf-formula-typo` (🔴) → `ceilHalf(x) := (x + (x & 1)) / 2`, pure integer, no bitshift; `541→271/270`.
+  - `finance-boundary-vector-unit-mismatch` (🔴) → V17/V18 restated in paise (`50000000`, `49999900/50000100`);
+    Finance decision asserted in the submit/lifecycle test (calc totals carry no finance flag).
+  - `round-primitive-and-rate-representation` + `rates-stored-as-real-drift` (🟠) → **no `REAL` anywhere**;
+    rates are integer basis points (`markup_bp`/`discount_bp`/`sale_gst_bp`/`purchase_gst_bp`); every rounding
+    site routed through `roundHalfAwayFromZero(int,int)`/`applyBp`; §0 I0 invariant + `tsc` `Paise`/`Bp`
+    brands + I0 grep test.
+  - `mrp-discount-cost-equals-sell` (🟠) → `mrp_discount` carries its own `purchase_cost_paise` basis; §8
+    recomputed (L2 margin now +580, V1 both-positive; V16 covers negative).
+  - `unbounded-markup-qty-overflow` (🟠) + `max-magnitude-unit-error` (unconf) → bounded `markup_bp`/`qty`,
+    computed-value safe-integer + ≤10^12-paise assertion → 422; magnitude annotation corrected.
+  - `weighted-margin` now integer `weighted_margin_bp` (no float percent).
+  - `freight-branding-per-unit` (unconf) → stated **per unit** + a `qty>1` vector (V11).
+  - `catalogue-gst-authority-ignored-or-422` (unconf) → chose "client rate ignored, server authoritative".
+  - redaction field list in `plan.md` updated to the `_bp`/`_paise` names + allowlist/deep/8-path shape.
+- [ ] **Still open (not in this pass):** `calc-vectors-not-inlined` (🔴 — hand-author V2–V18 numbers; the one
+  build gate), `genesis-salt-not-persisted` (🔴), header-version-desync, cas-zero-row wording, fy-counter
+  seeding, reminder-snooze/R8-ordering, capability-matrix columns, idempotency in-flight, sod-author-set,
+  sole-approver fallback, settings `_ver`, expiring_window_days, access-body, gst-slab width, idem route-scope.
+- [ ] Re-run panel after the remaining fixes → `spec-validation-r3.md`.

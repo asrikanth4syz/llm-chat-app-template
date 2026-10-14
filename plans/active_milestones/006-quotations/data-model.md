@@ -7,8 +7,10 @@ splits on `;`). Immutability/append-only is enforced in app-layer `env.DB.batch(
 below, never by SQL triggers.
 
 ## Cross-cutting decisions folded from spec-validation r1
-- **Money = INTEGER paise everywhere** (resolves `money-stored-as-real-float`). No `REAL` money columns.
-  See `calc-spec.md §0`.
+- **Integer-only money & rates** (resolves `money-stored-as-real-float`, `rates-stored-as-real-drift`):
+  **no `REAL` column anywhere in the quote feature.** Money is `INTEGER` paise; rates are `INTEGER`
+  basis points (`*_bp`, `18% → 1800`). Nothing float is stored, computed, or hashed (calc-spec §0 I0).
+  Presentation converts paise/bp → strings only at the SPA edge.
 - **Tenancy** (resolves `tenancy-isolation-missing`): every `quote_*` table carries `account_id TEXT NOT
   NULL`. Every read/write filters by the caller's `account_id`; a mismatch is a **404** (host convention),
   and `denyClientCrossAccess(user, client_id)` additionally guards `client_id` on create/list. The
@@ -68,9 +70,9 @@ fails → handler retries by re-reading. Rows are never UPDATEd/DELETEd.
 | description | TEXT | |
 | qty | INTEGER | > 0 |
 | pricing_mode | TEXT | `cost_markup` \| `mrp_discount` |
-| purchase_cost_paise / markup_pct / mrp_paise / discount_pct | INTEGER/REAL/INTEGER/REAL NULL | mode-dependent; pct are rate not money |
-| freight_alloc_paise / branding_cost_paise | INTEGER | cost inputs |
-| sale_gst_rate / purchase_gst_rate | REAL | per line; server-resolved for catalogued SKUs |
+| purchase_cost_paise / markup_bp / mrp_paise / discount_bp | INTEGER (NULL by mode) | all integers; `markup_bp`/`discount_bp` are basis points; `mrp_discount` carries its own `purchase_cost_paise` cost basis (not the discounted MRP) |
+| freight_alloc_paise / branding_cost_paise | INTEGER | cost inputs, **per unit** |
+| sale_gst_bp / purchase_gst_bp | INTEGER | per line, basis points; server-resolved (bp) for catalogued SKUs |
 | itc_claimable | INTEGER | **per line** (0/1) |
 | landed_cost_paise / unit_price_paise / line_taxable_paise / line_gst_paise / cgst_paise / sgst_paise / igst_paise / line_margin_paise | INTEGER | computed outputs (all paise) |
 Cost/margin columns are **deep-redacted** server-side for non-cost quote-roles (see api-contracts redaction).
