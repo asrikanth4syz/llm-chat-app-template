@@ -85,11 +85,14 @@ The adversarial panel confirmed 31 findings (`adversarial-reviews/spec-validatio
   accept-lost/followup/snooze/audit-read columns), admin self-grant of approver roles forbidden + hash-chained
   `quote_entitlement_audit`, nav re-checks `/access` per navigation, optimistic `_ver` on both config blobs.
 - **Redaction** → allowlist-based, deep (nested `payload_json`/`detail_json`), on all 8 response paths.
-- **Approvals (r3 product decisions)** → author set = creator ∪ all version authors; **Manager leg
-  auto-satisfied when an author holds `commercial_manager`** ("editor who is a manager needs no extra
-  approval"); **Finance leg never auto-satisfied** (preserves ITC/₹5L control); else a non-author approver,
-  else the configured **`fallback_approver_id`**, else 409; eligibility re-checked at act time (no deadlock);
-  reject supersedes all rows; completion via guarded UPDATE; Finance basis = post-round-off GST-inclusive grand.
+- **Approvals (r3/r4 product decisions)** → `commercial_manager` **can author** (matrix grants create/edit),
+  so the author set = creator ∪ all version authors (used to *disqualify* approving). **Manager leg
+  auto-satisfied only when the _current-version_ author holds `commercial_manager`** ("editor who is a
+  manager needs no extra approval"); if all required legs auto-satisfy, submit goes straight to APPROVED.
+  **Finance leg never auto-satisfied** (preserves ITC/₹5L control). Else a non-author role approver; else the
+  configured **`fallback_approver_id`** (entitled approver, ∉ author set, one leg only, finance-leg fallback
+  holds finance); else 409 naming the missing leg. Eligibility re-checked at act time; reject supersedes all
+  rows; completion via a single conditional UPDATE; Finance basis = post-round-off GST-inclusive grand.
 - **Reminders/lifecycle (r3)** → **3-step** `R1=send+2d, R2=send+7d, R3=valid_until−2d`, **no post-expiry
   nudge**; snooze only from PENDING (defers via `snooze_until`); cron fires reminders **then** sweeps
   SENT→EXPIRED; IST day boundaries; accept/lost/expire cancel PENDING+SNOOZED.

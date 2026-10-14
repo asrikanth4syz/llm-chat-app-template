@@ -21,11 +21,19 @@ Every reachable action has a column; anything not ✅ → **403**. (view = list/
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | sales | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | ops | ✅ | ✅ | — | — | — | — | — | — | ✅ | ✅ | ✅ | **❌ (redacted)** |
-| commercial_manager | ✅ | ✅ | — | — | `manager` | `manager` | — | — | ✅ | ✅ | ✅ | ✅ |
+| commercial_manager | ✅ | ✅ | ✅ | ✅ | `manager` | `manager` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | finance | ✅ | ✅ | — | — | `finance` | `finance` | — | — | ✅ | ✅ | ✅ | ✅ |
-- **reject** is tied to the leg an approver owns (a `manager`/`finance` user may reject their own pending leg,
-  sending the quote back to DRAFT). `ops` is view + follow-up only, always cost-redacted. The configured
-  `fallback_approver_id` gains the approve/reject capability for whichever leg it is standing in for.
+- **`commercial_manager` can author** (create/edit/submit/send/accept-lost) as well as approve the manager
+  leg — this makes the "manager who priced the current version needs no separate manager approval" rule
+  **reachable** (resolves `manager-autosatisfy-unreachable`): when a manager authors the current version the
+  Manager leg is `AUTO_SATISFIED` and, if no Finance leg is required, submit lands directly in `APPROVED`.
+  SoD still bars a manager from approving the *finance* leg of a quote they authored. `finance` remains
+  approve-only (keeps the ITC/₹5L control clean). `ops` is view + follow-up only, always cost-redacted.
+- **reject** is tied to the leg an approver owns. The configured `fallback_approver_id` gains the approve/
+  reject capability for the one leg it is assigned to stand in for.
+- _[Accepted trade-off, flagged: a manager authoring + auto-satisfying their own manager leg receives no
+  independent manager review — this is your stated intent ("editor who is a manager needs no extra
+  approval"). The admin-self-grant guard + current-version-author scoping limit promote-to-waive abuse.]_
 
 ## Admin (entitlement/settings) — platform `super_admin|ops_admin`, routes under `/api/admin/*`
 - `GET  /api/admin/quote-access` → `{ users:[{id,name,role}], enabled:{userId:quoteRole}, _ver }`.
@@ -33,7 +41,10 @@ Every reachable action has a column; anything not ✅ → **403**. (view = list/
   `quote.enabled_users:<account_id>`. **422** unless `quoteRole` is null or one of the **four**
   `{sales, ops, commercial_manager, finance}` (case-sensitive); **409** on `_ver` mismatch. An admin **may
   not** grant an approver role (`commercial_manager`/`finance`) to their **own** userId → **403** (resolves
-  `admin-self-grant`). Every change appends to `quote_entitlement_audit` (hash-chained) with before/after.
+  `admin-self-grant`). A revoke/demote targeting the current `settings.fallback_approver_id` is **rejected
+  409** (admin must repoint/clear the fallback first) so the escape hatch can't go silently stale; the
+  `GET` responses carry a `fallback_valid` flag (resolves `fallback-stale-after-role-change`). Every change
+  appends to `quote_entitlement_audit` (hash-chained) with before/after.
 - `GET/PUT /api/admin/quote-settings` → read/write `quote.settings:<account_id>` (incl. `seller_state_code`,
   `fallback_approver_id`, `expiring_window_days`, 3-step `reminder_rules`). PUT validates the full blob,
   **422** on invalid `seller_state_code`; **409** on `_ver` mismatch (resolves `settings-config-no-ver`);
@@ -87,7 +98,12 @@ Any other source status → **409**.
   - **If every required leg is `AUTO_SATISFIED` at submit, the submit batch transitions the quote directly to
     `APPROVED`** (resolves `submit-all-auto-satisfied-never-completes`).
   - Eligibility is re-checked at **act time** with the same author set (resolves `sod-sole-approver-deadlock`).
-  - On submit, `pushNotification` is sent to each leg's assigned approver / fallback (not just the creator).
+  - On submit, each leg's `assigned_to` is persisted and `pushNotification`-ed (not just the creator).
+  - **Minimum staffing** (resolves `small-org-permanent-409`): a quote triggering **both** legs needs ≥3
+    distinct entitled users (author + non-author manager + non-author finance; one fallback covers only one
+    leg). When that can't be met, `409 E_NO_ELIGIBLE_APPROVER` **names the specific leg/role missing** (e.g.
+    "no eligible finance approver"); the admin settings page warns when the enabled set can't satisfy a
+    dual-leg quote.
 - **approve** guard: `actor_id ∉` author set → **403 SoD** (unless the caller is `fallback_approver_id`
   standing in for the leg, and is not themselves in the author set); caller's quoteRole must match the leg
   (or caller is the fallback approver). Completion = all `required` legs in `APPROVED`∪`AUTO_SATISFIED` for
@@ -106,9 +122,12 @@ Reminders are the **3-step cadence** (`R1=send+2d`, `R2=send+7d`, `R3=valid_unti
   `today(IST) ≤ valid_until ≤ today(IST) + settings.expiring_window_days` (default 3; inclusive both ends;
   already-past `valid_until` SENT quotes are excluded — they become EXPIRED on the sweep — resolves
   `expiring-bucket-predicate`).
-- `GET  /api/quotes/bell` → `{ count }` = PENDING approval legs assigned to me — `(leg matches my quoteRole
-  OR I am the leg's fallback approver)` AND I ∉ author set — plus my follow-ups due today(IST). (Fallback
-  legs are counted + notified so the escape-hatch approver sees pending work — resolves `fallback-no-bell`.)
+- `GET  /api/quotes/bell` → `{ count }` = PENDING approval legs **assigned to me** (`quote_approvals.assigned_to
+  == me` — this already encodes full eligibility, since `assigned_to` was set under the role/fallback/one-leg
+  rules at submit, so the bell never shows a leg I'd be 403'd on — resolves `fallback-no-bell`,
+  `bell-counts-ineligible-fallback-leg`) **plus my follow-ups with `next_action_date ≤ today(IST)`** (same
+  predicate as Today, so overdue follow-ups aren't dropped — resolves `bell-followup-overdue`). The assignee
+  (incl. a fallback) is `pushNotification`-ed at submit.
 - `POST /api/quotes/:id/reminders/:rid/snooze` `{ until }` — valid **only from PENDING** → SNOOZED with a
   future `snooze_until` (a SENT rule cannot be snoozed → 409; resolves `reminder-snooze-state-machine`).
 - `POST /api/quotes/:id/followups` `{ channel, note, next_action_date? }` → append + audit.

@@ -24,16 +24,21 @@ This is the single most load-bearing rule in the engine; the test suite asserts 
   with `pctToBp(p) = Math.round(p * 100)` once, rejecting any percent with >2dp (422) so the conversion is
   lossless; everything downstream is bp integers.
 - **The one rounding primitive.** `roundHalfAwayFromZero(numerator: int, denominator: int) -> int` is the
-  **only** rounding operation in the engine. It takes two integers and returns an integer:
-  `q = (|numerator| * 2 + denominator) / (2 * denominator)` truncated, then signed — i.e. exact
-  half-away-from-zero with **no division performed in float**. Every rate application is written as this
-  primitive over integers, never as `x * rate / 100` in float:
-  - apply a bp rate to a paise base: `applyBp(base_paise, rate_bp) := roundHalfAwayFromZero(base_paise * rate_bp, 10000)`.
-  "half-up" / "round" everywhere in this doc means `roundHalfAwayFromZero`; a bare `/` never appears in a
-  money path.
+  **only** rounding operation in the engine, and **its division is done in `BigInt`, never IEEE float**
+  (resolves `round-primitive-float-division`): `q = ((|n|*2n + d) / (2n*d))` in BigInt (exact integer
+  division; BigInt is integral so it is exempt from the no-float rule), then re-signed and converted back to
+  a `Number` asserted `Number.isSafeInteger`. BigInt makes it exact for every operand within the cap, where a
+  plain `Math.trunc(n/d)` on a double can be off by one near 2^53. Rate application uses it over integers,
+  never `x * rate / 100`:
+  - `applyBp(base_paise, rate_bp) := roundHalfAwayFromZero(base_paise * rate_bp, 10000)`.
+  - `weighted_margin_bp` takes the same BigInt path (`roundHalfAwayFromZero(Σmargin*10000, subtotal)`), so it
+    is exact to the full 10^12-paise cap — no separate lower cap, no 422 on the metric (resolves
+    `weighted-margin-cap-vs-money-cap`).
+  "half-up" / "round" everywhere means `roundHalfAwayFromZero`; a bare `/` never appears in a money path.
 - **I0-test (acceptance):** `test/quote_calc.test.mjs` includes a guard that (a) every numeric field the
   engine returns is `Number.isInteger(x) === true`, and (b) a grep/AST check fails if `src/quote_calc.ts`
-  contains a `/ 100`, `/ 10000`, `parseFloat`, `Number(`…`.`…`)`, or a non-`_bp`/non-`_paise` numeric field.
+  contains **any `/` or `%` applied to a `Number`** (bare division banned outright — the only division is
+  BigInt inside the primitive), or `parseFloat`, or a non-`_bp`/non-`_paise` numeric field.
   `tsc` types model money as a branded `Paise = number & {__paise}` and rates as `Bp = number & {__bp}` so a
   raw float cannot be assigned into a money/rate position.
 
@@ -137,8 +142,12 @@ at the edge. **No float percent is computed or stored** (upholds §0 I0). All op
 - **Slab check applies to server-resolved rates too** (resolves `catalogue-rate-off-slab`): if a catalogued
   SKU's stored `gst_rate` converts to a bp value **not** in the allowed set (§7), the calc/create request
   returns **422 `E_UNSUPPORTED_GST_SLAB`** naming the SKU — surfaced, never silently bypassed — until that
-  slab is added to the set (other slabs are a planned follow-up). This keeps the whitelist honest for every
-  line rather than exempting catalogue lines.
+  slab is added to the set. This keeps the whitelist honest for every line rather than exempting catalogue lines.
+- **Null / unknown SKU** (resolves `catalogue-null-or-unknown-sku-gst`): a catalogued SKU whose stored
+  `gst_rate` is **NULL/absent/non-numeric** → **422 `E_CATALOGUE_RATE_MISSING`** naming the SKU — never
+  coerced to 0 (which would silently tax at 0%). A **non-null `sku` that is not found** in the catalogue →
+  **422 `E_UNKNOWN_SKU`**; it never falls through to the ad-hoc client-supplied-rate path. Only `sku === null`
+  uses the client-supplied `sale_gst_bp` (constrained to the slab set).
 - For an ad-hoc line (`sku == null`): the client supplies `sale_gst_bp`, constrained to the allowed slab set
   `{0,500,1200,1800,2800,4000}` bp (§7);
   `purchase_gst_bp` defaults to it.
@@ -156,13 +165,13 @@ integer (§0 I0) — a non-integer `*_paise`/`*_bp` is itself a 422.
 - `sale_gst_bp`/`purchase_gst_bp` ∈ the allowed GST-slab set in bp: **{0, 500, 1200, 1800, 2800, 4000}**
   (= 0/5/12/18/28/40%). Other slabs (3%, 0.25%, cess, etc.) are deferred — add to this set when needed.
 - `seller_state_code` set (else `E_SELLER_STATE_UNSET`).
-- **Magnitude (input and computed):** the money cap is **10^12 paise (= ₹1,000 crore)**. Every input money
-  value is `≤ 10^12`, AND the engine asserts every **computed** value — `unit_price_paise`,
-  `line_taxable_paise`, all totals, **and the weighted-margin numerator `(Σ line_margin_paise) * 10000` plus
-  its `×2` inside `roundHalfAwayFromZero`** — is `Number.isSafeInteger(...)` and within range; a breach is a
-  **422**, never silent precision loss. (The bp numerator is the one path that can exceed 2^53 below the
-  money cap, so it is guarded explicitly — closes `weighted-margin-numerator-overflow` and
-  `unbounded-markup-qty-overflow`.) A boundary vector sits near 10^12 paise.
+- **Magnitude (input and computed):** the single money cap is **10^12 paise (= ₹1,000 crore)**. Every input
+  money value is `≤ 10^12`, AND the engine asserts every **computed money** value — `unit_price_paise`,
+  `line_taxable_paise`, all totals — is `≤ 10^12` and `Number.isSafeInteger(...)`; a breach is a **422**,
+  never silent precision loss (closes `unbounded-markup-qty-overflow`). The **weighted-margin numerator does
+  not need a separate cap**: it is computed in BigInt (§0) and only its final small `_bp` result returns to
+  `Number`, so there is no sub-₹450cr effective limit — one consistent cap (resolves
+  `weighted-margin-cap-vs-money-cap`). A boundary vector sits near 10^12 paise.
 
 ## 8. Worked example vector (V1 — canonical, all integer paise / bp)
 Seller state `KL`, `place_of_supply = KL` (intra-state), `qty = 1` each. All rates are bp integers.

@@ -30,7 +30,10 @@ below, never by SQL triggers.
   and a stored `genesis_salt`** (a random 16-byte hex minted once per quote at creation, column on `quotes`;
   the entitlement chain uses a per-account salt row). The verifier reads the stored salt to recompute every
   hash, so the chain is reproducible; the salt + account_id + quote_id framing blocks delimiter injection
-  and cross-quote/cross-account replay.
+  and cross-quote/cross-account replay. **Representation:** `payload_json`/`detail_json` are stored
+  already-canonical and embedded in a preimage as the **exact stored string bytes** (never a re-parsed
+  object), so writer and verifier are byte-identical (resolves `content-hash-payload-repr`); Task 2.D pins a
+  known-answer `payload → hex digest` vector.
 
 ## `quotes` (header — only non-pricing metadata mutable while DRAFT)
 | col | type | notes |
@@ -53,7 +56,9 @@ batch MUST populate all three** from the v1 computation, and each version-append
 never trusts the header cache), so a created-then-submitted v1 quote cannot skip the Finance leg via a null
 cache (resolves `header-version-desync`, `create-v1-header-cache-unset`).
 | created_by | TEXT NOT NULL | SoD anchor |
-| valid_until | TEXT NOT NULL | `YYYY-MM-DD`, end-of-day **Asia/Kolkata**; default `send_date + settings.default_validity_days` |
+| valid_until | TEXT NULL | `YYYY-MM-DD` end-of-day **Asia/Kolkata**; **nullable until send** (resolves `valid-until-default-at-create`): optional at create (if given, stored), otherwise set in the send batch to `sent_at + default_validity_days`. NOT NULL is enforced at send, not create. |
+| sent_at | TEXT NULL | set in the send batch (IST date); the anchor for `valid_until` default and R1/R2 offsets |
+| idem_key | TEXT NULL | the create's `Idempotency-Key`, stored so a stale-lease retry can detect the prior commit (resolves `idempotency-lease-double-execute`) |
 | lost_reason | TEXT NULL | required when `LOST` (≤500 chars) |
 | created_at / updated_at | TEXT | `datetime('now')` (UTC stored; compared in IST — see below) |
 
@@ -104,7 +109,9 @@ Cost/margin columns are **deep-redacted** server-side for non-cost quote-roles (
 | leg | TEXT | `manager` \| `finance` |
 | required | INTEGER | computed at submit |
 | status | TEXT | `PENDING`\|`APPROVED`\|`REJECTED`\|`SUPERSEDED`\|`AUTO_SATISFIED` |
-| actor_id / actor_name | TEXT NULL | the approver (null until acted) |
+| assigned_to | TEXT NULL | userId assigned to this leg at submit (the eligible role-approver or the fallback) |
+| assigned_as_fallback | INTEGER | 1 if `assigned_to` is standing in via `fallback_approver_id` (resolves `fallback-one-leg-not-enforced-act-time`) |
+| actor_id / actor_name | TEXT NULL | the approver who acted (null until acted) |
 | comments | TEXT NULL | |
 | acted_at | TEXT NULL | |
 
@@ -134,10 +141,16 @@ test). Per leg:
 On reject or any version append, all prior `PENDING`/`APPROVED`/`AUTO_SATISFIED` rows → `SUPERSEDED`;
 completion = all `required` legs in `APPROVED`∪`AUTO_SATISFIED` for `version == quotes.current_version`.
 **Completion is evaluated both inside each approve batch AND at the end of the submit batch**, so a quote
-whose every required leg is `AUTO_SATISFIED` at submit transitions **directly to `APPROVED`** rather than
-stalling in `PENDING_APPROVAL` (resolves `submit-all-auto-satisfied-never-completes`, `approval-completion-race`).
-Eligibility is re-checked at act time with the same author set, so a revoke-after-submit falls back to the
-(valid) fallback approver rather than deadlocking.
+whose every required leg is `APPROVED`∪`AUTO_SATISFIED` at submit transitions **directly to `APPROVED`**
+rather than stalling in `PENDING_APPROVAL` (resolves `submit-all-auto-satisfied-never-completes`). Completion
+is a **single conditional** `UPDATE quotes SET status='APPROVED' WHERE id=? AND status='PENDING_APPROVAL' AND
+NOT EXISTS (a required leg for current_version still PENDING)` — never a SELECT-count-then-UPDATE — so two
+concurrent approvals cannot both miss the flip (resolves `approval-completion-race`). **Act-time re-check**
+applies the *full* rule, not just author membership: the actor must be the leg's `assigned_to` (or a still-
+eligible role-approver), ∉ author set, hold the leg's required role when standing in for Finance, and **not
+have already acted on the other leg of this quote** — so one fallback can never clear both legs
+(resolves `fallback-one-leg-not-enforced-act-time`). A revoke-after-submit re-routes to a valid fallback
+rather than deadlocking.
 
 ## `quote_audit` (hash-chained, append-only — tamper-evident)
 | col | type | notes |
@@ -193,9 +206,13 @@ cannot fire a nudge on the day it expires (resolves `reminder-overshoot-post-exp
 **State machine** (resolves `reminder-snooze-state-machine`): the cron fires a rule when
 `status = 'PENDING' AND due_date ≤ today(IST)`, OR `status = 'SNOOZED' AND snooze_until ≤ today(IST)` →
 set `SENT`, `sent_at`. **Dedup = one `SENT` per (quote_id, rule)**; a `SENT` rule is not re-fired. Snooze is
-valid only from `PENDING` → `SNOOZED` with a future `snooze_until` (a `SENT` rule cannot be snoozed — 409);
-this makes snooze a genuine deferral (the predicate checks `snooze_until`, not `due_date`). `accept`/`lost`,
-and the SENT→EXPIRED cron sweep, cancel rules `IN ('PENDING','SNOOZED')`. `CANCELLED` is terminal.
+valid only from `PENDING` → `SNOOZED` with `today(IST) < snooze_until < valid_until` (a `SENT` rule cannot be
+snoozed — 409; a `snooze_until ≥ valid_until` is rejected 422 so snooze can't push a nudge onto/after expiry
+— resolves `snooze-reintroduces-post-expiry-nudge`). The predicate checks `snooze_until`, not `due_date`.
+The cron's **fire step additionally skips any reminder whose quote already satisfies the expiry predicate
+(`valid_until < today(IST)`)**, so even under cron lag no reminder fires for an expired quote (resolves
+`reminder-fires-on-cron-lag-post-expiry`). `accept`/`lost` and the SENT→EXPIRED sweep cancel rules
+`IN ('PENDING','SNOOZED')`. `CANCELLED` is terminal.
 
 ## `quote_followups`
 | id | account_id | quote_id | actor_id | actor_name | channel (`call`\|`email`\|`meeting`\|`note`) | note | next_action_date (YYYY-MM-DD IST, NULL) | created_at |
@@ -208,17 +225,20 @@ DO UPDATE SET last_no = last_no + 1 RETURNING last_no` (single statement, no tri
 `quote_no` is formatted `<settings.number_prefix>/<fy>/<last_no padded 4>` (e.g. `GZ/25-26/0007`); FY boundary
 is IST (Apr 1). Create retries on `UNIQUE(account_id, quote_no)` conflict.
 
-## `quote_idempotency` (resolves `idempotency-key-semantics`, `idempotency-inflight-race`)
-| key | account_id | user_id | route | request_hash | status (`IN_PROGRESS`\|`DONE`) | response_json | status_code | created_at |
+## `quote_idempotency` (resolves `idempotency-key-semantics`, `idempotency-inflight-race`, `idempotency-lease-double-execute`)
+| key | account_id | user_id | route | request_hash | status (`IN_PROGRESS`\|`DONE`) | response_json | status_code | lease_until | created_at |
 — PK(account_id, user_id, **resolved route incl. `:id`**, key). The mutation **reserves the key by INSERTing
 the PK row with `status=IN_PROGRESS` inside the same `batch()` as the write**; a concurrent second request
 with the same key fails the PK and is served the reservation (replay/`409`), so double-click can never
 create two quotes/approvals. On success the row flips to `DONE` with `response_json`/`status_code`. Replay:
 a `DONE` row with same `request_hash` → cached response; same key + different `request_hash` → **409**; an
 **`IN_PROGRESS` row → 409 `E_IN_PROGRESS` + `Retry-After`** (never a null body). The `IN_PROGRESS` row
-carries a short **lease** (`lease_until`, ~30s): a row still `IN_PROGRESS` past its lease is treated as
-abandoned (crashed worker) and the key becomes re-executable, so a committed-but-unflipped mutation is not
-bricked for the full 24h TTL (resolves `idempotency-in-progress-semantics`). TTL 24h; expired key treated as absent.
+carries a short **lease** (`lease_until`, ~30s). A row still `IN_PROGRESS` past its lease is treated as
+abandoned (crashed worker), but recovery **does NOT blindly re-run** (that would mint a second quote_no): the
+retry first **probes for the already-committed effect** — the `quotes` row (or approval/version) carrying
+this `idem_key` — and, if found, returns that result and flips the row to `DONE`; it re-executes only when no
+committed effect exists (resolves `idempotency-lease-double-execute`). So a committed-but-unflipped create
+never yields a duplicate, and the key is not bricked for 24h. TTL 24h; expired key treated as absent.
 
 ## Config keys (`app_config`, per-tenant)
 - `quote.enabled_users:<account_id>` → `{ "_ver": <int>, "users": { "<userId>": "<quoteRole>" } }`,
