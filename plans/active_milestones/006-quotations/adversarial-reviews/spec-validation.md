@@ -228,6 +228,7 @@ construction.
 ## Actions Taken
 
 - [x] Wrote this review (31 confirmed, 10 unconfirmed) — evidence artifact for the gate.
-- [ ] Fold the 11 high + 20 medium tightenings into `context.md` / `data-model.md` / `api-contracts.md` / `plan.md` _(pending user go-ahead — it's a material spec revision)._
-- [ ] Surface the high-value unconfirmed items (float money, access-endpoint exemption) to the user.
-- [ ] Re-run the panel on the revision → `spec-validation-r2.md` _(after folding)._
+- [x] Folded all 31 confirmed tightenings (+ the high-value unconfirmed: integer-paise money, `/access`
+  exemption, doc-hash blanking, header-mutation→version, mixed-basket per-line ITC) into `calc-spec.md`
+  (new), `data-model.md`, `api-contracts.md`, `context.md`, `plan.md`.
+- [x] Re-ran the panel on the revision → `spec-validation-r2.md`.

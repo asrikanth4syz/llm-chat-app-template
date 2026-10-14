@@ -64,6 +64,31 @@ No per-user entitlement exists today (RBAC is pure role). Design, no schema chur
   --remote` is known-broken. A migration file is added for parity/local but self-heal is the source of
   truth at runtime.
 
+## Resolved decisions (folded from spec-validation r1 → r2)
+The adversarial panel confirmed 31 findings (`adversarial-reviews/spec-validation.md`). All are folded in:
+- **Pricing/GST/landed-cost/rounding/margin** → fully specified in `calc-spec.md` (integer-paise math,
+  explicit intra/inter-state rule keyed on `seller_state_code`, per-line ITC, CGST=⌈gst/2⌉ odd-paisa rule,
+  round-to-rupee-ties-up, revenue-weighted margin, 18 named vectors as the acceptance oracle).
+- **Tenancy** → `account_id` on every table + `denyClientCrossAccess` + per-tenant config keys.
+- **Concurrency** → UNIQUE(quote_id,version)/(quote_id,seq)/(account_id,quote_no) + CAS on `current_version`
+  + counter `RETURNING` + retry.
+- **Hashing** → RFC 8785 canonicalization; length-prefixed audit preimage including account_id+quote_id+salt;
+  a `verifyQuoteChain` verifier; document hashed with its hash field blanked.
+- **Entitlement** → role enum validated + fail-closed redaction (allowlist), capability matrix for all five
+  roles, admin self-grant of approver roles forbidden + hash-chained `quote_entitlement_audit`, nav re-checks
+  `/access` per navigation, optimistic `_ver` on the config blob.
+- **Redaction** → allowlist-based, deep (nested `payload_json`/`detail_json`), on all 8 response paths.
+- **Approvals** → sole-approver deadlock → 409 before PENDING; SoD vs all version authors; reject supersedes
+  all rows; completion via guarded UPDATE; Finance leg basis = post-round-off GST-inclusive grand total.
+- **Reminders/lifecycle** → R1–R8 offsets in `quote.settings.reminder_rules`; explicit reminder state
+  machine; SENT→EXPIRED via cron; IST day boundaries; accept/lost cancel PENDING+SNOOZED.
+- **Idempotency** → required header, `(account_id,user_id,route,key)` scope, 24h TTL, 409 on body mismatch.
+
+### Reminder rule defaults (`quote.settings.reminder_rules`, admin-editable)
+`R1=send+1d, R2=send+3d, R3=send+7d, R4=send+14d, R5=valid_until−7d, R6=valid_until−3d, R7=valid_until−1d,
+R8=valid_until+1d (final nudge)`. Anchors and offsets are config; the seeding test asserts the eight
+computed IST due-dates under a frozen clock.
+
 ## Explicitly out of scope for this milestone
 WhatsApp/SMS reminder channels; e-sign; multi-currency; PostgreSQL migration (PRD D-6); importing the
 external /giftsyz test suite. Deploy is **manual** (`npx wrangler deploy` by the user).

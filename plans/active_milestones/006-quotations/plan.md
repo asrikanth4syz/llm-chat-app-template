@@ -1,7 +1,10 @@
 # Technical Plan: 006-quotations (GIFTSYZ Quotations in Smart Pantry)
 
 > **Planning artifact only — no code written in this milestone step.** Companion docs:
-> `context.md` (fit assessment), `data-model.md`, `api-contracts.md`.
+> `context.md` (fit assessment + resolved decisions), `calc-spec.md` (pricing/GST oracle),
+> `data-model.md`, `api-contracts.md`, `adversarial-reviews/spec-validation.md` (r1, 31 findings folded).
+> **r2:** spec-validation tightenings folded in; the groups below carry the added tenancy/concurrency/
+> verifier/idempotency work.
 
 ## 🔍 Analysis & Context
 - **Objective:** Fold the GIFTSYZ quotation workflow into the Smart Pantry Worker/D1 SPA, reusing the
@@ -45,9 +48,16 @@
 - [ ] Task 1.C: `data-model.md`/`api-contracts.md` already drafted — no code; finalize field list only.
 
 ### Group 2 (Depends on Group 1 — schema + entitlement)
-- [ ] Task 2.A: `ensureQuoteSchema(env)` + `_quoteSchemaReady` guard + parity migration file.
-- [ ] Task 2.B: `requireQuoteAccess`, `getQuoteEnabledUsers`, admin access/settings endpoints + `GET /api/quotes/access`.
-- [ ] Task 2.C: `redactForQuoteRole()` chokepoint helper + unit test.
+- [ ] Task 2.A: `ensureQuoteSchema(env)` + `_quoteSchemaReady` guard + parity migration file. **Includes
+  `account_id` on every table and all UNIQUE constraints** (quote_id,version / quote_id,seq /
+  account_id,quote_no) that back the concurrency guarantees.
+- [ ] Task 2.B: `requireQuoteAccess` (+enum validation, fail-closed), `getQuoteEnabledUsers` (per-tenant key,
+  malformed→empty), admin access/settings endpoints (self-grant block, `_ver` optimistic concurrency,
+  `quote_entitlement_audit`), `GET /api/quotes/access` (**exempt from the guard**).
+- [ ] Task 2.C: `redactForQuoteRole()` — **allowlist-based, deep** (nested payload_json/detail_json); unit
+  test every role × every response path (list/detail/calc/versions/document/audit/today/bell).
+- [ ] Task 2.D: `canonical()` (RFC 8785) + `sha256Hex` + audit preimage builder + `verifyQuoteChain` with
+  unit test vector (payload→digest). Tenancy helper `requireQuoteTenant` wrapping `denyClientCrossAccess`.
 
 ### Group 3 (Depends on Group 2 — quote CRUD + immutable versions)
 - [ ] Task 3.A: Quote counter + `POST /api/quotes` (v1) + `GET` list/detail + hash helpers.
@@ -163,17 +173,28 @@
   submit/approve SoD + finance-leg, send→document hash + redaction, reminder dedup.
 - **Smoke (`test/smoke.mjs`):** handler resolution + page gating + nav entitlement for the new module.
 
-## 🎯 Success Criteria
-- `quote_calc.ts` passes all 18 PRD calc vectors incl. CGST/SGST-vs-IGST, ITC-into-landed-cost, and
-  rounding policy — **before** any persistence code.
-- A user can be granted/revoked the Quotations feature **and** assigned a quote-role from the admin
-  Settings UI, taking effect with **no deploy**; nav + server + approvals all honor it.
-- Editing a quote never mutates a prior version; `quote_versions` + `quote_audit` form verifiable
-  SHA-256 chains.
-- SoD holds: a creator cannot approve their own quote (403); Finance leg appears iff ITC=No or ≥₹5,00,000.
-- `ops` quote-role never receives cost/margin/ITC on any endpoint or in the customer document.
-- Reminders R1–R8 fire once each (deduped) via the cron pass; Today + bell reflect due work.
-- `npm test` green; CSP intact (no inline JS); self-heal provisions all tables idempotently.
+## 🎯 Success Criteria (r2)
+- `quote_calc.ts` passes all **18 named vectors** in `test/fixtures/quote_calc_vectors.json` **byte-exact**
+  (integer paise), covering intra/inter-state, per-line ITC fold, multi-rate basket, odd-paisa split,
+  round-off ties, and the ₹5L boundary — CI fails if < 18 vectors present; **before** any persistence code.
+- Every `quote_*` row carries `account_id`; a cross-tenant `:id` read/write returns 404 (test with two
+  tenants); the feature config is per-tenant.
+- Two concurrent `PUT` version-appends (and two concurrent creates) never fork the chain or duplicate
+  `quote_no`: one succeeds, the other fails the batch and retries (integration test with racing writes).
+- `verifyQuoteChain` recomputes and links every hash; tampering a stored row makes it report
+  `verified:false` with the first broken version.
+- Grant/revoke + quote-role assignment take effect with **no deploy**; nav re-checks `/access` per
+  navigation; an unknown/typo'd role fails closed (no cost shown, no approval power).
+- Redaction is allowlist-based and deep: an `ops` (or unknown) role receives **zero** cost/margin keys
+  (incl. `weighted_margin`, `freight_alloc`, `branding_cost`, `mrp`, `discount_pct`) on **all 8** response
+  paths and in the customer document — asserted by a path-coverage test + CI grep.
+- SoD: approver ∉ {creator ∪ all version authors} (403); sole-approver submit returns 409 before PENDING;
+  reject supersedes all rows; Finance leg iff `!itc_claimable_all` OR post-round-off grand ≥ ₹5,00,000.
+- Reminders fire per the R1–R8 state machine (dedup; snooze; accept/lost/expire cancel PENDING+SNOOZED);
+  SENT→EXPIRED via cron; Today/bell computed in IST with the defined predicates.
+- Idempotency-Key honored on all mutations (replay cached; body-mismatch 409).
+- `npm test` green (unit + integration + smoke); CSP intact (no inline JS); self-heal provisions all tables
+  idempotently; `tsc` clean.
 
 ## 📌 Notes for downstream (spec-validation / construction)
 - This plan is derived from an **external PRD**, not a validated in-repo `spec.md`. Recommend a
