@@ -160,8 +160,27 @@ independently recomputed by two skeptics and is internally correct (weighted_mar
   - `freight-branding-per-unit` (unconf) → stated **per unit** + a `qty>1` vector (V11).
   - `catalogue-gst-authority-ignored-or-422` (unconf) → chose "client rate ignored, server authoritative".
   - redaction field list in `plan.md` updated to the `_bp`/`_paise` names + allowlist/deep/8-path shape.
-- [ ] **Still open (not in this pass):** `calc-vectors-not-inlined` (🔴 — hand-author V2–V18 numbers; the one
-  build gate), `genesis-salt-not-persisted` (🔴), header-version-desync, cas-zero-row wording, fy-counter
-  seeding, reminder-snooze/R8-ordering, capability-matrix columns, idempotency in-flight, sod-author-set,
-  sole-approver fallback, settings `_ver`, expiring_window_days, access-body, gst-slab width, idem route-scope.
-- [ ] Re-run panel after the remaining fixes → `spec-validation-r3.md`.
+- [x] **Grill + fold pass (all remaining confirmed + most unconfirmed closed):**
+  - `calc-vectors-not-inlined` (🔴) → all 18 vectors hand-computed and frozen in `calc-vectors.md`;
+    `calc-spec §9` points at it; fixtures must reproduce it (not engine-generated).
+  - `genesis-salt-not-persisted` (🔴) → `genesis_salt` column on `quotes` (+ per-account for the entitlement
+    chain), minted at creation, read by the verifier.
+  - `header-version-desync` → header `place_of_supply`/`itc_claimable_all`/`grand_total_paise` are caches
+    refreshed in the version-append CAS UPDATE; current version is authoritative for pricing/approval.
+  - `cas-zero-row-not-abort` → wording corrected: `UNIQUE(quote_id,version)` serializes; handler checks
+    `meta.changes`; a 0-row UPDATE does not abort.
+  - `fy-counter-seeding` → single atomic UPSERT (`ON CONFLICT … DO UPDATE … RETURNING`).
+  - `reminder-snooze-state-machine` + R8/expiry → **3-step cadence** (send+2d/+7d, valid−2d), no post-expiry
+    nudge (collision gone); snooze only from PENDING via `snooze_until`; cron fires reminders then expires.
+  - `capability-matrix-missing-actions` → full matrix (view/calc/reject/snooze/audit-read/… columns) for the
+    **4 roles** (auditor dropped per product decision).
+  - `idempotency-inflight-race` → in-batch `IN_PROGRESS` key reservation; resolved-route scope.
+  - `sod-author-set-inconsistent` + `sod-sole-approver-deadlock` → author set = creator ∪ all version
+    authors (stated identically both docs); Manager leg auto-satisfied when an author is a manager; Finance
+    leg never auto-satisfied; `fallback_approver_id` escape hatch; act-time re-check.
+  - `settings-config-no-ver`, `expiring-window-days-missing`, `access-endpoint-body-undefined`,
+    `catalogue-gst-authority-ignored-or-422` (→ ignore client rate), `max-magnitude-unit-error`,
+    `freight-branding-per-unit` → all folded.
+- [ ] **Deferred (low):** `gst-slab-set-too-narrow` (unconfirmed) — widen allowed GST slab set if the
+  catalogue carries 3%/0.25%/cess items; confirm with finance before building.
+- [ ] Re-run panel on the revised corpus → `spec-validation-r3.md` (recommended, to confirm no new holes).

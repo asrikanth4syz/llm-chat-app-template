@@ -153,8 +153,9 @@
 3. **Verification:** test asserts hash stability + redaction.
 
 #### Task 6.A / 6.B — Reminders / Today / bell
-1. **Harness:** tests — `send` seeds R1–R8 due dates; `runQuoteReminderPass` fires only due+PENDING,
-   dedups `(quote_id,rule)`, marks SENT; snooze pushes `snooze_until`; `GET /today` + `GET /bell` shapes.
+1. **Harness:** tests — `send` seeds the 3 due dates (R1=send+2d, R2=send+7d, R3=valid−2d; offsets ≤ send
+   skipped); `runQuoteReminderPass` fires due PENDING/SNOOZED then sweeps SENT→EXPIRED; dedups
+   `(quote_id,rule)`; snooze only from PENDING; `GET /today` + `GET /bell` shapes.
 2. **Implementation:** add a gated branch in `scheduled()` (`src/index.ts:4441`) calling
    `runQuoteReminderPass(env)`; follow-ups endpoints; Today aggregates due reminders + follow-ups +
    expiring; bell = my pending approvals + my due follow-ups.
@@ -201,7 +202,7 @@
   paths and in the customer document — asserted by a path-coverage test + CI grep.
 - SoD: approver ∉ {creator ∪ all version authors} (403); sole-approver submit returns 409 before PENDING;
   reject supersedes all rows; Finance leg iff `!itc_claimable_all` OR post-round-off grand ≥ ₹5,00,000.
-- Reminders fire per the R1–R8 state machine (dedup; snooze; accept/lost/expire cancel PENDING+SNOOZED);
+- Reminders fire per the 3-step state machine (dedup; snooze only from PENDING; accept/lost/expire cancel PENDING+SNOOZED);
   SENT→EXPIRED via cron; Today/bell computed in IST with the defined predicates.
 - Idempotency-Key honored on all mutations (replay cached; body-mismatch 409).
 - `npm test` green (unit + integration + smoke); CSP intact (no inline JS); self-heal provisions all tables

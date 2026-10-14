@@ -23,7 +23,7 @@ module.
 | Audit | `audit_logs` + `audit()` (`src/index.ts:185`) | Extend with SHA-256 hash-chain for quotes. |
 | Document blob + hash | `dc_documents.content_b64` (`migrations/0018`), `crypto.subtle` SHA-256 present (`src/index.ts:9`) | Reuse pattern for immutable customer doc. |
 | FY numbering | `allocateDCSeriesNumber`/`currentFY` (`src/index.ts:341,360`) | Reuse for quote no. + counters. |
-| Reminders | `scheduled()` + 3 crons (`src/index.ts:4441`; `wrangler.jsonc:31`), `pushNotification` (`:2695`) | Extend: 4th gated pass for R1–R8 + Today + bell. |
+| Reminders | `scheduled()` + 3 crons (`src/index.ts:4441`; `wrangler.jsonc:31`), `pushNotification` (`:2695`) | Extend: gated pass for the 3-step cadence + Today + bell. |
 | Settings store | `app_config` + `getConfig`/`setConfig` (`src/index.ts:236,242`) | Reuse for quote settings **and** the entitlement list. |
 | Self-heal schema | `ensureFeatureTables` (`:2777`), scoped guard `_spSchemaReady` (`:6205`) | Follow pattern — `ensureQuoteSchema` once-per-isolate. |
 
@@ -35,14 +35,15 @@ module.
    **NOT SQL triggers** (self-heal runner splits on `;` and breaks on trigger bodies).
 3. **Separation-of-duties parallel approvals** — Ops→Manager always; +Finance when `itc_claimable=No`
    OR grand total ≥ ₹5,00,000. Creator ≠ approver.
-4. **Reminders/follow-ups** — R1–R8, dedup, snooze, Lost state, follow-up log, Today page, bell badge.
+4. **Reminders/follow-ups** — 3-step cadence, dedup, snooze, Lost state, follow-up log, Today page, bell badge.
 5. **Cost/margin redaction** — Operations quote-role must never receive cost/margin fields
    (server-side strip, mirroring existing client-vs-internal price redaction).
 
 ## Configurable per-user assignment (the added requirement)
 No per-user entitlement exists today (RBAC is pure role). Design, no schema churn:
-- `app_config['quote.enabled_users']` = JSON `{ "<userId>": "<quoteRole>", ... }` where `quoteRole ∈
-  {sales, ops, commercial_manager, finance, auditor}`. Empty/unset ⇒ feature OFF for everyone.
+- `app_config['quote.enabled_users:<account_id>']` = JSON `{ _ver, users:{ "<userId>": "<quoteRole>" } }`
+  where `quoteRole ∈ {sales, ops, commercial_manager, finance}` (auditor dropped per product decision).
+  Empty/unset ⇒ feature OFF for everyone.
 - `app_config['quote.settings']` = JSON (freight defaults, branding defaults, approval threshold,
   reminder cadence, counters seed) — admin editable.
 - Enforced in **three** layers:
@@ -79,20 +80,27 @@ The adversarial panel confirmed 31 findings (`adversarial-reviews/spec-validatio
   + counter `RETURNING` + retry.
 - **Hashing** → RFC 8785 canonicalization; length-prefixed audit preimage including account_id+quote_id+salt;
   a `verifyQuoteChain` verifier; document hashed with its hash field blanked.
-- **Entitlement** → role enum validated + fail-closed redaction (allowlist), capability matrix for all five
-  roles, admin self-grant of approver roles forbidden + hash-chained `quote_entitlement_audit`, nav re-checks
-  `/access` per navigation, optimistic `_ver` on the config blob.
+- **Entitlement (4 roles: sales/ops/commercial_manager/finance — auditor dropped)** → role enum validated +
+  fail-closed redaction (allowlist), full capability matrix (view/calc/create/submit/reject/approve/send/
+  accept-lost/followup/snooze/audit-read columns), admin self-grant of approver roles forbidden + hash-chained
+  `quote_entitlement_audit`, nav re-checks `/access` per navigation, optimistic `_ver` on both config blobs.
 - **Redaction** → allowlist-based, deep (nested `payload_json`/`detail_json`), on all 8 response paths.
-- **Approvals** → sole-approver deadlock → 409 before PENDING; SoD vs all version authors; reject supersedes
-  all rows; completion via guarded UPDATE; Finance leg basis = post-round-off GST-inclusive grand total.
-- **Reminders/lifecycle** → R1–R8 offsets in `quote.settings.reminder_rules`; explicit reminder state
-  machine; SENT→EXPIRED via cron; IST day boundaries; accept/lost cancel PENDING+SNOOZED.
-- **Idempotency** → required header, `(account_id,user_id,route,key)` scope, 24h TTL, 409 on body mismatch.
+- **Approvals (r3 product decisions)** → author set = creator ∪ all version authors; **Manager leg
+  auto-satisfied when an author holds `commercial_manager`** ("editor who is a manager needs no extra
+  approval"); **Finance leg never auto-satisfied** (preserves ITC/₹5L control); else a non-author approver,
+  else the configured **`fallback_approver_id`**, else 409; eligibility re-checked at act time (no deadlock);
+  reject supersedes all rows; completion via guarded UPDATE; Finance basis = post-round-off GST-inclusive grand.
+- **Reminders/lifecycle (r3)** → **3-step** `R1=send+2d, R2=send+7d, R3=valid_until−2d`, **no post-expiry
+  nudge**; snooze only from PENDING (defers via `snooze_until`); cron fires reminders **then** sweeps
+  SENT→EXPIRED; IST day boundaries; accept/lost/expire cancel PENDING+SNOOZED.
+- **Idempotency** → required header, `(account_id,user_id,resolved-route,key)` scope, in-batch `IN_PROGRESS`
+  reservation (no in-flight double-exec), 24h TTL, 409 on body mismatch.
+- **18 calc vectors** → hand-authored, frozen in `calc-vectors.md` (the oracle); fixtures must reproduce it.
 
 ### Reminder rule defaults (`quote.settings.reminder_rules`, admin-editable)
-`R1=send+1d, R2=send+3d, R3=send+7d, R4=send+14d, R5=valid_until−7d, R6=valid_until−3d, R7=valid_until−1d,
-R8=valid_until+1d (final nudge)`. Anchors and offsets are config; the seeding test asserts the eight
-computed IST due-dates under a frozen clock.
+`R1 = send_date + 2d`, `R2 = send_date + 7d`, `R3 = valid_until − 2d` (IST). No post-expiry nudge. A rule
+whose offset lands ≤ send_date (very short validity) is skipped at seed time. The seeding test asserts the
+three computed IST due-dates under a frozen clock.
 
 ## Explicitly out of scope for this milestone
 WhatsApp/SMS reminder channels; e-sign; multi-currency; PostgreSQL migration (PRD D-6); importing the
