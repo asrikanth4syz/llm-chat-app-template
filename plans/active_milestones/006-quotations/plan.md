@@ -56,10 +56,19 @@
   (10 integration — grant/revoke, 404-hide, 403 admin/self-grant, 409 `_ver`, 422 role/slab/seller-state, ops redaction).
 - [~] Task 2.C: calc-preview redaction (`redactCalcForRole`, allowlist-shaped) done; the **deep chokepoint
   across list/detail/versions/document/audit/today/bell** lands with the CRUD slice (those paths don't exist yet).
-- [ ] Task 2.A: `ensureQuoteSchema(env)` + UNIQUE/`account_id` — deferred to the **CRUD+versions slice** (the
-  entitlement gate rides on `app_config` + `audit_logs`, no new tables needed yet).
-- [ ] Task 2.D: `canonical()`/`sha256Hex`/`verifyQuoteChain` + hash-chained `quote_entitlement_audit` —
-  deferred to the **hashing slice** (entitlement changes currently audit via host `audit_logs`).
+- [x] Task 2.A: `ensureQuoteSchema(env)` (self-heal; `account_id` + UNIQUE(quote_id,version)/(quote_id,seq)/
+  (account_id,quote_no); `genesis_salt` column) — **built in Slice 3**.
+- [x] Task 2.D: `src/quote_hash.ts` — `canonicalize` (JCS subset, integer-only), `sha256Hex`, domain-separated
+  `versionContentHash`/`auditEntryHash`, `verifyQuoteChain`, `newSalt`; 12 unit tests (known-answer SHA-256,
+  determinism, tamper/transplant detection). _(Hash-chained `quote_entitlement_audit` still via host
+  `audit_logs` — the entitlement-chain variant lands when the audit slice needs it.)_
+
+### Group 3 (Depends on Group 2 — quote CRUD + immutable versions) — ✅ BUILT (520 tests green)
+- [x] Task 3.A: counter UPSERT + `POST /api/quotes` (v1, hash-chained, idempotent) + `GET` list + `GET /:id`
+  detail (redacted) in `src/index.ts`; `ensureQuoteSchema` self-heal.
+- [x] Task 3.B: `PUT /api/quotes/:id` immutable version-append (CAS on `current_version`, `meta.changes`
+  guard) + `GET /:id/versions` with `verifyQuoteChain`. Integration: `test/quote_crud.int.test.ts` (8 —
+  create/detail/edit/versions-verify, immutability + chain, ops redaction, idempotency, DRAFT guard, 422/404/403).
 
 ### Group 3 (Depends on Group 2 — quote CRUD + immutable versions)
 - [ ] Task 3.A: Quote counter + `POST /api/quotes` (v1) + `GET` list/detail + hash helpers.

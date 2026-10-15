@@ -65,8 +65,9 @@
 
 - [ ] **Milestone 6: Quotations — GIFTSYZ into Smart Pantry** — STATUS: BUILDING (spec-validated r1–r4,
   31→20→15→8 findings folded; **Slice 1 calc engine + Slice 2 entitlement gate BUILT + green** —
-  `src/quote_calc.ts` (18 vectors byte-exact) + `src/quote_access.ts` + Worker routes (/api/quotes/access,
-  /calc, /admin/quote-access, /admin/quote-settings); 500 tests green, tsc + smoke clean. Next slices: CRUD+versions →
+  `quote_calc.ts` (18 vectors) + `quote_access.ts` (entitlement) + `quote_hash.ts` (SHA-256 chain) + Worker
+  routes (/access, /calc, admin config, **CRUD + immutable versions**); 520 tests green, tsc + smoke clean.
+  Next slices: approvals/SoD →
   approvals/SoD → document+hash → reminders/Today/bell)
   - *Description:* Fold the GIFTSYZ B2B quotation workflow (PRD v2.1) into this app, reusing the
     platform spine (JWT auth, clients/catalogue, approval engine, audit, document store + SHA-256, FY

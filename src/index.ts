@@ -3,9 +3,13 @@ import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candid
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
 import {
   parseEnabledUsers, resolveQuoteRole, accessDecision, applyAccessChange,
-  validateFallbackApprover, revokeBreaksFallback, seesCost, QuoteAccessError,
+  validateFallbackApprover, revokeBreaksFallback, seesCost, can, QuoteAccessError,
   type EnabledUsers, type QuoteRole,
 } from "./quote_access";
+import {
+  canonicalize, versionContentHash, auditEntryHash, verifyQuoteChain, newSalt,
+  type VersionChainRow,
+} from "./quote_hash";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4623,6 +4627,231 @@ async function handleAdminQuoteSettingsPut(request: Request, env: Env): Promise<
   return json({ ok: true, _ver: next._ver });
 }
 
+// ── Quotations CRUD + immutable versions (Slice 3). Self-heal schema + create /
+// list / detail / edit(version-append) / versions(verify). All money integer
+// paise; versions are append-only with a SHA-256 hash chain (src/quote_hash.ts).
+let _quoteSchemaReady = false;
+async function ensureQuoteSchema(env: Env): Promise<void> {
+  if (_quoteSchemaReady) return;
+  const ddl = [
+    `CREATE TABLE IF NOT EXISTS quotes ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, genesis_salt TEXT NOT NULL, quote_no TEXT NOT NULL, client_id TEXT NOT NULL, place_of_supply TEXT, status TEXT NOT NULL DEFAULT 'DRAFT', current_version INTEGER NOT NULL DEFAULT 1, itc_claimable_all INTEGER, grand_total_paise INTEGER, created_by TEXT NOT NULL, valid_until TEXT, sent_at TEXT, lost_reason TEXT, idem_key TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_no ON quotes (account_id, quote_no);`,
+    `CREATE INDEX IF NOT EXISTS idx_quotes_acct_status ON quotes (account_id, status);`,
+    `CREATE INDEX IF NOT EXISTS idx_quotes_acct_client ON quotes (account_id, client_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_quotes_idem ON quotes (account_id, idem_key);`,
+    `CREATE TABLE IF NOT EXISTS quote_versions ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, payload_canonical TEXT NOT NULL, content_hash TEXT NOT NULL, prev_hash TEXT, created_by TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_qv_quote_version ON quote_versions (quote_id, version);`,
+    `CREATE TABLE IF NOT EXISTS quote_lines ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, line_no INTEGER NOT NULL, sku TEXT, description TEXT, qty INTEGER, pricing_mode TEXT, purchase_cost_paise INTEGER, markup_bp INTEGER, mrp_paise INTEGER, discount_bp INTEGER, freight_alloc_paise INTEGER, branding_cost_paise INTEGER, sale_gst_bp INTEGER, purchase_gst_bp INTEGER, itc_claimable INTEGER, landed_cost_paise INTEGER, unit_price_paise INTEGER, line_taxable_paise INTEGER, line_gst_paise INTEGER, cgst_paise INTEGER, sgst_paise INTEGER, igst_paise INTEGER, line_margin_paise INTEGER );`,
+    `CREATE INDEX IF NOT EXISTS idx_qlines_quote ON quote_lines (quote_id, version);`,
+    `CREATE TABLE IF NOT EXISTS quote_audit ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, seq INTEGER NOT NULL, action TEXT NOT NULL, actor_id TEXT NOT NULL, detail_json TEXT, entry_hash TEXT NOT NULL, prev_hash TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_qaudit_quote_seq ON quote_audit (quote_id, seq);`,
+    `CREATE TABLE IF NOT EXISTS quote_counters ( account_id TEXT NOT NULL, fy TEXT NOT NULL, last_no INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, fy) );`,
+  ];
+  for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
+  _quoteSchemaReady = true;
+}
+
+// Canonical snapshot persisted + hashed per version (money all integer paise).
+function quotePayload(input: { place_of_supply: string; itc_claimable_all: boolean }, result: QuoteCalcResult): string {
+  return canonicalize({
+    place_of_supply: input.place_of_supply,
+    itc_claimable_all: result.itc_claimable_all,
+    lines: result.lines,
+    totals: result.totals,
+  });
+}
+
+function redactQuoteDetailForRole(detail: any, role: QuoteRole): any {
+  if (seesCost(role)) return detail;
+  const strip = (l: any) => ({
+    line_no: l.line_no, sku: l.sku, description: l.description, qty: l.qty, pricing_mode: l.pricing_mode,
+    sale_gst_bp: l.sale_gst_bp, unit_price_paise: l.unit_price_paise, line_taxable_paise: l.line_taxable_paise,
+    line_gst_paise: l.line_gst_paise, cgst_paise: l.cgst_paise, sgst_paise: l.sgst_paise, igst_paise: l.igst_paise,
+  });
+  const t = detail.version?.totals;
+  return {
+    ...detail,
+    lines: (detail.lines || []).map(strip),
+    version: detail.version ? {
+      ...detail.version,
+      payload: undefined, // hide the full cost-bearing snapshot
+      totals: t ? { subtotal_paise: t.subtotal_paise, cgst_total: t.cgst_total, sgst_total: t.sgst_total, igst_total: t.igst_total, grand_total_paise: t.grand_total_paise, round_off_paise: t.round_off_paise } : undefined,
+    } : undefined,
+  };
+}
+
+// POST /api/quotes — create a DRAFT quote (v1). Hash-chained, idempotent.
+async function handleQuoteCreate(request: Request, env: Env): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "create_edit")) return json({ error: "Forbidden" }, 403);
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const clientId = String(body.client_id ?? "");
+  if (!clientId) return json({ error: "client_id required", code: "E_VALIDATION", field: "client_id" }, 422);
+  const xacc = await denyClientCrossAccess(env, acc.user, clientId);
+  if (xacc) return xacc;
+  const clientRow = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(clientId).first();
+  if (!clientRow) return json({ error: "unknown client", code: "E_UNKNOWN_CLIENT", field: "client_id" }, 422);
+
+  // Idempotency: a repeat with the same key returns the already-created quote.
+  const idemKey = request.headers.get("Idempotency-Key") || null;
+  if (idemKey) {
+    const existing = await env.DB.prepare("SELECT id, quote_no, current_version FROM quotes WHERE account_id=? AND idem_key=?")
+      .bind(QUOTE_ACCOUNT, idemKey).first() as any;
+    if (existing) return json({ id: existing.id, quote_no: existing.quote_no, version: existing.current_version, idempotent_replay: true });
+  }
+
+  const settings = await getQuoteSettings(env);
+  let result: QuoteCalcResult;
+  try { result = computeQuote({ ...body, seller_state_code: settings.seller_state_code }); }
+  catch (e) { if (e instanceof QuoteCalcError) return json({ error: e.message, code: e.code, field: e.field }, 422); throw e; }
+
+  // FY counter — single atomic UPSERT (seeds the row on first quote of the FY).
+  const fy = currentFY();
+  const cntr = await env.DB.prepare(
+    "INSERT INTO quote_counters (account_id, fy, last_no) VALUES (?,?,1) ON CONFLICT(account_id,fy) DO UPDATE SET last_no = last_no + 1 RETURNING last_no"
+  ).bind(QUOTE_ACCOUNT, fy).first() as { last_no: number };
+  const quoteNo = `${settings.number_prefix}/${fy}/${String(cntr.last_no).padStart(4, "0")}`;
+
+  const id = `q_${uid()}`;
+  const salt = newSalt();
+  const payload = quotePayload({ place_of_supply: String(body.place_of_supply ?? ""), itc_claimable_all: result.itc_claimable_all }, result);
+  const contentHash = await versionContentHash(QUOTE_ACCOUNT, id, 1, salt, payload);
+  const auditDetail = JSON.stringify({ quote_no: quoteNo, version: 1, grand_total_paise: result.totals.grand_total_paise });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, 1, "created", acc.user.sub, auditDetail, null, salt);
+
+  const stmts = [
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,idem_key) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,?,?)")
+      .bind(id, QUOTE_ACCOUNT, salt, quoteNo, clientId, String(body.place_of_supply ?? ""), result.itc_claimable_all ? 1 : 0, result.totals.grand_total_paise, acc.user.sub, body.valid_until ?? null, idemKey),
+    env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,NULL,?)")
+      .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, 1, payload, contentHash, acc.user.sub),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, acc.user.sub, auditDetail, entryHash),
+  ];
+  (body.lines as any[]).forEach((ln, i) => {
+    const o = result.lines[i];
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise));
+  });
+  await env.DB.batch(stmts);
+  return json({ id, quote_no: quoteNo, version: 1, status: "DRAFT", grand_total_paise: result.totals.grand_total_paise });
+}
+
+// GET /api/quotes — tenant-scoped list (redacted).
+async function handleQuoteList(request: Request, env: Env): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const url = new URL(request.url);
+  const status = url.searchParams.get("status");
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const size = Math.min(100, Math.max(1, Number(url.searchParams.get("page_size") || 50)));
+  const where = ["account_id=?"]; const binds: unknown[] = [QUOTE_ACCOUNT];
+  if (status) { where.push("status=?"); binds.push(status); }
+  const { results } = await env.DB.prepare(
+    `SELECT id, quote_no, client_id, status, current_version, grand_total_paise, created_by, valid_until, created_at FROM quotes WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+  ).bind(...binds, size, (page - 1) * size).all();
+  const rows = seesCost(acc.quoteRole) ? results : results.map((r: any) => ({ ...r, grand_total_paise: r.grand_total_paise }));
+  return json({ quotes: rows, page, page_size: size });
+}
+
+async function loadQuote(env: Env, id: string): Promise<any | null> {
+  return env.DB.prepare("SELECT * FROM quotes WHERE id=? AND account_id=?").bind(id, QUOTE_ACCOUNT).first();
+}
+
+// GET /api/quotes/:id — header + current version + lines + audit summary (redacted).
+async function handleQuoteDetail(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id);
+  if (xacc) return xacc;
+  const ver = await env.DB.prepare("SELECT version, payload_canonical, content_hash, prev_hash, created_at FROM quote_versions WHERE quote_id=? AND version=?")
+    .bind(id, q.current_version).first() as any;
+  const { results: lines } = await env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+  const { results: audit } = await env.DB.prepare("SELECT seq, action, actor_id, created_at FROM quote_audit WHERE quote_id=? ORDER BY seq").bind(id).all();
+  const detail = {
+    id: q.id, quote_no: q.quote_no, client_id: q.client_id, place_of_supply: q.place_of_supply,
+    status: q.status, current_version: q.current_version, itc_claimable_all: !!q.itc_claimable_all,
+    grand_total_paise: q.grand_total_paise, created_by: q.created_by, valid_until: q.valid_until,
+    version: ver ? { version: ver.version, content_hash: ver.content_hash, prev_hash: ver.prev_hash, payload: JSON.parse(ver.payload_canonical) } : null,
+    lines, audit,
+  };
+  return json(redactQuoteDetailForRole(detail, acc.quoteRole));
+}
+
+// PUT /api/quotes/:id — edit a DRAFT by APPENDING a new immutable version.
+async function handleQuoteEdit(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "create_edit")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id);
+  if (xacc) return xacc;
+  if (q.status !== "DRAFT") return json({ error: "quote is not editable", code: "E_NOT_DRAFT" }, 409);
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const settings = await getQuoteSettings(env);
+  let result: QuoteCalcResult;
+  try { result = computeQuote({ ...body, seller_state_code: settings.seller_state_code }); }
+  catch (e) { if (e instanceof QuoteCalcError) return json({ error: e.message, code: e.code, field: e.field }, 422); throw e; }
+
+  const expected = q.current_version as number;
+  const nextVer = expected + 1;
+  const prevHash = (await env.DB.prepare("SELECT content_hash FROM quote_versions WHERE quote_id=? AND version=?").bind(id, expected).first() as any)?.content_hash ?? null;
+  const pos = String(body.place_of_supply ?? q.place_of_supply ?? "");
+  const payload = quotePayload({ place_of_supply: pos, itc_claimable_all: result.itc_claimable_all }, result);
+  const contentHash = await versionContentHash(QUOTE_ACCOUNT, id, nextVer, q.genesis_salt, payload);
+  const seq = ((await env.DB.prepare("SELECT MAX(seq) AS m FROM quote_audit WHERE quote_id=?").bind(id).first() as any)?.m ?? 0) + 1;
+  const auditDetail = JSON.stringify({ version: nextVer, grand_total_paise: result.totals.grand_total_paise });
+  const auditPrev = (await env.DB.prepare("SELECT entry_hash FROM quote_audit WHERE quote_id=? ORDER BY seq DESC LIMIT 1").bind(id).first() as any)?.entry_hash ?? null;
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, seq, "version_added", acc.user.sub, auditDetail, auditPrev, q.genesis_salt);
+
+  const stmts = [
+    env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, nextVer, payload, contentHash, prevHash, acc.user.sub),
+    env.DB.prepare("UPDATE quotes SET current_version=?, grand_total_paise=?, place_of_supply=?, itc_claimable_all=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND current_version=?")
+      .bind(nextVer, result.totals.grand_total_paise, pos, result.itc_claimable_all ? 1 : 0, id, QUOTE_ACCOUNT, expected),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'version_added',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, seq, acc.user.sub, auditDetail, entryHash, auditPrev),
+  ];
+  (body.lines as any[]).forEach((ln, i) => {
+    const o = result.lines[i];
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, nextVer, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise));
+  });
+  const res = await env.DB.batch(stmts);
+  // CAS guard: the UPDATE is stmts[1]; 0 rows changed → a concurrent edit won the race.
+  const changed = (res[1] as any)?.meta?.changes ?? 1;
+  if (changed === 0) return json({ error: "concurrent edit — reload and retry", code: "E_VERSION_CONFLICT" }, 409);
+  return json({ id, version: nextVer, status: "DRAFT", grand_total_paise: result.totals.grand_total_paise });
+}
+
+// GET /api/quotes/:id/versions — chain + verification result.
+async function handleQuoteVersions(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id);
+  if (xacc) return xacc;
+  const { results } = await env.DB.prepare("SELECT version, payload_canonical, content_hash, prev_hash, created_at FROM quote_versions WHERE quote_id=? ORDER BY version").bind(id).all();
+  const rows = results as unknown as (VersionChainRow & { created_at: string })[];
+  const verdict = await verifyQuoteChain(QUOTE_ACCOUNT, id, q.genesis_salt, rows);
+  return json({
+    versions: rows.map((r) => ({ version: r.version, content_hash: r.content_hash, prev_hash: r.prev_hash, created_at: r.created_at })),
+    verified: verdict.verified,
+    first_broken_version: verdict.first_broken_version,
+  });
+}
+
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -4717,6 +4946,13 @@ export default {
       if (path==="/api/admin/quote-access"     && method==="PUT")  return handleAdminQuoteAccessPut(request,env);
       if (path==="/api/admin/quote-settings"   && method==="GET")  return handleAdminQuoteSettingsGet(request,env);
       if (path==="/api/admin/quote-settings"   && method==="PUT")  return handleAdminQuoteSettingsPut(request,env);
+      // Quote CRUD + immutable versions (Slice 3) — wildcard /:id routes come
+      // AFTER the exact /access and /calc routes above.
+      if (path==="/api/quotes"                 && method==="GET")  return handleQuoteList(request,env);
+      if (path==="/api/quotes"                 && method==="POST") return handleQuoteCreate(request,env);
+      if (path.match(/^\/api\/quotes\/[^/]+\/versions$/) && method==="GET") return handleQuoteVersions(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="PUT")  return handleQuoteEdit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
