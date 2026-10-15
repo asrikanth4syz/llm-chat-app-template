@@ -239,6 +239,8 @@ const NAV = {
     { section:'Alerts & Exceptions' },
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
     { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconEye,    badge:null },
+    { section:'Admin' },
+    { id:'quote_admin',         label:'Quote Access',        icon:iconSettings, badge:null },
   ],
   procurement: [
     { section:'Home' },
