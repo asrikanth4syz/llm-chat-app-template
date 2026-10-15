@@ -74,9 +74,15 @@
 - [ ] Task 3.A: Quote counter + `POST /api/quotes` (v1) + `GET` list/detail + hash helpers.
 - [ ] Task 3.B: `PUT /api/quotes/:id` version append + chain + `GET /versions`.
 
-### Group 4 (Depends on Group 3 — approvals/SoD + lifecycle)
-- [ ] Task 4.A: submit/approve/reject with SoD + conditional Finance leg + `quote_audit` chain.
-- [ ] Task 4.B: send/accept/lost transitions + notifications.
+### Group 4 (Depends on Group 3 — approvals/SoD + lifecycle) — ⏳ Slice 4 approvals BUILT (542 tests green)
+- [x] Task 4.A: `src/quote_approval.ts` (pure: `requiredLegs`, `planSubmit` with Manager-auto-satisfy on the
+  CURRENT-version author / Finance-never / fallback one-leg, `assertCanActOnLeg` SoD, `isComplete`; 15 unit
+  tests) + Worker handlers `POST /api/quotes/:id/{submit,approve,reject}` over `quote_approvals`
+  (assignment persisted; submit→APPROVED when all auto-satisfy or 409 naming the leg; single conditional
+  completion UPDATE; reject supersedes all rows → DRAFT; hash-chained `quote_audit`). Integration:
+  `test/quote_approval.int.test.ts` (7 — manager/auto-satisfy/sole-409, two-leg ITC=No + wrong-leg 403,
+  reject→DRAFT + no-comments 422, non-PENDING 409, reject→resubmit→re-approve round-trip).
+- [ ] Task 4.B: send/accept/lost transitions + customer document + reminders — **next slices**.
 
 ### Group 5 (Depends on Group 4 — customer document + hash)
 - [ ] Task 5.A: `quote_documents` generation (redacted, hashed) + `GET /document`.

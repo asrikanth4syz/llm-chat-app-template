@@ -10,6 +10,11 @@ import {
   canonicalize, versionContentHash, auditEntryHash, verifyQuoteChain, newSalt,
   type VersionChainRow,
 } from "./quote_hash";
+import {
+  requiredLegs, planSubmit, assertCanActOnLeg, isComplete, QuoteApprovalError,
+  type LegRowStatus,
+} from "./quote_approval";
+import type { ApprovalLeg } from "./quote_access";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4646,6 +4651,8 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS quote_audit ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, seq INTEGER NOT NULL, action TEXT NOT NULL, actor_id TEXT NOT NULL, detail_json TEXT, entry_hash TEXT NOT NULL, prev_hash TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_qaudit_quote_seq ON quote_audit (quote_id, seq);`,
     `CREATE TABLE IF NOT EXISTS quote_counters ( account_id TEXT NOT NULL, fy TEXT NOT NULL, last_no INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, fy) );`,
+    `CREATE TABLE IF NOT EXISTS quote_approvals ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, leg TEXT NOT NULL, required INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'PENDING', assigned_to TEXT, assigned_as_fallback INTEGER NOT NULL DEFAULT 0, actor_id TEXT, actor_name TEXT, comments TEXT, acted_at TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_qappr_quote ON quote_approvals (quote_id, version, status);`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   _quoteSchemaReady = true;
@@ -4852,6 +4859,144 @@ async function handleQuoteVersions(request: Request, env: Env, id: string): Prom
   });
 }
 
+// ── Approvals / SoD (Slice 4). submit → leg routing (Manager-auto-satisfy /
+// Finance-never / fallback), approve (completion), reject (supersede → DRAFT).
+async function authorSetOf(env: Env, q: any): Promise<Set<string>> {
+  const { results } = await env.DB.prepare("SELECT DISTINCT created_by FROM quote_versions WHERE quote_id=?").bind(q.id).all();
+  const s = new Set<string>((results as any[]).map((r) => r.created_by));
+  s.add(q.created_by);
+  return s;
+}
+async function nextAuditMeta(env: Env, id: string): Promise<{ seq: number; prevHash: string | null }> {
+  const row = await env.DB.prepare("SELECT seq, entry_hash FROM quote_audit WHERE quote_id=? ORDER BY seq DESC LIMIT 1").bind(id).first() as any;
+  return { seq: (row?.seq ?? 0) + 1, prevHash: row?.entry_hash ?? null };
+}
+
+// POST /api/quotes/:id/submit — DRAFT → PENDING_APPROVAL (or APPROVED when every
+// required leg auto-satisfies; 409 E_NO_ELIGIBLE_APPROVER naming the leg otherwise).
+async function handleQuoteSubmit(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "submit")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (q.status !== "DRAFT") return json({ error: "quote is not in DRAFT", code: "E_NOT_DRAFT" }, 409);
+
+  const settings = await getQuoteSettings(env);
+  const legsNeeded = requiredLegs(!!q.itc_claimable_all, q.grand_total_paise ?? 0, settings.approval_threshold_paise);
+  const authorSet = await authorSetOf(env, q);
+  const curAuthor = (await env.DB.prepare("SELECT created_by FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any)?.created_by ?? q.created_by;
+  const users = (await getQuoteEnabledUsers(env)).users;
+
+  let plan;
+  try {
+    plan = planSubmit({ requiredLegs: legsNeeded, authorSet, currentVersionAuthor: curAuthor, users, fallbackId: settings.fallback_approver_id });
+  } catch (e) {
+    if (e instanceof QuoteApprovalError) return json({ error: e.message, code: e.code, leg: e.leg }, e.status);
+    throw e;
+  }
+
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ version: q.current_version, legs: plan.legs.map((l) => ({ leg: l.leg, status: l.status, assigned_to: l.assigned_to })), final: plan.finalStatus });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "submitted", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+
+  const stmts = plan.legs.map((l) =>
+    env.DB.prepare("INSERT INTO quote_approvals (id,account_id,quote_id,version,leg,required,status,assigned_to,assigned_as_fallback) VALUES (?,?,?,?,?,1,?,?,?)")
+      .bind(`qap_${uid()}`, QUOTE_ACCOUNT, id, q.current_version, l.leg, l.status, l.assigned_to, l.assigned_as_fallback ? 1 : 0));
+  stmts.push(env.DB.prepare("UPDATE quotes SET status=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status='DRAFT'")
+    .bind(plan.finalStatus, id, QUOTE_ACCOUNT));
+  stmts.push(env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'submitted',?,?,?,?)")
+    .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash));
+  await env.DB.batch(stmts);
+
+  for (const l of plan.legs) if (l.status === "PENDING" && l.assigned_to) {
+    await pushNotification(env, null, `Quote ${q.quote_no} needs your ${l.leg} approval`, l.assigned_to);
+  }
+  return json({ id, status: plan.finalStatus, legs: plan.legs.map((l) => ({ leg: l.leg, status: l.status, assigned_to: l.assigned_to, assigned_as_fallback: l.assigned_as_fallback })) });
+}
+
+// POST /api/quotes/:id/approve  { leg, comments? }
+async function handleQuoteApprove(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (q.status !== "PENDING_APPROVAL") return json({ error: "quote is not awaiting approval", code: "E_NOT_PENDING" }, 409);
+  let body: any; try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const leg = body.leg as ApprovalLeg;
+  const row = await env.DB.prepare("SELECT * FROM quote_approvals WHERE quote_id=? AND version=? AND leg=? AND required=1 AND status!='SUPERSEDED' ORDER BY created_at DESC LIMIT 1").bind(id, q.current_version, leg).first() as any;
+  if (!row) return json({ error: "no such leg", code: "E_VALIDATION", field: "leg" }, 422);
+  if (row.status !== "PENDING") return json({ error: `leg already ${row.status}`, code: "E_LEG_NOT_PENDING" }, 409);
+
+  const authorSet = await authorSetOf(env, q);
+  const otherLegActor = (await env.DB.prepare("SELECT actor_id FROM quote_approvals WHERE quote_id=? AND version=? AND leg!=? AND status!='SUPERSEDED' AND actor_id IS NOT NULL").bind(id, q.current_version, leg).first() as any)?.actor_id ?? null;
+  try {
+    assertCanActOnLeg({ actorId: acc.user.sub, actorRole: acc.quoteRole, leg, authorSet, fallbackId: settingsFallback(await getQuoteSettings(env)), otherLegActor });
+  } catch (e) {
+    if (e instanceof QuoteApprovalError) return json({ error: e.message, code: e.code, leg: e.leg }, e.status);
+    throw e;
+  }
+
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ leg, version: q.current_version, comments: body.comments ?? null });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "approved", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+  const res = await env.DB.batch([
+    env.DB.prepare("UPDATE quote_approvals SET status='APPROVED', actor_id=?, actor_name=?, comments=?, acted_at=datetime('now') WHERE id=? AND status='PENDING'")
+      .bind(acc.user.sub, acc.user.name, body.comments ?? null, row.id),
+    // Single conditional completion flip — no SELECT-then-UPDATE race.
+    env.DB.prepare("UPDATE quotes SET status='APPROVED', updated_at=datetime('now') WHERE id=? AND account_id=? AND status='PENDING_APPROVAL' AND NOT EXISTS (SELECT 1 FROM quote_approvals WHERE quote_id=? AND version=? AND required=1 AND status='PENDING')")
+      .bind(id, QUOTE_ACCOUNT, id, q.current_version),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'approved',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash),
+  ]);
+  if (((res[0] as any)?.meta?.changes ?? 0) === 0) return json({ error: "leg already acted", code: "E_LEG_NOT_PENDING" }, 409);
+  const after = await env.DB.prepare("SELECT status FROM quotes WHERE id=?").bind(id).first() as any;
+  if (after?.status === "APPROVED") await pushNotification(env, null, `Quote ${q.quote_no} is fully approved`, q.created_by);
+  return json({ id, leg, leg_status: "APPROVED", quote_status: after?.status ?? "PENDING_APPROVAL" });
+}
+
+// POST /api/quotes/:id/reject  { leg, comments } — supersede all rows, back to DRAFT.
+async function handleQuoteReject(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (q.status !== "PENDING_APPROVAL") return json({ error: "quote is not awaiting approval", code: "E_NOT_PENDING" }, 409);
+  let body: any; try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const leg = body.leg as ApprovalLeg;
+  if (!body.comments || !String(body.comments).trim()) return json({ error: "comments required to reject", code: "E_VALIDATION", field: "comments" }, 422);
+  const row = await env.DB.prepare("SELECT * FROM quote_approvals WHERE quote_id=? AND version=? AND leg=? AND required=1 AND status!='SUPERSEDED' ORDER BY created_at DESC LIMIT 1").bind(id, q.current_version, leg).first() as any;
+  if (!row) return json({ error: "no such leg", code: "E_VALIDATION", field: "leg" }, 422);
+  const authorSet = await authorSetOf(env, q);
+  const otherLegActor = (await env.DB.prepare("SELECT actor_id FROM quote_approvals WHERE quote_id=? AND version=? AND leg!=? AND status!='SUPERSEDED' AND actor_id IS NOT NULL").bind(id, q.current_version, leg).first() as any)?.actor_id ?? null;
+  try {
+    assertCanActOnLeg({ actorId: acc.user.sub, actorRole: acc.quoteRole, leg, authorSet, fallbackId: settingsFallback(await getQuoteSettings(env)), otherLegActor });
+  } catch (e) {
+    if (e instanceof QuoteApprovalError) return json({ error: e.message, code: e.code, leg: e.leg }, e.status);
+    throw e;
+  }
+
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ leg, version: q.current_version, comments: body.comments });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "rejected", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE quote_approvals SET status='SUPERSEDED' WHERE quote_id=? AND status IN ('PENDING','APPROVED','AUTO_SATISFIED')").bind(id),
+    env.DB.prepare("UPDATE quotes SET status='DRAFT', updated_at=datetime('now') WHERE id=? AND account_id=? AND status='PENDING_APPROVAL'").bind(id, QUOTE_ACCOUNT),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'rejected',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash),
+  ]);
+  await pushNotification(env, null, `Quote ${q.quote_no} was sent back to DRAFT (${leg} rejected)`, q.created_by);
+  return json({ id, status: "DRAFT", rejected_leg: leg });
+}
+
+function settingsFallback(s: { fallback_approver_id: string | null }): string | null { return s.fallback_approver_id ?? null; }
+
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -4951,6 +5096,9 @@ export default {
       if (path==="/api/quotes"                 && method==="GET")  return handleQuoteList(request,env);
       if (path==="/api/quotes"                 && method==="POST") return handleQuoteCreate(request,env);
       if (path.match(/^\/api\/quotes\/[^/]+\/versions$/) && method==="GET") return handleQuoteVersions(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/submit$/)  && method==="POST") return handleQuoteSubmit(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/approve$/) && method==="POST") return handleQuoteApprove(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/reject$/)  && method==="POST") return handleQuoteReject(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="PUT")  return handleQuoteEdit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
