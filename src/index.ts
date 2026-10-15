@@ -4655,6 +4655,12 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_qappr_quote ON quote_approvals (quote_id, version, status);`,
     `CREATE TABLE IF NOT EXISTS quote_documents ( id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, content_b64 TEXT NOT NULL, content_hash TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT 'text/html', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE INDEX IF NOT EXISTS idx_qdoc_quote ON quote_documents (quote_id, version);`,
+    `CREATE TABLE IF NOT EXISTS quote_reminders ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, rule TEXT NOT NULL, due_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', sent_at TEXT, snooze_until TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_qrem_quote_rule ON quote_reminders (quote_id, rule);`,
+    `CREATE INDEX IF NOT EXISTS idx_qrem_due ON quote_reminders (account_id, status, due_date);`,
+    `CREATE TABLE IF NOT EXISTS quote_followups ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, actor_id TEXT, actor_name TEXT, channel TEXT NOT NULL, note TEXT, next_action_date TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_qfollow_quote ON quote_followups (quote_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_qfollow_due ON quote_followups (account_id, actor_id, next_action_date);`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   _quoteSchemaReady = true;
@@ -5070,15 +5076,24 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
   const am = await nextAuditMeta(env, id);
   const detail = JSON.stringify({ version: q.current_version, document_hash: docHash, sent_at: sentAt, valid_until: validUntil });
   const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "sent", acc.user.sub, detail, am.prevHash, q.genesis_salt);
-  await env.DB.batch([
+  // Seed the 3-step reminder cadence. Invariant: sent_at < due_date < valid_until
+  // for every seeded rule (no nudge on/after expiry); a rule outside that window
+  // is simply skipped (data-model §quote_reminders).
+  const reminderSeeds = quoteReminderSeeds(sentAt, validUntil, settings.reminder_rules);
+  const stmts = [
     env.DB.prepare("INSERT INTO quote_documents (account_id,quote_id,version,content_b64,content_hash,mime_type,created_by) VALUES (?,?,?,?,?,'text/html',?)")
       .bind(QUOTE_ACCOUNT, id, q.current_version, qB64Utf8(stamped), docHash, acc.user.sub),
     env.DB.prepare("UPDATE quotes SET status='SENT', sent_at=?, valid_until=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status='APPROVED'")
       .bind(sentAt, validUntil, id, QUOTE_ACCOUNT),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'sent',?,?,?,?)")
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash),
-  ]);
-  return json({ id, status: "SENT", sent_at: sentAt, valid_until: validUntil, document_hash: docHash });
+  ];
+  for (const r of reminderSeeds) {
+    stmts.push(env.DB.prepare("INSERT OR IGNORE INTO quote_reminders (id,account_id,quote_id,rule,due_date,status) VALUES (?,?,?,?,?,'PENDING')")
+      .bind(`qr_${uid()}`, QUOTE_ACCOUNT, id, r.rule, r.due_date));
+  }
+  await env.DB.batch(stmts);
+  return json({ id, status: "SENT", sent_at: sentAt, valid_until: validUntil, document_hash: docHash, reminders: reminderSeeds.map((r) => ({ rule: r.rule, due_date: r.due_date })) });
 }
 
 // GET /api/quotes/:id/document — latest customer document (already redacted).
@@ -5119,11 +5134,174 @@ async function quoteTransition(request: Request, env: Env, id: string, action: "
   await env.DB.batch([
     env.DB.prepare("UPDATE quotes SET status=?, lost_reason=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status=?")
       .bind(newStatus, reason, id, QUOTE_ACCOUNT, q.status),
-    // NOTE: reminder cancellation lands in Slice 6 (no quote_reminders yet).
+    env.DB.prepare("UPDATE quote_reminders SET status='CANCELLED' WHERE quote_id=? AND status IN ('PENDING','SNOOZED')").bind(id),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,?,?,?,?,?)")
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, action === "accept" ? "accepted" : "lost", acc.user.sub, detail, entryHash, am.prevHash),
   ]);
   return json({ id, status: newStatus, ...(reason ? { lost_reason: reason } : {}) });
+}
+
+// ── Reminders / follow-ups / Today / bell (Slice 6) ──────────────────────────
+// Pure: given sent_at, valid_until and the configured offsets, which rules seed.
+// Invariant kept: sent_at < due_date < valid_until (strict both ends). A rule
+// whose computed due_date falls outside that open window is skipped.
+export function quoteReminderSeeds(sentAt: string, validUntil: string | null,
+    rules: { R1_send_plus_days: number; R2_send_plus_days: number; R3_valid_minus_days: number }): { rule: string; due_date: string }[] {
+  if (!validUntil) return [];
+  const cand = [
+    { rule: "R1", due_date: qAddDaysISO(sentAt, rules.R1_send_plus_days) },
+    { rule: "R2", due_date: qAddDaysISO(sentAt, rules.R2_send_plus_days) },
+    { rule: "R3", due_date: qAddDaysISO(validUntil, -rules.R3_valid_minus_days) },
+  ];
+  // ISO YYYY-MM-DD compares lexicographically; strict open interval (sent, valid).
+  return cand.filter((c) => c.due_date > sentAt && c.due_date < validUntil);
+}
+
+// POST /api/quotes/:id/reminders/:rid/snooze { until } — only from PENDING.
+async function handleQuoteReminderSnooze(request: Request, env: Env, id: string, rid: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "snooze")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  let body: any; try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const until = String(body.until ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return json({ error: "until must be YYYY-MM-DD", code: "E_VALIDATION", field: "until" }, 422);
+  const today = istToday();
+  if (!(until > today)) return json({ error: "snooze_until must be in the future", code: "E_VALIDATION", field: "until" }, 422);
+  if (q.valid_until && !(until < q.valid_until)) return json({ error: "snooze_until must be before the quote expires", code: "E_SNOOZE_PAST_EXPIRY", field: "until" }, 422);
+  const rem = await env.DB.prepare("SELECT id, status FROM quote_reminders WHERE id=? AND quote_id=? AND account_id=?").bind(rid, id, QUOTE_ACCOUNT).first() as any;
+  if (!rem) return json({ error: "Not found" }, 404);
+  if (rem.status !== "PENDING") return json({ error: `cannot snooze a ${rem.status} reminder`, code: "E_NOT_PENDING" }, 409);
+  await env.DB.prepare("UPDATE quote_reminders SET status='SNOOZED', snooze_until=? WHERE id=? AND status='PENDING'").bind(until, rid).run();
+  return json({ id: rid, status: "SNOOZED", snooze_until: until });
+}
+
+// POST /api/quotes/:id/followups { channel, note, next_action_date? }
+async function handleQuoteFollowup(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "followup")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  let body: any; try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  const channel = String(body.channel ?? "").trim();
+  if (!["call", "email", "meeting", "note"].includes(channel)) return json({ error: "channel must be call|email|meeting|note", code: "E_VALIDATION", field: "channel" }, 422);
+  let note = String(body.note ?? "").trim();
+  if (note.length > 1000) note = note.slice(0, 1000);
+  const nad = body.next_action_date ? String(body.next_action_date).trim() : null;
+  if (nad && !/^\d{4}-\d{2}-\d{2}$/.test(nad)) return json({ error: "next_action_date must be YYYY-MM-DD", code: "E_VALIDATION", field: "next_action_date" }, 422);
+  const fid = `qf_${uid()}`;
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ channel, next_action_date: nad });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "followup_logged", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO quote_followups (id,account_id,quote_id,actor_id,actor_name,channel,note,next_action_date) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(fid, QUOTE_ACCOUNT, id, acc.user.sub, acc.user.name ?? null, channel, note || null, nad),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'followup_logged',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash),
+  ]);
+  return json({ id: fid, channel, note: note || null, next_action_date: nad });
+}
+
+// GET /api/quotes/today → { due_reminders, followups_due, expiring } (all IST).
+async function handleQuoteToday(request: Request, env: Env): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const today = istToday();
+  const settings = await getQuoteSettings(env);
+  const windowEnd = qAddDaysISO(today, settings.expiring_window_days);
+  // Due reminders on still-SENT, not-yet-expired quotes.
+  const { results: due_reminders } = await env.DB.prepare(
+    `SELECT r.id, r.quote_id, r.rule, r.due_date, r.status, r.snooze_until, q.quote_no, q.client_id, q.valid_until
+       FROM quote_reminders r JOIN quotes q ON q.id = r.quote_id AND q.account_id = r.account_id
+      WHERE r.account_id = ? AND q.status = 'SENT' AND q.valid_until >= ?
+        AND ( (r.status='PENDING' AND r.due_date <= ?) OR (r.status='SNOOZED' AND r.snooze_until <= ?) )
+      ORDER BY r.due_date`).bind(QUOTE_ACCOUNT, today, today, today).all();
+  const { results: followups_due } = await env.DB.prepare(
+    `SELECT f.id, f.quote_id, f.channel, f.note, f.next_action_date, q.quote_no, q.client_id
+       FROM quote_followups f JOIN quotes q ON q.id = f.quote_id AND q.account_id = f.account_id
+      WHERE f.account_id = ? AND f.actor_id = ? AND f.next_action_date IS NOT NULL AND f.next_action_date <= ?
+      ORDER BY f.next_action_date`).bind(QUOTE_ACCOUNT, acc.user.sub, today).all();
+  const { results: expiring } = await env.DB.prepare(
+    `SELECT id, quote_no, client_id, valid_until FROM quotes
+      WHERE account_id = ? AND status = 'SENT' AND valid_until >= ? AND valid_until <= ?
+      ORDER BY valid_until`).bind(QUOTE_ACCOUNT, today, windowEnd).all();
+  return json({ due_reminders, followups_due, expiring });
+}
+
+// GET /api/quotes/bell → { count } = my PENDING approval legs + my overdue follow-ups.
+async function handleQuoteBell(request: Request, env: Env): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const today = istToday();
+  const legs = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM quote_approvals a JOIN quotes q ON q.id = a.quote_id AND q.account_id = a.account_id
+      WHERE a.account_id = ? AND a.assigned_to = ? AND a.required = 1 AND a.status = 'PENDING'
+        AND a.version = q.current_version AND q.status = 'PENDING_APPROVAL'`).bind(QUOTE_ACCOUNT, acc.user.sub).first() as any;
+  const fups = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM quote_followups
+      WHERE account_id = ? AND actor_id = ? AND next_action_date IS NOT NULL AND next_action_date <= ?`).bind(QUOTE_ACCOUNT, acc.user.sub, today).first() as any;
+  return json({ count: (legs?.n || 0) + (fups?.n || 0), approvals: legs?.n || 0, followups: fups?.n || 0 });
+}
+
+// Cron: (1) fire due reminders, then (2) sweep SENT→EXPIRED. Ordering is safe
+// because no rule is ever seeded on/after valid_until (data-model §quote_reminders).
+export interface QuoteReminderPassResult { fired: number; expired: number; }
+export async function runQuoteReminderPass(env: Env, now: Date = new Date()): Promise<QuoteReminderPassResult> {
+  await ensureQuoteSchema(env);
+  const today = istToday(now);
+  // (1) FIRE — PENDING due, or SNOOZED whose snooze elapsed, on quotes still SENT
+  //     and not yet expired (the expiry guard covers cron lag).
+  const { results: due } = await env.DB.prepare(
+    `SELECT r.id, r.quote_id, r.rule, q.quote_no, q.created_by
+       FROM quote_reminders r JOIN quotes q ON q.id = r.quote_id AND q.account_id = r.account_id
+      WHERE r.account_id = ? AND q.status = 'SENT' AND q.valid_until >= ?
+        AND ( (r.status='PENDING' AND r.due_date <= ?) OR (r.status='SNOOZED' AND r.snooze_until <= ?) )`)
+    .bind(QUOTE_ACCOUNT, today, today, today).all();
+  let fired = 0;
+  for (const r of due as any[]) {
+    const res = await env.DB.prepare("UPDATE quote_reminders SET status='SENT', sent_at=? WHERE id=? AND status IN ('PENDING','SNOOZED')").bind(today, r.id).run();
+    if (res.meta.changes > 0) {
+      fired++;
+      await pushNotification(env, null, `Quote ${r.quote_no}: reminder ${r.rule} due — follow up with the customer.`, r.created_by);
+      try {
+        const q = await loadQuote(env, r.quote_id);
+        if (q) {
+          const am = await nextAuditMeta(env, r.quote_id);
+          const detail = JSON.stringify({ rule: r.rule });
+          const eh = await auditEntryHash(QUOTE_ACCOUNT, r.quote_id, am.seq, "reminder_sent", "system", detail, am.prevHash, q.genesis_salt);
+          await env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'reminder_sent','system',?,?,?)")
+            .bind(`qa_${uid()}`, QUOTE_ACCOUNT, r.quote_id, am.seq, detail, eh, am.prevHash).run();
+        }
+      } catch (e) { console.error("quote reminder audit error:", String(e)); }
+    }
+  }
+  // (2) SWEEP — SENT quotes whose validity has lapsed → EXPIRED; cancel their reminders.
+  const { results: expired } = await env.DB.prepare(
+    "SELECT id FROM quotes WHERE account_id = ? AND status = 'SENT' AND valid_until < ?").bind(QUOTE_ACCOUNT, today).all();
+  for (const q of expired as any[]) {
+    const res = await env.DB.prepare("UPDATE quotes SET status='EXPIRED', updated_at=datetime('now') WHERE id=? AND account_id=? AND status='SENT'").bind(q.id, QUOTE_ACCOUNT).run();
+    if (res.meta.changes > 0) {
+      await env.DB.prepare("UPDATE quote_reminders SET status='CANCELLED' WHERE quote_id=? AND status IN ('PENDING','SNOOZED')").bind(q.id).run();
+      try {
+        const full = await loadQuote(env, q.id);
+        if (full) {
+          const am = await nextAuditMeta(env, q.id);
+          const eh = await auditEntryHash(QUOTE_ACCOUNT, q.id, am.seq, "expired", "system", "{}", am.prevHash, full.genesis_salt);
+          await env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'expired','system','{}',?,?)")
+            .bind(`qa_${uid()}`, QUOTE_ACCOUNT, q.id, am.seq, eh, am.prevHash).run();
+        }
+      } catch (e) { console.error("quote expiry audit error:", String(e)); }
+    }
+  }
+  return { fired, expired: (expired as any[]).length };
 }
 
 export default {
@@ -5136,6 +5314,8 @@ export default {
       if ((controller.cron || "") === SEND_CRON) {
         try { await runReminderPass(env, controller.cron || ""); }
         catch (e) { console.error("reminder pass cron error:", String(e)); }
+        try { await runQuoteReminderPass(env); }
+        catch (e) { console.error("quote reminder pass cron error:", String(e)); }
         return;
       }
       // Nightly Zoho Books delta (23:00 IST). Runs ONLY the finance-mirror refresh — no
@@ -5232,6 +5412,10 @@ export default {
       if (path.match(/^\/api\/quotes\/[^/]+\/accept$/)   && method==="POST") return quoteTransition(request,env,path.split("/")[3],"accept");
       if (path.match(/^\/api\/quotes\/[^/]+\/lost$/)     && method==="POST") return quoteTransition(request,env,path.split("/")[3],"lost");
       if (path.match(/^\/api\/quotes\/[^/]+\/document$/) && method==="GET")  return handleQuoteDocument(request,env,path.split("/")[3]);
+      if (path==="/api/quotes/today"           && method==="GET")  return handleQuoteToday(request,env);
+      if (path==="/api/quotes/bell"            && method==="GET")  return handleQuoteBell(request,env);
+      if (path.match(/^\/api\/quotes\/[^/]+\/reminders\/[^/]+\/snooze$/) && method==="POST") return handleQuoteReminderSnooze(request,env,path.split("/")[3],path.split("/")[5]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/followups$/) && method==="POST") return handleQuoteFollowup(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="PUT")  return handleQuoteEdit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
