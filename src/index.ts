@@ -7,7 +7,7 @@ import {
   type EnabledUsers, type QuoteRole,
 } from "./quote_access";
 import {
-  canonicalize, versionContentHash, auditEntryHash, verifyQuoteChain, newSalt,
+  canonicalize, versionContentHash, auditEntryHash, verifyQuoteChain, newSalt, sha256Hex,
   type VersionChainRow,
 } from "./quote_hash";
 import {
@@ -4653,6 +4653,8 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS quote_counters ( account_id TEXT NOT NULL, fy TEXT NOT NULL, last_no INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, fy) );`,
     `CREATE TABLE IF NOT EXISTS quote_approvals ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, leg TEXT NOT NULL, required INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'PENDING', assigned_to TEXT, assigned_as_fallback INTEGER NOT NULL DEFAULT 0, actor_id TEXT, actor_name TEXT, comments TEXT, acted_at TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE INDEX IF NOT EXISTS idx_qappr_quote ON quote_approvals (quote_id, version, status);`,
+    `CREATE TABLE IF NOT EXISTS quote_documents ( id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, content_b64 TEXT NOT NULL, content_hash TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT 'text/html', created_by TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_qdoc_quote ON quote_documents (quote_id, version);`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   _quoteSchemaReady = true;
@@ -4997,6 +4999,133 @@ async function handleQuoteReject(request: Request, env: Env, id: string): Promis
 
 function settingsFallback(s: { fallback_approver_id: string | null }): string | null { return s.fallback_approver_id ?? null; }
 
+// ── Send + customer document + lifecycle (Slice 5) ───────────────────────────
+function qEsc(s: unknown): string {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+}
+function qFmtPaise(p: number): string {
+  const neg = p < 0; const a = Math.abs(p | 0);
+  return `${neg ? "-" : ""}₹${Math.floor(a / 100)}.${String(a % 100).padStart(2, "0")}`;
+}
+function qAddDaysISO(ymd: string, n: number): string {
+  return new Date(Date.parse(ymd + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+}
+function qB64Utf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+const QUOTE_DOC_HASH_PLACEHOLDER = "__QUOTE_DOC_HASH__";
+
+// Customer-facing quote document — redacted by construction (sell-side only: no
+// cost, margin, ITC). The hash is computed over the body with the hash field
+// blanked, then stamped in (resolves doc-hash-self-reference).
+function buildQuoteDocumentHtml(h: { quote_no: string; client: string; place_of_supply: string; sent_at: string; valid_until: string; prefix: string }, lines: any[], totals: any): string {
+  const rows = lines.map((l, i) => `<tr><td>${i + 1}</td><td>${qEsc(l.description || l.sku || "Item")}</td><td>${l.qty}</td><td>${qFmtPaise(l.unit_price_paise)}</td><td>${(l.sale_gst_bp / 100).toFixed(2)}%</td><td>${qFmtPaise(l.line_taxable_paise)}</td><td>${qFmtPaise(l.line_gst_paise)}</td></tr>`).join("");
+  const taxLine = totals.igst_total > 0
+    ? `<tr><td colspan="6">IGST</td><td>${qFmtPaise(totals.igst_total)}</td></tr>`
+    : `<tr><td colspan="6">CGST</td><td>${qFmtPaise(totals.cgst_total)}</td></tr><tr><td colspan="6">SGST</td><td>${qFmtPaise(totals.sgst_total)}</td></tr>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Quotation ${qEsc(h.quote_no)}</title></head>
+<body data-quote-hash="${QUOTE_DOC_HASH_PLACEHOLDER}">
+<h1>Quotation ${qEsc(h.quote_no)}</h1>
+<p>Customer: ${qEsc(h.client)} &middot; Place of supply: ${qEsc(h.place_of_supply)}</p>
+<p>Date: ${qEsc(h.sent_at)} &middot; Valid until: ${qEsc(h.valid_until)}</p>
+<table border="1" cellspacing="0" cellpadding="4"><thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Unit price</th><th>GST</th><th>Taxable</th><th>GST amt</th></tr></thead>
+<tbody>${rows}
+<tr><td colspan="6">Subtotal</td><td>${qFmtPaise(totals.subtotal_paise)}</td></tr>
+${taxLine}
+<tr><td colspan="6">Round off</td><td>${qFmtPaise(totals.round_off_paise)}</td></tr>
+<tr><th colspan="6">Grand total</th><th>${qFmtPaise(totals.grand_total_paise)}</th></tr>
+</tbody></table>
+<p style="font-size:11px;color:#666">Document integrity hash (SHA-256): ${QUOTE_DOC_HASH_PLACEHOLDER}</p>
+</body></html>`;
+}
+
+// POST /api/quotes/:id/send — APPROVED → SENT; generate + hash the customer doc.
+async function handleQuoteSend(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "send")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (q.status !== "APPROVED") return json({ error: "quote is not APPROVED", code: "E_NOT_APPROVED" }, 409);
+
+  const settings = await getQuoteSettings(env);
+  const sentAt = istToday();
+  const validUntil = q.valid_until || qAddDaysISO(sentAt, settings.default_validity_days);
+  const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
+  const payload = JSON.parse(ver.payload_canonical);
+  const { results: lines } = await env.DB.prepare("SELECT description, sku, qty, sale_gst_bp, unit_price_paise, line_taxable_paise, line_gst_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+  const clientRow = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as any;
+
+  const htmlWithPlaceholder = buildQuoteDocumentHtml(
+    { quote_no: q.quote_no, client: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
+    lines as any[], payload.totals,
+  );
+  const docHash = await sha256Hex(htmlWithPlaceholder);       // hash with field blank
+  const stamped = htmlWithPlaceholder.split(QUOTE_DOC_HASH_PLACEHOLDER).join(docHash);
+
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ version: q.current_version, document_hash: docHash, sent_at: sentAt, valid_until: validUntil });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "sent", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO quote_documents (account_id,quote_id,version,content_b64,content_hash,mime_type,created_by) VALUES (?,?,?,?,?,'text/html',?)")
+      .bind(QUOTE_ACCOUNT, id, q.current_version, qB64Utf8(stamped), docHash, acc.user.sub),
+    env.DB.prepare("UPDATE quotes SET status='SENT', sent_at=?, valid_until=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status='APPROVED'")
+      .bind(sentAt, validUntil, id, QUOTE_ACCOUNT),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'sent',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, detail, entryHash, am.prevHash),
+  ]);
+  return json({ id, status: "SENT", sent_at: sentAt, valid_until: validUntil, document_hash: docHash });
+}
+
+// GET /api/quotes/:id/document — latest customer document (already redacted).
+async function handleQuoteDocument(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  const doc = await env.DB.prepare("SELECT content_b64, content_hash, mime_type, version, created_at FROM quote_documents WHERE quote_id=? ORDER BY id DESC LIMIT 1").bind(id).first() as any;
+  if (!doc) return json({ error: "no document — quote not sent yet", code: "E_NO_DOCUMENT" }, 404);
+  return json({ content_b64: doc.content_b64, content_hash: doc.content_hash, mime_type: doc.mime_type, version: doc.version, created_at: doc.created_at });
+}
+
+async function quoteTransition(request: Request, env: Env, id: string, action: "accept" | "lost"): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "accept_lost")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  let reason: string | null = null;
+  if (action === "lost") {
+    let body: any; try { body = await request.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+    reason = String(body.reason ?? "").trim();
+    if (!reason) return json({ error: "reason required", code: "E_VALIDATION", field: "reason" }, 422);
+    if (reason.length > 500) reason = reason.slice(0, 500);
+  }
+  const allowed = action === "accept" ? ["SENT"] : ["SENT", "PENDING_APPROVAL", "APPROVED"];
+  if (!allowed.includes(q.status)) return json({ error: `cannot ${action} from ${q.status}`, code: "E_BAD_TRANSITION" }, 409);
+  const newStatus = action === "accept" ? "ACCEPTED" : "LOST";
+
+  const am = await nextAuditMeta(env, id);
+  const detail = JSON.stringify({ from: q.status, reason });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, action === "accept" ? "accepted" : "lost", acc.user.sub, detail, am.prevHash, q.genesis_salt);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE quotes SET status=?, lost_reason=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status=?")
+      .bind(newStatus, reason, id, QUOTE_ACCOUNT, q.status),
+    // NOTE: reminder cancellation lands in Slice 6 (no quote_reminders yet).
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, action === "accept" ? "accepted" : "lost", acc.user.sub, detail, entryHash, am.prevHash),
+  ]);
+  return json({ id, status: newStatus, ...(reason ? { lost_reason: reason } : {}) });
+}
+
 export default {
   // Daily cron (wrangler.jsonc triggers): delivery reminders + recurring-order nudges
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -5099,6 +5228,10 @@ export default {
       if (path.match(/^\/api\/quotes\/[^/]+\/submit$/)  && method==="POST") return handleQuoteSubmit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+\/approve$/) && method==="POST") return handleQuoteApprove(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+\/reject$/)  && method==="POST") return handleQuoteReject(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/send$/)     && method==="POST") return handleQuoteSend(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/accept$/)   && method==="POST") return quoteTransition(request,env,path.split("/")[3],"accept");
+      if (path.match(/^\/api\/quotes\/[^/]+\/lost$/)     && method==="POST") return quoteTransition(request,env,path.split("/")[3],"lost");
+      if (path.match(/^\/api\/quotes\/[^/]+\/document$/) && method==="GET")  return handleQuoteDocument(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="PUT")  return handleQuoteEdit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
