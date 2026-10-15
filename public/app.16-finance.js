@@ -424,7 +424,7 @@ function _finStaleBanner(stale) {
     ⚠ <strong>Data is ${h(age)}</strong> (threshold ${h(String(stale.threshold_days))}d). Figures may be out of date, and automated reminders are paused until a fresh Zoho sync. Run <strong>Sync now</strong> under Finance Setup.</div>`;
 }
 function financeSetAsOf(v) { _FIN.asOf = v || ''; renderArCustomers(); }
-function financeSetKpiPeriod(n) { _FIN.kpiPeriod = parseInt(n, 10) || 90; const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
+function financeSetKpiPeriod(n) { _FIN.kpiPeriod = (n === 'all') ? 'all' : (parseInt(n, 10) || 90); const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
 function financeToggleArAll() { _FIN.arAll = !_FIN.arAll; const m = document.getElementById('main-content'); if (m) renderReceivables(m); }
 // One KPI tile: value vs target, coloured by on/off-track (grey when n/a).
 function _finKpiCard(label, value, suffix, ok, targetText) {
@@ -440,15 +440,19 @@ function _finKpiSection(kpis) {
   if (!rows.length) return '';
   const t = kpis.targets || {};
   const cur = kpis.period_days || 90;
-  const periodBtns = [30, 60, 90, 365].map(n =>
-    `<button ${dataAct('financeSetKpiPeriod', n)} style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;cursor:pointer;background:${n === cur ? 'var(--blue,#1d6fa4)' : 'transparent'};color:${n === cur ? '#fff' : 'inherit'}">${n}d</button>`).join(' ');
+  const isLifetime = !!kpis.lifetime;
+  const periodOpts = [{ v: 30, l: '30d' }, { v: 60, l: '60d' }, { v: 90, l: '90d' }, { v: 365, l: '365d' }, { v: 'all', l: 'Lifetime' }];
+  const periodBtns = periodOpts.map(o => {
+    const active = o.v === 'all' ? isLifetime : (!isLifetime && o.v === cur);
+    return `<button ${dataAct('financeSetKpiPeriod', o.v)} style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;cursor:pointer;background:${active ? 'var(--blue,#1d6fa4)' : 'transparent'};color:${active ? '#fff' : 'inherit'}">${o.l}</button>`;
+  }).join(' ');
   const blocks = rows.map(k => {
     const dsoOk = k.dso == null ? null : (k.dso <= t.dso);
     const ceiOk = k.cei == null ? null : (k.cei >= t.cei);
     const acpOk = k.acp == null ? null : (k.acp <= t.acp);
     const ovOk = (k.overdue_pct == null) ? null : (k.overdue_pct <= t.overdue_pct);
     return `<div style="margin-top:8px">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${h(k.currency)} · AR ${h(_fmtPaise(k.ar, k.currency))} · credit sales (period) ${h(_fmtPaise(k.credit_sales, k.currency))}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${h(k.currency)} · AR ${h(_fmtPaise(k.ar, k.currency))} · credit sales (${isLifetime ? 'lifetime' : 'period'}) ${h(_fmtPaise(k.credit_sales, k.currency))}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         ${_finKpiCard('DSO', k.dso, 'd', dsoOk, 'target ≤ ' + t.dso + 'd')}
         ${_finKpiCard('CEI', k.cei, '%', ceiOk, 'target ≥ ' + t.cei + '%')}

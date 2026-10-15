@@ -11749,10 +11749,24 @@ async function _arSummaryRows(env: Env, clientId: string | null, opts: { asOf?: 
 // metrics are correct for any as-of (not just today) and reconcile to Zoho history.
 // Pure arithmetic once the rows are loaded — one scan each of invoices, payment
 // allocations and credit allocations (indexed), computed in memory.
-async function computeArKpis(env: Env, opts: { asOf?: string; periodDays?: number } = {}): Promise<Record<string, unknown>> {
+async function computeArKpis(env: Env, opts: { asOf?: string; periodDays?: number; lifetime?: boolean } = {}): Promise<Record<string, unknown>> {
   const asOf = opts.asOf || istToday();
-  const period = opts.periodDays && opts.periodDays > 0 ? opts.periodDays : await finCfgInt(env, "fin_kpi_period_days", 90);
-  const periodStart = addDaysIST(asOf, -period);
+  const lifetime = !!opts.lifetime;
+  let period: number, periodStart: string;
+  if (lifetime) {
+    // Lifetime: the window spans the entire book — start just before the earliest
+    // invoice so beginning-AR is 0 and every credit sale counts. DSO/ACP then use
+    // the real elapsed span as their day multiplier (resolves "cover all pending AR").
+    const first = await env.DB.prepare(
+      "SELECT MIN(date) AS d FROM ar_invoices WHERE status != 'void' AND date IS NOT NULL AND date <> ''"
+    ).first() as { d: string | null } | null;
+    const firstDate = (first && first.d) ? String(first.d) : asOf;
+    periodStart = addDaysIST(firstDate, -1);
+    period = Math.max(1, daysBetweenIST(periodStart, asOf) || 1);
+  } else {
+    period = opts.periodDays && opts.periodDays > 0 ? opts.periodDays : await finCfgInt(env, "fin_kpi_period_days", 90);
+    periodStart = addDaysIST(asOf, -period);
+  }
   const dust = await finCfgInt(env, "fin_dust_cutoff_paise", 100);
 
   // Invoices: total, currency, dates. Allocation events (payments + credit notes) per
@@ -11804,7 +11818,7 @@ async function computeArKpis(env: Env, opts: { asOf?: string; periodDays?: numbe
     };
   });
   return {
-    as_of: asOf, period_days: period,
+    as_of: asOf, period_days: period, lifetime,
     targets: {
       dso: await finCfgInt(env, "fin_target_dso", 45),
       cei: await finCfgInt(env, "fin_target_cei", 80),
@@ -11821,9 +11835,11 @@ async function handleFinanceKpis(request: Request, env: Env): Promise<Response> 
   const url = new URL(request.url);
   const asOfRaw = url.searchParams.get("as_of") || "";
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : undefined;
-  const periodRaw = parseInt(url.searchParams.get("period") || "", 10);
+  const periodParam = url.searchParams.get("period") || "";
+  const lifetime = periodParam === "all" || periodParam === "lifetime";
+  const periodRaw = parseInt(periodParam, 10);
   const periodDays = [30, 60, 90, 365].includes(periodRaw) ? periodRaw : undefined;
-  return json({ ...(await computeArKpis(env, { asOf, periodDays })), stale: await finStaleInfo(env) });
+  return json({ ...(await computeArKpis(env, { asOf, periodDays, lifetime })), stale: await finStaleInfo(env) });
 }
 
 // ── Payables (P3.2) read API — finance/ops only; clients NEVER see AP. ──
