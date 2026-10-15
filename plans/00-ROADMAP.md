@@ -63,13 +63,15 @@
 
 ## 📦 Release v0.4.0 — Quotations (GIFTSYZ) — STATUS: PLANNED (architecture only; not built)
 
-- [ ] **Milestone 6: Quotations — GIFTSYZ into Smart Pantry** — STATUS: BUILDING (spec-validated r1–r4,
+- [ ] **Milestone 6: Quotations — GIFTSYZ into Smart Pantry** — STATUS: BUILT (awaiting live rollout;
+  all 7 slices built + green — ships inert until an admin enables users via Quote Access) (spec-validated r1–r4,
   31→20→15→8 findings folded; **Slice 1 calc engine + Slice 2 entitlement gate BUILT + green** —
   `quote_calc.ts` (18 vectors) + `quote_access.ts` (entitlement) + `quote_hash.ts` (SHA-256 chain) + Worker
   routes (/access, /calc, admin config, CRUD + immutable versions, **approvals/SoD**); `quote_approval.ts`
-  + submit/approve/reject; **Slice 5 send + customer document + SHA-256 + accept/lost lifecycle BUILT**
-  (`/send` → redacted hash-stamped `quote_documents` + `/document`, `/accept`, `/lost`); 548 tests green,
-  tsc + smoke clean. Next slice: reminders R1–R3 + Today + bell + SENT→EXPIRED cron)
+  + submit/approve/reject; Slice 5 send + customer document + SHA-256 + accept/lost; **Slice 6 reminders
+  R1–R3 + follow-ups + Today + bell + SENT→EXPIRED cron, and Slice 7 the entitlement-gated SPA
+  (`app.20-quotes.js`: list/editor/detail/Today + role-gated Quote Access admin) BUILT**; 555 tests
+  green, tsc + smoke clean. Feature complete, ships inert until an admin enables users)
   - *Description:* Fold the GIFTSYZ B2B quotation workflow (PRD v2.1) into this app, reusing the
     platform spine (JWT auth, clients/catalogue, approval engine, audit, document store + SHA-256, FY
     numbering, cron + notifications, app_config). Net-new: a pure vector-tested pricing/landed-cost/GST

@@ -92,12 +92,21 @@
   in `test/quote_document.int.test.ts` (6): send→document round-trip with hash-match + redaction, plus
   409/404/403/422 edges. Reminder seeding on send deferred to Group 6.
 
-### Group 6 (Depends on Group 5 — reminders / Today / bell)
-- [ ] Task 6.A: reminder seeding + `runQuoteReminderPass` cron + snooze.
-- [ ] Task 6.B: follow-ups + `GET /today` + `GET /bell`.
+### Group 6 (Depends on Group 5 — reminders / Today / bell) — ✅ BUILT (555 tests green)
+- [x] Task 6.A: reminder seeding on send (R1/R2/R3, strict open window) + `runQuoteReminderPass`
+  cron (fire due, then sweep SENT→EXPIRED; wired into scheduled() on SEND_CRON) + snooze
+  (PENDING→SNOOZED; 409/422 guards). accept/lost cancel PENDING+SNOOZED.
+- [x] Task 6.B: `POST /:id/followups` + `GET /today` {due_reminders, followups_due, expiring} +
+  `GET /bell` {count, approvals, followups}, all IST with the spec predicates.
+  Tests: `test/quote_reminders.int.test.ts` (7, incl. frozen-clock cron pass).
 
-### Group 7 (Depends on 2–6 — SPA surface, built incrementally alongside each slice)
-- [ ] Task 7.A: `public/app.NN-quotes.js` pages (list, editor, approvals, Today, admin settings) + nav/PAGE_MAP/ACTION_PAGES + `test/smoke.mjs` registration.
+### Group 7 (Depends on 2–6 — SPA surface) — ✅ BUILT (smoke green, 21 scripts / 58 routes)
+- [x] Task 7.A: `public/app.20-quotes.js` — entitlement-gated `quotations` page (list + status
+  filter, detail with redacted totals/audit/hash + lifecycle actions, new-quote editor with live
+  /calc preview, Today tab, bell badge) and role-gated `quote_admin` config (per-user quote-role
+  grant/revoke + settings form). Core wiring: canAccessPage entitlement branch, buildNav tile
+  injection, PAGE_MAP + ACTION_PAGES + platform nav entry, loadQuoteAccess() at boot. smoke asserts
+  the tile is entitlement-gated (never in a static NAV; canAccessPage tracks /access).
 
 ## 📝 Step-by-Step Implementation Details
 
