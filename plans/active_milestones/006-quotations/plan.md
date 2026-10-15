@@ -82,10 +82,15 @@
   completion UPDATE; reject supersedes all rows → DRAFT; hash-chained `quote_audit`). Integration:
   `test/quote_approval.int.test.ts` (7 — manager/auto-satisfy/sole-409, two-leg ITC=No + wrong-leg 403,
   reject→DRAFT + no-comments 422, non-PENDING 409, reject→resubmit→re-approve round-trip).
-- [ ] Task 4.B: send/accept/lost transitions + customer document + reminders — **next slices**.
+- [x] Task 4.B: send/accept/lost transitions — **BUILT in Slice 5** (see Group 5).
 
-### Group 5 (Depends on Group 4 — customer document + hash)
-- [ ] Task 5.A: `quote_documents` generation (redacted, hashed) + `GET /document`.
+### Group 5 (Depends on Group 4 — customer document + hash) — ✅ BUILT (548 tests green, tsc + smoke clean)
+- [x] Task 5.A: `POST /:id/send` (APPROVED→SENT; stamps sent_at + default valid_until), redacted
+  customer HTML `quote_documents` generation (hash body-with-blanked-field then stamp the digest in),
+  `GET /:id/document`, plus `POST /:id/accept` (→ACCEPTED) and `POST /:id/lost {reason}` (→LOST). All
+  hash-chained into `quote_audit`; gated by the entitlement matrix (send/accept_lost). Integration tests
+  in `test/quote_document.int.test.ts` (6): send→document round-trip with hash-match + redaction, plus
+  409/404/403/422 edges. Reminder seeding on send deferred to Group 6.
 
 ### Group 6 (Depends on Group 5 — reminders / Today / bell)
 - [ ] Task 6.A: reminder seeding + `runQuoteReminderPass` cron + snooze.
