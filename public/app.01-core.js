@@ -207,6 +207,7 @@ const NAV = {
     { id:'alerts',              label:'Alerts & Exceptions', icon:iconBell,   badge:'!' },
     { id:'over_delivery_audit', label:'Over-Delivery Audit', icon:iconEye,    badge:null },
     { section:'Admin & Settings' },
+    { id:'quote_admin',   label:'Quote Access',  icon:iconSettings, badge:null },
     { id:'finance_setup', label:'Finance Setup', icon:iconSettings, badge:null },
     { id:'users',       label:'Users & Roles',  icon:iconUsers,  badge:null },
     { id:'staff',       label:'Staff',          icon:iconBadge,  badge:null },
@@ -610,6 +611,7 @@ function initApp() {
   loadBranding();          // document letterhead details; async, non-blocking
   loadNotifications();
   startNotificationPolling();
+  loadQuoteAccess();       // Quotations (006) entitlement → inject nav tile if enabled
 
   document.addEventListener('click', e => {
     if (!e.target.closest('.search-bar')) hideSearchResults();
@@ -773,6 +775,11 @@ function startNotificationPolling() {
 function canAccessPage(page) {
   if (!APP.user) return true;
   if (page === 'dashboard') return true;
+  // Quotations (006) is entitlement-gated, not role-gated: visible only once the
+  // server's /api/quotes/access says this user is enabled. The flag is loaded at
+  // boot (loadQuoteAccess); absent → denied (fail-closed, and keeps the offline
+  // smoke's nav-guard happy since the tile is never in the static NAV).
+  if (page === 'quotations') return !!(APP.quoteAccess && APP.quoteAccess.enabled);
   // Allowed if the page is in the role's own sidebar nav …
   if ((NAV[APP.user.nav] || []).some(i => i.id === page)) return true;
   // … or it's an off-nav action page this role may reach via a button/menu —
@@ -802,6 +809,10 @@ const ACTION_PAGES = {
   // Smart Paste Order (004): ops/admin place a draft for a chosen client; a
   // client_admin for their own. Matches the parse-paste/from-paste role gate.
   smart_paste:       ['super_admin', 'ops_admin', 'client_admin'],
+  // Quotations access/config (006) — role-gated admin surface (entitlement list,
+  // per-user quote-role, pricing/approval settings). Reachable off-nav for ops_admin
+  // (whose sidebar has no Admin section) and via the sidebar item for super_admin.
+  quote_admin:       ['super_admin', 'ops_admin'],
 };
 
 function getDefaultPage() {
@@ -839,7 +850,13 @@ function applyAccordion(openLabel) {
 
 function buildNav() {
   const nav = APP.user.nav;
-  const items = NAV[nav] || NAV.platform;
+  const base = NAV[nav] || NAV.platform;
+  // Inject the entitlement-gated Quotations tile only when the server enabled this
+  // user (loadQuoteAccess). Kept out of the static NAV so the offline smoke never
+  // sees it and so grant/revoke takes effect with no deploy.
+  const items = (APP.quoteAccess && APP.quoteAccess.enabled)
+    ? [...base, { section:'Quotations' }, { id:'quotations', label:'Quotations', icon:iconFile, badge:null }]
+    : base;
   navPrefLoad();
 
   // Group items into sections
@@ -1103,6 +1120,9 @@ const PAGE_MAP = {
   // Smart Paste Order (app.19) — off-nav page reached via the ordering surface;
   // ACL lives in ACTION_PAGES (matches the endpoint role gate).
   smart_paste: 'renderSmartPaste',
+  // Quotations (006): the entitlement-gated workspace + the role-gated admin surface.
+  quotations: 'renderQuotations',
+  quote_admin: 'renderQuoteAdmin',
 };
 
 // Phase 2: pages folded into a hub redirect to the hub on their tab, so every
@@ -1741,6 +1761,20 @@ function brandInfo() {
 async function loadBranding() {
   const b = await api('/branding').catch(() => null);
   if (b && !b.error) APP.branding = b;
+}
+// Quotations (006): ask the server whether this user is entitled. /api/quotes/access
+// is exempt from the entitlement gate, so it always answers for an authed user.
+// When enabled, rebuild the sidebar so the Quotations tile appears (no deploy needed)
+// and refresh its bell badge.
+async function loadQuoteAccess() {
+  const r = await api('/quotes/access').catch(() => null);
+  APP.quoteAccess = (r && !r.error) ? r : { enabled: false };
+  if (APP.quoteAccess.enabled) {
+    buildNav();
+    const navEl = document.getElementById('nav-' + APP.page);
+    if (navEl) { navEl.classList.add('active'); navEl.setAttribute('aria-current', 'page'); }
+    if (typeof window.quoteRefreshBell === 'function') window.quoteRefreshBell();
+  }
 }
 function _hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex || '').trim());

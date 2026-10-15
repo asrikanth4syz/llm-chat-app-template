@@ -172,6 +172,18 @@ const result = await page.evaluate(async (actTargets) => {
       const want = SP_ALLOWED.has(role);
       if (got !== want) out.smartPasteAclFails.push(`${role}: canAccessPage('smart_paste')=${got}, want ${want}`);
     }
+    // 4. Quotations (006) is entitlement-gated, not role-gated: its tile must never
+    //    live in a static NAV, and canAccessPage('quotations') must track the runtime
+    //    /api/quotes/access flag — hidden until an admin enables the user.
+    out.quoteGateFails = [];
+    if (Object.values(NAV).some((items) => items.some((i) => i.id === "quotations")))
+      out.quoteGateFails.push("'quotations' leaked into a static NAV (must be injected dynamically)");
+    APP.user = { role: "procurement_manager", nav: "procurement" };
+    APP.quoteAccess = { enabled: false };
+    if (canAccessPage("quotations")) out.quoteGateFails.push("disabled user can reach quotations");
+    APP.quoteAccess = { enabled: true, quoteRole: "sales" };
+    if (!canAccessPage("quotations")) out.quoteGateFails.push("enabled user cannot reach quotations");
+    APP.quoteAccess = undefined;
     APP.user = null;
   } catch (e) { out.aclErr = String(e.message); }
   return out;
@@ -187,6 +199,7 @@ check(`all ${result.actCount || 0} delegated targets resolve`, Array.isArray(res
 check("no role has an off-nav quick action", Array.isArray(result.aclLeaks) && result.aclLeaks.length === 0 || (console.log("    leaks:", result.aclLeaks), false));
 check("canAccessPage gates every role correctly", Array.isArray(result.navGuardFails) && result.navGuardFails.length === 0 || (console.log("    guard fails:", result.navGuardFails), false));
 check("smart_paste reachable by exactly its endpoint-gate roles", Array.isArray(result.smartPasteAclFails) && result.smartPasteAclFails.length === 0 || (console.log("    acl fails:", result.smartPasteAclFails), false));
+check("quotations tile is entitlement-gated (hidden until /access enables it)", Array.isArray(result.quoteGateFails) && result.quoteGateFails.length === 0 || (console.log("    quote gate fails:", result.quoteGateFails), false));
 if (result.aclErr) console.log("    acl error:", result.aclErr);
 if (result.modalErr) console.log("    modal error:", result.modalErr);
 if (result.renderErr) console.log("    render error:", result.renderErr);
