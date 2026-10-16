@@ -128,10 +128,12 @@ describe("send + customer document (Slice 5)", () => {
     expect(lb.lost_reason).toBe("chose a competitor");
   });
 
-  it("accept is 409 when not SENT; finance role cannot send (no send capability → 403)", async () => {
+  it("accept is 409 when not SENT; finance (a raiser role) may send", async () => {
     await prep();
     const id = await approvedQuote();
     expect((await post(`/api/quotes/${id}/accept`, {}, salesTok)).status).toBe(409); // still APPROVED
-    expect((await post(`/api/quotes/${id}/send`, {}, finTok)).status).toBe(403);      // finance can't send
+    const sent = await post(`/api/quotes/${id}/send`, {}, finTok);
+    expect(sent.status).toBe(200);                                                   // finance may send now
+    expect((await sent.json() as any).status).toBe("SENT");
   });
 });

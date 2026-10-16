@@ -81,6 +81,16 @@ describe("quote entitlement gate — admin + /access", () => {
     expect(await (await get("/api/quotes/access", salesTok)).json()).toEqual({ enabled: true, quoteRole: "sales" });
   });
 
+  it("super_admin is an implicit quote author (commercial_manager) with no grant", async () => {
+    await setSellerState("KL");
+    // qadmin is super_admin and was never granted a quote-role
+    expect(await (await get("/api/quotes/access", adminTok)).json()).toEqual({ enabled: true, quoteRole: "commercial_manager" });
+    // and a guarded quote route is reachable (implicit access) and sees cost
+    const calc = await post("/api/quotes/calc", CALC_BODY, adminTok);
+    expect(calc.status).toBe(200);
+    expect((await calc.json() as any).lines[0].landed_cost_paise).toBe(10000);
+  });
+
   it("stale _ver → 409; invalid role → 422; self-grant of approver role → 403", async () => {
     await grant("tst-qsales", "sales", 0);
     expect((await grant("tst-qsales", "finance", 0)).status).toBe(409);         // stale _ver (now 1)

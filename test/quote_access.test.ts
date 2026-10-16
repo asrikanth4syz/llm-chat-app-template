@@ -24,10 +24,11 @@ describe("quote_access — capability matrix (default-deny)", () => {
     expect(canApproveLeg("commercial_manager", "finance")).toBe(false);
     expect(seesCost("commercial_manager")).toBe(true);
   });
-  it("finance approves only the finance leg and cannot author", () => {
+  it("finance approves the finance leg and may also author (product update)", () => {
     expect(canApproveLeg("finance", "finance")).toBe(true);
     expect(canApproveLeg("finance", "manager")).toBe(false);
-    expect(can("finance", "create_edit")).toBe(false);
+    expect(can("finance", "create_edit")).toBe(true);   // finance may raise quotes
+    expect(can("finance", "submit")).toBe(true);
     expect(seesCost("finance")).toBe(true);
   });
   it("ops is view/follow-up only and NEVER sees cost", () => {

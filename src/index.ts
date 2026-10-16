@@ -2,7 +2,7 @@ import { Env, JWTPayload } from "./types";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
 import {
-  parseEnabledUsers, resolveQuoteRole, accessDecision, applyAccessChange,
+  parseEnabledUsers, resolveQuoteRole, applyAccessChange,
   validateFallbackApprover, revokeBreaksFallback, seesCost, can, QuoteAccessError,
   type EnabledUsers, type QuoteRole,
 } from "./quote_access";
@@ -4496,11 +4496,20 @@ async function getQuoteSettings(env: Env): Promise<QuoteSettings> {
 
 // Returns {user, quoteRole} or a Response (401/404 hide-convention). NOT used by
 // GET /api/quotes/access, which is exempt (always 200 for an authed user).
+// super_admin is an IMPLICIT quote author/approver (commercial_manager-equivalent):
+// they can raise and drive quotes with no entitlement grant. ops_admin stays
+// config-only (manages Quote Access) unless explicitly granted a quote-role.
+function implicitQuoteRole(user: JWTPayload): QuoteRole | null {
+  return user.role === "super_admin" ? "commercial_manager" : null;
+}
+function effectiveQuoteRole(enabled: EnabledUsers, user: JWTPayload): QuoteRole | null {
+  return resolveQuoteRole(enabled, user.sub) ?? implicitQuoteRole(user);
+}
 async function requireQuoteAccess(request: Request, env: Env): Promise<{ user: JWTPayload; quoteRole: QuoteRole } | Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
   if (denied) return denied;
-  const role = resolveQuoteRole(await getQuoteEnabledUsers(env), user!.sub);
+  const role = effectiveQuoteRole(await getQuoteEnabledUsers(env), user!);
   if (!role) return json({ error: "Not found" }, 404);
   return { user: user!, quoteRole: role };
 }
@@ -4532,7 +4541,8 @@ function redactCalcForRole(result: QuoteCalcResult, role: QuoteRole): unknown {
 async function handleQuoteAccess(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  return json(accessDecision(await getQuoteEnabledUsers(env), user!.sub));
+  const role = effectiveQuoteRole(await getQuoteEnabledUsers(env), user!);
+  return json({ enabled: role !== null, quoteRole: role });
 }
 
 // POST /api/quotes/calc — guarded pricing preview (reuses the pure engine).

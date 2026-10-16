@@ -297,17 +297,22 @@ button { font-family: var(--font); cursor: pointer; }
 }
 .sidebar.collapsed { width: var(--sidebar-collapsed-w); }
 
-/* Collapsed: hide labels */
+/* Collapsed: labels slide + fade away (not snap) so the desktop rail's in/out
+   motion reads as one smooth, predictable animation with the width transition. */
+.nav-item-label, .nav-section-label, .sb-titles, .su-info {
+  overflow: hidden; white-space: nowrap; max-width: 240px; opacity: 1;
+  transition: max-width .22s cubic-bezier(.4,0,.2,1), opacity .16s ease;
+}
 .sidebar.collapsed .sb-titles,
 .sidebar.collapsed .nav-item-label,
-.sidebar.collapsed .nav-item-badge,
 .sidebar.collapsed .su-info,
-.sidebar.collapsed .nav-section-label { display: none !important; }
+.sidebar.collapsed .nav-section-label { max-width: 0; opacity: 0; }
+.sidebar.collapsed .nav-item-badge { display: none !important; }
 .sidebar.collapsed .sidebar-brand { justify-content: center; padding: 16px 0 12px; }
 .sidebar.collapsed .sidebar-user { justify-content: center; }
 .sidebar.collapsed .su-logout { margin: 0 auto; }
 .sidebar.collapsed .nav-section { height: 1px; background: var(--border); margin: 6px 10px; padding: 0; }
-.sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; margin: 1px 8px; width: auto; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; margin: 1px 8px; width: auto; gap: 0; }
 .sidebar.collapsed .nav-item.active { border-left: none; padding-left: 0; background: var(--sidebar-active-bg); border-radius: var(--radius-sm); }
 .sidebar.collapsed .nav-section-toggle { display: none; }
 /* In icon-rail mode every group is a flat icon list — never hide items */
@@ -970,9 +975,12 @@ button.tile:hover { transform: translateY(-1px); }
      the page and recedes as it slides back. */
   .sidebar.mobile-open { transform: translateX(0); box-shadow: 6px 0 32px rgba(0,0,0,.28); }
   .sidebar.collapsed { width: var(--sidebar-w) !important; }
-  /* Restore labels in mobile drawer */
+  /* Restore labels in mobile drawer (override the desktop rail's slide+fade) */
   .sidebar .sb-titles, .sidebar .nav-item-label, .sidebar .nav-section-label,
   .sidebar .su-info, .sidebar .nav-item-badge { display: revert !important; }
+  .sidebar.collapsed .sb-titles, .sidebar.collapsed .nav-item-label,
+  .sidebar.collapsed .nav-section-label, .sidebar.collapsed .su-info { max-width: none !important; opacity: 1 !important; }
+  .sidebar.collapsed .nav-item { gap: 9px; }
   .sidebar .sidebar-brand { justify-content: flex-start; padding: 14px 14px 10px; }
   .sidebar .sidebar-user { justify-content: flex-start; }
   .sidebar .nav-item { justify-content: flex-start; padding: 7px 10px; margin: 1px 8px; width: auto; }

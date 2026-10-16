@@ -29,9 +29,11 @@ function qStatusColor(s) {
 }
 function qBadge(s) { return `<span class="chip" style="background:${qStatusColor(s)};color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">${h(s || '')}</span>`; }
 function qRole() { return (APP.quoteAccess && APP.quoteAccess.quoteRole) || null; }
-const qCanCreate = () => ['sales', 'commercial_manager'].includes(qRole());
-const qCanSend = () => ['sales', 'commercial_manager'].includes(qRole());
-const qCanAcceptLost = () => ['sales', 'commercial_manager'].includes(qRole());
+// sales, commercial_manager and finance may author/send/close (super_admin resolves
+// to commercial_manager server-side). ops is view + follow-up only.
+const qCanCreate = () => ['sales', 'commercial_manager', 'finance'].includes(qRole());
+const qCanSend = () => ['sales', 'commercial_manager', 'finance'].includes(qRole());
+const qCanAcceptLost = () => ['sales', 'commercial_manager', 'finance'].includes(qRole());
 // A role approves exactly its own leg (fallback-approver edge handled server-side).
 function qMyLeg() { return qRole() === 'commercial_manager' ? 'manager' : (qRole() === 'finance' ? 'finance' : null); }
 
@@ -66,12 +68,23 @@ async function quoteRenderList() {
   const qs = q.statusFilter ? `?status=${encodeURIComponent(q.statusFilter)}` : '';
   const data = await api('/quotes' + qs);
   if (!data) { body.innerHTML = `<div class="card">Could not load quotes.</div>`; return; }
-  const rows = (data.quotes || data || []);
+  q.listRows = (data.quotes || data || []);
+  const query = (q.listQuery || '').trim().toLowerCase();
+  const rows = query ? q.listRows.filter(r =>
+    (r.quote_no || '').toLowerCase().includes(query) || (r.client_id || '').toLowerCase().includes(query)) : q.listRows;
   const filterChips = ['', ...QUOTE_STATUSES].map(s =>
     `<button class="btn btn-sm ${q.statusFilter === s ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetStatus', s)}>${s || 'All'}</button>`).join(' ');
   body.innerHTML = `
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${filterChips}</div>
-    ${rows.length === 0 ? `<div class="card" style="text-align:center;padding:30px">No quotes${q.statusFilter ? ' in ' + h(q.statusFilter) : ''} yet.</div>` : `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${filterChips}</div>
+      <div style="position:relative;display:inline-flex;align-items:center">
+        <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote # or client…" autocomplete="off"
+          style="padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:8px;min-width:220px;font:inherit">
+        <button type="button" ${dataAct('quoteListClearSearch')} title="Clear search" aria-label="Clear search"
+          style="position:absolute;right:4px;border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:2px 6px">✕</button>
+      </div>
+    </div>
+    ${rows.length === 0 ? `<div class="card" style="text-align:center;padding:30px">No quotes${query ? ' match “' + h(q.listQuery) + '”' : (q.statusFilter ? ' in ' + h(q.statusFilter) : ' yet')}.</div>` : `
     <div class="card" style="overflow-x:auto;padding:0">
       <table class="data-table" style="width:100%;border-collapse:collapse">
         <thead><tr>
@@ -79,18 +92,39 @@ async function quoteRenderList() {
           <th style="text-align:left;padding:10px">Status</th><th style="text-align:right;padding:10px">Grand total</th>
           <th style="text-align:left;padding:10px">Valid until</th>
         </tr></thead>
-        <tbody>${rows.map(r => `
-          <tr style="cursor:pointer;border-top:1px solid var(--border,#e5e7eb)" ${dataAct('quoteOpenDetail', r.id)}>
-            <td style="padding:10px;font-weight:600">${h(r.quote_no || r.id)}</td>
-            <td style="padding:10px">${h(r.client_id || '')}</td>
-            <td style="padding:10px">${qBadge(r.status)}</td>
-            <td style="padding:10px;text-align:right">${qMoney(r.grand_total_paise)}</td>
-            <td style="padding:10px">${h(r.valid_until || '—')}</td>
-          </tr>`).join('')}</tbody>
+        <tbody id="q-list-rows">${quoteListRowsHtml(rows)}</tbody>
       </table>
     </div>`}`;
 }
 function quoteSetStatus(s) { const q = qState(); q.statusFilter = s; quoteRenderList(); }
+// Client-side filter over the already-loaded page of quotes (no refetch), so the
+// results update as you type. The X button clears the text and the filter.
+function quoteListApplyFilter() {
+  const q = qState(); const query = (q.listQuery || '').trim().toLowerCase();
+  const rows = query ? (q.listRows || []).filter(r =>
+    (r.quote_no || '').toLowerCase().includes(query) || (r.client_id || '').toLowerCase().includes(query)) : (q.listRows || []);
+  const host = document.getElementById('q-list-rows');
+  if (host) host.innerHTML = quoteListRowsHtml(rows);
+}
+function quoteListSearch(val) { qState().listQuery = val; quoteListApplyFilter(); }
+function quoteListClearSearch() {
+  const q = qState(); q.listQuery = '';
+  const inp = document.getElementById('q-list-search'); if (inp) { inp.value = ''; inp.focus(); }
+  quoteRenderList();
+}
+// Rows only (no <tbody> wrapper) — the caller supplies the tbody so this can be
+// dropped straight into tbody.innerHTML on live filter.
+function quoteListRowsHtml(rows) {
+  if (!rows.length) return `<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted)">No quotes match.</td></tr>`;
+  return rows.map(r => `
+    <tr style="cursor:pointer;border-top:1px solid var(--border,#e5e7eb)" ${dataAct('quoteOpenDetail', r.id)}>
+      <td style="padding:10px;font-weight:600">${h(r.quote_no || r.id)}</td>
+      <td style="padding:10px">${h(r.client_id || '')}</td>
+      <td style="padding:10px">${qBadge(r.status)}</td>
+      <td style="padding:10px;text-align:right">${qMoney(r.grand_total_paise)}</td>
+      <td style="padding:10px">${h(r.valid_until || '—')}</td>
+    </tr>`).join('');
+}
 
 // ── Detail ─────────────────────────────────────────────────────────────────────
 async function quoteOpenDetail(id) {
@@ -395,25 +429,22 @@ async function renderQuoteAdmin(main) {
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
   const [acc, settings] = await Promise.all([api('/admin/quote-access'), api('/admin/quote-settings')]);
   if (!acc || !settings) { main.innerHTML = `<div class="card">Could not load quote configuration.</div>`; return; }
-  APP._qadmin = { ver: acc._ver, settings };
-  const roleOpts = (cur) => ['', 'sales', 'ops', 'commercial_manager', 'finance'].map(r =>
-    `<option value="${r}" ${cur === r ? 'selected' : ''}>${r || '— none —'}</option>`).join('');
-  const users = acc.users || [];
-  const enabled = acc.enabled || {};
+  APP._qadmin = { ver: acc._ver, settings, users: acc.users || [], enabled: acc.enabled || {}, q: '' };
   const s = settings;
   main.innerHTML = `
     <div class="page-head" style="margin-bottom:14px"><h1 style="margin:0">Quote Access & Settings</h1>
       <div class="text-muted" style="font-size:13px">Assign who can use Quotations and their quote-role. ${acc.fallback_valid === false ? '<b style="color:var(--danger,#b91c1c)">Fallback approver is no longer entitled — fix it below.</b>' : ''}</div></div>
     <div class="card" style="margin-bottom:14px">
-      <h3 style="margin-top:0">Entitled users</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr><th style="text-align:left;padding:6px">User</th><th style="text-align:left;padding:6px">App role</th><th style="text-align:left;padding:6px">Quote role</th></tr></thead>
-        <tbody>${users.map(u => `<tr style="border-top:1px solid var(--border,#eee)">
-          <td style="padding:6px">${h(u.name || u.id)}<div class="text-muted" style="font-size:11px">${h(u.email || '')}</div></td>
-          <td style="padding:6px">${h(u.role || '')}</td>
-          <td style="padding:6px"><select ${dataChangeVal('quoteAdminSetRole', u.id)}>${roleOpts(enabled[u.id] || '')}</select></td>
-        </tr>`).join('')}</tbody>
-      </table>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <h3 style="margin:0">Entitled users</h3>
+        <div style="position:relative;display:inline-flex;align-items:center">
+          <input id="qa-search" ${dataInputVal('quoteAdminSearch')} placeholder="Find a user by name or email…" autocomplete="off"
+            style="padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:8px;min-width:240px;font:inherit">
+          <button type="button" ${dataAct('quoteAdminClearSearch')} title="Clear search" aria-label="Clear search"
+            style="position:absolute;right:4px;border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:2px 6px">✕</button>
+        </div>
+      </div>
+      <div id="qa-users">${quoteAdminUsersHtml()}</div>
     </div>
     <div class="card">
       <h3 style="margin-top:0">Settings</h3>
@@ -431,11 +462,44 @@ async function renderQuoteAdmin(main) {
       <div style="margin-top:12px"><button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteAdminSaveSettings')}>Save settings</button></div>
     </div>`;
 }
+// Users table, filtered by the live search query (name / email / id).
+function quoteAdminUsersHtml() {
+  const st = APP._qadmin || {}; const q = (st.q || '').trim().toLowerCase();
+  const enabled = st.enabled || {};
+  const roleOpts = (cur) => ['', 'sales', 'ops', 'commercial_manager', 'finance'].map(r =>
+    `<option value="${r}" ${cur === r ? 'selected' : ''}>${r || '— none —'}</option>`).join('');
+  const users = (st.users || []).filter(u => !q ||
+    (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (u.id || '').toLowerCase().includes(q));
+  if (!users.length) return `<div class="text-muted" style="padding:14px;text-align:center">No users match “${h(st.q || '')}”.</div>`;
+  return `<table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr>
+      <th style="text-align:left;padding:8px">User</th><th style="text-align:left;padding:8px">App role</th><th style="text-align:left;padding:8px">Quote role</th>
+    </tr></thead>
+    <tbody>${users.map(u => `<tr style="border-top:1px solid var(--border,#eee)">
+      <td style="padding:8px">${h(u.name || u.id)}<div class="text-muted" style="font-size:11px">${h(u.email || '')}</div></td>
+      <td style="padding:8px">${h(u.role || '')}</td>
+      <td style="padding:8px"><select ${dataChangeVal('quoteAdminSetRole', u.id)}>${roleOpts(enabled[u.id] || '')}</select></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+function quoteAdminSearch(val) {
+  const st = APP._qadmin; if (!st) return; st.q = val;
+  const host = document.getElementById('qa-users'); if (host) host.innerHTML = quoteAdminUsersHtml();
+}
+function quoteAdminClearSearch() {
+  const st = APP._qadmin; if (!st) return; st.q = '';
+  const inp = document.getElementById('qa-search'); if (inp) { inp.value = ''; inp.focus(); }
+  const host = document.getElementById('qa-users'); if (host) host.innerHTML = quoteAdminUsersHtml();
+}
 async function quoteAdminSetRole(userId, role) {
   const st = APP._qadmin || {};
   const r = await api('/admin/quote-access', { method: 'PUT', body: JSON.stringify({ userId, quoteRole: role || null, _ver: st.ver }) });
-  if (r) { st.ver = r._ver; showToast('Access updated'); }
-  else { renderQuoteAdmin(qMain()); }   // reload to resync _ver on conflict
+  if (r) {
+    st.ver = r._ver;
+    st.enabled = st.enabled || {};
+    if (role) st.enabled[userId] = role; else delete st.enabled[userId];
+    showToast('Access updated');
+  } else { renderQuoteAdmin(qMain()); }   // reload to resync _ver on conflict
 }
 async function quoteAdminSaveSettings() {
   const st = APP._qadmin || {}; const s = st.settings || {};

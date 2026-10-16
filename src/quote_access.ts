@@ -43,7 +43,9 @@ const MATRIX: Record<QuoteRole, RoleCaps> = {
     approveLegs: ["manager"],
   },
   finance: {
-    caps: new Set<QuoteCapability>(["view", "calc", "followup", "snooze", "audit_read", "sees_cost"]),
+    // Finance may author/raise quotes too (product decision). SoD still holds at
+    // act-time: a finance user who authored a quote cannot approve its finance leg.
+    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "followup", "snooze", "audit_read", "sees_cost"]),
     approveLegs: ["finance"],
   },
 };

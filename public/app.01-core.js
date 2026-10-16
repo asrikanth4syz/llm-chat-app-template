@@ -774,9 +774,19 @@ function startNotificationPolling() {
 // Single source of truth for page-level access: a role may open a page only if it
 // is in that role's navigation (dashboard is always allowed). Used to guard
 // navigate() and to hide shortcuts that would lead somewhere off-menu.
+// A quote-entitled user who is NOT a platform admin gets a FOCUSED experience:
+// their sidebar and reachable pages are Quotations (+ Home) only, hiding the rest
+// of the ERP. Admins (super_admin/ops_admin) keep the full app plus Quotations.
+function quoteOnlyUser() {
+  return !!(APP.user && APP.quoteAccess && APP.quoteAccess.enabled
+    && !['super_admin', 'ops_admin'].includes(APP.user.role));
+}
 function canAccessPage(page) {
   if (!APP.user) return true;
   if (page === 'dashboard') return true;
+  // Focused quote user: only Quotations (and Home) are reachable — deep links to
+  // other ERP pages are denied.
+  if (quoteOnlyUser()) return page === 'quotations';
   // Quotations (006) is entitlement-gated, not role-gated: visible only once the
   // server's /api/quotes/access says this user is enabled. The flag is loaded at
   // boot (loadQuoteAccess); absent → denied (fail-closed, and keeps the offline
@@ -818,6 +828,7 @@ const ACTION_PAGES = {
 };
 
 function getDefaultPage() {
+  if (quoteOnlyUser()) return 'quotations';   // focused quote user lands on their workspace
   const nav = APP.user.nav;
   if (nav === 'vendor' || nav === 'vendor_user') return 'dashboard';
   if (nav === 'client_user') return 'place_order';
@@ -853,12 +864,20 @@ function applyAccordion(openLabel) {
 function buildNav() {
   const nav = APP.user.nav;
   const base = NAV[nav] || NAV.platform;
-  // Inject the entitlement-gated Quotations tile only when the server enabled this
-  // user (loadQuoteAccess). Kept out of the static NAV so the offline smoke never
-  // sees it and so grant/revoke takes effect with no deploy.
-  const items = (APP.quoteAccess && APP.quoteAccess.enabled)
-    ? [...base, { section:'Quotations' }, { id:'quotations', label:'Quotations', icon:iconFile, badge:null }]
-    : base;
+  const quoteTile = { section:'Quotations' };
+  const quoteItem = { id:'quotations', label:'Quotations', icon:iconFile, badge:null };
+  // Focused quote user → sidebar is Home + Quotations only (the rest of the ERP is
+  // hidden). Admins keep their full sidebar with the Quotations tile appended.
+  // The tile stays out of the static NAV so the offline smoke never sees it and so
+  // grant/revoke takes effect with no deploy.
+  let items;
+  if (quoteOnlyUser()) {
+    items = [{ section:'Home' }, { id:'dashboard', label:'Home', icon:iconHome, badge:null }, quoteTile, quoteItem];
+  } else if (APP.quoteAccess && APP.quoteAccess.enabled) {
+    items = [...base, quoteTile, quoteItem];
+  } else {
+    items = base;
+  }
   navPrefLoad();
 
   // Group items into sections
@@ -1773,6 +1792,9 @@ async function loadQuoteAccess() {
   APP.quoteAccess = (r && !r.error) ? r : { enabled: false };
   if (APP.quoteAccess.enabled) {
     buildNav();
+    // Focused quote user: if boot landed them on a now-hidden ERP page, send them
+    // to their Quotations workspace.
+    if (quoteOnlyUser() && APP.page !== 'quotations') { navigate('quotations'); return; }
     const navEl = document.getElementById('nav-' + APP.page);
     if (navEl) { navEl.classList.add('active'); navEl.setAttribute('aria-current', 'page'); }
     if (typeof window.quoteRefreshBell === 'function') window.quoteRefreshBell();
