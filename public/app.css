@@ -747,6 +747,12 @@ button.tile:hover { transform: translateY(-1px); }
 .q-search .q-clear { position: absolute; right: 5px; border: none; background: none; cursor: pointer; color: var(--text-muted); font-size: 15px; line-height: 1; padding: 3px 6px; border-radius: 6px; }
 .q-search .q-clear:hover { color: var(--navy); background: var(--bg); }
 
+/* Sticky editor action bar — primary actions stay reachable while filling the form */
+.q-actionbar { position: sticky; bottom: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 -3px 14px rgba(18,32,56,.09); padding: 11px 16px; margin-top: 6px; }
+.q-actionbar-total { font-size: .8rem; color: var(--text-muted); display: flex; align-items: baseline; gap: 7px; }
+.q-actionbar-total b { font-size: 1.1rem; color: var(--navy); font-weight: 800; font-variant-numeric: tabular-nums; }
+.q-actionbar-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
 /* Detail meta grid */
 .q-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; }
 .q-meta dt { font-size: .68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }

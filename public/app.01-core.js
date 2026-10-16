@@ -601,10 +601,17 @@ function initApp() {
   // Return to the last page on reload (falls back to the role's default; the
   // navigate() ACL guard redirects if the saved page isn't allowed for this role).
   let startPage = getDefaultPage();
-  try { const p = localStorage.getItem('sp_page'); if (p && canAccessPage(p)) startPage = p; } catch (_) {}
+  let savedPage = null;
+  try { savedPage = localStorage.getItem('sp_page'); } catch (_) {}
+  if (savedPage && canAccessPage(savedPage)) startPage = savedPage;
   // A URL hash (deep link / refresh on an addressable tab) wins over the stored
   // page so the tab it names opens directly.
   const { page: hashPage, tab: hashTab } = parseHash();
+  // Entitlement-gated pages (Quotations) aren't reachable yet — /api/quotes/access
+  // loads async (loadQuoteAccess). Remember the page the reload was on so we can
+  // restore it once access resolves, instead of clobbering it to the default.
+  const desired = (hashPage && canAccessPage(hashPage)) ? null : (hashPage || savedPage);
+  if (desired === 'quotations') APP._pendingQuotePage = 'quotations';
   if (hashPage && canAccessPage(hashPage)) navigate(hashPage, { tab: hashTab, fromHash: true });
   else navigate(startPage);
   // Back/forward and manual hash edits re-route (idempotent: same listener ref).
@@ -1790,11 +1797,15 @@ async function loadBranding() {
 async function loadQuoteAccess() {
   const r = await api('/quotes/access').catch(() => null);
   APP.quoteAccess = (r && !r.error) ? r : { enabled: false };
+  const pending = APP._pendingQuotePage; APP._pendingQuotePage = null;
   if (APP.quoteAccess.enabled) {
     buildNav();
     // Focused quote user: if boot landed them on a now-hidden ERP page, send them
     // to their Quotations workspace.
     if (quoteOnlyUser() && APP.page !== 'quotations') { navigate('quotations'); return; }
+    // Restore a Quotations page the reload was on (initApp couldn't reach it before
+    // access resolved) — keeps reload on the same page.
+    if (pending === 'quotations' && APP.page !== 'quotations') { navigate('quotations'); return; }
     const navEl = document.getElementById('nav-' + APP.page);
     if (navEl) { navEl.classList.add('active'); navEl.setAttribute('aria-current', 'page'); }
     if (typeof window.quoteRefreshBell === 'function') window.quoteRefreshBell();

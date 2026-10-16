@@ -161,7 +161,10 @@ function quoteRenderDetail() {
   const showCost = lines.some(l => l.landed_cost_paise != null || l.line_margin_paise != null);
   const actions = [];
   const st = d.status;
-  if (st === 'DRAFT' && qCanCreate()) actions.push(`<button class="btn btn-primary" data-busy="Submitting…" ${dataAct('quoteSubmit', d.id)}>Submit for approval</button>`);
+  if (st === 'DRAFT' && qCanCreate()) {
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteEditDraft', d.id)}>Edit</button>`);
+    actions.push(`<button class="btn btn-primary" data-busy="Submitting…" ${dataAct('quoteSubmit', d.id)}>Submit for approval</button>`);
+  }
   if (st === 'PENDING_APPROVAL' && qMyLeg()) {
     actions.push(`<button class="btn btn-success" data-busy="Approving…" ${dataAct('quoteApprove', d.id, qMyLeg())}>Approve ${h(qMyLeg())} leg</button>`);
     actions.push(`<button class="btn btn-secondary" ${dataAct('quoteRejectPrompt', d.id, qMyLeg())}>Reject…</button>`);
@@ -306,36 +309,65 @@ function noop() { /* modal cancel */ }
 function quoteBlankLine() { return { pricing_mode: 'cost_markup', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', sale_gst_pct: '18', itc_claimable: true }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
-  q.editor = { client_id: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
+  q.editor = { editId: null, client_id: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
   const main = qMain();
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading clients…</p></div>`;
   const clients = await api('/clients');
   q.clients = Array.isArray(clients) ? clients : [];
   quoteRenderEditor();
 }
+// Open the editor on an existing DRAFT — maps stored line fields back to the
+// rupee/percent form so the operator can amend and re-save (PUT → new version).
+async function quoteEditDraft(id) {
+  const q = qState(); q.view = 'editor';
+  const main = qMain();
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
+  const d = (q.detail && q.detail.id === id) ? q.detail : await api('/quotes/' + id);
+  if (!d) { main.innerHTML = `<div class="card"><div class="card-body">Could not load the quote.</div></div>`; return; }
+  const toRupee = (p) => (p == null ? '' : (Number(p) / 100));
+  const toPct = (bp) => (bp == null ? '' : (Number(bp) / 100));
+  const lines = (d.lines || []).map(l => ({
+    pricing_mode: l.pricing_mode || 'cost_markup',
+    description: l.description || '', qty: l.qty || 1,
+    purchase_cost: toRupee(l.purchase_cost_paise), markup_pct: toPct(l.markup_bp),
+    mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
+    sale_gst_pct: toPct(l.sale_gst_bp) || '0', itc_claimable: !!l.itc_claimable,
+  }));
+  q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, place_of_supply: d.place_of_supply || '',
+    valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
+  const clients = await api('/clients');
+  q.clients = Array.isArray(clients) ? clients : [];
+  quoteRenderEditor();
+}
 function quoteRenderEditor() {
   const q = qState(); const e = q.editor; const main = qMain(); if (!e) return;
+  const editing = !!e.editId;
   const clientOpts = ['<option value="">— select client —</option>', ...q.clients.map(c => `<option value="${h(c.id)}" ${e.client_id === c.id ? 'selected' : ''}>${h(c.name || c.id)}</option>`)].join('');
+  const gt = e.preview && e.preview.totals ? qMoney(e.preview.totals.grand_total_paise) : '—';
   main.innerHTML = `
     <div class="page-header">
       <div class="page-header-left">
-        <div class="page-title">New quote</div>
-        <div class="page-subtitle">Add line items, preview the price, then save as a draft.</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" ${dataAct('quoteBackToList')}>Cancel</button>
-        <button class="btn btn-secondary" data-busy="Pricing…" ${dataAct('quoteEditPreview')}>Preview price</button>
-        <button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteEditSave')}>Save draft</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" ${editing ? dataAct('quoteOpenDetail', e.editId) : dataAct('quoteBackToList')}>← ${editing ? 'Back to quote' : 'All quotes'}</button>
+        <div class="page-title">${editing ? 'Edit quote ' + h(e.quoteNo || '') : 'New quote'}</div>
+        <div class="page-subtitle">${editing ? 'Editing a draft adds a new immutable version.' : 'Add line items, preview the price, then save as a draft.'}</div>
       </div>
     </div>
     ${qCard('Quote details', `<div class="form-row" style="margin-bottom:0">
-      ${qField('Client', `<select ${dataChangeVal('quoteEditHeader', 'client_id')}>${clientOpts}</select>`)}
+      ${qField('Client', `<select ${editing ? 'disabled' : ''} ${dataChangeVal('quoteEditHeader', 'client_id')}>${clientOpts}</select>`, editing ? 'Client is fixed on an existing quote' : '')}
       ${qField('Place of supply', `<input maxlength="2" value="${h(e.place_of_supply)}" ${dataInputVal('quoteEditHeader', 'place_of_supply')} placeholder="State code, e.g. KL">`, 'Decides CGST/SGST vs IGST')}
       ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
     </div>`)}
     ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
       `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
-    ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Click “Preview price” to compute GST, round-off and margin.</div></div>'}</div>`)}`;
+    ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Use “Preview price” to compute GST, round-off and margin.</div></div>'}</div>`)}
+    <div class="q-actionbar">
+      <div class="q-actionbar-total">Grand total <b id="q-actionbar-total">${gt}</b></div>
+      <div class="q-actionbar-btns">
+        <button class="btn btn-secondary" ${editing ? dataAct('quoteOpenDetail', e.editId) : dataAct('quoteBackToList')}>Cancel</button>
+        <button class="btn btn-secondary" data-busy="Pricing…" ${dataAct('quoteEditPreview')}>Preview price</button>
+        <button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteEditSave')}>${editing ? 'Save changes' : 'Save draft'}</button>
+      </div>
+    </div>`;
 }
 function quoteLineHtml(l, i) {
   const cm = l.pricing_mode === 'cost_markup';
@@ -399,12 +431,18 @@ function quoteBuildPayload() {
 async function quoteEditPreview() {
   const e = qState().editor; if (!e.client_id) { showToast('Pick a client first', 'error'); return; }
   const r = await api('/quotes/calc', { method: 'POST', body: JSON.stringify(quoteBuildPayload()) });
-  if (r) { e.preview = r; const pv = document.getElementById('q-preview'); if (pv) pv.innerHTML = quotePreviewHtml(r); }
+  if (r) {
+    e.preview = r;
+    const pv = document.getElementById('q-preview'); if (pv) pv.innerHTML = quotePreviewHtml(r);
+    const bt = document.getElementById('q-actionbar-total'); if (bt) bt.textContent = qMoney(r.totals.grand_total_paise);
+  }
 }
 async function quoteEditSave() {
   const e = qState().editor; if (!e.client_id) { showToast('Pick a client first', 'error'); return; }
-  const r = await api('/quotes', { method: 'POST', body: JSON.stringify(quoteBuildPayload()) });
-  if (r && r.id) { showToast('Draft saved'); quoteOpenDetail(r.id); }
+  const r = e.editId
+    ? await api('/quotes/' + e.editId, { method: 'PUT', body: JSON.stringify(quoteBuildPayload()) })
+    : await api('/quotes', { method: 'POST', body: JSON.stringify(quoteBuildPayload()) });
+  if (r && (r.id || e.editId)) { showToast(e.editId ? 'Changes saved' : 'Draft saved'); quoteOpenDetail(e.editId || r.id); }
 }
 
 // ── Today ────────────────────────────────────────────────────────────────────
