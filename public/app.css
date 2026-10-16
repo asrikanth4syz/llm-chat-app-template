@@ -708,6 +708,55 @@ button.tile:hover { transform: translateY(-1px); }
 .empty-icon  { font-size: 2.8rem; margin-bottom: 14px; }
 .empty-title { font-size: .98rem; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
 .empty-desc  { font-size: .85rem; color: var(--text-muted); margin-bottom: 20px; }
+.empty-state.empty-sm { padding: 28px 20px; }
+.empty-state.empty-sm .empty-icon { font-size: 1.8rem; margin-bottom: 8px; }
+
+/* ═══════════════════════════════════════════════════════════
+   QUOTATIONS (milestone 006)
+   ═══════════════════════════════════════════════════════════ */
+.q-tabs { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+.q-tab { padding: 6px 15px; border: none; background: none; border-radius: 7px; font-family: var(--font); font-weight: 600; font-size: .8rem; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .15s, color .15s; }
+.q-tab:hover { color: var(--navy); }
+.q-tab.active { background: var(--surface); color: var(--navy); box-shadow: var(--shadow-sm); }
+.q-tab .q-tab-badge { background: var(--danger); color: #fff; font-size: .62rem; font-weight: 800; border-radius: 9px; padding: 1px 6px; line-height: 1.5; }
+
+/* Line-item editor panels */
+.q-line { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--bg); }
+.q-line-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.q-line-no { font-weight: 700; color: var(--navy); font-size: .82rem; }
+.q-line .form-row { margin-bottom: 0; }
+
+/* Totals / summary panel */
+.q-summary { max-width: 340px; margin-left: auto; }
+.q-summary .q-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 5px 0; font-size: .85rem; color: var(--text-label); font-variant-numeric: tabular-nums; }
+.q-summary .q-row.q-grand { border-top: 1.5px solid var(--border); margin-top: 6px; padding-top: 9px; font-weight: 800; font-size: 1.05rem; color: var(--navy); }
+.q-summary .q-row .q-amt { font-weight: 600; }
+
+/* Item rows (Today, approvals, audit) */
+.q-item-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--border); }
+.q-item-row:first-child { border-top: none; }
+.q-item-main { min-width: 0; }
+.q-item-title { font-weight: 600; color: var(--navy); font-size: .88rem; }
+.q-item-meta { font-size: .76rem; color: var(--text-muted); margin-top: 2px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.q-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Inline search with clear button (list + admin) */
+.q-search { position: relative; display: inline-flex; align-items: center; }
+.q-search input { padding: 8px 30px 8px 12px; border: 1.5px solid var(--border); border-radius: 9px; font-family: var(--font); font-size: .84rem; min-width: 230px; background: var(--surface); color: var(--text); outline: none; transition: border-color .2s, box-shadow .2s; }
+.q-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,.12); }
+.q-search .q-clear { position: absolute; right: 5px; border: none; background: none; cursor: pointer; color: var(--text-muted); font-size: 15px; line-height: 1; padding: 3px 6px; border-radius: 6px; }
+.q-search .q-clear:hover { color: var(--navy); background: var(--bg); }
+
+/* Detail meta grid */
+.q-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; }
+.q-meta dt { font-size: .68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
+.q-meta dd { margin: 2px 0 0; font-size: .9rem; font-weight: 600; color: var(--navy); }
+
+@media (max-width: 768px) {
+  .q-search, .q-search input { width: 100%; min-width: 0; }
+  .q-summary { max-width: none; }
+  .q-item-row { flex-wrap: wrap; }
+}
 
 /* ═══════════════════════════════════════════════════════════
    GRIDS

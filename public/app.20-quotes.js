@@ -23,11 +23,27 @@ function qMoney(paise) {
   return (neg ? '-' : '') + '₹' + Math.floor(a / 100).toLocaleString('en-IN') + '.' + String(a % 100).padStart(2, '0');
 }
 const QUOTE_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'LOST', 'EXPIRED'];
-function qStatusColor(s) {
-  return ({ DRAFT: 'var(--text-muted)', PENDING_APPROVAL: 'var(--gold,#b45309)', APPROVED: 'var(--navy,#1e3a5f)',
-    SENT: '#2563eb', ACCEPTED: 'var(--success,#15803d)', LOST: 'var(--danger,#b91c1c)', EXPIRED: '#6b7280' }[s] || 'var(--text-muted)');
+// Map a quote status to one of the app's semantic badge classes + a human label.
+const QUOTE_STATUS_META = {
+  DRAFT: ['badge-secondary', 'Draft'], PENDING_APPROVAL: ['badge-warning', 'Pending approval'],
+  APPROVED: ['badge-info', 'Approved'], SENT: ['badge-primary', 'Sent'],
+  ACCEPTED: ['badge-success', 'Accepted'], LOST: ['badge-danger', 'Lost'], EXPIRED: ['badge-secondary', 'Expired'],
+};
+function qBadge(s) {
+  const [cls, label] = QUOTE_STATUS_META[s] || ['badge-secondary', s || '—'];
+  return `<span class="badge ${cls}">${h(label)}</span>`;
 }
-function qBadge(s) { return `<span class="chip" style="background:${qStatusColor(s)};color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">${h(s || '')}</span>`; }
+// A titled card with the app's header/body chrome and optional header actions.
+function qCard(title, bodyHtml, actionsHtml = '') {
+  return `<div class="card">
+    <div class="card-header"><span class="card-title">${h(title)}</span>${actionsHtml ? `<div class="page-actions">${actionsHtml}</div>` : ''}</div>
+    <div class="card-body">${bodyHtml}</div>
+  </div>`;
+}
+// A single labelled form field (picks up the app's .form-field input styling).
+function qField(label, inputHtml, hint = '') {
+  return `<div class="form-field"><label>${h(label)}</label>${inputHtml}${hint ? `<span class="form-hint">${h(hint)}</span>` : ''}</div>`;
+}
 function qRole() { return (APP.quoteAccess && APP.quoteAccess.quoteRole) || null; }
 // sales, commercial_manager and finance may author/send/close (super_admin resolves
 // to commercial_manager server-side). ops is view + follow-up only.
@@ -43,16 +59,19 @@ function qMain() { return document.getElementById('main-content'); }
 // ── Page entry + tabs ────────────────────────────────────────────────────────
 function renderQuotations(main) {
   const q = qState();
+  const roleLabel = (qRole() || '—').replace(/_/g, ' ');
   main.innerHTML = `
-    <div class="page-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      <div>
-        <h1 style="margin:0">Quotations</h1>
-        <div class="text-muted" style="font-size:13px">Role: <b>${h(qRole() || '—')}</b></div>
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Quotations</div>
+        <div class="page-subtitle">Create, approve and track customer quotes · your role: <b>${h(roleLabel)}</b></div>
       </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-sm ${q.tab === 'list' ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteGoTab', 'list')}>Quotes</button>
-        <button class="btn btn-sm ${q.tab === 'today' ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteGoTab', 'today')}>Today</button>
-        ${qCanCreate() ? `<button class="btn btn-sm btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(13)} New Quote</button>` : ''}
+      <div class="page-actions">
+        <div class="q-tabs" role="tablist">
+          <button class="q-tab ${q.tab === 'list' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'list')}>Quotes</button>
+          <button class="q-tab ${q.tab === 'today' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'today')}>Today</button>
+        </div>
+        ${qCanCreate() ? `<button class="btn btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(14)} New quote</button>` : ''}
       </div>
     </div>
     <div id="quote-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
@@ -72,29 +91,28 @@ async function quoteRenderList() {
   const query = (q.listQuery || '').trim().toLowerCase();
   const rows = query ? q.listRows.filter(r =>
     (r.quote_no || '').toLowerCase().includes(query) || (r.client_id || '').toLowerCase().includes(query)) : q.listRows;
-  const filterChips = ['', ...QUOTE_STATUSES].map(s =>
-    `<button class="btn btn-sm ${q.statusFilter === s ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetStatus', s)}>${s || 'All'}</button>`).join(' ');
+  const chip = (s, label) => `<button class="btn btn-sm ${q.statusFilter === s ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetStatus', s)}>${h(label)}</button>`;
+  const filterChips = chip('', 'All') + ' ' + QUOTE_STATUSES.map(s => chip(s, (QUOTE_STATUS_META[s] || [, s])[1])).join(' ');
+  const emptyMsg = query ? `No quotes match “${h(q.listQuery)}”.` : (q.statusFilter ? `No ${h((QUOTE_STATUS_META[q.statusFilter] || [, q.statusFilter])[1].toLowerCase())} quotes.` : 'No quotes yet.');
   body.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
       <div style="display:flex;gap:6px;flex-wrap:wrap">${filterChips}</div>
-      <div style="position:relative;display:inline-flex;align-items:center">
-        <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote # or client…" autocomplete="off"
-          style="padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:8px;min-width:220px;font:inherit">
-        <button type="button" ${dataAct('quoteListClearSearch')} title="Clear search" aria-label="Clear search"
-          style="position:absolute;right:4px;border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:2px 6px">✕</button>
+      <div class="q-search">
+        <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote # or client…" autocomplete="off">
+        <button type="button" class="q-clear" ${dataAct('quoteListClearSearch')} title="Clear search" aria-label="Clear search">✕</button>
       </div>
     </div>
-    ${rows.length === 0 ? `<div class="card" style="text-align:center;padding:30px">No quotes${query ? ' match “' + h(q.listQuery) + '”' : (q.statusFilter ? ' in ' + h(q.statusFilter) : ' yet')}.</div>` : `
-    <div class="card" style="overflow-x:auto;padding:0">
+    ${rows.length === 0 ? `<div class="card"><div class="empty-state empty-sm"><div class="empty-icon">📄</div><div class="empty-title">${emptyMsg}</div>${qCanCreate() && !query && !q.statusFilter ? `<div class="empty-desc">Start by creating your first quote.</div><button class="btn btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(14)} New quote</button>` : ''}</div></div>` : `
+    <div class="card" style="padding:0"><div class="table-wrap">
       <table class="data-table" style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="text-align:left;padding:10px">Quote #</th><th style="text-align:left;padding:10px">Client</th>
-          <th style="text-align:left;padding:10px">Status</th><th style="text-align:right;padding:10px">Grand total</th>
-          <th style="text-align:left;padding:10px">Valid until</th>
+          <th style="text-align:left;padding:11px 14px">Quote #</th><th style="text-align:left;padding:11px 14px">Client</th>
+          <th style="text-align:left;padding:11px 14px">Status</th><th style="text-align:right;padding:11px 14px">Grand total</th>
+          <th style="text-align:left;padding:11px 14px">Valid until</th>
         </tr></thead>
         <tbody id="q-list-rows">${quoteListRowsHtml(rows)}</tbody>
       </table>
-    </div>`}`;
+    </div></div>`}`;
 }
 function quoteSetStatus(s) { const q = qState(); q.statusFilter = s; quoteRenderList(); }
 // Client-side filter over the already-loaded page of quotes (no refetch), so the
@@ -115,14 +133,14 @@ function quoteListClearSearch() {
 // Rows only (no <tbody> wrapper) — the caller supplies the tbody so this can be
 // dropped straight into tbody.innerHTML on live filter.
 function quoteListRowsHtml(rows) {
-  if (!rows.length) return `<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted)">No quotes match.</td></tr>`;
+  if (!rows.length) return `<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
   return rows.map(r => `
-    <tr style="cursor:pointer;border-top:1px solid var(--border,#e5e7eb)" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:10px;font-weight:600">${h(r.quote_no || r.id)}</td>
-      <td style="padding:10px">${h(r.client_id || '')}</td>
-      <td style="padding:10px">${qBadge(r.status)}</td>
-      <td style="padding:10px;text-align:right">${qMoney(r.grand_total_paise)}</td>
-      <td style="padding:10px">${h(r.valid_until || '—')}</td>
+    <tr style="cursor:pointer;border-top:1px solid var(--border)" ${dataAct('quoteOpenDetail', r.id)}>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy)">${h(r.quote_no || r.id)}</td>
+      <td style="padding:11px 14px">${h(r.client_id || '')}</td>
+      <td style="padding:11px 14px">${qBadge(r.status)}</td>
+      <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.grand_total_paise)}</td>
+      <td style="padding:11px 14px">${h(r.valid_until || '—')}</td>
     </tr>`).join('');
 }
 
@@ -143,67 +161,72 @@ function quoteRenderDetail() {
   const showCost = lines.some(l => l.landed_cost_paise != null || l.line_margin_paise != null);
   const actions = [];
   const st = d.status;
-  if (st === 'DRAFT' && qCanCreate()) actions.push(`<button class="btn btn-primary btn-sm" data-busy="Submitting…" ${dataAct('quoteSubmit', d.id)}>Submit for approval</button>`);
+  if (st === 'DRAFT' && qCanCreate()) actions.push(`<button class="btn btn-primary" data-busy="Submitting…" ${dataAct('quoteSubmit', d.id)}>Submit for approval</button>`);
   if (st === 'PENDING_APPROVAL' && qMyLeg()) {
-    actions.push(`<button class="btn btn-primary btn-sm" data-busy="Approving…" ${dataAct('quoteApprove', d.id, qMyLeg())}>Approve (${qMyLeg()} leg)</button>`);
-    actions.push(`<button class="btn btn-secondary btn-sm" ${dataAct('quoteRejectPrompt', d.id, qMyLeg())}>Reject…</button>`);
+    actions.push(`<button class="btn btn-success" data-busy="Approving…" ${dataAct('quoteApprove', d.id, qMyLeg())}>Approve ${h(qMyLeg())} leg</button>`);
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteRejectPrompt', d.id, qMyLeg())}>Reject…</button>`);
   }
-  if (st === 'APPROVED' && qCanSend()) actions.push(`<button class="btn btn-gold btn-sm" data-busy="Sending…" ${dataAct('quoteSend', d.id)}>Send to customer</button>`);
+  if (st === 'APPROVED' && qCanSend()) actions.push(`<button class="btn btn-gold" data-busy="Sending…" ${dataAct('quoteSend', d.id)}>Send to customer</button>`);
   if (st === 'SENT') {
-    actions.push(`<button class="btn btn-secondary btn-sm" ${dataAct('quoteViewDocument', d.id)}>View document</button>`);
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteViewDocument', d.id)}>View document</button>`);
     if (qCanAcceptLost()) {
-      actions.push(`<button class="btn btn-primary btn-sm" data-busy="…" ${dataAct('quoteAccept', d.id)}>Mark accepted</button>`);
-      actions.push(`<button class="btn btn-secondary btn-sm" ${dataAct('quoteLostPrompt', d.id)}>Mark lost…</button>`);
+      actions.push(`<button class="btn btn-success" data-busy="…" ${dataAct('quoteAccept', d.id)}>Mark accepted</button>`);
+      actions.push(`<button class="btn btn-danger" ${dataAct('quoteLostPrompt', d.id)}>Mark lost…</button>`);
     }
   }
-  actions.push(`<button class="btn btn-secondary btn-sm" ${dataAct('quoteFollowupPrompt', d.id)}>Log follow-up</button>`);
+  actions.push(`<button class="btn btn-secondary" ${dataAct('quoteFollowupPrompt', d.id)}>Log follow-up</button>`);
+
+  const taxRows = t.igst_total
+    ? `<div class="q-row"><span>IGST</span><span class="q-amt">${qMoney(t.igst_total)}</span></div>`
+    : `<div class="q-row"><span>CGST</span><span class="q-amt">${qMoney(t.cgst_total)}</span></div><div class="q-row"><span>SGST</span><span class="q-amt">${qMoney(t.sgst_total)}</span></div>`;
 
   main.innerHTML = `
-    <div style="margin-bottom:12px"><button class="btn btn-secondary btn-sm" ${dataAct('quoteBackToList')}>← All quotes</button></div>
-    <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div><h2 style="margin:0">${h(d.quote_no || d.id)}</h2>
-          <div class="text-muted" style="font-size:13px">Client ${h(d.client_id)} · Place of supply ${h(d.place_of_supply || '—')} · v${d.current_version}</div></div>
-        <div>${qBadge(st)}</div>
+    <div class="page-header">
+      <div class="page-header-left">
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" ${dataAct('quoteBackToList')}>← All quotes</button>
+        <div class="page-title" style="display:flex;align-items:center;gap:10px">${h(d.quote_no || d.id)} ${qBadge(st)}</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${actions.join(' ')}</div>
+      <div class="page-actions">${actions.join(' ')}</div>
     </div>
-    <div class="card" style="overflow-x:auto;margin-bottom:14px">
-      <h3 style="margin-top:0">Lines</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+    ${qCard('Quote details', `<dl class="q-meta">
+      <div><dt>Client</dt><dd>${h(d.client_id)}</dd></div>
+      <div><dt>Place of supply</dt><dd>${h(d.place_of_supply || '—')}</dd></div>
+      <div><dt>Version</dt><dd>v${d.current_version}</dd></div>
+      <div><dt>Valid until</dt><dd>${h(d.valid_until || '—')}</dd></div>
+      <div><dt>ITC claimable</dt><dd>${d.itc_claimable_all ? 'Yes (all lines)' : 'No'}</dd></div>
+    </dl>`)}
+    ${qCard('Line items', `
+      <div class="table-wrap">
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:.84rem">
         <thead><tr>
-          <th style="text-align:left;padding:6px">#</th><th style="text-align:left;padding:6px">Item</th>
-          <th style="text-align:right;padding:6px">Qty</th><th style="text-align:right;padding:6px">Unit price</th>
-          <th style="text-align:right;padding:6px">GST</th><th style="text-align:right;padding:6px">Taxable</th>
-          ${showCost ? '<th style="text-align:right;padding:6px">Landed</th><th style="text-align:right;padding:6px">Margin</th>' : ''}
+          <th style="text-align:left;padding:8px 10px">#</th><th style="text-align:left;padding:8px 10px">Item</th>
+          <th style="text-align:right;padding:8px 10px">Qty</th><th style="text-align:right;padding:8px 10px">Unit price</th>
+          <th style="text-align:right;padding:8px 10px">GST</th><th style="text-align:right;padding:8px 10px">Taxable</th>
+          ${showCost ? '<th style="text-align:right;padding:8px 10px">Landed</th><th style="text-align:right;padding:8px 10px">Margin</th>' : ''}
         </tr></thead>
-        <tbody>${lines.map((l, i) => `<tr style="border-top:1px solid var(--border,#eee)">
-          <td style="padding:6px">${i + 1}</td>
-          <td style="padding:6px">${h(l.description || l.sku || 'Item')}</td>
-          <td style="padding:6px;text-align:right">${l.qty}</td>
-          <td style="padding:6px;text-align:right">${qMoney(l.unit_price_paise)}</td>
-          <td style="padding:6px;text-align:right">${((l.sale_gst_bp || 0) / 100).toFixed(0)}%</td>
-          <td style="padding:6px;text-align:right">${qMoney(l.line_taxable_paise)}</td>
-          ${showCost ? `<td style="padding:6px;text-align:right">${qMoney(l.landed_cost_paise)}</td><td style="padding:6px;text-align:right">${qMoney(l.line_margin_paise)}</td>` : ''}
+        <tbody>${lines.map((l, i) => `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:8px 10px;color:var(--text-muted)">${i + 1}</td>
+          <td style="padding:8px 10px;font-weight:600">${h(l.description || l.sku || 'Item')}</td>
+          <td style="padding:8px 10px;text-align:right">${l.qty}</td>
+          <td style="padding:8px 10px;text-align:right">${qMoney(l.unit_price_paise)}</td>
+          <td style="padding:8px 10px;text-align:right">${((l.sale_gst_bp || 0) / 100).toFixed(0)}%</td>
+          <td style="padding:8px 10px;text-align:right">${qMoney(l.line_taxable_paise)}</td>
+          ${showCost ? `<td style="padding:8px 10px;text-align:right">${qMoney(l.landed_cost_paise)}</td><td style="padding:8px 10px;text-align:right">${qMoney(l.line_margin_paise)}</td>` : ''}
         </tr>`).join('')}</tbody>
-      </table>
-      <div style="display:flex;justify-content:flex-end;margin-top:12px">
-        <table style="font-size:13px">
-          <tr><td style="padding:3px 10px;text-align:right">Subtotal</td><td style="padding:3px 10px;text-align:right">${qMoney(t.subtotal_paise)}</td></tr>
-          ${t.igst_total ? `<tr><td style="padding:3px 10px;text-align:right">IGST</td><td style="padding:3px 10px;text-align:right">${qMoney(t.igst_total)}</td></tr>`
-            : `<tr><td style="padding:3px 10px;text-align:right">CGST</td><td style="padding:3px 10px;text-align:right">${qMoney(t.cgst_total)}</td></tr><tr><td style="padding:3px 10px;text-align:right">SGST</td><td style="padding:3px 10px;text-align:right">${qMoney(t.sgst_total)}</td></tr>`}
-          <tr><td style="padding:3px 10px;text-align:right">Round off</td><td style="padding:3px 10px;text-align:right">${qMoney(t.round_off_paise)}</td></tr>
-          <tr style="font-weight:700;border-top:1px solid var(--border,#ddd)"><td style="padding:6px 10px;text-align:right">Grand total</td><td style="padding:6px 10px;text-align:right">${qMoney(t.grand_total_paise != null ? t.grand_total_paise : d.grand_total_paise)}</td></tr>
-        </table>
-      </div>
-    </div>
-    <div class="card">
-      <h3 style="margin-top:0">Audit trail</h3>
-      <div style="font-size:12px" class="text-muted">Content hash: <code>${h((d.version && d.version.content_hash) || '—')}</code></div>
-      <ul style="font-size:13px;margin:8px 0 0;padding-left:18px">
-        ${(d.audit || []).map(a => `<li>#${a.seq} <b>${h(a.action)}</b> — ${h(a.actor_id)} <span class="text-muted">${h(a.created_at || '')}</span></li>`).join('')}
-      </ul>
-    </div>`;
+      </table></div>
+      <div class="q-summary" style="margin-top:14px">
+        <div class="q-row"><span>Subtotal</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
+        ${taxRows}
+        <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
+        <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise != null ? t.grand_total_paise : d.grand_total_paise)}</span></div>
+      </div>`)}
+    ${qCard('Activity', `
+      <div class="form-hint" style="margin-bottom:10px">Integrity hash: <code style="font-size:.78rem">${h((d.version && d.version.content_hash) || '—')}</code></div>
+      ${(d.audit || []).length ? (d.audit || []).map(a => `<div class="q-item-row">
+        <div class="q-item-main"><div class="q-item-title">${h(a.action.replace(/_/g, ' '))}</div>
+          <div class="q-item-meta"><span>#${a.seq}</span><span>·</span><span>${h(a.actor_id)}</span></div></div>
+        <div class="q-item-meta">${h(a.created_at || '')}</div>
+      </div>`).join('') : '<div class="form-hint">No activity yet.</div>'}`)}`;
 }
 function quoteBackToList() { const q = qState(); q.view = 'list'; q.quoteId = null; renderQuotations(qMain()); }
 
@@ -226,10 +249,12 @@ async function quoteAccept(id) {
   if (r) { showToast('Marked accepted'); await quoteReload(id); }
 }
 function quoteRejectPrompt(id, leg) {
-  openModal('Reject quote', `<label>Reason / comments (required)</label>
-    <textarea id="q-reject-note" rows="3" style="width:100%" placeholder="Why is this rejected?"></textarea>`,
+  openModal('Reject quote', `<div class="form-field">
+      <label>Reason / comments (required)</label>
+      <textarea id="q-reject-note" rows="3" placeholder="Why is this rejected?"></textarea>
+    </div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
-     <button class="btn btn-primary" ${dataAct('quoteRejectDo', id, leg)}>Reject</button>`);
+     <button class="btn btn-danger" ${dataAct('quoteRejectDo', id, leg)}>Reject</button>`);
 }
 async function quoteRejectDo(id, leg) {
   const comments = (document.getElementById('q-reject-note')?.value || '').trim();
@@ -238,10 +263,12 @@ async function quoteRejectDo(id, leg) {
   if (r) { closeModal(); showToast('Rejected — back to DRAFT'); await quoteReload(id); }
 }
 function quoteLostPrompt(id) {
-  openModal('Mark quote lost', `<label>Reason (required)</label>
-    <textarea id="q-lost-note" rows="3" style="width:100%" placeholder="Why was this lost?"></textarea>`,
+  openModal('Mark quote lost', `<div class="form-field">
+      <label>Reason (required)</label>
+      <textarea id="q-lost-note" rows="3" placeholder="Why was this lost?"></textarea>
+    </div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
-     <button class="btn btn-primary" ${dataAct('quoteLostDo', id)}>Mark lost</button>`);
+     <button class="btn btn-danger" ${dataAct('quoteLostDo', id)}>Mark lost</button>`);
 }
 async function quoteLostDo(id) {
   const reason = (document.getElementById('q-lost-note')?.value || '').trim();
@@ -251,12 +278,10 @@ async function quoteLostDo(id) {
 }
 function quoteFollowupPrompt(id) {
   openModal('Log follow-up', `
-    <label>Channel</label>
-    <select id="q-fu-channel" style="width:100%"><option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="note">Note</option></select>
-    <label style="margin-top:8px;display:block">Note</label>
-    <textarea id="q-fu-note" rows="2" style="width:100%"></textarea>
-    <label style="margin-top:8px;display:block">Next action date (optional)</label>
-    <input id="q-fu-date" type="date" style="width:100%">`,
+    <div class="form-field"><label>Channel</label>
+      <select id="q-fu-channel"><option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="note">Note</option></select></div>
+    <div class="form-field"><label>Note</label><textarea id="q-fu-note" rows="2" placeholder="What happened / next step"></textarea></div>
+    <div class="form-field"><label>Next action date (optional)</label><input id="q-fu-date" type="date"></div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('quoteFollowupDo', id)}>Save</button>`);
 }
@@ -292,60 +317,62 @@ function quoteRenderEditor() {
   const q = qState(); const e = q.editor; const main = qMain(); if (!e) return;
   const clientOpts = ['<option value="">— select client —</option>', ...q.clients.map(c => `<option value="${h(c.id)}" ${e.client_id === c.id ? 'selected' : ''}>${h(c.name || c.id)}</option>`)].join('');
   main.innerHTML = `
-    <div style="margin-bottom:12px"><button class="btn btn-secondary btn-sm" ${dataAct('quoteBackToList')}>← Cancel</button></div>
-    <div class="card" style="margin-bottom:14px">
-      <h2 style="margin-top:0">New quote</h2>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
-        <div><label>Client</label><select style="width:100%" ${dataChangeVal('quoteEditHeader', 'client_id')}>${clientOpts}</select></div>
-        <div><label>Place of supply (state code)</label><input style="width:100%" maxlength="2" value="${h(e.place_of_supply)}" ${dataInputVal('quoteEditHeader', 'place_of_supply')} placeholder="e.g. KL"></div>
-        <div><label>Valid until (optional)</label><input type="date" style="width:100%" value="${h(e.valid_until)}" ${dataChangeVal('quoteEditHeader', 'valid_until')}></div>
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">New quote</div>
+        <div class="page-subtitle">Add line items, preview the price, then save as a draft.</div>
       </div>
-    </div>
-    <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Lines</h3>
-        <button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button></div>
-      <div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>
-    </div>
-    <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-secondary" data-busy="…" ${dataAct('quoteEditPreview')}>Preview price</button>
+      <div class="page-actions">
+        <button class="btn btn-secondary" ${dataAct('quoteBackToList')}>Cancel</button>
+        <button class="btn btn-secondary" data-busy="Pricing…" ${dataAct('quoteEditPreview')}>Preview price</button>
         <button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteEditSave')}>Save draft</button>
       </div>
-      <div id="q-preview" style="margin-top:12px">${e.preview ? quotePreviewHtml(e.preview) : '<span class="text-muted">Preview to see totals (GST, round-off, margin).</span>'}</div>
-    </div>`;
+    </div>
+    ${qCard('Quote details', `<div class="form-row" style="margin-bottom:0">
+      ${qField('Client', `<select ${dataChangeVal('quoteEditHeader', 'client_id')}>${clientOpts}</select>`)}
+      ${qField('Place of supply', `<input maxlength="2" value="${h(e.place_of_supply)}" ${dataInputVal('quoteEditHeader', 'place_of_supply')} placeholder="State code, e.g. KL">`, 'Decides CGST/SGST vs IGST')}
+      ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
+    </div>`)}
+    ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
+      `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
+    ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Click “Preview price” to compute GST, round-off and margin.</div></div>'}</div>`)}`;
 }
 function quoteLineHtml(l, i) {
   const cm = l.pricing_mode === 'cost_markup';
-  return `<div class="q-line" style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px;margin-bottom:10px">
-    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px">
-      <b>Line ${i + 1}</b>
-      <button class="btn btn-secondary btn-sm" ${dataAct('quoteEditRemoveLine', i)}>Remove</button>
+  const canRemove = (qState().editor.lines.length > 1);
+  return `<div class="q-line">
+    <div class="q-line-head">
+      <span class="q-line-no">Line ${i + 1}</span>
+      ${canRemove ? `<button class="btn btn-danger btn-sm" ${dataAct('quoteEditRemoveLine', i)}>Remove</button>` : ''}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
-      <div><label>Description</label><input style="width:100%" value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')}></div>
-      <div><label>Qty</label><input type="number" min="1" step="1" style="width:100%" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}></div>
-      <div><label>Pricing</label><select style="width:100%" ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
+    <div class="form-row">
+      ${qField('Description', `<input value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')} placeholder="Item description">`)}
+      ${qField('Qty', `<input type="number" min="1" step="1" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`)}
+      ${qField('Pricing method', `<select ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
         <option value="cost_markup" ${cm ? 'selected' : ''}>Cost + markup</option>
-        <option value="mrp_discount" ${!cm ? 'selected' : ''}>MRP − discount</option></select></div>
-      ${cm ? `
-        <div><label>Purchase cost (₹)</label><input type="number" min="0" step="0.01" style="width:100%" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')}></div>
-        <div><label>Markup %</label><input type="number" min="0" step="0.01" style="width:100%" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}></div>` : `
-        <div><label>MRP (₹)</label><input type="number" min="0" step="0.01" style="width:100%" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}></div>
-        <div><label>Discount %</label><input type="number" min="0" step="0.01" style="width:100%" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}></div>`}
-      <div><label>GST %</label><input type="number" min="0" step="1" style="width:100%" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}></div>
-      <div><label style="display:block">ITC claimable</label><input type="checkbox" ${l.itc_claimable ? 'checked' : ''} ${dataChangeEl('quoteEditLineItc', i)}></div>
+        <option value="mrp_discount" ${!cm ? 'selected' : ''}>MRP − discount</option></select>`)}
+      ${cm
+        ? qField('Purchase cost (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')}>`) +
+          qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`)
+        : qField('MRP (₹)', `<input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}>`) +
+          qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`)}
+      ${qField('GST %', `<input type="number" min="0" step="1" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}>`)}
+      ${qField('ITC', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
+        <input type="checkbox" style="width:auto" ${l.itc_claimable ? 'checked' : ''} ${dataChangeEl('quoteEditLineItc', i)}> Claimable</label>`)}
     </div>
   </div>`;
 }
 function quotePreviewHtml(p) {
   const t = p.totals || {};
-  return `<table style="font-size:13px">
-    <tr><td style="padding:2px 10px;text-align:right">Subtotal</td><td style="padding:2px 10px;text-align:right">${qMoney(t.subtotal_paise)}</td></tr>
-    ${t.igst_total ? `<tr><td style="padding:2px 10px;text-align:right">IGST</td><td style="padding:2px 10px;text-align:right">${qMoney(t.igst_total)}</td></tr>`
-      : `<tr><td style="padding:2px 10px;text-align:right">CGST</td><td style="padding:2px 10px;text-align:right">${qMoney(t.cgst_total)}</td></tr><tr><td style="padding:2px 10px;text-align:right">SGST</td><td style="padding:2px 10px;text-align:right">${qMoney(t.sgst_total)}</td></tr>`}
-    <tr><td style="padding:2px 10px;text-align:right">Round off</td><td style="padding:2px 10px;text-align:right">${qMoney(t.round_off_paise)}</td></tr>
-    <tr style="font-weight:700"><td style="padding:4px 10px;text-align:right">Grand total</td><td style="padding:4px 10px;text-align:right">${qMoney(t.grand_total_paise)}</td></tr>
-  </table>`;
+  const taxRows = t.igst_total
+    ? `<div class="q-row"><span>IGST</span><span class="q-amt">${qMoney(t.igst_total)}</span></div>`
+    : `<div class="q-row"><span>CGST</span><span class="q-amt">${qMoney(t.cgst_total)}</span></div><div class="q-row"><span>SGST</span><span class="q-amt">${qMoney(t.sgst_total)}</span></div>`;
+  return `<div class="q-summary">
+    <div class="q-row"><span>Subtotal</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
+    ${taxRows}
+    <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
+    <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise)}</span></div>
+  </div>`;
 }
 function quoteEditHeader(field, val) { const e = qState().editor; if (e) e[field] = val; }
 function quoteEditLine(i, field, val) {
@@ -384,23 +411,33 @@ async function quoteEditSave() {
 async function quoteRenderToday() {
   const body = document.getElementById('quote-body'); if (!body) return;
   const d = await api('/quotes/today');
-  if (!d) { body.innerHTML = `<div class="card">Could not load Today.</div>`; return; }
-  const sec = (title, items, render) => `<div class="card" style="margin-bottom:14px"><h3 style="margin-top:0">${title} <span class="text-muted">(${items.length})</span></h3>
-    ${items.length ? items.map(render).join('') : '<div class="text-muted">Nothing here.</div>'}</div>`;
+  if (!d) { body.innerHTML = `<div class="card"><div class="card-body">Could not load Today.</div></div>`; return; }
+  // A section card: title + count badge in the header, item rows (or an empty state) in the body.
+  const sec = (title, icon, items, emptyText, render) => `<div class="card">
+    <div class="card-header"><span class="card-title">${icon} ${h(title)}</span><span class="badge ${items.length ? 'badge-primary' : 'badge-secondary'}">${items.length}</span></div>
+    <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+      ${items.length ? items.map(render).join('') : `<div class="empty-state empty-sm"><div class="empty-title" style="font-weight:500;color:var(--text-muted)">${h(emptyText)}</div></div>`}
+    </div></div>`;
+  const row = (title, metaHtml, actionsHtml) => `<div class="q-item-row">
+    <div class="q-item-main"><div class="q-item-title">${title}</div><div class="q-item-meta">${metaHtml}</div></div>
+    <div class="q-item-actions">${actionsHtml}</div></div>`;
   body.innerHTML =
-    sec('Due reminders', d.due_reminders || [], r => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border,#eee)">
-        <span><b>${h(r.quote_no || r.quote_id)}</b> · ${h(r.rule)} · due ${h(r.due_date)}</span>
-        <span><button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', r.quote_id)}>Open</button>
-          <button class="btn btn-secondary btn-sm" ${dataAct('quoteSnoozePrompt', r.quote_id, r.id)}>Snooze</button></span></div>`) +
-    sec('Follow-ups due', d.followups_due || [], f => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border,#eee)">
-        <span><b>${h(f.quote_no || f.quote_id)}</b> · ${h(f.channel)} · ${h(f.next_action_date)}${f.note ? ' · ' + h(f.note) : ''}</span>
-        <button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', f.quote_id)}>Open</button></div>`) +
-    sec('Expiring soon', d.expiring || [], q => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border,#eee)">
-        <span><b>${h(q.quote_no || q.id)}</b> · valid until ${h(q.valid_until)}</span>
-        <button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', q.id)}>Open</button></div>`);
+    sec('Due reminders', '⏰', d.due_reminders || [], 'No reminders due today.', r =>
+      row(h(r.quote_no || r.quote_id),
+        `<span class="badge badge-warning">${h(r.rule)}</span><span>due ${h(r.due_date)}</span>`,
+        `<button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', r.quote_id)}>Open</button>
+         <button class="btn btn-secondary btn-sm" ${dataAct('quoteSnoozePrompt', r.quote_id, r.id)}>Snooze</button>`)) +
+    sec('Follow-ups due', '📞', d.followups_due || [], 'No follow-ups due today.', f =>
+      row(h(f.quote_no || f.quote_id),
+        `<span class="badge badge-info">${h(f.channel)}</span><span>${h(f.next_action_date)}</span>${f.note ? `<span>· ${h(f.note)}</span>` : ''}`,
+        `<button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', f.quote_id)}>Open</button>`)) +
+    sec('Expiring soon', '⌛', d.expiring || [], 'Nothing expiring in the window.', qq =>
+      row(h(qq.quote_no || qq.id),
+        `<span>valid until ${h(qq.valid_until)}</span>`,
+        `<button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', qq.id)}>Open</button>`));
 }
 function quoteSnoozePrompt(id, rid) {
-  openModal('Snooze reminder', `<label>Snooze until</label><input id="q-snooze-date" type="date" style="width:100%">`,
+  openModal('Snooze reminder', `<div class="form-field"><label>Snooze until</label><input id="q-snooze-date" type="date"></div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('quoteSnoozeDo', id, rid)}>Snooze</button>`);
 }
@@ -432,35 +469,34 @@ async function renderQuoteAdmin(main) {
   APP._qadmin = { ver: acc._ver, settings, users: acc.users || [], enabled: acc.enabled || {}, q: '' };
   const s = settings;
   main.innerHTML = `
-    <div class="page-head" style="margin-bottom:14px"><h1 style="margin:0">Quote Access & Settings</h1>
-      <div class="text-muted" style="font-size:13px">Assign who can use Quotations and their quote-role. ${acc.fallback_valid === false ? '<b style="color:var(--danger,#b91c1c)">Fallback approver is no longer entitled — fix it below.</b>' : ''}</div></div>
-    <div class="card" style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-        <h3 style="margin:0">Entitled users</h3>
-        <div style="position:relative;display:inline-flex;align-items:center">
-          <input id="qa-search" ${dataInputVal('quoteAdminSearch')} placeholder="Find a user by name or email…" autocomplete="off"
-            style="padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:8px;min-width:240px;font:inherit">
-          <button type="button" ${dataAct('quoteAdminClearSearch')} title="Clear search" aria-label="Clear search"
-            style="position:absolute;right:4px;border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:2px 6px">✕</button>
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Quote Access &amp; Settings</div>
+        <div class="page-subtitle">Assign who can use Quotations and their quote-role.</div>
+      </div>
+    </div>
+    ${acc.fallback_valid === false ? `<div class="card" style="border-left:3px solid var(--danger)"><div class="card-body" style="color:var(--danger);font-weight:600;font-size:.85rem">⚠ The configured fallback approver is no longer an entitled approver — update it in Settings below.</div></div>` : ''}
+    <div class="card">
+      <div class="card-header"><span class="card-title">Entitled users</span>
+        <div class="q-search">
+          <input id="qa-search" ${dataInputVal('quoteAdminSearch')} placeholder="Find a user by name or email…" autocomplete="off">
+          <button type="button" class="q-clear" ${dataAct('quoteAdminClearSearch')} title="Clear search" aria-label="Clear search">✕</button>
         </div>
       </div>
-      <div id="qa-users">${quoteAdminUsersHtml()}</div>
+      <div class="card-body" style="padding:0"><div id="qa-users">${quoteAdminUsersHtml()}</div></div>
     </div>
-    <div class="card">
-      <h3 style="margin-top:0">Settings</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
-        <div><label>Seller state code</label><input id="qs-seller" maxlength="2" style="width:100%" value="${h(s.seller_state_code || '')}"></div>
-        <div><label>Default validity (days)</label><input id="qs-validity" type="number" min="1" style="width:100%" value="${s.default_validity_days}"></div>
-        <div><label>Approval threshold (₹)</label><input id="qs-threshold" type="number" min="0" style="width:100%" value="${Math.round((s.approval_threshold_paise || 0) / 100)}"></div>
-        <div><label>Expiring window (days)</label><input id="qs-expwin" type="number" min="0" style="width:100%" value="${s.expiring_window_days}"></div>
-        <div><label>Number prefix</label><input id="qs-prefix" style="width:100%" value="${h(s.number_prefix || '')}"></div>
-        <div><label>Fallback approver (user id)</label><input id="qs-fallback" style="width:100%" value="${h(s.fallback_approver_id || '')}" placeholder="optional"></div>
-        <div><label>R1 send + days</label><input id="qs-r1" type="number" min="0" style="width:100%" value="${s.reminder_rules.R1_send_plus_days}"></div>
-        <div><label>R2 send + days</label><input id="qs-r2" type="number" min="0" style="width:100%" value="${s.reminder_rules.R2_send_plus_days}"></div>
-        <div><label>R3 valid − days</label><input id="qs-r3" type="number" min="0" style="width:100%" value="${s.reminder_rules.R3_valid_minus_days}"></div>
-      </div>
-      <div style="margin-top:12px"><button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteAdminSaveSettings')}>Save settings</button></div>
-    </div>`;
+    ${qCard('Settings', `<div class="form-row">
+      ${qField('Seller state code', `<input id="qs-seller" maxlength="2" value="${h(s.seller_state_code || '')}" placeholder="e.g. KL">`)}
+      ${qField('Default validity (days)', `<input id="qs-validity" type="number" min="1" value="${s.default_validity_days}">`)}
+      ${qField('Approval threshold (₹)', `<input id="qs-threshold" type="number" min="0" value="${Math.round((s.approval_threshold_paise || 0) / 100)}">`, 'Finance leg required at/above this')}
+      ${qField('Expiring window (days)', `<input id="qs-expwin" type="number" min="0" value="${s.expiring_window_days}">`)}
+      ${qField('Number prefix', `<input id="qs-prefix" value="${h(s.number_prefix || '')}">`)}
+      ${qField('Fallback approver (user id)', `<input id="qs-fallback" value="${h(s.fallback_approver_id || '')}" placeholder="optional">`)}
+      ${qField('R1 — send + days', `<input id="qs-r1" type="number" min="0" value="${s.reminder_rules.R1_send_plus_days}">`)}
+      ${qField('R2 — send + days', `<input id="qs-r2" type="number" min="0" value="${s.reminder_rules.R2_send_plus_days}">`)}
+      ${qField('R3 — valid − days', `<input id="qs-r3" type="number" min="0" value="${s.reminder_rules.R3_valid_minus_days}">`)}
+    </div>
+    <div style="margin-top:4px"><button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteAdminSaveSettings')}>Save settings</button></div>`)}`;
 }
 // Users table, filtered by the live search query (name / email / id).
 function quoteAdminUsersHtml() {
@@ -470,17 +506,17 @@ function quoteAdminUsersHtml() {
     `<option value="${r}" ${cur === r ? 'selected' : ''}>${r || '— none —'}</option>`).join('');
   const users = (st.users || []).filter(u => !q ||
     (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (u.id || '').toLowerCase().includes(q));
-  if (!users.length) return `<div class="text-muted" style="padding:14px;text-align:center">No users match “${h(st.q || '')}”.</div>`;
-  return `<table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px">
+  if (!users.length) return `<div class="empty-state empty-sm"><div class="empty-title" style="font-weight:500;color:var(--text-muted)">No users match “${h(st.q || '')}”.</div></div>`;
+  return `<div class="table-wrap"><table class="data-table" style="width:100%;border-collapse:collapse;font-size:.84rem">
     <thead><tr>
-      <th style="text-align:left;padding:8px">User</th><th style="text-align:left;padding:8px">App role</th><th style="text-align:left;padding:8px">Quote role</th>
+      <th style="text-align:left;padding:10px 14px">User</th><th style="text-align:left;padding:10px 14px">App role</th><th style="text-align:left;padding:10px 14px;width:200px">Quote role</th>
     </tr></thead>
-    <tbody>${users.map(u => `<tr style="border-top:1px solid var(--border,#eee)">
-      <td style="padding:8px">${h(u.name || u.id)}<div class="text-muted" style="font-size:11px">${h(u.email || '')}</div></td>
-      <td style="padding:8px">${h(u.role || '')}</td>
-      <td style="padding:8px"><select ${dataChangeVal('quoteAdminSetRole', u.id)}>${roleOpts(enabled[u.id] || '')}</select></td>
+    <tbody>${users.map(u => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:10px 14px"><div style="font-weight:600;color:var(--navy)">${h(u.name || u.id)}</div><div class="form-hint">${h(u.email || '')}</div></td>
+      <td style="padding:10px 14px">${h(u.role || '')}</td>
+      <td style="padding:8px 14px"><div class="form-field" style="gap:0"><select ${dataChangeVal('quoteAdminSetRole', u.id)}>${roleOpts(enabled[u.id] || '')}</select></div></td>
     </tr>`).join('')}</tbody>
-  </table>`;
+  </table></div>`;
 }
 function quoteAdminSearch(val) {
   const st = APP._qadmin; if (!st) return; st.q = val;
