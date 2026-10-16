@@ -4658,6 +4658,10 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_qv_quote_version ON quote_versions (quote_id, version);`,
     `CREATE TABLE IF NOT EXISTS quote_lines ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, version INTEGER NOT NULL, line_no INTEGER NOT NULL, sku TEXT, description TEXT, qty INTEGER, pricing_mode TEXT, purchase_cost_paise INTEGER, markup_bp INTEGER, mrp_paise INTEGER, discount_bp INTEGER, freight_alloc_paise INTEGER, branding_cost_paise INTEGER, sale_gst_bp INTEGER, purchase_gst_bp INTEGER, itc_claimable INTEGER, price_inclusive_gst INTEGER DEFAULT 0, landed_cost_paise INTEGER, unit_price_paise INTEGER, line_taxable_paise INTEGER, line_gst_paise INTEGER, cgst_paise INTEGER, sgst_paise INTEGER, igst_paise INTEGER, line_margin_paise INTEGER );`,
     `CREATE INDEX IF NOT EXISTS idx_qlines_quote ON quote_lines (quote_id, version);`,
+    // Self-heal added columns on tables that predate them (CREATE IF NOT EXISTS
+    // never alters an existing table). Errors (incl. "duplicate column" on a fresh
+    // table) are swallowed by the runner below.
+    `ALTER TABLE quote_lines ADD COLUMN price_inclusive_gst INTEGER DEFAULT 0;`,
     `CREATE TABLE IF NOT EXISTS quote_audit ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, seq INTEGER NOT NULL, action TEXT NOT NULL, actor_id TEXT NOT NULL, detail_json TEXT, entry_hash TEXT NOT NULL, prev_hash TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_qaudit_quote_seq ON quote_audit (quote_id, seq);`,
     `CREATE TABLE IF NOT EXISTS quote_counters ( account_id TEXT NOT NULL, fy TEXT NOT NULL, last_no INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, fy) );`,
