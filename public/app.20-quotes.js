@@ -22,6 +22,11 @@ function qMoney(paise) {
   const neg = n < 0, a = Math.abs(Math.round(n));
   return (neg ? '-' : '') + '₹' + Math.floor(a / 100).toLocaleString('en-IN') + '.' + String(a % 100).padStart(2, '0');
 }
+// Margin % of the taxable (sell) value, as a short display string.
+function qMarginPct(marginPaise, taxablePaise) {
+  const t = Number(taxablePaise) || 0; if (!t) return '—';
+  return ((Number(marginPaise) || 0) / t * 100).toFixed(1) + '%';
+}
 const QUOTE_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'LOST', 'EXPIRED'];
 // Map a quote status to one of the app's semantic badge classes + a human label.
 const QUOTE_STATUS_META = {
@@ -214,7 +219,7 @@ function quoteRenderDetail() {
           <td style="padding:8px 10px;text-align:right">${qMoney(l.unit_price_paise)}</td>
           <td style="padding:8px 10px;text-align:right">${((l.sale_gst_bp || 0) / 100).toFixed(0)}%</td>
           <td style="padding:8px 10px;text-align:right">${qMoney(l.line_taxable_paise)}</td>
-          ${showCost ? `<td style="padding:8px 10px;text-align:right">${qMoney(l.landed_cost_paise)}</td><td style="padding:8px 10px;text-align:right">${qMoney(l.line_margin_paise)}</td>` : ''}
+          ${showCost ? `<td style="padding:8px 10px;text-align:right">${qMoney(l.landed_cost_paise)}</td><td style="padding:8px 10px;text-align:right;color:${(l.line_margin_paise||0)<0?'var(--danger)':'inherit'}">${qMoney(l.line_margin_paise)}<div style="font-size:.72rem;color:var(--text-muted)">${qMarginPct(l.line_margin_paise, l.line_taxable_paise)}</div></td>` : ''}
         </tr>`).join('')}</tbody>
       </table></div>
       <div class="q-summary" style="margin-top:14px">
@@ -222,6 +227,7 @@ function quoteRenderDetail() {
         ${taxRows}
         <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
         <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise != null ? t.grand_total_paise : d.grand_total_paise)}</span></div>
+        ${showCost ? (() => { const tm = lines.reduce((s, l) => s + (l.line_margin_paise || 0), 0); const pct = t.weighted_margin_bp != null ? (t.weighted_margin_bp / 100) : null; return `<div class="q-row" style="margin-top:6px;border-top:1px dashed var(--border);padding-top:8px"><span>Total margin</span><span class="q-amt" style="color:${tm < 0 ? 'var(--danger)' : 'var(--success)'}">${qMoney(tm)}${pct != null ? ` · ${pct.toFixed(2)}%` : ''}</span></div>`; })() : ''}
       </div>`)}
     ${qCard('Activity', `
       <div class="form-hint" style="margin-bottom:10px">Integrity hash: <code style="font-size:.78rem">${h((d.version && d.version.content_hash) || '—')}</code></div>
@@ -349,8 +355,10 @@ function quoteRenderEditor() {
   // type-to-filter over client names (CSP-safe, no custom dropdown).
   const clientField = editing
     ? qField('Client', `<input value="${h(clientName)}" disabled>`, 'Client is fixed on an existing quote')
-    : qField('Client', `<input list="q-client-list" value="${h(e.client_q || '')}" ${dataInputVal('quoteEditClientPick')} placeholder="Type to search client…" autocomplete="off">
-        <datalist id="q-client-list">${q.clients.map(c => `<option value="${h(c.name || c.id)}"></option>`).join('')}</datalist>`, 'Search by client name');
+    : qField('Client', `<div class="q-combo">
+        <input id="q-client-input" value="${h(e.client_q || '')}" ${dataInputVal('quoteClientFilter')} data-focusact="quoteClientFocus" placeholder="Type to search client…" autocomplete="off">
+        <div class="q-combo-menu" id="q-client-menu" style="display:none"></div>
+      </div>`, 'Search by client name');
   const gt = e.preview && e.preview.totals ? qMoney(e.preview.totals.grand_total_paise) : '—';
   main.innerHTML = `
     <div class="page-header">
@@ -418,17 +426,50 @@ function quotePreviewHtml(p) {
     ${taxRows}
     <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
     <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise)}</span></div>
+    ${(p.lines && p.lines[0] && p.lines[0].line_margin_paise != null) ? (() => {
+      const tm = p.lines.reduce((s, l) => s + (l.line_margin_paise || 0), 0);
+      const pct = t.weighted_margin_bp != null ? (t.weighted_margin_bp / 100).toFixed(2) + '%' : '';
+      return `<div class="q-row" style="margin-top:6px;border-top:1px dashed var(--border);padding-top:8px"><span>Total margin</span><span class="q-amt" style="color:${tm < 0 ? 'var(--danger)' : 'var(--success)'}">${qMoney(tm)}${pct ? ' · ' + pct : ''}</span></div>`;
+    })() : ''}
   </div>`;
 }
 function quoteEditHeader(field, val) { const e = qState().editor; if (e) e[field] = val; }
-// Resolve the typed/picked client name back to its id (case-insensitive exact, or
-// a direct id match) so the search field drives the stored client_id.
-function quoteEditClientPick(val) {
+// Searchable client combobox (custom, styled). Filtering re-renders the menu;
+// selecting a row sets the stored client_id. An outside click closes the menu.
+function quoteClientMenuHtml() {
+  const e = qState().editor; const q = ((e && e.client_q) || '').trim().toLowerCase();
+  const all = qState().clients || [];
+  const rows = (q ? all.filter(c => (c.name || '').toLowerCase().includes(q) || (c.id || '').toLowerCase().includes(q)) : all).slice(0, 50);
+  if (!rows.length) return `<div class="q-combo-empty">No clients match.</div>`;
+  return rows.map(c => `<div class="q-combo-opt" ${dataAct('quoteClientSelect', c.id)}>${h(c.name || c.id)}${c.contact_email ? `<span class="q-combo-sub">${h(c.contact_email)}</span>` : ''}</div>`).join('');
+}
+function quoteClientShowMenu() {
+  const m = document.getElementById('q-client-menu'); if (!m) return;
+  m.innerHTML = quoteClientMenuHtml(); m.style.display = '';
+}
+function quoteClientFocus() { quoteClientShowMenu(); }
+function quoteClientFilter(val) {
   const e = qState().editor; if (!e) return;
   e.client_q = val;
   const needle = (val || '').trim().toLowerCase();
   const match = (qState().clients || []).find(c => (c.name || '').toLowerCase() === needle || c.id === val);
-  e.client_id = match ? match.id : '';
+  e.client_id = match ? match.id : '';   // exact typed match still resolves; a click is the usual path
+  quoteClientShowMenu();
+}
+function quoteClientSelect(id) {
+  const e = qState().editor; if (!e) return;
+  const c = (qState().clients || []).find(x => x.id === id);
+  e.client_id = id; e.client_q = c ? (c.name || id) : id;
+  const inp = document.getElementById('q-client-input'); if (inp) inp.value = e.client_q;
+  const m = document.getElementById('q-client-menu'); if (m) m.style.display = 'none';
+}
+// Close the open client menu on any click/tap outside the combo (added once).
+if (typeof window !== 'undefined' && !window._qComboInit) {
+  window._qComboInit = true;
+  document.addEventListener('mousedown', (ev) => {
+    const m = document.getElementById('q-client-menu');
+    if (m && m.style.display !== 'none' && ev.target && !ev.target.closest('.q-combo')) m.style.display = 'none';
+  });
 }
 function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;

@@ -753,6 +753,15 @@ button.tile:hover { transform: translateY(-1px); }
 .q-actionbar-total b { font-size: 1.1rem; color: var(--navy); font-weight: 800; font-variant-numeric: tabular-nums; }
 .q-actionbar-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 
+/* Searchable client combobox (styled, left-aligned — replaces the native datalist) */
+.q-combo { position: relative; }
+.q-combo-menu { position: absolute; left: 0; right: 0; top: 100%; z-index: 40; margin-top: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); max-height: 240px; overflow-y: auto; }
+.q-combo-opt { padding: 8px 12px; cursor: pointer; font-size: .85rem; text-align: left; color: var(--navy); border-bottom: 1px solid var(--border-light, var(--border)); }
+.q-combo-opt:last-child { border-bottom: none; }
+.q-combo-opt:hover, .q-combo-opt.active { background: var(--bg); }
+.q-combo-opt .q-combo-sub { display: block; color: var(--text-muted); font-size: .72rem; margin-top: 1px; }
+.q-combo-empty { padding: 10px 12px; font-size: .8rem; color: var(--text-muted); text-align: left; }
+
 /* Detail meta grid */
 .q-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; }
 .q-meta dt { font-size: .68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
