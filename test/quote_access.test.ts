@@ -38,6 +38,14 @@ describe("quote_access — capability matrix (default-deny)", () => {
     expect(can("ops", "submit")).toBe(false);
     expect(seesCost("ops")).toBe(false);
   });
+  it("revise/convert follow the author roles (ops excluded)", () => {
+    for (const r of ["sales", "commercial_manager", "finance"] as const) {
+      expect(can(r, "revise")).toBe(true);
+      expect(can(r, "convert")).toBe(true);
+    }
+    expect(can("ops", "revise")).toBe(false);
+    expect(can("ops", "convert")).toBe(false);
+  });
   it("unknown / typo'd role fails closed on every capability", () => {
     expect(can("Ops", "view")).toBe(false);
     expect(can("manager", "create_edit")).toBe(false);

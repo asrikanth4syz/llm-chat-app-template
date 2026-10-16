@@ -4472,11 +4472,26 @@ interface QuoteSettings {
   fallback_approver_id: string | null;
   number_prefix: string;
   reminder_rules: { R1_send_plus_days: number; R2_send_plus_days: number; R3_valid_minus_days: number };
+  payment_terms: string;
+  terms: string;
 }
+// Default terms & payment line printed on the customer quote document. Admin-editable
+// in Settings → Quotations; one T&C per line. Date-agnostic (the header already shows
+// the validity date), so edits never silently drop the validity.
+const DEFAULT_QUOTE_PAYMENT_TERMS = "50% advance with the purchase order, balance before dispatch, unless otherwise agreed in writing.";
+const DEFAULT_QUOTE_TERMS = [
+  "This quotation is valid until the date shown above; prices and availability are subject to revision thereafter.",
+  "Prices are quoted in Indian Rupees. GST is charged at the rates shown and at rates prevailing on the date of supply.",
+  "Delivery is made within the agreed lead time, counted from receipt of a confirmed purchase order and advance payment.",
+  "Goods once sold are not returnable unless received damaged and reported within 48 hours of delivery.",
+  "Any dispute arising out of this quotation is subject to the jurisdiction of the courts at the seller's registered place of business.",
+  "This is a system-generated document; its integrity can be verified against the SHA-256 hash printed below.",
+].join("\n");
 const DEFAULT_QUOTE_SETTINGS: QuoteSettings = {
   _ver: 0, seller_state_code: "", default_validity_days: 30, approval_threshold_paise: 50000000,
   expiring_window_days: 3, fallback_approver_id: null, number_prefix: "GZ",
   reminder_rules: { R1_send_plus_days: 2, R2_send_plus_days: 7, R3_valid_minus_days: 2 },
+  payment_terms: DEFAULT_QUOTE_PAYMENT_TERMS, terms: DEFAULT_QUOTE_TERMS,
 };
 
 async function getQuoteEnabledUsers(env: Env): Promise<EnabledUsers> {
@@ -4631,6 +4646,9 @@ async function handleAdminQuoteSettingsPut(request: Request, env: Env): Promise<
   if (![rr.R1_send_plus_days, rr.R2_send_plus_days, rr.R3_valid_minus_days].every((n) => Number.isInteger(n) && n >= 0) || rr.R1_send_plus_days > rr.R2_send_plus_days) {
     return json({ error: "reminder_rules offsets must be non-negative integers with R1 <= R2", code: "E_VALIDATION", field: "reminder_rules" }, 422);
   }
+  // Document terms are free text (one T&C per line); coerce + cap, keep defaults when blank.
+  next.payment_terms = String(next.payment_terms ?? "").slice(0, 1000);
+  next.terms = String(next.terms ?? "").slice(0, 5000);
   try {
     validateFallbackApprover(await getQuoteEnabledUsers(env), next.fallback_approver_id ?? null);
   } catch (e) {
@@ -4662,6 +4680,18 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     // never alters an existing table). Errors (incl. "duplicate column" on a fresh
     // table) are swallowed by the runner below.
     `ALTER TABLE quote_lines ADD COLUMN price_inclusive_gst INTEGER DEFAULT 0;`,
+    // Revision lineage (new linked Rev N) + convert-to-order linkage on quotes.
+    `ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1;`,
+    `ALTER TABLE quotes ADD COLUMN revised_from_id TEXT;`,
+    `ALTER TABLE quotes ADD COLUMN root_quote_id TEXT;`,
+    `ALTER TABLE quotes ADD COLUMN superseded_by_id TEXT;`,
+    `ALTER TABLE quotes ADD COLUMN converted_order_id TEXT;`,
+    // Columns the convert-to-order path writes. orders predates these; some are
+    // otherwise added by the orders-module schema, so ensure them here too (the
+    // quote routes may run before that schema in a given request/worker).
+    `ALTER TABLE orders ADD COLUMN source_quote_id TEXT;`,
+    `ALTER TABLE orders ADD COLUMN source TEXT;`,
+    `ALTER TABLE orders ADD COLUMN order_period TEXT;`,
     `CREATE TABLE IF NOT EXISTS quote_audit ( id TEXT PRIMARY KEY, account_id TEXT NOT NULL, quote_id TEXT NOT NULL, seq INTEGER NOT NULL, action TEXT NOT NULL, actor_id TEXT NOT NULL, detail_json TEXT, entry_hash TEXT NOT NULL, prev_hash TEXT, created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_qaudit_quote_seq ON quote_audit (quote_id, seq);`,
     `CREATE TABLE IF NOT EXISTS quote_counters ( account_id TEXT NOT NULL, fy TEXT NOT NULL, last_no INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, fy) );`,
@@ -4780,7 +4810,7 @@ async function handleQuoteList(request: Request, env: Env): Promise<Response> {
   const where = ["account_id=?"]; const binds: unknown[] = [QUOTE_ACCOUNT];
   if (status) { where.push("status=?"); binds.push(status); }
   const { results } = await env.DB.prepare(
-    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at
+    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at, q.revision
        FROM quotes q LEFT JOIN clients c ON c.id = q.client_id
       WHERE ${where.map((w) => w.replace(/^account_id=/, "q.account_id=").replace(/^status=/, "q.status=")).join(" AND ")} ORDER BY q.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...binds, size, (page - 1) * size).all();
@@ -4806,10 +4836,16 @@ async function handleQuoteDetail(request: Request, env: Env, id: string): Promis
   const { results: lines } = await env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
   const { results: audit } = await env.DB.prepare("SELECT seq, action, actor_id, created_at FROM quote_audit WHERE quote_id=? ORDER BY seq").bind(id).all();
   const clientRow = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as { name?: string } | null;
+  // Readable quote numbers for the lineage chips (parent revised-from / child revision).
+  const revisedFromNo = q.revised_from_id ? ((await env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.revised_from_id, QUOTE_ACCOUNT).first() as any)?.quote_no || null) : null;
+  const supersededByNo = q.superseded_by_id ? ((await env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.superseded_by_id, QUOTE_ACCOUNT).first() as any)?.quote_no || null) : null;
   const detail = {
     id: q.id, quote_no: q.quote_no, client_id: q.client_id, client_name: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply,
     status: q.status, current_version: q.current_version, itc_claimable_all: !!q.itc_claimable_all,
     grand_total_paise: q.grand_total_paise, created_by: q.created_by, valid_until: q.valid_until,
+    revision: q.revision || 1, revised_from_id: q.revised_from_id || null, revised_from_no: revisedFromNo,
+    superseded_by_id: q.superseded_by_id || null, superseded_by_no: supersededByNo,
+    root_quote_id: q.root_quote_id || null, converted_order_id: q.converted_order_id || null,
     version: ver ? { version: ver.version, content_hash: ver.content_hash, prev_hash: ver.prev_hash, payload: JSON.parse(ver.payload_canonical) } : null,
     lines, audit,
   };
@@ -5087,6 +5123,7 @@ function qAmountInWords(paise: number): string {
 function buildQuoteDocumentHtml(
   h: { quote_no: string; client: string; client_address?: string; client_gstin?: string; place_of_supply: string; sent_at: string; valid_until: string; prefix: string },
   lines: any[], totals: any, brand: Record<string, string>,
+  docTerms?: { payment_terms?: string; terms?: string },
 ): string {
   const accent = /^#[0-9a-fA-F]{3,8}$/.test(brand.accent || "") ? brand.accent : "#16284a";
   const sellerName = qEsc(brand.legal_name || brand.company_name || "");
@@ -5120,15 +5157,9 @@ function buildQuoteDocumentHtml(
     h.client_gstin ? "GSTIN: " + qEsc(h.client_gstin) : "",
     h.place_of_supply ? "Place of supply: " + qEsc(h.place_of_supply) : "",
   ].filter(Boolean).map((x) => `<div>${x}</div>`).join("");
-  const terms = [
-    `This quotation is valid until <strong>${qEsc(h.valid_until)}</strong>; prices and availability are subject to revision thereafter.`,
-    `Prices are quoted in Indian Rupees. GST is charged at the rates shown and at rates prevailing on the date of supply.`,
-    `Payment terms: 50% advance with the purchase order and the balance before dispatch, unless otherwise agreed in writing.`,
-    `Delivery is made within the agreed lead time, counted from receipt of a confirmed purchase order and advance payment.`,
-    `Goods once sold are not returnable unless received damaged and reported within 48 hours of delivery.`,
-    `Any dispute arising out of this quotation is subject to the jurisdiction of the courts at the seller's registered place of business.`,
-    `This is a system-generated document; its integrity can be verified against the SHA-256 hash printed below.`,
-  ].map((t) => `<li>${t}</li>`).join("");
+  const paymentTerms = (docTerms?.payment_terms ?? "").trim();
+  const terms = (docTerms?.terms ?? "").split("\n").map((t) => t.trim()).filter(Boolean)
+    .map((t) => `<li>${qEsc(t)}</li>`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quotation ${qEsc(h.quote_no)}</title>
 <style>
@@ -5158,7 +5189,9 @@ function buildQuoteDocumentHtml(
   tfoot .lbl { text-align: right; color: #4b5563; }
   tfoot .grand td { border-top: 2px solid var(--accent); font-weight: 700; font-size: 14px; color: var(--accent); padding-top: 9px; }
   .words { padding: 10px 0 0; font-size: 12px; font-style: italic; color: #374151; }
-  .terms { padding-top: 26px; }
+  .payterms { padding: 14px 0 0; font-size: 12px; color: #374151; }
+  .payterms .pt-label { font-weight: 600; color: var(--accent); }
+  .terms { padding-top: 22px; }
   .terms h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); padding-bottom: 8px; }
   .terms ol { padding: 0 0 0 18px; font-size: 11.5px; color: #4b5563; line-height: 1.7; }
   .sign { display: flex; justify-content: flex-end; padding-top: 34px; }
@@ -5202,10 +5235,8 @@ function buildQuoteDocumentHtml(
     </tfoot>
   </table></div>
   <p class="words">Amount in words: ${qEsc(qAmountInWords(totals.grand_total_paise))}</p>
-  <div class="terms">
-    <h3>Terms &amp; Conditions</h3>
-    <ol>${terms}</ol>
-  </div>
+  ${paymentTerms ? `<p class="payterms"><span class="pt-label">Payment Terms:</span> ${qEsc(paymentTerms)}</p>` : ""}
+  ${terms ? `<div class="terms"><h3>Terms &amp; Conditions</h3><ol>${terms}</ol></div>` : ""}
   <div class="sign">
     <div class="box">For <strong>${sellerName}</strong><div class="spacer"></div><div class="line">Authorised Signatory</div></div>
   </div>
@@ -5237,6 +5268,7 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
   const htmlWithPlaceholder = buildQuoteDocumentHtml(
     { quote_no: q.quote_no, client: clientRow?.name || q.client_id, client_address: clientRow?.address || "", client_gstin: clientRow?.gstin || "", place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
     lines as any[], payload.totals, brand,
+    { payment_terms: settings.payment_terms, terms: settings.terms },
   );
   const docHash = await sha256Hex(htmlWithPlaceholder);       // hash with field blank
   const stamped = htmlWithPlaceholder.split(QUOTE_DOC_HASH_PLACEHOLDER).join(docHash);
@@ -5307,6 +5339,117 @@ async function quoteTransition(request: Request, env: Env, id: string, action: "
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, action === "accept" ? "accepted" : "lost", acc.user.sub, detail, entryHash, am.prevHash),
   ]);
   return json({ id, status: newStatus, ...(reason ? { lost_reason: reason } : {}) });
+}
+
+// POST /api/quotes/:id/revise — create a new linked DRAFT revision (Rev N) that
+// copies the current version's lines verbatim; the source quote is SUPERSEDED.
+// Lineage is kept via revision/revised_from_id/root_quote_id/superseded_by_id so
+// the original stays immutable and visible alongside the revision.
+async function handleQuoteRevise(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "revise")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (!["SENT", "EXPIRED", "LOST"].includes(q.status)) return json({ error: `cannot revise from ${q.status}`, code: "E_BAD_TRANSITION" }, 409);
+  if (q.superseded_by_id) return json({ error: "quote already has a revision", code: "E_ALREADY_REVISED", superseded_by_id: q.superseded_by_id }, 409);
+
+  const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
+  if (!ver) return json({ error: "source version missing", code: "E_NO_VERSION" }, 409);
+  const payload = ver.payload_canonical as string;
+  const { results: srcLines } = await env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+
+  const newId = `q_${uid()}`;
+  const salt = newSalt();
+  const revision = (Number(q.revision) || 1) + 1;
+  const rootId = q.root_quote_id || q.id;
+  const baseNo = String(q.quote_no).replace(/-R\d+$/, "");
+  const newNo = `${baseNo}-R${revision}`;
+
+  const contentHash = await versionContentHash(QUOTE_ACCOUNT, newId, 1, salt, payload);
+  const auditDetail = JSON.stringify({ quote_no: newNo, version: 1, revised_from_id: id, revision });
+  const entryHash = await auditEntryHash(QUOTE_ACCOUNT, newId, 1, "created", acc.user.sub, auditDetail, null, salt);
+
+  const stmts = [
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,revision,revised_from_id,root_quote_id) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,NULL,?,?,?)")
+      .bind(newId, QUOTE_ACCOUNT, salt, newNo, q.client_id, q.place_of_supply, q.itc_claimable_all ? 1 : 0, q.grand_total_paise, acc.user.sub, revision, id, rootId),
+    env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,1,?,?,NULL,?)")
+      .bind(`qv_${uid()}`, QUOTE_ACCOUNT, newId, payload, contentHash, acc.user.sub),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, newId, acc.user.sub, auditDetail, entryHash),
+  ];
+  for (const l of srcLines as any[]) {
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,price_inclusive_gst,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, newId, l.line_no, l.sku, l.description, l.qty, l.pricing_mode, l.purchase_cost_paise, l.markup_bp, l.mrp_paise, l.discount_bp, l.freight_alloc_paise, l.branding_cost_paise, l.sale_gst_bp, l.purchase_gst_bp, l.itc_claimable, l.price_inclusive_gst, l.landed_cost_paise, l.unit_price_paise, l.line_taxable_paise, l.line_gst_paise, l.cgst_paise, l.sgst_paise, l.igst_paise, l.line_margin_paise));
+  }
+  // Supersede the parent: append to its hash-chained audit, cancel its reminders.
+  const pam = await nextAuditMeta(env, id);
+  const pdetail = JSON.stringify({ superseded_by_id: newId, revision });
+  const pEntry = await auditEntryHash(QUOTE_ACCOUNT, id, pam.seq, "superseded", acc.user.sub, pdetail, pam.prevHash, q.genesis_salt);
+  stmts.push(
+    env.DB.prepare("UPDATE quotes SET status='SUPERSEDED', superseded_by_id=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status=?")
+      .bind(newId, id, QUOTE_ACCOUNT, q.status),
+    env.DB.prepare("UPDATE quote_reminders SET status='CANCELLED' WHERE quote_id=? AND status IN ('PENDING','SNOOZED')").bind(id),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'superseded',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, pam.seq, acc.user.sub, pdetail, pEntry, pam.prevHash),
+  );
+  await env.DB.batch(stmts);
+  return json({ id: newId, quote_no: newNo, revision, revised_from_id: id, status: "DRAFT", grand_total_paise: q.grand_total_paise });
+}
+
+// POST /api/quotes/:id/convert — ACCEPTED quote → a DRAFT sales order, pre-filled
+// from the quote with the AGREED tax carried over exactly (order-level gst), for
+// Ops/sales to review and submit through the normal order pipeline. One-shot:
+// the quote is marked CONVERTED and linked to the new order.
+async function handleQuoteConvert(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  if (!can(acc.quoteRole, "convert")) return json({ error: "Forbidden" }, 403);
+  const q = await loadQuote(env, id);
+  if (!q) return json({ error: "Not found" }, 404);
+  const xacc = await denyClientCrossAccess(env, acc.user, q.client_id); if (xacc) return xacc;
+  if (q.status !== "ACCEPTED") return json({ error: `cannot convert from ${q.status}`, code: "E_BAD_TRANSITION" }, 409);
+  if (q.converted_order_id) return json({ error: "quote already converted", code: "E_ALREADY_CONVERTED", order_id: q.converted_order_id }, 409);
+
+  const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
+  const totals = ver ? JSON.parse(ver.payload_canonical).totals : null;
+  const { results: lines } = await env.DB.prepare("SELECT sku, description, qty, line_taxable_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+  if (!lines.length) return json({ error: "quote has no lines", code: "E_NO_LINES" }, 409);
+
+  const gstPaise = (totals?.cgst_total || 0) + (totals?.sgst_total || 0) + (totals?.igst_total || 0);
+  const subtotalPaise = totals?.subtotal_paise ?? (lines as any[]).reduce((s, l) => s + (l.line_taxable_paise || 0), 0);
+  const grandPaise = q.grand_total_paise ?? (subtotalPaise + gstPaise);
+  const orderId = `SP-${new Date().toISOString().slice(2, 7).replace("-", "")}-${Math.floor(Math.random() * 9000 + 1000)}`;
+  const orderPeriod = new Date().toISOString().slice(0, 7);
+  const note = `Converted from quote ${q.quote_no}`;
+
+  const stmts = [
+    env.DB.prepare("INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,order_period,source,source_quote_id) VALUES (?,?,?,'DRAFT',?,?,?,?,'Regular',?,'quote',?)")
+      .bind(orderId, q.client_id, acc.user.sub, subtotalPaise / 100, gstPaise / 100, grandPaise / 100, note, orderPeriod, id),
+  ];
+  for (const l of lines as any[]) {
+    const unit = l.qty ? (l.line_taxable_paise || 0) / l.qty / 100 : (l.line_taxable_paise || 0) / 100;
+    stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), orderId, l.sku || "QUOTE", l.description || l.sku || "Item", l.qty, unit, (l.line_taxable_paise || 0) / 100, null));
+  }
+  stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'DRAFT',?,?,?)")
+    .bind(uid(), orderId, acc.user.sub, (acc.user as any).name || acc.user.sub, note));
+
+  const am = await nextAuditMeta(env, id);
+  const cdetail = JSON.stringify({ order_id: orderId, grand_total_paise: grandPaise });
+  const cEntry = await auditEntryHash(QUOTE_ACCOUNT, id, am.seq, "converted", acc.user.sub, cdetail, am.prevHash, q.genesis_salt);
+  stmts.push(
+    env.DB.prepare("UPDATE quotes SET status='CONVERTED', converted_order_id=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND status='ACCEPTED'")
+      .bind(orderId, id, QUOTE_ACCOUNT),
+    env.DB.prepare("UPDATE quote_reminders SET status='CANCELLED' WHERE quote_id=? AND status IN ('PENDING','SNOOZED')").bind(id),
+    env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'converted',?,?,?,?)")
+      .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, cdetail, cEntry, am.prevHash),
+  );
+  await env.DB.batch(stmts);
+  return json({ id, status: "CONVERTED", order_id: orderId, order_status: "DRAFT" });
 }
 
 // ── Reminders / follow-ups / Today / bell (Slice 6) ──────────────────────────
@@ -5579,6 +5722,8 @@ export default {
       if (path.match(/^\/api\/quotes\/[^/]+\/send$/)     && method==="POST") return handleQuoteSend(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+\/accept$/)   && method==="POST") return quoteTransition(request,env,path.split("/")[3],"accept");
       if (path.match(/^\/api\/quotes\/[^/]+\/lost$/)     && method==="POST") return quoteTransition(request,env,path.split("/")[3],"lost");
+      if (path.match(/^\/api\/quotes\/[^/]+\/revise$/)   && method==="POST") return handleQuoteRevise(request,env,path.split("/")[3]);
+      if (path.match(/^\/api\/quotes\/[^/]+\/convert$/)  && method==="POST") return handleQuoteConvert(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+\/document$/) && method==="GET")  return handleQuoteDocument(request,env,path.split("/")[3]);
       if (path==="/api/quotes/today"           && method==="GET")  return handleQuoteToday(request,env);
       if (path==="/api/quotes/bell"            && method==="GET")  return handleQuoteBell(request,env);

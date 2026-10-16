@@ -2,6 +2,11 @@ import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
 export default defineWorkersConfig({
   test: {
+    // Integration suites make many sequential HTTP round-trips per test against a
+    // single shared worker runtime; deep into a full run the default 5s ceiling is
+    // too tight (a timeout mid-test also corrupts the pool's isolated-storage stack).
+    testTimeout: 30000,
+    hookTimeout: 60000,
     poolOptions: {
       workers: {
         singleWorker: true,

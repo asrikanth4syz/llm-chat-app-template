@@ -20,7 +20,7 @@ export type ApprovalLeg = (typeof APPROVAL_LEGS)[number];
 
 export type QuoteCapability =
   | "view" | "calc" | "create_edit" | "submit" | "send"
-  | "accept_lost" | "followup" | "snooze" | "audit_read" | "sees_cost";
+  | "accept_lost" | "revise" | "convert" | "followup" | "snooze" | "audit_read" | "sees_cost";
 
 /** Approver roles — the roles that own an approval leg (and may be a fallback). */
 export const APPROVER_ROLES: readonly QuoteRole[] = ["commercial_manager", "finance"];
@@ -30,7 +30,7 @@ export const APPROVER_ROLES: readonly QuoteRole[] = ["commercial_manager", "fina
 interface RoleCaps { caps: ReadonlySet<QuoteCapability>; approveLegs: readonly ApprovalLeg[]; }
 const MATRIX: Record<QuoteRole, RoleCaps> = {
   sales: {
-    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "followup", "snooze", "audit_read", "sees_cost"]),
+    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "revise", "convert", "followup", "snooze", "audit_read", "sees_cost"]),
     approveLegs: [],
   },
   ops: {
@@ -39,13 +39,13 @@ const MATRIX: Record<QuoteRole, RoleCaps> = {
     approveLegs: [],
   },
   commercial_manager: {
-    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "followup", "snooze", "audit_read", "sees_cost"]),
+    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "revise", "convert", "followup", "snooze", "audit_read", "sees_cost"]),
     approveLegs: ["manager"],
   },
   finance: {
     // Finance may author/raise quotes too (product decision). SoD still holds at
     // act-time: a finance user who authored a quote cannot approve its finance leg.
-    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "followup", "snooze", "audit_read", "sees_cost"]),
+    caps: new Set<QuoteCapability>(["view", "calc", "create_edit", "submit", "send", "accept_lost", "revise", "convert", "followup", "snooze", "audit_read", "sees_cost"]),
     approveLegs: ["finance"],
   },
 };

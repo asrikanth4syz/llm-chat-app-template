@@ -16,7 +16,7 @@ const put = (p: string, b: unknown, t?: string) => SELF.fetch(`${BASE}${p}`, { m
 async function login(email: string, pw: string) { return (await (await post("/api/auth/login", { email, password: pw })).json() as any).token as string; }
 const b64decode = (s: string) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
 
-let adminTok: string, salesTok: string, mgrTok: string, finTok: string;
+let adminTok: string, salesTok: string, mgrTok: string, finTok: string, opsTok: string;
 
 const line = (itc: boolean) => ({ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 2000, sale_gst_bp: 1800, itc_claimable: itc });
 const CREATE = (itc = true) => ({ client_id: "c1", place_of_supply: "KL", lines: [line(itc)] });
@@ -41,12 +41,14 @@ beforeAll(async () => {
   await mk("tst-dsales", "dsales@sp.test", "procurement_manager");
   await mk("tst-dmgr", "dmgr@sp.test", "warehouse_exec");
   await mk("tst-dfin", "dfin@sp.test", "delivery_exec");
+  await mk("tst-dops", "dops@sp.test", "delivery_exec");
   await db.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active) VALUES ('c1','Meta India','x@y.z',1)").run();
   await get("/api/quotes"); // warm schema into the per-test baseline
   adminTok = await login("dadmin@sp.test", "pw123");
   salesTok = await login("dsales@sp.test", "pw123");
   mgrTok = await login("dmgr@sp.test", "pw123");
   finTok = await login("dfin@sp.test", "pw123");
+  opsTok = await login("dops@sp.test", "pw123");
 });
 
 async function prep() {
@@ -54,6 +56,7 @@ async function prep() {
   await put("/api/admin/quote-access", { userId: "tst-dsales", quoteRole: "sales", _ver: 0 }, adminTok);
   await put("/api/admin/quote-access", { userId: "tst-dmgr", quoteRole: "commercial_manager", _ver: 1 }, adminTok);
   await put("/api/admin/quote-access", { userId: "tst-dfin", quoteRole: "finance", _ver: 2 }, adminTok);
+  await put("/api/admin/quote-access", { userId: "tst-dops", quoteRole: "ops", _ver: 3 }, adminTok);
 }
 const createAs = async (tok: string, itc = true) => (await (await post("/api/quotes", CREATE(itc), tok)).json() as any).id as string;
 async function approvedQuote(): Promise<string> {
@@ -135,5 +138,105 @@ describe("send + customer document (Slice 5)", () => {
     const sent = await post(`/api/quotes/${id}/send`, {}, finTok);
     expect(sent.status).toBe(200);                                                   // finance may send now
     expect((await sent.json() as any).status).toBe("SENT");
+  });
+});
+
+describe("admin-editable document terms", () => {
+  it("payment terms + T&C from settings appear on the sent document", async () => {
+    await prep();
+    const cur = await (await get("/api/admin/quote-settings", adminTok)).json() as any;
+    await put("/api/admin/quote-settings", { ...cur, _ver: cur._ver, seller_state_code: "KL",
+      payment_terms: "100% advance against this quotation", terms: "First custom clause\nSecond custom clause" }, adminTok);
+    const id = await approvedQuote();
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    const html = b64decode((await (await get(`/api/quotes/${id}/document`, salesTok)).json() as any).content_b64);
+    expect(html).toContain("100% advance against this quotation");
+    expect(html).toContain("First custom clause");
+    expect(html).toContain("Second custom clause");
+    expect(html).toContain("Amount in words");
+    // still redacted
+    expect(html.toLowerCase()).not.toContain("margin");
+    expect(html.toLowerCase()).not.toContain("landed");
+  });
+});
+
+describe("post-send revision with lineage", () => {
+  async function sentQuote(): Promise<string> {
+    const id = await approvedQuote();
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    return id;
+  }
+  it("revise from SENT creates a linked Rev 2 DRAFT and supersedes the original", async () => {
+    await prep();
+    const id = await sentQuote();
+    const r = await post(`/api/quotes/${id}/revise`, {}, salesTok);
+    expect(r.status).toBe(200);
+    const rb = await r.json() as any;
+    expect(rb.status).toBe("DRAFT");
+    expect(rb.revision).toBe(2);
+    expect(rb.revised_from_id).toBe(id);
+    expect(rb.quote_no).toMatch(/-R2$/);
+    // original is now SUPERSEDED and points to the revision
+    const parent = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    expect(parent.status).toBe("SUPERSEDED");
+    expect(parent.superseded_by_id).toBe(rb.id);
+    // the revision carries the copied lines + lineage back-link
+    const child = await (await get(`/api/quotes/${rb.id}`, salesTok)).json() as any;
+    expect(child.revision).toBe(2);
+    expect(child.revised_from_id).toBe(id);
+    expect(child.lines.length).toBe(1);
+    expect(child.grand_total_paise).toBe(parent.grand_total_paise);
+  });
+  it("a quote cannot be revised twice, and DRAFT cannot be revised", async () => {
+    await prep();
+    const id = await sentQuote();
+    await post(`/api/quotes/${id}/revise`, {}, salesTok);
+    expect((await post(`/api/quotes/${id}/revise`, {}, salesTok)).status).toBe(409); // already revised
+    const draft = await createAs(salesTok);
+    expect((await post(`/api/quotes/${draft}/revise`, {}, salesTok)).status).toBe(409); // bad transition
+  });
+  it("ops (view-only) cannot revise or convert", async () => {
+    await prep();
+    const id = await sentQuote();
+    expect((await post(`/api/quotes/${id}/revise`, {}, opsTok)).status).toBe(403);
+    await post(`/api/quotes/${id}/accept`, {}, salesTok);
+    expect((await post(`/api/quotes/${id}/convert`, {}, opsTok)).status).toBe(403);
+  });
+});
+
+describe("convert accepted quote to order", () => {
+  async function acceptedQuote(): Promise<string> {
+    const id = await approvedQuote();
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    await post(`/api/quotes/${id}/accept`, {}, salesTok);
+    return id;
+  }
+  it("convert creates a DRAFT order carrying the quote's agreed totals, and marks the quote CONVERTED", async () => {
+    await prep();
+    const id = await acceptedQuote();
+    const q = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    const r = await post(`/api/quotes/${id}/convert`, {}, salesTok);
+    expect(r.status).toBe(200);
+    const rb = await r.json() as any;
+    expect(rb.order_id).toMatch(/^SP-/);
+    expect(rb.order_status).toBe("DRAFT");
+    // quote is CONVERTED and linked to the order
+    const after = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    expect(after.status).toBe("CONVERTED");
+    expect(after.converted_order_id).toBe(rb.order_id);
+    // order carries the quote's grand total exactly and links back
+    const order = await (await get(`/api/orders/${rb.order_id}`, adminTok)).json() as any;
+    expect(order.status).toBe("DRAFT");
+    expect(order.source_quote_id).toBe(id);
+    expect(Math.round(order.grand_total * 100)).toBe(q.grand_total_paise);
+  });
+  it("convert is 409 unless ACCEPTED and cannot run twice", async () => {
+    await prep();
+    const id = await approvedQuote();
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(409); // SENT, not ACCEPTED
+    await post(`/api/quotes/${id}/accept`, {}, salesTok);
+    expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(200);
+    expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(409); // already converted
   });
 });

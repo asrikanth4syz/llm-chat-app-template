@@ -27,12 +27,13 @@ function qMarginPct(marginPaise, taxablePaise) {
   const t = Number(taxablePaise) || 0; if (!t) return '—';
   return ((Number(marginPaise) || 0) / t * 100).toFixed(1) + '%';
 }
-const QUOTE_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'LOST', 'EXPIRED'];
+const QUOTE_STATUSES = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'CONVERTED', 'LOST', 'EXPIRED', 'SUPERSEDED'];
 // Map a quote status to one of the app's semantic badge classes + a human label.
 const QUOTE_STATUS_META = {
   DRAFT: ['badge-secondary', 'Draft'], PENDING_APPROVAL: ['badge-warning', 'Pending approval'],
   APPROVED: ['badge-info', 'Approved'], SENT: ['badge-primary', 'Sent'],
-  ACCEPTED: ['badge-success', 'Accepted'], LOST: ['badge-danger', 'Lost'], EXPIRED: ['badge-secondary', 'Expired'],
+  ACCEPTED: ['badge-success', 'Accepted'], CONVERTED: ['badge-success', 'Converted'],
+  LOST: ['badge-danger', 'Lost'], EXPIRED: ['badge-secondary', 'Expired'], SUPERSEDED: ['badge-secondary', 'Superseded'],
 };
 function qBadge(s) {
   const [cls, label] = QUOTE_STATUS_META[s] || ['badge-secondary', s || '—'];
@@ -141,7 +142,7 @@ function quoteListRowsHtml(rows) {
   if (!rows.length) return `<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
   return rows.map(r => `
     <tr style="cursor:pointer;border-top:1px solid var(--border)" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:11px 14px;font-weight:700;color:var(--navy)">${h(r.quote_no || r.id)}</td>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy)">${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}</td>
       <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
       <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.grand_total_paise)}</td>
@@ -182,7 +183,23 @@ function quoteRenderDetail() {
       actions.push(`<button class="btn btn-danger" ${dataAct('quoteLostPrompt', d.id)}>Mark lost…</button>`);
     }
   }
+  if (st === 'ACCEPTED') {
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteViewDocument', d.id)}>View document</button>`);
+    if (qCanCreate() && !d.converted_order_id) actions.push(`<button class="btn btn-gold" data-busy="Converting…" ${dataAct('quoteConvert', d.id)}>Convert to order</button>`);
+  }
+  // A revision can be raised off a sent/expired/lost quote that has not already been revised.
+  if (['SENT', 'EXPIRED', 'LOST'].includes(st) && qCanCreate() && !d.superseded_by_id) {
+    actions.push(`<button class="btn btn-secondary" data-busy="Revising…" ${dataAct('quoteRevise', d.id)}>Revise</button>`);
+  }
   actions.push(`<button class="btn btn-secondary" ${dataAct('quoteFollowupPrompt', d.id)}>Log follow-up</button>`);
+
+  // Lineage banner — revision chain + convert-to-order linkage.
+  const qlink = (id, label) => `<button class="q-lineage-link" ${dataAct('quoteOpenDetail', id)}>${h(label)}</button>`;
+  const lineage = [];
+  if ((d.revision || 1) > 1 && d.revised_from_id) lineage.push(`<strong>Revision ${d.revision}</strong> — revised from ${qlink(d.revised_from_id, d.revised_from_no || d.revised_from_id)}`);
+  if (d.superseded_by_id) lineage.push(`Superseded by ${qlink(d.superseded_by_id, d.superseded_by_no || d.superseded_by_id)}`);
+  if (d.converted_order_id) lineage.push(`Converted to order <strong>${h(d.converted_order_id)}</strong>`);
+  const lineageHtml = lineage.length ? `<div class="card q-lineage"><div class="card-body">${lineage.join(' <span class="q-lineage-sep">·</span> ')}</div></div>` : '';
 
   const taxRows = qTaxRowsHtml(t, qUniformGstPct(lines.map(l => (l.sale_gst_bp || 0) / 100)));
 
@@ -194,6 +211,7 @@ function quoteRenderDetail() {
       </div>
       <div class="page-actions">${actions.join(' ')}</div>
     </div>
+    ${lineageHtml}
     ${qCard('Quote details', `<dl class="q-meta">
       <div><dt>Client</dt><dd>${h(d.client_name || d.client_id)}</dd></div>
       <div><dt>Place of supply</dt><dd>${h(d.place_of_supply || '—')}</dd></div>
@@ -254,6 +272,14 @@ async function quoteSend(id) {
 async function quoteAccept(id) {
   const r = await api('/quotes/' + id + '/accept', { method: 'POST', body: '{}' });
   if (r) { showToast('Marked accepted'); await quoteReload(id); }
+}
+async function quoteRevise(id) {
+  const r = await api('/quotes/' + id + '/revise', { method: 'POST', body: '{}' });
+  if (r && r.id) { showToast(`Revision ${r.revision} created as draft`); await quoteOpenDetail(r.id); if (window.quoteRefreshBell) quoteRefreshBell(); }
+}
+async function quoteConvert(id) {
+  const r = await api('/quotes/' + id + '/convert', { method: 'POST', body: '{}' });
+  if (r && r.order_id) { showToast(`Converted to draft order ${r.order_id}`); await quoteReload(id); }
 }
 function quoteRejectPrompt(id, leg) {
   openModal('Reject quote', `<div class="form-field">
@@ -712,6 +738,14 @@ async function renderQuoteAdmin(main) {
       ${qField('R2 — send + days', `<input id="qs-r2" type="number" min="0" value="${s.reminder_rules.R2_send_plus_days}">`)}
       ${qField('R3 — valid − days', `<input id="qs-r3" type="number" min="0" value="${s.reminder_rules.R3_valid_minus_days}">`)}
     </div>
+    <div class="q-doc-terms">
+      <div class="form-field"><label>Payment terms (on the customer document)</label>
+        <input id="qs-payterms" value="${h(s.payment_terms || '')}" placeholder="e.g. 50% advance with PO, balance before dispatch">
+        <span class="form-hint">Printed as the “Payment Terms” line. Leave blank to omit.</span></div>
+      <div class="form-field"><label>Terms &amp; conditions (one per line)</label>
+        <textarea id="qs-terms" rows="7" placeholder="One condition per line…">${h(s.terms || '')}</textarea>
+        <span class="form-hint">Each line becomes a numbered clause on the quote document. Leave blank to omit the section.</span></div>
+    </div>
     <div style="margin-top:4px"><button class="btn btn-gold" data-busy="Saving…" ${dataAct('quoteAdminSaveSettings')}>Save settings</button></div>`)}`;
 }
 // Users table, filtered by the live search query (name / email / id).
@@ -765,6 +799,8 @@ async function quoteAdminSaveSettings() {
     number_prefix: document.getElementById('qs-prefix')?.value || 'GZ',
     fallback_approver_id: (document.getElementById('qs-fallback')?.value || '').trim() || null,
     reminder_rules: { R1_send_plus_days: num('qs-r1', 2), R2_send_plus_days: num('qs-r2', 7), R3_valid_minus_days: num('qs-r3', 2) },
+    payment_terms: document.getElementById('qs-payterms')?.value || '',
+    terms: document.getElementById('qs-terms')?.value || '',
   };
   const r = await api('/admin/quote-settings', { method: 'PUT', body: JSON.stringify(body) });
   if (r) { showToast('Settings saved'); renderQuoteAdmin(qMain()); }
