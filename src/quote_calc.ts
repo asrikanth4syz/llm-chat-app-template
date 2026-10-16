@@ -245,6 +245,11 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
       }
       unitPrice = mrp - applyBp(mrp, discBp);
     }
+    // Freight + branding are PASSED THROUGH to the client at cost: added per-unit
+    // on top of the marked-up / discounted base, and taxed at the line's sale rate
+    // (they are part of the taxable value). They also stay in landed cost, so they
+    // net to zero in margin — a clean recovery, neither profit nor loss.
+    unitPrice = unitPrice + freight + branding;
     if (unitPrice < 0) {
       throw new QuoteCalcError("E_VALIDATION", `${f("unit_price")} computed negative`, f("unit_price"));
     }

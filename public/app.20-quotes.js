@@ -393,9 +393,9 @@ function quoteLineHtml(l, i) {
         <option value="cost_markup" ${cm ? 'selected' : ''}>Cost + markup</option>
         <option value="mrp_discount" ${!cm ? 'selected' : ''}>MRP − discount</option></select>`)}
       ${cm
-        ? qField('Purchase cost (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')}>`) +
+        ? `<div class="form-field"><label>Purchase cost (₹)</label><input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')}><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>` +
           qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`)
-        : qField('MRP (₹)', `<input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}>`) +
+        : `<div class="form-field"><label>MRP (₹)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>` +
           qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`)}
       ${qField(cm ? 'Cost is net' : 'MRP is net', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
         <input type="checkbox" style="width:auto" ${l.price_inclusive_gst ? 'checked' : ''} ${dataChangeEl('quoteEditLineIncl', i)}> Incl. GST</label>`, 'Strip GST before margin')}
@@ -433,10 +433,26 @@ function quoteEditClientPick(val) {
 function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;
   e.lines[i][field] = val;
-  if (field === 'pricing_mode') quoteRenderEditor();   // swap the cost/mrp fields
+  if (field === 'pricing_mode') { quoteRenderEditor(); return; }   // swap the cost/mrp fields
+  // Keep the live ex-GST hint in step as the price / GST rate is typed.
+  if (['purchase_cost', 'mrp', 'sale_gst_pct', 'purchase_gst_pct'].includes(field)) {
+    const el = document.getElementById('q-exgst-' + i);
+    if (el) el.textContent = quoteExGstHint(e.lines[i]);
+  }
 }
 function quoteEditLineItc(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].itc_claimable = !!el.checked; }
-function quoteEditLineIncl(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].price_inclusive_gst = !!el.checked; }
+function quoteEditLineIncl(i, el) { const e = qState().editor; if (e && e.lines[i]) { e.lines[i].price_inclusive_gst = !!el.checked; quoteRenderEditor(); } }
+// Display-only: the ex-GST (stripped) price shown under the cost/MRP field when the
+// input is GST-inclusive, so the operator sees the base the margin is applied to.
+function quoteExGstHint(l) {
+  if (!l.price_inclusive_gst) return '';
+  const cm = l.pricing_mode === 'cost_markup';
+  const incl = Number(cm ? l.purchase_cost : l.mrp) || 0;
+  const gstPct = Number((cm ? (l.purchase_gst_pct || l.sale_gst_pct) : l.sale_gst_pct)) || 0;
+  if (incl <= 0) return '';
+  const ex = incl / (1 + gstPct / 100);
+  return `ex-GST ₹${ex.toFixed(2)} @ ${gstPct}%`;
+}
 function quoteEditAddLine() { const e = qState().editor; if (e) { e.lines.push(quoteBlankLine()); quoteRenderEditor(); } }
 function quoteEditRemoveLine(i) { const e = qState().editor; if (e && e.lines.length > 1) { e.lines.splice(i, 1); quoteRenderEditor(); } }
 

@@ -98,9 +98,14 @@ landed_cost_paise := base_cost_paise
 ## 4. Per-line sell price, taxable value, output GST
 ```
 // cost_markup: sell is cost + markup; mrp_discount: sell is MRP less discount (cost basis is purchase_cost_paise, §3)
+// Freight + branding are PASSED THROUGH to the client: added per-unit on top of the
+// marked-up / discounted base, so they are part of the taxable value (GST applies) and,
+// since they also sit in landed cost (§3), they net to zero in margin — a clean recovery.
+// (If price_inclusive_gst, base_cost/MRP is first stripped to ex-GST before markup/discount.)
 unit_price_paise :=
-   pricing_mode == "cost_markup" ? base_cost_paise + applyBp(base_cost_paise, markup_bp)
- : /* mrp_discount */             mrp_paise - applyBp(mrp_paise, discount_bp)
+   ( pricing_mode == "cost_markup" ? base_cost_paise + applyBp(base_cost_paise, markup_bp)
+   : /* mrp_discount */             mrp_paise - applyBp(mrp_paise, discount_bp) )
+   + freight_alloc_paise + branding_cost_paise
 line_taxable_paise := unit_price_paise * qty                      // exact (integer * integer)
 line_gst_paise     := applyBp(line_taxable_paise, sale_gst_bp)    // integer paise
 cgst_paise := intraState ? ceilHalf(line_gst_paise) : 0           // odd paisa to CGST
