@@ -4776,7 +4776,9 @@ async function handleQuoteList(request: Request, env: Env): Promise<Response> {
   const where = ["account_id=?"]; const binds: unknown[] = [QUOTE_ACCOUNT];
   if (status) { where.push("status=?"); binds.push(status); }
   const { results } = await env.DB.prepare(
-    `SELECT id, quote_no, client_id, status, current_version, grand_total_paise, created_by, valid_until, created_at FROM quotes WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at
+       FROM quotes q LEFT JOIN clients c ON c.id = q.client_id
+      WHERE ${where.map((w) => w.replace(/^account_id=/, "q.account_id=").replace(/^status=/, "q.status=")).join(" AND ")} ORDER BY q.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...binds, size, (page - 1) * size).all();
   const rows = seesCost(acc.quoteRole) ? results : results.map((r: any) => ({ ...r, grand_total_paise: r.grand_total_paise }));
   return json({ quotes: rows, page, page_size: size });
@@ -4799,8 +4801,9 @@ async function handleQuoteDetail(request: Request, env: Env, id: string): Promis
     .bind(id, q.current_version).first() as any;
   const { results: lines } = await env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
   const { results: audit } = await env.DB.prepare("SELECT seq, action, actor_id, created_at FROM quote_audit WHERE quote_id=? ORDER BY seq").bind(id).all();
+  const clientRow = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as { name?: string } | null;
   const detail = {
-    id: q.id, quote_no: q.quote_no, client_id: q.client_id, place_of_supply: q.place_of_supply,
+    id: q.id, quote_no: q.quote_no, client_id: q.client_id, client_name: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply,
     status: q.status, current_version: q.current_version, itc_claimable_all: !!q.itc_claimable_all,
     grand_total_paise: q.grand_total_paise, created_by: q.created_by, valid_until: q.valid_until,
     version: ver ? { version: ver.version, content_hash: ver.content_hash, prev_hash: ver.prev_hash, payload: JSON.parse(ver.payload_canonical) } : null,
@@ -4909,11 +4912,22 @@ async function handleQuoteSubmit(request: Request, env: Env, id: string): Promis
   const users = (await getQuoteEnabledUsers(env)).users;
 
   let plan;
-  try {
-    plan = planSubmit({ requiredLegs: legsNeeded, authorSet, currentVersionAuthor: curAuthor, users, fallbackId: settings.fallback_approver_id });
-  } catch (e) {
-    if (e instanceof QuoteApprovalError) return json({ error: e.message, code: e.code, leg: e.leg }, e.status);
-    throw e;
+  // super_admin override: the platform owner is the ultimate authority, so their
+  // submit auto-approves every required leg (no separate approver needed). This
+  // unblocks orgs with no dedicated finance/manager approver yet; the override is
+  // recorded in the audit. SoD still applies to every non-super_admin author.
+  if (acc.user.role === "super_admin") {
+    plan = {
+      legs: legsNeeded.map((leg) => ({ leg, status: "AUTO_SATISFIED" as const, assigned_to: acc.user.sub, assigned_as_fallback: false })),
+      finalStatus: "APPROVED" as const,
+    };
+  } else {
+    try {
+      plan = planSubmit({ requiredLegs: legsNeeded, authorSet, currentVersionAuthor: curAuthor, users, fallbackId: settings.fallback_approver_id });
+    } catch (e) {
+      if (e instanceof QuoteApprovalError) return json({ error: e.message, code: e.code, leg: e.leg }, e.status);
+      throw e;
+    }
   }
 
   const am = await nextAuditMeta(env, id);

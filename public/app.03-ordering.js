@@ -65,8 +65,11 @@ async function renderPlaceOrder(el) {
       </div>
     </div>
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted)">${inventory.length} items in catalogue</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="catalog-results-info" style="font-size:.8rem;color:var(--text-muted)">${inventory.length} items in catalogue</div>
+        <button class="btn btn-secondary btn-sm" ${dataAct('clearAllQty')} title="Reset every quantity to zero">Clear all</button>
+      </div>
       <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
         <button id="view-tile-btn" ${dataAct('setCatalogView', 'tile')} title="Tile view"
           style="padding:5px 10px;border:none;cursor:pointer;background:${APP._catalogView==='tile'?'var(--navy)':'#fff'};color:${APP._catalogView==='tile'?'#fff':'var(--text-muted)'}">
@@ -1039,6 +1042,17 @@ function setQty(sku, value) {
   if (el && el.tagName === 'INPUT') el.value = APP.cart.find(c => c.sku === sku)?.qty || 0;
   updateMoqHint(sku);
   refreshCartUI();
+}
+
+// Reset every entered quantity to zero — a fast "start over" for bulk entry.
+function clearAllQty() {
+  if (!APP.cart.length) { showToast('No quantities to clear', 'info'); return; }
+  if (!confirm('Clear all entered quantities to zero?')) return;
+  APP.cart = [];
+  const grid = document.getElementById('catalog-grid');
+  if (grid) grid.innerHTML = renderCatalogItems(getFilteredCatalog());
+  refreshCartUI();
+  showToast('All quantities cleared');
 }
 
 async function orderMoreItem(sku, name) {

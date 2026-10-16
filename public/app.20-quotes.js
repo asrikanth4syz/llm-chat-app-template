@@ -137,7 +137,7 @@ function quoteListRowsHtml(rows) {
   return rows.map(r => `
     <tr style="cursor:pointer;border-top:1px solid var(--border)" ${dataAct('quoteOpenDetail', r.id)}>
       <td style="padding:11px 14px;font-weight:700;color:var(--navy)">${h(r.quote_no || r.id)}</td>
-      <td style="padding:11px 14px">${h(r.client_id || '')}</td>
+      <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
       <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.grand_total_paise)}</td>
       <td style="padding:11px 14px">${h(r.valid_until || '—')}</td>
@@ -192,7 +192,7 @@ function quoteRenderDetail() {
       <div class="page-actions">${actions.join(' ')}</div>
     </div>
     ${qCard('Quote details', `<dl class="q-meta">
-      <div><dt>Client</dt><dd>${h(d.client_id)}</dd></div>
+      <div><dt>Client</dt><dd>${h(d.client_name || d.client_id)}</dd></div>
       <div><dt>Place of supply</dt><dd>${h(d.place_of_supply || '—')}</dd></div>
       <div><dt>Version</dt><dd>v${d.current_version}</dd></div>
       <div><dt>Valid until</dt><dd>${h(d.valid_until || '—')}</dd></div>
@@ -306,7 +306,7 @@ async function quoteViewDocument(id) {
 function noop() { /* modal cancel */ }
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
-function quoteBlankLine() { return { pricing_mode: 'cost_markup', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', sale_gst_pct: '18', itc_claimable: true }; }
+function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', itc_claimable: true }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
   q.editor = { editId: null, client_id: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
@@ -328,10 +328,12 @@ async function quoteEditDraft(id) {
   const toPct = (bp) => (bp == null ? '' : (Number(bp) / 100));
   const lines = (d.lines || []).map(l => ({
     pricing_mode: l.pricing_mode || 'cost_markup',
-    description: l.description || '', qty: l.qty || 1,
+    sku: l.sku || '', description: l.description || '', qty: l.qty || 1,
     purchase_cost: toRupee(l.purchase_cost_paise), markup_pct: toPct(l.markup_bp),
     mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
-    sale_gst_pct: toPct(l.sale_gst_bp) || '0', itc_claimable: !!l.itc_claimable,
+    freight: toRupee(l.freight_alloc_paise), branding: toRupee(l.branding_cost_paise),
+    sale_gst_pct: toPct(l.sale_gst_bp) || '0', purchase_gst_pct: toPct(l.purchase_gst_bp),
+    itc_claimable: !!l.itc_claimable,
   }));
   q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, place_of_supply: d.place_of_supply || '',
     valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
@@ -378,6 +380,7 @@ function quoteLineHtml(l, i) {
       ${canRemove ? `<button class="btn btn-danger btn-sm" ${dataAct('quoteEditRemoveLine', i)}>Remove</button>` : ''}
     </div>
     <div class="form-row">
+      ${qField('SKU', `<input value="${h(l.sku)}" ${dataInputVal('quoteEditLine', i, 'sku')} placeholder="optional">`)}
       ${qField('Description', `<input value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')} placeholder="Item description">`)}
       ${qField('Qty', `<input type="number" min="1" step="1" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`)}
       ${qField('Pricing method', `<select ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
@@ -388,7 +391,10 @@ function quoteLineHtml(l, i) {
           qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`)
         : qField('MRP (₹)', `<input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}>`) +
           qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`)}
-      ${qField('GST %', `<input type="number" min="0" step="1" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}>`)}
+      ${qField('Freight / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.freight)}" ${dataInputVal('quoteEditLine', i, 'freight')} placeholder="0">`)}
+      ${qField('Branding / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.branding)}" ${dataInputVal('quoteEditLine', i, 'branding')} placeholder="0">`)}
+      ${qField('Sale GST %', `<input type="number" min="0" step="1" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}>`)}
+      ${qField('Purchase GST %', `<input type="number" min="0" step="1" value="${h(l.purchase_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'purchase_gst_pct')} placeholder="= sale">`, 'For ITC — defaults to sale GST')}
       ${qField('ITC', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
         <input type="checkbox" style="width:auto" ${l.itc_claimable ? 'checked' : ''} ${dataChangeEl('quoteEditLineItc', i)}> Claimable</label>`)}
     </div>
@@ -422,7 +428,14 @@ function quoteBuildPayload() {
   const rupee = (v) => Math.round(Number(v || 0) * 100);
   const bp = (v) => Math.round(Number(v || 0) * 100);
   const lines = e.lines.map(l => {
-    const base = { description: l.description || null, qty: Math.round(Number(l.qty || 0)), pricing_mode: l.pricing_mode, sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable };
+    const base = {
+      sku: (l.sku || '').trim() || null, description: l.description || null,
+      qty: Math.round(Number(l.qty || 0)), pricing_mode: l.pricing_mode,
+      freight_alloc_paise: rupee(l.freight), branding_cost_paise: rupee(l.branding),
+      sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable,
+    };
+    // Purchase GST defaults to sale GST on the server when omitted.
+    if (String(l.purchase_gst_pct || '').trim() !== '') base.purchase_gst_bp = bp(l.purchase_gst_pct);
     if (l.pricing_mode === 'cost_markup') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), markup_bp: bp(l.markup_pct) };
     return { ...base, mrp_paise: rupee(l.mrp), discount_bp: bp(l.discount_pct) };
   });

@@ -56,6 +56,19 @@ async function prep() {
 }
 const createAs = async (tok: string, itc = true) => (await (await post("/api/quotes", CREATE(itc), tok)).json() as any).id as string;
 
+describe("approvals — super_admin override", () => {
+  it("super_admin submit auto-approves every leg even with no eligible finance approver", async () => {
+    await put("/api/admin/quote-settings", { _ver: 0, seller_state_code: "KL" }, adminTok);
+    // No quote-roles granted → a normal author would hit 409 on the finance leg.
+    const id = await createAs(adminTok, false);   // super_admin authors; ITC=No → finance leg required
+    const sub = await post(`/api/quotes/${id}/submit`, {}, adminTok);
+    expect(sub.status).toBe(200);
+    const b = await sub.json() as any;
+    expect(b.status).toBe("APPROVED");
+    expect(b.legs.every((l: any) => l.status === "AUTO_SATISFIED")).toBe(true);
+  });
+});
+
 describe("approvals — manager leg", () => {
   it("sales authors → submit needs the manager leg; a distinct manager approves → APPROVED", async () => {
     await prep();
