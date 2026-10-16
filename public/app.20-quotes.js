@@ -306,10 +306,10 @@ async function quoteViewDocument(id) {
 function noop() { /* modal cancel */ }
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
-function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', itc_claimable: true }; }
+function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', price_inclusive_gst: false, itc_claimable: true }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
-  q.editor = { editId: null, client_id: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
+  q.editor = { editId: null, client_id: '', client_q: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
   const main = qMain();
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading clients…</p></div>`;
   const clients = await api('/clients');
@@ -333,9 +333,9 @@ async function quoteEditDraft(id) {
     mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
     freight: toRupee(l.freight_alloc_paise), branding: toRupee(l.branding_cost_paise),
     sale_gst_pct: toPct(l.sale_gst_bp) || '0', purchase_gst_pct: toPct(l.purchase_gst_bp),
-    itc_claimable: !!l.itc_claimable,
+    price_inclusive_gst: !!l.price_inclusive_gst, itc_claimable: !!l.itc_claimable,
   }));
-  q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, place_of_supply: d.place_of_supply || '',
+  q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, client_q: d.client_name || d.client_id, place_of_supply: d.place_of_supply || '',
     valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
   const clients = await api('/clients');
   q.clients = Array.isArray(clients) ? clients : [];
@@ -344,7 +344,13 @@ async function quoteEditDraft(id) {
 function quoteRenderEditor() {
   const q = qState(); const e = q.editor; const main = qMain(); if (!e) return;
   const editing = !!e.editId;
-  const clientOpts = ['<option value="">— select client —</option>', ...q.clients.map(c => `<option value="${h(c.id)}" ${e.client_id === c.id ? 'selected' : ''}>${h(c.name || c.id)}</option>`)].join('');
+  const clientName = (q.clients.find(c => c.id === e.client_id) || {}).name || e.client_q || e.client_id || '';
+  // Searchable client picker: a text input backed by a <datalist> gives native
+  // type-to-filter over client names (CSP-safe, no custom dropdown).
+  const clientField = editing
+    ? qField('Client', `<input value="${h(clientName)}" disabled>`, 'Client is fixed on an existing quote')
+    : qField('Client', `<input list="q-client-list" value="${h(e.client_q || '')}" ${dataInputVal('quoteEditClientPick')} placeholder="Type to search client…" autocomplete="off">
+        <datalist id="q-client-list">${q.clients.map(c => `<option value="${h(c.name || c.id)}"></option>`).join('')}</datalist>`, 'Search by client name');
   const gt = e.preview && e.preview.totals ? qMoney(e.preview.totals.grand_total_paise) : '—';
   main.innerHTML = `
     <div class="page-header">
@@ -355,7 +361,7 @@ function quoteRenderEditor() {
       </div>
     </div>
     ${qCard('Quote details', `<div class="form-row" style="margin-bottom:0">
-      ${qField('Client', `<select ${editing ? 'disabled' : ''} ${dataChangeVal('quoteEditHeader', 'client_id')}>${clientOpts}</select>`, editing ? 'Client is fixed on an existing quote' : '')}
+      ${clientField}
       ${qField('Place of supply', `<input maxlength="2" value="${h(e.place_of_supply)}" ${dataInputVal('quoteEditHeader', 'place_of_supply')} placeholder="State code, e.g. KL">`, 'Decides CGST/SGST vs IGST')}
       ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
     </div>`)}
@@ -391,6 +397,8 @@ function quoteLineHtml(l, i) {
           qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`)
         : qField('MRP (₹)', `<input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}>`) +
           qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`)}
+      ${qField(cm ? 'Cost is net' : 'MRP is net', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
+        <input type="checkbox" style="width:auto" ${l.price_inclusive_gst ? 'checked' : ''} ${dataChangeEl('quoteEditLineIncl', i)}> Incl. GST</label>`, 'Strip GST before margin')}
       ${qField('Freight / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.freight)}" ${dataInputVal('quoteEditLine', i, 'freight')} placeholder="0">`)}
       ${qField('Branding / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.branding)}" ${dataInputVal('quoteEditLine', i, 'branding')} placeholder="0">`)}
       ${qField('Sale GST %', `<input type="number" min="0" step="1" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}>`)}
@@ -413,12 +421,22 @@ function quotePreviewHtml(p) {
   </div>`;
 }
 function quoteEditHeader(field, val) { const e = qState().editor; if (e) e[field] = val; }
+// Resolve the typed/picked client name back to its id (case-insensitive exact, or
+// a direct id match) so the search field drives the stored client_id.
+function quoteEditClientPick(val) {
+  const e = qState().editor; if (!e) return;
+  e.client_q = val;
+  const needle = (val || '').trim().toLowerCase();
+  const match = (qState().clients || []).find(c => (c.name || '').toLowerCase() === needle || c.id === val);
+  e.client_id = match ? match.id : '';
+}
 function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;
   e.lines[i][field] = val;
   if (field === 'pricing_mode') quoteRenderEditor();   // swap the cost/mrp fields
 }
 function quoteEditLineItc(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].itc_claimable = !!el.checked; }
+function quoteEditLineIncl(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].price_inclusive_gst = !!el.checked; }
 function quoteEditAddLine() { const e = qState().editor; if (e) { e.lines.push(quoteBlankLine()); quoteRenderEditor(); } }
 function quoteEditRemoveLine(i) { const e = qState().editor; if (e && e.lines.length > 1) { e.lines.splice(i, 1); quoteRenderEditor(); } }
 
@@ -433,6 +451,7 @@ function quoteBuildPayload() {
       qty: Math.round(Number(l.qty || 0)), pricing_mode: l.pricing_mode,
       freight_alloc_paise: rupee(l.freight), branding_cost_paise: rupee(l.branding),
       sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable,
+      price_inclusive_gst: !!l.price_inclusive_gst,
     };
     // Purchase GST defaults to sale GST on the server when omitted.
     if (String(l.purchase_gst_pct || '').trim() !== '') base.purchase_gst_bp = bp(l.purchase_gst_pct);

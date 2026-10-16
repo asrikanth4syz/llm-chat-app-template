@@ -561,6 +561,10 @@ async function pickOrderModal(orderId) {
       <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
       <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
       <span id="ps-match" style="font-weight:600;margin-left:auto"></span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')} title="Set every Qty to Pick to 0">Clear all to 0</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('pickFillDue')} title="Reset every Qty to Pick to the due quantity">Reset to due</button>
+      </span>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
       <table class="table" style="margin:0">
@@ -600,6 +604,9 @@ async function pickOrderModal(orderId) {
 // Combined qty-input handler for the Pick Items modal: keep the below-ordered
 // colour cue and refresh the live picked tally.
 function onPickQty(el) { colorByOrdered(el); updatePickSummary(); }
+// Bulk helpers for the Pick Items modal — fast entry for whoever's keying picks.
+function pickClearAll() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = 0; colorByOrdered(inp); }); updatePickSummary(); }
+function pickFillDue() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = inp.dataset.ordered || 0; colorByOrdered(inp); }); updatePickSummary(); }
 
 // Recompute "lines picked / qty picked" from the modal inputs and flag whether the
 // manually picked total reconciles with the system-ordered total.

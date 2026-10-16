@@ -36,6 +36,7 @@ export interface QuoteCalcLine {
   sale_gst_bp: number;
   purchase_gst_bp?: number;     // defaults to sale_gst_bp
   itc_claimable: boolean;       // PER LINE
+  price_inclusive_gst?: boolean; // the input price (cost / MRP) is GST-inclusive ("net")
 }
 
 export interface QuoteCalcInput {
@@ -117,6 +118,23 @@ export function applyBp(basePaise: number, rateBp: number): number {
 /** Nearest rupee (100 paise), 50-paisa ties round up (toward +∞ for p>=0). */
 export function roundToRupee(paise: number): number {
   return roundHalfAwayFromZero(paise, 100) * 100;
+}
+
+/** Strip GST out of a tax-inclusive ("net") price → the ex-GST (taxable) base.
+ *  ex = incl * 10000 / (10000 + gst_bp), half-away-from-zero. Done entirely in
+ *  BigInt so the intermediate never loses precision near the magnitude cap. */
+export function exclGstPaise(inclPaise: number, gstBp: number): number {
+  if (!Number.isInteger(inclPaise) || !Number.isInteger(gstBp) || inclPaise < 0 || gstBp < 0) {
+    throw new QuoteCalcError("E_CALC", "exclGstPaise requires non-negative integers");
+  }
+  const n = BigInt(inclPaise) * 10000n;
+  const d = BigInt(10000 + gstBp);
+  const q = (n * 2n + d) / (2n * d);
+  const out = Number(q);
+  if (!Number.isSafeInteger(out)) {
+    throw new QuoteCalcError("E_OVERFLOW", "ex-GST base exceeds safe integer range");
+  }
+  return out;
 }
 
 /** CGST = ceil(line_gst / 2); the odd paisa goes to CGST. Pure integer via the primitive. */
@@ -203,7 +221,13 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
 
     // purchase_cost_paise is the cost basis in BOTH modes (mrp_discount uses a
     // real purchase cost, never the discounted MRP — calc-spec §3).
-    const baseCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
+    const baseCostRaw = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
+    // When the input price is GST-inclusive ("net"), strip the tax out first so
+    // markups/discounts and the taxable sale price are computed on the ex-GST base
+    // (otherwise GST would be applied twice). Cost is stripped with purchase GST,
+    // MRP with sale GST.
+    const inclusive = ln.price_inclusive_gst === true;
+    const baseCost = (inclusive && ln.pricing_mode === "cost_markup") ? exclGstPaise(baseCostRaw, purchaseBp) : baseCostRaw;
 
     let unitPrice: number;
     if (ln.pricing_mode === "cost_markup") {
@@ -213,7 +237,8 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
       }
       unitPrice = baseCost + applyBp(baseCost, markupBp);
     } else {
-      const mrp = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
+      const mrpRaw = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
+      const mrp = inclusive ? exclGstPaise(mrpRaw, saleBp) : mrpRaw;
       const discBp = assertInt(ln.discount_bp ?? 0, f("discount_bp"));
       if (discBp < 0 || discBp > 10000) {
         throw new QuoteCalcError("E_VALIDATION", `${f("discount_bp")} must be in 0..10000`, f("discount_bp"));
