@@ -184,9 +184,7 @@ function quoteRenderDetail() {
   }
   actions.push(`<button class="btn btn-secondary" ${dataAct('quoteFollowupPrompt', d.id)}>Log follow-up</button>`);
 
-  const taxRows = t.igst_total
-    ? `<div class="q-row"><span>IGST</span><span class="q-amt">${qMoney(t.igst_total)}</span></div>`
-    : `<div class="q-row"><span>CGST</span><span class="q-amt">${qMoney(t.cgst_total)}</span></div><div class="q-row"><span>SGST</span><span class="q-amt">${qMoney(t.sgst_total)}</span></div>`;
+  const taxRows = qTaxRowsHtml(t, qUniformGstPct(lines.map(l => (l.sale_gst_bp || 0) / 100)));
 
   main.innerHTML = `
     <div class="page-header">
@@ -290,7 +288,7 @@ function quoteFollowupPrompt(id) {
     <div class="form-field"><label>Channel</label>
       <select id="q-fu-channel"><option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="note">Note</option></select></div>
     <div class="form-field"><label>Note</label><textarea id="q-fu-note" rows="2" placeholder="What happened / next step"></textarea></div>
-    <div class="form-field"><label>Next action date (optional)</label><input id="q-fu-date" type="date"></div>`,
+    <div class="form-field"><label>Next action date (optional)</label><input id="q-fu-date" type="date" max="9999-12-31"></div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('quoteFollowupDo', id)}>Save</button>`);
 }
@@ -370,8 +368,11 @@ function quoteRenderEditor() {
     </div>
     ${qCard('Quote details', `<div class="form-row" style="margin-bottom:0">
       ${clientField}
-      ${qField('Place of supply', `<input maxlength="2" value="${h(e.place_of_supply)}" ${dataInputVal('quoteEditHeader', 'place_of_supply')} placeholder="State code, e.g. KL">`, 'Decides CGST/SGST vs IGST')}
-      ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
+      ${qField('Place of supply', `<div class="q-combo">
+        <input id="q-pos-input" value="${h(quoteStateLabel(e.place_of_supply))}" data-code="${h((e.place_of_supply || '').toUpperCase())}" ${dataInputVal('quoteStateType', 'q-pos-input')} data-focusact="quoteStateFocus" placeholder="Search state or code…" autocomplete="off">
+        <div class="q-combo-menu" id="q-pos-input-menu" style="display:none"></div>
+      </div>`, 'Decides CGST/SGST vs IGST')}
+      ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" max="9999-12-31" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
     </div>`)}
     ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
       `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
@@ -416,11 +417,26 @@ function quoteLineHtml(l, i) {
     </div>
   </div>`;
 }
+// Uniform sale-GST rate (%) across the lines, or null when the quote mixes rates.
+function qUniformGstPct(pcts) {
+  const set = Array.from(new Set((pcts || []).map(Number).filter(n => !isNaN(n))));
+  return set.length === 1 ? set[0] : null;
+}
+// Tax-summary rows, labelled with the GST % when it is uniform. CGST/SGST each
+// carry half the rate; IGST the full rate. A mixed-rate quote shows no %.
+function qTaxRowsHtml(t, gstPct) {
+  const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+  if (t.igst_total) {
+    return `<div class="q-row"><span>IGST${gstPct != null ? ` @ ${fmt(gstPct)}%` : ''}</span><span class="q-amt">${qMoney(t.igst_total)}</span></div>`;
+  }
+  const half = gstPct != null ? gstPct / 2 : null;
+  return `<div class="q-row"><span>CGST${half != null ? ` @ ${fmt(half)}%` : ''}</span><span class="q-amt">${qMoney(t.cgst_total)}</span></div>`
+    + `<div class="q-row"><span>SGST${half != null ? ` @ ${fmt(half)}%` : ''}</span><span class="q-amt">${qMoney(t.sgst_total)}</span></div>`;
+}
 function quotePreviewHtml(p) {
   const t = p.totals || {};
-  const taxRows = t.igst_total
-    ? `<div class="q-row"><span>IGST</span><span class="q-amt">${qMoney(t.igst_total)}</span></div>`
-    : `<div class="q-row"><span>CGST</span><span class="q-amt">${qMoney(t.cgst_total)}</span></div><div class="q-row"><span>SGST</span><span class="q-amt">${qMoney(t.sgst_total)}</span></div>`;
+  const e = qState().editor;
+  const taxRows = qTaxRowsHtml(t, qUniformGstPct(((e && e.lines) || []).map(l => l.sale_gst_pct)));
   return `<div class="q-summary">
     <div class="q-row"><span>Subtotal</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
     ${taxRows}
@@ -463,13 +479,83 @@ function quoteClientSelect(id) {
   const inp = document.getElementById('q-client-input'); if (inp) inp.value = e.client_q;
   const m = document.getElementById('q-client-menu'); if (m) m.style.display = 'none';
 }
-// Close the open client menu on any click/tap outside the combo (added once).
+// Close any open combo menu on a click/tap outside its own combo (added once).
 if (typeof window !== 'undefined' && !window._qComboInit) {
   window._qComboInit = true;
   document.addEventListener('mousedown', (ev) => {
-    const m = document.getElementById('q-client-menu');
-    if (m && m.style.display !== 'none' && ev.target && !ev.target.closest('.q-combo')) m.style.display = 'none';
+    document.querySelectorAll('.q-combo-menu').forEach((m) => {
+      const combo = m.closest('.q-combo');
+      if (m.style.display !== 'none' && !(combo && combo.contains(ev.target))) m.style.display = 'none';
+    });
   });
+}
+
+// ── Place-of-supply / seller state: searchable Indian state + GST-code combo ──
+// Value stored is the 2-letter state code (e.g. "KL"), which is what the GST engine
+// compares against the seller's state code to decide CGST/SGST vs IGST. The same
+// combo serves the editor (q-pos-input) and the admin seller field (qs-seller).
+const QUOTE_STATES = [
+  { code: 'JK', name: 'Jammu & Kashmir', gst: '01' }, { code: 'HP', name: 'Himachal Pradesh', gst: '02' },
+  { code: 'PB', name: 'Punjab', gst: '03' }, { code: 'CH', name: 'Chandigarh', gst: '04' },
+  { code: 'UK', name: 'Uttarakhand', gst: '05' }, { code: 'HR', name: 'Haryana', gst: '06' },
+  { code: 'DL', name: 'Delhi', gst: '07' }, { code: 'RJ', name: 'Rajasthan', gst: '08' },
+  { code: 'UP', name: 'Uttar Pradesh', gst: '09' }, { code: 'BR', name: 'Bihar', gst: '10' },
+  { code: 'SK', name: 'Sikkim', gst: '11' }, { code: 'AR', name: 'Arunachal Pradesh', gst: '12' },
+  { code: 'NL', name: 'Nagaland', gst: '13' }, { code: 'MN', name: 'Manipur', gst: '14' },
+  { code: 'MZ', name: 'Mizoram', gst: '15' }, { code: 'TR', name: 'Tripura', gst: '16' },
+  { code: 'ML', name: 'Meghalaya', gst: '17' }, { code: 'AS', name: 'Assam', gst: '18' },
+  { code: 'WB', name: 'West Bengal', gst: '19' }, { code: 'JH', name: 'Jharkhand', gst: '20' },
+  { code: 'OD', name: 'Odisha', gst: '21' }, { code: 'CG', name: 'Chhattisgarh', gst: '22' },
+  { code: 'MP', name: 'Madhya Pradesh', gst: '23' }, { code: 'GJ', name: 'Gujarat', gst: '24' },
+  { code: 'DN', name: 'Dadra & Nagar Haveli and Daman & Diu', gst: '26' }, { code: 'MH', name: 'Maharashtra', gst: '27' },
+  { code: 'KA', name: 'Karnataka', gst: '29' }, { code: 'GA', name: 'Goa', gst: '30' },
+  { code: 'LD', name: 'Lakshadweep', gst: '31' }, { code: 'KL', name: 'Kerala', gst: '32' },
+  { code: 'TN', name: 'Tamil Nadu', gst: '33' }, { code: 'PY', name: 'Puducherry', gst: '34' },
+  { code: 'AN', name: 'Andaman & Nicobar Islands', gst: '35' }, { code: 'TS', name: 'Telangana', gst: '36' },
+  { code: 'AP', name: 'Andhra Pradesh', gst: '37' }, { code: 'LA', name: 'Ladakh', gst: '38' },
+  { code: 'OT', name: 'Other Territory', gst: '97' },
+];
+function quoteStateLabel(code) {
+  if (!code) return '';
+  const s = QUOTE_STATES.find(x => x.code === (code || '').toUpperCase());
+  return s ? `${s.name} (${s.code})` : code;
+}
+// Canonical 2-letter code for an input, preferring an explicit prior selection
+// (data-code) before parsing the typed text.
+function quoteStateValue(inputId) {
+  const inp = document.getElementById(inputId); if (!inp) return '';
+  if (inp.dataset && inp.dataset.code) return inp.dataset.code;
+  const v = (inp.value || '').trim();
+  const m = QUOTE_STATES.find(s => s.code.toLowerCase() === v.toLowerCase() || s.name.toLowerCase() === v.toLowerCase());
+  return m ? m.code : v.toUpperCase();
+}
+function quoteStateOptsHtml(inputId) {
+  const inp = document.getElementById(inputId);
+  const q = ((inp && inp.value) || '').trim().toLowerCase();
+  const rows = (q ? QUOTE_STATES.filter(s => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q) || s.gst.includes(q)) : QUOTE_STATES).slice(0, 60);
+  if (!rows.length) return `<div class="q-combo-empty">No states match.</div>`;
+  return rows.map(s => `<div class="q-combo-opt" ${dataAct('quoteStatePick', inputId, s.code)}>${h(s.name)}<span class="q-combo-sub">${h(s.code)} · GST ${h(s.gst)}</span></div>`).join('');
+}
+function quoteStateShow(inputId) {
+  const m = document.getElementById(inputId + '-menu'); if (!m) return;
+  m.innerHTML = quoteStateOptsHtml(inputId); m.style.display = '';
+}
+function quoteStateFocus(inputId) { quoteStateShow(inputId); }
+function quoteStateType(inputId, val) {
+  const inp = document.getElementById(inputId);
+  const needle = (val || '').trim().toLowerCase();
+  const m = QUOTE_STATES.find(s => s.code.toLowerCase() === needle || s.name.toLowerCase() === needle || s.gst === needle);
+  const code = m ? m.code : (val || '').trim().toUpperCase();
+  if (inp) inp.dataset.code = code;
+  if (inputId === 'q-pos-input') { const e = qState().editor; if (e) e.place_of_supply = code; }
+  quoteStateShow(inputId);
+}
+function quoteStatePick(inputId, code) {
+  const s = QUOTE_STATES.find(x => x.code === code);
+  const inp = document.getElementById(inputId);
+  if (inp) { inp.value = s ? `${s.name} (${s.code})` : code; inp.dataset.code = code; }
+  if (inputId === 'q-pos-input') { const e = qState().editor; if (e) e.place_of_supply = code; }
+  const m = document.getElementById(inputId + '-menu'); if (m) m.style.display = 'none';
 }
 function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;
@@ -564,7 +650,7 @@ async function quoteRenderToday() {
         `<button class="btn btn-secondary btn-sm" ${dataAct('quoteOpenDetail', qq.id)}>Open</button>`));
 }
 function quoteSnoozePrompt(id, rid) {
-  openModal('Snooze reminder', `<div class="form-field"><label>Snooze until</label><input id="q-snooze-date" type="date"></div>`,
+  openModal('Snooze reminder', `<div class="form-field"><label>Snooze until</label><input id="q-snooze-date" type="date" max="9999-12-31"></div>`,
     `<button class="btn btn-secondary" ${dataActClose('noop')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('quoteSnoozeDo', id, rid)}>Snooze</button>`);
 }
@@ -613,7 +699,10 @@ async function renderQuoteAdmin(main) {
       <div class="card-body" style="padding:0"><div id="qa-users">${quoteAdminUsersHtml()}</div></div>
     </div>
     ${qCard('Settings', `<div class="form-row">
-      ${qField('Seller state code', `<input id="qs-seller" maxlength="2" value="${h(s.seller_state_code || '')}" placeholder="e.g. KL">`)}
+      ${qField('Seller state code', `<div class="q-combo">
+        <input id="qs-seller" value="${h(quoteStateLabel(s.seller_state_code || ''))}" data-code="${h((s.seller_state_code || '').toUpperCase())}" ${dataInputVal('quoteStateType', 'qs-seller')} data-focusact="quoteStateFocus" placeholder="Search state or code…" autocomplete="off">
+        <div class="q-combo-menu" id="qs-seller-menu" style="display:none"></div>
+      </div>`, 'Your GST state — decides intra vs inter-state tax')}
       ${qField('Default validity (days)', `<input id="qs-validity" type="number" min="1" value="${s.default_validity_days}">`)}
       ${qField('Approval threshold (₹)', `<input id="qs-threshold" type="number" min="0" value="${Math.round((s.approval_threshold_paise || 0) / 100)}">`, 'Finance leg required at/above this')}
       ${qField('Expiring window (days)', `<input id="qs-expwin" type="number" min="0" value="${s.expiring_window_days}">`)}
@@ -669,7 +758,7 @@ async function quoteAdminSaveSettings() {
   const num = (id, d) => { const v = Number(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
   const body = {
     _ver: s._ver || 0,
-    seller_state_code: (document.getElementById('qs-seller')?.value || '').toUpperCase(),
+    seller_state_code: quoteStateValue('qs-seller'),
     default_validity_days: num('qs-validity', 30),
     approval_threshold_paise: Math.round(num('qs-threshold', 500000) * 100),
     expiring_window_days: num('qs-expwin', 3),

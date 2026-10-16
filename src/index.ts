@@ -5051,27 +5051,166 @@ function qB64Utf8(s: string): string {
 }
 const QUOTE_DOC_HASH_PLACEHOLDER = "__QUOTE_DOC_HASH__";
 
-// Customer-facing quote document — redacted by construction (sell-side only: no
-// cost, margin, ITC). The hash is computed over the body with the hash field
-// blanked, then stamped in (resolves doc-hash-self-reference).
-function buildQuoteDocumentHtml(h: { quote_no: string; client: string; place_of_supply: string; sent_at: string; valid_until: string; prefix: string }, lines: any[], totals: any): string {
-  const rows = lines.map((l, i) => `<tr><td>${i + 1}</td><td>${qEsc(l.description || l.sku || "Item")}</td><td>${l.qty}</td><td>${qFmtPaise(l.unit_price_paise)}</td><td>${(l.sale_gst_bp / 100).toFixed(2)}%</td><td>${qFmtPaise(l.line_taxable_paise)}</td><td>${qFmtPaise(l.line_gst_paise)}</td></tr>`).join("");
-  const taxLine = totals.igst_total > 0
-    ? `<tr><td colspan="6">IGST</td><td>${qFmtPaise(totals.igst_total)}</td></tr>`
-    : `<tr><td colspan="6">CGST</td><td>${qFmtPaise(totals.cgst_total)}</td></tr><tr><td colspan="6">SGST</td><td>${qFmtPaise(totals.sgst_total)}</td></tr>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Quotation ${qEsc(h.quote_no)}</title></head>
+// Rupees-in-words using the Indian numbering system (lakh/crore). Input is paise;
+// output e.g. "Rupees One Lakh Twenty Three Thousand Four Hundred and Fifty Only".
+function qAmountInWords(paise: number): string {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const two = (n: number): string => n < 20 ? ones[n] : `${tens[Math.floor(n / 10)]}${n % 10 ? " " + ones[n % 10] : ""}`;
+  const three = (n: number): string => {
+    const h = Math.floor(n / 100), r = n % 100;
+    return `${h ? ones[h] + " Hundred" + (r ? " and " : "") : ""}${r ? two(r) : ""}`;
+  };
+  const abs = Math.abs(paise | 0);
+  let rupees = Math.floor(abs / 100);
+  const paiseRem = abs % 100;
+  if (rupees === 0 && paiseRem === 0) return "Rupees Zero Only";
+  const crore = Math.floor(rupees / 10000000); rupees %= 10000000;
+  const lakh = Math.floor(rupees / 100000); rupees %= 100000;
+  const thousand = Math.floor(rupees / 1000); rupees %= 1000;
+  const hundred = rupees;
+  const parts: string[] = [];
+  if (crore) parts.push(three(crore) + " Crore");
+  if (lakh) parts.push(two(lakh) + " Lakh");
+  if (thousand) parts.push(two(thousand) + " Thousand");
+  if (hundred) parts.push(three(hundred));
+  let words = parts.join(" ").replace(/\s+/g, " ").trim();
+  let out = `Rupees ${words}`;
+  if (paiseRem) out += ` and ${two(paiseRem)} Paise`;
+  return `${(paise | 0) < 0 ? "Minus " : ""}${out} Only`;
+}
+
+// Customer-facing quote document — a professional letterhead quotation, redacted by
+// construction (sell-side only: no cost, margin, ITC). The hash is computed over the
+// body with the hash field blanked, then stamped in (resolves doc-hash-self-reference).
+function buildQuoteDocumentHtml(
+  h: { quote_no: string; client: string; client_address?: string; client_gstin?: string; place_of_supply: string; sent_at: string; valid_until: string; prefix: string },
+  lines: any[], totals: any, brand: Record<string, string>,
+): string {
+  const accent = /^#[0-9a-fA-F]{3,8}$/.test(brand.accent || "") ? brand.accent : "#16284a";
+  const sellerName = qEsc(brand.legal_name || brand.company_name || "");
+  const pct = (bp: number) => `${(bp / 100).toFixed(bp % 100 ? 2 : 0)}%`;
+  // Distinct GST rates across the lines → label the tax rows with the % when it is
+  // uniform, otherwise fall back to a plain label (mixed-rate quote).
+  const rateSet = Array.from(new Set(lines.map((l) => Number(l.sale_gst_bp) || 0)));
+  const singleBp = rateSet.length === 1 ? rateSet[0] : null;
+  const rows = lines.map((l, i) => `<tr>
+    <td class="num">${i + 1}</td>
+    <td>${qEsc(l.description || l.sku || "Item")}${l.sku && l.description ? `<div class="sub">${qEsc(l.sku)}</div>` : ""}</td>
+    <td class="num">${l.qty}</td>
+    <td class="num">${qFmtPaise(l.unit_price_paise)}</td>
+    <td class="num">${pct(Number(l.sale_gst_bp) || 0)}</td>
+    <td class="num">${qFmtPaise(l.line_taxable_paise)}</td>
+    <td class="num">${qFmtPaise(l.line_gst_paise)}</td>
+    <td class="num">${qFmtPaise((l.line_taxable_paise || 0) + (l.line_gst_paise || 0))}</td>
+  </tr>`).join("");
+  const taxRows = totals.igst_total > 0
+    ? `<tr><td colspan="7">IGST${singleBp != null ? " @ " + pct(singleBp) : ""}</td><td class="num">${qFmtPaise(totals.igst_total)}</td></tr>`
+    : `<tr><td colspan="7">CGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.cgst_total)}</td></tr>` +
+      `<tr><td colspan="7">SGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.sgst_total)}</td></tr>`;
+  const sellerBits = [
+    brand.address ? qEsc(brand.address) : "",
+    [brand.gstin ? "GSTIN: " + qEsc(brand.gstin) : "", brand.pan ? "PAN: " + qEsc(brand.pan) : "", brand.cin ? "CIN: " + qEsc(brand.cin) : ""].filter(Boolean).join(" &nbsp;·&nbsp; "),
+    [brand.contact ? qEsc(brand.contact) : "", brand.website ? qEsc(brand.website) : ""].filter(Boolean).join(" &nbsp;·&nbsp; "),
+  ].filter(Boolean).map((x) => `<div class="seller-line">${x}</div>`).join("");
+  const billTo = [
+    `<strong>${qEsc(h.client)}</strong>`,
+    h.client_address ? qEsc(h.client_address) : "",
+    h.client_gstin ? "GSTIN: " + qEsc(h.client_gstin) : "",
+    h.place_of_supply ? "Place of supply: " + qEsc(h.place_of_supply) : "",
+  ].filter(Boolean).map((x) => `<div>${x}</div>`).join("");
+  const terms = [
+    `This quotation is valid until <strong>${qEsc(h.valid_until)}</strong>; prices and availability are subject to revision thereafter.`,
+    `Prices are quoted in Indian Rupees. GST is charged at the rates shown and at rates prevailing on the date of supply.`,
+    `Payment terms: 50% advance with the purchase order and the balance before dispatch, unless otherwise agreed in writing.`,
+    `Delivery is made within the agreed lead time, counted from receipt of a confirmed purchase order and advance payment.`,
+    `Goods once sold are not returnable unless received damaged and reported within 48 hours of delivery.`,
+    `Any dispute arising out of this quotation is subject to the jurisdiction of the courts at the seller's registered place of business.`,
+    `This is a system-generated document; its integrity can be verified against the SHA-256 hash printed below.`,
+  ].map((t) => `<li>${t}</li>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quotation ${qEsc(h.quote_no)}</title>
+<style>
+  :root { --accent: ${accent}; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1f2b; padding: 24px 12px; background: #f4f5f7; display: flex; justify-content: center; }
+  .sheet { width: 100%; max-width: 820px; background: #fff; padding: 36px 40px 28px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+  .lh { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid var(--accent); padding-bottom: 16px; gap: 24px; }
+  .lh .brand { font-size: 22px; font-weight: 700; color: var(--accent); letter-spacing: .3px; }
+  .lh .tagline { font-size: 12px; color: #6b7280; padding-top: 2px; }
+  .seller-line { font-size: 11.5px; color: #4b5563; padding-top: 3px; }
+  .doc-title { text-align: right; }
+  .doc-title h1 { font-size: 20px; padding: 0; color: var(--accent); letter-spacing: 2px; }
+  .doc-title .meta { font-size: 12px; color: #374151; padding-top: 6px; line-height: 1.6; }
+  .doc-title .meta b { color: #111827; }
+  .parties { display: flex; gap: 24px; padding: 20px 0 6px; }
+  .party { flex: 1; font-size: 12.5px; line-height: 1.55; }
+  .party .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; padding-bottom: 4px; }
+  .lines-wrap { padding-top: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  thead th { background: var(--accent); color: #fff; text-align: left; padding: 8px 9px; font-weight: 600; font-size: 11.5px; }
+  thead th.num, td.num { text-align: right; }
+  tbody td { padding: 7px 9px; border-bottom: 1px solid #eceef1; vertical-align: top; }
+  tbody tr:nth-child(even) td { background: #fafbfc; }
+  td .sub { font-size: 10.5px; color: #9ca3af; padding-top: 2px; }
+  tfoot td { padding: 6px 9px; }
+  tfoot .lbl { text-align: right; color: #4b5563; }
+  tfoot .grand td { border-top: 2px solid var(--accent); font-weight: 700; font-size: 14px; color: var(--accent); padding-top: 9px; }
+  .words { padding: 10px 0 0; font-size: 12px; font-style: italic; color: #374151; }
+  .terms { padding-top: 26px; }
+  .terms h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); padding-bottom: 8px; }
+  .terms ol { padding: 0 0 0 18px; font-size: 11.5px; color: #4b5563; line-height: 1.7; }
+  .sign { display: flex; justify-content: flex-end; padding-top: 34px; }
+  .sign .box { text-align: center; font-size: 12px; color: #374151; min-width: 230px; }
+  .sign .line { border-top: 1px solid #9ca3af; padding-top: 6px; }
+  .sign .spacer { height: 44px; }
+  .hashline { padding-top: 10px; border-top: 1px solid #eceef1; font-size: 10px; color: #9ca3af; word-break: break-all; }
+  @media print { body { background: #fff; padding: 0; } .sheet { box-shadow: none; max-width: none; } }
+</style></head>
 <body data-quote-hash="${QUOTE_DOC_HASH_PLACEHOLDER}">
-<h1>Quotation ${qEsc(h.quote_no)}</h1>
-<p>Customer: ${qEsc(h.client)} &middot; Place of supply: ${qEsc(h.place_of_supply)}</p>
-<p>Date: ${qEsc(h.sent_at)} &middot; Valid until: ${qEsc(h.valid_until)}</p>
-<table border="1" cellspacing="0" cellpadding="4"><thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Unit price</th><th>GST</th><th>Taxable</th><th>GST amt</th></tr></thead>
-<tbody>${rows}
-<tr><td colspan="6">Subtotal</td><td>${qFmtPaise(totals.subtotal_paise)}</td></tr>
-${taxLine}
-<tr><td colspan="6">Round off</td><td>${qFmtPaise(totals.round_off_paise)}</td></tr>
-<tr><th colspan="6">Grand total</th><th>${qFmtPaise(totals.grand_total_paise)}</th></tr>
-</tbody></table>
-<p style="font-size:11px;color:#666">Document integrity hash (SHA-256): ${QUOTE_DOC_HASH_PLACEHOLDER}</p>
+<div class="sheet">
+  <div class="lh">
+    <div>
+      <div class="brand">${sellerName}</div>
+      ${brand.tagline ? `<div class="tagline">${qEsc(brand.tagline)}</div>` : ""}
+      ${sellerBits}
+    </div>
+    <div class="doc-title">
+      <h1>QUOTATION</h1>
+      <div class="meta">
+        <div>No. <b>${qEsc(h.quote_no)}</b></div>
+        <div>Date: <b>${qEsc(h.sent_at)}</b></div>
+        <div>Valid until: <b>${qEsc(h.valid_until)}</b></div>
+      </div>
+    </div>
+  </div>
+  <div class="parties">
+    <div class="party"><div class="label">Quotation for</div>${billTo}</div>
+  </div>
+  <div class="lines-wrap"><table>
+    <thead><tr>
+      <th class="num">#</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th>
+      <th class="num">GST %</th><th class="num">Taxable</th><th class="num">GST amt</th><th class="num">Amount</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr><td colspan="7" class="lbl">Subtotal (taxable)</td><td class="num">${qFmtPaise(totals.subtotal_paise)}</td></tr>
+      ${taxRows}
+      ${totals.round_off_paise ? `<tr><td colspan="7" class="lbl">Round off</td><td class="num">${qFmtPaise(totals.round_off_paise)}</td></tr>` : ""}
+      <tr class="grand"><td colspan="7" class="lbl">Grand total</td><td class="num">${qFmtPaise(totals.grand_total_paise)}</td></tr>
+    </tfoot>
+  </table></div>
+  <p class="words">Amount in words: ${qEsc(qAmountInWords(totals.grand_total_paise))}</p>
+  <div class="terms">
+    <h3>Terms &amp; Conditions</h3>
+    <ol>${terms}</ol>
+  </div>
+  <div class="sign">
+    <div class="box">For <strong>${sellerName}</strong><div class="spacer"></div><div class="line">Authorised Signatory</div></div>
+  </div>
+  <div class="hashline">Document integrity hash (SHA-256): ${QUOTE_DOC_HASH_PLACEHOLDER}</div>
+</div>
 </body></html>`;
 }
 
@@ -5092,11 +5231,12 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
   const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
   const payload = JSON.parse(ver.payload_canonical);
   const { results: lines } = await env.DB.prepare("SELECT description, sku, qty, sale_gst_bp, unit_price_paise, line_taxable_paise, line_gst_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
-  const clientRow = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as any;
+  const clientRow = await env.DB.prepare("SELECT name, address, gstin FROM clients WHERE id=?").bind(q.client_id).first() as any;
+  const brand = await readBranding(env);
 
   const htmlWithPlaceholder = buildQuoteDocumentHtml(
-    { quote_no: q.quote_no, client: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
-    lines as any[], payload.totals,
+    { quote_no: q.quote_no, client: clientRow?.name || q.client_id, client_address: clientRow?.address || "", client_gstin: clientRow?.gstin || "", place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
+    lines as any[], payload.totals, brand,
   );
   const docHash = await sha256Hex(htmlWithPlaceholder);       // hash with field blank
   const stamped = htmlWithPlaceholder.split(QUOTE_DOC_HASH_PLACEHOLDER).join(docHash);
