@@ -95,8 +95,7 @@ async function quoteRenderList() {
   if (!data) { body.innerHTML = `<div class="card">Could not load quotes.</div>`; return; }
   q.listRows = (data.quotes || data || []);
   const query = (q.listQuery || '').trim().toLowerCase();
-  const rows = query ? q.listRows.filter(r =>
-    (r.quote_no || '').toLowerCase().includes(query) || (r.client_id || '').toLowerCase().includes(query)) : q.listRows;
+  const rows = quoteSortedRows(quoteFilteredRows());
   const chip = (s, label) => `<button class="btn btn-sm ${q.statusFilter === s ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetStatus', s)}>${h(label)}</button>`;
   const filterChips = chip('', 'All') + ' ' + QUOTE_STATUSES.map(s => chip(s, (QUOTE_STATUS_META[s] || [, s])[1])).join(' ');
   const emptyMsg = query ? `No quotes match “${h(q.listQuery)}”.` : (q.statusFilter ? `No ${h((QUOTE_STATUS_META[q.statusFilter] || [, q.statusFilter])[1].toLowerCase())} quotes.` : 'No quotes yet.');
@@ -104,31 +103,70 @@ async function quoteRenderList() {
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
       <div style="display:flex;gap:6px;flex-wrap:wrap">${filterChips}</div>
       <div class="q-search">
-        <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote # or client…" autocomplete="off">
+        <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote #, client or purpose…" autocomplete="off">
         <button type="button" class="q-clear" ${dataAct('quoteListClearSearch')} title="Clear search" aria-label="Clear search">✕</button>
       </div>
     </div>
     ${rows.length === 0 ? `<div class="card"><div class="empty-state empty-sm"><div class="empty-icon">📄</div><div class="empty-title">${emptyMsg}</div>${qCanCreate() && !query && !q.statusFilter ? `<div class="empty-desc">Start by creating your first quote.</div><button class="btn btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(14)} New quote</button>` : ''}</div></div>` : `
     <div class="card" style="padding:0"><div class="table-wrap">
-      <table class="data-table" style="width:100%;border-collapse:collapse">
+      <table class="data-table q-list-table" style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="text-align:left;padding:11px 14px">Quote #</th><th style="text-align:left;padding:11px 14px">Client</th>
-          <th style="text-align:left;padding:11px 14px">Status</th><th style="text-align:right;padding:11px 14px">Grand total</th>
-          <th style="text-align:left;padding:11px 14px">Valid until</th>
+          ${quoteSortTh('quote_no', 'Quote #', 'left')}
+          ${quoteSortTh('title', 'Purpose', 'left')}
+          ${quoteSortTh('client', 'Client', 'left')}
+          ${quoteSortTh('status', 'Status', 'left')}
+          ${quoteSortTh('grand_total_paise', 'Grand total', 'right')}
+          ${quoteSortTh('valid_until', 'Valid until', 'left')}
         </tr></thead>
         <tbody id="q-list-rows">${quoteListRowsHtml(rows)}</tbody>
       </table>
     </div></div>`}`;
 }
 function quoteSetStatus(s) { const q = qState(); q.statusFilter = s; quoteRenderList(); }
+// A quote matches the search across its number, client (name or id) and purpose.
+function quoteRowMatches(r, query) {
+  if (!query) return true;
+  return (r.quote_no || '').toLowerCase().includes(query)
+    || (r.client_name || '').toLowerCase().includes(query)
+    || (r.client_id || '').toLowerCase().includes(query)
+    || (r.title || '').toLowerCase().includes(query);
+}
+function quoteFilteredRows() {
+  const q = qState(); const query = (q.listQuery || '').trim().toLowerCase();
+  return (q.listRows || []).filter(r => quoteRowMatches(r, query));
+}
+// Header sort — toggles asc/desc on the clicked column; purely client-side over
+// the loaded page (matches the search model).
+function quoteListSort(key) {
+  const q = qState(); const s = q.listSort || {};
+  q.listSort = { key, dir: (s.key === key && s.dir === 'asc') ? 'desc' : 'asc' };
+  quoteRenderList();
+}
+function quoteSortedRows(rows) {
+  const s = qState().listSort; if (!s || !s.key) return rows;
+  const dir = s.dir === 'desc' ? -1 : 1;
+  const val = (r) => {
+    switch (s.key) {
+      case 'grand_total_paise': return Number(r.grand_total_paise || 0);
+      case 'client': return (r.client_name || r.client_id || '').toLowerCase();
+      case 'valid_until': return r.valid_until || '';
+      case 'status': return r.status || '';
+      case 'title': return (r.title || '').toLowerCase();
+      default: return (r.quote_no || '').toLowerCase();
+    }
+  };
+  return [...rows].sort((a, b) => { const av = val(a), bv = val(b); return av < bv ? -dir : av > bv ? dir : 0; });
+}
+function quoteSortTh(key, label, align) {
+  const s = qState().listSort || {};
+  const arrow = s.key === key ? (s.dir === 'desc' ? ' ▼' : ' ▲') : '';
+  return `<th style="text-align:${align};padding:11px 14px;cursor:pointer;user-select:none;white-space:nowrap" ${dataAct('quoteListSort', key)}>${h(label)}<span style="color:var(--gold)">${arrow}</span></th>`;
+}
 // Client-side filter over the already-loaded page of quotes (no refetch), so the
 // results update as you type. The X button clears the text and the filter.
 function quoteListApplyFilter() {
-  const q = qState(); const query = (q.listQuery || '').trim().toLowerCase();
-  const rows = query ? (q.listRows || []).filter(r =>
-    (r.quote_no || '').toLowerCase().includes(query) || (r.client_id || '').toLowerCase().includes(query)) : (q.listRows || []);
   const host = document.getElementById('q-list-rows');
-  if (host) host.innerHTML = quoteListRowsHtml(rows);
+  if (host) host.innerHTML = quoteListRowsHtml(quoteSortedRows(quoteFilteredRows()));
 }
 function quoteListSearch(val) { qState().listQuery = val; quoteListApplyFilter(); }
 function quoteListClearSearch() {
@@ -139,14 +177,15 @@ function quoteListClearSearch() {
 // Rows only (no <tbody> wrapper) — the caller supplies the tbody so this can be
 // dropped straight into tbody.innerHTML on live filter.
 function quoteListRowsHtml(rows) {
-  if (!rows.length) return `<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
+  if (!rows.length) return `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
   return rows.map(r => `
-    <tr style="cursor:pointer;border-top:1px solid var(--border)" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:11px 14px;font-weight:700;color:var(--navy)">${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}</td>
+    <tr class="q-trow" ${dataAct('quoteOpenDetail', r.id)}>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}</td>
+      <td style="padding:11px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(r.title || '')}">${h(r.title || '—')}</td>
       <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
       <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.grand_total_paise)}</td>
-      <td style="padding:11px 14px">${h(r.valid_until || '—')}</td>
+      <td style="padding:11px 14px;white-space:nowrap">${h(r.valid_until || '—')}</td>
     </tr>`).join('');
 }
 
@@ -178,14 +217,16 @@ function quoteRenderDetail() {
   if (st === 'APPROVED' && qCanSend()) actions.push(`<button class="btn btn-gold" data-busy="Sending…" ${dataAct('quoteSend', d.id)}>Send to customer</button>`);
   if (st === 'SENT') {
     actions.push(`<button class="btn btn-secondary" ${dataAct('quoteViewDocument', d.id)}>View document</button>`);
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteDownloadPdf', d.id)}>Download PDF</button>`);
     if (qCanAcceptLost()) {
       actions.push(`<button class="btn btn-success" data-busy="…" ${dataAct('quoteAccept', d.id)}>Mark accepted</button>`);
       actions.push(`<button class="btn btn-danger" ${dataAct('quoteLostPrompt', d.id)}>Mark lost…</button>`);
     }
   }
-  if (st === 'ACCEPTED') {
+  if (st === 'ACCEPTED' || st === 'CONVERTED') {
     actions.push(`<button class="btn btn-secondary" ${dataAct('quoteViewDocument', d.id)}>View document</button>`);
-    if (qCanCreate() && !d.converted_order_id) actions.push(`<button class="btn btn-gold" data-busy="Converting…" ${dataAct('quoteConvert', d.id)}>Convert to order</button>`);
+    actions.push(`<button class="btn btn-secondary" ${dataAct('quoteDownloadPdf', d.id)}>Download PDF</button>`);
+    if (st === 'ACCEPTED' && qCanCreate() && !d.converted_order_id) actions.push(`<button class="btn btn-gold" data-busy="Converting…" ${dataAct('quoteConvert', d.id)}>Convert to order</button>`);
   }
   // A revision can be raised off a sent/expired/lost quote that has not already been revised.
   if (['SENT', 'EXPIRED', 'LOST'].includes(st) && qCanCreate() && !d.superseded_by_id) {
@@ -208,16 +249,19 @@ function quoteRenderDetail() {
       <div class="page-header-left">
         <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" ${dataAct('quoteBackToList')}>← All quotes</button>
         <div class="page-title" style="display:flex;align-items:center;gap:10px">${h(d.quote_no || d.id)} ${qBadge(st)}</div>
+        ${d.title ? `<div class="page-subtitle">${h(d.title)}</div>` : ''}
       </div>
       <div class="page-actions">${actions.join(' ')}</div>
     </div>
     ${lineageHtml}
     ${qCard('Quote details', `<dl class="q-meta">
+      ${d.title ? `<div style="grid-column:1/-1"><dt>What this quote is for</dt><dd>${h(d.title)}</dd></div>` : ''}
       <div><dt>Client</dt><dd>${h(d.client_name || d.client_id)}</dd></div>
       <div><dt>Place of supply</dt><dd>${h(d.place_of_supply || '—')}</dd></div>
       <div><dt>Version</dt><dd>v${d.current_version}</dd></div>
       <div><dt>Valid until</dt><dd>${h(d.valid_until || '—')}</dd></div>
       <div><dt>ITC claimable</dt><dd>${d.itc_claimable_all ? 'Yes (all lines)' : 'No'}</dd></div>
+      ${d.payment_terms ? `<div style="grid-column:1/-1"><dt>Payment terms</dt><dd>${h(d.payment_terms)}</dd></div>` : ''}
     </dl>`)}
     ${qCard('Line items', `
       <div class="table-wrap">
@@ -331,15 +375,30 @@ async function quoteViewDocument(id) {
   let html = ''; try { html = decodeURIComponent(escape(atob(r.content_b64))); } catch { try { html = atob(r.content_b64); } catch { html = '<p>Could not decode document.</p>'; } }
   openModal('Customer document', `<div style="max-height:60vh;overflow:auto;border:1px solid var(--border,#ddd);padding:10px">${html}</div>
     <div class="text-muted" style="font-size:11px;margin-top:8px">Integrity hash: <code>${h(r.content_hash || '')}</code></div>`,
-    `<button class="btn btn-primary" ${dataActClose('noop')}>Close</button>`);
+    `<button class="btn btn-secondary" ${dataAct('quoteDownloadPdf', id)}>Download PDF</button>
+     <button class="btn btn-primary" ${dataActClose('noop')}>Close</button>`);
 }
 function noop() { /* modal cancel */ }
+// Download the customer document as a PDF. Workers can't render PDFs server-side
+// without the (paid) Browser Rendering binding, so we open the stored, print-styled
+// HTML in a new tab and invoke the browser's print dialog → "Save as PDF".
+async function quoteDownloadPdf(id) {
+  const r = await api('/quotes/' + id + '/document');
+  if (!r) return;
+  let html = ''; try { html = decodeURIComponent(escape(atob(r.content_b64))); } catch { try { html = atob(r.content_b64); } catch { html = ''; } }
+  if (!html) { showToast('Could not load the document', 'error'); return; }
+  const w = window.open('', '_blank');
+  if (!w) { showToast('Allow pop-ups to download the PDF', 'error'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 450);
+}
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
 function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', price_inclusive_gst: false, itc_claimable: true }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
-  q.editor = { editId: null, client_id: '', client_q: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
+  q.editor = { editId: null, client_id: '', client_q: '', title: '', payment_terms: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
   const main = qMain();
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading clients…</p></div>`;
   const clients = await api('/clients');
@@ -366,6 +425,7 @@ async function quoteEditDraft(id) {
     price_inclusive_gst: !!l.price_inclusive_gst, itc_claimable: !!l.itc_claimable,
   }));
   q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, client_q: d.client_name || d.client_id, place_of_supply: d.place_of_supply || '',
+    title: d.title || '', payment_terms: d.payment_terms || '',
     valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
   const clients = await api('/clients');
   q.clients = Array.isArray(clients) ? clients : [];
@@ -392,13 +452,16 @@ function quoteRenderEditor() {
         <div class="page-subtitle">${editing ? 'Editing a draft adds a new immutable version.' : 'Add line items, preview the price, then save as a draft.'}</div>
       </div>
     </div>
-    ${qCard('Quote details', `<div class="form-row" style="margin-bottom:0">
+    ${qCard('Quote details', `
+      ${qField('What this quote is for', `<input value="${h(e.title || '')}" ${dataInputVal('quoteEditHeader', 'title')} placeholder="e.g. Diwali gift hampers — Meta Bangalore" maxlength="200">`, 'Shows in the list and powers search by purpose')}
+      <div class="form-row" style="margin-bottom:0">
       ${clientField}
       ${qField('Place of supply', `<div class="q-combo">
         <input id="q-pos-input" value="${h(quoteStateLabel(e.place_of_supply))}" data-code="${h((e.place_of_supply || '').toUpperCase())}" ${dataInputVal('quoteStateType', 'q-pos-input')} data-focusact="quoteStateFocus" placeholder="Search state or code…" autocomplete="off">
         <div class="q-combo-menu" id="q-pos-input-menu" style="display:none"></div>
       </div>`, 'Decides CGST/SGST vs IGST')}
       ${qField('Valid until', `<input type="date" value="${h(e.valid_until)}" max="9999-12-31" ${dataChangeVal('quoteEditHeader', 'valid_until')}>`, 'Optional — defaults from settings')}
+      ${qField('Payment terms (optional)', `<input value="${h(e.payment_terms || '')}" ${dataInputVal('quoteEditHeader', 'payment_terms')} placeholder="Overrides the default on this quote" maxlength="1000">`, 'Blank = use the global default')}
     </div>`)}
     ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
       `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
@@ -627,7 +690,12 @@ function quoteBuildPayload() {
     if (l.pricing_mode === 'cost_markup') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), markup_bp: bp(l.markup_pct) };
     return { ...base, mrp_paise: rupee(l.mrp), discount_bp: bp(l.discount_pct) };
   });
-  return { client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(), valid_until: e.valid_until || undefined, lines };
+  return {
+    client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(),
+    valid_until: e.valid_until || undefined,
+    title: (e.title || '').trim(), payment_terms: (e.payment_terms || '').trim(),
+    lines,
+  };
 }
 async function quoteEditPreview() {
   const e = qState().editor; if (!e.client_id) { showToast('Pick a client first', 'error'); return; }

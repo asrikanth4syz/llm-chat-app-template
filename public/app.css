@@ -767,6 +767,13 @@ button.tile:hover { transform: translateY(-1px); }
 .q-meta dt { font-size: .68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
 .q-meta dd { margin: 2px 0 0; font-size: .9rem; font-weight: 600; color: var(--navy); }
 
+/* Quotes list — clickable rows with a clear hover highlight (app-aligned). */
+.q-list-table tbody tr { border-top: 1px solid var(--border); }
+.q-trow { cursor: pointer; transition: background .12s ease; }
+.q-trow:hover { background: var(--surface-2); }
+.q-list-table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.q-list-table thead th:hover { color: var(--navy); }
+
 /* Revision / convert lineage banner on the quote detail. */
 .q-lineage { border-left: 3px solid var(--navy); margin-bottom: 14px; }
 .q-lineage .card-body { font-size: .84rem; color: var(--text-label); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }

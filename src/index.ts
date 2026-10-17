@@ -4680,6 +4680,10 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     // never alters an existing table). Errors (incl. "duplicate column" on a fresh
     // table) are swallowed by the runner below.
     `ALTER TABLE quote_lines ADD COLUMN price_inclusive_gst INTEGER DEFAULT 0;`,
+    // Free-text purpose ("what this quote is for") + optional per-quote payment
+    // terms override (falls back to the global setting on the document).
+    `ALTER TABLE quotes ADD COLUMN title TEXT;`,
+    `ALTER TABLE quotes ADD COLUMN payment_terms TEXT;`,
     // Revision lineage (new linked Rev N) + convert-to-order linkage on quotes.
     `ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1;`,
     `ALTER TABLE quotes ADD COLUMN revised_from_id TEXT;`,
@@ -4782,8 +4786,8 @@ async function handleQuoteCreate(request: Request, env: Env): Promise<Response> 
   const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, 1, "created", acc.user.sub, auditDetail, null, salt);
 
   const stmts = [
-    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,idem_key) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,?,?)")
-      .bind(id, QUOTE_ACCOUNT, salt, quoteNo, clientId, String(body.place_of_supply ?? ""), result.itc_claimable_all ? 1 : 0, result.totals.grand_total_paise, acc.user.sub, body.valid_until ?? null, idemKey),
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,idem_key,title,payment_terms) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,?,?,?,?)")
+      .bind(id, QUOTE_ACCOUNT, salt, quoteNo, clientId, String(body.place_of_supply ?? ""), result.itc_claimable_all ? 1 : 0, result.totals.grand_total_paise, acc.user.sub, body.valid_until ?? null, idemKey, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null)),
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,NULL,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, 1, payload, contentHash, acc.user.sub),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")
@@ -4810,7 +4814,7 @@ async function handleQuoteList(request: Request, env: Env): Promise<Response> {
   const where = ["account_id=?"]; const binds: unknown[] = [QUOTE_ACCOUNT];
   if (status) { where.push("status=?"); binds.push(status); }
   const { results } = await env.DB.prepare(
-    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at, q.revision
+    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at, q.revision, q.title
        FROM quotes q LEFT JOIN clients c ON c.id = q.client_id
       WHERE ${where.map((w) => w.replace(/^account_id=/, "q.account_id=").replace(/^status=/, "q.status=")).join(" AND ")} ORDER BY q.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...binds, size, (page - 1) * size).all();
@@ -4843,6 +4847,7 @@ async function handleQuoteDetail(request: Request, env: Env, id: string): Promis
     id: q.id, quote_no: q.quote_no, client_id: q.client_id, client_name: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply,
     status: q.status, current_version: q.current_version, itc_claimable_all: !!q.itc_claimable_all,
     grand_total_paise: q.grand_total_paise, created_by: q.created_by, valid_until: q.valid_until,
+    title: q.title || null, payment_terms: q.payment_terms || null,
     revision: q.revision || 1, revised_from_id: q.revised_from_id || null, revised_from_no: revisedFromNo,
     superseded_by_id: q.superseded_by_id || null, superseded_by_no: supersededByNo,
     root_quote_id: q.root_quote_id || null, converted_order_id: q.converted_order_id || null,
@@ -4884,8 +4889,8 @@ async function handleQuoteEdit(request: Request, env: Env, id: string): Promise<
   const stmts = [
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,?,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, nextVer, payload, contentHash, prevHash, acc.user.sub),
-    env.DB.prepare("UPDATE quotes SET current_version=?, grand_total_paise=?, place_of_supply=?, itc_claimable_all=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND current_version=?")
-      .bind(nextVer, result.totals.grand_total_paise, pos, result.itc_claimable_all ? 1 : 0, id, QUOTE_ACCOUNT, expected),
+    env.DB.prepare("UPDATE quotes SET current_version=?, grand_total_paise=?, place_of_supply=?, itc_claimable_all=?, title=?, payment_terms=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND current_version=?")
+      .bind(nextVer, result.totals.grand_total_paise, pos, result.itc_claimable_all ? 1 : 0, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null), id, QUOTE_ACCOUNT, expected),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'version_added',?,?,?,?)")
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, seq, acc.user.sub, auditDetail, entryHash, auditPrev),
   ];
@@ -5268,7 +5273,7 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
   const htmlWithPlaceholder = buildQuoteDocumentHtml(
     { quote_no: q.quote_no, client: clientRow?.name || q.client_id, client_address: clientRow?.address || "", client_gstin: clientRow?.gstin || "", place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
     lines as any[], payload.totals, brand,
-    { payment_terms: settings.payment_terms, terms: settings.terms },
+    { payment_terms: (q.payment_terms && String(q.payment_terms).trim()) ? q.payment_terms : settings.payment_terms, terms: settings.terms },
   );
   const docHash = await sha256Hex(htmlWithPlaceholder);       // hash with field blank
   const stamped = htmlWithPlaceholder.split(QUOTE_DOC_HASH_PLACEHOLDER).join(docHash);
@@ -5373,8 +5378,8 @@ async function handleQuoteRevise(request: Request, env: Env, id: string): Promis
   const entryHash = await auditEntryHash(QUOTE_ACCOUNT, newId, 1, "created", acc.user.sub, auditDetail, null, salt);
 
   const stmts = [
-    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,revision,revised_from_id,root_quote_id) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,NULL,?,?,?)")
-      .bind(newId, QUOTE_ACCOUNT, salt, newNo, q.client_id, q.place_of_supply, q.itc_claimable_all ? 1 : 0, q.grand_total_paise, acc.user.sub, revision, id, rootId),
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,revision,revised_from_id,root_quote_id,title,payment_terms) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,NULL,?,?,?,?,?)")
+      .bind(newId, QUOTE_ACCOUNT, salt, newNo, q.client_id, q.place_of_supply, q.itc_claimable_all ? 1 : 0, q.grand_total_paise, acc.user.sub, revision, id, rootId, q.title ?? null, q.payment_terms ?? null),
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,1,?,?,NULL,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, newId, payload, contentHash, acc.user.sub),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")

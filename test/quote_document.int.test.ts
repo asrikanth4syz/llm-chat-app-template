@@ -240,3 +240,36 @@ describe("convert accepted quote to order", () => {
     expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(409); // already converted
   });
 });
+
+describe("per-quote purpose + payment terms override", () => {
+  it("title + payment_terms are stored, returned, searchable in the list, and the override prints on the document", async () => {
+    await prep();
+    const cur = await (await get("/api/admin/quote-settings", adminTok)).json() as any;
+    await put("/api/admin/quote-settings", { ...cur, _ver: cur._ver, seller_state_code: "KL", payment_terms: "GLOBAL DEFAULT TERMS" }, adminTok);
+    const id = (await (await post("/api/quotes",
+      { ...CREATE(true), title: "Diwali hampers for Meta", payment_terms: "100% advance — this quote only" }, salesTok)).json() as any).id;
+    const d = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    expect(d.title).toBe("Diwali hampers for Meta");
+    expect(d.payment_terms).toBe("100% advance — this quote only");
+    const list = await (await get("/api/quotes", salesTok)).json() as any;
+    expect(list.quotes.find((r: any) => r.id === id)?.title).toBe("Diwali hampers for Meta");
+    await post(`/api/quotes/${id}/submit`, {}, salesTok);
+    await post(`/api/quotes/${id}/approve`, { leg: "manager" }, mgrTok);
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    const html = b64decode((await (await get(`/api/quotes/${id}/document`, salesTok)).json() as any).content_b64);
+    expect(html).toContain("100% advance — this quote only");
+    expect(html).not.toContain("GLOBAL DEFAULT TERMS");
+  });
+  it("a revision carries the purpose + payment terms forward", async () => {
+    await prep();
+    const id = (await (await post("/api/quotes",
+      { ...CREATE(true), title: "Quarterly pantry restock", payment_terms: "Net 30" }, salesTok)).json() as any).id;
+    await post(`/api/quotes/${id}/submit`, {}, salesTok);
+    await post(`/api/quotes/${id}/approve`, { leg: "manager" }, mgrTok);
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    const rev = await (await post(`/api/quotes/${id}/revise`, {}, salesTok)).json() as any;
+    const child = await (await get(`/api/quotes/${rev.id}`, salesTok)).json() as any;
+    expect(child.title).toBe("Quarterly pantry restock");
+    expect(child.payment_terms).toBe("Net 30");
+  });
+});
