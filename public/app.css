@@ -774,6 +774,22 @@ button.tile:hover { transform: translateY(-1px); }
 .q-list-table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
 .q-list-table thead th:hover { color: var(--navy); }
 
+/* Quote pipeline (analytics) tiles + stage bars. */
+.q-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.q-pipe { display: flex; flex-direction: column; gap: 9px; }
+.q-pipe-row { display: grid; grid-template-columns: 185px 1fr 120px; align-items: center; gap: 12px; }
+.q-pipe-label { display: flex; align-items: center; gap: 7px; }
+.q-pipe-n { font-size: .78rem; color: var(--text-muted); font-weight: 700; }
+.q-pipe-bar { background: var(--surface-2); border-radius: 6px; height: 14px; overflow: hidden; }
+.q-pipe-fill { background: var(--navy); height: 100%; border-radius: 6px; min-width: 2px; }
+.q-pipe-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--navy); }
+.q-pipe-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.q-charge { margin-bottom: 8px; }
+@media (max-width: 768px) {
+  .q-pipe-row { grid-template-columns: 120px 1fr 92px; gap: 8px; }
+  .q-pipe-cols { grid-template-columns: 1fr; }
+}
+
 /* Revision / convert lineage banner on the quote detail. */
 .q-lineage { border-left: 3px solid var(--navy); margin-bottom: 14px; }
 .q-lineage .card-body { font-size: .84rem; color: var(--text-label); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }

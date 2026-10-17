@@ -4680,6 +4680,14 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     // never alters an existing table). Errors (incl. "duplicate column" on a fresh
     // table) are swallowed by the runner below.
     `ALTER TABLE quote_lines ADD COLUMN price_inclusive_gst INTEGER DEFAULT 0;`,
+    // HSN/SAC + unit of measure (descriptive) + apportioned header discount per line.
+    `ALTER TABLE quote_lines ADD COLUMN hsn TEXT;`,
+    `ALTER TABLE quote_lines ADD COLUMN uom TEXT;`,
+    `ALTER TABLE quote_lines ADD COLUMN line_discount_paise INTEGER;`,
+    // Header-level discount + taxable charges (charges stored as JSON on the quote).
+    `ALTER TABLE quotes ADD COLUMN header_discount_paise INTEGER;`,
+    `ALTER TABLE quotes ADD COLUMN header_discount_bp INTEGER;`,
+    `ALTER TABLE quotes ADD COLUMN charges_json TEXT;`,
     // Free-text purpose ("what this quote is for") + optional per-quote payment
     // terms override (falls back to the global setting on the document).
     `ALTER TABLE quotes ADD COLUMN title TEXT;`,
@@ -4721,14 +4729,32 @@ function quotePayload(input: { place_of_supply: string; itc_claimable_all: boole
     itc_claimable_all: result.itc_claimable_all,
     lines: result.lines,
     totals: result.totals,
+    ...(result.charges ? { charges: result.charges } : {}),
   });
+}
+// Normalise the header discount + charges a request supplies, for storage on the
+// quote row (charges as JSON). Mirrors what computeQuote validated.
+function quoteHeaderExtras(body: any): { discountPaise: number | null; discountBp: number | null; chargesJson: string | null } {
+  const dp = Number.isFinite(body?.header_discount_paise) ? Math.max(0, Math.round(body.header_discount_paise)) : null;
+  const db = Number.isFinite(body?.header_discount_bp) ? Math.max(0, Math.round(body.header_discount_bp)) : null;
+  let chargesJson: string | null = null;
+  if (Array.isArray(body?.charges) && body.charges.length) {
+    const clean = body.charges.slice(0, 20).map((c: any) => ({
+      label: typeof c?.label === "string" ? c.label.slice(0, 120) : "",
+      amount_paise: Math.max(0, Math.round(Number(c?.amount_paise) || 0)),
+      gst_bp: Math.round(Number(c?.gst_bp) || 0),
+    }));
+    chargesJson = JSON.stringify(clean);
+  }
+  return { discountPaise: dp, discountBp: db, chargesJson };
 }
 
 function redactQuoteDetailForRole(detail: any, role: QuoteRole): any {
   if (seesCost(role)) return detail;
   const strip = (l: any) => ({
     line_no: l.line_no, sku: l.sku, description: l.description, qty: l.qty, pricing_mode: l.pricing_mode,
-    sale_gst_bp: l.sale_gst_bp, unit_price_paise: l.unit_price_paise, line_taxable_paise: l.line_taxable_paise,
+    hsn: l.hsn, uom: l.uom, sale_gst_bp: l.sale_gst_bp, unit_price_paise: l.unit_price_paise,
+    line_taxable_paise: l.line_taxable_paise, line_discount_paise: l.line_discount_paise,
     line_gst_paise: l.line_gst_paise, cgst_paise: l.cgst_paise, sgst_paise: l.sgst_paise, igst_paise: l.igst_paise,
   });
   const t = detail.version?.totals;
@@ -4738,7 +4764,7 @@ function redactQuoteDetailForRole(detail: any, role: QuoteRole): any {
     version: detail.version ? {
       ...detail.version,
       payload: undefined, // hide the full cost-bearing snapshot
-      totals: t ? { subtotal_paise: t.subtotal_paise, cgst_total: t.cgst_total, sgst_total: t.sgst_total, igst_total: t.igst_total, grand_total_paise: t.grand_total_paise, round_off_paise: t.round_off_paise } : undefined,
+      totals: t ? { subtotal_paise: t.subtotal_paise, cgst_total: t.cgst_total, sgst_total: t.sgst_total, igst_total: t.igst_total, grand_total_paise: t.grand_total_paise, round_off_paise: t.round_off_paise, gross_subtotal_paise: t.gross_subtotal_paise, discount_total_paise: t.discount_total_paise, charges_total_paise: t.charges_total_paise } : undefined,
     } : undefined,
   };
 }
@@ -4785,9 +4811,10 @@ async function handleQuoteCreate(request: Request, env: Env): Promise<Response> 
   const auditDetail = JSON.stringify({ quote_no: quoteNo, version: 1, grand_total_paise: result.totals.grand_total_paise });
   const entryHash = await auditEntryHash(QUOTE_ACCOUNT, id, 1, "created", acc.user.sub, auditDetail, null, salt);
 
+  const hx = quoteHeaderExtras(body);
   const stmts = [
-    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,idem_key,title,payment_terms) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,?,?,?,?)")
-      .bind(id, QUOTE_ACCOUNT, salt, quoteNo, clientId, String(body.place_of_supply ?? ""), result.itc_claimable_all ? 1 : 0, result.totals.grand_total_paise, acc.user.sub, body.valid_until ?? null, idemKey, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null)),
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,idem_key,title,payment_terms,header_discount_paise,header_discount_bp,charges_json) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,?,?,?,?,?,?,?)")
+      .bind(id, QUOTE_ACCOUNT, salt, quoteNo, clientId, String(body.place_of_supply ?? ""), result.itc_claimable_all ? 1 : 0, result.totals.grand_total_paise, acc.user.sub, body.valid_until ?? null, idemKey, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null), hx.discountPaise, hx.discountBp, hx.chargesJson),
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,NULL,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, 1, payload, contentHash, acc.user.sub),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")
@@ -4795,8 +4822,8 @@ async function handleQuoteCreate(request: Request, env: Env): Promise<Response> 
   ];
   (body.lines as any[]).forEach((ln, i) => {
     const o = result.lines[i];
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null));
   });
   await env.DB.batch(stmts);
   return json({ id, quote_no: quoteNo, version: 1, status: "DRAFT", grand_total_paise: result.totals.grand_total_paise });
@@ -4851,6 +4878,8 @@ async function handleQuoteDetail(request: Request, env: Env, id: string): Promis
     revision: q.revision || 1, revised_from_id: q.revised_from_id || null, revised_from_no: revisedFromNo,
     superseded_by_id: q.superseded_by_id || null, superseded_by_no: supersededByNo,
     root_quote_id: q.root_quote_id || null, converted_order_id: q.converted_order_id || null,
+    header_discount_paise: q.header_discount_paise ?? null, header_discount_bp: q.header_discount_bp ?? null,
+    charges: ver ? (JSON.parse(ver.payload_canonical).charges || null) : null,
     version: ver ? { version: ver.version, content_hash: ver.content_hash, prev_hash: ver.prev_hash, payload: JSON.parse(ver.payload_canonical) } : null,
     lines, audit,
   };
@@ -4874,6 +4903,7 @@ async function handleQuoteEdit(request: Request, env: Env, id: string): Promise<
   let result: QuoteCalcResult;
   try { result = computeQuote({ ...body, seller_state_code: settings.seller_state_code }); }
   catch (e) { if (e instanceof QuoteCalcError) return json({ error: e.message, code: e.code, field: e.field }, 422); throw e; }
+  const hx = quoteHeaderExtras(body);
 
   const expected = q.current_version as number;
   const nextVer = expected + 1;
@@ -4889,15 +4919,15 @@ async function handleQuoteEdit(request: Request, env: Env, id: string): Promise<
   const stmts = [
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,?,?,?,?,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, id, nextVer, payload, contentHash, prevHash, acc.user.sub),
-    env.DB.prepare("UPDATE quotes SET current_version=?, grand_total_paise=?, place_of_supply=?, itc_claimable_all=?, title=?, payment_terms=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND current_version=?")
-      .bind(nextVer, result.totals.grand_total_paise, pos, result.itc_claimable_all ? 1 : 0, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null), id, QUOTE_ACCOUNT, expected),
+    env.DB.prepare("UPDATE quotes SET current_version=?, grand_total_paise=?, place_of_supply=?, itc_claimable_all=?, title=?, payment_terms=?, header_discount_paise=?, header_discount_bp=?, charges_json=?, updated_at=datetime('now') WHERE id=? AND account_id=? AND current_version=?")
+      .bind(nextVer, result.totals.grand_total_paise, pos, result.itc_claimable_all ? 1 : 0, (body.title != null ? String(body.title).slice(0, 200) : null), (body.payment_terms != null ? String(body.payment_terms).slice(0, 1000) : null), hx.discountPaise, hx.discountBp, hx.chargesJson, id, QUOTE_ACCOUNT, expected),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,?,'version_added',?,?,?,?)")
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, seq, acc.user.sub, auditDetail, entryHash, auditPrev),
   ];
   (body.lines as any[]).forEach((ln, i) => {
     const o = result.lines[i];
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, nextVer, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, nextVer, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null));
   });
   const res = await env.DB.batch(stmts);
   // CAS guard: the UPDATE is stmts[1]; 0 rows changed → a concurrent edit won the race.
@@ -5129,28 +5159,45 @@ function buildQuoteDocumentHtml(
   h: { quote_no: string; client: string; client_address?: string; client_gstin?: string; place_of_supply: string; sent_at: string; valid_until: string; prefix: string },
   lines: any[], totals: any, brand: Record<string, string>,
   docTerms?: { payment_terms?: string; terms?: string },
+  charges?: any[],
 ): string {
   const accent = /^#[0-9a-fA-F]{3,8}$/.test(brand.accent || "") ? brand.accent : "#16284a";
   const sellerName = qEsc(brand.legal_name || brand.company_name || "");
   const pct = (bp: number) => `${(bp / 100).toFixed(bp % 100 ? 2 : 0)}%`;
-  // Distinct GST rates across the lines → label the tax rows with the % when it is
-  // uniform, otherwise fall back to a plain label (mixed-rate quote).
-  const rateSet = Array.from(new Set(lines.map((l) => Number(l.sale_gst_bp) || 0)));
+  const chargeList = Array.isArray(charges) ? charges : [];
+  // Distinct GST rates across lines + charges → label the tax rows with the % when
+  // it is uniform, otherwise a plain label (mixed-rate quote).
+  const rateSet = Array.from(new Set([...lines, ...chargeList].map((l) => Number(l.sale_gst_bp ?? l.gst_bp) || 0)));
   const singleBp = rateSet.length === 1 ? rateSet[0] : null;
-  const rows = lines.map((l, i) => `<tr>
+  const row = (cells: string) => `<tr>${cells}</tr>`;
+  const rows = lines.map((l, i) => row(`
     <td class="num">${i + 1}</td>
     <td>${qEsc(l.description || l.sku || "Item")}${l.sku && l.description ? `<div class="sub">${qEsc(l.sku)}</div>` : ""}</td>
+    <td>${qEsc(l.hsn || "")}</td>
+    <td>${qEsc(l.uom || "")}</td>
     <td class="num">${l.qty}</td>
     <td class="num">${qFmtPaise(l.unit_price_paise)}</td>
     <td class="num">${pct(Number(l.sale_gst_bp) || 0)}</td>
     <td class="num">${qFmtPaise(l.line_taxable_paise)}</td>
     <td class="num">${qFmtPaise(l.line_gst_paise)}</td>
-    <td class="num">${qFmtPaise((l.line_taxable_paise || 0) + (l.line_gst_paise || 0))}</td>
-  </tr>`).join("");
+    <td class="num">${qFmtPaise((l.line_taxable_paise || 0) + (l.line_gst_paise || 0))}</td>`)).join("")
+    + chargeList.map((c) => row(`
+    <td class="num"></td>
+    <td>${qEsc(c.label || "Charge")}<div class="sub">Additional charge</div></td>
+    <td></td><td></td>
+    <td class="num">1</td>
+    <td class="num">${qFmtPaise(c.amount_paise)}</td>
+    <td class="num">${pct(Number(c.gst_bp) || 0)}</td>
+    <td class="num">${qFmtPaise(c.amount_paise)}</td>
+    <td class="num">${qFmtPaise(c.gst_paise)}</td>
+    <td class="num">${qFmtPaise((c.amount_paise || 0) + (c.gst_paise || 0))}</td>`)).join("");
   const taxRows = totals.igst_total > 0
-    ? `<tr><td colspan="7">IGST${singleBp != null ? " @ " + pct(singleBp) : ""}</td><td class="num">${qFmtPaise(totals.igst_total)}</td></tr>`
-    : `<tr><td colspan="7">CGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.cgst_total)}</td></tr>` +
-      `<tr><td colspan="7">SGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.sgst_total)}</td></tr>`;
+    ? `<tr><td colspan="9">IGST${singleBp != null ? " @ " + pct(singleBp) : ""}</td><td class="num">${qFmtPaise(totals.igst_total)}</td></tr>`
+    : `<tr><td colspan="9">CGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.cgst_total)}</td></tr>` +
+      `<tr><td colspan="9">SGST${singleBp != null ? " @ " + pct(singleBp / 2) : ""}</td><td class="num">${qFmtPaise(totals.sgst_total)}</td></tr>`;
+  const discountNote = totals.discount_total_paise
+    ? `<tr><td colspan="9" class="lbl" style="font-style:italic;color:#6b7280">Taxable value is net of an apportioned discount of ${qFmtPaise(totals.discount_total_paise)} on ${qFmtPaise(totals.gross_subtotal_paise)}</td><td class="num" style="color:#6b7280">−${qFmtPaise(totals.discount_total_paise)}</td></tr>`
+    : "";
   const sellerBits = [
     brand.address ? qEsc(brand.address) : "",
     [brand.gstin ? "GSTIN: " + qEsc(brand.gstin) : "", brand.pan ? "PAN: " + qEsc(brand.pan) : "", brand.cin ? "CIN: " + qEsc(brand.cin) : ""].filter(Boolean).join(" &nbsp;·&nbsp; "),
@@ -5228,15 +5275,16 @@ function buildQuoteDocumentHtml(
   </div>
   <div class="lines-wrap"><table>
     <thead><tr>
-      <th class="num">#</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th>
+      <th class="num">#</th><th>Description</th><th>HSN/SAC</th><th>UoM</th><th class="num">Qty</th><th class="num">Rate</th>
       <th class="num">GST %</th><th class="num">Taxable</th><th class="num">GST amt</th><th class="num">Amount</th>
     </tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
-      <tr><td colspan="7" class="lbl">Subtotal (taxable)</td><td class="num">${qFmtPaise(totals.subtotal_paise)}</td></tr>
+      ${discountNote}
+      <tr><td colspan="9" class="lbl">Subtotal (taxable)</td><td class="num">${qFmtPaise(totals.subtotal_paise)}</td></tr>
       ${taxRows}
-      ${totals.round_off_paise ? `<tr><td colspan="7" class="lbl">Round off</td><td class="num">${qFmtPaise(totals.round_off_paise)}</td></tr>` : ""}
-      <tr class="grand"><td colspan="7" class="lbl">Grand total</td><td class="num">${qFmtPaise(totals.grand_total_paise)}</td></tr>
+      ${totals.round_off_paise ? `<tr><td colspan="9" class="lbl">Round off</td><td class="num">${qFmtPaise(totals.round_off_paise)}</td></tr>` : ""}
+      <tr class="grand"><td colspan="9" class="lbl">Grand total</td><td class="num">${qFmtPaise(totals.grand_total_paise)}</td></tr>
     </tfoot>
   </table></div>
   <p class="words">Amount in words: ${qEsc(qAmountInWords(totals.grand_total_paise))}</p>
@@ -5266,7 +5314,7 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
   const validUntil = q.valid_until || qAddDaysISO(sentAt, settings.default_validity_days);
   const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
   const payload = JSON.parse(ver.payload_canonical);
-  const { results: lines } = await env.DB.prepare("SELECT description, sku, qty, sale_gst_bp, unit_price_paise, line_taxable_paise, line_gst_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+  const { results: lines } = await env.DB.prepare("SELECT description, sku, qty, hsn, uom, sale_gst_bp, unit_price_paise, line_taxable_paise, line_gst_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
   const clientRow = await env.DB.prepare("SELECT name, address, gstin FROM clients WHERE id=?").bind(q.client_id).first() as any;
   const brand = await readBranding(env);
 
@@ -5274,6 +5322,7 @@ async function handleQuoteSend(request: Request, env: Env, id: string): Promise<
     { quote_no: q.quote_no, client: clientRow?.name || q.client_id, client_address: clientRow?.address || "", client_gstin: clientRow?.gstin || "", place_of_supply: q.place_of_supply || "", sent_at: sentAt, valid_until: validUntil, prefix: settings.number_prefix },
     lines as any[], payload.totals, brand,
     { payment_terms: (q.payment_terms && String(q.payment_terms).trim()) ? q.payment_terms : settings.payment_terms, terms: settings.terms },
+    payload.charges,
   );
   const docHash = await sha256Hex(htmlWithPlaceholder);       // hash with field blank
   const stamped = htmlWithPlaceholder.split(QUOTE_DOC_HASH_PLACEHOLDER).join(docHash);
@@ -5378,16 +5427,16 @@ async function handleQuoteRevise(request: Request, env: Env, id: string): Promis
   const entryHash = await auditEntryHash(QUOTE_ACCOUNT, newId, 1, "created", acc.user.sub, auditDetail, null, salt);
 
   const stmts = [
-    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,revision,revised_from_id,root_quote_id,title,payment_terms) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,NULL,?,?,?,?,?)")
-      .bind(newId, QUOTE_ACCOUNT, salt, newNo, q.client_id, q.place_of_supply, q.itc_claimable_all ? 1 : 0, q.grand_total_paise, acc.user.sub, revision, id, rootId, q.title ?? null, q.payment_terms ?? null),
+    env.DB.prepare("INSERT INTO quotes (id,account_id,genesis_salt,quote_no,client_id,place_of_supply,status,current_version,itc_claimable_all,grand_total_paise,created_by,valid_until,revision,revised_from_id,root_quote_id,title,payment_terms,header_discount_paise,header_discount_bp,charges_json) VALUES (?,?,?,?,?,?,'DRAFT',1,?,?,?,NULL,?,?,?,?,?,?,?,?)")
+      .bind(newId, QUOTE_ACCOUNT, salt, newNo, q.client_id, q.place_of_supply, q.itc_claimable_all ? 1 : 0, q.grand_total_paise, acc.user.sub, revision, id, rootId, q.title ?? null, q.payment_terms ?? null, q.header_discount_paise ?? null, q.header_discount_bp ?? null, q.charges_json ?? null),
     env.DB.prepare("INSERT INTO quote_versions (id,account_id,quote_id,version,payload_canonical,content_hash,prev_hash,created_by) VALUES (?,?,?,1,?,?,NULL,?)")
       .bind(`qv_${uid()}`, QUOTE_ACCOUNT, newId, payload, contentHash, acc.user.sub),
     env.DB.prepare("INSERT INTO quote_audit (id,account_id,quote_id,seq,action,actor_id,detail_json,entry_hash,prev_hash) VALUES (?,?,?,1,'created',?,?,?,NULL)")
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, newId, acc.user.sub, auditDetail, entryHash),
   ];
   for (const l of srcLines as any[]) {
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,price_inclusive_gst,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, newId, l.line_no, l.sku, l.description, l.qty, l.pricing_mode, l.purchase_cost_paise, l.markup_bp, l.mrp_paise, l.discount_bp, l.freight_alloc_paise, l.branding_cost_paise, l.sale_gst_bp, l.purchase_gst_bp, l.itc_claimable, l.price_inclusive_gst, l.landed_cost_paise, l.unit_price_paise, l.line_taxable_paise, l.line_gst_paise, l.cgst_paise, l.sgst_paise, l.igst_paise, l.line_margin_paise));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,price_inclusive_gst,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,hsn,uom,line_discount_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, newId, l.line_no, l.sku, l.description, l.qty, l.pricing_mode, l.purchase_cost_paise, l.markup_bp, l.mrp_paise, l.discount_bp, l.freight_alloc_paise, l.branding_cost_paise, l.sale_gst_bp, l.purchase_gst_bp, l.itc_claimable, l.price_inclusive_gst, l.landed_cost_paise, l.unit_price_paise, l.line_taxable_paise, l.line_gst_paise, l.cgst_paise, l.sgst_paise, l.igst_paise, l.line_margin_paise, l.hsn ?? null, l.uom ?? null, l.line_discount_paise ?? null));
   }
   // Supersede the parent: append to its hash-chained audit, cancel its reminders.
   const pam = await nextAuditMeta(env, id);
@@ -5420,7 +5469,9 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
   if (q.converted_order_id) return json({ error: "quote already converted", code: "E_ALREADY_CONVERTED", order_id: q.converted_order_id }, 409);
 
   const ver = await env.DB.prepare("SELECT payload_canonical FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as any;
-  const totals = ver ? JSON.parse(ver.payload_canonical).totals : null;
+  const payloadObj = ver ? JSON.parse(ver.payload_canonical) : null;
+  const totals = payloadObj?.totals ?? null;
+  const chargeRows = Array.isArray(payloadObj?.charges) ? payloadObj.charges : [];
   const { results: lines } = await env.DB.prepare("SELECT sku, description, qty, line_taxable_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
   if (!lines.length) return json({ error: "quote has no lines", code: "E_NO_LINES" }, 409);
 
@@ -5439,6 +5490,10 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
     const unit = l.qty ? (l.line_taxable_paise || 0) / l.qty / 100 : (l.line_taxable_paise || 0) / 100;
     stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
       .bind(uid(), orderId, l.sku || "QUOTE", l.description || l.sku || "Item", l.qty, unit, (l.line_taxable_paise || 0) / 100, null));
+  }
+  for (const c of chargeRows as any[]) {
+    stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), orderId, "CHARGE", c.label || "Charge", 1, (c.amount_paise || 0) / 100, (c.amount_paise || 0) / 100, "Quote charge"));
   }
   stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'DRAFT',?,?,?)")
     .bind(uid(), orderId, acc.user.sub, (acc.user as any).name || acc.user.sub, note));
@@ -5565,6 +5620,25 @@ async function handleQuoteBell(request: Request, env: Env): Promise<Response> {
     `SELECT COUNT(*) AS n FROM quote_followups
       WHERE account_id = ? AND actor_id = ? AND next_action_date IS NOT NULL AND next_action_date <= ?`).bind(QUOTE_ACCOUNT, acc.user.sub, today).first() as any;
   return json({ count: (legs?.n || 0) + (fups?.n || 0), approvals: legs?.n || 0, followups: fups?.n || 0 });
+}
+
+// GET /api/quotes/pipeline — sell-side pipeline analytics: count + ₹ value by
+// stage, by client, and by purpose/type. Grand totals are sell-side (no cost),
+// so every entitled role may read it.
+async function handleQuotePipeline(request: Request, env: Env): Promise<Response> {
+  await ensureQuoteSchema(env);
+  const acc = await requireQuoteAccess(request, env);
+  if (acc instanceof Response) return acc;
+  const byStatus = (await env.DB.prepare(
+    "SELECT status, COUNT(*) AS n, COALESCE(SUM(grand_total_paise),0) AS v FROM quotes WHERE account_id=? GROUP BY status").bind(QUOTE_ACCOUNT).all()).results;
+  const byClient = (await env.DB.prepare(
+    `SELECT q.client_id, c.name AS client_name, COUNT(*) AS n, COALESCE(SUM(q.grand_total_paise),0) AS v
+       FROM quotes q LEFT JOIN clients c ON c.id=q.client_id
+      WHERE q.account_id=? GROUP BY q.client_id ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
+  const byType = (await env.DB.prepare(
+    `SELECT COALESCE(NULLIF(TRIM(title),''),'(untitled)') AS t, COUNT(*) AS n, COALESCE(SUM(grand_total_paise),0) AS v
+       FROM quotes WHERE account_id=? GROUP BY t ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
+  return json({ by_status: byStatus, by_client: byClient, by_type: byType });
 }
 
 // Cron: (1) fire due reminders, then (2) sweep SENT→EXPIRED. Ordering is safe
@@ -5732,6 +5806,7 @@ export default {
       if (path.match(/^\/api\/quotes\/[^/]+\/document$/) && method==="GET")  return handleQuoteDocument(request,env,path.split("/")[3]);
       if (path==="/api/quotes/today"           && method==="GET")  return handleQuoteToday(request,env);
       if (path==="/api/quotes/bell"            && method==="GET")  return handleQuoteBell(request,env);
+      if (path==="/api/quotes/pipeline"        && method==="GET")  return handleQuotePipeline(request,env);
       if (path.match(/^\/api\/quotes\/[^/]+\/reminders\/[^/]+\/snooze$/) && method==="POST") return handleQuoteReminderSnooze(request,env,path.split("/")[3],path.split("/")[5]);
       if (path.match(/^\/api\/quotes\/[^/]+\/followups$/) && method==="POST") return handleQuoteFollowup(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);

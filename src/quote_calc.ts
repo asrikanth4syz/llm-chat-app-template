@@ -39,25 +39,48 @@ export interface QuoteCalcLine {
   price_inclusive_gst?: boolean; // the input price (cost / MRP) is GST-inclusive ("net")
 }
 
+/** A header-level charge (installation, delivery, handling…): taxable revenue at
+ *  its own GST rate, added on top of the line items. */
+export interface QuoteCalcCharge {
+  label?: string;
+  amount_paise: number;
+  gst_bp: number;
+}
+
 export interface QuoteCalcInput {
   place_of_supply: string;
   seller_state_code: string;
   lines: QuoteCalcLine[];
+  // Optional header-level concession + charges (both default to none).
+  header_discount_paise?: number;  // flat ₹ discount in paise
+  header_discount_bp?: number;     // percent-of-line-subtotal discount, bp
+  charges?: QuoteCalcCharge[];
 }
 
 export interface QuoteCalcLineOut {
   landed_cost_paise: number;
   unit_price_paise: number;
-  line_taxable_paise: number;
+  line_taxable_paise: number;      // NET of any apportioned header discount
   line_gst_paise: number;
   cgst_paise: number;
   sgst_paise: number;
   igst_paise: number;
   line_margin_paise: number;
+  line_discount_paise?: number;    // apportioned header discount (present only when > 0)
+}
+
+export interface QuoteCalcChargeOut {
+  label: string;
+  amount_paise: number;
+  gst_bp: number;
+  gst_paise: number;
+  cgst_paise: number;
+  sgst_paise: number;
+  igst_paise: number;
 }
 
 export interface QuoteCalcTotals {
-  subtotal_paise: number;
+  subtotal_paise: number;          // taxable base = net line items + charges
   cgst_total: number;
   sgst_total: number;
   igst_total: number;
@@ -65,12 +88,16 @@ export interface QuoteCalcTotals {
   round_off_paise: number;
   weighted_margin_bp: number;
   negative_margin: boolean;
+  gross_subtotal_paise?: number;   // line items before header discount (present only when discounted)
+  discount_total_paise?: number;   // total header discount (present only when > 0)
+  charges_total_paise?: number;    // sum of charge amounts (present only when charges exist)
 }
 
 export interface QuoteCalcResult {
   lines: QuoteCalcLineOut[];
   totals: QuoteCalcTotals;
   itc_claimable_all: boolean;
+  charges?: QuoteCalcChargeOut[];  // present only when charges exist
 }
 
 /** Validation / calc error → HTTP 422 at the handler boundary. */
@@ -199,8 +226,22 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     throw new QuoteCalcError("E_VALIDATION", "a quote may have at most 200 lines", "lines");
   }
 
+  // Header-level inputs (optional): a pro-rata discount and taxable charges.
+  const headerDiscountFlat = assertPaiseInRange(assertInt(input.header_discount_paise ?? 0, "header_discount_paise"), "header_discount_paise");
+  const headerDiscountBp = assertInt(input.header_discount_bp ?? 0, "header_discount_bp");
+  if (headerDiscountBp < 0 || headerDiscountBp > 10000) {
+    throw new QuoteCalcError("E_VALIDATION", "header_discount_bp must be in 0..10000", "header_discount_bp");
+  }
+  const charges = Array.isArray(input.charges) ? input.charges : [];
+  if (charges.length > 20) {
+    throw new QuoteCalcError("E_VALIDATION", "a quote may have at most 20 charges", "charges");
+  }
+
+  // Pass 1 collects each line's GROSS taxable + landed cost; the GST split and
+  // margin are computed in pass 2 (after the header discount is apportioned).
   const out: QuoteCalcLineOut[] = [];
-  let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, sumMargin = 0;
+  const aux: { grossTaxable: number; saleBp: number; landedTotal: number }[] = [];
+  let grossSubtotal = 0;
   let itcAll = true;
 
   lines.forEach((ln, i) => {
@@ -257,37 +298,76 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     const inputGst = applyBp(baseCost, purchaseBp);
     const landed = baseCost + freight + branding + (ln.itc_claimable ? 0 : inputGst);
 
-    const taxable = unitPrice * qty;
+    const taxable = unitPrice * qty;                 // gross (pre header-discount)
     if (!Number.isSafeInteger(taxable) || taxable > MAX_PAISE) {
       throw new QuoteCalcError("E_OVERFLOW", `${f("line_taxable")} exceeds cap`, f("line_taxable"));
     }
-    const lineGst = applyBp(taxable, saleBp);
-    const cgst = intraState ? cgstHalf(lineGst) : 0;
-    const sgst = intraState ? lineGst - cgst : 0;
-    const igst = intraState ? 0 : lineGst;
     const landedTotal = landed * qty;
     if (!Number.isSafeInteger(landedTotal)) {
       throw new QuoteCalcError("E_OVERFLOW", `${f("landed_total")} exceeds safe integer`, f("landed_total"));
     }
-    const margin = taxable - landedTotal;
-
     if (!ln.itc_claimable) itcAll = false;
-    subtotal += taxable;
-    cgstTotal += cgst;
-    sgstTotal += sgst;
-    igstTotal += igst;
-    sumMargin += margin;
-
+    grossSubtotal += taxable;
+    aux.push({ grossTaxable: taxable, saleBp, landedTotal });
     out.push({
       landed_cost_paise: landed,
       unit_price_paise: unitPrice,
-      line_taxable_paise: taxable,
-      line_gst_paise: lineGst,
-      cgst_paise: cgst,
-      sgst_paise: sgst,
-      igst_paise: igst,
-      line_margin_paise: margin,
+      line_taxable_paise: taxable,  // net is set in pass 2
+      line_gst_paise: 0, cgst_paise: 0, sgst_paise: 0, igst_paise: 0, line_margin_paise: 0,
     });
+  });
+
+  if (!Number.isSafeInteger(grossSubtotal) || grossSubtotal > MAX_PAISE) {
+    throw new QuoteCalcError("E_OVERFLOW", "subtotal exceeds cap", "subtotal");
+  }
+
+  // Header discount — flat + percent-of-line-subtotal, never below a zero taxable.
+  const discountPct = grossSubtotal > 0 ? applyBp(grossSubtotal, headerDiscountBp) : 0;
+  let discountTotal = headerDiscountFlat + discountPct;
+  if (discountTotal > grossSubtotal) discountTotal = grossSubtotal;
+  const hasDiscount = discountTotal > 0;
+
+  // Pass 2 — apportion the discount pro-rata to each line's gross taxable (GST is
+  // then charged on the NET), so the per-line tax is correct for a mixed-rate quote.
+  let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, sumMargin = 0;
+  let allocated = 0;
+  const lastIdx = aux.length - 1;
+  aux.forEach((a, i) => {
+    let disc = 0;
+    if (hasDiscount && grossSubtotal > 0) {
+      if (i === lastIdx) disc = discountTotal - allocated;          // remainder → exact sum
+      else {
+        const den = BigInt(grossSubtotal);
+        disc = Number((BigInt(discountTotal) * BigInt(a.grossTaxable) * 2n + den) / (2n * den));
+        allocated += disc;
+      }
+    }
+    const netTaxable = a.grossTaxable - disc;
+    const lineGst = applyBp(netTaxable, a.saleBp);
+    const cgst = intraState ? cgstHalf(lineGst) : 0;
+    const sgst = intraState ? lineGst - cgst : 0;
+    const igst = intraState ? 0 : lineGst;
+    const margin = netTaxable - a.landedTotal;
+    subtotal += netTaxable; cgstTotal += cgst; sgstTotal += sgst; igstTotal += igst; sumMargin += margin;
+    const o = out[i];
+    o.line_taxable_paise = netTaxable;
+    o.line_gst_paise = lineGst;
+    o.cgst_paise = cgst; o.sgst_paise = sgst; o.igst_paise = igst;
+    o.line_margin_paise = margin;
+    if (disc > 0) o.line_discount_paise = disc;
+  });
+
+  // Charges — each is taxable revenue at its own GST rate (zero cost → full margin).
+  const chargesOut: QuoteCalcChargeOut[] = [];
+  charges.forEach((c, i) => {
+    const amount = assertPaiseInRange(assertInt(c.amount_paise ?? 0, `charges[${i}].amount_paise`), `charges[${i}].amount_paise`);
+    const gbp = assertSlab(assertInt(c.gst_bp, `charges[${i}].gst_bp`), `charges[${i}].gst_bp`);
+    const g = applyBp(amount, gbp);
+    const cgst = intraState ? cgstHalf(g) : 0;
+    const sgst = intraState ? g - cgst : 0;
+    const igst = intraState ? 0 : g;
+    subtotal += amount; cgstTotal += cgst; sgstTotal += sgst; igstTotal += igst; sumMargin += amount;
+    chargesOut.push({ label: (typeof c.label === "string" ? c.label : "").slice(0, 120), amount_paise: amount, gst_bp: gbp, gst_paise: g, cgst_paise: cgst, sgst_paise: sgst, igst_paise: igst });
   });
 
   if (!Number.isSafeInteger(subtotal) || subtotal > MAX_PAISE) {
@@ -301,18 +381,20 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
   const grand = roundToRupee(preRound);
   const roundOff = grand - preRound;
 
-  return {
-    lines: out,
-    itc_claimable_all: itcAll,
-    totals: {
-      subtotal_paise: subtotal,
-      cgst_total: cgstTotal,
-      sgst_total: sgstTotal,
-      igst_total: igstTotal,
-      grand_total_paise: grand,
-      round_off_paise: roundOff,
-      weighted_margin_bp: weightedMarginBp(sumMargin, subtotal),
-      negative_margin: sumMargin < 0,
-    },
+  const totals: QuoteCalcTotals = {
+    subtotal_paise: subtotal,
+    cgst_total: cgstTotal,
+    sgst_total: sgstTotal,
+    igst_total: igstTotal,
+    grand_total_paise: grand,
+    round_off_paise: roundOff,
+    weighted_margin_bp: weightedMarginBp(sumMargin, subtotal),
+    negative_margin: sumMargin < 0,
   };
+  if (hasDiscount) { totals.gross_subtotal_paise = grossSubtotal; totals.discount_total_paise = discountTotal; }
+  if (chargesOut.length) totals.charges_total_paise = chargesOut.reduce((s, c) => s + c.amount_paise, 0);
+
+  const result: QuoteCalcResult = { lines: out, itc_claimable_all: itcAll, totals };
+  if (chargesOut.length) result.charges = chargesOut;
+  return result;
 }

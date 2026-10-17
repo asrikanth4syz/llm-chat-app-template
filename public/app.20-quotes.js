@@ -75,6 +75,7 @@ function renderQuotations(main) {
       <div class="page-actions">
         <div class="q-tabs" role="tablist">
           <button class="q-tab ${q.tab === 'list' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'list')}>Quotes</button>
+          <button class="q-tab ${q.tab === 'pipeline' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'pipeline')}>Pipeline</button>
           <button class="q-tab ${q.tab === 'today' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'today')}>Today</button>
         </div>
         ${qCanCreate() ? `<button class="btn btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(14)} New quote</button>` : ''}
@@ -82,9 +83,61 @@ function renderQuotations(main) {
     </div>
     <div id="quote-body"><div class="loading-state"><div class="spinner"></div><p>Loading…</p></div></div>`;
   if (q.tab === 'today') return quoteRenderToday();
+  if (q.tab === 'pipeline') return quoteRenderPipeline();
   return quoteRenderList();
 }
 function quoteGoTab(tab) { const q = qState(); q.tab = tab; q.view = 'list'; q.quoteId = null; q.editor = null; renderQuotations(qMain()); }
+
+// ── Pipeline (analytics) ────────────────────────────────────────────────────────
+async function quoteRenderPipeline() {
+  const body = document.getElementById('quote-body'); if (!body) return;
+  const d = await api('/quotes/pipeline');
+  if (!d) { body.innerHTML = `<div class="card">Could not load the pipeline.</div>`; return; }
+  const byStatus = d.by_status || [];
+  const stat = {}; byStatus.forEach(s => { stat[s.status] = { n: s.n, v: s.v }; });
+  const sumV = keys => keys.reduce((a, k) => a + ((stat[k] && stat[k].v) || 0), 0);
+  const sumN = keys => keys.reduce((a, k) => a + ((stat[k] && stat[k].n) || 0), 0);
+  const openKeys = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT'];
+  const wonKeys = ['ACCEPTED', 'CONVERTED'];
+  const openV = sumV(openKeys), wonV = sumV(wonKeys);
+  const wonN = sumN(wonKeys), lostN = sumN(['LOST']);
+  const decided = wonN + lostN;
+  const winRate = decided ? Math.round(wonN * 100 / decided) : 0;
+  const totalV = byStatus.reduce((a, s) => a + s.v, 0);
+  const totalN = byStatus.reduce((a, s) => a + s.n, 0);
+  const stageOrder = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'CONVERTED', 'LOST', 'EXPIRED', 'SUPERSEDED'];
+  const maxV = Math.max(1, ...byStatus.map(s => s.v));
+  const stageRows = stageOrder.filter(k => stat[k]).map(k => {
+    const s = stat[k]; const w = Math.max(2, Math.round((s.v / maxV) * 100));
+    return `<div class="q-pipe-row">
+      <div class="q-pipe-label">${qBadge(k)} <span class="q-pipe-n">${s.n}</span></div>
+      <div class="q-pipe-bar"><div class="q-pipe-fill" style="width:${w}%"></div></div>
+      <div class="q-pipe-val">${qMoney(s.v)}</div>
+    </div>`;
+  }).join('');
+  const breakdown = (title, col, rows, labelFn) => qCard(title, rows.length
+    ? `<div class="table-wrap"><table class="data-table" style="width:100%"><thead><tr>
+        <th style="text-align:left;padding:9px 12px">${h(col)}</th>
+        <th style="text-align:right;padding:9px 12px">Quotes</th>
+        <th style="text-align:right;padding:9px 12px">Value</th></tr></thead>
+      <tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:9px 12px">${h(labelFn(r))}</td>
+        <td style="padding:9px 12px;text-align:right">${r.n}</td>
+        <td style="padding:9px 12px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.v)}</td></tr>`).join('')}</tbody></table></div>`
+    : '<div class="form-hint">No data yet.</div>');
+  body.innerHTML = `
+    <div class="q-tiles">
+      ${tileHtml({ label: 'Total pipeline', value: qMoney(totalV), sub: `${totalN} quotes`, accent: 'var(--navy)' })}
+      ${tileHtml({ label: 'Open', value: qMoney(openV), sub: `${sumN(openKeys)} active`, accent: 'var(--gold)' })}
+      ${tileHtml({ label: 'Won', value: qMoney(wonV), sub: `${wonN} accepted/converted`, accent: 'var(--success)' })}
+      ${tileHtml({ label: 'Win rate', value: winRate + '%', sub: `${wonN} won · ${lostN} lost`, accent: 'var(--navy)' })}
+    </div>
+    ${qCard('By stage', `<div class="q-pipe">${stageRows || '<div class="form-hint">No quotes yet.</div>'}</div>`)}
+    <div class="q-pipe-cols">
+      ${breakdown('By client', 'Client', d.by_client || [], r => r.client_name || r.client_id || '—')}
+      ${breakdown('By purpose / type', 'Purpose', d.by_type || [], r => r.t || '(untitled)')}
+    </div>`;
+}
 
 // ── List ──────────────────────────────────────────────────────────────────────
 async function quoteRenderList() {
@@ -201,8 +254,9 @@ async function quoteOpenDetail(id) {
 }
 function quoteRenderDetail() {
   const q = qState(); const d = q.detail; const main = qMain(); if (!d) return;
-  const t = (d.version && d.version.payload && d.version.payload.totals) || {};
+  const t = (d.version && ((d.version.payload && d.version.payload.totals) || d.version.totals)) || {};
   const lines = d.lines || [];
+  const charges = d.charges || [];
   const showCost = lines.some(l => l.landed_cost_paise != null || l.line_margin_paise != null);
   const actions = [];
   const st = d.status;
@@ -268,22 +322,37 @@ function quoteRenderDetail() {
       <table class="data-table" style="width:100%;border-collapse:collapse;font-size:.84rem">
         <thead><tr>
           <th style="text-align:left;padding:8px 10px">#</th><th style="text-align:left;padding:8px 10px">Item</th>
+          <th style="text-align:left;padding:8px 10px">HSN</th><th style="text-align:left;padding:8px 10px">UoM</th>
           <th style="text-align:right;padding:8px 10px">Qty</th><th style="text-align:right;padding:8px 10px">Unit price</th>
           <th style="text-align:right;padding:8px 10px">GST</th><th style="text-align:right;padding:8px 10px">Taxable</th>
           ${showCost ? '<th style="text-align:right;padding:8px 10px">Landed</th><th style="text-align:right;padding:8px 10px">Margin</th>' : ''}
         </tr></thead>
         <tbody>${lines.map((l, i) => `<tr style="border-top:1px solid var(--border)">
           <td style="padding:8px 10px;color:var(--text-muted)">${i + 1}</td>
-          <td style="padding:8px 10px;font-weight:600">${h(l.description || l.sku || 'Item')}</td>
+          <td style="padding:8px 10px;font-weight:600">${h(l.description || l.sku || 'Item')}${(l.line_discount_paise ? `<div style="font-size:.72rem;color:var(--text-muted)">less discount ${qMoney(l.line_discount_paise)}</div>` : '')}</td>
+          <td style="padding:8px 10px">${h(l.hsn || '—')}</td>
+          <td style="padding:8px 10px">${h(l.uom || '—')}</td>
           <td style="padding:8px 10px;text-align:right">${l.qty}</td>
           <td style="padding:8px 10px;text-align:right">${qMoney(l.unit_price_paise)}</td>
           <td style="padding:8px 10px;text-align:right">${((l.sale_gst_bp || 0) / 100).toFixed(0)}%</td>
           <td style="padding:8px 10px;text-align:right">${qMoney(l.line_taxable_paise)}</td>
           ${showCost ? `<td style="padding:8px 10px;text-align:right">${qMoney(l.landed_cost_paise)}</td><td style="padding:8px 10px;text-align:right;color:${(l.line_margin_paise||0)<0?'var(--danger)':'inherit'}">${qMoney(l.line_margin_paise)}<div style="font-size:.72rem;color:var(--text-muted)">${qMarginPct(l.line_margin_paise, l.line_taxable_paise)}</div></td>` : ''}
+        </tr>`).join('')}${charges.map(c => `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:8px 10px;color:var(--text-muted)">—</td>
+          <td style="padding:8px 10px;font-weight:600">${h(c.label || 'Charge')}<div style="font-size:.72rem;color:var(--text-muted)">Additional charge</div></td>
+          <td style="padding:8px 10px">—</td><td style="padding:8px 10px">—</td>
+          <td style="padding:8px 10px;text-align:right">1</td>
+          <td style="padding:8px 10px;text-align:right">${qMoney(c.amount_paise)}</td>
+          <td style="padding:8px 10px;text-align:right">${((c.gst_bp || 0) / 100).toFixed(0)}%</td>
+          <td style="padding:8px 10px;text-align:right">${qMoney(c.amount_paise)}</td>
+          ${showCost ? '<td style="padding:8px 10px;text-align:right">—</td><td style="padding:8px 10px;text-align:right">—</td>' : ''}
         </tr>`).join('')}</tbody>
       </table></div>
       <div class="q-summary" style="margin-top:14px">
-        <div class="q-row"><span>Subtotal</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
+        ${t.discount_total_paise != null ? `<div class="q-row"><span>Line subtotal</span><span class="q-amt">${qMoney(t.gross_subtotal_paise)}</span></div>
+        <div class="q-row"><span>Discount</span><span class="q-amt" style="color:var(--danger)">− ${qMoney(t.discount_total_paise)}</span></div>` : ''}
+        ${t.charges_total_paise != null ? `<div class="q-row"><span>Charges</span><span class="q-amt">${qMoney(t.charges_total_paise)}</span></div>` : ''}
+        <div class="q-row"><span>${(t.discount_total_paise != null || t.charges_total_paise != null) ? 'Taxable value' : 'Subtotal'}</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
         ${taxRows}
         <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
         <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise != null ? t.grand_total_paise : d.grand_total_paise)}</span></div>
@@ -395,10 +464,11 @@ async function quoteDownloadPdf(id) {
 }
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
-function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', price_inclusive_gst: false, itc_claimable: true }; }
+function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', hsn: '', uom: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', price_inclusive_gst: false, itc_claimable: true }; }
+function quoteBlankCharge() { return { label: '', amount: '', gst_pct: '18' }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
-  q.editor = { editId: null, client_id: '', client_q: '', title: '', payment_terms: '', place_of_supply: '', valid_until: '', lines: [quoteBlankLine()], preview: null };
+  q.editor = { editId: null, client_id: '', client_q: '', title: '', payment_terms: '', place_of_supply: '', valid_until: '', discount_type: 'pct', discount_value: '', charges: [], lines: [quoteBlankLine()], preview: null };
   const main = qMain();
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading clients…</p></div>`;
   const clients = await api('/clients');
@@ -417,15 +487,20 @@ async function quoteEditDraft(id) {
   const toPct = (bp) => (bp == null ? '' : (Number(bp) / 100));
   const lines = (d.lines || []).map(l => ({
     pricing_mode: l.pricing_mode || 'cost_markup',
-    sku: l.sku || '', description: l.description || '', qty: l.qty || 1,
+    sku: l.sku || '', description: l.description || '', hsn: l.hsn || '', uom: l.uom || '', qty: l.qty || 1,
     purchase_cost: toRupee(l.purchase_cost_paise), markup_pct: toPct(l.markup_bp),
     mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
     freight: toRupee(l.freight_alloc_paise), branding: toRupee(l.branding_cost_paise),
     sale_gst_pct: toPct(l.sale_gst_bp) || '0', purchase_gst_pct: toPct(l.purchase_gst_bp),
     price_inclusive_gst: !!l.price_inclusive_gst, itc_claimable: !!l.itc_claimable,
   }));
+  // Reconstruct the header discount + charges from the stored quote.
+  let discType = 'pct', discVal = '';
+  if (d.header_discount_bp) { discType = 'pct'; discVal = Number(d.header_discount_bp) / 100; }
+  else if (d.header_discount_paise) { discType = 'amount'; discVal = Number(d.header_discount_paise) / 100; }
+  const charges = (d.charges || []).map(c => ({ label: c.label || '', amount: (Number(c.amount_paise) || 0) / 100, gst_pct: (Number(c.gst_bp) || 0) / 100 }));
   q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, client_q: d.client_name || d.client_id, place_of_supply: d.place_of_supply || '',
-    title: d.title || '', payment_terms: d.payment_terms || '',
+    title: d.title || '', payment_terms: d.payment_terms || '', discount_type: discType, discount_value: discVal, charges,
     valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
   const clients = await api('/clients');
   q.clients = Array.isArray(clients) ? clients : [];
@@ -465,6 +540,15 @@ function quoteRenderEditor() {
     </div>`)}
     ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
       `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
+    ${qCard('Discount & charges', `
+      <div class="form-row" style="margin-bottom:10px">
+        ${qField('Header discount', `<select ${dataChangeVal('quoteEditDiscount', 'discount_type')}>
+          <option value="pct" ${e.discount_type !== 'amount' ? 'selected' : ''}>Percent (%)</option>
+          <option value="amount" ${e.discount_type === 'amount' ? 'selected' : ''}>Amount (₹)</option></select>`, 'Apportioned across lines (GST-correct)')}
+        ${qField(e.discount_type === 'amount' ? 'Discount (₹)' : 'Discount (%)', `<input type="number" min="0" step="0.01" value="${h(e.discount_value)}" ${dataInputVal('quoteEditDiscount', 'discount_value')} placeholder="0">`)}
+      </div>
+      <div id="q-charges">${(e.charges || []).map((c, i) => quoteChargeHtml(c, i)).join('') || '<div class="form-hint" style="margin-bottom:8px">No additional charges. Add installation, delivery, handling, etc.</div>'}</div>`,
+      `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddCharge')}>${iconPlus(12)} Add charge</button>`)}
     ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Use “Preview price” to compute GST, round-off and margin.</div></div>'}</div>`)}
     <div class="q-actionbar">
       <div class="q-actionbar-total">Grand total <b id="q-actionbar-total">${gt}</b></div>
@@ -486,6 +570,8 @@ function quoteLineHtml(l, i) {
     <div class="form-row">
       ${qField('SKU', `<input value="${h(l.sku)}" ${dataInputVal('quoteEditLine', i, 'sku')} placeholder="optional">`)}
       ${qField('Description', `<input value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')} placeholder="Item description">`)}
+      ${qField('HSN / SAC', `<input value="${h(l.hsn)}" ${dataInputVal('quoteEditLine', i, 'hsn')} placeholder="e.g. 2106" maxlength="12">`, 'GST code')}
+      ${qField('UoM', `<input value="${h(l.uom)}" ${dataInputVal('quoteEditLine', i, 'uom')} placeholder="e.g. Nos / Kg / Box" maxlength="16">`)}
       ${qField('Qty', `<input type="number" min="1" step="1" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`)}
       ${qField('Pricing method', `<select ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
         <option value="cost_markup" ${cm ? 'selected' : ''}>Cost + markup</option>
@@ -525,9 +611,15 @@ function qTaxRowsHtml(t, gstPct) {
 function quotePreviewHtml(p) {
   const t = p.totals || {};
   const e = qState().editor;
-  const taxRows = qTaxRowsHtml(t, qUniformGstPct(((e && e.lines) || []).map(l => l.sale_gst_pct)));
+  const rates = ((e && e.lines) || []).map(l => l.sale_gst_pct).concat(((e && e.charges) || []).map(c => c.gst_pct));
+  const taxRows = qTaxRowsHtml(t, qUniformGstPct(rates));
+  const hasDisc = t.discount_total_paise != null;
+  const hasCharges = t.charges_total_paise != null;
   return `<div class="q-summary">
-    <div class="q-row"><span>Subtotal</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
+    ${hasDisc ? `<div class="q-row"><span>Line subtotal</span><span class="q-amt">${qMoney(t.gross_subtotal_paise)}</span></div>
+    <div class="q-row"><span>Discount</span><span class="q-amt" style="color:var(--danger)">− ${qMoney(t.discount_total_paise)}</span></div>` : ''}
+    ${hasCharges ? `<div class="q-row"><span>Charges</span><span class="q-amt">${qMoney(t.charges_total_paise)}</span></div>` : ''}
+    <div class="q-row"><span>${hasDisc || hasCharges ? 'Taxable value' : 'Subtotal'}</span><span class="q-amt">${qMoney(t.subtotal_paise)}</span></div>
     ${taxRows}
     <div class="q-row"><span>Round off</span><span class="q-amt">${qMoney(t.round_off_paise)}</span></div>
     <div class="q-row q-grand"><span>Grand total</span><span>${qMoney(t.grand_total_paise)}</span></div>
@@ -671,6 +763,21 @@ function quoteExGstHint(l) {
 }
 function quoteEditAddLine() { const e = qState().editor; if (e) { e.lines.push(quoteBlankLine()); quoteRenderEditor(); } }
 function quoteEditRemoveLine(i) { const e = qState().editor; if (e && e.lines.length > 1) { e.lines.splice(i, 1); quoteRenderEditor(); } }
+// Header discount + charges editor rows.
+function quoteChargeHtml(c, i) {
+  return `<div class="q-charge">
+    <div class="form-row" style="margin-bottom:0">
+      ${qField('Charge', `<input value="${h(c.label)}" ${dataInputVal('quoteEditCharge', i, 'label')} placeholder="e.g. Installation" maxlength="120">`)}
+      ${qField('Amount (₹)', `<input type="number" min="0" step="0.01" value="${h(c.amount)}" ${dataInputVal('quoteEditCharge', i, 'amount')} placeholder="0">`)}
+      ${qField('GST %', `<input type="number" min="0" step="1" value="${h(c.gst_pct)}" ${dataInputVal('quoteEditCharge', i, 'gst_pct')}>`)}
+      <div class="form-field" style="justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-danger btn-sm" ${dataAct('quoteEditRemoveCharge', i)}>Remove</button></div>
+    </div>
+  </div>`;
+}
+function quoteEditDiscount(field, val) { const e = qState().editor; if (!e) return; e[field] = val; if (field === 'discount_type') quoteRenderEditor(); }
+function quoteEditCharge(i, field, val) { const e = qState().editor; if (e && e.charges[i]) e.charges[i][field] = val; }
+function quoteEditAddCharge() { const e = qState().editor; if (e) { (e.charges = e.charges || []).push(quoteBlankCharge()); quoteRenderEditor(); } }
+function quoteEditRemoveCharge(i) { const e = qState().editor; if (e && e.charges) { e.charges.splice(i, 1); quoteRenderEditor(); } }
 
 // Build the server payload from the rupee/percent form (× 100 → paise, % → bp).
 function quoteBuildPayload() {
@@ -680,6 +787,7 @@ function quoteBuildPayload() {
   const lines = e.lines.map(l => {
     const base = {
       sku: (l.sku || '').trim() || null, description: l.description || null,
+      hsn: (l.hsn || '').trim() || null, uom: (l.uom || '').trim() || null,
       qty: Math.round(Number(l.qty || 0)), pricing_mode: l.pricing_mode,
       freight_alloc_paise: rupee(l.freight), branding_cost_paise: rupee(l.branding),
       sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable,
@@ -690,12 +798,21 @@ function quoteBuildPayload() {
     if (l.pricing_mode === 'cost_markup') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), markup_bp: bp(l.markup_pct) };
     return { ...base, mrp_paise: rupee(l.mrp), discount_bp: bp(l.discount_pct) };
   });
-  return {
+  const charges = (e.charges || [])
+    .filter(c => Number(c.amount) > 0)
+    .map(c => ({ label: (c.label || '').trim(), amount_paise: rupee(c.amount), gst_bp: bp(c.gst_pct) }));
+  const payload = {
     client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(),
     valid_until: e.valid_until || undefined,
     title: (e.title || '').trim(), payment_terms: (e.payment_terms || '').trim(),
-    lines,
+    lines, charges,
   };
+  const dv = Number(e.discount_value) || 0;
+  if (dv > 0) {
+    if (e.discount_type === 'amount') payload.header_discount_paise = rupee(e.discount_value);
+    else payload.header_discount_bp = bp(e.discount_value);
+  }
+  return payload;
 }
 async function quoteEditPreview() {
   const e = qState().editor; if (!e.client_id) { showToast('Pick a client first', 'error'); return; }

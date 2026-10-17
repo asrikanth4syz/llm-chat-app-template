@@ -273,3 +273,44 @@ describe("per-quote purpose + payment terms override", () => {
     expect(child.payment_terms).toBe("Net 30");
   });
 });
+
+describe("HSN/UoM, header discount + charges, and pipeline", () => {
+  it("HSN/UoM + apportioned discount + taxable charge round-trip to detail and document", async () => {
+    await prep();
+    const id = (await (await post("/api/quotes", {
+      client_id: "c1", place_of_supply: "KL", title: "Widgets + install",
+      header_discount_bp: 1000,
+      charges: [{ label: "Installation", amount_paise: 500000, gst_bp: 1800 }],
+      lines: [{ sku: "SKU1", description: "Widget", hsn: "8471", uom: "Nos", qty: 2, pricing_mode: "cost_markup", purchase_cost_paise: 100000, markup_bp: 2000, sale_gst_bp: 1800, itc_claimable: true }],
+    }, salesTok)).json() as any).id;
+    const d = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    expect(d.lines[0].hsn).toBe("8471");
+    expect(d.lines[0].uom).toBe("Nos");
+    expect(d.lines[0].line_discount_paise).toBeGreaterThan(0);
+    expect(d.charges[0]).toMatchObject({ label: "Installation", amount_paise: 500000, gst_bp: 1800 });
+    expect(d.version.payload.totals.discount_total_paise).toBeGreaterThan(0);
+    expect(d.version.payload.totals.charges_total_paise).toBe(500000);
+    await post(`/api/quotes/${id}/submit`, {}, salesTok);
+    await post(`/api/quotes/${id}/approve`, { leg: "manager" }, mgrTok);
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    const html = b64decode((await (await get(`/api/quotes/${id}/document`, salesTok)).json() as any).content_b64);
+    expect(html).toContain("8471");
+    expect(html).toContain("Nos");
+    expect(html).toContain("Installation");
+    expect(html).toContain("HSN/SAC");
+    expect(html.toLowerCase()).toContain("discount");
+    expect(html.toLowerCase()).not.toContain("margin");
+    expect(html.toLowerCase()).not.toContain("landed");
+  });
+  it("pipeline endpoint returns stage, client and type breakdowns", async () => {
+    await prep();
+    await createAs(salesTok);
+    const r = await get("/api/quotes/pipeline", salesTok);
+    expect(r.status).toBe(200);
+    const p = await r.json() as any;
+    expect(Array.isArray(p.by_status)).toBe(true);
+    expect(Array.isArray(p.by_client)).toBe(true);
+    expect(Array.isArray(p.by_type)).toBe(true);
+    expect(p.by_status.some((s: any) => s.status === "DRAFT")).toBe(true);
+  });
+});

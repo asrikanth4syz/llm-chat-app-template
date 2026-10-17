@@ -145,3 +145,54 @@ describe("quote_calc — GST-inclusive (net) input price", () => {
 // test/smoke.mjs (plain Node with fs access; the Workers vitest pool sandboxes
 // file reads). I0-a (every returned value is an integer) is asserted above on
 // all 18 vectors + the rounding tests.
+
+describe("quote_calc — header discount (apportioned) + charges", () => {
+  const base = (over = {}) => ({ place_of_supply: "KL", seller_state_code: "KL", ...over });
+  it("apportions a 10% header discount pro-rata and charges GST on the net", () => {
+    const r = computeQuote(base({
+      header_discount_bp: 1000,
+      lines: [
+        { sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 2000, sale_gst_bp: 1800, itc_claimable: true },
+        { sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 20000, markup_bp: 0, sale_gst_bp: 1800, itc_claimable: true },
+      ],
+    }));
+    expect(r.lines[0].line_discount_paise).toBe(1200);
+    expect(r.lines[1].line_discount_paise).toBe(2000);
+    expect(r.lines[0].line_taxable_paise).toBe(10800);
+    expect(r.lines[1].line_taxable_paise).toBe(18000);
+    expect(r.lines[0].line_gst_paise).toBe(1944);
+    expect(r.lines[1].line_gst_paise).toBe(3240);
+    expect(r.totals.gross_subtotal_paise).toBe(32000);
+    expect(r.totals.discount_total_paise).toBe(3200);
+    expect(r.totals.subtotal_paise).toBe(28800);
+    expect(r.totals.cgst_total).toBe(2592);
+    expect(r.totals.sgst_total).toBe(2592);
+    expect(r.totals.grand_total_paise).toBe(34000);
+    expect(r.totals.round_off_paise).toBe(16);
+    // sum of apportioned discounts is exact
+    expect((r.lines[0].line_discount_paise || 0) + (r.lines[1].line_discount_paise || 0)).toBe(3200);
+  });
+  it("adds a taxable charge as revenue at its own GST rate", () => {
+    const r = computeQuote(base({
+      charges: [{ label: "Installation", amount_paise: 5000, gst_bp: 1800 }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
+    }));
+    expect(r.charges).toBeDefined();
+    expect(r.charges![0]).toMatchObject({ label: "Installation", amount_paise: 5000, gst_bp: 1800, gst_paise: 900, cgst_paise: 450, sgst_paise: 450, igst_paise: 0 });
+    expect(r.totals.charges_total_paise).toBe(5000);
+    expect(r.totals.subtotal_paise).toBe(15000);     // 10000 line + 5000 charge
+    expect(r.totals.cgst_total).toBe(1350);
+    expect(r.totals.grand_total_paise).toBe(17700);
+    // charge is full margin (zero cost): line margin 0 + charge 5000
+    expect(r.totals.weighted_margin_bp).toBe(3333);
+  });
+  it("no discount / no charges leaves the new fields absent (frozen-vector shape)", () => {
+    const r = computeQuote(base({
+      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 1000, sale_gst_bp: 1800, itc_claimable: true }],
+    }));
+    expect(r.totals.discount_total_paise).toBeUndefined();
+    expect(r.totals.charges_total_paise).toBeUndefined();
+    expect(r.charges).toBeUndefined();
+    expect(r.lines[0].line_discount_paise).toBeUndefined();
+  });
+});
