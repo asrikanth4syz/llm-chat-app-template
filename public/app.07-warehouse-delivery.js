@@ -785,7 +785,7 @@ async function renderDelivery(el) {
       </div>
       <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div style="font-size:.82rem;color:var(--text-muted)">
-          ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+          ${dc.item_count ? `<span style="font-weight:600;color:var(--text)">${dc.item_count}</span> item${dc.item_count != 1 ? 's' : ''} · ` : ''}${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
@@ -972,7 +972,7 @@ async function switchDeliveryTab(tab, btn) {
           </div>
           <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
             <div style="font-size:.82rem;color:var(--text-muted)">
-              ${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+              ${dc.item_count ? `<span style="font-weight:600;color:var(--text)">${dc.item_count}</span> item${dc.item_count != 1 ? 's' : ''} · ` : ''}${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
             </div>
             <div style="display:flex;gap:6px">
               <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
@@ -1185,6 +1185,10 @@ function filterPODTable(q) {
 async function viewDCItems(dcId) {
   const items = await api('/delivery-challans/' + dcId + '/items');
   if (!items) return;
+  const lineCount = items.length;
+  const qtyDispatched = items.reduce((s, i) => s + (Number(i.qty_ordered) || 0), 0);
+  const qtyDelivered = items.reduce((s, i) => s + (Number(i.qty_delivered) || 0), 0);
+  const qtyPending = qtyDispatched - qtyDelivered;
   const rows = items.length ? items.map(i => `<tr>
     <td>${i.sku}</td>
     <td><b>${h(i.name)}</b></td>
@@ -1192,14 +1196,25 @@ async function viewDCItems(dcId) {
     <td style="color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
     <td style="color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
   </tr>`).join('') : '<tr><td colspan="5" class="u-empty">No items</td></tr>';
+  const foot = items.length ? `<tfoot><tr style="border-top:2px solid var(--border);font-weight:700">
+      <td colspan="2">${lineCount} line${lineCount!==1?'s':''} · ${qtyDispatched} unit${qtyDispatched!==1?'s':''}</td>
+      <td>${qtyDispatched}</td><td style="color:var(--success)">${qtyDelivered}</td>
+      <td style="color:${qtyPending>0?'var(--danger)':'var(--success)'}">${qtyPending}</td>
+    </tr></tfoot>` : '';
   openModal(`DC Items — ${dcId}`,
     `<p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px">
       "Dispatched" = qty in this DC (picked from warehouse). "Delivered" = confirmed at drop-off. "Pending" = yet to be confirmed delivered.
     </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="badge badge-secondary">${lineCount} line${lineCount!==1?'s':''}</span>
+      <span class="badge badge-secondary">${qtyDispatched} unit${qtyDispatched!==1?'s':''} dispatched</span>
+      <span class="badge badge-secondary">${qtyPending} pending</span>
+    </div>
     <div class="table-wrap">
       <table class="table">
         <thead><tr><th>SKU</th><th>Item</th><th>Dispatched</th><th>Delivered</th><th>Pending</th></tr></thead>
         <tbody>${rows}</tbody>
+        ${foot}
       </table>
     </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
@@ -1223,10 +1238,19 @@ async function toggleDCItemsInline(dcId, btn) {
         <td style="text-align:right;color:${i.qty_delivered>0?'var(--success)':'var(--text-muted)'}">${i.qty_delivered||0}</td>
         <td style="text-align:right;color:${(i.qty_ordered-(i.qty_delivered||0))>0?'var(--danger)':'var(--success)'};font-weight:600">${i.qty_ordered-(i.qty_delivered||0)}</td>
       </tr>`).join('') : `<tr><td colspan="5" class="u-empty">No items</td></tr>`;
+    const lc = items.length;
+    const qd = items.reduce((s, i) => s + (Number(i.qty_ordered) || 0), 0);
+    const qdel = items.reduce((s, i) => s + (Number(i.qty_delivered) || 0), 0);
+    const foot = items.length ? `<tfoot><tr style="border-top:2px solid var(--border);font-weight:700">
+        <td colspan="2">${lc} line${lc!==1?'s':''} · ${qd} unit${qd!==1?'s':''}</td>
+        <td class="u-right">${qd}</td><td class="u-right" style="color:var(--success)">${qdel}</td>
+        <td class="u-right" style="color:${(qd-qdel)>0?'var(--danger)':'var(--success)'}">${qd-qdel}</td>
+      </tr></tfoot>` : '';
     box.innerHTML = `<div class="table-wrap" style="margin-top:8px;border:1px solid var(--border);border-radius:8px">
       <table class="table" style="margin:0;font-size:.82rem">
         <thead><tr><th>SKU</th><th>Item</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th><th class="u-right">Pending</th></tr></thead>
         <tbody>${rows}</tbody>
+        ${foot}
       </table></div>`;
     box.dataset.loaded = '1';
   }

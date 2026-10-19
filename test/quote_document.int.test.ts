@@ -314,3 +314,19 @@ describe("HSN/UoM, header discount + charges, and pipeline", () => {
     expect(p.by_status.some((s: any) => s.status === "DRAFT")).toBe(true);
   });
 });
+
+describe("pipeline counts one deal per revision chain", () => {
+  it("revising a sent quote does not inflate pipeline value and hides the superseded predecessor", async () => {
+    await prep();
+    const id = await approvedQuote();
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    const sumV = (p: any) => (p.by_status || []).reduce((a: number, s: any) => a + (s.v || 0), 0);
+    const before = await (await get("/api/quotes/pipeline", salesTok)).json() as any;
+    const totalBefore = sumV(before);
+    await post(`/api/quotes/${id}/revise`, {}, salesTok);   // original → SUPERSEDED, new DRAFT head
+    const after = await (await get("/api/quotes/pipeline", salesTok)).json() as any;
+    // one deal per chain: the superseded predecessor is excluded, so value is unchanged
+    expect(sumV(after)).toBe(totalBefore);
+    expect(after.by_status.some((s: any) => s.status === "SUPERSEDED")).toBe(false);
+  });
+});

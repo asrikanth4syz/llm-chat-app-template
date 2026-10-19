@@ -5629,15 +5629,18 @@ async function handleQuotePipeline(request: Request, env: Env): Promise<Response
   await ensureQuoteSchema(env);
   const acc = await requireQuoteAccess(request, env);
   if (acc instanceof Response) return acc;
+  // A revision chain is ONE deal: a SUPERSEDED quote is the replaced predecessor of
+  // its revision, so it is excluded everywhere — each chain contributes only its live
+  // head (the latest revision), never counting a quote's history as multiple deals.
   const byStatus = (await env.DB.prepare(
-    "SELECT status, COUNT(*) AS n, COALESCE(SUM(grand_total_paise),0) AS v FROM quotes WHERE account_id=? GROUP BY status").bind(QUOTE_ACCOUNT).all()).results;
+    "SELECT status, COUNT(*) AS n, COALESCE(SUM(grand_total_paise),0) AS v FROM quotes WHERE account_id=? AND status!='SUPERSEDED' GROUP BY status").bind(QUOTE_ACCOUNT).all()).results;
   const byClient = (await env.DB.prepare(
     `SELECT q.client_id, c.name AS client_name, COUNT(*) AS n, COALESCE(SUM(q.grand_total_paise),0) AS v
        FROM quotes q LEFT JOIN clients c ON c.id=q.client_id
-      WHERE q.account_id=? GROUP BY q.client_id ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
+      WHERE q.account_id=? AND q.status!='SUPERSEDED' GROUP BY q.client_id ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
   const byType = (await env.DB.prepare(
     `SELECT COALESCE(NULLIF(TRIM(title),''),'(untitled)') AS t, COUNT(*) AS n, COALESCE(SUM(grand_total_paise),0) AS v
-       FROM quotes WHERE account_id=? GROUP BY t ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
+       FROM quotes WHERE account_id=? AND status!='SUPERSEDED' GROUP BY t ORDER BY v DESC LIMIT 10`).bind(QUOTE_ACCOUNT).all()).results;
   return json({ by_status: byStatus, by_client: byClient, by_type: byType });
 }
 
@@ -8200,7 +8203,13 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
 
   const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!order) return json({error:"Not found"}, 404);
-  if (!["ACKNOWLEDGED","READY_TO_PICK"].includes(order.status))
+  // Admins may re-pick an already-picked order (edit the allocation) up to QC; it
+  // rewrites the allocation and lands the order back at PICKED.
+  const canEditPick = ["super_admin","ops_admin"].includes(user!.role);
+  const pickable = canEditPick
+    ? ["ACKNOWLEDGED","READY_TO_PICK","PICKED","QUALITY_CHECK"]
+    : ["ACKNOWLEDGED","READY_TO_PICK"];
+  if (!pickable.includes(order.status))
     return json({error:`Cannot pick from status ${order.status}`}, 400);
 
   // Save allocation records
@@ -9307,7 +9316,9 @@ async function handleListDCs(request: Request, env: Env): Promise<Response> {
   let query = `SELECT dc.*,o.client_id,c.name as client_name,o.grand_total as order_value,
     c.address AS client_address, c.location AS client_location, c.zone AS client_zone,
     c.map_pin AS client_map_pin, c.contact_name AS client_contact_name, c.contact_phone AS client_contact_phone,
-    COALESCE((SELECT COUNT(*) FROM dc_documents d WHERE d.dc_id=dc.id),0) AS doc_count
+    COALESCE((SELECT COUNT(*) FROM dc_documents d WHERE d.dc_id=dc.id),0) AS doc_count,
+    COALESCE((SELECT COUNT(*) FROM dc_items di WHERE di.dc_id=dc.id),0) AS item_count,
+    COALESCE((SELECT SUM(di.qty_ordered) FROM dc_items di WHERE di.dc_id=dc.id),0) AS total_qty
     FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
     WHERE 1=1`;
   const params: string[] = [];

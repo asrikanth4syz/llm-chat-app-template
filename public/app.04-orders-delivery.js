@@ -689,7 +689,7 @@ async function viewOrder(id) {
           </div>
         </div>
         ${dc.driver_name?`<div style="margin-top:6px;font-size:.85rem;color:var(--text-muted)">Driver: ${dc.driver_name} · Vehicle: ${dc.vehicle_no||'—'}</div>`:''}
-        ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
+        ${dc.total_qty?`<div style="margin-top:4px;font-size:.85rem">${dc.item_count?`<b>${dc.item_count}</b> item${dc.item_count!=1?'s':''} · `:''}Dispatched: <b>${dc.total_qty}</b> units · Delivered: <b style="color:${dc.delivered_qty>0?'var(--success)':'var(--text-muted)'}">${dc.delivered_qty||0}</b></div>`:''}
         ${dc.status==='SCHEDULED'?`<div style="margin-top:6px;font-size:.8rem;color:var(--warning)">⏳ Awaiting dispatch${(dc.delivered_qty>0||orderDCs.some(x=>x.status==='DELIVERED'))?' — remaining items after an earlier partial delivery':''}</div>`:''}
         <div id="dcitems-${dc.id}" style="display:none"></div>
       </div>`).join('')}` : '';
@@ -885,6 +885,11 @@ async function viewOrder(id) {
           footer.push(`<span class="badge badge-warning" style="padding:8px 12px">⏳ Pending your approver's review</span>`);
       }
       if (opsRole) {
+        if (!['DRAFT','CANCELLED'].includes(s))
+          footer.push(`<button class="btn btn-secondary" ${dataActClose('viewOrderDrilldown', id)}>⬇ Download</button>`);
+        // Admins can edit the picked allocation after picking (and up to QC).
+        if (['super_admin','ops_admin'].includes(APP.user?.role||'') && ['PICKED','QUALITY_CHECK'].includes(s))
+          footer.push(`<button class="btn btn-secondary" ${dataActClose('pickOrderModal', id)}>✏️ Edit picks</button>`);
         if (['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'].includes(s))
           footer.push(`<button class="btn btn-warning" ${dataActClose('amendOrderModal', id)}>✏️ Amend</button>`);
         if (s==='PENDING_PRICING')
@@ -1067,10 +1072,17 @@ async function amendOrderModal(id) {
   ]);
   if (!order) return;
   APP._amendInv = (inv || []).map(i => ({ sku: i.sku, name: i.name, unit_price: i.unit_price != null ? i.unit_price : (i.price || 0) }));
+  // Catalogue price fallback so every already-assigned line shows a price, even if
+  // the stored order line was created without one (ad-hoc / pre-pricing orders).
+  const invPrice = {}; APP._amendInv.forEach(i => { invPrice[i.sku] = Number(i.unit_price) || 0; });
   const deliveredMap = {};
   if (drill && Array.isArray(drill.lines)) drill.lines.forEach(l => { deliveredMap[l.sku] = parseInt(l.qty_delivered) || 0; });
   const anyDelivered = Object.values(deliveredMap).some(v => v > 0);
-  const rows = (order.items || []).map(it => amendRowHTML({ ...it, delivered: deliveredMap[it.sku] || 0 })).join('');
+  const rows = (order.items || []).map(it => amendRowHTML({
+    ...it,
+    unit_price: (Number(it.unit_price) || 0) || invPrice[it.sku] || 0,
+    delivered: deliveredMap[it.sku] || 0,
+  })).join('');
   openModal(`✏️ Amend Order ${id}`,
     `<div style="margin:0 0 12px;padding:9px 12px;background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:8px;font-size:.82rem;color:var(--amber-text)">
        ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
