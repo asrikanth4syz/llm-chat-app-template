@@ -1439,7 +1439,7 @@ async function markDelivered(dcId) {
           <td class="u-empty">${i.qty_ordered}</td>
           <td style="text-align:center;font-weight:600${expected<i.qty_ordered?';color:var(--warning)':''}">${expected}</td>
           <td class="u-center"><input type="number" class="form-control form-control-sm deliver-qty"
-            data-sku="${i.sku}" data-expected="${expected}" value="${expected}" min="0"
+            data-sku="${i.sku}" data-expected="${expected}" data-dispatched="${i.qty_ordered}" value="${expected}" min="0"
             style="width:80px;text-align:center"
             ${dataInputEl('onDeliverQty')}></td>
         </tr>`;}).join('')}
@@ -1460,18 +1460,21 @@ async function markDelivered(dcId) {
       <button class="btn btn-success" id="deliver-confirm-btn" data-busy="Confirming…" ${dataAct('confirmDelivery', dcId)}>Confirm Delivery</button>
     </div>
   `);
+  onDeliverQty();  // reveal the voice section immediately if the pre-filled qty already differs from dispatched
 }
 
 // Recompute delivery discrepancy as quantities are typed; reveal the voice-note
 // section and switch the confirm button to "Submit for Approval" when short/excess.
+// Baseline = the DISPATCHED qty (qty_ordered), the SAME one the server uses to demand
+// a voice note — so the recorder appears in every case the server will require it.
 function onDeliverQty(el) {
   const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
   let discrepancy = false;
   inputs.forEach(inp => {
     const v = parseInt(inp.value) || 0;
-    const expected = parseInt(inp.dataset.expected) || 0;
-    inp.style.color = v !== expected ? 'var(--warning)' : 'inherit';
-    if (v !== expected) discrepancy = true;
+    const dispatched = parseInt(inp.dataset.dispatched) || 0;
+    inp.style.color = v !== dispatched ? 'var(--warning)' : 'inherit';
+    if (v !== dispatched) discrepancy = true;
   });
   const section = document.getElementById('deliver-variance');
   const btn = document.getElementById('deliver-confirm-btn');
@@ -1482,7 +1485,7 @@ function onDeliverQty(el) {
 async function confirmDelivery(dcId) {
   const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
   const items = inputs.map(inp => ({ sku: inp.dataset.sku, qty_delivered: parseInt(inp.value)||0 }));
-  const discrepancy = inputs.some(inp => (parseInt(inp.value)||0) !== (parseInt(inp.dataset.expected)||0));
+  const discrepancy = inputs.some(inp => (parseInt(inp.value)||0) !== (parseInt(inp.dataset.dispatched)||0));
   // DC number is set at dispatch now — not sent from here.
   const dcNumber = '';
 
@@ -1537,6 +1540,7 @@ async function toggleVoiceRecording() {
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     rec.onstop = () => {
       stream.getTracks().forEach(t => t.stop());
+      if (APP._voiceTimer) { clearInterval(APP._voiceTimer); APP._voiceTimer = null; }
       const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -1544,7 +1548,7 @@ async function toggleVoiceRecording() {
         const b64 = dataUrl.split(',')[1] || '';
         APP._deliveryVoice = { b64, mime: blob.type, size: blob.size };
         if (playback) { playback.src = dataUrl; playback.hidden = false; }
-        if (status) status.textContent = `Recorded · ${(blob.size/1024).toFixed(0)} KB`;
+        if (status) status.innerHTML = `<span style="color:var(--success)">✓ Recorded</span> · ${(blob.size/1024).toFixed(0)} KB`;
       };
       reader.readAsDataURL(blob);
       if (btn) { btn.textContent = '🎙 Re-record'; btn.classList.remove('btn-danger'); }
@@ -1552,7 +1556,17 @@ async function toggleVoiceRecording() {
     APP._voiceRecorder = rec;
     rec.start();
     if (btn) { btn.textContent = '⏹ Stop'; btn.classList.add('btn-danger'); }
-    if (status) status.textContent = 'Recording…';
+    // Live "recording in progress" indicator: a pulsing red dot + running timer.
+    const started = Date.now();
+    const paint = () => {
+      if (!status) return;
+      const s = Math.floor((Date.now() - started) / 1000);
+      const mmss = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      status.innerHTML = `<span class="rec-dot"></span> <b style="color:var(--danger)">Recording…</b> <span style="font-variant-numeric:tabular-nums">${mmss}</span> <span style="color:var(--text-muted)">— tap Stop when done</span>`;
+    };
+    paint();
+    if (APP._voiceTimer) clearInterval(APP._voiceTimer);
+    APP._voiceTimer = setInterval(paint, 1000);
   } catch {
     showToast('Microphone permission denied — cannot record', 'error');
   }

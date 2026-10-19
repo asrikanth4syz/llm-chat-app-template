@@ -774,6 +774,10 @@ button.tile:hover { transform: translateY(-1px); }
 .q-list-table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
 .q-list-table thead th:hover { color: var(--navy); }
 
+/* Live "recording in progress" dot for the delivery voice-note capture. */
+.rec-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--danger,#dc2626); vertical-align:middle; animation:recPulse 1s ease-in-out infinite; }
+@keyframes recPulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.3; transform:scale(.7); } }
+
 /* Quote pipeline (analytics) tiles + stage bars. */
 .q-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 14px; }
 .q-pipe { display: flex; flex-direction: column; gap: 9px; }
