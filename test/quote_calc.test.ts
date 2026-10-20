@@ -111,34 +111,52 @@ describe("quote_calc — validation surface (422)", () => {
     expect([...GST_SLAB_BP]).toEqual([0, 500, 1200, 1800, 2800, 4000]);
   });
 });
-describe("quote_calc — GST-inclusive (net) input price", () => {
-  // ₹118 incl 18% GST → ex-GST base ₹100; 0% markup → unit price ₹100; GST re-added.
-  it("cost_markup: a net cost is stripped to ex-GST before markup", () => {
+describe("quote_calc — auto GST-inclusive net rate / MRP; cost ex-GST; costs out of price", () => {
+  // Net rate is entered GST-INCLUSIVE and auto-stripped (no toggle): ₹118 incl 18% → ex-GST ₹100.
+  it("net_rate: a GST-inclusive rate is stripped to the ex-GST sale price", () => {
     const r = computeQuote({
       place_of_supply: "TN", seller_state_code: "KL",   // inter-state → IGST
-      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 11800, markup_bp: 0, sale_gst_bp: 1800, purchase_gst_bp: 1800, price_inclusive_gst: true, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 8000, net_rate_paise: 11800, sale_gst_bp: 1800, itc_claimable: true }],
     });
-    expect(r.lines[0].unit_price_paise).toBe(10000);     // ex-GST base
+    expect(r.lines[0].unit_price_paise).toBe(10000);     // ex-GST sale price
     expect(r.lines[0].line_gst_paise).toBe(1800);        // 18% re-added once
     expect(r.lines[0].igst_paise).toBe(1800);
     expect(r.totals.grand_total_paise).toBe(11800);      // back to the net figure
-    expect(r.lines[0].landed_cost_paise).toBe(10000);    // landed also on ex-GST
+    expect(r.lines[0].landed_cost_paise).toBe(8000);     // sellable cost = buying cost
+    expect(r.lines[0].line_margin_paise).toBe(2000);     // 10000 − 8000
   });
-  it("mrp_discount: a net MRP is stripped to ex-GST before discount", () => {
+  it("net_rate: a per-line adjust (>=0) adds to the sale total", () => {
+    const r = computeQuote({
+      place_of_supply: "KL", seller_state_code: "KL",
+      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 3000, net_rate_paise: 5900, adjust_paise: 1000, sale_gst_bp: 1800, itc_claimable: true }],
+    });
+    expect(r.lines[0].unit_price_paise).toBe(5000);       // 5900 incl → 5000 ex
+    expect(r.lines[0].line_taxable_paise).toBe(6000);     // 5000 + 1000 adjust
+  });
+  it("mrp_discount: a GST-inclusive MRP is stripped before discount", () => {
     const r = computeQuote({
       place_of_supply: "TN", seller_state_code: "KL",
-      lines: [{ sku: null, qty: 1, pricing_mode: "mrp_discount", purchase_cost_paise: 8000, mrp_paise: 11800, discount_bp: 0, sale_gst_bp: 1800, price_inclusive_gst: true, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "mrp_discount", purchase_cost_paise: 8000, mrp_paise: 11800, discount_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
     });
     expect(r.lines[0].unit_price_paise).toBe(10000);
     expect(r.totals.grand_total_paise).toBe(11800);
   });
-  it("without the flag the same cost is treated as ex-GST (no stripping)", () => {
+  it("cost_markup: the buying cost is ex-GST (no stripping)", () => {
     const r = computeQuote({
       place_of_supply: "TN", seller_state_code: "KL",
-      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 11800, markup_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
     });
-    expect(r.lines[0].unit_price_paise).toBe(11800);
-    expect(r.totals.grand_total_paise).toBe(13900);      // 11800 + 18% = 13924 → round-to-rupee ₹139.00
+    expect(r.lines[0].unit_price_paise).toBe(10000);
+    expect(r.totals.grand_total_paise).toBe(11800);       // 10000 + 18%
+  });
+  it("branding + freight are costs — they reduce margin, never the sale price", () => {
+    const r = computeQuote({
+      place_of_supply: "KL", seller_state_code: "KL",
+      lines: [{ sku: null, qty: 1, pricing_mode: "cost_markup", purchase_cost_paise: 10000, markup_bp: 2000, freight_alloc_paise: 300, branding_cost_paise: 200, sale_gst_bp: 1800, itc_claimable: true }],
+    });
+    expect(r.lines[0].unit_price_paise).toBe(12000);      // 10000 + 20% markup; NO freight/branding on top
+    expect(r.lines[0].landed_cost_paise).toBe(10500);     // sellable cost = 10000 + 300 + 200
+    expect(r.lines[0].line_margin_paise).toBe(1500);      // 12000 − 10500
   });
 });
 // I0-b (no float math in the engine source) is a STATIC grep enforced in

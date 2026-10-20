@@ -1,5 +1,19 @@
 # Calc Spec: 006-quotations pricing / GST / landed-cost / rounding
 
+> **r3 pricing-model revision (operator-requested).** Three pricing methods now exist and the
+> freight/branding treatment changed:
+> - **Methods:** `cost_markup` (sale = buying cost × (1+markup), markup on the **buying cost only**),
+>   `net_rate` (sale rate entered **GST-inclusive**, auto-stripped; plus an optional per-line `adjust_paise`
+>   (≥0) added to the line sale total), `mrp_discount` (MRP entered **GST-inclusive**, auto-stripped, then
+>   discount). There is no "is this inclusive?" toggle any more — net rate and MRP are always inclusive,
+>   cost is always ex-GST.
+> - **Branding + freight are COSTS, never added to the sale price in any method.** They fold into the
+>   **sellable cost** (`landed = buying cost + freight + branding + non-ITC purchase GST`) and therefore
+>   reduce margin (`margin = net taxable − sellable cost`). Previously they were passed through onto the
+>   sale price (netting to ~zero margin); that is removed.
+> - `purchase_cost_paise` is the **buying cost in every method** (the margin basis), never the sale price.
+> - Affected frozen vectors re-derived: V1, V2, V4, V11, V16 (V13 unchanged); V19, V20 added for `net_rate`.
+
 > Resolves spec-validation r1 findings: `calc-vectors-not-inlined`, `rounding-policy-underspecified`,
 > `seller-state-origin-missing`, `itc-landed-cost-fold-formula`, `weighted-margin-undefined`,
 > `gst-rate-authority`, `calc-input-validation-422`, `money-stored-as-real-float`, `itc-per-quote-mixed-basket`.

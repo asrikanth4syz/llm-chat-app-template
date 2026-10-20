@@ -4684,6 +4684,10 @@ async function ensureQuoteSchema(env: Env): Promise<void> {
     `ALTER TABLE quote_lines ADD COLUMN hsn TEXT;`,
     `ALTER TABLE quote_lines ADD COLUMN uom TEXT;`,
     `ALTER TABLE quote_lines ADD COLUMN line_discount_paise INTEGER;`,
+    // Net-rate pricing method: a GST-inclusive sale rate + an optional per-line
+    // sale adjustment. (cost_markup/mrp_discount leave these NULL.)
+    `ALTER TABLE quote_lines ADD COLUMN net_rate_paise INTEGER;`,
+    `ALTER TABLE quote_lines ADD COLUMN adjust_paise INTEGER;`,
     // Header-level discount + taxable charges (charges stored as JSON on the quote).
     `ALTER TABLE quotes ADD COLUMN header_discount_paise INTEGER;`,
     `ALTER TABLE quotes ADD COLUMN header_discount_bp INTEGER;`,
@@ -4828,8 +4832,8 @@ async function handleQuoteCreate(request: Request, env: Env): Promise<Response> 
   ];
   (body.lines as any[]).forEach((ln, i) => {
     const o = result.lines[i];
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise,net_rate_paise,adjust_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null, ln.net_rate_paise ?? null, ln.adjust_paise ?? null));
   });
   await env.DB.batch(stmts);
   return json({ id, quote_no: quoteNo, version: 1, status: "DRAFT", grand_total_paise: result.totals.grand_total_paise });
@@ -4940,8 +4944,8 @@ async function handleQuoteEdit(request: Request, env: Env, id: string): Promise<
   ];
   (body.lines as any[]).forEach((ln, i) => {
     const o = result.lines[i];
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, nextVer, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,price_inclusive_gst,hsn,uom,line_discount_paise,net_rate_paise,adjust_paise) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, id, nextVer, i, ln.sku ?? null, ln.description ?? null, ln.qty, ln.pricing_mode, ln.purchase_cost_paise ?? null, ln.markup_bp ?? null, ln.mrp_paise ?? null, ln.discount_bp ?? null, ln.freight_alloc_paise ?? 0, ln.branding_cost_paise ?? 0, ln.sale_gst_bp, ln.purchase_gst_bp ?? ln.sale_gst_bp, ln.itc_claimable ? 1 : 0, o.landed_cost_paise, o.unit_price_paise, o.line_taxable_paise, o.line_gst_paise, o.cgst_paise, o.sgst_paise, o.igst_paise, o.line_margin_paise, ln.price_inclusive_gst ? 1 : 0, (ln.hsn != null ? String(ln.hsn).slice(0, 12) : null), (ln.uom != null ? String(ln.uom).slice(0, 16) : null), o.line_discount_paise ?? null, ln.net_rate_paise ?? null, ln.adjust_paise ?? null));
   });
   const res = await env.DB.batch(stmts);
   // CAS guard: the UPDATE is stmts[1]; 0 rows changed → a concurrent edit won the race.
@@ -5449,8 +5453,8 @@ async function handleQuoteRevise(request: Request, env: Env, id: string): Promis
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, newId, acc.user.sub, auditDetail, entryHash),
   ];
   for (const l of srcLines as any[]) {
-    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,price_inclusive_gst,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,hsn,uom,line_discount_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, newId, l.line_no, l.sku, l.description, l.qty, l.pricing_mode, l.purchase_cost_paise, l.markup_bp, l.mrp_paise, l.discount_bp, l.freight_alloc_paise, l.branding_cost_paise, l.sale_gst_bp, l.purchase_gst_bp, l.itc_claimable, l.price_inclusive_gst, l.landed_cost_paise, l.unit_price_paise, l.line_taxable_paise, l.line_gst_paise, l.cgst_paise, l.sgst_paise, l.igst_paise, l.line_margin_paise, l.hsn ?? null, l.uom ?? null, l.line_discount_paise ?? null));
+    stmts.push(env.DB.prepare("INSERT INTO quote_lines (id,account_id,quote_id,version,line_no,sku,description,qty,pricing_mode,purchase_cost_paise,markup_bp,mrp_paise,discount_bp,freight_alloc_paise,branding_cost_paise,sale_gst_bp,purchase_gst_bp,itc_claimable,price_inclusive_gst,landed_cost_paise,unit_price_paise,line_taxable_paise,line_gst_paise,cgst_paise,sgst_paise,igst_paise,line_margin_paise,hsn,uom,line_discount_paise,net_rate_paise,adjust_paise) VALUES (?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`ql_${uid()}`, QUOTE_ACCOUNT, newId, l.line_no, l.sku, l.description, l.qty, l.pricing_mode, l.purchase_cost_paise, l.markup_bp, l.mrp_paise, l.discount_bp, l.freight_alloc_paise, l.branding_cost_paise, l.sale_gst_bp, l.purchase_gst_bp, l.itc_claimable, l.price_inclusive_gst, l.landed_cost_paise, l.unit_price_paise, l.line_taxable_paise, l.line_gst_paise, l.cgst_paise, l.sgst_paise, l.igst_paise, l.line_margin_paise, l.hsn ?? null, l.uom ?? null, l.line_discount_paise ?? null, l.net_rate_paise ?? null, l.adjust_paise ?? null));
   }
   // Supersede the parent: append to its hash-chained audit, cancel its reminders.
   const pam = await nextAuditMeta(env, id);

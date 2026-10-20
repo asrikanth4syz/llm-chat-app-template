@@ -21,22 +21,25 @@ export const MAX_PAISE = 1_000_000_000_000;
 const MAX_QTY = 1_000_000;
 const MAX_MARKUP_BP = 1_000_000; // 0..10000 %
 
-export type PricingMode = "cost_markup" | "mrp_discount";
+export type PricingMode = "cost_markup" | "net_rate" | "mrp_discount";
 
 export interface QuoteCalcLine {
   sku: string | null;
   qty: number;
   pricing_mode: PricingMode;
-  purchase_cost_paise?: number; // required (both modes: it is the cost basis)
-  markup_bp?: number;           // required if cost_markup
-  mrp_paise?: number;           // required if mrp_discount
-  discount_bp?: number;         // required if mrp_discount
-  freight_alloc_paise?: number; // per unit, default 0
-  branding_cost_paise?: number; // per unit, default 0
+  // purchase_cost_paise is the ex-GST BUYING COST in every mode — the basis for
+  // sellable cost + margin (never the sale price).
+  purchase_cost_paise?: number;
+  markup_bp?: number;           // cost_markup: markup applied to the buying cost
+  net_rate_paise?: number;      // net_rate: the sale rate per unit, GST-INCLUSIVE
+  adjust_paise?: number;        // net_rate: per-line amount (>=0) added to the sale total
+  mrp_paise?: number;           // mrp_discount: the MRP, GST-INCLUSIVE
+  discount_bp?: number;         // mrp_discount: discount off the MRP
+  freight_alloc_paise?: number; // per unit, a COST (not added to the sale price), default 0
+  branding_cost_paise?: number; // per unit, a COST (not added to the sale price), default 0
   sale_gst_bp: number;
   purchase_gst_bp?: number;     // defaults to sale_gst_bp
   itc_claimable: boolean;       // PER LINE
-  price_inclusive_gst?: boolean; // the input price (cost / MRP) is GST-inclusive ("net")
 }
 
 /** A header-level charge (installation, delivery, handling…): taxable revenue at
@@ -250,7 +253,7 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     if (qty <= 0 || qty > MAX_QTY) {
       throw new QuoteCalcError("E_VALIDATION", `${f("qty")} must be in 1..${MAX_QTY}`, f("qty"));
     }
-    if (ln.pricing_mode !== "cost_markup" && ln.pricing_mode !== "mrp_discount") {
+    if (ln.pricing_mode !== "cost_markup" && ln.pricing_mode !== "net_rate" && ln.pricing_mode !== "mrp_discount") {
       throw new QuoteCalcError("E_VALIDATION", `${f("pricing_mode")} invalid`, f("pricing_mode"));
     }
     const saleBp = assertSlab(ln.sale_gst_bp, f("sale_gst_bp"));
@@ -260,45 +263,46 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     const freight = assertPaiseInRange(assertInt(ln.freight_alloc_paise ?? 0, f("freight_alloc_paise")), f("freight_alloc_paise"));
     const branding = assertPaiseInRange(assertInt(ln.branding_cost_paise ?? 0, f("branding_cost_paise")), f("branding_cost_paise"));
 
-    // purchase_cost_paise is the cost basis in BOTH modes (mrp_discount uses a
-    // real purchase cost, never the discounted MRP — calc-spec §3).
-    const baseCostRaw = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
-    // When the input price is GST-inclusive ("net"), strip the tax out first so
-    // markups/discounts and the taxable sale price are computed on the ex-GST base
-    // (otherwise GST would be applied twice). Cost is stripped with purchase GST,
-    // MRP with sale GST.
-    const inclusive = ln.price_inclusive_gst === true;
-    const baseCost = (inclusive && ln.pricing_mode === "cost_markup") ? exclGstPaise(baseCostRaw, purchaseBp) : baseCostRaw;
+    // purchase_cost_paise is the ex-GST BUYING COST in every mode — the margin basis,
+    // never the sale price. (mrp_discount/net_rate carry a real buying cost, not the
+    // discounted MRP / net rate.)
+    const baseCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
 
+    // The ex-GST sale price PER UNIT. Net rate and MRP are entered GST-INCLUSIVE and
+    // are auto-stripped here (no "is this inclusive?" toggle — avoids operator error).
+    // Branding + transport are NOT added to the sale price in any mode.
     let unitPrice: number;
+    let adjust = 0;   // net_rate: a per-line amount (>=0) added to the sale total
     if (ln.pricing_mode === "cost_markup") {
       const markupBp = assertInt(ln.markup_bp ?? 0, f("markup_bp"));
       if (markupBp < 0 || markupBp > MAX_MARKUP_BP) {
         throw new QuoteCalcError("E_VALIDATION", `${f("markup_bp")} must be in 0..${MAX_MARKUP_BP}`, f("markup_bp"));
       }
-      unitPrice = baseCost + applyBp(baseCost, markupBp);
+      unitPrice = baseCost + applyBp(baseCost, markupBp);   // markup on the buying cost only
+    } else if (ln.pricing_mode === "net_rate") {
+      const netIncl = assertPaiseInRange(assertInt(ln.net_rate_paise ?? 0, f("net_rate_paise")), f("net_rate_paise"));
+      unitPrice = exclGstPaise(netIncl, saleBp);            // net rate is GST-inclusive
+      adjust = assertPaiseInRange(assertInt(ln.adjust_paise ?? 0, f("adjust_paise")), f("adjust_paise"));
     } else {
-      const mrpRaw = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
-      const mrp = inclusive ? exclGstPaise(mrpRaw, saleBp) : mrpRaw;
+      const mrpIncl = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
+      const mrp = exclGstPaise(mrpIncl, saleBp);            // MRP is GST-inclusive
       const discBp = assertInt(ln.discount_bp ?? 0, f("discount_bp"));
       if (discBp < 0 || discBp > 10000) {
         throw new QuoteCalcError("E_VALIDATION", `${f("discount_bp")} must be in 0..10000`, f("discount_bp"));
       }
       unitPrice = mrp - applyBp(mrp, discBp);
     }
-    // Freight + branding are PASSED THROUGH to the client at cost: added per-unit
-    // on top of the marked-up / discounted base, and taxed at the line's sale rate
-    // (they are part of the taxable value). They also stay in landed cost, so they
-    // net to zero in margin — a clean recovery, neither profit nor loss.
-    unitPrice = unitPrice + freight + branding;
     if (unitPrice < 0) {
       throw new QuoteCalcError("E_VALIDATION", `${f("unit_price")} computed negative`, f("unit_price"));
     }
 
+    // Sellable cost = buying cost + freight + branding (+ non-ITC purchase GST).
+    // Freight + branding are COSTS that reduce margin; they never inflate the sale
+    // price. Non-reclaimable input GST is a real cost, so it lands too.
     const inputGst = applyBp(baseCost, purchaseBp);
     const landed = baseCost + freight + branding + (ln.itc_claimable ? 0 : inputGst);
 
-    const taxable = unitPrice * qty;                 // gross (pre header-discount)
+    const taxable = unitPrice * qty + adjust;        // gross sale (pre header-discount); net_rate adjust adds here
     if (!Number.isSafeInteger(taxable) || taxable > MAX_PAISE) {
       throw new QuoteCalcError("E_OVERFLOW", `${f("line_taxable")} exceeds cap`, f("line_taxable"));
     }

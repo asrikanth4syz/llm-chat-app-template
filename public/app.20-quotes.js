@@ -504,7 +504,7 @@ async function quoteDownloadPdf(id) {
 }
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
-function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', hsn: '', uom: '', qty: 1, purchase_cost: '', markup_pct: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', price_inclusive_gst: false, itc_claimable: true }; }
+function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', hsn: '', uom: '', qty: 1, purchase_cost: '', markup_pct: '', net_rate: '', adjust: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', itc_claimable: true }; }
 function quoteBlankCharge() { return { label: '', amount: '', gst_pct: '18' }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
@@ -529,10 +529,11 @@ async function quoteEditDraft(id) {
     pricing_mode: l.pricing_mode || 'cost_markup',
     sku: l.sku || '', description: l.description || '', hsn: l.hsn || '', uom: l.uom || '', qty: l.qty || 1,
     purchase_cost: toRupee(l.purchase_cost_paise), markup_pct: toPct(l.markup_bp),
+    net_rate: toRupee(l.net_rate_paise), adjust: toRupee(l.adjust_paise),
     mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
     freight: toRupee(l.freight_alloc_paise), branding: toRupee(l.branding_cost_paise),
     sale_gst_pct: toPct(l.sale_gst_bp) || '0', purchase_gst_pct: toPct(l.purchase_gst_bp),
-    price_inclusive_gst: !!l.price_inclusive_gst, itc_claimable: !!l.itc_claimable,
+    itc_claimable: !!l.itc_claimable,
   }));
   // Reconstruct the header discount + charges from the stored quote.
   let discType = 'pct', discVal = '';
@@ -586,16 +587,7 @@ function quoteRenderEditor() {
     </div>`)}
     ${qCard('Line items', `<div id="q-lines">${e.lines.map((l, i) => quoteLineHtml(l, i)).join('')}</div>`,
       `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddLine')}>${iconPlus(12)} Add line</button>`)}
-    ${qCard('Discount & charges', `
-      <div class="form-row" style="margin-bottom:10px">
-        ${qField('Header discount', `<select ${dataChangeVal('quoteEditDiscount', 'discount_type')}>
-          <option value="pct" ${e.discount_type !== 'amount' ? 'selected' : ''}>Percent (%)</option>
-          <option value="amount" ${e.discount_type === 'amount' ? 'selected' : ''}>Amount (₹)</option></select>`, 'Apportioned across lines (GST-correct)')}
-        ${qField(e.discount_type === 'amount' ? 'Discount (₹)' : 'Discount (%)', `<input type="number" min="0" step="0.01" value="${h(e.discount_value)}" ${dataInputVal('quoteEditDiscount', 'discount_value')} placeholder="0">`)}
-      </div>
-      <div id="q-charges">${(e.charges || []).map((c, i) => quoteChargeHtml(c, i)).join('') || '<div class="form-hint" style="margin-bottom:8px">No additional charges. Add installation, delivery, handling, etc.</div>'}</div>`,
-      `<button class="btn btn-secondary btn-sm" ${dataAct('quoteEditAddCharge')}>${iconPlus(12)} Add charge</button>`)}
-    ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Use “Preview price” to compute GST, round-off and margin.</div></div>'}</div>`)}
+    ${qCard('Pricing summary', `<div id="q-preview">${e.preview ? quotePreviewHtml(e.preview) : '<div class="empty-state empty-sm"><div class="empty-icon">🧮</div><div class="empty-title">No preview yet</div><div class="empty-desc">Use “Preview price” to compute GST, round-off and margin — each line also shows its cost breakup.</div></div>'}</div>`)}
     <div class="q-actionbar">
       <div class="q-actionbar-total">Grand total <b id="q-actionbar-total">${gt}</b></div>
       <div class="q-actionbar-btns">
@@ -606,8 +598,23 @@ function quoteRenderEditor() {
     </div>`;
 }
 function quoteLineHtml(l, i) {
-  const cm = l.pricing_mode === 'cost_markup';
+  const mode = l.pricing_mode || 'cost_markup';
   const canRemove = (qState().editor.lines.length > 1);
+  // Buying cost is captured in EVERY mode (it is the margin basis). Net rate and
+  // MRP are entered GST-inclusive (auto-stripped) — no "incl. GST?" toggle.
+  const buyingCostField = qField('Buying cost / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="ex-GST">`, 'Ex-GST — drives margin');
+  let priceFields;
+  if (mode === 'cost_markup') {
+    priceFields = buyingCostField + qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`, 'On buying cost');
+  } else if (mode === 'net_rate') {
+    priceFields = buyingCostField
+      + `<div class="form-field"><label>Net rate / unit (₹)</label><input type="number" min="0" step="0.01" value="${h(l.net_rate)}" ${dataInputVal('quoteEditLine', i, 'net_rate')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
+      + qField('Adjust amount (₹)', `<input type="number" min="0" step="0.01" value="${h(l.adjust)}" ${dataInputVal('quoteEditLine', i, 'adjust')} placeholder="0">`, 'Added to the line sale total');
+  } else {
+    priceFields = buyingCostField
+      + `<div class="form-field"><label>MRP / unit (₹)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
+      + qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`, 'Off the MRP');
+  }
   return `<div class="q-line">
     <div class="q-line-head">
       <span class="q-line-no">Line ${i + 1}</span>
@@ -620,22 +627,41 @@ function quoteLineHtml(l, i) {
       ${qField('UoM', `<input value="${h(l.uom)}" ${dataInputVal('quoteEditLine', i, 'uom')} placeholder="e.g. Nos / Kg / Box" maxlength="16">`)}
       ${qField('Qty', `<input type="number" min="1" step="1" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`)}
       ${qField('Pricing method', `<select ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
-        <option value="cost_markup" ${cm ? 'selected' : ''}>Cost + markup</option>
-        <option value="mrp_discount" ${!cm ? 'selected' : ''}>MRP − discount</option></select>`)}
-      ${cm
-        ? `<div class="form-field"><label>Purchase cost (₹)</label><input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')}><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>` +
-          qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`)
-        : `<div class="form-field"><label>MRP (₹)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')}><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>` +
-          qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`)}
-      ${qField(cm ? 'Cost is net' : 'MRP is net', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
-        <input type="checkbox" style="width:auto" ${l.price_inclusive_gst ? 'checked' : ''} ${dataChangeEl('quoteEditLineIncl', i)}> Incl. GST</label>`, 'Strip GST before margin')}
-      ${qField('Freight / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.freight)}" ${dataInputVal('quoteEditLine', i, 'freight')} placeholder="0">`)}
-      ${qField('Branding / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.branding)}" ${dataInputVal('quoteEditLine', i, 'branding')} placeholder="0">`)}
+        <option value="cost_markup" ${mode === 'cost_markup' ? 'selected' : ''}>Cost + markup</option>
+        <option value="net_rate" ${mode === 'net_rate' ? 'selected' : ''}>Net rate</option>
+        <option value="mrp_discount" ${mode === 'mrp_discount' ? 'selected' : ''}>MRP − discount</option></select>`)}
+      ${priceFields}
+      ${qField('Freight / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.freight)}" ${dataInputVal('quoteEditLine', i, 'freight')} placeholder="0">`, 'Cost — not added to sale price')}
+      ${qField('Branding / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.branding)}" ${dataInputVal('quoteEditLine', i, 'branding')} placeholder="0">`, 'Cost — not added to sale price')}
       ${qField('Sale GST %', `<input type="number" min="0" step="1" value="${h(l.sale_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'sale_gst_pct')}>`)}
       ${qField('Purchase GST %', `<input type="number" min="0" step="1" value="${h(l.purchase_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'purchase_gst_pct')} placeholder="= sale">`, 'For ITC — defaults to sale GST')}
       ${qField('ITC', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
         <input type="checkbox" style="width:auto" ${l.itc_claimable ? 'checked' : ''} ${dataChangeEl('quoteEditLineItc', i)}> Claimable</label>`)}
     </div>
+    ${quoteLineBreakup(l, i)}
+  </div>`;
+}
+// Per-line cost breakup (pre-tax) from the last preview, so the operator can cross-
+// check buying cost, branding+transport, sellable cost, sale price and margin.
+function quoteLineBreakup(l, i) {
+  const e = qState().editor;
+  const pv = e && e.preview && e.preview.lines && e.preview.lines[i];
+  if (!pv) return '';
+  const qty = Math.max(0, Math.round(Number(l.qty || 0)));
+  const r = (v) => Math.round(Number(v || 0) * 100);
+  const buying = r(l.purchase_cost) * qty;
+  const bt = (r(l.freight) + r(l.branding)) * qty;
+  const sellable = (pv.landed_cost_paise != null) ? pv.landed_cost_paise * qty : (buying + bt);
+  const sale = pv.line_taxable_paise || 0;
+  const margin = pv.line_margin_paise;
+  const cell = (label, val, cls) => `<span class="q-bk-cell"><span class="q-bk-l">${label}</span><span class="q-bk-v${cls ? ' ' + cls : ''}">${qMoney(val)}</span></span>`;
+  const marginCls = (margin != null && margin < 0) ? 'q-bk-neg' : 'q-bk-pos';
+  return `<div class="q-breakup" title="All figures pre-tax, for this line">
+    ${cell('Buying cost', buying)}
+    ${cell('Branding + transport', bt)}
+    ${cell('Sellable cost', sellable)}
+    ${cell('Sale price', sale)}
+    ${margin != null ? cell('Margin', margin, marginCls) : ''}
   </div>`;
 }
 // Uniform sale-GST rate (%) across the lines, or null when the quote mixes rates.
@@ -790,22 +816,23 @@ function quoteStatePick(inputId, code) {
 function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;
   e.lines[i][field] = val;
-  if (field === 'pricing_mode') { quoteRenderEditor(); return; }   // swap the cost/mrp fields
-  // Keep the live ex-GST hint in step as the price / GST rate is typed.
-  if (['purchase_cost', 'mrp', 'sale_gst_pct', 'purchase_gst_pct'].includes(field)) {
+  if (field === 'pricing_mode') { quoteRenderEditor(); return; }   // swap the per-method fields
+  // Keep the live ex-GST hint in step as the net rate / MRP / GST rate is typed.
+  if (['net_rate', 'mrp', 'sale_gst_pct'].includes(field)) {
     const el = document.getElementById('q-exgst-' + i);
     if (el) el.textContent = quoteExGstHint(e.lines[i]);
   }
 }
 function quoteEditLineItc(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].itc_claimable = !!el.checked; }
 function quoteEditLineIncl(i, el) { const e = qState().editor; if (e && e.lines[i]) { e.lines[i].price_inclusive_gst = !!el.checked; quoteRenderEditor(); } }
-// Display-only: the ex-GST (stripped) price shown under the cost/MRP field when the
-// input is GST-inclusive, so the operator sees the base the margin is applied to.
+// Display-only: the ex-GST (stripped) value shown under the Net rate / MRP field.
+// Those inputs are GST-inclusive, so this shows the taxable base the sale price
+// and margin are built on. (Cost + markup has no hint — buying cost is ex-GST.)
 function quoteExGstHint(l) {
-  if (!l.price_inclusive_gst) return '';
-  const cm = l.pricing_mode === 'cost_markup';
-  const incl = Number(cm ? l.purchase_cost : l.mrp) || 0;
-  const gstPct = Number((cm ? (l.purchase_gst_pct || l.sale_gst_pct) : l.sale_gst_pct)) || 0;
+  const mode = l.pricing_mode || 'cost_markup';
+  if (mode === 'cost_markup') return '';
+  const incl = Number(mode === 'net_rate' ? l.net_rate : l.mrp) || 0;
+  const gstPct = Number(l.sale_gst_pct) || 0;
   if (incl <= 0) return '';
   const ex = incl / (1 + gstPct / 100);
   return `ex-GST ₹${ex.toFixed(2)} @ ${gstPct}%`;
@@ -834,34 +861,29 @@ function quoteBuildPayload() {
   const rupee = (v) => Math.round(Number(v || 0) * 100);
   const bp = (v) => Math.round(Number(v || 0) * 100);
   const lines = e.lines.map(l => {
+    const mode = l.pricing_mode || 'cost_markup';
+    // Buying cost (ex-GST) is sent in EVERY mode — it is the margin basis.
     const base = {
       sku: (l.sku || '').trim() || null, description: l.description || null,
       hsn: (l.hsn || '').trim() || null, uom: (l.uom || '').trim() || null,
-      qty: Math.round(Number(l.qty || 0)), pricing_mode: l.pricing_mode,
+      qty: Math.round(Number(l.qty || 0)), pricing_mode: mode,
+      purchase_cost_paise: rupee(l.purchase_cost),
       freight_alloc_paise: rupee(l.freight), branding_cost_paise: rupee(l.branding),
       sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable,
-      price_inclusive_gst: !!l.price_inclusive_gst,
     };
     // Purchase GST defaults to sale GST on the server when omitted.
     if (String(l.purchase_gst_pct || '').trim() !== '') base.purchase_gst_bp = bp(l.purchase_gst_pct);
-    if (l.pricing_mode === 'cost_markup') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), markup_bp: bp(l.markup_pct) };
+    if (mode === 'cost_markup') return { ...base, markup_bp: bp(l.markup_pct) };
+    if (mode === 'net_rate') return { ...base, net_rate_paise: rupee(l.net_rate), adjust_paise: rupee(l.adjust) };
     return { ...base, mrp_paise: rupee(l.mrp), discount_bp: bp(l.discount_pct) };
   });
-  const charges = (e.charges || [])
-    .filter(c => Number(c.amount) > 0)
-    .map(c => ({ label: (c.label || '').trim(), amount_paise: rupee(c.amount), gst_bp: bp(c.gst_pct) }));
   const payload = {
     client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(),
     valid_until: e.valid_until || undefined,
     title: (e.title || '').trim(), payment_terms: (e.payment_terms || '').trim(),
     kind: e.kind === 'GIFTING' ? 'GIFTING' : 'REGULAR',
-    lines, charges,
+    lines, charges: [],
   };
-  const dv = Number(e.discount_value) || 0;
-  if (dv > 0) {
-    if (e.discount_type === 'amount') payload.header_discount_paise = rupee(e.discount_value);
-    else payload.header_discount_bp = bp(e.discount_value);
-  }
   return payload;
 }
 async function quoteEditPreview() {
@@ -869,8 +891,8 @@ async function quoteEditPreview() {
   const r = await api('/quotes/calc', { method: 'POST', body: JSON.stringify(quoteBuildPayload()) });
   if (r) {
     e.preview = r;
-    const pv = document.getElementById('q-preview'); if (pv) pv.innerHTML = quotePreviewHtml(r);
-    const bt = document.getElementById('q-actionbar-total'); if (bt) bt.textContent = qMoney(r.totals.grand_total_paise);
+    // Re-render the editor so each line shows its freshly-computed cost breakup.
+    quoteRenderEditor();
   }
 }
 async function quoteEditSave() {

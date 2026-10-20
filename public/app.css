@@ -725,6 +725,13 @@ button.tile:hover { transform: translateY(-1px); }
 .q-line-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .q-line-no { font-weight: 700; color: var(--navy); font-size: .82rem; }
 .q-line .form-row { margin-bottom: 0; }
+/* Per-line cost breakup strip (pre-tax) shown after a price preview. */
+.q-breakup { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; padding-top: 11px; border-top: 1px dashed var(--border); }
+.q-bk-cell { display: flex; flex-direction: column; gap: 1px; background: var(--surface-2, var(--surface)); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 110px; }
+.q-bk-l { font-size: .64rem; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); font-weight: 700; }
+.q-bk-v { font-size: .9rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.q-bk-v.q-bk-pos { color: var(--success, #16a34a); }
+.q-bk-v.q-bk-neg { color: var(--danger, #dc2626); }
 
 /* Totals / summary panel */
 .q-summary { max-width: 340px; margin-left: auto; }
