@@ -568,6 +568,11 @@ async function pickOrderModal(orderId) {
     <p style="color:var(--text-muted);margin:0 0 12px;font-size:.86rem">
       Enter the quantity actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
     </p>
+    <div class="pk-scanbar">
+      <span class="pk-scan-ic" aria-hidden="true">▣</span>
+      <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan or type a SKU — fills that line to its due qty" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
+      <span id="pick-scan-msg" class="pk-scan-msg"></span>
+    </div>
     <div id="pick-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
       <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
       <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
@@ -657,6 +662,52 @@ function pickStepQty(i, delta) {
 function pickInc(i) { pickStepQty(i, 1); }
 function pickDec(i) { pickStepQty(i, -1); }
 function pickAll(i) { const inp = document.querySelectorAll('.pick-qty')[i]; if (!inp) return; inp.value = parseInt(inp.dataset.ordered) || 0; onPickQty(inp); }
+// Scan-to-fill: a scanned/typed SKU fills that line to its due qty, flashes the row
+// and plays a confirming tick; an unknown code plays an error beep (and buzzes on
+// mobile). Works in both the card and table layouts (both expose .pick-qty[data-sku]).
+function pickScan() {
+  var el = document.getElementById('pick-scan'); if (!el) return;
+  var code = (el.value || '').trim(); el.value = '';
+  var msg = document.getElementById('pick-scan-msg');
+  if (!code) { el.focus(); return; }
+  var inputs = Array.prototype.slice.call(document.querySelectorAll('.pick-qty'));
+  var lc = code.toLowerCase();
+  var hit = inputs.find(function (i) { return (i.dataset.sku || '').toLowerCase() === lc; });
+  // tolerate a scanner that wraps the SKU in a longer barcode payload
+  if (!hit) hit = inputs.find(function (i) { var s = (i.dataset.sku || '').toLowerCase(); return s && lc.indexOf(s) >= 0; });
+  if (hit) {
+    hit.value = parseInt(hit.dataset.ordered) || 0;   // fill the line to its due qty
+    onPickQty(hit);
+    var row = hit.closest('.pk-card') || hit.closest('tr');
+    if (row) { row.classList.remove('pk-flash'); void row.offsetWidth; row.classList.add('pk-flash'); row.scrollIntoView({ block: 'nearest' }); }
+    pickBeep(true);
+    if (msg) { msg.textContent = '✓ ' + (hit.dataset.name || hit.dataset.sku); msg.style.color = 'var(--success)'; }
+  } else {
+    pickBeep(false);
+    if (navigator.vibrate) { try { navigator.vibrate(140); } catch (e) {} }
+    if (msg) { msg.textContent = '✕ Not on this order: ' + code; msg.style.color = 'var(--danger)'; }
+  }
+  el.focus();
+}
+// Short WebAudio tones — a high tick on a match, a low double-buzz on an unknown
+// code. Lazily created on the first scan (a keypress is a valid user gesture).
+function pickBeep(ok) {
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    APP._pickAudio = APP._pickAudio || new AC();
+    var ctx = APP._pickAudio; if (ctx.state === 'suspended') ctx.resume();
+    var now = ctx.currentTime;
+    var tone = function (freq, start, dur) {
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination); o.type = 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.06, now + start);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+      o.start(now + start); o.stop(now + start + dur + 0.02);
+    };
+    if (ok) tone(880, 0, 0.12);
+    else { tone(200, 0, 0.22); tone(160, 0.18, 0.28); }
+  } catch (e) { /* audio unavailable — stay silent */ }
+}
 // Bulk helpers for the Pick Items modal — fast entry for whoever's keying picks.
 function pickClearAll() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = 0; colorByOrdered(inp); }); updatePickSummary(); }
 function pickFillDue() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = inp.dataset.ordered || 0; colorByOrdered(inp); }); updatePickSummary(); }
