@@ -4841,7 +4841,7 @@ async function handleQuoteList(request: Request, env: Env): Promise<Response> {
   const where = ["account_id=?"]; const binds: unknown[] = [QUOTE_ACCOUNT];
   if (status) { where.push("status=?"); binds.push(status); }
   const { results } = await env.DB.prepare(
-    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at, q.revision, q.title
+    `SELECT q.id, q.quote_no, q.client_id, c.name AS client_name, q.status, q.current_version, q.grand_total_paise, q.created_by, q.valid_until, q.created_at, q.revision, q.title, q.root_quote_id, q.revised_from_id, q.superseded_by_id
        FROM quotes q LEFT JOIN clients c ON c.id = q.client_id
       WHERE ${where.map((w) => w.replace(/^account_id=/, "q.account_id=").replace(/^status=/, "q.status=")).join(" AND ")} ORDER BY q.created_at DESC LIMIT ? OFFSET ?`
   ).bind(...binds, size, (page - 1) * size).all();
@@ -4862,14 +4862,21 @@ async function handleQuoteDetail(request: Request, env: Env, id: string): Promis
   if (!q) return json({ error: "Not found" }, 404);
   const xacc = await denyClientCrossAccess(env, acc.user, q.client_id);
   if (xacc) return xacc;
-  const ver = await env.DB.prepare("SELECT version, payload_canonical, content_hash, prev_hash, created_at FROM quote_versions WHERE quote_id=? AND version=?")
-    .bind(id, q.current_version).first() as any;
-  const { results: lines } = await env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
-  const { results: audit } = await env.DB.prepare("SELECT seq, action, actor_id, created_at FROM quote_audit WHERE quote_id=? ORDER BY seq").bind(id).all();
-  const clientRow = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as { name?: string } | null;
-  // Readable quote numbers for the lineage chips (parent revised-from / child revision).
-  const revisedFromNo = q.revised_from_id ? ((await env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.revised_from_id, QUOTE_ACCOUNT).first() as any)?.quote_no || null) : null;
-  const supersededByNo = q.superseded_by_id ? ((await env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.superseded_by_id, QUOTE_ACCOUNT).first() as any)?.quote_no || null) : null;
+  // All independent of each other (they only need `q`), so fire them in one wave
+  // instead of ~6 sequential D1 round-trips — the main cause of the slow detail load.
+  const [ver, linesRes, auditRes, clientRow, revisedFromRow, supersededByRow] = await Promise.all([
+    env.DB.prepare("SELECT version, payload_canonical, content_hash, prev_hash, created_at FROM quote_versions WHERE quote_id=? AND version=?").bind(id, q.current_version).first() as Promise<any>,
+    env.DB.prepare("SELECT * FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all(),
+    env.DB.prepare("SELECT seq, action, actor_id, created_at FROM quote_audit WHERE quote_id=? ORDER BY seq").bind(id).all(),
+    env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(q.client_id).first() as Promise<{ name?: string } | null>,
+    // Readable quote numbers for the lineage chips (parent revised-from / child revision).
+    q.revised_from_id ? env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.revised_from_id, QUOTE_ACCOUNT).first() as Promise<any> : Promise.resolve(null),
+    q.superseded_by_id ? env.DB.prepare("SELECT quote_no FROM quotes WHERE id=? AND account_id=?").bind(q.superseded_by_id, QUOTE_ACCOUNT).first() as Promise<any> : Promise.resolve(null),
+  ]);
+  const lines = linesRes.results;
+  const audit = auditRes.results;
+  const revisedFromNo = revisedFromRow?.quote_no || null;
+  const supersededByNo = supersededByRow?.quote_no || null;
   const detail = {
     id: q.id, quote_no: q.quote_no, client_id: q.client_id, client_name: clientRow?.name || q.client_id, place_of_supply: q.place_of_supply,
     status: q.status, current_version: q.current_version, itc_claimable_all: !!q.itc_claimable_all,

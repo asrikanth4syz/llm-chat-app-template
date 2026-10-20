@@ -109,18 +109,18 @@ async function quoteRenderPipeline() {
   const maxV = Math.max(1, ...byStatus.map(s => s.v));
   const stageRows = stageOrder.filter(k => stat[k]).map(k => {
     const s = stat[k]; const w = Math.max(2, Math.round((s.v / maxV) * 100));
-    return `<div class="q-pipe-row">
+    return `<div class="q-pipe-row q-pipe-click" ${dataAct('quotePipelineStage', k)} title="Open ${h((QUOTE_STATUS_META[k] || [, k])[1])} quotes" role="button" tabindex="0">
       <div class="q-pipe-label">${qBadge(k)} <span class="q-pipe-n">${s.n}</span></div>
       <div class="q-pipe-bar"><div class="q-pipe-fill" style="width:${w}%"></div></div>
-      <div class="q-pipe-val">${qMoney(s.v)}</div>
+      <div class="q-pipe-val">${qMoney(s.v)} <span class="q-pipe-go" aria-hidden="true">›</span></div>
     </div>`;
   }).join('');
-  const breakdown = (title, col, rows, labelFn) => qCard(title, rows.length
+  const breakdown = (title, col, rows, labelFn, clickFn) => qCard(title, rows.length
     ? `<div class="table-wrap"><table class="data-table" style="width:100%"><thead><tr>
         <th style="text-align:left;padding:9px 12px">${h(col)}</th>
         <th style="text-align:right;padding:9px 12px">Quotes</th>
         <th style="text-align:right;padding:9px 12px">Value</th></tr></thead>
-      <tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border)">
+      <tbody>${rows.map(r => `<tr class="${clickFn ? 'q-brow' : ''}"${clickFn ? ` ${dataAct(clickFn, labelFn(r))} title="Find these quotes" role="button" tabindex="0"` : ''} style="border-top:1px solid var(--border)">
         <td style="padding:9px 12px">${h(labelFn(r))}</td>
         <td style="padding:9px 12px;text-align:right">${r.n}</td>
         <td style="padding:9px 12px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.v)}</td></tr>`).join('')}</tbody></table></div>`
@@ -132,12 +132,17 @@ async function quoteRenderPipeline() {
       ${tileHtml({ label: 'Won', value: qMoney(wonV), sub: `${wonN} accepted/converted`, accent: 'var(--success)' })}
       ${tileHtml({ label: 'Win rate', value: winRate + '%', sub: `${wonN} won · ${lostN} lost`, accent: 'var(--navy)' })}
     </div>
-    ${qCard('By stage', `<div class="q-pipe">${stageRows || '<div class="form-hint">No quotes yet.</div>'}</div>`)}
+    ${qCard('By stage', `<div class="form-hint" style="margin:-2px 0 10px">Click a stage or a row to open those quotes.</div><div class="q-pipe">${stageRows || '<div class="form-hint">No quotes yet.</div>'}</div>`)}
     <div class="q-pipe-cols">
-      ${breakdown('By client', 'Client', d.by_client || [], r => r.client_name || r.client_id || '—')}
-      ${breakdown('By purpose / type', 'Purpose', d.by_type || [], r => r.t || '(untitled)')}
+      ${breakdown('By client', 'Client', d.by_client || [], r => r.client_name || r.client_id || '—', 'quotePipelineClient')}
+      ${breakdown('By purpose / type', 'Purpose', d.by_type || [], r => r.t || '(untitled)', 'quotePipelinePurpose')}
     </div>`;
 }
+// Pipeline drill-through → jump to the Quotes list, filtered. A stage filters
+// server-side by status; a client / purpose row seeds the client-side search.
+function quotePipelineStage(status) { const q = qState(); q.tab = 'list'; q.view = 'list'; q.statusFilter = status || ''; q.listQuery = ''; renderQuotations(qMain()); }
+function quotePipelineClient(name) { const q = qState(); q.tab = 'list'; q.view = 'list'; q.statusFilter = ''; q.listQuery = (name === '—' ? '' : name) || ''; renderQuotations(qMain()); }
+function quotePipelinePurpose(t) { const q = qState(); q.tab = 'list'; q.view = 'list'; q.statusFilter = ''; q.listQuery = (t === '(untitled)' ? '' : t) || ''; renderQuotations(qMain()); }
 
 // ── List ──────────────────────────────────────────────────────────────────────
 async function quoteRenderList() {
@@ -229,17 +234,52 @@ function quoteListClearSearch() {
 }
 // Rows only (no <tbody> wrapper) — the caller supplies the tbody so this can be
 // dropped straight into tbody.innerHTML on live filter.
+// Rows fold by lineage: all revisions of one quote (same root_quote_id, else the
+// quote's own id) collapse under their LATEST revision, which carries a ▸ toggle
+// that reveals the earlier revisions as indented sub-rows.
 function quoteListRowsHtml(rows) {
   if (!rows.length) return `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
-  return rows.map(r => `
-    <tr class="q-trow" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}</td>
+  const keyOf = r => r.root_quote_id || r.id;
+  const groups = new Map();
+  rows.forEach(r => { const k = keyOf(r); const g = groups.get(k) || []; g.push(r); groups.set(k, g); });
+  const headIdOf = new Map();
+  groups.forEach((g, k) => { headIdOf.set(k, g.reduce((a, b) => ((b.revision || 1) > (a.revision || 1) ? b : a)).id); });
+  const subCells = (x, pad) => `
+    <td style="padding:${pad};color:var(--text-muted);white-space:nowrap">↳ ${h(x.quote_no || x.id)}${(x.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${x.revision}</span>` : ''}</td>
+    <td style="padding:9px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(x.title || '')}">${h(x.title || '—')}</td>
+    <td style="padding:9px 14px">${h(x.client_name || x.client_id || '')}</td>
+    <td style="padding:9px 14px">${qBadge(x.status)}</td>
+    <td style="padding:9px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(x.grand_total_paise)}</td>
+    <td style="padding:9px 14px;white-space:nowrap">${h(x.valid_until || '—')}</td>`;
+  const seen = new Set();
+  const out = [];
+  rows.forEach(r => {
+    const k = keyOf(r);
+    if (headIdOf.get(k) !== r.id || seen.has(k)) return;   // emit each lineage once, at its head's sorted position
+    seen.add(k);
+    const tail = groups.get(k).filter(x => x.id !== r.id).sort((a, b) => (b.revision || 1) - (a.revision || 1));
+    const gk = String(k).replace(/[^\w-]/g, '');
+    const toggle = tail.length ? `<button class="q-rev-toggle" data-group="${gk}" ${dataAct('quoteToggleRevisions', gk)} title="Show ${tail.length} earlier revision${tail.length > 1 ? 's' : ''}" aria-label="Toggle earlier revisions">▸</button> ` : '';
+    const count = tail.length ? ` <span class="q-rev-count">${tail.length + 1} revisions</span>` : '';
+    out.push(`<tr class="q-trow" ${dataAct('quoteOpenDetail', r.id)}>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${toggle}${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}${count}</td>
       <td style="padding:11px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(r.title || '')}">${h(r.title || '—')}</td>
       <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
       <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">${qMoney(r.grand_total_paise)}</td>
       <td style="padding:11px 14px;white-space:nowrap">${h(r.valid_until || '—')}</td>
-    </tr>`).join('');
+    </tr>`);
+    tail.forEach(x => out.push(`<tr class="q-trow q-rev-sub" data-group="${gk}" style="display:none" ${dataAct('quoteOpenDetail', x.id)}>${subCells(x, '9px 14px 9px 34px')}</tr>`));
+  });
+  return out.join('');
+}
+// Expand / collapse a lineage's earlier-revision sub-rows.
+function quoteToggleRevisions(key) {
+  const subs = document.querySelectorAll(`tr.q-rev-sub[data-group="${key}"]`);
+  const btn = document.querySelector(`.q-rev-toggle[data-group="${key}"]`);
+  let nowShown = false;
+  subs.forEach(tr => { const hidden = tr.style.display === 'none'; tr.style.display = hidden ? '' : 'none'; nowShown = hidden; });
+  if (btn) btn.textContent = nowShown ? '▾' : '▸';
 }
 
 // ── Detail ─────────────────────────────────────────────────────────────────────
