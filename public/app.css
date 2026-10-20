@@ -774,6 +774,25 @@ button.tile:hover { transform: translateY(-1px); }
 .q-list-table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
 .q-list-table thead th:hover { color: var(--navy); }
 
+/* Pick Items — stepper cards (phone-first; no horizontal scroll to reach the qty). */
+.pk-list{display:flex;flex-direction:column;gap:10px}
+.pk-card{border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.pk-card-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.pk-name{font-weight:700;color:var(--navy);font-size:.92rem}
+.pk-sku{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;color:var(--text-muted);margin-top:2px}
+.pk-due{font-size:.7rem;font-weight:700;color:var(--text-label);background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.pk-card-mid{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pk-step{display:flex;align-items:center;border:1.5px solid var(--border-mid);border-radius:12px;overflow:hidden}
+.pk-pm{width:46px;height:46px;border:0;background:var(--surface-2);color:var(--navy);font-size:1.5rem;font-weight:700;cursor:pointer;line-height:1;display:grid;place-items:center}
+.pk-pm:hover{background:var(--border-light)} .pk-pm:active{background:var(--border)}
+.pk-val{width:66px;text-align:center;font-size:1.3rem;font-weight:800;border:0;background:transparent;color:var(--text);font-variant-numeric:tabular-nums;-moz-appearance:textfield}
+.pk-val::-webkit-outer-spin-button,.pk-val::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.pk-val:focus{outline:none}
+.pk-all{background:none;border:0;color:var(--navy);font-weight:700;font-size:.8rem;cursor:pointer;padding:6px 4px;white-space:nowrap}
+.pk-card-bot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pk-ord{font-size:.78rem;color:var(--text-muted)}
+.pk-bin{min-width:150px;flex:1}
+
 /* Live "recording in progress" dot for the delivery voice-note capture. */
 .rec-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--danger,#dc2626); vertical-align:middle; animation:recPulse 1s ease-in-out infinite; }
 @keyframes recPulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.3; transform:scale(.7); } }

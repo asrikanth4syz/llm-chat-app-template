@@ -572,32 +572,31 @@ async function pickOrderModal(orderId) {
         <button class="btn btn-secondary btn-sm" ${dataAct('pickFillDue')} title="Reset every Qty to Pick to the due quantity">Reset to due</button>
       </span>
     </div>
-    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
-      <table class="table" style="margin:0">
-        <thead><tr><th>Item Name</th><th>SKU</th><th class="u-center">Ordered</th>${anyDelivered?'<th class="u-center">Delivered</th>':''}<th class="u-center">Due</th><th class="u-center">Qty to Pick</th><th>Bin Location</th></tr></thead>
-        <tbody id="pick-items-body">
-          ${lines.map(item=>`<tr>
-            <td><b style="color:var(--navy)">${item.name}</b></td>
-            <td style="color:var(--text-muted);font-size:.82rem">${item.sku}</td>
-            <td class="u-center u-muted">${item.ordered}</td>
-            ${anyDelivered?`<td class="u-center" style="color:var(--success)">${item.delivered}</td>`:''}
-            <td class="u-center"><b>${item.due}</b></td>
-            <td class="u-center">
-              <input type="number" inputmode="numeric" class="form-control form-control-sm pick-qty"
-                data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall
-                value="${item.due}" min="0"
-                style="width:72px;text-align:center;margin:0 auto"
-                ${dataInputEl('onPickQty')}>
-            </td>
-            <td>
-              <select class="form-control form-control-sm pick-bin" data-sku="${item.sku}" style="min-width:140px">
-                <option value="">— select bin —</option>
-                ${binOptions}
-              </select>
-            </td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
+    <div id="pick-items-body" class="pk-list">
+      ${lines.map((item,i)=>`<div class="pk-card">
+        <div class="pk-card-top">
+          <div style="min-width:0"><div class="pk-name">${h(item.name)}</div><div class="pk-sku">${h(item.sku)||'—'}</div></div>
+          <span class="pk-due">Due ${item.due}${anyDelivered&&item.delivered?` · <span style="color:var(--success)">${item.delivered} delivered</span>`:''}</span>
+        </div>
+        <div class="pk-card-mid">
+          <div class="pk-step">
+            <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
+            <input type="number" inputmode="numeric" class="pick-qty pk-val"
+              data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall
+              value="${item.due}" min="0" aria-label="Qty to pick for ${h(item.name)}"
+              ${dataInputEl('onPickQty')}>
+            <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
+          </div>
+          <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all (${item.due})</button>
+        </div>
+        <div class="pk-card-bot">
+          <span class="pk-ord">Ordered ${item.ordered}</span>
+          <select class="form-control form-control-sm pick-bin pk-bin" data-sku="${item.sku}">
+            <option value="">— select bin —</option>
+            ${binOptions}
+          </select>
+        </div>
+      </div>`).join('')}
     </div>
   `,
     `${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
@@ -610,6 +609,16 @@ async function pickOrderModal(orderId) {
 // Combined qty-input handler for the Pick Items modal: keep the below-ordered
 // colour cue and refresh the live picked tally.
 function onPickQty(el) { colorByOrdered(el); updatePickSummary(); }
+// Stepper controls for the Pick Items cards — big −/+ and a one-tap "Pick all"
+// that drive the i-th .pick-qty field (so the tally + confirm logic are unchanged).
+function pickStepQty(i, delta) {
+  const inp = document.querySelectorAll('.pick-qty')[i]; if (!inp) return;
+  inp.value = Math.max(0, (parseInt(inp.value) || 0) + delta);
+  onPickQty(inp);
+}
+function pickInc(i) { pickStepQty(i, 1); }
+function pickDec(i) { pickStepQty(i, -1); }
+function pickAll(i) { const inp = document.querySelectorAll('.pick-qty')[i]; if (!inp) return; inp.value = parseInt(inp.dataset.ordered) || 0; onPickQty(inp); }
 // Bulk helpers for the Pick Items modal — fast entry for whoever's keying picks.
 function pickClearAll() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = 0; colorByOrdered(inp); }); updatePickSummary(); }
 function pickFillDue() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = inp.dataset.ordered || 0; colorByOrdered(inp); }); updatePickSummary(); }
