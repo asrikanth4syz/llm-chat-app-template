@@ -824,15 +824,16 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 #pick-search{flex:1;min-width:180px;border:1.5px solid var(--border-mid);border-radius:9px;padding:9px 12px;background:var(--surface);color:var(--text);font:inherit;font-size:.9rem}
 #pick-search:focus{outline:2px solid var(--teal,var(--navy));outline-offset:1px}
 #pick-binfilter{min-width:140px;max-width:200px}
-.pk-controls .pk-bulk{margin-left:auto;white-space:nowrap}
-/* per-line card */
-.pk-card2{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:12px;padding:12px 14px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
-.pk-card2.is-complete{border-left-color:var(--success)}
+.pk-controls .pk-bulk{margin-left:auto;display:flex;gap:6px;white-space:nowrap}
+/* per-line card — a subtle amber rail flags an UNDER-picked line; completed and
+   default-filled lines stay neutral (no green). Over-pick flags red. */
+.pk-card2{border:1px solid var(--border);border-left:4px solid var(--border-mid);border-radius:12px;padding:12px 14px;background:var(--surface);display:flex;flex-direction:column;gap:10px;transition:box-shadow .12s ease,border-color .12s ease}
+.pk-card2:hover{border-color:var(--border-mid);box-shadow:0 2px 10px rgba(15,23,42,.08)}
+.pk-card2.is-short{border-left-color:var(--warning)}
 .pk-card2.is-over{border-left-color:var(--danger)}
 .pk-row-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .pk-id{min-width:0}
 .pk-badge{font-size:.72rem;font-weight:700;color:var(--text-label);background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:3px 10px;white-space:nowrap}
-.pk-card2.is-complete .pk-badge{color:var(--success);border-color:rgba(22,163,74,.4);background:rgba(22,163,74,.08)}
 .pk-card2.is-over .pk-badge{color:var(--danger);border-color:rgba(220,38,38,.4);background:rgba(220,38,38,.08)}
 .pk-grid{display:grid;grid-template-columns:minmax(150px,1fr) auto minmax(150px,200px);gap:14px;align-items:center}
 .pk-facts{display:flex;flex-direction:column;gap:3px}
@@ -843,9 +844,10 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 .pk-pick{display:flex;flex-direction:column;align-items:center;gap:5px}
 .pk-pick-lbl{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
 .pk-pick-foot{display:flex;flex-direction:column;align-items:center;gap:2px}
-.pk-complete{display:none;font-size:.74rem;font-weight:700;color:var(--success)}
+.pk-all{background:none;border:0;color:var(--navy);font-weight:700;font-size:.8rem;cursor:pointer;padding:4px;white-space:nowrap;text-decoration:underline;text-underline-offset:2px}
+.pk-all:hover{color:var(--gold,#d97706)}
+.pk-complete{display:none;font-size:.72rem;font-weight:700;color:var(--text-muted)}
 .pk-card2.is-complete .pk-complete{display:block}
-.pk-card2.is-complete .pk-all{display:none}
 .pk-binbox{display:flex;flex-direction:column;gap:4px;justify-self:end;width:100%;max-width:200px}
 .pk-bin-lbl{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
 .pk-bin-hint{font-size:.68rem;color:var(--text-muted)}

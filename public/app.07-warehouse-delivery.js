@@ -591,7 +591,10 @@ function pickModalInner() {
     <div class="pk-controls">
       <input id="pick-search" type="search" autocomplete="off" placeholder="Find product or SKU…" ${dataInputVal('pickSearch')} aria-label="Find product or SKU">
       <select id="pick-binfilter" class="form-control form-control-sm" ${dataChangeVal('pickBinFilter')} aria-label="Filter by storage bin"><option value="">All bins</option>${binFilterOpts}</select>
-      <button type="button" class="btn btn-primary btn-sm pk-bulk" ${dataAct('pickRemainingVisible')} title="Set Pick now to the remaining qty for every line shown">Pick remaining (visible)</button>
+      <span class="pk-bulk">
+        <button type="button" class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')} title="Set Pick now to 0 for every line">Clear all</button>
+        <button type="button" class="btn btn-primary btn-sm" ${dataAct('pickFillDue')} title="Set Pick now to the remaining qty for every line">Pick all</button>
+      </span>
     </div>
     <div class="pk-scanwrap">
       <div class="pk-scanbar">
@@ -631,7 +634,7 @@ function pickBodyHtml() {
   return `<div class="pk-list">${lines.map((l, i) => {
     const rem = l.due, already = l.delivered || 0, v = vals[i];
     const complete = v >= rem;
-    return `<div class="pk-card2${complete ? ' is-complete' : ''}${v > rem ? ' is-over' : ''}" data-i="${i}" data-search="${h((l.name + ' ' + (l.sku || '')).toLowerCase())}">
+    return `<div class="pk-card2${complete ? ' is-complete' : ''}${v < rem ? ' is-short' : ''}${v > rem ? ' is-over' : ''}" data-i="${i}" data-search="${h((l.name + ' ' + (l.sku || '')).toLowerCase())}">
       <div class="pk-row-head">
         <div class="pk-id"><div class="pk-name">${h(l.name)}</div><div class="pk-sku">${h(l.sku) || '—'}</div></div>
         <span class="pk-badge">Picked <b>${already + v}</b></span>
@@ -677,14 +680,6 @@ function pickApplyFilters() {
 }
 function pickSearch() { pickApplyFilters(); }
 function pickBinFilter() { pickApplyFilters(); }
-// Bulk "pick remaining" over the currently visible (filtered) cards only.
-function pickRemainingVisible() {
-  document.querySelectorAll('.pk-card2').forEach(c => {
-    if (c.style.display === 'none') return;
-    const inp = c.querySelector('.pick-qty'); if (!inp) return;
-    inp.value = parseInt(inp.dataset.ordered) || 0; onPickQty(inp);
-  });
-}
 // Keyboard flow: Enter in a qty field jumps to the next visible card's field.
 function pickNext(i) {
   const inputs = Array.prototype.slice.call(document.querySelectorAll('.pk-card2 .pick-qty'))
@@ -753,6 +748,7 @@ function onPickQty(el) {
     const already = parseInt(el.dataset.already) || 0;
     const badge = card.querySelector('.pk-badge b'); if (badge) badge.textContent = (already + v);
     card.classList.toggle('is-complete', v >= rem);
+    card.classList.toggle('is-short', v < rem);
     card.classList.toggle('is-over', v > rem);
   }
   updatePickSummary();
