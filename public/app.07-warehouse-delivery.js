@@ -536,10 +536,16 @@ async function pickOrderModal(orderId) {
   // Pick only the OUTSTANDING balance. On a replenishment pick (after a partial
   // delivery) the drilldown gives ordered/delivered/due per line; fall back to
   // the raw order lines (due = ordered) when the drilldown isn't available.
-  const lines = (drill && Array.isArray(drill.lines))
+  let lines = (drill && Array.isArray(drill.lines))
     ? drill.lines.filter(l => (parseInt(l.qty_due)||0) > 0)
         .map(l => ({ sku:l.sku, name:l.name, ordered:parseInt(l.qty_ordered)||0, delivered:parseInt(l.qty_delivered)||0, due:parseInt(l.qty_due)||0 }))
     : (order?.items||[]).map(i => ({ sku:i.sku, name:i.name||i.item_name, ordered:parseInt(i.qty)||0, delivered:0, due:parseInt(i.qty)||0 }));
+  // Fallback: if the drilldown reported nothing due (e.g. a stale or over-counted
+  // delivery left a pickable order with all dues at 0) but the order still has lines,
+  // pick against the raw order lines so a picked qty can always be entered.
+  if (!lines.length && order && Array.isArray(order.items) && order.items.length) {
+    lines = order.items.map(i => ({ sku:i.sku, name:i.name||i.item_name, ordered:parseInt(i.qty)||0, delivered:0, due:parseInt(i.qty)||0 }));
+  }
   const anyDelivered = lines.some(l => l.delivered > 0);
   const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
   const totalDue = lines.reduce((n,l)=>n+(parseInt(l.due)||0),0);
@@ -577,9 +583,9 @@ async function pickOrderModal(orderId) {
             ${anyDelivered?`<td class="u-center" style="color:var(--success)">${item.delivered}</td>`:''}
             <td class="u-center"><b>${item.due}</b></td>
             <td class="u-center">
-              <input type="number" class="form-control form-control-sm pick-qty"
-                data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}"
-                value="${item.due}" min="0" max="${item.due}"
+              <input type="number" inputmode="numeric" class="form-control form-control-sm pick-qty"
+                data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall
+                value="${item.due}" min="0"
                 style="width:72px;text-align:center;margin:0 auto"
                 ${dataInputEl('onPickQty')}>
             </td>
