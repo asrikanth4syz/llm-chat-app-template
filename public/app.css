@@ -929,6 +929,13 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
   .q-pipe-cols { grid-template-columns: 1fr; }
 }
 
+/* Regular ⇆ Gifting type selector in the quote editor + the gifting marker. */
+.q-kind { display: inline-flex; gap: 6px; }
+.q-kind-opt { border: 1.5px solid var(--border-mid); background: var(--surface); color: var(--text-label); border-radius: 9px; padding: 8px 16px; font: inherit; font-size: .88rem; font-weight: 700; cursor: pointer; }
+.q-kind-opt:hover { border-color: var(--navy); }
+.q-kind-opt.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.q-kind-pill { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: rgba(124,58,237,.12); color: #7c3aed; border: 1px solid rgba(124,58,237,.3); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .q-kind-pill { color: #a78bfa; } }
 /* Revision / convert lineage banner on the quote detail. */
 .q-lineage { border-left: 3px solid var(--navy); margin-bottom: 14px; }
 .q-lineage .card-body { font-size: .84rem; color: var(--text-label); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }

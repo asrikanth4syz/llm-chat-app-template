@@ -262,7 +262,7 @@ function quoteListRowsHtml(rows) {
     const toggle = tail.length ? `<button class="q-rev-toggle" data-group="${gk}" ${dataAct('quoteToggleRevisions', gk)} title="Show ${tail.length} earlier revision${tail.length > 1 ? 's' : ''}" aria-label="Toggle earlier revisions">▸</button> ` : '';
     const count = tail.length ? ` <span class="q-rev-count">${tail.length + 1} revisions</span>` : '';
     out.push(`<tr class="q-trow" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${toggle}${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}${count}</td>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${toggle}${r.kind === 'GIFTING' ? '🎁 ' : ''}${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}${count}</td>
       <td style="padding:11px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(r.title || '')}">${h(r.title || '—')}</td>
       <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
@@ -342,7 +342,7 @@ function quoteRenderDetail() {
     <div class="page-header">
       <div class="page-header-left">
         <button class="btn btn-secondary btn-sm" style="margin-bottom:8px" ${dataAct('quoteBackToList')}>← All quotes</button>
-        <div class="page-title" style="display:flex;align-items:center;gap:10px">${h(d.quote_no || d.id)} ${qBadge(st)}</div>
+        <div class="page-title" style="display:flex;align-items:center;gap:10px">${h(d.quote_no || d.id)} ${qBadge(st)}${d.kind === 'GIFTING' ? ` <span class="q-kind-pill">🎁 Gifting</span>` : ''}</div>
         ${d.title ? `<div class="page-subtitle">${h(d.title)}</div>` : ''}
       </div>
       <div class="page-actions">${actions.join(' ')}</div>
@@ -508,7 +508,7 @@ function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', descr
 function quoteBlankCharge() { return { label: '', amount: '', gst_pct: '18' }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
-  q.editor = { editId: null, client_id: '', client_q: '', title: '', payment_terms: '', place_of_supply: '', valid_until: '', discount_type: 'pct', discount_value: '', charges: [], lines: [quoteBlankLine()], preview: null };
+  q.editor = { editId: null, kind: 'REGULAR', client_id: '', client_q: '', title: '', payment_terms: '', place_of_supply: '', valid_until: '', discount_type: 'pct', discount_value: '', charges: [], lines: [quoteBlankLine()], preview: null };
   const main = qMain();
   main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading clients…</p></div>`;
   const clients = await api('/clients');
@@ -539,7 +539,7 @@ async function quoteEditDraft(id) {
   if (d.header_discount_bp) { discType = 'pct'; discVal = Number(d.header_discount_bp) / 100; }
   else if (d.header_discount_paise) { discType = 'amount'; discVal = Number(d.header_discount_paise) / 100; }
   const charges = (d.charges || []).map(c => ({ label: c.label || '', amount: (Number(c.amount_paise) || 0) / 100, gst_pct: (Number(c.gst_bp) || 0) / 100 }));
-  q.editor = { editId: id, quoteNo: d.quote_no, client_id: d.client_id, client_q: d.client_name || d.client_id, place_of_supply: d.place_of_supply || '',
+  q.editor = { editId: id, kind: d.kind || 'REGULAR', quoteNo: d.quote_no, client_id: d.client_id, client_q: d.client_name || d.client_id, place_of_supply: d.place_of_supply || '',
     title: d.title || '', payment_terms: d.payment_terms || '', discount_type: discType, discount_value: discVal, charges,
     valid_until: d.valid_until || '', lines: lines.length ? lines : [quoteBlankLine()], preview: null };
   const clients = await api('/clients');
@@ -568,6 +568,12 @@ function quoteRenderEditor() {
       </div>
     </div>
     ${qCard('Quote details', `
+      ${qField('Quote type', `<div class="q-kind">
+        <button type="button" class="q-kind-opt ${e.kind !== 'GIFTING' ? 'on' : ''}" ${dataAct('quoteSetKind', 'REGULAR')}>📦 Regular</button>
+        <button type="button" class="q-kind-opt ${e.kind === 'GIFTING' ? 'on' : ''}" ${dataAct('quoteSetKind', 'GIFTING')}>🎁 Gifting</button>
+      </div>`, e.kind === 'GIFTING'
+        ? 'Gifting → converts to a multi-step gifting order: order each item · branding (where applicable) · client sample approval · collect · dispatch.'
+        : 'Regular → converts to a standard order: pick · pack · deliver.')}
       ${qField('What this quote is for', `<input value="${h(e.title || '')}" ${dataInputVal('quoteEditHeader', 'title')} placeholder="e.g. Diwali gift hampers — Meta Bangalore" maxlength="200">`, 'Shows in the list and powers search by purpose')}
       <div class="form-row" style="margin-bottom:0">
       ${clientField}
@@ -671,6 +677,9 @@ function quotePreviewHtml(p) {
   </div>`;
 }
 function quoteEditHeader(field, val) { const e = qState().editor; if (e) e[field] = val; }
+// Regular ⇆ Gifting fork — drives the convert-to-order workflow. Re-renders the
+// editor so the helper text under the toggle updates.
+function quoteSetKind(k) { const e = qState().editor; if (!e) return; e.kind = (k === 'GIFTING' ? 'GIFTING' : 'REGULAR'); quoteRenderEditor(); }
 // Searchable client combobox (custom, styled). Filtering re-renders the menu;
 // selecting a row sets the stored client_id. An outside click closes the menu.
 function quoteClientMenuHtml() {
@@ -845,6 +854,7 @@ function quoteBuildPayload() {
     client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(),
     valid_until: e.valid_until || undefined,
     title: (e.title || '').trim(), payment_terms: (e.payment_terms || '').trim(),
+    kind: e.kind === 'GIFTING' ? 'GIFTING' : 'REGULAR',
     lines, charges,
   };
   const dv = Number(e.discount_value) || 0;
