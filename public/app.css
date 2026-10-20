@@ -804,6 +804,13 @@ button.tile:hover { transform: translateY(-1px); }
 .pk-scanmode{display:flex;gap:4px;flex-shrink:0}
 .pk-scanmode .btn{white-space:nowrap}
 .pk-scan-msg{font-size:.78rem;font-weight:700;min-height:1.1em;padding:5px 2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* camera scanner overlay */
+.pk-cam{position:fixed;inset:0;z-index:2000;background:rgba(5,10,20,.85);display:flex;align-items:center;justify-content:center;padding:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.pk-cam-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(440px,100%);max-height:92vh;overflow:hidden;display:flex;flex-direction:column}
+.pk-cam-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);font-weight:700;color:var(--navy)}
+.pk-cam-reader{width:100%;background:#000;min-height:260px}
+.pk-cam-reader video{width:100%!important;height:auto!important;display:block}
+.pk-cam-msg{padding:12px 14px;font-size:.85rem;font-weight:700;color:var(--text-muted);text-align:center;min-height:1.2em}
 @keyframes pkFlash{0%{background:rgba(22,163,74,.22)}100%{background:transparent}}
 .pk-card.pk-flash{animation:pkFlash 1s ease-out}
 tr.pk-flash>td{animation:pkFlash 1s ease-out}

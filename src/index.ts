@@ -101,7 +101,7 @@ function withSecurityHeaders(res: Response): Response {
   h.set("Cross-Origin-Opener-Policy", "same-origin");
   // Microphone allowed for same-origin only — needed for the delivery-discrepancy
   // voice note (MediaRecorder). Geolocation and camera stay fully disabled.
-  h.set("Permissions-Policy", "geolocation=(), microphone=(self), camera=()");
+  h.set("Permissions-Policy", "geolocation=(), microphone=(self), camera=(self)");
   h.set("Content-Security-Policy", CSP);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }

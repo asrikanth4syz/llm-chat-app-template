@@ -573,6 +573,7 @@ async function pickOrderModal(orderId) {
       <div class="pk-scanbar">
         <span class="pk-scan-ic" aria-hidden="true">▣</span>
         <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan or type a SKU — fills the line to its due qty" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
+        <button type="button" class="btn btn-sm btn-secondary" id="pick-cam-btn" ${dataAct('pickCameraOpen')} title="Scan with the device camera">📷 Camera</button>
         <span class="pk-scanmode">
           <button type="button" class="btn btn-sm btn-primary" data-scanmode="fill" ${dataAct('pickSetScanMode', 'fill')} title="Each scan fills the line to its due quantity">Fill</button>
           <button type="button" class="btn btn-sm btn-secondary" data-scanmode="count" ${dataAct('pickSetScanMode', 'count')} title="Each scan adds 1, counting up to the due quantity">Count +1</button>
@@ -672,43 +673,103 @@ function pickAll(i) { const inp = document.querySelectorAll('.pick-qty')[i]; if 
 // Scan-to-fill: a scanned/typed SKU fills that line to its due qty, flashes the row
 // and plays a confirming tick; an unknown code plays an error beep (and buzzes on
 // mobile). Works in both the card and table layouts (both expose .pick-qty[data-sku]).
-function pickScan() {
-  var el = document.getElementById('pick-scan'); if (!el) return;
-  var code = (el.value || '').trim(); el.value = '';
-  var msg = document.getElementById('pick-scan-msg');
-  if (!code) { el.focus(); return; }
+// Core: resolve a scanned/typed code against the lines and apply it per the current
+// scan mode. Shared by the keyboard field and the camera. Returns {ok, label}.
+function pickApplyCode(code) {
+  code = (code || '').trim();
+  if (!code) return { ok: false, label: '' };
   var inputs = Array.prototype.slice.call(document.querySelectorAll('.pick-qty'));
   var lc = code.toLowerCase();
   var hit = inputs.find(function (i) { return (i.dataset.sku || '').toLowerCase() === lc; });
   // tolerate a scanner that wraps the SKU in a longer barcode payload
   if (!hit) hit = inputs.find(function (i) { var s = (i.dataset.sku || '').toLowerCase(); return s && lc.indexOf(s) >= 0; });
-  if (hit) {
-    var mode = APP._pickScanMode || 'fill';
-    var due = parseInt(hit.dataset.ordered) || 0;
-    var cur = parseInt(hit.value) || 0;
-    var label = hit.dataset.name || hit.dataset.sku;
-    if (mode === 'count') {
-      if (cur >= due) {                                  // already counted to the due qty
-        pickBeep('full');
-        if (msg) { msg.textContent = '• ' + label + ' already at ' + due; msg.style.color = 'var(--warning)'; }
-        el.focus(); return;
-      }
-      hit.value = cur + 1;                               // count one more unit
-      onPickQty(hit); pickBeep(true);
-      if (msg) { msg.textContent = '✓ ' + label + ' — ' + (cur + 1) + '/' + due; msg.style.color = 'var(--success)'; }
-    } else {
-      hit.value = due;                                   // fill the line to its due qty
-      onPickQty(hit); pickBeep(true);
-      if (msg) { msg.textContent = '✓ ' + label + ' — filled ' + due; msg.style.color = 'var(--success)'; }
-    }
-    var row = hit.closest('.pk-card') || hit.closest('tr');
-    if (row) { row.classList.remove('pk-flash'); void row.offsetWidth; row.classList.add('pk-flash'); row.scrollIntoView({ block: 'nearest' }); }
-  } else {
+  if (!hit) {
     pickBeep(false);
     if (navigator.vibrate) { try { navigator.vibrate(140); } catch (e) {} }
-    if (msg) { msg.textContent = '✕ Not on this order: ' + code; msg.style.color = 'var(--danger)'; }
+    return { ok: false, label: code };
   }
+  var mode = APP._pickScanMode || 'fill';
+  var due = parseInt(hit.dataset.ordered) || 0;
+  var cur = parseInt(hit.value) || 0;
+  var label = hit.dataset.name || hit.dataset.sku;
+  var text;
+  if (mode === 'count') {
+    if (cur >= due) { pickBeep('full'); return { ok: true, label: label + ' already at ' + due }; }
+    hit.value = cur + 1; onPickQty(hit); pickBeep(true);
+    text = label + ' — ' + (cur + 1) + '/' + due;
+  } else {
+    hit.value = due; onPickQty(hit); pickBeep(true);
+    text = label + ' — filled ' + due;
+  }
+  var row = hit.closest('.pk-card') || hit.closest('tr');
+  if (row) { row.classList.remove('pk-flash'); void row.offsetWidth; row.classList.add('pk-flash'); row.scrollIntoView({ block: 'nearest' }); }
+  return { ok: true, label: text };
+}
+function pickScan() {
+  var el = document.getElementById('pick-scan'); if (!el) return;
+  var code = (el.value || '').trim(); el.value = '';
+  var msg = document.getElementById('pick-scan-msg');
+  if (!code) { el.focus(); return; }
+  var res = pickApplyCode(code);
+  if (msg) { msg.textContent = res.ok ? ('✓ ' + res.label) : ('✕ Not on this order: ' + code); msg.style.color = res.ok ? 'var(--success)' : 'var(--danger)'; }
   el.focus();
+}
+
+// ── Camera scanning (iOS / Android / desktop) ────────────────────────────────
+// Decodes with html5-qrcode (pure JS, bundles ZXing — no WASM, CSP-safe), loaded
+// from jsDelivr on first use. Each decode is routed through pickApplyCode, so the
+// Fill/Count mode and short/over tally behave exactly as the keyboard scan.
+function pickEnsureScanner(cb) {
+  if (window.Html5Qrcode) return cb();
+  var btn = document.getElementById('pick-cam-btn'); if (btn) btn.textContent = '📷 Loading…';
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  s.onload = function () { if (btn) btn.textContent = '📷 Camera'; cb(); };
+  s.onerror = function () { if (btn) btn.textContent = '📷 Camera'; showToast('Could not load the camera scanner', 'error'); };
+  document.head.appendChild(s);
+}
+function pickCameraOpen() {
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) { showToast('Camera is not available on this device', 'error'); return; }
+  if (APP._pickCam) return;
+  pickEnsureScanner(pickCameraStart);
+}
+function pickCameraStart() {
+  if (!window.Html5Qrcode) { showToast('Camera scanner is still loading — try again', 'error'); return; }
+  var ov = document.createElement('div'); ov.className = 'pk-cam'; ov.id = 'pk-cam';
+  ov.innerHTML =
+    '<div class="pk-cam-card">' +
+      '<div class="pk-cam-head"><span>Scan a barcode · ' + ((APP._pickScanMode || 'fill') === 'count' ? 'Count +1' : 'Fill') + '</span>' +
+      '<button type="button" class="btn btn-secondary btn-sm" id="pk-cam-done">Done</button></div>' +
+      '<div id="pk-cam-reader" class="pk-cam-reader"></div>' +
+      '<div class="pk-cam-msg" id="pk-cam-msg">Point the camera at a product barcode…</div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  document.getElementById('pk-cam-done').addEventListener('click', pickCameraClose);
+  var fmts; try { var F = window.Html5QrcodeSupportedFormats; if (F) fmts = [F.QR_CODE, F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR]; } catch (e) {}
+  var reader;
+  try { reader = new Html5Qrcode('pk-cam-reader', fmts ? { formatsToSupport: fmts, verbose: false } : { verbose: false }); }
+  catch (e) { reader = new Html5Qrcode('pk-cam-reader'); }
+  APP._pickCam = { reader: reader, ov: ov, last: '', lastAt: 0 };
+  reader.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 270, height: 170 } },
+    function (text) {
+      var c = APP._pickCam; if (!c) return;
+      var now = Date.now();
+      if (text === c.last && now - c.lastAt < 1300) return;   // debounce repeat reads of the same code
+      c.last = text; c.lastAt = now;
+      var res = pickApplyCode(text);
+      var m = document.getElementById('pk-cam-msg');
+      if (m) { m.textContent = res.ok ? ('✓ ' + res.label) : ('✕ Not on this order: ' + text); m.style.color = res.ok ? 'var(--success)' : 'var(--danger)'; }
+    },
+    function () { /* per-frame "no code" — ignore */ }
+  ).catch(function () {
+    var m = document.getElementById('pk-cam-msg');
+    if (m) { m.textContent = 'Could not start the camera — allow camera access for this site and try again.'; m.style.color = 'var(--danger)'; }
+  });
+}
+function pickCameraClose() {
+  var c = APP._pickCam; if (!c) return;
+  var done = function () { if (c.ov && c.ov.parentNode) c.ov.parentNode.removeChild(c.ov); APP._pickCam = null; var el = document.getElementById('pick-scan'); if (el) el.focus(); };
+  try { var p = c.reader && c.reader.stop(); if (p && p.then) p.then(done).catch(done); else done(); } catch (e) { done(); }
 }
 // Switch the scan behaviour. Count builds each line from zero (scan every unit);
 // Fill starts from the due qty (scan to confirm a full pick) — so the starting
