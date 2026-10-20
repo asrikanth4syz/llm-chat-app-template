@@ -582,6 +582,11 @@ function pickModalInner() {
   const ctx = APP._pickCtx; if (!ctx) return '';
   const binFilterOpts = (ctx.bins || []).map(b => `<option value="${b.code}">${b.code}${b.zone ? ' — ' + b.zone : ''}</option>`).join('');
   return `
+    <div class="pk-kbd" aria-hidden="true">⌨️ <span>Type a quantity and press <kbd>Enter</kbd> to jump to the next item. <kbd>↑</kbd>/<kbd>↓</kbd> move between items; <kbd>+</kbd>/<kbd>−</kbd> step by one.</span></div>
+    <div class="pk-prog">
+      <div class="pk-prog-track"><i id="pk-prog-bar"></i></div>
+      <div id="pk-prog-txt" class="pk-prog-txt">0 of ${ctx.lines.length} items done</div>
+    </div>
     <div class="pk-tiles">
       <div class="pk-tile"><b id="pk-t-products">${ctx.lines.length}</b><span>Products</span></div>
       <div class="pk-tile"><b id="pk-t-complete">0 / ${ctx.lines.length}</b><span>Items completed</span></div>
@@ -613,55 +618,66 @@ function pickModalInner() {
 function pickModalFooter() {
   const ctx = APP._pickCtx; if (!ctx) return '';
   return `${ctx.canAmend ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', ctx.orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
+    <span class="pk-foot-hint">You can pick less than remaining — a short pick is recorded.</span>
     <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
     <button class="btn btn-primary" ${dataAct('pickReview', ctx.orderId)}>Review &amp; confirm →</button>`;
 }
 
-// One card per line (reference layout): left facts (Ordered / Already picked /
-// Remaining), a middle Pick-now stepper with a directly-editable field + "Pick all
-// remaining" at the bottom, and a secondary right-aligned Storage bin. Emits
-// .pick-qty + .pick-bin exactly as before, so confirmPick is unchanged.
+// Status chip for a line given picked (v) vs. remaining (rem).
+function pickChip(v, rem) {
+  if (v > rem)  return '<span class="pk-chip over">▲ Over</span>';
+  if (v >= rem) return '<span class="pk-chip done">✓ Complete</span>';
+  if (v > 0)    return '<span class="pk-chip short">Short</span>';
+  return '<span class="pk-chip pending">Not picked</span>';
+}
+// One horizontal row per line (reference design): identity (✓/○ + name + SKU·Unit
+// + Ordered/Picked chips) · PICK NOW stepper (Max N · Pick all) · PICK FROM BIN
+// (+ suggested) · Still to pick + status chip. Pick-now starts at 0 and counts
+// down "Still to pick". Emits .pick-qty + .pick-bin exactly as before, so
+// confirmPick is unchanged.
 function pickBodyHtml() {
   const ctx = APP._pickCtx; if (!ctx) return '';
   const { lines, bins } = ctx;
-  const vals = ctx.vals || lines.map(l => l.due);
+  const vals = ctx.vals || lines.map(() => 0);
   const over = pickCanOverpick();
+  // Suggested bin: a bin-location that stocks this SKU, else the last-used bin.
+  const suggest = (sku) => { const b = (bins || []).find(x => (x.sku || '') === sku); return b ? b.code : (ctx.lastBin || ''); };
   const binSelHtml = (sku) => {
-    const cur = (ctx.binSel || {})[sku] || ctx.lastBin || '';
+    const cur = (ctx.binSel || {})[sku] || '';
     const opts = (bins || []).map(b => `<option value="${b.code}"${b.code === cur ? ' selected' : ''}>${b.code}${b.zone ? ' — ' + b.zone : ''}</option>`).join('');
     return `<select class="form-control form-control-sm pick-bin" data-sku="${sku}" ${dataChangeEl('pickBinChange')}><option value="">— select bin —</option>${opts}</select>`;
   };
   return `<div class="pk-list">${lines.map((l, i) => {
     const rem = l.due, already = l.delivered || 0, v = vals[i];
-    const complete = v >= rem;
-    return `<div class="pk-card2${complete ? ' is-complete' : ''}${v < rem ? ' is-short' : ''}${v > rem ? ' is-over' : ''}" data-i="${i}" data-search="${h((l.name + ' ' + (l.sku || '')).toLowerCase())}">
-      <div class="pk-row-head">
-        <div class="pk-id"><div class="pk-name">${h(l.name)}</div><div class="pk-sku">${h(l.sku) || '—'}</div></div>
-        <span class="pk-badge">Picked <b>${already + v}</b></span>
+    const done = v >= rem, sug = suggest(l.sku), unit = (l.unit || l.uom || '');
+    const still = v > rem ? '+' + (v - rem) : Math.max(0, rem - v);
+    return `<div class="pk-card2${done ? ' is-complete' : (v > 0 ? ' is-short' : '')}${v > rem ? ' is-over' : ''}" data-i="${i}" data-search="${h((l.name + ' ' + (l.sku || '')).toLowerCase())}">
+      <div class="pk-id">
+        <span class="pk-mark">${done ? '✓' : '○'}</span>
+        <div class="pk-idmain">
+          <div class="pk-name">${h(l.name)}</div>
+          <div class="pk-sku">SKU: ${h(l.sku) || '—'}${unit ? ' · Unit: ' + h(unit) : ''}</div>
+          <div class="pk-idchips"><span class="pk-ic">Ordered ${l.ordered}</span><span class="pk-ic picked">Picked ${already}</span></div>
+        </div>
       </div>
-      <div class="pk-grid">
-        <div class="pk-facts">
-          <div><span>Ordered</span><b>${l.ordered}</b></div>
-          <div><span>Already picked</span><b>${already}</b></div>
-          <div><span>Remaining</span><b class="pk-rem">${rem}</b></div>
+      <div class="pk-zpick">
+        <div class="pk-zlabel">Pick now</div>
+        <div class="pk-step">
+          <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease"${v <= 0 ? ' disabled' : ''}>−</button>
+          <input type="number" inputmode="numeric" class="pick-qty pk-qbox" data-sku="${l.sku}" data-name="${l.name}" data-ordered="${rem}" data-already="${already}" data-selectall value="${v}" min="0"${over ? '' : ` max="${rem}"`} aria-label="Pick now for ${h(l.name)}" ${dataInputEl('onPickQty')} data-keydown="pickKeyNav">
+          <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase"${(!over && v >= rem) ? ' disabled' : ''}>+</button>
         </div>
-        <div class="pk-pick">
-          <div class="pk-pick-lbl">Pick now</div>
-          <div class="pk-step">
-            <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
-            <input type="number" inputmode="numeric" class="pick-qty pk-val" data-sku="${l.sku}" data-name="${l.name}" data-ordered="${rem}" data-already="${already}" data-selectall value="${v}" min="0"${over ? '' : ` max="${rem}"`} aria-label="Pick now for ${h(l.name)}" ${dataInputEl('onPickQty')} ${dataEnter('pickNext', i)}>
-            <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
-          </div>
-          <div class="pk-pick-foot">
-            <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all remaining (${rem})</button>
-            <span class="pk-complete">✓ Complete</span>
-          </div>
-        </div>
-        <div class="pk-binbox">
-          <div class="pk-bin-lbl">Storage bin</div>
-          ${binSelHtml(l.sku)}
-          <div class="pk-bin-hint">Confirm bin before saving</div>
-        </div>
+        <div class="pk-zhelp">Max <b>${rem}</b>${unit ? ' ' + h(unit).toLowerCase() + '(s)' : ''} · <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all ${rem}</button></div>
+      </div>
+      <div class="pk-zbin">
+        <div class="pk-zlabel">Pick from bin</div>
+        ${binSelHtml(l.sku)}
+        <div class="pk-zhelp">${sug ? 'Suggested: ' + h(sug) : 'Confirm bin before saving'}</div>
+      </div>
+      <div class="pk-still">
+        <div class="pk-still-l">Still to pick</div>
+        <div class="pk-still-n">${still}</div>
+        <span class="pk-chipwrap">${pickChip(v, rem)}</span>
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -680,20 +696,32 @@ function pickApplyFilters() {
 }
 function pickSearch() { pickApplyFilters(); }
 function pickBinFilter() { pickApplyFilters(); }
-// Keyboard flow: Enter in a qty field jumps to the next visible card's field.
-function pickNext(i) {
+// Keyboard flow: move focus to the next/previous visible line's qty field.
+function pickGo(i, dir) {
   const inputs = Array.prototype.slice.call(document.querySelectorAll('.pk-card2 .pick-qty'))
     .filter(inp => { const c = inp.closest('.pk-card2'); return c && c.style.display !== 'none'; });
   const cur = inputs.findIndex(inp => { const c = inp.closest('.pk-card2'); return c && c.getAttribute('data-i') === String(i); });
-  const next = inputs[cur + 1];
-  if (next) { next.focus(); if (next.select) next.select(); const nc = next.closest('.pk-card2'); if (nc) nc.scrollIntoView({ block: 'nearest' }); }
-  else if (inputs[cur]) inputs[cur].blur();
+  const nx = inputs[cur + dir];
+  if (nx) { nx.focus(); if (nx.select) nx.select(); const nc = nx.closest('.pk-card2'); if (nc) nc.scrollIntoView({ block: 'nearest' }); }
+  else if (dir > 0 && inputs[cur]) inputs[cur].blur();   // past the last item → done
+}
+// Enter / ↓ → next item, ↑ → previous, + / − → step this line by one.
+function pickKeyNav(e) {
+  const el = e.target; if (!el || !el.classList || !el.classList.contains('pick-qty')) return;
+  const card = el.closest('.pk-card2'); if (!card) return;
+  const i = parseInt(card.dataset.i);
+  if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); pickGo(i, 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); pickGo(i, -1); }
+  else if (e.key === '+') { e.preventDefault(); pickStepQty(i, 1); }
+  else if (e.key === '-') { e.preventDefault(); pickStepQty(i, -1); }
 }
 // Remember the last bin chosen so the next line can suggest it.
 function pickBinChange(sel) {
   const ctx = APP._pickCtx; if (!ctx || !sel) return;
   if (sel.value) { ctx.binSel[sel.dataset.sku] = sel.value; ctx.lastBin = sel.value; }
   else delete ctx.binSel[sel.dataset.sku];
+  const card = sel.closest('.pk-card2');
+  if (card) { const inp = card.querySelector('.pick-qty'); const v = inp ? (parseInt(inp.value) || 0) : 0; sel.classList.toggle('need', v > 0 && !sel.value); }
   pickApplyFilters();
 }
 // Completion summary before submission: reconcile picked vs. remaining, call out
@@ -734,10 +762,10 @@ function pickBackToList() {
   updatePickSummary(); pickApplyFilters();
 }
 
-// Qty-input handler: clamp over-pick to the remaining qty (unless the user is
-// authorised to over-pick), refresh the card's "Picked" badge + complete state,
-// and update the summary tiles. An empty field is treated as 0 without being
-// overwritten, so the number stays clearable while typing.
+// Qty-input handler: clamp over-pick to the remaining qty (unless authorised),
+// refresh the row's Still-to-pick number, status chip, ✓/○ mark and stepper
+// enabled-state, then update the tiles + progress. An empty field reads as 0
+// without being overwritten, so the number stays clearable while typing.
 function onPickQty(el) {
   const rem = parseInt(el.dataset.ordered) || 0;
   let v = parseInt(el.value);
@@ -745,11 +773,15 @@ function onPickQty(el) {
   if (isNaN(v) || v < 0) v = 0;
   const card = el.closest('.pk-card2');
   if (card) {
-    const already = parseInt(el.dataset.already) || 0;
-    const badge = card.querySelector('.pk-badge b'); if (badge) badge.textContent = (already + v);
+    const sn = card.querySelector('.pk-still-n'); if (sn) sn.textContent = (v > rem ? '+' + (v - rem) : Math.max(0, rem - v));
+    const cw = card.querySelector('.pk-chipwrap'); if (cw) cw.innerHTML = pickChip(v, rem);
+    const mk = card.querySelector('.pk-mark'); if (mk) mk.textContent = (v >= rem ? '✓' : '○');
     card.classList.toggle('is-complete', v >= rem);
-    card.classList.toggle('is-short', v < rem);
+    card.classList.toggle('is-short', v > 0 && v < rem);
     card.classList.toggle('is-over', v > rem);
+    const dec = card.querySelector('.pk-pm[aria-label="Decrease"]'); if (dec) dec.disabled = v <= 0;
+    const inc = card.querySelector('.pk-pm[aria-label="Increase"]'); if (inc) inc.disabled = !pickCanOverpick() && v >= rem;
+    const binsel = card.querySelector('.pick-bin'); if (binsel) binsel.classList.toggle('need', v > 0 && !binsel.value);
   }
   updatePickSummary();
 }
@@ -922,6 +954,9 @@ function updatePickSummary() {
   set('pk-t-complete', complete + ' / ' + ctx.lines.length);
   set('pk-t-picked', picked + ' / ' + ctx.totalDue);
   set('pk-t-remaining', Math.max(0, ctx.totalDue - picked));
+  const pct = ctx.totalDue ? Math.round(picked / ctx.totalDue * 100) : 0;
+  const bar = document.getElementById('pk-prog-bar'); if (bar) bar.style.width = pct + '%';
+  set('pk-prog-txt', complete + ' of ' + ctx.lines.length + ' items done');
 }
 
 async function confirmPick(orderId) {
