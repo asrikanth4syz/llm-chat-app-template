@@ -557,109 +557,206 @@ async function pickOrderModal(orderId) {
     return;
   }
 
-  // Layout adapts to the device: stepper CARDS on a phone (variation A), a dense
-  // TABLE on desktop (variation B). One set of .pick-qty fields drives both, so the
-  // tally + confirm logic is layout-independent; a toggle lets either be forced.
-  const wide = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(min-width: 760px)').matches);
-  APP._pickCtx = { lines, bins: bins||[], anyDelivered, binSel:{}, vals:null, layout: wide ? 'table' : 'cards' };
+  // Picking context drives the whole modal. Each line's "remaining" (l.due) is the
+  // target to pick; `vals` preserves entered qtys across the review ⇆ list swap and
+  // `lastBin` remembers the most recent bin so the next line can suggest it.
+  APP._pickCtx = {
+    lines, bins: bins || [], binSel: {}, lastBin: '', vals: null,
+    orderId, clientName, anyDelivered, totalDue,
+    canAmend: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'].includes(APP.user && APP.user.role),
+  };
   APP._pickScanMode = 'fill';
+  openModal(`Pick Items — ${orderId}${clientName ? ` · ${clientName}` : ''}`, pickModalInner(), pickModalFooter());
+  updatePickSummary();
+  pickApplyFilters();
+  const fs = document.getElementById('pick-search'); if (fs) fs.focus();
+}
 
-  const tog = (l,label) => `<button class="btn btn-sm ${APP._pickCtx.layout===l?'btn-primary':'btn-secondary'}" data-picklayout="${l}" ${dataAct('pickSetLayout', l)}>${label}</button>`;
-  openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
-    <p style="color:var(--text-muted);margin:0 0 12px;font-size:.86rem">
-      Enter the quantity actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
-    </p>
+// Roles allowed to pick MORE than the remaining qty (the authorised over-pick
+// workflow). Everyone else is capped at the remaining quantity per line.
+function pickCanOverpick() { return ['super_admin', 'ops_admin'].includes(APP.user && APP.user.role); }
+
+// The Pick Items body: summary tiles, a live name/SKU search + bin filter + a
+// prominent "pick remaining" bulk action, the scanner row, then one card per line.
+function pickModalInner() {
+  const ctx = APP._pickCtx; if (!ctx) return '';
+  const binFilterOpts = (ctx.bins || []).map(b => `<option value="${b.code}">${b.code}${b.zone ? ' — ' + b.zone : ''}</option>`).join('');
+  return `
+    <div class="pk-tiles">
+      <div class="pk-tile"><b id="pk-t-products">${ctx.lines.length}</b><span>Products</span></div>
+      <div class="pk-tile"><b id="pk-t-complete">0 / ${ctx.lines.length}</b><span>Items completed</span></div>
+      <div class="pk-tile"><b id="pk-t-picked">0 / ${ctx.totalDue}</b><span>Units picked / to pick</span></div>
+      <div class="pk-tile"><b id="pk-t-remaining">${ctx.totalDue}</b><span>Units remaining</span></div>
+    </div>
+    <div class="pk-controls">
+      <input id="pick-search" type="search" autocomplete="off" placeholder="Find product or SKU…" ${dataInputVal('pickSearch')} aria-label="Find product or SKU">
+      <select id="pick-binfilter" class="form-control form-control-sm" ${dataChangeVal('pickBinFilter')} aria-label="Filter by storage bin"><option value="">All bins</option>${binFilterOpts}</select>
+      <button type="button" class="btn btn-primary btn-sm pk-bulk" ${dataAct('pickRemainingVisible')} title="Set Pick now to the remaining qty for every line shown">Pick remaining (visible)</button>
+    </div>
     <div class="pk-scanwrap">
       <div class="pk-scanbar">
         <span class="pk-scan-ic" aria-hidden="true">▣</span>
-        <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan or type a SKU — fills the line to its due qty" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
+        <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan a barcode — hardware scanner or camera" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
         <button type="button" class="btn btn-sm btn-secondary" id="pick-cam-btn" ${dataAct('pickCameraOpen')} title="Scan with the device camera">📷 Camera</button>
         <span class="pk-scanmode">
-          <button type="button" class="btn btn-sm btn-primary" data-scanmode="fill" ${dataAct('pickSetScanMode', 'fill')} title="Each scan fills the line to its due quantity">Fill</button>
-          <button type="button" class="btn btn-sm btn-secondary" data-scanmode="count" ${dataAct('pickSetScanMode', 'count')} title="Each scan adds 1, counting up to the due quantity">Count +1</button>
+          <button type="button" class="btn btn-sm btn-primary" data-scanmode="fill" ${dataAct('pickSetScanMode', 'fill')} title="Each scan fills the line to its remaining qty">Fill</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-scanmode="count" ${dataAct('pickSetScanMode', 'count')} title="Each scan adds 1, counting up to the remaining qty">Count +1</button>
         </span>
       </div>
       <div id="pick-scan-msg" class="pk-scan-msg"></div>
     </div>
-    <div id="pick-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
-      <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
-      <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
-      <span id="ps-match" style="font-weight:600;margin-left:auto"></span>
-      <span style="display:flex;gap:6px">
-        <button class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')} title="Set every Qty to Pick to 0">Clear all</button>
-        <button class="btn btn-secondary btn-sm" ${dataAct('pickFillDue')} title="Reset every Qty to Pick to the due quantity">Reset to due</button>
-      </span>
-      <span style="display:flex;gap:4px;border-left:1px solid var(--border);padding-left:10px" title="Card view (phone) or table view (desktop)">${tog('cards','▦ Cards')}${tog('table','▤ Table')}</span>
-    </div>
-    <div id="pick-items-body">${pickBodyHtml(APP._pickCtx.layout)}</div>
-  `,
-    `${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
-      ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
+    <div id="pick-items-body">${pickBodyHtml()}</div>`;
+}
+function pickModalFooter() {
+  const ctx = APP._pickCtx; if (!ctx) return '';
+  return `${ctx.canAmend ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', ctx.orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
     <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-    <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>`);
-  updatePickSummary(); // seed the tally from the pre-filled (=ordered) quantities
+    <button class="btn btn-primary" ${dataAct('pickReview', ctx.orderId)}>Review &amp; confirm →</button>`;
 }
 
-// Render the Pick Items lines in the chosen layout. Both layouts emit the same
-// .pick-qty fields (same data-attrs + select-on-focus), so onPickQty / the tally /
-// confirmPick are identical regardless of layout.
-function pickBodyHtml(layout) {
+// One card per line (reference layout): left facts (Ordered / Already picked /
+// Remaining), a middle Pick-now stepper with a directly-editable field + "Pick all
+// remaining" at the bottom, and a secondary right-aligned Storage bin. Emits
+// .pick-qty + .pick-bin exactly as before, so confirmPick is unchanged.
+function pickBodyHtml() {
   const ctx = APP._pickCtx; if (!ctx) return '';
-  const { lines, bins, anyDelivered } = ctx;
+  const { lines, bins } = ctx;
   const vals = ctx.vals || lines.map(l => l.due);
+  const over = pickCanOverpick();
   const binSelHtml = (sku) => {
-    const cur = (ctx.binSel||{})[sku] || '';
-    const opts = (bins||[]).map(b => `<option value="${b.code}"${b.code===cur?' selected':''}>${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
-    return `<select class="form-control form-control-sm pick-bin pk-bin" data-sku="${sku}"><option value="">— select bin —</option>${opts}</select>`;
+    const cur = (ctx.binSel || {})[sku] || ctx.lastBin || '';
+    const opts = (bins || []).map(b => `<option value="${b.code}"${b.code === cur ? ' selected' : ''}>${b.code}${b.zone ? ' — ' + b.zone : ''}</option>`).join('');
+    return `<select class="form-control form-control-sm pick-bin" data-sku="${sku}" ${dataChangeEl('pickBinChange')}><option value="">— select bin —</option>${opts}</select>`;
   };
-  const qtyInput = (item,i,cls) => `<input type="number" inputmode="numeric" class="pick-qty ${cls}" data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall value="${vals[i]}" min="0" aria-label="Qty to pick for ${h(item.name)}" ${dataInputEl('onPickQty')}>`;
-  if (layout === 'table') {
-    return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px"><table class="table" style="margin:0">
-      <thead><tr><th>Item Name</th><th>SKU</th><th class="u-center">Ordered</th>${anyDelivered?'<th class="u-center">Delivered</th>':''}<th class="u-center">Due</th><th class="u-center">Qty to Pick</th><th>Bin Location</th></tr></thead>
-      <tbody>${lines.map((item,i)=>`<tr>
-        <td><b style="color:var(--navy)">${h(item.name)}</b></td>
-        <td style="color:var(--text-muted);font-size:.82rem">${h(item.sku)||'—'}</td>
-        <td class="u-center u-muted">${item.ordered}</td>
-        ${anyDelivered?`<td class="u-center" style="color:var(--success)">${item.delivered}</td>`:''}
-        <td class="u-center"><b>${item.due}</b></td>
-        <td class="u-center">${qtyInput(item,i,'pk-qin')}</td>
-        <td>${binSelHtml(item.sku)}</td>
-      </tr>`).join('')}</tbody></table></div>`;
-  }
-  return `<div class="pk-list">${lines.map((item,i)=>`<div class="pk-card">
-    <div class="pk-card-top">
-      <div style="min-width:0"><div class="pk-name">${h(item.name)}</div><div class="pk-sku">${h(item.sku)||'—'}</div></div>
-      <span class="pk-due">Due ${item.due}${anyDelivered&&item.delivered?` · <span style="color:var(--success)">${item.delivered} delivered</span>`:''}</span>
-    </div>
-    <div class="pk-card-mid">
-      <div class="pk-step">
-        <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
-        ${qtyInput(item,i,'pk-val')}
-        <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
+  return `<div class="pk-list">${lines.map((l, i) => {
+    const rem = l.due, already = l.delivered || 0, v = vals[i];
+    const complete = v >= rem;
+    return `<div class="pk-card2${complete ? ' is-complete' : ''}${v > rem ? ' is-over' : ''}" data-i="${i}" data-search="${h((l.name + ' ' + (l.sku || '')).toLowerCase())}">
+      <div class="pk-row-head">
+        <div class="pk-id"><div class="pk-name">${h(l.name)}</div><div class="pk-sku">${h(l.sku) || '—'}</div></div>
+        <span class="pk-badge">Picked <b>${already + v}</b></span>
       </div>
-      <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all (${item.due})</button>
-    </div>
-    <div class="pk-card-bot"><span class="pk-ord">Ordered ${item.ordered}</span>${binSelHtml(item.sku)}</div>
-  </div>`).join('')}</div>`;
+      <div class="pk-grid">
+        <div class="pk-facts">
+          <div><span>Ordered</span><b>${l.ordered}</b></div>
+          <div><span>Already picked</span><b>${already}</b></div>
+          <div><span>Remaining</span><b class="pk-rem">${rem}</b></div>
+        </div>
+        <div class="pk-pick">
+          <div class="pk-pick-lbl">Pick now</div>
+          <div class="pk-step">
+            <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
+            <input type="number" inputmode="numeric" class="pick-qty pk-val" data-sku="${l.sku}" data-name="${l.name}" data-ordered="${rem}" data-already="${already}" data-selectall value="${v}" min="0"${over ? '' : ` max="${rem}"`} aria-label="Pick now for ${h(l.name)}" ${dataInputEl('onPickQty')} ${dataEnter('pickNext', i)}>
+            <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
+          </div>
+          <div class="pk-pick-foot">
+            <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all remaining (${rem})</button>
+            <span class="pk-complete">✓ Complete</span>
+          </div>
+        </div>
+        <div class="pk-binbox">
+          <div class="pk-bin-lbl">Storage bin</div>
+          ${binSelHtml(l.sku)}
+          <div class="pk-bin-hint">Confirm bin before saving</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 }
-// Switch Cards ⇆ Table, preserving the entered qty + bin selections.
-function pickSetLayout(l) {
-  const ctx = APP._pickCtx; if (!ctx) return;
-  ctx.vals = Array.from(document.querySelectorAll('.pick-qty')).map(i => parseInt(i.value)||0);
-  ctx.binSel = {}; document.querySelectorAll('.pick-bin').forEach(s => { if (s.value) ctx.binSel[s.dataset.sku] = s.value; });
-  ctx.layout = l;
-  const host = document.getElementById('pick-items-body'); if (host) host.innerHTML = pickBodyHtml(l);
-  document.querySelectorAll('[data-picklayout]').forEach(b => {
-    const on = b.getAttribute('data-picklayout') === l;
-    b.classList.toggle('btn-primary', on); b.classList.toggle('btn-secondary', !on);
+
+// Live name/SKU search + bin filter (combined) — hide cards that don't match.
+function pickApplyFilters() {
+  const q = ((document.getElementById('pick-search') || {}).value || '').trim().toLowerCase();
+  const bin = (document.getElementById('pick-binfilter') || {}).value || '';
+  document.querySelectorAll('.pk-card2').forEach(c => {
+    const okq = !q || (c.getAttribute('data-search') || '').indexOf(q) >= 0;
+    const sel = c.querySelector('.pick-bin');
+    const okb = !bin || (sel && sel.value === bin);
+    c.style.display = (okq && okb) ? '' : 'none';
   });
-  document.querySelectorAll('.pick-qty').forEach(colorByOrdered);
+}
+function pickSearch() { pickApplyFilters(); }
+function pickBinFilter() { pickApplyFilters(); }
+// Bulk "pick remaining" over the currently visible (filtered) cards only.
+function pickRemainingVisible() {
+  document.querySelectorAll('.pk-card2').forEach(c => {
+    if (c.style.display === 'none') return;
+    const inp = c.querySelector('.pick-qty'); if (!inp) return;
+    inp.value = parseInt(inp.dataset.ordered) || 0; onPickQty(inp);
+  });
+}
+// Keyboard flow: Enter in a qty field jumps to the next visible card's field.
+function pickNext(i) {
+  const inputs = Array.prototype.slice.call(document.querySelectorAll('.pk-card2 .pick-qty'))
+    .filter(inp => { const c = inp.closest('.pk-card2'); return c && c.style.display !== 'none'; });
+  const cur = inputs.findIndex(inp => { const c = inp.closest('.pk-card2'); return c && c.getAttribute('data-i') === String(i); });
+  const next = inputs[cur + 1];
+  if (next) { next.focus(); if (next.select) next.select(); const nc = next.closest('.pk-card2'); if (nc) nc.scrollIntoView({ block: 'nearest' }); }
+  else if (inputs[cur]) inputs[cur].blur();
+}
+// Remember the last bin chosen so the next line can suggest it.
+function pickBinChange(sel) {
+  const ctx = APP._pickCtx; if (!ctx || !sel) return;
+  if (sel.value) { ctx.binSel[sel.dataset.sku] = sel.value; ctx.lastBin = sel.value; }
+  else delete ctx.binSel[sel.dataset.sku];
+  pickApplyFilters();
+}
+// Completion summary before submission: reconcile picked vs. remaining, call out
+// short/over-pick lines and any picked line left without a bin, then swap the
+// footer to a final Submit. Back returns to the (preserved) picking list.
+function pickReview(orderId) {
+  const ctx = APP._pickCtx; if (!ctx) return;
+  ctx.vals = Array.prototype.slice.call(document.querySelectorAll('.pick-qty')).map(i => parseInt(i.value) || 0);
+  const bySku = {}, binBySku = {};
+  document.querySelectorAll('.pick-qty').forEach(i => { bySku[i.dataset.sku] = parseInt(i.value) || 0; });
+  document.querySelectorAll('.pick-bin').forEach(s => { binBySku[s.dataset.sku] = s.value || ''; });
+  let complete = 0, picked = 0, toPick = 0, noBin = 0; const shorts = [], over = [];
+  ctx.lines.forEach(l => {
+    const rem = l.due, v = bySku[l.sku] || 0; toPick += rem; picked += v;
+    if (v >= rem) complete++; if (v < rem) shorts.push({ name: l.name, rem, v });
+    if (v > rem) over.push({ name: l.name, rem, v });
+    if (v > 0 && !binBySku[l.sku]) noBin++;
+  });
+  const body = `<div class="pk-review">
+    <div class="pk-tiles">
+      <div class="pk-tile"><b>${complete} / ${ctx.lines.length}</b><span>Items complete</span></div>
+      <div class="pk-tile"><b>${picked} / ${toPick}</b><span>Units picked</span></div>
+      <div class="pk-tile"><b>${Math.max(0, toPick - picked)}</b><span>Units short</span></div>
+    </div>
+    ${shorts.length ? `<div class="pk-rev-sec pk-rev-warn"><b>⚠ ${shorts.length} line${shorts.length > 1 ? 's' : ''} picked short</b><ul>${shorts.map(s => `<li>${h(s.name)} — picked ${s.v} of ${s.rem}</li>`).join('')}</ul></div>` : `<div class="pk-rev-ok">✓ Every line picked in full.</div>`}
+    ${over.length ? `<div class="pk-rev-sec pk-rev-bad"><b>▲ Over-pick on ${over.length} line${over.length > 1 ? 's' : ''}</b><ul>${over.map(s => `<li>${h(s.name)} — ${s.v} vs ${s.rem} remaining</li>`).join('')}</ul></div>` : ''}
+    ${noBin ? `<div class="pk-rev-sec pk-rev-warn">${noBin} picked line${noBin > 1 ? 's' : ''} without a storage bin selected.</div>` : ''}
+  </div>`;
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal-footer').innerHTML =
+    `<button class="btn btn-secondary" ${dataAct('pickBackToList')}>← Back to picking</button>
+     <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Submit pick</button>`;
+}
+function pickBackToList() {
+  const ctx = APP._pickCtx; if (!ctx) return;
+  document.getElementById('modal-body').innerHTML = pickModalInner();
+  document.getElementById('modal-footer').innerHTML = pickModalFooter();
+  updatePickSummary(); pickApplyFilters();
+}
+
+// Qty-input handler: clamp over-pick to the remaining qty (unless the user is
+// authorised to over-pick), refresh the card's "Picked" badge + complete state,
+// and update the summary tiles. An empty field is treated as 0 without being
+// overwritten, so the number stays clearable while typing.
+function onPickQty(el) {
+  const rem = parseInt(el.dataset.ordered) || 0;
+  let v = parseInt(el.value);
+  if (!isNaN(v) && !pickCanOverpick() && v > rem) { v = rem; el.value = v; }   // cap at remaining
+  if (isNaN(v) || v < 0) v = 0;
+  const card = el.closest('.pk-card2');
+  if (card) {
+    const already = parseInt(el.dataset.already) || 0;
+    const badge = card.querySelector('.pk-badge b'); if (badge) badge.textContent = (already + v);
+    card.classList.toggle('is-complete', v >= rem);
+    card.classList.toggle('is-over', v > rem);
+  }
   updatePickSummary();
 }
-
-// Combined qty-input handler for the Pick Items modal: keep the below-ordered
-// colour cue and refresh the live picked tally.
-function onPickQty(el) { colorByOrdered(el); updatePickSummary(); }
 // Stepper controls for the Pick Items cards — big −/+ and a one-tap "Pick all"
 // that drive the i-th .pick-qty field (so the tally + confirm logic are unchanged).
 function pickStepQty(i, delta) {
@@ -701,7 +798,7 @@ function pickApplyCode(code) {
     hit.value = due; onPickQty(hit); pickBeep(true);
     text = label + ' — filled ' + due;
   }
-  var row = hit.closest('.pk-card') || hit.closest('tr');
+  var row = hit.closest('.pk-card2') || hit.closest('.pk-card') || hit.closest('tr');
   if (row) { row.classList.remove('pk-flash'); void row.offsetWidth; row.classList.add('pk-flash'); row.scrollIntoView({ block: 'nearest' }); }
   return { ok: true, label: text };
 }
@@ -806,30 +903,29 @@ function pickBeep(ok) {
     else { tone(200, 0, 0.22); tone(160, 0.18, 0.28); }
   } catch (e) { /* audio unavailable — stay silent */ }
 }
-// Bulk helpers for the Pick Items modal — fast entry for whoever's keying picks.
-function pickClearAll() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = 0; colorByOrdered(inp); }); updatePickSummary(); }
-function pickFillDue() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = inp.dataset.ordered || 0; colorByOrdered(inp); }); updatePickSummary(); }
+// Bulk helpers (used by the Fill/Count scan-mode toggle) — reset every qty and
+// route each through onPickQty so badges / complete-state / tiles stay in sync.
+function pickClearAll() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = 0; onPickQty(inp); }); }
+function pickFillDue() { document.querySelectorAll('.pick-qty').forEach(inp => { inp.value = inp.dataset.ordered || 0; onPickQty(inp); }); }
 
-// Recompute "lines picked / qty picked" from the modal inputs and flag whether the
-// manually picked total reconciles with the system-ordered total.
+// Recompute the summary tiles (items completed, units picked / to pick, remaining)
+// from the live qty inputs.
 function updatePickSummary() {
+  const ctx = APP._pickCtx;
   const inputs = document.querySelectorAll('.pick-qty');
-  if (!inputs.length) return;
-  let lines = 0, qty = 0, ordered = 0;
+  if (!inputs.length || !ctx) return;
+  let complete = 0, picked = 0;
   inputs.forEach(inp => {
     const v = parseInt(inp.value) || 0;
-    ordered += parseInt(inp.dataset.ordered) || 0;
-    if (v > 0) lines++;
-    qty += v;
+    const rem = parseInt(inp.dataset.ordered) || 0;
+    picked += v;
+    if (v >= rem) complete++;
   });
   const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
-  set('ps-lines', lines);
-  set('ps-qty', qty);
-  const m = document.getElementById('ps-match');
-  if (!m) return;
-  if (qty === ordered)      { m.textContent = '✓ Matches system qty'; m.style.color = 'var(--success)'; }
-  else if (qty < ordered)   { m.textContent = `▼ Short by ${ordered - qty}`; m.style.color = 'var(--warning)'; }
-  else                      { m.textContent = `▲ Over by ${qty - ordered}`; m.style.color = 'var(--danger)'; }
+  set('pk-t-products', ctx.lines.length);
+  set('pk-t-complete', complete + ' / ' + ctx.lines.length);
+  set('pk-t-picked', picked + ' / ' + ctx.totalDue);
+  set('pk-t-remaining', Math.max(0, ctx.totalDue - picked));
 }
 
 async function confirmPick(orderId) {

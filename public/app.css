@@ -813,7 +813,58 @@ button.tile:hover { transform: translateY(-1px); }
 .pk-cam-msg{padding:12px 14px;font-size:.85rem;font-weight:700;color:var(--text-muted);text-align:center;min-height:1.2em}
 @keyframes pkFlash{0%{background:rgba(22,163,74,.22)}100%{background:transparent}}
 .pk-card.pk-flash{animation:pkFlash 1s ease-out}
+.pk-card2.pk-flash{animation:pkFlash 1s ease-out}
 tr.pk-flash>td{animation:pkFlash 1s ease-out}
+/* ── Pick Items redesign: summary tiles, search/filter controls, per-line cards ── */
+.pk-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.pk-tile{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;text-align:center}
+.pk-tile b{display:block;font-size:1.3rem;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1.1}
+.pk-tile span{display:block;font-size:.7rem;color:var(--text-muted);margin-top:3px;letter-spacing:.01em}
+.pk-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+#pick-search{flex:1;min-width:180px;border:1.5px solid var(--border-mid);border-radius:9px;padding:9px 12px;background:var(--surface);color:var(--text);font:inherit;font-size:.9rem}
+#pick-search:focus{outline:2px solid var(--teal,var(--navy));outline-offset:1px}
+#pick-binfilter{min-width:140px;max-width:200px}
+.pk-controls .pk-bulk{margin-left:auto;white-space:nowrap}
+/* per-line card */
+.pk-card2{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:12px;padding:12px 14px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+.pk-card2.is-complete{border-left-color:var(--success)}
+.pk-card2.is-over{border-left-color:var(--danger)}
+.pk-row-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.pk-id{min-width:0}
+.pk-badge{font-size:.72rem;font-weight:700;color:var(--text-label);background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.pk-card2.is-complete .pk-badge{color:var(--success);border-color:rgba(22,163,74,.4);background:rgba(22,163,74,.08)}
+.pk-card2.is-over .pk-badge{color:var(--danger);border-color:rgba(220,38,38,.4);background:rgba(220,38,38,.08)}
+.pk-grid{display:grid;grid-template-columns:minmax(150px,1fr) auto minmax(150px,200px);gap:14px;align-items:center}
+.pk-facts{display:flex;flex-direction:column;gap:3px}
+.pk-facts>div{display:flex;justify-content:space-between;gap:12px;font-size:.82rem}
+.pk-facts span{color:var(--text-muted)}
+.pk-facts b{font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.pk-facts .pk-rem{color:var(--navy)}
+.pk-pick{display:flex;flex-direction:column;align-items:center;gap:5px}
+.pk-pick-lbl{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.pk-pick-foot{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pk-complete{display:none;font-size:.74rem;font-weight:700;color:var(--success)}
+.pk-card2.is-complete .pk-complete{display:block}
+.pk-card2.is-complete .pk-all{display:none}
+.pk-binbox{display:flex;flex-direction:column;gap:4px;justify-self:end;width:100%;max-width:200px}
+.pk-bin-lbl{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.pk-bin-hint{font-size:.68rem;color:var(--text-muted)}
+/* completion-summary (review) step */
+.pk-review{display:flex;flex-direction:column;gap:12px}
+.pk-rev-sec{border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:.86rem}
+.pk-rev-sec ul{margin:6px 0 0;padding-left:18px}
+.pk-rev-sec li{margin:2px 0}
+.pk-rev-warn{border-color:rgba(217,119,6,.4);background:rgba(217,119,6,.07);color:var(--text)}
+.pk-rev-bad{border-color:rgba(220,38,38,.4);background:rgba(220,38,38,.07);color:var(--text)}
+.pk-rev-ok{border:1px solid rgba(22,163,74,.4);background:rgba(22,163,74,.08);border-radius:10px;padding:10px 14px;font-size:.9rem;font-weight:700;color:var(--success)}
+@media (max-width:640px){
+  .pk-tiles{grid-template-columns:repeat(2,1fr)}
+  .pk-grid{grid-template-columns:1fr;gap:12px}
+  .pk-pick{align-items:stretch}
+  .pk-step{align-self:center}
+  .pk-binbox{justify-self:stretch;max-width:none}
+  .pk-controls .pk-bulk{margin-left:0;width:100%}
+}
 
 /* Live "recording in progress" dot for the delivery voice-note capture. */
 .rec-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--danger,#dc2626); vertical-align:middle; animation:recPulse 1s ease-in-out infinite; }
