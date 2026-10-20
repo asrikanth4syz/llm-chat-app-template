@@ -547,7 +547,6 @@ async function pickOrderModal(orderId) {
     lines = order.items.map(i => ({ sku:i.sku, name:i.name||i.item_name, ordered:parseInt(i.qty)||0, delivered:0, due:parseInt(i.qty)||0 }));
   }
   const anyDelivered = lines.some(l => l.delivered > 0);
-  const binOptions = (bins||[]).map(b=>`<option value="${b.code}">${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
   const totalDue = lines.reduce((n,l)=>n+(parseInt(l.due)||0),0);
   const clientName = order?.client_name || '';
 
@@ -558,52 +557,91 @@ async function pickOrderModal(orderId) {
     return;
   }
 
+  // Layout adapts to the device: stepper CARDS on a phone (variation A), a dense
+  // TABLE on desktop (variation B). One set of .pick-qty fields drives both, so the
+  // tally + confirm logic is layout-independent; a toggle lets either be forced.
+  const wide = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(min-width: 760px)').matches);
+  APP._pickCtx = { lines, bins: bins||[], anyDelivered, binSel:{}, vals:null, layout: wide ? 'table' : 'cards' };
+
+  const tog = (l,label) => `<button class="btn btn-sm ${APP._pickCtx.layout===l?'btn-primary':'btn-secondary'}" data-picklayout="${l}" ${dataAct('pickSetLayout', l)}>${label}</button>`;
   openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
     <p style="color:var(--text-muted);margin:0 0 12px;font-size:.86rem">
       Enter the quantity actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
     </p>
-    <!-- Live picking tally: lines & qty picked vs the outstanding due qty. -->
-    <div id="pick-summary" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
+    <div id="pick-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
       <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
       <span>Qty picked: <b id="ps-qty">0</b> <span style="color:var(--text-muted)">/ ${totalDue} due</span></span>
       <span id="ps-match" style="font-weight:600;margin-left:auto"></span>
       <span style="display:flex;gap:6px">
-        <button class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')} title="Set every Qty to Pick to 0">Clear all to 0</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('pickClearAll')} title="Set every Qty to Pick to 0">Clear all</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('pickFillDue')} title="Reset every Qty to Pick to the due quantity">Reset to due</button>
       </span>
+      <span style="display:flex;gap:4px;border-left:1px solid var(--border);padding-left:10px" title="Card view (phone) or table view (desktop)">${tog('cards','▦ Cards')}${tog('table','▤ Table')}</span>
     </div>
-    <div id="pick-items-body" class="pk-list">
-      ${lines.map((item,i)=>`<div class="pk-card">
-        <div class="pk-card-top">
-          <div style="min-width:0"><div class="pk-name">${h(item.name)}</div><div class="pk-sku">${h(item.sku)||'—'}</div></div>
-          <span class="pk-due">Due ${item.due}${anyDelivered&&item.delivered?` · <span style="color:var(--success)">${item.delivered} delivered</span>`:''}</span>
-        </div>
-        <div class="pk-card-mid">
-          <div class="pk-step">
-            <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
-            <input type="number" inputmode="numeric" class="pick-qty pk-val"
-              data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall
-              value="${item.due}" min="0" aria-label="Qty to pick for ${h(item.name)}"
-              ${dataInputEl('onPickQty')}>
-            <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
-          </div>
-          <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all (${item.due})</button>
-        </div>
-        <div class="pk-card-bot">
-          <span class="pk-ord">Ordered ${item.ordered}</span>
-          <select class="form-control form-control-sm pick-bin pk-bin" data-sku="${item.sku}">
-            <option value="">— select bin —</option>
-            ${binOptions}
-          </select>
-        </div>
-      </div>`).join('')}
-    </div>
+    <div id="pick-items-body">${pickBodyHtml(APP._pickCtx.layout)}</div>
   `,
     `${['super_admin','ops_admin','ops_manager','procurement_manager'].includes(APP.user?.role)
       ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
     <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
     <button class="btn btn-primary" ${dataAct('confirmPick', orderId)}>Confirm Pick</button>`);
   updatePickSummary(); // seed the tally from the pre-filled (=ordered) quantities
+}
+
+// Render the Pick Items lines in the chosen layout. Both layouts emit the same
+// .pick-qty fields (same data-attrs + select-on-focus), so onPickQty / the tally /
+// confirmPick are identical regardless of layout.
+function pickBodyHtml(layout) {
+  const ctx = APP._pickCtx; if (!ctx) return '';
+  const { lines, bins, anyDelivered } = ctx;
+  const vals = ctx.vals || lines.map(l => l.due);
+  const binSelHtml = (sku) => {
+    const cur = (ctx.binSel||{})[sku] || '';
+    const opts = (bins||[]).map(b => `<option value="${b.code}"${b.code===cur?' selected':''}>${b.code}${b.zone?' — '+b.zone:''}</option>`).join('');
+    return `<select class="form-control form-control-sm pick-bin pk-bin" data-sku="${sku}"><option value="">— select bin —</option>${opts}</select>`;
+  };
+  const qtyInput = (item,i,cls) => `<input type="number" inputmode="numeric" class="pick-qty ${cls}" data-sku="${item.sku}" data-name="${item.name}" data-ordered="${item.due}" data-selectall value="${vals[i]}" min="0" aria-label="Qty to pick for ${h(item.name)}" ${dataInputEl('onPickQty')}>`;
+  if (layout === 'table') {
+    return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px"><table class="table" style="margin:0">
+      <thead><tr><th>Item Name</th><th>SKU</th><th class="u-center">Ordered</th>${anyDelivered?'<th class="u-center">Delivered</th>':''}<th class="u-center">Due</th><th class="u-center">Qty to Pick</th><th>Bin Location</th></tr></thead>
+      <tbody>${lines.map((item,i)=>`<tr>
+        <td><b style="color:var(--navy)">${h(item.name)}</b></td>
+        <td style="color:var(--text-muted);font-size:.82rem">${h(item.sku)||'—'}</td>
+        <td class="u-center u-muted">${item.ordered}</td>
+        ${anyDelivered?`<td class="u-center" style="color:var(--success)">${item.delivered}</td>`:''}
+        <td class="u-center"><b>${item.due}</b></td>
+        <td class="u-center">${qtyInput(item,i,'pk-qin')}</td>
+        <td>${binSelHtml(item.sku)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+  return `<div class="pk-list">${lines.map((item,i)=>`<div class="pk-card">
+    <div class="pk-card-top">
+      <div style="min-width:0"><div class="pk-name">${h(item.name)}</div><div class="pk-sku">${h(item.sku)||'—'}</div></div>
+      <span class="pk-due">Due ${item.due}${anyDelivered&&item.delivered?` · <span style="color:var(--success)">${item.delivered} delivered</span>`:''}</span>
+    </div>
+    <div class="pk-card-mid">
+      <div class="pk-step">
+        <button type="button" class="pk-pm" ${dataAct('pickDec', i)} aria-label="Decrease quantity">−</button>
+        ${qtyInput(item,i,'pk-val')}
+        <button type="button" class="pk-pm" ${dataAct('pickInc', i)} aria-label="Increase quantity">+</button>
+      </div>
+      <button type="button" class="pk-all" ${dataAct('pickAll', i)}>Pick all (${item.due})</button>
+    </div>
+    <div class="pk-card-bot"><span class="pk-ord">Ordered ${item.ordered}</span>${binSelHtml(item.sku)}</div>
+  </div>`).join('')}</div>`;
+}
+// Switch Cards ⇆ Table, preserving the entered qty + bin selections.
+function pickSetLayout(l) {
+  const ctx = APP._pickCtx; if (!ctx) return;
+  ctx.vals = Array.from(document.querySelectorAll('.pick-qty')).map(i => parseInt(i.value)||0);
+  ctx.binSel = {}; document.querySelectorAll('.pick-bin').forEach(s => { if (s.value) ctx.binSel[s.dataset.sku] = s.value; });
+  ctx.layout = l;
+  const host = document.getElementById('pick-items-body'); if (host) host.innerHTML = pickBodyHtml(l);
+  document.querySelectorAll('[data-picklayout]').forEach(b => {
+    const on = b.getAttribute('data-picklayout') === l;
+    b.classList.toggle('btn-primary', on); b.classList.toggle('btn-secondary', !on);
+  });
+  document.querySelectorAll('.pick-qty').forEach(colorByOrdered);
+  updatePickSummary();
 }
 
 // Combined qty-input handler for the Pick Items modal: keep the below-ordered

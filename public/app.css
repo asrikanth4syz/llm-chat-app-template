@@ -792,6 +792,10 @@ button.tile:hover { transform: translateY(-1px); }
 .pk-card-bot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .pk-ord{font-size:.78rem;color:var(--text-muted)}
 .pk-bin{min-width:150px;flex:1}
+/* qty input in the desktop table layout */
+.pk-qin{width:72px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;border:1.5px solid var(--border-mid);border-radius:8px;padding:7px 6px;background:var(--surface);color:var(--text);font-family:inherit;font-size:.9rem;-moz-appearance:textfield}
+.pk-qin::-webkit-outer-spin-button,.pk-qin::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.pk-qin:focus{outline:2px solid var(--teal,var(--navy));outline-offset:1px}
 
 /* Live "recording in progress" dot for the delivery voice-note capture. */
 .rec-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--danger,#dc2626); vertical-align:middle; animation:recPulse 1s ease-in-out infinite; }
