@@ -797,10 +797,13 @@ button.tile:hover { transform: translateY(-1px); }
 .pk-qin::-webkit-outer-spin-button,.pk-qin::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .pk-qin:focus{outline:2px solid var(--teal,var(--navy));outline-offset:1px}
 /* scan-to-fill bar + row flash on a matched scan */
-.pk-scanbar{display:flex;align-items:center;gap:8px;padding:9px 12px;margin-bottom:12px;background:var(--surface-2);border:1.5px solid var(--border-mid);border-radius:10px}
+.pk-scanwrap{margin-bottom:12px}
+.pk-scanbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 12px;background:var(--surface-2);border:1.5px solid var(--border-mid);border-radius:10px}
 .pk-scan-ic{color:var(--navy);font-size:1.05rem;line-height:1}
-#pick-scan{flex:1;min-width:0;border:0;background:transparent;color:var(--text);font-size:.9rem;font-family:inherit;outline:none}
-.pk-scan-msg{font-size:.78rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+#pick-scan{flex:1;min-width:120px;border:0;background:transparent;color:var(--text);font-size:.9rem;font-family:inherit;outline:none}
+.pk-scanmode{display:flex;gap:4px;flex-shrink:0}
+.pk-scanmode .btn{white-space:nowrap}
+.pk-scan-msg{font-size:.78rem;font-weight:700;min-height:1.1em;padding:5px 2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes pkFlash{0%{background:rgba(22,163,74,.22)}100%{background:transparent}}
 .pk-card.pk-flash{animation:pkFlash 1s ease-out}
 tr.pk-flash>td{animation:pkFlash 1s ease-out}

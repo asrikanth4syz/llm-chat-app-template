@@ -562,16 +562,23 @@ async function pickOrderModal(orderId) {
   // tally + confirm logic is layout-independent; a toggle lets either be forced.
   const wide = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(min-width: 760px)').matches);
   APP._pickCtx = { lines, bins: bins||[], anyDelivered, binSel:{}, vals:null, layout: wide ? 'table' : 'cards' };
+  APP._pickScanMode = 'fill';
 
   const tog = (l,label) => `<button class="btn btn-sm ${APP._pickCtx.layout===l?'btn-primary':'btn-secondary'}" data-picklayout="${l}" ${dataAct('pickSetLayout', l)}>${label}</button>`;
   openModal(`Pick Items — ${orderId}${clientName?` · ${clientName}`:''}`, `
     <p style="color:var(--text-muted);margin:0 0 12px;font-size:.86rem">
       Enter the quantity actually picked (can be less than due) and select the bin location.${anyDelivered?` <b style="color:var(--navy)">Showing the outstanding balance only</b> — already-delivered qty is excluded.`:''}
     </p>
-    <div class="pk-scanbar">
-      <span class="pk-scan-ic" aria-hidden="true">▣</span>
-      <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan or type a SKU — fills that line to its due qty" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
-      <span id="pick-scan-msg" class="pk-scan-msg"></span>
+    <div class="pk-scanwrap">
+      <div class="pk-scanbar">
+        <span class="pk-scan-ic" aria-hidden="true">▣</span>
+        <input id="pick-scan" type="text" autocomplete="off" inputmode="text" placeholder="Scan or type a SKU — fills the line to its due qty" ${dataEnter('pickScan')} aria-label="Scan barcode or SKU">
+        <span class="pk-scanmode">
+          <button type="button" class="btn btn-sm btn-primary" data-scanmode="fill" ${dataAct('pickSetScanMode', 'fill')} title="Each scan fills the line to its due quantity">Fill</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-scanmode="count" ${dataAct('pickSetScanMode', 'count')} title="Each scan adds 1, counting up to the due quantity">Count +1</button>
+        </span>
+      </div>
+      <div id="pick-scan-msg" class="pk-scan-msg"></div>
     </div>
     <div id="pick-summary" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:.85rem">
       <span>Lines picked: <b id="ps-lines">0</b> <span style="color:var(--text-muted)">/ ${lines.length}</span></span>
@@ -676,18 +683,47 @@ function pickScan() {
   // tolerate a scanner that wraps the SKU in a longer barcode payload
   if (!hit) hit = inputs.find(function (i) { var s = (i.dataset.sku || '').toLowerCase(); return s && lc.indexOf(s) >= 0; });
   if (hit) {
-    hit.value = parseInt(hit.dataset.ordered) || 0;   // fill the line to its due qty
-    onPickQty(hit);
+    var mode = APP._pickScanMode || 'fill';
+    var due = parseInt(hit.dataset.ordered) || 0;
+    var cur = parseInt(hit.value) || 0;
+    var label = hit.dataset.name || hit.dataset.sku;
+    if (mode === 'count') {
+      if (cur >= due) {                                  // already counted to the due qty
+        pickBeep('full');
+        if (msg) { msg.textContent = '• ' + label + ' already at ' + due; msg.style.color = 'var(--warning)'; }
+        el.focus(); return;
+      }
+      hit.value = cur + 1;                               // count one more unit
+      onPickQty(hit); pickBeep(true);
+      if (msg) { msg.textContent = '✓ ' + label + ' — ' + (cur + 1) + '/' + due; msg.style.color = 'var(--success)'; }
+    } else {
+      hit.value = due;                                   // fill the line to its due qty
+      onPickQty(hit); pickBeep(true);
+      if (msg) { msg.textContent = '✓ ' + label + ' — filled ' + due; msg.style.color = 'var(--success)'; }
+    }
     var row = hit.closest('.pk-card') || hit.closest('tr');
     if (row) { row.classList.remove('pk-flash'); void row.offsetWidth; row.classList.add('pk-flash'); row.scrollIntoView({ block: 'nearest' }); }
-    pickBeep(true);
-    if (msg) { msg.textContent = '✓ ' + (hit.dataset.name || hit.dataset.sku); msg.style.color = 'var(--success)'; }
   } else {
     pickBeep(false);
     if (navigator.vibrate) { try { navigator.vibrate(140); } catch (e) {} }
     if (msg) { msg.textContent = '✕ Not on this order: ' + code; msg.style.color = 'var(--danger)'; }
   }
   el.focus();
+}
+// Switch the scan behaviour. Count builds each line from zero (scan every unit);
+// Fill starts from the due qty (scan to confirm a full pick) — so the starting
+// quantities are reset to match the chosen mode.
+function pickSetScanMode(m) {
+  APP._pickScanMode = m;
+  document.querySelectorAll('[data-scanmode]').forEach(function (b) {
+    var on = b.getAttribute('data-scanmode') === m;
+    b.classList.toggle('btn-primary', on); b.classList.toggle('btn-secondary', !on);
+  });
+  var el = document.getElementById('pick-scan');
+  if (el) el.placeholder = m === 'count' ? 'Scan each unit — counts up to the due qty' : 'Scan or type a SKU — fills the line to its due qty';
+  if (m === 'count') { pickClearAll(); showToast('Counting from zero — scan each unit', 'info'); }
+  else { pickFillDue(); }
+  if (el) el.focus();
 }
 // Short WebAudio tones — a high tick on a match, a low double-buzz on an unknown
 // code. Lazily created on the first scan (a keypress is a valid user gesture).
@@ -704,7 +740,8 @@ function pickBeep(ok) {
       g.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
       o.start(now + start); o.stop(now + start + dur + 0.02);
     };
-    if (ok) tone(880, 0, 0.12);
+    if (ok === true) tone(880, 0, 0.12);
+    else if (ok === 'full') tone(660, 0, 0.1);
     else { tone(200, 0, 0.22); tone(160, 0.18, 0.28); }
   } catch (e) { /* audio unavailable — stay silent */ }
 }
