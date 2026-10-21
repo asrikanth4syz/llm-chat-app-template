@@ -917,7 +917,9 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 .gift-vendor-set{font-size:.8rem;color:var(--text-muted)}
 .gift-vendor-set b{color:var(--text-label)}
 .gift-act{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.gift-sub{font-size:.74rem;color:var(--text-muted);text-align:right;max-width:200px}
+.gift-sub{font-size:.74rem;color:var(--text-muted);text-align:right;max-width:220px}
+.gift-ref{width:100%;max-width:220px}
+.gift-reject{font-size:.74rem;color:var(--danger,#dc2626);text-align:right;max-width:220px;font-weight:600}
 .gift-chip{display:inline-flex;align-items:center;gap:5px;font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
 .gift-chip::before{content:"";width:7px;height:7px;border-radius:50%}
 .gift-chip.gift-pending{color:var(--text-muted);background:var(--surface-3,var(--surface-2));border-color:var(--border)} .gift-chip.gift-pending::before{background:var(--border-mid)}

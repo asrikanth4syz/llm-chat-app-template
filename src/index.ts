@@ -5557,6 +5557,10 @@ async function ensureGiftingSchema(env: Env): Promise<void> {
   const ddl = [
     `CREATE TABLE IF NOT EXISTS gifting_items ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, sku TEXT, name TEXT NOT NULL, qty INTEGER NOT NULL, needs_branding INTEGER NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT 'TO_ORDER', vendor_id TEXT, vendor_name TEXT, ordered_at TEXT, received_at TEXT, collected_at TEXT, dispatched_at TEXT, updated_at TEXT DEFAULT (datetime('now')), created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE INDEX IF NOT EXISTS idx_gifting_items_order ON gifting_items (order_id);`,
+    // Slice 2: branding sample rounds + the client's token-gated approval decision.
+    `CREATE TABLE IF NOT EXISTS gifting_samples ( id TEXT PRIMARY KEY, item_id TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 1, ref TEXT, approval_token TEXT NOT NULL, decision TEXT, decided_at TEXT, reject_reason TEXT, sent_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_gifting_samples_token ON gifting_samples (approval_token);`,
+    `CREATE INDEX IF NOT EXISTS idx_gifting_samples_item ON gifting_samples (item_id, round);`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   _giftingSchemaReady = true;
@@ -5615,7 +5619,16 @@ async function handleGetGiftingOrder(request: Request, env: Env, path: string): 
   const { results: items } = await env.DB.prepare(
     `SELECT * FROM gifting_items WHERE order_id=? ORDER BY created_at, name`
   ).bind(id).all();
-  return json({ order, items });
+  // Attach the latest sample round (ref, token, decision, reject reason) per item.
+  const { results: samples } = await env.DB.prepare(
+    `SELECT s.* FROM gifting_samples s
+       JOIN gifting_items i ON i.id=s.item_id
+      WHERE i.order_id=? AND s.round = (SELECT MAX(round) FROM gifting_samples WHERE item_id=s.item_id)`
+  ).bind(id).all();
+  const byItem: Record<string, any> = {};
+  for (const s of samples as any[]) byItem[s.item_id] = { round: s.round, ref: s.ref, approval_token: s.approval_token, decision: s.decision, reject_reason: s.reject_reason };
+  const out = (items as any[]).map((it) => ({ ...it, sample: byItem[it.id] || null }));
+  return json({ order, items: out });
 }
 
 async function loadGiftingItem(env: Env, id: string): Promise<any | null> {
@@ -5674,7 +5687,9 @@ async function handleGiftingItemAdvance(request: Request, env: Env, path: string
     next = item.needs_branding ? "BRANDING" : "AT_OFFICE";
     if (next === "AT_OFFICE") sets.push("collected_at=datetime('now')");
   } else if (stage === "BRANDING") {
-    return json({ error: "Branding sample + client approval arrive in Slice 2", code: "E_SLICE2" }, 409);
+    return json({ error: "Send a branding sample to the client instead of advancing", code: "E_USE_SAMPLE" }, 409);
+  } else if (stage === "SAMPLE_SENT") {
+    return json({ error: "Waiting on the client's approval of the sample", code: "E_AWAIT_CLIENT" }, 409);
   } else if (stage === "APPROVED") {
     next = "AT_OFFICE"; sets.push("collected_at=datetime('now')");
   } else if (stage === "AT_OFFICE") {
@@ -5685,6 +5700,84 @@ async function handleGiftingItemAdvance(request: Request, env: Env, path: string
   const setClause = ["stage=?", ...sets, "updated_at=datetime('now')"].join(", ");
   await env.DB.prepare(`UPDATE gifting_items SET ${setClause} WHERE id=?`).bind(next, id).run();
   return json({ ok: true, stage: next });
+}
+
+// POST /api/gifting-items/:id/sample  { ref } — BRANDING → SAMPLE_SENT; mints a new
+// sample round with a token-gated client approval link.
+async function handleGiftingItemSample(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (item.stage !== "BRANDING") return json({ error: "A sample can only be sent from the branding stage", code: "E_STAGE" }, 409);
+  const body = await request.json().catch(() => ({})) as { ref?: string };
+  const ref = typeof body.ref === "string" ? body.ref.slice(0, 500) : "";
+  const prevRound = (await env.DB.prepare("SELECT MAX(round) AS m FROM gifting_samples WHERE item_id=?").bind(id).first() as any)?.m || 0;
+  const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "");
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO gifting_samples (id,item_id,round,ref,approval_token) VALUES (?,?,?,?,?)")
+      .bind(`gs_${uid()}`, id, prevRound + 1, ref, token),
+    env.DB.prepare("UPDATE gifting_items SET stage='SAMPLE_SENT', updated_at=datetime('now') WHERE id=?").bind(id),
+  ]);
+  return json({ ok: true, stage: "SAMPLE_SENT", approval_token: token, round: prevRound + 1 });
+}
+
+// ── Public client sample-approval page (token-gated, no auth) ────────────────
+// Served at /gift-approve/:token (intercepted before the static asset fallback).
+// Pure HTML + <form> POST — CSP-safe, works for an external client without login.
+function giftApprovePage(title: string, inner: string): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+  <style>body{margin:0;background:#f1f5f9;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#0f172a;padding:24px 16px}
+  .card{max-width:460px;margin:24px auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 1px 3px rgba(15,23,42,.08);overflow:hidden}
+  .head{background:#1e3a5f;color:#fff;padding:16px 20px;font-weight:700}.body{padding:20px}
+  h1{font-size:1.05rem;margin:0 0 4px}.sub{color:#64748b;font-size:.85rem;margin-bottom:16px}
+  .field{font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:#64748b;font-weight:700;margin-top:12px}
+  .val{font-size:1rem;font-weight:600;margin-top:2px}.ref{white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-top:4px}
+  form{margin:0}textarea{width:100%;box-sizing:border-box;border:1.5px solid #cbd5e1;border-radius:9px;padding:9px;font:inherit;font-size:.9rem;margin-top:8px}
+  .btn{display:block;width:100%;box-sizing:border-box;border:0;border-radius:10px;padding:12px;font:inherit;font-size:.95rem;font-weight:700;cursor:pointer;margin-top:10px;color:#fff}
+  .ok{background:#16a34a}.no{background:#dc2626}.note{font-size:.78rem;color:#64748b;margin-top:14px}.big{font-size:1.4rem;font-weight:800;margin:8px 0}</style></head>
+  <body><div class="card"><div class="head">🎁 Smart Pantry — Branding approval</div><div class="body">${inner}</div></div></body></html>`;
+  return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+async function handleGiftApprove(request: Request, env: Env, url: URL): Promise<Response> {
+  await ensureGiftingSchema(env);
+  const token = decodeURIComponent(url.pathname.replace(/^\/gift-approve\/?/, "").replace(/\/$/, ""));
+  const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (!token) return giftApprovePage("Not found", `<h1>Link not found</h1><div class="sub">This approval link is missing its token.</div>`);
+  const sample = await env.DB.prepare(
+    `SELECT s.*, i.id AS item_id, i.name AS item_name, i.qty AS item_qty, i.stage AS item_stage
+       FROM gifting_samples s JOIN gifting_items i ON i.id=s.item_id WHERE s.approval_token=?`
+  ).bind(token).first() as any;
+  if (!sample) return giftApprovePage("Not found", `<h1>Link not found</h1><div class="sub">This approval link is no longer valid.</div>`);
+
+  if (request.method === "POST") {
+    if (sample.decision) return giftApprovePage("Already decided", `<h1>Already ${esc(String(sample.decision).toLowerCase())}</h1><div class="sub">This sample was already reviewed. Thank you.</div>`);
+    const form = await request.formData();
+    const decision = String(form.get("decision") || "");
+    const reason = String(form.get("reason") || "").slice(0, 500);
+    if (decision !== "APPROVED" && decision !== "REJECTED") return giftApprovePage("Error", `<h1>Please choose approve or reject.</h1>`);
+    const nextStage = decision === "APPROVED" ? "APPROVED" : "BRANDING";   // reject loops back to branding
+    await env.DB.batch([
+      env.DB.prepare("UPDATE gifting_samples SET decision=?, reject_reason=?, decided_at=datetime('now') WHERE approval_token=?")
+        .bind(decision, decision === "REJECTED" ? reason : null, token),
+      env.DB.prepare("UPDATE gifting_items SET stage=?, updated_at=datetime('now') WHERE id=?").bind(nextStage, sample.item_id),
+    ]);
+    return decision === "APPROVED"
+      ? giftApprovePage("Approved", `<div class="big" style="color:#16a34a">✓ Approved</div><div class="sub">Thank you — we'll proceed with this branding.</div>`)
+      : giftApprovePage("Changes requested", `<div class="big" style="color:#dc2626">Changes requested</div><div class="sub">Thanks — we'll rework the branding and send a new sample.</div>`);
+  }
+
+  // GET — show the sample + the approve / reject forms (or the prior decision).
+  if (sample.decision) {
+    return giftApprovePage("Reviewed", `<h1>${esc(sample.item_name)}</h1><div class="sub">Qty ${esc(sample.item_qty)} · round ${esc(sample.round)}</div><div class="big" style="color:${sample.decision==='APPROVED'?'#16a34a':'#dc2626'}">${sample.decision==='APPROVED'?'✓ Approved':'Changes requested'}</div><div class="note">You already reviewed this sample. Thank you.</div>`);
+  }
+  return giftApprovePage("Approve branding sample", `
+    <h1>${esc(sample.item_name)}</h1><div class="sub">Qty ${esc(sample.item_qty)} · branding sample round ${esc(sample.round)}</div>
+    <div class="field">Sample details</div><div class="ref">${esc(sample.ref) || "—"}</div>
+    <form method="POST" action="/gift-approve/${esc(token)}"><input type="hidden" name="decision" value="APPROVED"><button class="btn ok" type="submit">✓ Approve this sample</button></form>
+    <form method="POST" action="/gift-approve/${esc(token)}"><input type="hidden" name="decision" value="REJECTED"><textarea name="reason" rows="3" placeholder="What should we change? (optional)"></textarea><button class="btn no" type="submit">Request changes</button></form>
+    <div class="note">Approving lets us proceed with this branding; requesting changes sends it back for a new sample.</div>`);
 }
 
 // ── Reminders / follow-ups / Today / bell (Slice 6) ──────────────────────────
@@ -5908,6 +6001,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return withSecurityHeaders(cors());
+    // Public, token-gated gifting sample approval page (no login) — before static assets.
+    if (url.pathname.startsWith("/gift-approve/")) return withSecurityHeaders(await handleGiftApprove(request, env, url));
     if (!url.pathname.startsWith("/api/")) return withSecurityHeaders(await env.ASSETS.fetch(request));
     ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
 
@@ -5954,6 +6049,7 @@ export default {
       if (path.match(/^\/api\/gifting-orders\/[^/]+$/) && method==="GET") return handleGetGiftingOrder(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/sample$/)   && method==="POST") return handleGiftingItemSample(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/advance$/)  && method==="POST") return handleGiftingItemAdvance(request,env,path);
       if (path==="/api/orders"                 && method==="GET")  return handleListOrders(request,env);
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);

@@ -186,11 +186,20 @@ function giftingItemCard(it) {
   const vendorCell = it.stage === 'TO_ORDER'
     ? `<select class="form-control form-control-sm gift-vendor" ${dataChangeEl('giftingSetVendor', it.id)}><option value="">— select vendor —</option>${(g.vendors||[]).map(v=>`<option value="${h(v.id)}"${it.vendor_id===v.id?' selected':''}>${h(v.name||v.id)}</option>`).join('')}</select>`
     : `<div class="gift-vendor-set">Vendor: <b>${h(it.vendor_name||it.vendor_id||'—')}</b></div>`;
-  // advance action per stage
+  // action per stage
   let action = '';
+  const sm = it.sample;
   if (it.stage === 'DISPATCHED') action = `<span class="gift-chip gift-done">✓ Dispatched</span>`;
-  else if (it.stage === 'BRANDING') action = `<span class="gift-sub">Awaiting sample → client approval (Slice 2)</span>`;
-  else {
+  else if (it.stage === 'BRANDING') {
+    const rejected = sm && sm.decision === 'REJECTED';
+    action = `${rejected ? `<div class="gift-reject">↩ Client requested changes${sm.reject_reason?`: “${h(sm.reject_reason)}”`:''}</div>` : ''}
+      <input id="gref-${it.id}" class="form-control form-control-sm gift-ref" placeholder="Sample ref / note">
+      <button class="btn btn-primary btn-sm" ${dataAct('giftingSendSample', it.id)}>${rejected ? 'Send new sample' : 'Send sample to client'}</button>`;
+  } else if (it.stage === 'SAMPLE_SENT') {
+    action = `<span class="gift-chip gift-wait">◷ Awaiting client approval${sm?` · round ${sm.round}`:''}</span>
+      ${sm && sm.ref ? `<div class="gift-sub">Sent: ${h(sm.ref)}</div>` : ''}
+      ${sm && sm.approval_token ? `<button class="btn btn-secondary btn-sm" ${dataAct('giftingCopyLink', sm.approval_token)}>🔗 Copy approval link</button>` : ''}`;
+  } else {
     const label = it.stage==='TO_ORDER' ? 'Place order' : it.stage==='ORDERED' ? 'Mark received' : it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : it.stage==='AT_OFFICE' ? '🚚 Dispatch' : 'Advance';
     const dis = (it.stage==='TO_ORDER' && !it.vendor_id) ? ' disabled' : '';
     action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}${dis}>${label} →</button>`;
@@ -216,6 +225,18 @@ async function giftingToggleBranding(itemId, el) {
 async function giftingAdvance(itemId) {
   const r = await api('/gifting-items/' + itemId + '/advance', { method:'POST', body: '{}' });
   if (r && r.stage) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.stage = r.stage; giftingRenderBoard(); }
+}
+async function giftingSendSample(itemId) {
+  const inp = document.getElementById('gref-' + itemId);
+  const ref = inp ? inp.value : '';
+  const r = await api('/gifting-items/' + itemId + '/sample', { method:'POST', body: JSON.stringify({ ref }) });
+  if (r && r.approval_token) { showToast('Sample sent — share the approval link with the client'); giftingOpenBoard(APP._gift.orderId); }
+}
+function giftingCopyLink(token) {
+  const link = location.origin + '/gift-approve/' + token;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(() => showToast('Approval link copied'), () => showToast(link, 'info'));
+  } else { showToast(link, 'info'); }
 }
 
 function renderWHOverview(el, warehouses, bins, inv, grns) {

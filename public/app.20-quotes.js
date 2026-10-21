@@ -570,11 +570,11 @@ function quoteRenderEditor() {
     </div>
     ${qCard('Quote details', `
       ${qField('Quote type', `<div class="q-kind">
-        <button type="button" class="q-kind-opt ${e.kind !== 'GIFTING' ? 'on' : ''}" ${dataAct('quoteSetKind', 'REGULAR')}>📦 Regular</button>
+        <button type="button" class="q-kind-opt ${e.kind !== 'GIFTING' ? 'on' : ''}" ${dataAct('quoteSetKind', 'REGULAR')}>📦 Consumables</button>
         <button type="button" class="q-kind-opt ${e.kind === 'GIFTING' ? 'on' : ''}" ${dataAct('quoteSetKind', 'GIFTING')}>🎁 Gifting</button>
       </div>`, e.kind === 'GIFTING'
         ? 'Gifting → converts to a multi-step gifting order: order each item · branding (where applicable) · client sample approval · collect · dispatch.'
-        : 'Regular → converts to a standard order: pick · pack · deliver.')}
+        : 'Consumables → converts to a standard order: pick · pack · deliver. (Same pricing as gifting.)')}
       ${qField('What this quote is for', `<input value="${h(e.title || '')}" ${dataInputVal('quoteEditHeader', 'title')} placeholder="e.g. Diwali gift hampers — Meta Bangalore" maxlength="200">`, 'Shows in the list and powers search by purpose')}
       <div class="form-row" style="margin-bottom:0">
       ${clientField}

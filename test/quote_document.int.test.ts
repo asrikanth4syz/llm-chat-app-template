@@ -296,20 +296,69 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect((await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).status).toBe(409);
   });
 
-  it("a branded item diverts to BRANDING and waits for Slice 2 (sample + client approval)", async () => {
-    await prep();
+  async function brandedItemAtBranding(): Promise<{ orderId: string; itemId: string }> {
     const id = await acceptedGiftingQuote(1);
     const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
     const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
-
-    expect((await post(`/api/gifting-items/${itemId}/branding`, { needs_branding: true }, adminTok)).status).toBe(200);
+    await post(`/api/gifting-items/${itemId}/branding`, { needs_branding: true }, adminTok);
     await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
     await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);   // ORDERED
     await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);   // RECEIVED
-    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("BRANDING");
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);   // BRANDING
+    return { orderId, itemId };
+  }
+  const itemOf = async (orderId: string, itemId: string) =>
+    (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items.find((i: any) => i.id === itemId);
+  const formPost = (p: string, body: string) =>
+    SELF.fetch(`${BASE}${p}`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+
+  it("a branded item diverts to BRANDING; ops sends a sample instead of advancing", async () => {
+    await prep();
+    const { itemId } = await brandedItemAtBranding();
     const blocked = await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);
     expect(blocked.status).toBe(409);
-    expect((await blocked.json() as any).code).toBe("E_SLICE2");
+    expect((await blocked.json() as any).code).toBe("E_USE_SAMPLE");
+  });
+
+  it("Slice 2: send sample → SAMPLE_SENT + token; the client approves via the public link → APPROVED", async () => {
+    await prep();
+    const { orderId, itemId } = await brandedItemAtBranding();
+    const s = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "Logo on lid, gold foil" }, adminTok)).json() as any;
+    expect(s.stage).toBe("SAMPLE_SENT");
+    expect(s.approval_token).toBeTruthy();
+    expect(s.round).toBe(1);
+    // ops cannot advance a SAMPLE_SENT item — the client must decide
+    expect((await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).status).toBe(409);
+    // the public page loads as HTML without auth
+    const page = await get(`/gift-approve/${s.approval_token}`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    // client approves (unauthenticated form POST)
+    const ok = await formPost(`/gift-approve/${s.approval_token}`, "decision=APPROVED");
+    expect(ok.status).toBe(200);
+    expect(await itemOf(orderId, itemId).then((i: any) => i.stage)).toBe("APPROVED");
+    // then ops can collect it at office
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("AT_OFFICE");
+  });
+
+  it("Slice 2: the client rejects → item loops back to BRANDING with the reason; a new round can be sent", async () => {
+    await prep();
+    const { orderId, itemId } = await brandedItemAtBranding();
+    const s = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "v1" }, adminTok)).json() as any;
+    const rej = await formPost(`/gift-approve/${s.approval_token}`, "decision=REJECTED&reason=" + encodeURIComponent("Make the logo bigger"));
+    expect(rej.status).toBe(200);
+    const it = await itemOf(orderId, itemId);
+    expect(it.stage).toBe("BRANDING");
+    expect(it.sample.decision).toBe("REJECTED");
+    expect(it.sample.reject_reason).toBe("Make the logo bigger");
+    // a second sample round opens
+    const s2 = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "v2 bigger logo" }, adminTok)).json() as any;
+    expect(s2.round).toBe(2);
+    expect(s2.stage).toBe("SAMPLE_SENT");
+    // the first token is single-use: deciding again just reports it was already reviewed
+    const again = await formPost(`/gift-approve/${s.approval_token}`, "decision=APPROVED");
+    expect(again.status).toBe(200);
+    expect(await itemOf(orderId, itemId).then((i: any) => i.stage)).toBe("SAMPLE_SENT"); // unchanged by the stale token
   });
 });
 
