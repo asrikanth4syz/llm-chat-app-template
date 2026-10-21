@@ -5693,7 +5693,7 @@ async function handleGiftingItemAdvance(request: Request, env: Env, path: string
   } else if (stage === "APPROVED") {
     next = "AT_OFFICE"; sets.push("collected_at=datetime('now')");
   } else if (stage === "AT_OFFICE") {
-    next = "DISPATCHED"; sets.push("dispatched_at=datetime('now')");
+    return json({ error: "Dispatch at-office items from the order (partial dispatch)", code: "E_USE_DISPATCH" }, 409);
   } else {
     return json({ error: `Nothing to advance from ${stage}`, code: "E_TERMINAL" }, 409);
   }
@@ -5721,6 +5721,46 @@ async function handleGiftingItemSample(request: Request, env: Env, path: string)
     env.DB.prepare("UPDATE gifting_items SET stage='SAMPLE_SENT', updated_at=datetime('now') WHERE id=?").bind(id),
   ]);
   return json({ ok: true, stage: "SAMPLE_SENT", approval_token: token, round: prevRound + 1 });
+}
+
+// POST /api/gifting-orders/:id/dispatch — PARTIAL dispatch: hand every AT_OFFICE
+// item to delivery as a Gifting-class DC (the real delivery flow), mark them
+// DISPATCHED. Can be called repeatedly as more items reach the office.
+async function handleGiftingDispatch(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureGiftingSchema(env);
+  const orderId = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare(
+    "SELECT o.id, c.name AS client_name FROM orders o LEFT JOIN clients c ON c.id=o.client_id WHERE o.id=? AND o.order_kind='GIFTING'"
+  ).bind(orderId).first() as { id: string; client_name?: string } | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  const { results: ready } = await env.DB.prepare(
+    "SELECT id, sku, name, qty FROM gifting_items WHERE order_id=? AND stage='AT_OFFICE' ORDER BY name"
+  ).bind(orderId).all() as { results: { id: string; sku: string | null; name: string; qty: number }[] };
+  if (!ready.length) return json({ error: "No items are at office to dispatch", code: "E_NONE_READY" }, 409);
+
+  await migrateSeedDCSeries(env);   // ensure the Gifting FY series exists
+  const alloc = await allocateDCSeriesNumber(env, "Gifting");
+  if (alloc.error) return json({ error: alloc.error, code: "E_NO_DC_SERIES", fy: alloc.fy }, 409);
+
+  const dcId = `dc${uid().slice(0, 10)}`;
+  const totalQty = ready.reduce((s, r) => s + (r.qty || 0), 0);
+  const stmts = [
+    env.DB.prepare(`INSERT INTO delivery_challans (id,order_id,status,total_qty,dc_number,dc_class,category,client_name,dispatched_at)
+      VALUES (?,?,'DISPATCHED',?,?,?,'Gifting',?,datetime('now'))`)
+      .bind(dcId, orderId, totalQty, String(alloc.number), alloc.klass, order.client_name || null),
+  ];
+  for (const r of ready) {
+    stmts.push(env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,0)")
+      .bind(uid(), dcId, r.sku || "GIFT", r.name, r.qty));
+    stmts.push(env.DB.prepare("UPDATE gifting_items SET stage='DISPATCHED', dispatched_at=datetime('now'), updated_at=datetime('now') WHERE id=?")
+      .bind(r.id));
+  }
+  await env.DB.batch(stmts);
+
+  const remaining = (await env.DB.prepare("SELECT COUNT(*) AS n FROM gifting_items WHERE order_id=? AND stage!='DISPATCHED'").bind(orderId).first() as any)?.n || 0;
+  return json({ ok: true, dc_id: dcId, dc_number: String(alloc.number), dispatched: ready.length, total_qty: totalQty, all_dispatched: remaining === 0 });
 }
 
 // ── Public client sample-approval page (token-gated, no auth) ────────────────
@@ -6047,6 +6087,7 @@ export default {
       if (path==="/api/cart"                   && method==="DELETE") return handleClearCart(request,env);
       if (path==="/api/gifting-orders"         && method==="GET")  return handleListGiftingOrders(request,env);
       if (path.match(/^\/api\/gifting-orders\/[^/]+$/) && method==="GET") return handleGetGiftingOrder(request,env,path);
+      if (path.match(/^\/api\/gifting-orders\/[^/]+\/dispatch$/) && method==="POST") return handleGiftingDispatch(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/sample$/)   && method==="POST") return handleGiftingItemSample(request,env,path);

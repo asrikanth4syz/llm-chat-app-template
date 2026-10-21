@@ -291,9 +291,10 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("ORDERED");
     expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("RECEIVED");
     expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("AT_OFFICE");
-    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("DISPATCHED");
-    // terminal
-    expect((await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).status).toBe(409);
+    // at office, item-level advance is blocked — dispatch is order-level (Slice 3)
+    const atOffice = await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);
+    expect(atOffice.status).toBe(409);
+    expect((await atOffice.json() as any).code).toBe("E_USE_DISPATCH");
   });
 
   async function brandedItemAtBranding(): Promise<{ orderId: string; itemId: string }> {
@@ -359,6 +360,44 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     const again = await formPost(`/gift-approve/${s.approval_token}`, "decision=APPROVED");
     expect(again.status).toBe(200);
     expect(await itemOf(orderId, itemId).then((i: any) => i.stage)).toBe("SAMPLE_SENT"); // unchanged by the stale token
+  });
+
+  it("Slice 3: partial dispatch creates a Gifting DC for the at-office items; the order closes when all are dispatched", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(2);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const [a, b] = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items as any[];
+    const toOffice = async (itemId: string) => {
+      await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
+      await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // ORDERED
+      await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // RECEIVED
+      await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // AT_OFFICE (non-branded)
+    };
+
+    // nothing ready yet → 409
+    expect((await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok)).status).toBe(409);
+
+    await toOffice(a.id);
+    const d1 = await (await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok)).json() as any;
+    expect(d1.dispatched).toBe(1);
+    expect(d1.all_dispatched).toBe(false);
+    expect(d1.dc_number).toBeTruthy();
+    expect(await itemOf(orderId, a.id).then((i: any) => i.stage)).toBe("DISPATCHED");
+
+    // a real DC + dc_items were written, linked to the gifting order
+    const db = env.DB as D1Database;
+    const dc = await db.prepare("SELECT order_id, status, dc_class FROM delivery_challans WHERE id=?").bind(d1.dc_id).first() as any;
+    expect(dc.order_id).toBe(orderId);
+    expect(dc.status).toBe("DISPATCHED");
+    expect(dc.dc_class).toBe("GIFTING");
+    const dcItems = (await db.prepare("SELECT id FROM dc_items WHERE dc_id=?").bind(d1.dc_id).all()).results;
+    expect(dcItems.length).toBe(1);
+
+    // dispatch the second item → order fully dispatched; then nothing left
+    await toOffice(b.id);
+    const d2 = await (await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok)).json() as any;
+    expect(d2.all_dispatched).toBe(true);
+    expect((await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok)).status).toBe(409);
   });
 });
 

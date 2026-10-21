@@ -164,6 +164,7 @@ function giftingRenderBoard() {
   const g = APP._gift; const content = document.getElementById('wh-tab-content'); if (!g || !content) return;
   const items = g.items;
   const ready = items.filter(i => i.stage==='AT_OFFICE' || i.stage==='DISPATCHED').length;
+  const atOffice = items.filter(i => i.stage==='AT_OFFICE').length;
   const pct = items.length ? Math.round(ready/items.length*100) : 0;
   content.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
@@ -172,9 +173,12 @@ function giftingRenderBoard() {
         <div style="font-size:1.1rem;font-weight:800;color:var(--navy)">🎁 ${h(g.order.id)}</div>
         <div style="font-size:.84rem;color:var(--text-muted)">${h(g.order.client_name||g.order.client_id||'')}${g.order.source_quote_id?` · from quote ${h(g.order.source_quote_id)}`:''}</div>
       </div>
-      <div style="min-width:180px">
-        <div style="height:10px;border-radius:999px;background:var(--surface-3,var(--surface-2));overflow:hidden;border:1px solid var(--border)"><i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></div>
-        <div style="font-size:.78rem;font-weight:700;color:var(--navy);text-align:right;margin-top:4px">${ready} / ${items.length} items ready</div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="min-width:160px">
+          <div style="height:10px;border-radius:999px;background:var(--surface-3,var(--surface-2));overflow:hidden;border:1px solid var(--border)"><i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></div>
+          <div style="font-size:.78rem;font-weight:700;color:var(--navy);text-align:right;margin-top:4px">${ready} / ${items.length} items ready</div>
+        </div>
+        <button class="btn btn-primary" ${dataAct('giftingDispatch', g.order.id)}${atOffice?'':' disabled'}>🚚 Dispatch ready (${atOffice})</button>
       </div>
     </div>
     <div class="gift-board">${items.map(giftingItemCard).join('')}</div>
@@ -199,8 +203,10 @@ function giftingItemCard(it) {
     action = `<span class="gift-chip gift-wait">◷ Awaiting client approval${sm?` · round ${sm.round}`:''}</span>
       ${sm && sm.ref ? `<div class="gift-sub">Sent: ${h(sm.ref)}</div>` : ''}
       ${sm && sm.approval_token ? `<button class="btn btn-secondary btn-sm" ${dataAct('giftingCopyLink', sm.approval_token)}>🔗 Copy approval link</button>` : ''}`;
+  } else if (it.stage === 'AT_OFFICE') {
+    action = `<span class="gift-chip gift-ready">● At office — ready</span><div class="gift-sub">Dispatch from the header (partial OK)</div>`;
   } else {
-    const label = it.stage==='TO_ORDER' ? 'Place order' : it.stage==='ORDERED' ? 'Mark received' : it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : it.stage==='AT_OFFICE' ? '🚚 Dispatch' : 'Advance';
+    const label = it.stage==='TO_ORDER' ? 'Place order' : it.stage==='ORDERED' ? 'Mark received' : it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : 'Advance';
     const dis = (it.stage==='TO_ORDER' && !it.vendor_id) ? ' disabled' : '';
     action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}${dis}>${label} →</button>`;
   }
@@ -231,6 +237,13 @@ async function giftingSendSample(itemId) {
   const ref = inp ? inp.value : '';
   const r = await api('/gifting-items/' + itemId + '/sample', { method:'POST', body: JSON.stringify({ ref }) });
   if (r && r.approval_token) { showToast('Sample sent — share the approval link with the client'); giftingOpenBoard(APP._gift.orderId); }
+}
+async function giftingDispatch(orderId) {
+  const r = await api('/gifting-orders/' + orderId + '/dispatch', { method:'POST', body: '{}' });
+  if (r && r.ok) {
+    showToast(`Dispatched ${r.dispatched} item${r.dispatched>1?'s':''} · DC ${r.dc_number}${r.all_dispatched?' · order fully dispatched':''}`);
+    giftingOpenBoard(orderId);
+  }
 }
 function giftingCopyLink(token) {
   const link = location.origin + '/gift-approve/' + token;
