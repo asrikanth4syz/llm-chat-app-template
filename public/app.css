@@ -904,6 +904,30 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
   .pk-foot-hint{display:none}
 }
 
+/* ── Gifting order board (milestone 007, Slice 1) ── */
+.gift-board{display:flex;flex-direction:column;gap:9px}
+.gift-card{display:grid;grid-template-columns:minmax(200px,1.4fr) minmax(180px,1fr) minmax(200px,auto);gap:16px;align-items:center;border:1px solid var(--border);border-radius:12px;padding:13px 15px;background:var(--surface);transition:border-color .12s}
+.gift-card:hover{border-color:var(--border-mid)}
+.gift-name{font-weight:700;color:var(--text)}
+.gift-sku{font-size:.74rem;color:var(--text-muted);margin-top:1px}
+.gift-brandtog{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:.76rem;color:var(--text-label);cursor:pointer}
+.gift-brandtog input{width:auto}
+.gift-vendor{width:100%;max-width:200px}
+.gift-vendor.need{border-color:var(--gold,#d97706)}
+.gift-vendor-set{font-size:.8rem;color:var(--text-muted)}
+.gift-vendor-set b{color:var(--text-label)}
+.gift-act{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.gift-sub{font-size:.74rem;color:var(--text-muted);text-align:right;max-width:200px}
+.gift-chip{display:inline-flex;align-items:center;gap:5px;font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+.gift-chip::before{content:"";width:7px;height:7px;border-radius:50%}
+.gift-chip.gift-pending{color:var(--text-muted);background:var(--surface-3,var(--surface-2));border-color:var(--border)} .gift-chip.gift-pending::before{background:var(--border-mid)}
+.gift-chip.gift-prog{color:var(--info,#2563eb);background:rgba(37,99,235,.1);border-color:rgba(37,99,235,.28)} .gift-chip.gift-prog::before{background:var(--info,#2563eb)}
+.gift-chip.gift-brand{color:#7c3aed;background:rgba(124,58,237,.1);border-color:rgba(124,58,237,.28)} .gift-chip.gift-brand::before{background:#7c3aed}
+.gift-chip.gift-wait{color:var(--warning,#d97706);background:rgba(217,119,6,.1);border-color:rgba(217,119,6,.28)} .gift-chip.gift-wait::before{background:var(--warning,#d97706)}
+.gift-chip.gift-ready{color:var(--navy);background:rgba(30,58,95,.08);border-color:rgba(30,58,95,.3)} .gift-chip.gift-ready::before{background:var(--navy)}
+.gift-chip.gift-done{color:var(--success,#16a34a);background:rgba(22,163,74,.1);border-color:rgba(22,163,74,.26)} .gift-chip.gift-done::before{background:var(--success,#16a34a)}
+@media (max-width:760px){ .gift-card{grid-template-columns:1fr;gap:10px} .gift-act{align-items:stretch} .gift-sub{text-align:left;max-width:none} .gift-vendor{max-width:none} }
+
 /* Live "recording in progress" dot for the delivery voice-note capture. */
 .rec-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--danger,#dc2626); vertical-align:middle; animation:recPulse 1s ease-in-out infinite; }
 @keyframes recPulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.3; transform:scale(.7); } }

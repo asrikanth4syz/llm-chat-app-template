@@ -43,7 +43,9 @@ beforeAll(async () => {
   await mk("tst-dfin", "dfin@sp.test", "delivery_exec");
   await mk("tst-dops", "dops@sp.test", "delivery_exec");
   await db.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active) VALUES ('c1','Meta India','x@y.z',1)").run();
+  await db.prepare("INSERT OR IGNORE INTO vendors (id,name,category) VALUES ('v-gift','Gifto Supplies','Gifting')").run();
   await get("/api/quotes"); // warm schema into the per-test baseline
+  await get("/api/gifting-orders"); // warm gifting_items into the baseline (module-flag vs rollback hazard)
   adminTok = await login("dadmin@sp.test", "pw123");
   salesTok = await login("dsales@sp.test", "pw123");
   mgrTok = await login("dmgr@sp.test", "pw123");
@@ -238,6 +240,76 @@ describe("convert accepted quote to order", () => {
     await post(`/api/quotes/${id}/accept`, {}, salesTok);
     expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(200);
     expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(409); // already converted
+  });
+});
+
+describe("gifting orders (milestone 007, Slice 1)", () => {
+  async function acceptedGiftingQuote(lines = 2): Promise<string> {
+    const body = { client_id: "c1", place_of_supply: "KL", kind: "GIFTING", lines: Array.from({ length: lines }, () => line(true)) };
+    const id = (await (await post("/api/quotes", body, salesTok)).json() as any).id as string;
+    await post(`/api/quotes/${id}/submit`, {}, salesTok);
+    await post(`/api/quotes/${id}/approve`, { leg: "manager" }, mgrTok);
+    await post(`/api/quotes/${id}/send`, {}, salesTok);
+    await post(`/api/quotes/${id}/accept`, {}, salesTok);
+    return id;
+  }
+
+  it("converting a GIFTING quote seeds one gifting item per line and lists it in the gifting pipeline (not the regular orders list)", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(2);
+    const rb = await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any;
+    expect(rb.order_kind).toBe("GIFTING");
+    const orderId = rb.order_id as string;
+
+    // appears in the gifting pipeline with 2 items, all TO_ORDER (none ready)
+    const gifts = await (await get("/api/gifting-orders", adminTok)).json() as any[];
+    const row = gifts.find((g) => g.id === orderId);
+    expect(row).toBeTruthy();
+    expect(row.item_count).toBe(2);
+    expect(row.ready_count).toBe(0);
+    expect(row.phase).toBe("PROCURING");
+
+    // and is EXCLUDED from the regular orders list
+    const orders = await (await get("/api/orders", adminTok)).json() as any[];
+    expect(orders.find((o) => o.id === orderId)).toBeFalsy();
+
+    const detail = await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any;
+    expect(detail.items.length).toBe(2);
+    expect(detail.items.every((i: any) => i.stage === "TO_ORDER")).toBe(true);
+  });
+
+  it("an item cannot be ordered without a vendor; with one it advances; a non-branded item reaches AT_OFFICE then DISPATCHED", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(1);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
+
+    // advance without a vendor → 409
+    expect((await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).status).toBe(409);
+    // set vendor, then advance through the non-branded path
+    expect((await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok)).status).toBe(200);
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("ORDERED");
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("RECEIVED");
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("AT_OFFICE");
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("DISPATCHED");
+    // terminal
+    expect((await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).status).toBe(409);
+  });
+
+  it("a branded item diverts to BRANDING and waits for Slice 2 (sample + client approval)", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(1);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
+
+    expect((await post(`/api/gifting-items/${itemId}/branding`, { needs_branding: true }, adminTok)).status).toBe(200);
+    await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);   // ORDERED
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);   // RECEIVED
+    expect((await (await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok)).json() as any).stage).toBe("BRANDING");
+    const blocked = await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok);
+    expect(blocked.status).toBe(409);
+    expect((await blocked.json() as any).code).toBe("E_SLICE2");
   });
 });
 

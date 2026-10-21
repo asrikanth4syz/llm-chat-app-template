@@ -5519,6 +5519,14 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
     stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
       .bind(uid(), orderId, "CHARGE", c.label || "Charge", 1, (c.amount_paise || 0) / 100, (c.amount_paise || 0) / 100, "Quote charge"));
   }
+  // A GIFTING order seeds one gifting_items row per line (charges are not gifted items).
+  if (orderKind === "GIFTING") {
+    await ensureGiftingSchema(env);
+    for (const l of lines as any[]) {
+      stmts.push(env.DB.prepare("INSERT INTO gifting_items (id,order_id,sku,name,qty,needs_branding,stage) VALUES (?,?,?,?,?,0,'TO_ORDER')")
+        .bind(uid(), orderId, l.sku || null, l.description || l.sku || "Item", l.qty));
+    }
+  }
   stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'DRAFT',?,?,?)")
     .bind(uid(), orderId, acc.user.sub, (acc.user as any).name || acc.user.sub, note));
 
@@ -5533,7 +5541,150 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
       .bind(`qa_${uid()}`, QUOTE_ACCOUNT, id, am.seq, acc.user.sub, cdetail, cEntry, am.prevHash),
   );
   await env.DB.batch(stmts);
-  return json({ id, status: "CONVERTED", order_id: orderId, order_status: "DRAFT" });
+  return json({ id, status: "CONVERTED", order_id: orderId, order_status: "DRAFT", order_kind: orderKind });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// GIFTING ORDERS (milestone 007, Slice 1) — distinct multi-step fulfilment.
+// A GIFTING quote converts to a GIFTING order (order_kind='GIFTING') and seeds one
+// gifting_items row per line. Each item runs its own workflow: Slice 1 covers
+// procurement (pick vendor → order → receive) → branding gate → collect → dispatch.
+// Branding sample + client approval = Slice 2; delivery wiring = Slice 3.
+// ════════════════════════════════════════════════════════════════════
+let _giftingSchemaReady = false;
+async function ensureGiftingSchema(env: Env): Promise<void> {
+  if (_giftingSchemaReady) return;
+  const ddl = [
+    `CREATE TABLE IF NOT EXISTS gifting_items ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, sku TEXT, name TEXT NOT NULL, qty INTEGER NOT NULL, needs_branding INTEGER NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT 'TO_ORDER', vendor_id TEXT, vendor_name TEXT, ordered_at TEXT, received_at TEXT, collected_at TEXT, dispatched_at TEXT, updated_at TEXT DEFAULT (datetime('now')), created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_gifting_items_order ON gifting_items (order_id);`,
+  ];
+  for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
+  _giftingSchemaReady = true;
+}
+
+// Order rollup phase = the least-advanced item's phase (what is gating the order).
+function giftingOrderPhase(stages: string[]): string {
+  if (!stages.length) return "EMPTY";
+  const rank = (s: string) => {
+    if (s === "TO_ORDER" || s === "ORDERED") return 0;        // procuring
+    if (s === "RECEIVED" || s === "BRANDING") return 1;       // prep / branding
+    if (s === "SAMPLE_SENT") return 2;                        // awaiting approval
+    if (s === "APPROVED" || s === "AT_OFFICE") return 3;      // consolidating
+    return 4;                                                 // dispatched
+  };
+  return ["PROCURING", "BRANDING", "AWAITING_APPROVAL", "CONSOLIDATING", "FULFILLED"][Math.min(...stages.map(rank))];
+}
+
+async function handleListGiftingOrders(request: Request, env: Env): Promise<Response> {
+  await ensureGiftingSchema(env);   // before auth so a token-less warm still provisions the table
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const { results: orders } = await env.DB.prepare(
+    `SELECT o.id, o.client_id, c.name AS client_name, o.grand_total, o.status, o.created_at, o.source_quote_id
+       FROM orders o LEFT JOIN clients c ON c.id=o.client_id
+      WHERE o.order_kind='GIFTING' ORDER BY o.created_at DESC LIMIT 200`
+  ).all();
+  const { results: items } = await env.DB.prepare(
+    `SELECT order_id, stage, COUNT(*) AS n FROM gifting_items
+      WHERE order_id IN (SELECT id FROM orders WHERE order_kind='GIFTING') GROUP BY order_id, stage`
+  ).all();
+  const byOrder: Record<string, { stages: string[]; total: number; ready: number }> = {};
+  for (const r of items as any[]) {
+    const o = byOrder[r.order_id] || (byOrder[r.order_id] = { stages: [], total: 0, ready: 0 });
+    for (let k = 0; k < r.n; k++) o.stages.push(r.stage);
+    o.total += r.n;
+    if (r.stage === "AT_OFFICE" || r.stage === "DISPATCHED") o.ready += r.n;
+  }
+  const out = (orders as any[]).map((o) => {
+    const agg = byOrder[o.id] || { stages: [], total: 0, ready: 0 };
+    return { ...o, item_count: agg.total, ready_count: agg.ready, phase: giftingOrderPhase(agg.stages) };
+  });
+  return json(out);
+}
+
+async function handleGetGiftingOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureGiftingSchema(env);
+  const id = path.split("/").pop()!;
+  const order = await env.DB.prepare(
+    `SELECT o.id, o.client_id, c.name AS client_name, o.grand_total, o.status, o.notes, o.source_quote_id, o.created_at
+       FROM orders o LEFT JOIN clients c ON c.id=o.client_id WHERE o.id=? AND o.order_kind='GIFTING'`
+  ).bind(id).first();
+  if (!order) return json({ error: "Not found" }, 404);
+  const { results: items } = await env.DB.prepare(
+    `SELECT * FROM gifting_items WHERE order_id=? ORDER BY created_at, name`
+  ).bind(id).all();
+  return json({ order, items });
+}
+
+async function loadGiftingItem(env: Env, id: string): Promise<any | null> {
+  await ensureGiftingSchema(env);
+  return env.DB.prepare("SELECT * FROM gifting_items WHERE id=?").bind(id).first();
+}
+
+// POST /api/gifting-items/:id/vendor  { vendor_id } — only while TO_ORDER.
+async function handleGiftingItemVendor(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (item.stage !== "TO_ORDER") return json({ error: "Vendor can only be set before ordering", code: "E_STAGE" }, 409);
+  const body = await request.json() as { vendor_id?: string };
+  const vid = String(body.vendor_id || "");
+  if (!vid) return json({ error: "vendor_id required", code: "E_VALIDATION" }, 422);
+  const vendor = await env.DB.prepare("SELECT id, name FROM vendors WHERE id=?").bind(vid).first() as { name?: string } | null;
+  if (!vendor) return json({ error: "unknown vendor", code: "E_UNKNOWN_VENDOR" }, 422);
+  await env.DB.prepare("UPDATE gifting_items SET vendor_id=?, vendor_name=?, updated_at=datetime('now') WHERE id=?")
+    .bind(vid, vendor.name || vid, id).run();
+  return json({ ok: true });
+}
+
+// POST /api/gifting-items/:id/branding  { needs_branding } — only before it leaves receiving.
+async function handleGiftingItemBranding(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (!["TO_ORDER", "ORDERED", "RECEIVED"].includes(item.stage))
+    return json({ error: "Branding flag locks once the item leaves receiving", code: "E_STAGE" }, 409);
+  const body = await request.json() as { needs_branding?: boolean };
+  await env.DB.prepare("UPDATE gifting_items SET needs_branding=?, updated_at=datetime('now') WHERE id=?")
+    .bind(body.needs_branding ? 1 : 0, id).run();
+  return json({ ok: true });
+}
+
+// POST /api/gifting-items/:id/advance — ops moves the item to its next stage (guarded).
+async function handleGiftingItemAdvance(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  const stage = item.stage as string;
+  let next: string; const sets: string[] = [];
+  if (stage === "TO_ORDER") {
+    if (!item.vendor_id) return json({ error: "Pick a vendor before ordering", code: "E_NO_VENDOR" }, 409);
+    next = "ORDERED"; sets.push("ordered_at=datetime('now')");
+  } else if (stage === "ORDERED") {
+    next = "RECEIVED"; sets.push("received_at=datetime('now')");
+  } else if (stage === "RECEIVED") {
+    next = item.needs_branding ? "BRANDING" : "AT_OFFICE";
+    if (next === "AT_OFFICE") sets.push("collected_at=datetime('now')");
+  } else if (stage === "BRANDING") {
+    return json({ error: "Branding sample + client approval arrive in Slice 2", code: "E_SLICE2" }, 409);
+  } else if (stage === "APPROVED") {
+    next = "AT_OFFICE"; sets.push("collected_at=datetime('now')");
+  } else if (stage === "AT_OFFICE") {
+    next = "DISPATCHED"; sets.push("dispatched_at=datetime('now')");
+  } else {
+    return json({ error: `Nothing to advance from ${stage}`, code: "E_TERMINAL" }, 409);
+  }
+  const setClause = ["stage=?", ...sets, "updated_at=datetime('now')"].join(", ");
+  await env.DB.prepare(`UPDATE gifting_items SET ${setClause} WHERE id=?`).bind(next, id).run();
+  return json({ ok: true, stage: next });
 }
 
 // ── Reminders / follow-ups / Today / bell (Slice 6) ──────────────────────────
@@ -5799,6 +5950,11 @@ export default {
       if (path==="/api/cart"                   && method==="GET")    return handleGetCart(request,env);
       if (path==="/api/cart"                   && method==="PUT")    return handleSaveCart(request,env);
       if (path==="/api/cart"                   && method==="DELETE") return handleClearCart(request,env);
+      if (path==="/api/gifting-orders"         && method==="GET")  return handleListGiftingOrders(request,env);
+      if (path.match(/^\/api\/gifting-orders\/[^/]+$/) && method==="GET") return handleGetGiftingOrder(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/advance$/)  && method==="POST") return handleGiftingItemAdvance(request,env,path);
       if (path==="/api/orders"                 && method==="GET")  return handleListOrders(request,env);
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);
       if (path==="/api/orders/picklist"        && method==="GET")  return handlePickList(request,env);
@@ -6394,7 +6550,9 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   query += " ORDER BY o.created_at DESC LIMIT 100";
 
   const { results } = await env.DB.prepare(query).bind(...params).all();
-  return json(results);
+  // Gifting orders live in their own pipeline — exclude them from the regular list.
+  // Filtered in JS (not SQL) so this works even where the order_kind column is absent.
+  return json((results as Record<string, unknown>[]).filter((o) => o.order_kind !== "GIFTING"));
 }
 
 async function handleGetOrder(request: Request, env: Env, path: string): Promise<Response> {

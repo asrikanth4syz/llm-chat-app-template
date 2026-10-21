@@ -18,6 +18,7 @@ async function renderWarehouse(el) {
     <button class="tab-btn" ${dataActEl('switchWHTab', 'bins')}>Bin Locations</button>
     <button class="tab-btn" ${dataActEl('switchWHTab', 'picklist')}>Pick List</button>
     <button class="tab-btn" ${dataActEl('switchWHTab', 'transfers')}>Stock Transfers</button>
+    <button class="tab-btn" ${dataActEl('switchWHTab', 'gifting')}>🎁 Gifting</button>
   </div>
   <div id="wh-tab-content"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div></div>`;
 
@@ -105,12 +106,116 @@ async function switchWHTab(tab, btn) {
         api('/stock-movements?type=TRANSFER'), api('/bin-locations')
       ]);
       renderWHTransfers(content, movements||[], bins||[]);
+    } else if (tab === 'gifting') {
+      const orders = await api('/gifting-orders');
+      renderWHGifting(content, orders||[]);
     }
   } catch(e) {
     content.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--danger)">
       Error loading data. <button class="btn btn-secondary btn-sm" ${dataAct('whGoTab', tab)}>Retry</button>
     </div>`;
   }
+}
+
+// ── Gifting orders (milestone 007, Slice 1) ──────────────────────────────────
+// A separate pipeline of GIFTING orders (converted from gifting quotes). Each item
+// runs its own workflow: pick vendor → order → receive → (branding) → collect →
+// dispatch. Branding sample + client approval = Slice 2; delivery wiring = Slice 3.
+const GIFT_STAGE_LABEL = { TO_ORDER:'To order', ORDERED:'Ordered', RECEIVED:'Received', BRANDING:'Branding', SAMPLE_SENT:'Sample sent', APPROVED:'Approved', AT_OFFICE:'At office', DISPATCHED:'Dispatched' };
+const GIFT_PHASE_LABEL = { PROCURING:'Procuring', BRANDING:'Branding', AWAITING_APPROVAL:'Awaiting approval', CONSOLIDATING:'Consolidating', FULFILLED:'Fulfilled', EMPTY:'—' };
+function giftStageChip(s) {
+  const cls = (s==='DISPATCHED') ? 'gift-done' : (s==='AT_OFFICE'||s==='APPROVED') ? 'gift-ready' : (s==='SAMPLE_SENT') ? 'gift-wait' : (s==='BRANDING') ? 'gift-brand' : (s==='TO_ORDER') ? 'gift-pending' : 'gift-prog';
+  return `<span class="gift-chip ${cls}">${GIFT_STAGE_LABEL[s]||s}</span>`;
+}
+function renderWHGifting(el, orders) {
+  if (!orders.length) {
+    el.innerHTML = `<div class="card"><div class="empty-state empty-sm"><div class="empty-icon">🎁</div><div class="empty-title">No gifting orders yet</div><div class="empty-desc">Convert a quote marked <b>Gifting</b> to create one.</div></div></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="card" style="padding:0"><div class="table-wrap"><table class="data-table" style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="text-align:left;padding:11px 14px">Order</th>
+      <th style="text-align:left;padding:11px 14px">Client</th>
+      <th style="text-align:left;padding:11px 14px">Phase</th>
+      <th style="text-align:left;padding:11px 14px">Ready</th>
+      <th style="text-align:right;padding:11px 14px">Value</th>
+    </tr></thead>
+    <tbody>${orders.map(o => {
+      const ready = o.item_count ? Math.round((o.ready_count/o.item_count)*100) : 0;
+      return `<tr class="q-trow" ${dataAct('giftingOpenBoard', o.id)}>
+        <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">🎁 ${h(o.id)}</td>
+        <td style="padding:11px 14px">${h(o.client_name||o.client_id||'')}</td>
+        <td style="padding:11px 14px"><span class="gift-chip gift-prog">${GIFT_PHASE_LABEL[o.phase]||o.phase}</span></td>
+        <td style="padding:11px 14px;white-space:nowrap"><span style="display:inline-block;width:80px;height:8px;border-radius:999px;background:var(--surface-3,var(--surface-2));vertical-align:middle;overflow:hidden"><i style="display:block;height:100%;width:${ready}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></span> <span style="font-size:.8rem;color:var(--text-muted)">${o.ready_count}/${o.item_count}</span></td>
+        <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">₹${Number(o.grand_total||0).toLocaleString('en-IN')}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+async function giftingOpenBoard(orderId) {
+  const content = document.getElementById('wh-tab-content');
+  if (content) content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading…</div>';
+  const [data, vendors] = await Promise.all([api('/gifting-orders/' + orderId), api('/vendors').catch(()=>[])]);
+  if (!data || !data.order) { if (content) content.innerHTML = '<div class="card" style="padding:24px;color:var(--danger)">Could not load the gifting order.</div>'; return; }
+  APP._gift = { orderId, order: data.order, items: data.items || [], vendors: vendors || [] };
+  giftingRenderBoard();
+}
+function giftingRenderBoard() {
+  const g = APP._gift; const content = document.getElementById('wh-tab-content'); if (!g || !content) return;
+  const items = g.items;
+  const ready = items.filter(i => i.stage==='AT_OFFICE' || i.stage==='DISPATCHED').length;
+  const pct = items.length ? Math.round(ready/items.length*100) : 0;
+  content.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <button class="btn btn-secondary btn-sm" ${dataActEl('switchWHTab', 'gifting')} style="margin-bottom:6px">← All gifting orders</button>
+        <div style="font-size:1.1rem;font-weight:800;color:var(--navy)">🎁 ${h(g.order.id)}</div>
+        <div style="font-size:.84rem;color:var(--text-muted)">${h(g.order.client_name||g.order.client_id||'')}${g.order.source_quote_id?` · from quote ${h(g.order.source_quote_id)}`:''}</div>
+      </div>
+      <div style="min-width:180px">
+        <div style="height:10px;border-radius:999px;background:var(--surface-3,var(--surface-2));overflow:hidden;border:1px solid var(--border)"><i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></div>
+        <div style="font-size:.78rem;font-weight:700;color:var(--navy);text-align:right;margin-top:4px">${ready} / ${items.length} items ready</div>
+      </div>
+    </div>
+    <div class="gift-board">${items.map(giftingItemCard).join('')}</div>
+    <div class="form-hint" style="margin-top:10px">Partial dispatch is allowed — dispatch items that are at office without waiting for the rest. Branding sample &amp; client approval arrive in the next slice.</div>`;
+}
+function giftingItemCard(it) {
+  const g = APP._gift;
+  const canBrand = ['TO_ORDER','ORDERED','RECEIVED'].includes(it.stage);
+  const vendorCell = it.stage === 'TO_ORDER'
+    ? `<select class="form-control form-control-sm gift-vendor" ${dataChangeEl('giftingSetVendor', it.id)}><option value="">— select vendor —</option>${(g.vendors||[]).map(v=>`<option value="${h(v.id)}"${it.vendor_id===v.id?' selected':''}>${h(v.name||v.id)}</option>`).join('')}</select>`
+    : `<div class="gift-vendor-set">Vendor: <b>${h(it.vendor_name||it.vendor_id||'—')}</b></div>`;
+  // advance action per stage
+  let action = '';
+  if (it.stage === 'DISPATCHED') action = `<span class="gift-chip gift-done">✓ Dispatched</span>`;
+  else if (it.stage === 'BRANDING') action = `<span class="gift-sub">Awaiting sample → client approval (Slice 2)</span>`;
+  else {
+    const label = it.stage==='TO_ORDER' ? 'Place order' : it.stage==='ORDERED' ? 'Mark received' : it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : it.stage==='AT_OFFICE' ? '🚚 Dispatch' : 'Advance';
+    const dis = (it.stage==='TO_ORDER' && !it.vendor_id) ? ' disabled' : '';
+    action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}${dis}>${label} →</button>`;
+  }
+  return `<div class="gift-card">
+    <div class="gift-id">
+      <div class="gift-name">${h(it.name)}</div>
+      <div class="gift-sku">SKU ${h(it.sku||'—')} · Qty ${it.qty}</div>
+      <label class="gift-brandtog"><input type="checkbox"${it.needs_branding?' checked':''}${canBrand?'':' disabled'} ${dataChangeEl('giftingToggleBranding', it.id)}> Needs branding</label>
+    </div>
+    <div class="gift-mid">${vendorCell}</div>
+    <div class="gift-act">${giftStageChip(it.stage)}${action}</div>
+  </div>`;
+}
+async function giftingSetVendor(itemId, el) {
+  const r = await api('/gifting-items/' + itemId + '/vendor', { method:'POST', body: JSON.stringify({ vendor_id: el.value }) });
+  if (r) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.vendor_id = el.value; giftingRenderBoard(); }
+}
+async function giftingToggleBranding(itemId, el) {
+  const r = await api('/gifting-items/' + itemId + '/branding', { method:'POST', body: JSON.stringify({ needs_branding: !!el.checked }) });
+  if (r) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.needs_branding = el.checked ? 1 : 0; }
+}
+async function giftingAdvance(itemId) {
+  const r = await api('/gifting-items/' + itemId + '/advance', { method:'POST', body: '{}' });
+  if (r && r.stage) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.stage = r.stage; giftingRenderBoard(); }
 }
 
 function renderWHOverview(el, warehouses, bins, inv, grns) {
