@@ -1,5 +1,22 @@
 # Calc Spec: 006-quotations pricing / GST / landed-cost / rounding
 
+> **r4 pricing model (operator worked examples — supersedes r3).** One unified model across the three methods,
+> computed per unit:
+> - **buying cost EX-GST** (`buying_cost_paise`), derived per method:
+>   - `cost_markup`: `purchase_cost_paise` (entered ex-GST).
+>   - `net_rate`: `net_rate_paise` is the **gross (incl-GST) purchase cost**; ex = gross ÷ (1 + purchase GST).
+>   - `mrp_discount`: ex = `MRP × (1 − purchase_margin_bp) ÷ (1 + sale GST)`.
+> - **selling price EX-GST** = `buying cost × (1 + markup_bp)` where `markup_bp` is the **SELLING margin** (a
+>   markup on the ex-GST cost) for every method.
+> - **final sale EX-GST** (`unit_price_paise`, the taxable base per unit) = selling price **+ branding + transport**.
+>   Branding + transport pass through onto the sale at cost (added to the price AND the sellable cost), so
+>   `margin = selling markup` and they net to zero. GST is charged on the final sale.
+> - The ×margin / ÷(1+gst) chain is rounded **once** (`roundDivBig`, BigInt) to match a spreadsheet that keeps
+>   full precision until the final figure (e.g. net ₹1000 incl 18%, 10% margin → 932.20, not 932.21).
+> - Worked examples frozen: MRP 1000/25%/10%/branding 10 → 709.15; net 1000/10%/branding 10/transport 10 → 952.20.
+> - `discount_bp` and `adjust_paise` are retired (columns kept, unused). Affected vectors (V1,V2,V4,V11,V13,V16,
+>   V19,V20) regenerated; V20 is pinned to worked-example 2.
+
 > **r3 pricing-model revision (operator-requested).** Three pricing methods; freight/branding are costs; and
 > the buying cost (`buying_cost_paise`, new per-line output = ex-GST margin basis) is DERIVED per method:
 > - `cost_markup` — sale = buying cost × (1+markup), markup on the **buying cost only**; `purchase_cost_paise`
