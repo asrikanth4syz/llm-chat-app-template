@@ -112,33 +112,46 @@ describe("quote_calc — validation surface (422)", () => {
   });
 });
 describe("quote_calc — auto GST-inclusive net rate / MRP; cost ex-GST; costs out of price", () => {
-  // Net rate is entered GST-INCLUSIVE and auto-stripped (no toggle): ₹118 incl 18% → ex-GST ₹100.
-  it("net_rate: a GST-inclusive rate is stripped to the ex-GST sale price", () => {
+  // Net rate is the GST-INCLUSIVE sale price (auto-stripped); the buying cost is
+  // entered GROSS and auto-stripped by the purchase GST. ₹118 incl 18% → ex ₹100.
+  it("net_rate: sale rate AND gross buying cost are stripped to ex-GST", () => {
     const r = computeQuote({
       place_of_supply: "TN", seller_state_code: "KL",   // inter-state → IGST
-      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 8000, net_rate_paise: 11800, sale_gst_bp: 1800, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 9440, net_rate_paise: 11800, purchase_gst_bp: 1800, sale_gst_bp: 1800, itc_claimable: true }],
     });
-    expect(r.lines[0].unit_price_paise).toBe(10000);     // ex-GST sale price
+    expect(r.lines[0].unit_price_paise).toBe(10000);     // 11800 incl → 10000 ex (sale)
+    expect(r.lines[0].buying_cost_paise).toBe(8000);     // 9440 gross incl → 8000 ex (cost)
     expect(r.lines[0].line_gst_paise).toBe(1800);        // 18% re-added once
     expect(r.lines[0].igst_paise).toBe(1800);
     expect(r.totals.grand_total_paise).toBe(11800);      // back to the net figure
-    expect(r.lines[0].landed_cost_paise).toBe(8000);     // sellable cost = buying cost
+    expect(r.lines[0].landed_cost_paise).toBe(8000);     // sellable cost = ex buying cost
     expect(r.lines[0].line_margin_paise).toBe(2000);     // 10000 − 8000
   });
   it("net_rate: a per-line adjust (>=0) adds to the sale total", () => {
     const r = computeQuote({
       place_of_supply: "KL", seller_state_code: "KL",
-      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 3000, net_rate_paise: 5900, adjust_paise: 1000, sale_gst_bp: 1800, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "net_rate", purchase_cost_paise: 3540, net_rate_paise: 5900, adjust_paise: 1000, sale_gst_bp: 1800, itc_claimable: true }],
     });
     expect(r.lines[0].unit_price_paise).toBe(5000);       // 5900 incl → 5000 ex
     expect(r.lines[0].line_taxable_paise).toBe(6000);     // 5000 + 1000 adjust
+    expect(r.lines[0].buying_cost_paise).toBe(3000);      // 3540 gross → 3000 ex
   });
-  it("mrp_discount: a GST-inclusive MRP is stripped before discount", () => {
+  it("mrp_discount: buying cost is DERIVED as ex-MRP less the purchase margin", () => {
+    const r = computeQuote({
+      place_of_supply: "KL", seller_state_code: "KL",
+      lines: [{ sku: null, qty: 1, pricing_mode: "mrp_discount", mrp_paise: 11800, purchase_margin_bp: 2000, discount_bp: 1000, sale_gst_bp: 1800, itc_claimable: true }],
+    });
+    expect(r.lines[0].buying_cost_paise).toBe(8000);      // ex-MRP 10000 × (1 − 20%)
+    expect(r.lines[0].unit_price_paise).toBe(9000);       // ex-MRP 10000 − 10% sale discount
+    expect(r.lines[0].line_margin_paise).toBe(1000);      // 9000 − 8000
+  });
+  it("mrp_discount: zero purchase margin → buying cost = ex-MRP", () => {
     const r = computeQuote({
       place_of_supply: "TN", seller_state_code: "KL",
-      lines: [{ sku: null, qty: 1, pricing_mode: "mrp_discount", purchase_cost_paise: 8000, mrp_paise: 11800, discount_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
+      lines: [{ sku: null, qty: 1, pricing_mode: "mrp_discount", mrp_paise: 11800, purchase_margin_bp: 0, discount_bp: 0, sale_gst_bp: 1800, itc_claimable: true }],
     });
     expect(r.lines[0].unit_price_paise).toBe(10000);
+    expect(r.lines[0].buying_cost_paise).toBe(10000);
     expect(r.totals.grand_total_paise).toBe(11800);
   });
   it("cost_markup: the buying cost is ex-GST (no stripping)", () => {

@@ -504,7 +504,7 @@ async function quoteDownloadPdf(id) {
 }
 
 // ── Editor (new quote) ─────────────────────────────────────────────────────────
-function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', hsn: '', uom: '', qty: 1, purchase_cost: '', markup_pct: '', net_rate: '', adjust: '', mrp: '', discount_pct: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', itc_claimable: true }; }
+function quoteBlankLine() { return { pricing_mode: 'cost_markup', sku: '', description: '', hsn: '', uom: '', qty: 1, purchase_cost: '', markup_pct: '', net_rate: '', adjust: '', mrp: '', discount_pct: '', purchase_margin: '', freight: '', branding: '', sale_gst_pct: '18', purchase_gst_pct: '', itc_claimable: true }; }
 function quoteBlankCharge() { return { label: '', amount: '', gst_pct: '18' }; }
 async function quoteNewEditor() {
   const q = qState(); q.view = 'editor';
@@ -530,7 +530,7 @@ async function quoteEditDraft(id) {
     sku: l.sku || '', description: l.description || '', hsn: l.hsn || '', uom: l.uom || '', qty: l.qty || 1,
     purchase_cost: toRupee(l.purchase_cost_paise), markup_pct: toPct(l.markup_bp),
     net_rate: toRupee(l.net_rate_paise), adjust: toRupee(l.adjust_paise),
-    mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp),
+    mrp: toRupee(l.mrp_paise), discount_pct: toPct(l.discount_bp), purchase_margin: toPct(l.purchase_margin_bp),
     freight: toRupee(l.freight_alloc_paise), branding: toRupee(l.branding_cost_paise),
     sale_gst_pct: toPct(l.sale_gst_bp) || '0', purchase_gst_pct: toPct(l.purchase_gst_bp),
     itc_claimable: !!l.itc_claimable,
@@ -600,20 +600,20 @@ function quoteRenderEditor() {
 function quoteLineHtml(l, i) {
   const mode = l.pricing_mode || 'cost_markup';
   const canRemove = (qState().editor.lines.length > 1);
-  // Buying cost is captured in EVERY mode (it is the margin basis). Net rate and
-  // MRP are entered GST-inclusive (auto-stripped) — no "incl. GST?" toggle.
-  const buyingCostField = qField('Buying cost / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="ex-GST">`, 'Ex-GST — drives margin');
   let priceFields;
   if (mode === 'cost_markup') {
-    priceFields = buyingCostField + qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`, 'On buying cost');
+    priceFields = qField('Buying cost / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="ex-GST">`, 'Ex-GST — drives margin')
+      + qField('Markup %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`, 'On buying cost');
   } else if (mode === 'net_rate') {
-    priceFields = buyingCostField
-      + `<div class="form-field"><label>Net rate / unit (₹)</label><input type="number" min="0" step="0.01" value="${h(l.net_rate)}" ${dataInputVal('quoteEditLine', i, 'net_rate')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
-      + qField('Adjust amount (₹)', `<input type="number" min="0" step="0.01" value="${h(l.adjust)}" ${dataInputVal('quoteEditLine', i, 'adjust')} placeholder="0">`, 'Added to the line sale total');
+    // Buying cost entered GROSS (incl GST), auto-stripped by purchase GST → ex cost.
+    priceFields = `<div class="form-field"><label>Buying cost / unit (incl GST)</label><input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="gross"><span class="form-hint" id="q-excost-${i}">${quoteExCostHint(l)}</span></div>`
+      + `<div class="form-field"><label>Net rate / unit (incl GST)</label><input type="number" min="0" step="0.01" value="${h(l.net_rate)}" ${dataInputVal('quoteEditLine', i, 'net_rate')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
+      + qField('Adjust amount (₹)', `<input type="number" min="0" step="0.01" value="${h(l.adjust)}" ${dataInputVal('quoteEditLine', i, 'adjust')} placeholder="0">`, 'Added to the line sale total (≥ 0)');
   } else {
-    priceFields = buyingCostField
-      + `<div class="form-field"><label>MRP / unit (₹)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
-      + qField('Discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`, 'Off the MRP');
+    // MRP mode: buying cost is DERIVED from MRP − purchase margin (shown in the hint).
+    priceFields = `<div class="form-field"><label>MRP / unit (incl GST)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
+      + qField('Purchase margin %', `<input type="number" min="0" step="0.01" value="${h(l.purchase_margin)}" ${dataInputVal('quoteEditLine', i, 'purchase_margin')} placeholder="0">`, 'Off ex-MRP → buying cost')
+      + qField('Sale discount %', `<input type="number" min="0" step="0.01" value="${h(l.discount_pct)}" ${dataInputVal('quoteEditLine', i, 'discount_pct')}>`, 'Off ex-MRP → sale price');
   }
   return `<div class="q-line">
     <div class="q-line-head">
@@ -649,7 +649,8 @@ function quoteLineBreakup(l, i) {
   if (!pv) return '';
   const qty = Math.max(0, Math.round(Number(l.qty || 0)));
   const r = (v) => Math.round(Number(v || 0) * 100);
-  const buying = r(l.purchase_cost) * qty;
+  // Buying cost comes from the engine (derived for MRP / net rate), not the raw input.
+  const buying = (pv.buying_cost_paise != null ? pv.buying_cost_paise : r(l.purchase_cost)) * qty;
   const bt = (r(l.freight) + r(l.branding)) * qty;
   const sellable = (pv.landed_cost_paise != null) ? pv.landed_cost_paise * qty : (buying + bt);
   const sale = pv.line_taxable_paise || 0;
@@ -817,25 +818,45 @@ function quoteEditLine(i, field, val) {
   const e = qState().editor; if (!e || !e.lines[i]) return;
   e.lines[i][field] = val;
   if (field === 'pricing_mode') { quoteRenderEditor(); return; }   // swap the per-method fields
-  // Keep the live ex-GST hint in step as the net rate / MRP / GST rate is typed.
-  if (['net_rate', 'mrp', 'sale_gst_pct'].includes(field)) {
+  // Keep the live ex-GST hints in step as the price / margin / GST rate is typed.
+  if (['net_rate', 'mrp', 'sale_gst_pct', 'purchase_margin', 'purchase_gst_pct'].includes(field)) {
     const el = document.getElementById('q-exgst-' + i);
     if (el) el.textContent = quoteExGstHint(e.lines[i]);
+  }
+  if (['purchase_cost', 'purchase_gst_pct', 'sale_gst_pct'].includes(field)) {
+    const el = document.getElementById('q-excost-' + i);
+    if (el) el.textContent = quoteExCostHint(e.lines[i]);
   }
 }
 function quoteEditLineItc(i, el) { const e = qState().editor; if (e && e.lines[i]) e.lines[i].itc_claimable = !!el.checked; }
 function quoteEditLineIncl(i, el) { const e = qState().editor; if (e && e.lines[i]) { e.lines[i].price_inclusive_gst = !!el.checked; quoteRenderEditor(); } }
-// Display-only: the ex-GST (stripped) value shown under the Net rate / MRP field.
-// Those inputs are GST-inclusive, so this shows the taxable base the sale price
-// and margin are built on. (Cost + markup has no hint — buying cost is ex-GST.)
+// Display-only ex-GST hints (floats are fine — never stored/hashed; the engine is
+// authoritative). Net rate / MRP are GST-inclusive; MRP also shows the DERIVED
+// buying cost (ex-MRP less the purchase margin), both ex- and incl-GST.
 function quoteExGstHint(l) {
   const mode = l.pricing_mode || 'cost_markup';
-  if (mode === 'cost_markup') return '';
-  const incl = Number(mode === 'net_rate' ? l.net_rate : l.mrp) || 0;
-  const gstPct = Number(l.sale_gst_pct) || 0;
-  if (incl <= 0) return '';
-  const ex = incl / (1 + gstPct / 100);
-  return `ex-GST ₹${ex.toFixed(2)} @ ${gstPct}%`;
+  const saleGst = Number(l.sale_gst_pct) || 0;
+  if (mode === 'net_rate') {
+    const incl = Number(l.net_rate) || 0; if (incl <= 0) return '';
+    return `ex-GST ₹${(incl / (1 + saleGst / 100)).toFixed(2)} @ ${saleGst}%`;
+  }
+  if (mode === 'mrp_discount') {
+    const mrp = Number(l.mrp) || 0; if (mrp <= 0) return '';
+    const exMrp = mrp / (1 + saleGst / 100);
+    const margin = Number(l.purchase_margin) || 0;
+    const pg = Number(l.purchase_gst_pct || l.sale_gst_pct) || 0;
+    const cost = exMrp * (1 - margin / 100);
+    const costIncl = cost * (1 + pg / 100);
+    return `ex-MRP ₹${exMrp.toFixed(2)} · buying cost ₹${cost.toFixed(2)} ex / ₹${costIncl.toFixed(2)} incl GST`;
+  }
+  return '';
+}
+// Net-rate buying cost is entered GROSS; show its ex-GST value (purchase GST).
+function quoteExCostHint(l) {
+  if ((l.pricing_mode || 'cost_markup') !== 'net_rate') return '';
+  const gross = Number(l.purchase_cost) || 0; if (gross <= 0) return '';
+  const pg = Number(l.purchase_gst_pct || l.sale_gst_pct) || 0;
+  return `ex-GST ₹${(gross / (1 + pg / 100)).toFixed(2)} @ ${pg}%`;
 }
 function quoteEditAddLine() { const e = qState().editor; if (e) { e.lines.push(quoteBlankLine()); quoteRenderEditor(); } }
 function quoteEditRemoveLine(i) { const e = qState().editor; if (e && e.lines.length > 1) { e.lines.splice(i, 1); quoteRenderEditor(); } }
@@ -862,20 +883,20 @@ function quoteBuildPayload() {
   const bp = (v) => Math.round(Number(v || 0) * 100);
   const lines = e.lines.map(l => {
     const mode = l.pricing_mode || 'cost_markup';
-    // Buying cost (ex-GST) is sent in EVERY mode — it is the margin basis.
     const base = {
       sku: (l.sku || '').trim() || null, description: l.description || null,
       hsn: (l.hsn || '').trim() || null, uom: (l.uom || '').trim() || null,
       qty: Math.round(Number(l.qty || 0)), pricing_mode: mode,
-      purchase_cost_paise: rupee(l.purchase_cost),
       freight_alloc_paise: rupee(l.freight), branding_cost_paise: rupee(l.branding),
       sale_gst_bp: bp(l.sale_gst_pct), itc_claimable: !!l.itc_claimable,
     };
     // Purchase GST defaults to sale GST on the server when omitted.
     if (String(l.purchase_gst_pct || '').trim() !== '') base.purchase_gst_bp = bp(l.purchase_gst_pct);
-    if (mode === 'cost_markup') return { ...base, markup_bp: bp(l.markup_pct) };
-    if (mode === 'net_rate') return { ...base, net_rate_paise: rupee(l.net_rate), adjust_paise: rupee(l.adjust) };
-    return { ...base, mrp_paise: rupee(l.mrp), discount_bp: bp(l.discount_pct) };
+    // cost_markup: ex-GST buying cost. net_rate: GROSS buying cost (server strips).
+    // mrp_discount: no cost — server derives it from MRP − purchase margin.
+    if (mode === 'cost_markup') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), markup_bp: bp(l.markup_pct) };
+    if (mode === 'net_rate') return { ...base, purchase_cost_paise: rupee(l.purchase_cost), net_rate_paise: rupee(l.net_rate), adjust_paise: rupee(l.adjust) };
+    return { ...base, mrp_paise: rupee(l.mrp), purchase_margin_bp: bp(l.purchase_margin), discount_bp: bp(l.discount_pct) };
   });
   const payload = {
     client_id: e.client_id, place_of_supply: (e.place_of_supply || '').toUpperCase(),

@@ -34,7 +34,8 @@ export interface QuoteCalcLine {
   net_rate_paise?: number;      // net_rate: the sale rate per unit, GST-INCLUSIVE
   adjust_paise?: number;        // net_rate: per-line amount (>=0) added to the sale total
   mrp_paise?: number;           // mrp_discount: the MRP, GST-INCLUSIVE
-  discount_bp?: number;         // mrp_discount: discount off the MRP
+  discount_bp?: number;         // mrp_discount: sale discount off the MRP
+  purchase_margin_bp?: number;  // mrp_discount: trade margin off ex-MRP → DERIVES the buying cost
   freight_alloc_paise?: number; // per unit, a COST (not added to the sale price), default 0
   branding_cost_paise?: number; // per unit, a COST (not added to the sale price), default 0
   sale_gst_bp: number;
@@ -62,6 +63,7 @@ export interface QuoteCalcInput {
 
 export interface QuoteCalcLineOut {
   landed_cost_paise: number;
+  buying_cost_paise: number;       // ex-GST buying cost per unit (the margin basis; derived for MRP / net_rate)
   unit_price_paise: number;
   line_taxable_paise: number;      // NET of any apportioned header discount
   line_gst_paise: number;
@@ -263,34 +265,42 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     const freight = assertPaiseInRange(assertInt(ln.freight_alloc_paise ?? 0, f("freight_alloc_paise")), f("freight_alloc_paise"));
     const branding = assertPaiseInRange(assertInt(ln.branding_cost_paise ?? 0, f("branding_cost_paise")), f("branding_cost_paise"));
 
-    // purchase_cost_paise is the ex-GST BUYING COST in every mode — the margin basis,
-    // never the sale price. (mrp_discount/net_rate carry a real buying cost, not the
-    // discounted MRP / net rate.)
-    const baseCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
-
-    // The ex-GST sale price PER UNIT. Net rate and MRP are entered GST-INCLUSIVE and
-    // are auto-stripped here (no "is this inclusive?" toggle — avoids operator error).
-    // Branding + transport are NOT added to the sale price in any mode.
+    // baseCost = the ex-GST BUYING COST per unit (the margin basis), DERIVED per method:
+    //  - cost_markup: purchase_cost_paise is the ex-GST cost as entered.
+    //  - net_rate:    purchase_cost_paise is the GROSS (GST-inclusive) cost; strip
+    //                 purchase GST to get the ex-GST cost.
+    //  - mrp_discount: no cost is entered — buying cost = ex-MRP × (1 − purchase margin).
+    // unitPrice = the ex-GST SALE price per unit. Net rate + MRP are GST-inclusive and
+    // auto-stripped. Branding + transport are COSTS, never added to the sale price.
+    let baseCost: number;
     let unitPrice: number;
     let adjust = 0;   // net_rate: a per-line amount (>=0) added to the sale total
     if (ln.pricing_mode === "cost_markup") {
+      baseCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
       const markupBp = assertInt(ln.markup_bp ?? 0, f("markup_bp"));
       if (markupBp < 0 || markupBp > MAX_MARKUP_BP) {
         throw new QuoteCalcError("E_VALIDATION", `${f("markup_bp")} must be in 0..${MAX_MARKUP_BP}`, f("markup_bp"));
       }
       unitPrice = baseCost + applyBp(baseCost, markupBp);   // markup on the buying cost only
     } else if (ln.pricing_mode === "net_rate") {
+      const grossCost = assertPaiseInRange(assertInt(ln.purchase_cost_paise ?? 0, f("purchase_cost_paise")), f("purchase_cost_paise"));
+      baseCost = exclGstPaise(grossCost, purchaseBp);       // gross cost → ex-GST (purchase GST)
       const netIncl = assertPaiseInRange(assertInt(ln.net_rate_paise ?? 0, f("net_rate_paise")), f("net_rate_paise"));
-      unitPrice = exclGstPaise(netIncl, saleBp);            // net rate is GST-inclusive
+      unitPrice = exclGstPaise(netIncl, saleBp);            // net rate is GST-inclusive (sale side)
       adjust = assertPaiseInRange(assertInt(ln.adjust_paise ?? 0, f("adjust_paise")), f("adjust_paise"));
     } else {
       const mrpIncl = assertPaiseInRange(assertInt(ln.mrp_paise ?? 0, f("mrp_paise")), f("mrp_paise"));
-      const mrp = exclGstPaise(mrpIncl, saleBp);            // MRP is GST-inclusive
+      const exMrp = exclGstPaise(mrpIncl, saleBp);          // MRP is GST-inclusive → ex-MRP
+      const marginBp = assertInt(ln.purchase_margin_bp ?? 0, f("purchase_margin_bp"));
+      if (marginBp < 0 || marginBp > 10000) {
+        throw new QuoteCalcError("E_VALIDATION", `${f("purchase_margin_bp")} must be in 0..10000`, f("purchase_margin_bp"));
+      }
+      baseCost = exMrp - applyBp(exMrp, marginBp);          // buying cost = ex-MRP less the purchase margin
       const discBp = assertInt(ln.discount_bp ?? 0, f("discount_bp"));
       if (discBp < 0 || discBp > 10000) {
         throw new QuoteCalcError("E_VALIDATION", `${f("discount_bp")} must be in 0..10000`, f("discount_bp"));
       }
-      unitPrice = mrp - applyBp(mrp, discBp);
+      unitPrice = exMrp - applyBp(exMrp, discBp);           // sale price = ex-MRP less the sale discount
     }
     if (unitPrice < 0) {
       throw new QuoteCalcError("E_VALIDATION", `${f("unit_price")} computed negative`, f("unit_price"));
@@ -315,6 +325,7 @@ export function computeQuote(input: QuoteCalcInput): QuoteCalcResult {
     aux.push({ grossTaxable: taxable, saleBp, landedTotal });
     out.push({
       landed_cost_paise: landed,
+      buying_cost_paise: baseCost,
       unit_price_paise: unitPrice,
       line_taxable_paise: taxable,  // net is set in pass 2
       line_gst_paise: 0, cgst_paise: 0, sgst_paise: 0, igst_paise: 0, line_margin_paise: 0,

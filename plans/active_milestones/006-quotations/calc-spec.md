@@ -1,18 +1,21 @@
 # Calc Spec: 006-quotations pricing / GST / landed-cost / rounding
 
-> **r3 pricing-model revision (operator-requested).** Three pricing methods now exist and the
-> freight/branding treatment changed:
-> - **Methods:** `cost_markup` (sale = buying cost × (1+markup), markup on the **buying cost only**),
->   `net_rate` (sale rate entered **GST-inclusive**, auto-stripped; plus an optional per-line `adjust_paise`
->   (≥0) added to the line sale total), `mrp_discount` (MRP entered **GST-inclusive**, auto-stripped, then
->   discount). There is no "is this inclusive?" toggle any more — net rate and MRP are always inclusive,
->   cost is always ex-GST.
+> **r3 pricing-model revision (operator-requested).** Three pricing methods; freight/branding are costs; and
+> the buying cost (`buying_cost_paise`, new per-line output = ex-GST margin basis) is DERIVED per method:
+> - `cost_markup` — sale = buying cost × (1+markup), markup on the **buying cost only**; `purchase_cost_paise`
+>   is the ex-GST buying cost as entered.
+> - `net_rate` — sale rate entered **GST-inclusive**, auto-stripped; the buying cost is entered **GROSS**
+>   (`purchase_cost_paise`, GST-inclusive) and auto-stripped by the **purchase GST** → ex-GST cost; plus an
+>   optional per-line `adjust_paise` (≥0) added to the line sale total.
+> - `mrp_discount` — MRP entered **GST-inclusive**, auto-stripped to ex-MRP. **Buying cost is derived:**
+>   `baseCost = exMrp − applyBp(exMrp, purchase_margin_bp)` (trade margin off ex-MRP). Sale price =
+>   `exMrp − applyBp(exMrp, discount_bp)`. No separate cost is entered for MRP lines.
+> - No "is this inclusive?" toggle — net rate / MRP are always inclusive, cost_markup cost is ex-GST.
 > - **Branding + freight are COSTS, never added to the sale price in any method.** They fold into the
->   **sellable cost** (`landed = buying cost + freight + branding + non-ITC purchase GST`) and therefore
->   reduce margin (`margin = net taxable − sellable cost`). Previously they were passed through onto the
->   sale price (netting to ~zero margin); that is removed.
-> - `purchase_cost_paise` is the **buying cost in every method** (the margin basis), never the sale price.
-> - Affected frozen vectors re-derived: V1, V2, V4, V11, V16 (V13 unchanged); V19, V20 added for `net_rate`.
+>   **sellable cost** (`landed = buying cost + freight + branding + non-ITC purchase GST`) and reduce margin
+>   (`margin = net taxable − sellable cost`). Previously passed through onto the sale price — removed.
+> - Frozen oracle: V1, V2, V4, V13, V16 re-derived (margin model); V19, V20 (net_rate gross cost) added;
+>   every vector line now carries `buying_cost_paise`.
 
 > Resolves spec-validation r1 findings: `calc-vectors-not-inlined`, `rounding-policy-underspecified`,
 > `seller-state-origin-missing`, `itc-landed-cost-fold-formula`, `weighted-margin-undefined`,
