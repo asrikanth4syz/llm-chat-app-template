@@ -1228,6 +1228,19 @@ async function saveWarehouseEdit(id) {
 /* ============================================================
    DELIVERY — Tabbed view (Section 7 rebuild)
    ============================================================ */
+// Line count (distinct SKUs on the challan = item_count) + item count (total
+// units = total_qty), rendered as a single "N lines · M items" string. Shared by
+// the scheduled / transit cards and the delivered table so the counts read the
+// same everywhere. Falls back gracefully when a figure is missing.
+function dcCountsHtml(dc) {
+  const lines = dc.item_count != null ? Number(dc.item_count) : null;
+  const units = dc.total_qty != null ? Number(dc.total_qty) : null;
+  const parts = [];
+  if (lines != null) parts.push(`<span style="font-weight:600;color:var(--text)">${lines}</span> line${lines !== 1 ? 's' : ''}`);
+  if (units != null) parts.push(`<span style="font-weight:600;color:var(--text)">${units}</span> item${units !== 1 ? 's' : ''}`);
+  return parts.length ? parts.join(' · ') : 'Qty unknown';
+}
+
 async function renderDelivery(el) {
   const dcs = await api('/delivery-challans');
   if (!dcs) { el.innerHTML = `${pageHeader('Deliveries','Delivery challans, dispatch, POD & returns')}<div class="card" style="padding:32px;text-align:center;color:var(--danger)">Failed to load delivery challans.</div>`; return; }
@@ -1279,7 +1292,7 @@ async function renderDelivery(el) {
       </div>
       <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div style="font-size:.82rem;color:var(--text-muted)">
-          ${dc.item_count ? `<span style="font-weight:600;color:var(--text)">${dc.item_count}</span> item${dc.item_count != 1 ? 's' : ''} · ` : ''}${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+          ${dcCountsHtml(dc)}
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
@@ -1307,6 +1320,7 @@ async function renderDelivery(el) {
           <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
         </div>
         <div style="font-size:.82rem;font-weight:600;margin-bottom:2px">${dc.client_name||'Unknown Client'}</div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px">${dcCountsHtml(dc)}</div>
         ${dc.driver_name ? `<div style="font-size:.78rem;color:var(--text-muted)">🚚 ${dc.vehicle_no||'—'} · ${dc.driver_name}</div>` : ''}
       </div>
       <div style="padding:0 16px 10px">${typeof _dcDestination==='function'?_dcDestination(dc):''}</div>
@@ -1351,14 +1365,15 @@ async function renderDelivery(el) {
         <td><b>${dc.dc_number||dc.id}</b></td>
         <td>${dc.order_id}</td>
         <td>${dc.client_name||'—'}</td>
-        <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+        <td style="text-align:center">${dc.item_count != null ? dc.item_count : '—'}</td>
+        <td style="color:var(--success);font-weight:600;text-align:center">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td>
         <td>${fmtDate(dc.delivered_at)}</td>
         <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`}</td>
         <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markScan', dc.id)}>Scan POD</button>`}</td>
         <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" ${dataAct('billDC', dc.id)}>Bill</button>`}</td>
       </tr>`).join('');
-      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
+      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th style="text-align:center">Lines</th><th style="text-align:center">Items</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
       let html = '';
       if (needsAction.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Needs Action (${needsAction.length})</div>${tbl(needsAction)}<div style="margin-bottom:16px"></div>`;
       if (complete.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Complete (${complete.length})</div>${tbl(complete)}`;
@@ -1466,7 +1481,7 @@ async function switchDeliveryTab(tab, btn) {
           </div>
           <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
             <div style="font-size:.82rem;color:var(--text-muted)">
-              ${dc.item_count ? `<span style="font-weight:600;color:var(--text)">${dc.item_count}</span> item${dc.item_count != 1 ? 's' : ''} · ` : ''}${dc.total_qty ? `<span style="font-weight:600;color:var(--text)">${dc.total_qty}</span> units` : 'Qty unknown'}
+              ${dcCountsHtml(dc)}
             </div>
             <div style="display:flex;gap:6px">
               <button class="btn btn-secondary btn-sm" ${dataAct('viewDCItems', dc.id)}>View Items</button>
@@ -1496,6 +1511,7 @@ async function switchDeliveryTab(tab, btn) {
               <span style="font-size:.75rem;color:var(--text-muted)">Order ${dc.order_id}</span>
             </div>
             <div style="font-size:.82rem;font-weight:600;margin-bottom:2px">${dc.client_name||'Unknown Client'}</div>
+            <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px">${dcCountsHtml(dc)}</div>
             ${dc.driver_name?`<div style="font-size:.78rem;color:var(--text-muted)">🚚 ${dc.vehicle_no||'—'} · ${dc.driver_name}</div>`:''}
           </div>
           ${dQty!=null&&tQty?`<div style="padding:0 16px 4px">
@@ -1526,13 +1542,14 @@ async function switchDeliveryTab(tab, btn) {
       const complete    = delivered.filter(d => d.pod_uploaded && d.billed);
       const rows = (list) => list.map(dc=>`<tr>
         <td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td>
-        <td style="color:var(--success);font-weight:600">${dc.delivered_qty||dc.total_qty||'—'}</td>
+        <td style="text-align:center">${dc.item_count != null ? dc.item_count : '—'}</td>
+        <td style="color:var(--success);font-weight:600;text-align:center">${dc.delivered_qty||dc.total_qty||'—'}</td>
         <td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.delivered_at)}</td>
         <td>${dc.pod_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markPOD', dc.id)}>Upload POD</button>`}</td>
         <td>${dc.dc_scan_uploaded?'<span class="badge badge-success">✓ Done</span>':`<button class="btn btn-secondary btn-sm" ${dataAct('markScan', dc.id)}>Scan POD</button>`}</td>
         <td>${dc.billed?'<span class="badge badge-success">Billed</span>':`<button class="btn btn-primary btn-sm" ${dataAct('billDC', dc.id)}>Bill</button>`}</td>
       </tr>`).join('');
-      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Qty</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
+      const tbl = (list) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th style="text-align:center">Lines</th><th style="text-align:center">Items</th><th>Driver</th><th>Delivered At</th><th>POD</th><th>Scan</th><th>Billed</th></tr></thead><tbody>${rows(list)}</tbody></table></div></div>`;
       let html = '';
       if (!delivered.length) html = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">✅</div>No delivered challans yet</div>`;
       else {
