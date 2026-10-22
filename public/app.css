@@ -969,6 +969,13 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 .q-kind-opt.on { background: var(--navy); border-color: var(--navy); color: #fff; }
 .q-kind-pill { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: rgba(124,58,237,.12); color: #7c3aed; border: 1px solid rgba(124,58,237,.3); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .q-kind-pill { color: #a78bfa; } }
+/* Required-field marker + quote-type pill / filter in the Quotes list. */
+.q-req { color: var(--danger); font-weight: 800; }
+.q-kindfilter { display: inline-flex; gap: 6px; align-items: center; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--border); }
+.q-type-pill { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.q-type-pill.gifting { background: rgba(124,58,237,.12); color: #7c3aed; border: 1px solid rgba(124,58,237,.3); }
+.q-type-pill.regular { background: rgba(15,23,42,.06); color: var(--text-muted); border: 1px solid var(--border); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .q-type-pill.gifting { color: #a78bfa; } }
 /* Revision / convert lineage banner on the quote detail. */
 .q-lineage { border-left: 3px solid var(--navy); margin-bottom: 14px; }
 .q-lineage .card-body { font-size: .84rem; color: var(--text-label); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }

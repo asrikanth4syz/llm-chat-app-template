@@ -47,8 +47,8 @@ function qCard(title, bodyHtml, actionsHtml = '') {
   </div>`;
 }
 // A single labelled form field (picks up the app's .form-field input styling).
-function qField(label, inputHtml, hint = '') {
-  return `<div class="form-field"><label>${h(label)}</label>${inputHtml}${hint ? `<span class="form-hint">${h(hint)}</span>` : ''}</div>`;
+function qField(label, inputHtml, hint = '', req = false) {
+  return `<div class="form-field"><label>${h(label)}${req ? ' <span class="q-req" title="Required" aria-hidden="true">*</span>' : ''}</label>${inputHtml}${hint ? `<span class="form-hint">${h(hint)}</span>` : ''}</div>`;
 }
 function qRole() { return (APP.quoteAccess && APP.quoteAccess.quoteRole) || null; }
 // sales, commercial_manager and finance may author/send/close (super_admin resolves
@@ -75,7 +75,7 @@ function renderQuotations(main) {
       <div class="page-actions">
         <div class="q-tabs" role="tablist">
           <button class="q-tab ${q.tab === 'list' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'list')}>Quotes</button>
-          <button class="q-tab ${q.tab === 'pipeline' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'pipeline')}>Pipeline</button>
+          <button class="q-tab ${q.tab === 'pipeline' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'pipeline')}>Summary</button>
           <button class="q-tab ${q.tab === 'today' ? 'active' : ''}" role="tab" ${dataAct('quoteGoTab', 'today')}>Today</button>
         </div>
         ${qCanCreate() ? `<button class="btn btn-gold" ${dataAct('quoteNewEditor')}>${iconPlus(14)} New quote</button>` : ''}
@@ -156,10 +156,13 @@ async function quoteRenderList() {
   const rows = quoteSortedRows(quoteFilteredRows());
   const chip = (s, label) => `<button class="btn btn-sm ${q.statusFilter === s ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetStatus', s)}>${h(label)}</button>`;
   const filterChips = chip('', 'All') + ' ' + QUOTE_STATUSES.map(s => chip(s, (QUOTE_STATUS_META[s] || [, s])[1])).join(' ');
+  const kf = q.kindFilter || '';
+  const kchip = (k, label) => `<button class="btn btn-sm ${kf === k ? 'btn-primary' : 'btn-secondary'}" ${dataAct('quoteSetKindFilter', k)}>${h(label)}</button>`;
+  const kindChips = `<span class="q-kindfilter" title="Filter by quote type">${kchip('', 'All types')} ${kchip('REGULAR', '📦 Consumables')} ${kchip('GIFTING', '🎁 Gifting')}</span>`;
   const emptyMsg = query ? `No quotes match “${h(q.listQuery)}”.` : (q.statusFilter ? `No ${h((QUOTE_STATUS_META[q.statusFilter] || [, q.statusFilter])[1].toLowerCase())} quotes.` : 'No quotes yet.');
   body.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${filterChips}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${filterChips} ${kindChips}</div>
       <div class="q-search">
         <input id="q-list-search" ${dataInputVal('quoteListSearch')} value="${h(q.listQuery || '')}" placeholder="Search quote #, client or purpose…" autocomplete="off">
         <button type="button" class="q-clear" ${dataAct('quoteListClearSearch')} title="Clear search" aria-label="Clear search">✕</button>
@@ -170,6 +173,7 @@ async function quoteRenderList() {
       <table class="data-table q-list-table" style="width:100%;border-collapse:collapse">
         <thead><tr>
           ${quoteSortTh('quote_no', 'Quote #', 'left')}
+          ${quoteSortTh('kind', 'Type', 'left')}
           ${quoteSortTh('title', 'Purpose', 'left')}
           ${quoteSortTh('client', 'Client', 'left')}
           ${quoteSortTh('status', 'Status', 'left')}
@@ -181,6 +185,13 @@ async function quoteRenderList() {
     </div></div>`}`;
 }
 function quoteSetStatus(s) { const q = qState(); q.statusFilter = s; quoteRenderList(); }
+function quoteSetKindFilter(k) { const q = qState(); q.kindFilter = k || ''; quoteRenderList(); }
+// Quote-type ("kind") cell: a pill matching the editor's Consumables / Gifting toggle.
+function qKindCell(kind) {
+  return kind === 'GIFTING'
+    ? '<span class="q-type-pill gifting">🎁 Gifting</span>'
+    : '<span class="q-type-pill regular">📦 Consumables</span>';
+}
 // A quote matches the search across its number, client (name or id) and purpose.
 function quoteRowMatches(r, query) {
   if (!query) return true;
@@ -191,7 +202,9 @@ function quoteRowMatches(r, query) {
 }
 function quoteFilteredRows() {
   const q = qState(); const query = (q.listQuery || '').trim().toLowerCase();
-  return (q.listRows || []).filter(r => quoteRowMatches(r, query));
+  const kf = q.kindFilter || '';
+  const kindOf = r => (r.kind === 'GIFTING' ? 'GIFTING' : 'REGULAR');
+  return (q.listRows || []).filter(r => quoteRowMatches(r, query) && (!kf || kindOf(r) === kf));
 }
 // Header sort — toggles asc/desc on the clicked column; purely client-side over
 // the loaded page (matches the search model).
@@ -209,6 +222,7 @@ function quoteSortedRows(rows) {
       case 'client': return (r.client_name || r.client_id || '').toLowerCase();
       case 'valid_until': return r.valid_until || '';
       case 'status': return r.status || '';
+      case 'kind': return (r.kind === 'GIFTING' ? 'GIFTING' : 'REGULAR');
       case 'title': return (r.title || '').toLowerCase();
       default: return (r.quote_no || '').toLowerCase();
     }
@@ -238,7 +252,7 @@ function quoteListClearSearch() {
 // quote's own id) collapse under their LATEST revision, which carries a ▸ toggle
 // that reveals the earlier revisions as indented sub-rows.
 function quoteListRowsHtml(rows) {
-  if (!rows.length) return `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
+  if (!rows.length) return `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted)">No quotes match.</td></tr>`;
   const keyOf = r => r.root_quote_id || r.id;
   const groups = new Map();
   rows.forEach(r => { const k = keyOf(r); const g = groups.get(k) || []; g.push(r); groups.set(k, g); });
@@ -246,6 +260,7 @@ function quoteListRowsHtml(rows) {
   groups.forEach((g, k) => { headIdOf.set(k, g.reduce((a, b) => ((b.revision || 1) > (a.revision || 1) ? b : a)).id); });
   const subCells = (x, pad) => `
     <td style="padding:${pad};color:var(--text-muted);white-space:nowrap">↳ ${h(x.quote_no || x.id)}${(x.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${x.revision}</span>` : ''}</td>
+    <td style="padding:9px 14px;white-space:nowrap">${qKindCell(x.kind)}</td>
     <td style="padding:9px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(x.title || '')}">${h(x.title || '—')}</td>
     <td style="padding:9px 14px">${h(x.client_name || x.client_id || '')}</td>
     <td style="padding:9px 14px">${qBadge(x.status)}</td>
@@ -262,7 +277,8 @@ function quoteListRowsHtml(rows) {
     const toggle = tail.length ? `<button class="q-rev-toggle" data-group="${gk}" ${dataAct('quoteToggleRevisions', gk)} title="Show ${tail.length} earlier revision${tail.length > 1 ? 's' : ''}" aria-label="Toggle earlier revisions">▸</button> ` : '';
     const count = tail.length ? ` <span class="q-rev-count">${tail.length + 1} revisions</span>` : '';
     out.push(`<tr class="q-trow" ${dataAct('quoteOpenDetail', r.id)}>
-      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${toggle}${r.kind === 'GIFTING' ? '🎁 ' : ''}${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}${count}</td>
+      <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">${toggle}${h(r.quote_no || r.id)}${(r.revision || 1) > 1 ? ` <span class="badge badge-secondary" style="font-weight:600">R${r.revision}</span>` : ''}${count}</td>
+      <td style="padding:11px 14px;white-space:nowrap">${qKindCell(r.kind)}</td>
       <td style="padding:11px 14px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${h(r.title || '')}">${h(r.title || '—')}</td>
       <td style="padding:11px 14px">${h(r.client_name || r.client_id || '')}</td>
       <td style="padding:11px 14px">${qBadge(r.status)}</td>
@@ -602,19 +618,20 @@ function quoteLineHtml(l, i) {
   const canRemove = (qState().editor.lines.length > 1);
   // Selling price = ex-GST buying cost × (1 + Selling margin %); branding + transport
   // are then added to the sale. The buying cost is derived per method.
-  const sellingMargin = qField('Selling margin %', `<input type="number" min="0" step="0.01" value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`, 'Markup on the ex-GST cost');
+  // Selling margin % is mandatory in every method.
+  const sellingMargin = qField('Selling margin %', `<input type="number" min="0" step="0.01" required value="${h(l.markup_pct)}" ${dataInputVal('quoteEditLine', i, 'markup_pct')}>`, 'Markup on the ex-GST cost', true);
   let priceFields;
   if (mode === 'cost_markup') {
-    priceFields = qField('Buying cost / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="ex-GST">`, 'Ex-GST')
+    priceFields = qField('Buying cost / unit (₹)', `<input type="number" min="0" step="0.01" required value="${h(l.purchase_cost)}" ${dataInputVal('quoteEditLine', i, 'purchase_cost')} placeholder="ex-GST">`, 'Ex-GST', true)
       + sellingMargin;
   } else if (mode === 'net_rate') {
     // Net cost = the GROSS (incl-GST) purchase cost; auto-stripped to ex-GST.
-    priceFields = `<div class="form-field"><label>Net cost / unit (incl GST)</label><input type="number" min="0" step="0.01" value="${h(l.net_rate)}" ${dataInputVal('quoteEditLine', i, 'net_rate')} placeholder="gross cost"><span class="form-hint" id="q-excost-${i}">${quoteExCostHint(l)}</span></div>`
+    priceFields = `<div class="form-field"><label>Net cost / unit (incl GST) <span class="q-req" title="Required" aria-hidden="true">*</span></label><input type="number" min="0" step="0.01" required value="${h(l.net_rate)}" ${dataInputVal('quoteEditLine', i, 'net_rate')} placeholder="gross cost"><span class="form-hint" id="q-excost-${i}">${quoteExCostHint(l)}</span></div>`
       + sellingMargin;
   } else {
     // MRP mode: buying cost = ex-MRP × (1 − purchase margin), shown in the hint.
-    priceFields = `<div class="form-field"><label>MRP / unit (incl GST)</label><input type="number" min="0" step="0.01" value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
-      + qField('Purchase margin %', `<input type="number" min="0" step="0.01" value="${h(l.purchase_margin)}" ${dataInputVal('quoteEditLine', i, 'purchase_margin')} placeholder="0">`, 'Off ex-MRP → buying cost')
+    priceFields = `<div class="form-field"><label>MRP / unit (incl GST) <span class="q-req" title="Required" aria-hidden="true">*</span></label><input type="number" min="0" step="0.01" required value="${h(l.mrp)}" ${dataInputVal('quoteEditLine', i, 'mrp')} placeholder="incl. GST"><span class="form-hint" id="q-exgst-${i}">${quoteExGstHint(l)}</span></div>`
+      + qField('Purchase margin %', `<input type="number" min="0" step="0.01" required value="${h(l.purchase_margin)}" ${dataInputVal('quoteEditLine', i, 'purchase_margin')} placeholder="0">`, 'Off ex-MRP → buying cost', true)
       + sellingMargin;
   }
   return `<div class="q-line">
@@ -623,15 +640,12 @@ function quoteLineHtml(l, i) {
       ${canRemove ? `<button class="btn btn-danger btn-sm" ${dataAct('quoteEditRemoveLine', i)}>Remove</button>` : ''}
     </div>
     <div class="form-row">
-      ${qField('SKU', `<input value="${h(l.sku)}" ${dataInputVal('quoteEditLine', i, 'sku')} placeholder="optional">`)}
-      ${qField('Description', `<input value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')} placeholder="Item description">`)}
-      ${qField('HSN / SAC', `<input value="${h(l.hsn)}" ${dataInputVal('quoteEditLine', i, 'hsn')} placeholder="e.g. 2106" maxlength="12">`, 'GST code')}
-      ${qField('UoM', `<input value="${h(l.uom)}" ${dataInputVal('quoteEditLine', i, 'uom')} placeholder="e.g. Nos / Kg / Box" maxlength="16">`)}
-      ${qField('Qty', `<input type="number" min="1" step="1" value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`)}
-      ${qField('Pricing method', `<select ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
+      ${qField('Description', `<input required value="${h(l.description)}" ${dataInputVal('quoteEditLine', i, 'description')} placeholder="Item description">`, '', true)}
+      ${qField('Qty', `<input type="number" min="1" step="1" required value="${h(l.qty)}" ${dataInputVal('quoteEditLine', i, 'qty')}>`, '', true)}
+      ${qField('Pricing method', `<select required ${dataChangeVal('quoteEditLine', i, 'pricing_mode')}>
         <option value="cost_markup" ${mode === 'cost_markup' ? 'selected' : ''}>Cost + markup</option>
         <option value="net_rate" ${mode === 'net_rate' ? 'selected' : ''}>Net rate</option>
-        <option value="mrp_discount" ${mode === 'mrp_discount' ? 'selected' : ''}>MRP − discount</option></select>`)}
+        <option value="mrp_discount" ${mode === 'mrp_discount' ? 'selected' : ''}>MRP − discount</option></select>`, '', true)}
       ${priceFields}
       ${qField('Transport / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.freight)}" ${dataInputVal('quoteEditLine', i, 'freight')} placeholder="0">`, 'Added to the sale at cost')}
       ${qField('Branding / unit (₹)', `<input type="number" min="0" step="0.01" value="${h(l.branding)}" ${dataInputVal('quoteEditLine', i, 'branding')} placeholder="0">`, 'Added to the sale at cost')}
@@ -639,6 +653,9 @@ function quoteLineHtml(l, i) {
       ${qField('Purchase GST %', `<input type="number" min="0" step="1" value="${h(l.purchase_gst_pct)}" ${dataInputVal('quoteEditLine', i, 'purchase_gst_pct')} placeholder="= sale">`, 'For ITC — defaults to sale GST')}
       ${qField('ITC', `<label style="display:inline-flex;align-items:center;gap:7px;font-weight:500;font-size:.84rem;padding-top:6px;cursor:pointer">
         <input type="checkbox" style="width:auto" ${l.itc_claimable ? 'checked' : ''} ${dataChangeEl('quoteEditLineItc', i)}> Claimable</label>`)}
+      ${qField('SKU', `<input value="${h(l.sku)}" ${dataInputVal('quoteEditLine', i, 'sku')} placeholder="optional">`)}
+      ${qField('HSN / SAC', `<input value="${h(l.hsn)}" ${dataInputVal('quoteEditLine', i, 'hsn')} placeholder="e.g. 2106" maxlength="12">`, 'GST code')}
+      ${qField('UoM', `<input value="${h(l.uom)}" ${dataInputVal('quoteEditLine', i, 'uom')} placeholder="e.g. Nos / Kg / Box" maxlength="16">`)}
     </div>
     ${quoteLineBreakup(l, i)}
   </div>`;
@@ -910,8 +927,31 @@ async function quoteEditPreview() {
     quoteRenderEditor();
   }
 }
+// Mandatory-field gate before saving a draft. Returns true when every line has
+// the required fields filled for its pricing method; otherwise toasts the first
+// problem and returns false.
+function quoteValidateEditor() {
+  const e = qState().editor; if (!e) return false;
+  const filled = (v) => String(v == null ? '' : v).trim() !== '';
+  const num = (v) => filled(v) && !isNaN(Number(v));
+  for (let i = 0; i < e.lines.length; i++) {
+    const l = e.lines[i], mode = l.pricing_mode || 'cost_markup', where = `Line ${i + 1}`;
+    if (!filled(l.description)) return (showToast(`${where}: Description is required`, 'error'), false);
+    if (!num(l.qty) || Math.round(Number(l.qty)) < 1) return (showToast(`${where}: Qty must be at least 1`, 'error'), false);
+    if (!filled(mode)) return (showToast(`${where}: Pricing method is required`, 'error'), false);
+    if (!num(l.markup_pct)) return (showToast(`${where}: Selling margin % is required`, 'error'), false);
+    if (mode === 'cost_markup' && !num(l.purchase_cost)) return (showToast(`${where}: Buying cost / unit is required`, 'error'), false);
+    if (mode === 'net_rate' && !num(l.net_rate)) return (showToast(`${where}: Net cost / unit (incl GST) is required`, 'error'), false);
+    if (mode === 'mrp_discount') {
+      if (!num(l.mrp)) return (showToast(`${where}: MRP / unit (incl GST) is required`, 'error'), false);
+      if (!num(l.purchase_margin)) return (showToast(`${where}: Purchase margin % is required`, 'error'), false);
+    }
+  }
+  return true;
+}
 async function quoteEditSave() {
   const e = qState().editor; if (!e.client_id) { showToast('Pick a client first', 'error'); return; }
+  if (!quoteValidateEditor()) return;
   const r = e.editId
     ? await api('/quotes/' + e.editId, { method: 'PUT', body: JSON.stringify(quoteBuildPayload()) })
     : await api('/quotes', { method: 'POST', body: JSON.stringify(quoteBuildPayload()) });

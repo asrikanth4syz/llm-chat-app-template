@@ -704,6 +704,15 @@ async function pickOrderModal(orderId) {
     orderId, clientName, anyDelivered, totalDue,
     canAmend: ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager'].includes(APP.user && APP.user.role),
   };
+  // Default each line's bin so the operator needn't pick one every time: the bin
+  // that already stocks the SKU if known, else the first bin location ("bin 1").
+  const firstBinCode = (bins && bins[0]) ? bins[0].code : '';
+  lines.forEach(l => {
+    const stock = (bins || []).find(x => (x.sku || '') === l.sku);
+    const def = stock ? stock.code : firstBinCode;
+    if (def) APP._pickCtx.binSel[l.sku] = def;
+  });
+  if (firstBinCode) APP._pickCtx.lastBin = firstBinCode;
   APP._pickScanMode = 'fill';
   openModal(`Pick Items — ${orderId}${clientName ? ` · ${clientName}` : ''}`, pickModalInner(), pickModalFooter());
   updatePickSummary();
@@ -872,6 +881,9 @@ function pickReview(orderId) {
   const bySku = {}, binBySku = {};
   document.querySelectorAll('.pick-qty').forEach(i => { bySku[i.dataset.sku] = parseInt(i.value) || 0; });
   document.querySelectorAll('.pick-bin').forEach(s => { binBySku[s.dataset.sku] = s.value || ''; });
+  // Snapshot the entered picks + bins onto the context so confirmPick can submit
+  // them even though the review screen has replaced the .pick-qty / .pick-bin DOM.
+  ctx.bySku = bySku; ctx.binBySku = binBySku;
   let complete = 0, picked = 0, toPick = 0, noBin = 0; const shorts = [], over = [];
   ctx.lines.forEach(l => {
     const rem = l.due, v = bySku[l.sku] || 0; toPick += rem; picked += v;
@@ -1099,17 +1111,31 @@ function updatePickSummary() {
 }
 
 async function confirmPick(orderId) {
-  const qtyInputs = document.querySelectorAll('.pick-qty');
-  // Send EVERY line with its actual picked qty (blank → 0), so a short/zero pick is
-  // recorded against that line instead of being dropped and later defaulting to the
-  // full ordered quantity.
-  const items = Array.from(qtyInputs).map(inp => {
-    const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
-    const qty = parseInt(inp.value) || 0;
-    return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
-  });
+  // Submit is clicked from the review screen, where the .pick-qty / .pick-bin inputs
+  // no longer exist — so read the picks from the snapshot pickReview stored on the
+  // context (falling back to the live inputs if confirm is somehow called from the
+  // list). Send EVERY line with its actual picked qty (blank → 0), so a short/zero
+  // pick is recorded against that line instead of defaulting to the full ordered qty.
+  const ctx = APP._pickCtx;
+  let items, hasPartial;
+  if (ctx && ctx.bySku) {
+    const bySku = ctx.bySku, binBySku = ctx.binBySku || {};
+    items = ctx.lines.map(l => ({
+      sku: l.sku, name: l.name,
+      qty: parseInt(bySku[l.sku]) || 0,
+      bin_code: binBySku[l.sku] || (ctx.binSel || {})[l.sku] || '',
+    }));
+    hasPartial = ctx.lines.some(l => (parseInt(bySku[l.sku]) || 0) < (parseInt(l.due) || 0));
+  } else {
+    const qtyInputs = document.querySelectorAll('.pick-qty');
+    items = Array.from(qtyInputs).map(inp => {
+      const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
+      const qty = parseInt(inp.value) || 0;
+      return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
+    });
+    hasPartial = Array.from(qtyInputs).some(inp => (parseInt(inp.value) || 0) < +inp.dataset.ordered);
+  }
   if (!items.some(i => i.qty > 0)) { showToast('Enter a quantity for at least one item', 'error'); return; }
-  const hasPartial = Array.from(qtyInputs).some(inp => (parseInt(inp.value) || 0) < +inp.dataset.ordered);
   const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial }) });
   if (res) {
     showToast(`Order ${orderId} marked as PICKED${hasPartial ? ' (partial)' : ''}`);
