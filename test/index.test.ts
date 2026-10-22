@@ -2961,7 +2961,8 @@ describe("Dispatch — single capture with a system DC number", () => {
   });
 });
 
-// ── Delivery discrepancy: voice + manager approval before DELIVERED ───
+// ── Delivery discrepancy: written note (mandatory) + optional voice, then
+// manager approval before DELIVERED ───
 describe("Delivery discrepancy approval", () => {
   const vdb = env.DB as D1Database;
   beforeAll(async () => {
@@ -2983,18 +2984,23 @@ describe("Delivery discrepancy approval", () => {
     expect(d.status).toBe("DELIVERED");
   });
 
-  it("a short delivery is blocked without a voice note, then held for approval with one", async () => {
-    const noVoice = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}] }, adminToken);
-    expect(noVoice.status).toBe(400);
-    expect((await noVoice.json() as {code:string}).code).toBe("VOICE_REQUIRED");
+  it("a short delivery is blocked without a written note, then held for approval with one (voice optional)", async () => {
+    const noNote = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}] }, adminToken);
+    expect(noNote.status).toBe(400);
+    expect((await noNote.json() as {code:string}).code).toBe("NOTE_REQUIRED");
 
-    await addVoice();
+    // A blank/whitespace note is still rejected.
+    const blankNote = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'   ' }, adminToken);
+    expect(blankNote.status).toBe(400);
+
+    // A written note alone (no voice recording attached) is accepted and held.
     const held = await post("/api/delivery-challans/VDC-1/deliver", { items:[{sku:'VD-A',qty_delivered:8},{sku:'VD-B',qty_delivered:5}], variance_note:'2 damaged' }, adminToken);
     expect(held.status).toBe(200);
     expect((await held.json() as {pending_approval:boolean}).pending_approval).toBe(true);
-    const dc = await vdb.prepare("SELECT status, delivery_approval FROM delivery_challans WHERE id='VDC-1'").first() as { status:string; delivery_approval:string };
+    const dc = await vdb.prepare("SELECT status, delivery_approval, variance_note FROM delivery_challans WHERE id='VDC-1'").first() as { status:string; delivery_approval:string; variance_note:string };
     expect(dc.status).toBe("IN_TRANSIT");           // NOT delivered yet
     expect(dc.delivery_approval).toBe("PENDING");
+    expect(dc.variance_note).toBe("2 damaged");
   });
 
   it("approving a held delivery finalizes with the proposed quantities", async () => {

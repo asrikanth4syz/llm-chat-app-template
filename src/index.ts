@@ -9745,9 +9745,10 @@ async function closeOrderIfSettled(env: Env, orderId: string, user: {sub:string;
 }
 
 // Driver-facing delivery confirmation. An exact delivery (every line delivered as
-// dispatched) finalizes immediately. A short/excess delivery is HELD: the driver's
-// voice explanation must already be attached, and a super-admin or ops-admin
-// (warehouse manager) approves it before the challan is marked DELIVERED.
+// dispatched) finalizes immediately. A short/excess delivery is HELD: a written
+// explanation is MANDATORY (a voice note may optionally be attached beforehand),
+// and a super-admin or ops-admin (warehouse manager) approves it before the
+// challan is marked DELIVERED.
 async function handleDeliverDC(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -9781,11 +9782,13 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   // Hold a short/excess delivery for approval — but only once (an already-APPROVED
   // challan finalizes with the approved quantities).
   if (hasDiscrepancy && dc.delivery_approval !== "APPROVED") {
-    const voice = await env.DB.prepare("SELECT COUNT(*) AS n FROM dc_documents WHERE dc_id=? AND doc_type='voice'").bind(id).first() as {n:number}|null;
-    if (!voice || !voice.n) return json({error:"A voice explanation is required to submit a short or excess delivery for approval", code:"VOICE_REQUIRED"}, 400);
+    // A written explanation is mandatory; a voice note is optional (attached
+    // separately via /voice/upload before this call when the operator records one).
+    const note = typeof body.variance_note === "string" ? body.variance_note.trim() : "";
+    if (!note) return json({error:"A written explanation is required to submit a short or excess delivery for approval", code:"NOTE_REQUIRED"}, 400);
     await env.DB.prepare(
       "UPDATE delivery_challans SET delivery_approval='PENDING', variance_payload=?, variance_note=?, variance_by=?, variance_at=datetime('now'), variance_reviewed_by=NULL, variance_reviewed_at=NULL WHERE id=?"
-    ).bind(JSON.stringify(body.items||[]), body.variance_note||null, user!.name, id).run();
+    ).bind(JSON.stringify(body.items||[]), note, user!.name, id).run();
     await pushNotification(env, "ops_admin", `Delivery ${dc.dc_number||id} has a quantity discrepancy — awaiting approval`);
     await audit(env, user, "DELIVERY_VARIANCE_SUBMIT", "delivery_challan", id, undefined, body.variance_note||"");
     return json({id, status:"PENDING_APPROVAL", pending_approval:true});

@@ -1921,7 +1921,8 @@ async function markDelivered(dcId) {
   openModal(`Confirm Delivery — ${h(titleNum)}`, `
     <p style="color:var(--text-muted);margin-bottom:12px">
       Enter the actual qty delivered for each item. If any line is <b>short or excess</b> vs what was dispatched,
-      you must record a short voice explanation — the delivery is then sent to a manager for approval before it is marked delivered.
+      you must enter a written explanation — the delivery is then sent to a manager for approval before it is marked delivered.
+      A voice note is optional.
     </p>
     ${dcNumberField(curDcNum)}
     <table class="table" style="margin-bottom:16px">
@@ -1941,13 +1942,16 @@ async function markDelivered(dcId) {
     </table>
     ${capped?'<div style="font-size:.76rem;color:var(--amber-text);background:var(--warning-bg);border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:12px">⚠️ Expected qty is capped to the order balance — some quantity was already delivered on earlier DCs.</div>':''}
     <div id="deliver-variance" hidden style="border:1px solid var(--warning);background:var(--warning-bg);border-radius:8px;padding:12px;margin-bottom:12px">
-      <div style="font-weight:700;font-size:.85rem;margin-bottom:6px">⚠ Quantity discrepancy — voice explanation required</div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:6px">⚠ Quantity discrepancy — written explanation required</div>
+      <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px">Explanation <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="variance-note" class="form-control form-control-sm" required
+        placeholder="Required — e.g. 2 cases damaged in transit" style="margin-bottom:10px">
+      <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:6px">Voice note (optional)</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button type="button" class="btn btn-secondary btn-sm" id="voice-btn" ${dataAct('toggleVoiceRecording')}>🎙 Record</button>
         <span id="voice-status" style="font-size:.8rem;color:var(--text-muted)">Not recorded</span>
         <audio id="voice-playback" controls hidden style="height:34px"></audio>
       </div>
-      <input type="text" id="variance-note" class="form-control form-control-sm" placeholder="Optional note (e.g. 2 cases damaged in transit)">
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
@@ -1984,14 +1988,22 @@ async function confirmDelivery(dcId) {
   const dcNumber = '';
 
   if (discrepancy) {
-    if (!APP._deliveryVoice) { showToast('Record a voice explanation for the short/excess delivery', 'error'); return; }
-    // Attach the recording, then submit for approval (server holds it as PENDING).
-    const v = APP._deliveryVoice;
-    const up = await api(`/delivery-challans/${dcId}/voice/upload`, { method:'POST', body: JSON.stringify({
-      filename: `delivery-note-${dcId}.webm`, mime_type: v.mime, content_b64: v.b64, file_size: v.size
-    }) });
-    if (!up) return;
-    const note = document.getElementById('variance-note')?.value || '';
+    // A written explanation is mandatory; the voice note is optional.
+    const note = (document.getElementById('variance-note')?.value || '').trim();
+    if (!note) {
+      showToast('Enter a written explanation for the short/excess delivery', 'error');
+      const noteEl = document.getElementById('variance-note'); if (noteEl) noteEl.focus();
+      return;
+    }
+    // Attach the voice recording first only if one was made, then submit for approval
+    // (server holds it as PENDING). A failed/absent recording no longer blocks submit.
+    if (APP._deliveryVoice) {
+      const v = APP._deliveryVoice;
+      const up = await api(`/delivery-challans/${dcId}/voice/upload`, { method:'POST', body: JSON.stringify({
+        filename: `delivery-note-${dcId}.webm`, mime_type: v.mime, content_b64: v.b64, file_size: v.size
+      }) });
+      if (!up) return;
+    }
     const res = await api(`/delivery-challans/${dcId}/deliver`, { method:'POST', body: JSON.stringify({ items, variance_note: note, dc_number: dcNumber || undefined }) });
     if (!res) return;
     closeModal();
