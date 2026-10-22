@@ -833,6 +833,10 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 .pk-tile{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;text-align:center}
 .pk-tile b{display:block;font-size:1.3rem;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1.1}
 .pk-tile span{display:block;font-size:.7rem;color:var(--text-muted);margin-top:3px;letter-spacing:.01em}
+/* Confirm-Delivery summary tiles — sent vs delivered totals. */
+.dsum{flex:1 1 120px;min-width:110px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;text-align:center}
+.dsum b{display:block;font-size:1.25rem;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1.1}
+.dsum span{display:block;font-size:.7rem;color:var(--text-muted);margin-top:3px;letter-spacing:.01em}
 .pk-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
 #pick-search{flex:1;min-width:180px;border:1.5px solid var(--border-mid);border-radius:9px;padding:9px 12px;background:var(--surface);color:var(--text);font:inherit;font-size:.9rem}
 #pick-search:focus{outline:2px solid var(--teal,var(--navy));outline-offset:1px}

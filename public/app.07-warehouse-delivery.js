@@ -1942,18 +1942,25 @@ async function markDelivered(dcId) {
       A voice note is optional.
     </p>
     ${dcNumberField(curDcNum)}
+    <div id="deliver-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <div class="dsum"><b id="dsum-lines">—</b><span>Lines</span></div>
+      <div class="dsum"><b id="dsum-sent">—</b><span>Items sent</span></div>
+      <div class="dsum"><b id="dsum-delivered">—</b><span>Items delivered</span></div>
+      <div class="dsum"><b id="dsum-diff">—</b><span>Difference</span></div>
+    </div>
     <table class="table" style="margin-bottom:16px">
-      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Dispatched</th><th class="u-center">Expected</th><th class="u-center">Delivered</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Item</th><th class="u-center">Sent</th><th class="u-center">Expected</th><th class="u-center">Delivered</th><th class="u-center">Difference</th></tr></thead>
       <tbody>
         ${items.map(i=>{ const expected = i.order_remaining != null ? i.order_remaining : i.qty_ordered; return `<tr>
           <td><b>${i.sku}</b></td>
           <td>${h(i.name)}</td>
-          <td class="u-empty">${i.qty_ordered}</td>
+          <td class="u-center">${i.qty_ordered}</td>
           <td style="text-align:center;font-weight:600${expected<i.qty_ordered?';color:var(--warning)':''}">${expected}</td>
           <td class="u-center"><input type="number" class="form-control form-control-sm deliver-qty"
             data-sku="${i.sku}" data-expected="${expected}" data-dispatched="${i.qty_ordered}" value="${expected}" min="0"
             style="width:80px;text-align:center"
             ${dataInputEl('onDeliverQty')}></td>
+          <td class="u-center deliver-diff" data-sku="${i.sku}"></td>
         </tr>`;}).join('')}
       </tbody>
     </table>
@@ -1984,13 +1991,27 @@ async function markDelivered(dcId) {
 // a voice note — so the recorder appears in every case the server will require it.
 function onDeliverQty(el) {
   const inputs = Array.from(document.querySelectorAll('.deliver-qty'));
-  let discrepancy = false;
+  let discrepancy = false, totalSent = 0, totalDelivered = 0;
   inputs.forEach(inp => {
     const v = parseInt(inp.value) || 0;
     const dispatched = parseInt(inp.dataset.dispatched) || 0;
+    const diff = v - dispatched;
+    totalSent += dispatched; totalDelivered += v;
     inp.style.color = v !== dispatched ? 'var(--warning)' : 'inherit';
     if (v !== dispatched) discrepancy = true;
+    // Per-line difference vs what was sent: − short, ＋ excess, ✓ exact.
+    const cell = document.querySelector(`.deliver-diff[data-sku="${inp.dataset.sku}"]`);
+    if (cell) {
+      if (diff === 0) { cell.textContent = '✓'; cell.style.color = 'var(--success)'; }
+      else { cell.textContent = (diff > 0 ? '＋' : '−') + Math.abs(diff); cell.style.color = 'var(--warning)'; cell.style.fontWeight = '700'; }
+    }
   });
+  const totalDiff = totalDelivered - totalSent;
+  const set = (id, val, color) => { const e = document.getElementById(id); if (e) { e.textContent = val; if (color) e.style.color = color; } };
+  set('dsum-lines', inputs.length);
+  set('dsum-sent', totalSent);
+  set('dsum-delivered', totalDelivered, totalDiff === 0 ? 'var(--success)' : 'var(--warning)');
+  set('dsum-diff', totalDiff === 0 ? '0' : (totalDiff > 0 ? '＋' : '−') + Math.abs(totalDiff), totalDiff === 0 ? 'var(--success)' : 'var(--warning)');
   const section = document.getElementById('deliver-variance');
   const btn = document.getElementById('deliver-confirm-btn');
   if (section) section.hidden = !discrepancy;
