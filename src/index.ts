@@ -2713,6 +2713,18 @@ async function pushNotification(env: Env, userRole: string | null, message: stri
     .bind(uid(), userId ? null : userRole, message, userId).run().catch(()=>{});
 }
 
+// Notify the in-app users of ONE client (scoped by client_id), falling back to a
+// client_admin role broadcast when the client has no linked accounts, so the message
+// is never silently dropped. Used by the gifting flow (sample-ready notice).
+async function notifyClientUsers(env: Env, clientId: string | null, message: string): Promise<void> {
+  if (!clientId) { await pushNotification(env, "client_admin", message); return; }
+  const { results } = await env.DB.prepare(
+    "SELECT id FROM users WHERE client_id=? AND active=1 AND role IN ('client_admin','client_approver','client_user')"
+  ).bind(clientId).all().catch(() => ({ results: [] as Record<string, unknown>[] }));
+  if (!results.length) { await pushNotification(env, "client_admin", message); return; }
+  for (const u of results as Record<string, unknown>[]) await pushNotification(env, null, message, u.id as string);
+}
+
 // ── Auto-reorder (Gap 8) ──────────────────────────────────────────────
 async function checkAutoReorder(env: Env, actor: JWTPayload | null): Promise<void> {
   // Items at/below reorder level that have at least one vendor to source from.
@@ -5567,6 +5579,10 @@ async function ensureGiftingSchema(env: Env): Promise<void> {
     `ALTER TABLE gifting_items ADD COLUMN sale_value_paise INTEGER NOT NULL DEFAULT 0;`,
     `ALTER TABLE gifting_items ADD COLUMN procurement_cost_paise INTEGER NOT NULL DEFAULT 0;`,
     `ALTER TABLE gifting_items ADD COLUMN branding_cost_paise INTEGER NOT NULL DEFAULT 0;`,
+    // Slice 6: gifting emits per-user (client/ops) notifications, which need the
+    // user_id targeting column. ensureFeatureTables adds it too, but gifting endpoints
+    // don't call that, so guarantee it here (idempotent) rather than lose notices.
+    `ALTER TABLE notifications ADD COLUMN user_id TEXT;`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   _giftingSchemaReady = true;
@@ -5794,6 +5810,13 @@ async function handleGiftingItemSample(request: Request, env: Env, path: string)
       .bind(`gs_${uid()}`, id, prevRound + 1, ref, token),
     env.DB.prepare("UPDATE gifting_items SET stage='SAMPLE_SENT', updated_at=datetime('now') WHERE id=?").bind(id),
   ]);
+  // Slice 6: notify the client that a branding sample is ready, with the approval link.
+  const ctx = await env.DB.prepare(
+    "SELECT i.order_id AS order_id, o.client_id AS client_id FROM gifting_items i JOIN orders o ON o.id=i.order_id WHERE i.id=?"
+  ).bind(id).first() as { order_id?: string; client_id?: string } | null;
+  const link = new URL(request.url).origin + "/gift-approve/" + token;
+  await notifyClientUsers(env, ctx?.client_id || null,
+    `🎁 A branding sample for “${item.name}” (round ${prevRound + 1}) is ready for your approval: ${link}`);
   return json({ ok: true, stage: "SAMPLE_SENT", approval_token: token, round: prevRound + 1 });
 }
 
@@ -5894,6 +5917,16 @@ async function handleGiftApprove(request: Request, env: Env, url: URL): Promise<
         .bind(decision, decision === "REJECTED" ? reason : null, token),
       env.DB.prepare("UPDATE gifting_items SET stage=?, updated_at=datetime('now') WHERE id=?").bind(nextStage, sample.item_id),
     ]);
+    // Slice 6: notify ops + the order's account owner that the client decided.
+    const octx = await env.DB.prepare(
+      "SELECT i.order_id AS order_id, o.created_by AS created_by FROM gifting_items i JOIN orders o ON o.id=i.order_id WHERE i.id=?"
+    ).bind(sample.item_id).first() as { order_id?: string; created_by?: string } | null;
+    const msg = decision === "APPROVED"
+      ? `✓ Client APPROVED the branding sample for “${sample.item_name}”${octx?.order_id ? ` (order ${octx.order_id})` : ""} — ready to collect at office.`
+      : `✕ Client requested changes on “${sample.item_name}”${octx?.order_id ? ` (order ${octx.order_id})` : ""}${reason ? `: “${reason}”` : ""} — back to branding for a new sample.`;
+    await pushNotification(env, "ops_admin", msg);
+    await pushNotification(env, "warehouse_exec", msg);
+    if (octx?.created_by) await pushNotification(env, null, msg, octx.created_by);
     return decision === "APPROVED"
       ? giftApprovePage("Approved", `<div class="big" style="color:#16a34a">✓ Approved</div><div class="sub">Thank you — we'll proceed with this branding.</div>`)
       : giftApprovePage("Changes requested", `<div class="big" style="color:#dc2626">Changes requested</div><div class="sub">Thanks — we'll rework the branding and send a new sample.</div>`);

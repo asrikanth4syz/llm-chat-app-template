@@ -478,6 +478,32 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     const it = detail.items.find((i: any) => i.id === itemId);
     expect(it.sample_rounds).toBe(2);
   });
+
+  it("Slice 6: sending a sample notifies the client with the approval link; a decision notifies ops", async () => {
+    await prep();
+    const { itemId } = await brandedItemAtBranding();
+    const db = env.DB as D1Database;
+    const s = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "Gold foil logo" }, adminTok)).json() as any;
+
+    // a client-facing notification carries the tokenised approval link
+    const clientNote = await db.prepare("SELECT message FROM notifications WHERE message LIKE '%gift-approve/%' ORDER BY rowid DESC LIMIT 1")
+      .first() as { message: string } | null;
+    expect(clientNote).toBeTruthy();
+    expect(clientNote!.message).toContain("/gift-approve/" + s.approval_token);
+
+    // the client requests changes → ops is notified with the item + reason
+    await formPost(`/gift-approve/${s.approval_token}`, "decision=REJECTED&reason=" + encodeURIComponent("Logo too small"));
+    const opsNote = await db.prepare("SELECT message FROM notifications WHERE user_role='ops_admin' AND message LIKE '%requested changes%' ORDER BY rowid DESC LIMIT 1").first() as { message: string } | null;
+    expect(opsNote).toBeTruthy();
+    expect(opsNote!.message).toContain("Logo too small");
+
+    // and an approval on a fresh sample notifies ops it's ready to collect
+    const s2 = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "Gold foil v2" }, adminTok)).json() as any;
+    await formPost(`/gift-approve/${s2.approval_token}`, "decision=APPROVED");
+    const okNote = await db.prepare("SELECT message FROM notifications WHERE user_role='ops_admin' AND message LIKE '%APPROVED%' ORDER BY rowid DESC LIMIT 1").first() as { message: string } | null;
+    expect(okNote).toBeTruthy();
+    expect(okNote!.message).toContain("ready to collect");
+  });
 });
 
 describe("per-quote purpose + payment terms override", () => {

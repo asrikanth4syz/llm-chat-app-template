@@ -184,4 +184,4 @@ Scenario: Advance guard on vendor
 - ~~**Multi-round sample UI**~~ — ✅ BUILT (Slice 5).
 - **Vendor PO** — promote the Phase-1 vendor dropdown to the real procurement/GRN flow?
 - **Client portal** — expand the single approval page into an order-level client view?
-- **Notifications** — auto-notify the client when a sample is sent, and ops when a decision lands?
+- ~~**Notifications**~~ — ✅ BUILT (Slice 6): client is notified (with the approval link) when a sample is sent; ops + the order's account owner are notified when the client approves/rejects.
