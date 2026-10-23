@@ -183,5 +183,5 @@ Scenario: Advance guard on vendor
   Routing/invoicing of branding cost remains a later concern.
 - ~~**Multi-round sample UI**~~ — ✅ BUILT (Slice 5).
 - **Vendor PO** — promote the Phase-1 vendor dropdown to the real procurement/GRN flow?
-- **Client portal** — expand the single approval page into an order-level client view?
+- ~~**Client portal**~~ — ✅ BUILT (Slice 7): an order-scoped tokenised `/gift-track/:token` page shows the client every item's live client-facing stage (with a link to approve any awaiting sample); read-only, no cost/margin/vendor or sibling-order data. Ops shares it via "Client tracking link" on the board.
 - ~~**Notifications**~~ — ✅ BUILT (Slice 6): client is notified (with the approval link) when a sample is sent; ops + the order's account owner are notified when the client approves/rejects.

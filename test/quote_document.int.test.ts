@@ -504,6 +504,45 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect(okNote).toBeTruthy();
     expect(okNote!.message).toContain("ready to collect");
   });
+
+  it("Slice 7: client tracking link is idempotent; the public page shows item status only, leaking no cost/vendor", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(2);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
+    // drive item 1 to SAMPLE_SENT and give it a (secret) branding cost that must not leak
+    await post(`/api/gifting-items/${itemId}/branding`, { needs_branding: true }, adminTok);
+    await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // ORDERED
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // RECEIVED
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // BRANDING
+    await post(`/api/gifting-items/${itemId}/sample`, { ref: "Gold foil" }, adminTok); // SAMPLE_SENT
+    await post(`/api/gifting-items/${itemId}/costs`, { branding_cost: 777 }, adminTok); // 77700 paise — internal
+
+    const l1 = await (await post(`/api/gifting-orders/${orderId}/track-link`, {}, adminTok)).json() as any;
+    expect(l1.token).toBeTruthy();
+    expect(l1.link).toContain("/gift-track/" + l1.token);
+    // idempotent — the same token on a second request
+    const l2 = await (await post(`/api/gifting-orders/${orderId}/track-link`, {}, adminTok)).json() as any;
+    expect(l2.token).toBe(l1.token);
+
+    // public page (no auth) lists the items with a client-facing status
+    const page = await get(`/gift-track/${l1.token}`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    const html = await page.text();
+    expect(html).toContain("Awaiting your approval");  // the SAMPLE_SENT item's client label
+    expect(html).toContain("/gift-approve/");           // links through to the sample approval
+    // leaks nothing sensitive: no cost figures, no vendor identity
+    expect(html).not.toContain("777");                  // branding cost (rupees)
+    expect(html).not.toContain("77700");                // branding cost (paise)
+    expect(html).not.toContain("Gifto Supplies");       // the vendor name set on the item
+
+    // an unknown token → graceful invalid page (still 200 HTML), no order data
+    const bad = await get(`/gift-track/not-a-real-token`);
+    expect(bad.status).toBe(200);
+    expect(await bad.text()).toContain("no longer valid");
+  });
 });
 
 describe("per-quote purpose + payment terms override", () => {

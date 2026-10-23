@@ -207,6 +207,7 @@ function giftingRenderBoard() {
           <div style="height:10px;border-radius:999px;background:var(--surface-3,var(--surface-2));overflow:hidden;border:1px solid var(--border)"><i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></div>
           <div style="font-size:.78rem;font-weight:700;color:var(--navy);text-align:right;margin-top:4px">${ready} / ${items.length} items ready</div>
         </div>
+        <button class="btn btn-secondary" ${dataAct('giftingCopyTrackLink', g.order.id)} title="Share a read-only tracking page with the client">🔗 Client tracking link</button>
         <button class="btn btn-primary" ${dataAct('giftingDispatch', g.order.id)}${atOffice?'':' disabled'}>🚚 Dispatch ready (${atOffice})</button>
       </div>
     </div>
@@ -328,6 +329,15 @@ async function giftingSampleHistory(itemId) {
   openModal(`Sample history — ${h(d.item && d.item.name || 'item')}`,
     `<div class="gift-hist">${rows || '<div class="form-hint">No samples sent yet.</div>'}</div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+}
+// Slice 7: mint (once) and copy the client's read-only order-tracking link.
+async function giftingCopyTrackLink(orderId) {
+  const r = await api('/gifting-orders/' + orderId + '/track-link', { method:'POST', body: '{}' });
+  if (!r || !r.link) return;
+  const link = r.link;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(() => showToast('Client tracking link copied'), () => showToast(link, 'info'));
+  } else { showToast(link, 'info'); }
 }
 function giftingCopyLink(token) {
   const link = location.origin + '/gift-approve/' + token;

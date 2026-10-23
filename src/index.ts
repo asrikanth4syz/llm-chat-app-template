@@ -5583,6 +5583,10 @@ async function ensureGiftingSchema(env: Env): Promise<void> {
     // user_id targeting column. ensureFeatureTables adds it too, but gifting endpoints
     // don't call that, so guarantee it here (idempotent) rather than lose notices.
     `ALTER TABLE notifications ADD COLUMN user_id TEXT;`,
+    // Slice 7: an opaque, order-scoped token for the client's read-only tracking page
+    // (minted lazily when ops shares the link). Indexed for the public lookup.
+    `ALTER TABLE orders ADD COLUMN gift_track_token TEXT;`,
+    `CREATE INDEX IF NOT EXISTS idx_orders_gift_track ON orders (gift_track_token);`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   _giftingSchemaReady = true;
@@ -5837,6 +5841,26 @@ async function handleGiftingItemSamples(request: Request, env: Env, path: string
   return json({ item, samples: results });
 }
 
+// POST /api/gifting-orders/:id/track-link — mint (once) and return the client's
+// read-only order-tracking link. Ops shares it; the client needs no login. Slice 7.
+async function handleGiftingTrackLink(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureGiftingSchema(env);
+  const orderId = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare(
+    "SELECT id, gift_track_token FROM orders WHERE id=? AND order_kind='GIFTING'"
+  ).bind(orderId).first() as { id: string; gift_track_token?: string } | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  let token = order.gift_track_token || "";
+  if (!token) {
+    token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "");
+    await env.DB.prepare("UPDATE orders SET gift_track_token=? WHERE id=?").bind(token, orderId).run();
+  }
+  const link = new URL(request.url).origin + "/gift-track/" + token;
+  return json({ ok: true, token, link });
+}
+
 // POST /api/gifting-orders/:id/dispatch — PARTIAL dispatch: hand every AT_OFFICE
 // item to delivery as a Gifting-class DC (the real delivery flow), mark them
 // DISPATCHED. Can be called repeatedly as more items reach the office.
@@ -5942,6 +5966,79 @@ async function handleGiftApprove(request: Request, env: Env, url: URL): Promise<
     <form method="POST" action="/gift-approve/${esc(token)}"><input type="hidden" name="decision" value="APPROVED"><button class="btn ok" type="submit">✓ Approve this sample</button></form>
     <form method="POST" action="/gift-approve/${esc(token)}"><input type="hidden" name="decision" value="REJECTED"><textarea name="reason" rows="3" placeholder="What should we change? (optional)"></textarea><button class="btn no" type="submit">Request changes</button></form>
     <div class="note">Approving lets us proceed with this branding; requesting changes sends it back for a new sample.</div>`);
+}
+
+// ── Public client order-tracking page (token-gated, no auth) ─────────────────
+// Served at /gift-track/:token (intercepted before the static fallback). Read-only:
+// shows ONLY this order's items with a client-facing stage — never costs, margin,
+// vendor names, or any other order. An item awaiting approval links to its sample.
+function giftTrackClientStage(stage: string): { label: string; cls: string } {
+  switch (stage) {
+    case "TO_ORDER": case "ORDERED": case "RECEIVED": return { label: "In preparation", cls: "s-prep" };
+    case "BRANDING": return { label: "Branding in progress", cls: "s-brand" };
+    case "SAMPLE_SENT": return { label: "Awaiting your approval", cls: "s-wait" };
+    case "APPROVED": return { label: "Branding approved", cls: "s-ok" };
+    case "AT_OFFICE": return { label: "Ready for dispatch", cls: "s-ready" };
+    case "DISPATCHED": return { label: "Dispatched", cls: "s-done" };
+    default: return { label: stage, cls: "s-prep" };
+  }
+}
+async function handleGiftTrack(request: Request, env: Env, url: URL): Promise<Response> {
+  await ensureGiftingSchema(env);
+  const token = decodeURIComponent(url.pathname.replace(/^\/gift-track\/?/, "").replace(/\/$/, ""));
+  const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (!token) return giftApprovePage("Not found", `<h1>Link not found</h1><div class="sub">This tracking link is missing its token.</div>`);
+  const order = await env.DB.prepare(
+    `SELECT o.id, c.name AS client_name FROM orders o LEFT JOIN clients c ON c.id=o.client_id
+      WHERE o.gift_track_token=? AND o.order_kind='GIFTING'`
+  ).bind(token).first() as { id: string; client_name?: string } | null;
+  if (!order) return giftApprovePage("Not found", `<h1>Link not found</h1><div class="sub">This tracking link is no longer valid.</div>`);
+  // Safe fields only — no cost/margin/vendor columns selected.
+  const { results: items } = await env.DB.prepare(
+    "SELECT id, name, qty, stage, needs_branding FROM gifting_items WHERE order_id=? ORDER BY created_at, name"
+  ).bind(order.id).all() as { results: { id: string; name: string; qty: number; stage: string; needs_branding: number }[] };
+  // Latest sample token per item (only used to link an awaiting-approval item to its page).
+  const { results: samples } = await env.DB.prepare(
+    `SELECT s.item_id AS item_id, s.approval_token AS approval_token FROM gifting_samples s
+       JOIN gifting_items i ON i.id=s.item_id
+      WHERE i.order_id=? AND s.round=(SELECT MAX(round) FROM gifting_samples WHERE item_id=s.item_id) AND s.decision IS NULL`
+  ).bind(order.id).all() as { results: { item_id: string; approval_token: string }[] };
+  const tokenByItem: Record<string, string> = {};
+  for (const s of samples) tokenByItem[s.item_id] = s.approval_token;
+
+  const total = items.length;
+  const dispatched = items.filter(i => i.stage === "DISPATCHED").length;
+  const ready = items.filter(i => i.stage === "AT_OFFICE" || i.stage === "DISPATCHED").length;
+  const pct = total ? Math.round(ready / total * 100) : 0;
+  const rows = items.map(it => {
+    const st = giftTrackClientStage(it.stage);
+    const review = it.stage === "SAMPLE_SENT" && tokenByItem[it.id]
+      ? ` <a class="tk-review" href="/gift-approve/${esc(tokenByItem[it.id])}">Review sample →</a>` : "";
+    return `<div class="tk-item">
+      <div class="tk-item-main"><div class="tk-name">${esc(it.name)}</div><div class="tk-qty">Qty ${esc(it.qty)}</div></div>
+      <div class="tk-status"><span class="tk-pill ${st.cls}">${esc(st.label)}</span>${review}</div>
+    </div>`;
+  }).join("");
+
+  return giftApprovePage("Your gifting order", `
+    <style>
+      .tk-prog-track{height:9px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin:6px 0 4px}
+      .tk-prog-fill{height:100%;background:#1e3a5f}
+      .tk-prog-txt{font-size:.8rem;color:#64748b;margin-bottom:14px}
+      .tk-item{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:11px 0;border-top:1px solid #e2e8f0}
+      .tk-name{font-weight:600}.tk-qty{font-size:.78rem;color:#64748b;margin-top:1px}
+      .tk-status{text-align:right;white-space:nowrap}
+      .tk-pill{display:inline-block;font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:999px}
+      .tk-pill.s-prep{background:#f1f5f9;color:#475569}.tk-pill.s-brand{background:#ede9fe;color:#7c3aed}
+      .tk-pill.s-wait{background:#fef3c7;color:#b45309}.tk-pill.s-ok{background:#dcfce7;color:#15803d}
+      .tk-pill.s-ready{background:#e0e7ff;color:#1e3a5f}.tk-pill.s-done{background:#dcfce7;color:#16a34a}
+      .tk-review{display:block;font-size:.76rem;font-weight:700;color:#b45309;margin-top:4px;text-decoration:none}
+    </style>
+    <h1>Gift order tracking</h1><div class="sub">${esc(order.client_name || "")} · ${total} item${total === 1 ? "" : "s"}</div>
+    <div class="tk-prog-track"><div class="tk-prog-fill" style="width:${pct}%"></div></div>
+    <div class="tk-prog-txt">${dispatched} dispatched · ${ready} of ${total} ready</div>
+    ${rows || '<div class="note">No items on this order yet.</div>'}
+    <div class="note">This page updates as we progress each item. For branding items, you'll be asked to approve a sample before we proceed.</div>`);
 }
 
 // ── Reminders / follow-ups / Today / bell (Slice 6) ──────────────────────────
@@ -6167,6 +6264,7 @@ export default {
     if (request.method === "OPTIONS") return withSecurityHeaders(cors());
     // Public, token-gated gifting sample approval page (no login) — before static assets.
     if (url.pathname.startsWith("/gift-approve/")) return withSecurityHeaders(await handleGiftApprove(request, env, url));
+    if (url.pathname.startsWith("/gift-track/")) return withSecurityHeaders(await handleGiftTrack(request, env, url));
     if (!url.pathname.startsWith("/api/")) return withSecurityHeaders(await env.ASSETS.fetch(request));
     ctx.waitUntil(fixCategoryNames(env)); // guaranteed to complete even after response
 
@@ -6212,6 +6310,7 @@ export default {
       if (path==="/api/gifting-orders"         && method==="GET")  return handleListGiftingOrders(request,env);
       if (path.match(/^\/api\/gifting-orders\/[^/]+$/) && method==="GET") return handleGetGiftingOrder(request,env,path);
       if (path.match(/^\/api\/gifting-orders\/[^/]+\/dispatch$/) && method==="POST") return handleGiftingDispatch(request,env,path);
+      if (path.match(/^\/api\/gifting-orders\/[^/]+\/track-link$/) && method==="POST") return handleGiftingTrackLink(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/costs$/)    && method==="POST") return handleGiftingItemCosts(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
