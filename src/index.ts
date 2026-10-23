@@ -9878,7 +9878,7 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
     const {results: oItems} = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as {results: Record<string,unknown>[]};
     for (const oi of oItems) orderCap[oi.sku as string] = oi.qty as number;
     const {results: delRows} = await env.DB.prepare(
-      "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) as del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.dc_id!=? GROUP BY di.sku"
+      "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) as del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.dc_id!=? AND dc2.status!='CANCELLED' GROUP BY di.sku"
     ).bind(dc.order_id, id).all() as {results: Record<string,unknown>[]};
     for (const r of delRows) deliveredElsewhere[r.sku as string] = r.del as number;
   }
@@ -9940,7 +9940,7 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
     let allDelivered = true;
     for (const oi of orderItems) {
       const row = await env.DB.prepare(
-        "SELECT COALESCE(SUM(di.qty_delivered),0) as total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.sku=?"
+        "SELECT COALESCE(SUM(di.qty_delivered),0) as total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND dc2.status!='CANCELLED' AND di.sku=?"
       ).bind(dc.order_id, oi.sku).first() as Record<string,unknown>|null;
       if ((row?.total as number || 0) < (oi.qty as number)) { allDelivered = false; break; }
     }
@@ -10417,6 +10417,29 @@ async function handleReviewReturn(request: Request, env: Env, path: string, verd
     if (ret.order_id) {
       await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'RETURN_APPROVED',?,?,?)`)
         .bind(uid(), ret.order_id as string, user!.sub, user!.name, `Return ${retId} approved — ${items.length} item(s) restocked`).run();
+      // A return puts goods back in the warehouse, so the returned quantity is
+      // OUTSTANDING against the order again. An order that had shipped (IN_SHIPMENT) or
+      // fully closed (CLOSED) must reopen to PARTIALLY_CLOSED so ops can re-pick and
+      // plan a fresh delivery — otherwise it stays stuck in a shipped state that offers
+      // no pick/replenish action. (Delivered tallies count DELIVERED challans only, so
+      // the just-cancelled DC's units are already back in "due".)
+      const ord = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(ret.order_id as string).first() as { status?: string } | null;
+      const oStatus = ord?.status || "";
+      if (["IN_SHIPMENT", "CLOSED"].includes(oStatus)) {
+        const { results: oItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(ret.order_id as string).all() as { results: Record<string, unknown>[] };
+        let outstanding = 0;
+        for (const oi of oItems) {
+          const row = await env.DB.prepare(
+            "SELECT COALESCE(SUM(di.qty_delivered),0) AS del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND dc2.status='DELIVERED' AND di.sku=?"
+          ).bind(ret.order_id as string, oi.sku as string).first() as { del?: number } | null;
+          outstanding += Math.max(0, (oi.qty as number) - (row?.del || 0));
+        }
+        if (outstanding > 0) {
+          await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED', closed_at=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('CANCELLED','DRAFT')").bind(ret.order_id as string).run();
+          await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
+            .bind(uid(), ret.order_id as string, oStatus, "PARTIALLY_CLOSED", user!.sub, user!.name, `Reopened after return ${retId} — ${outstanding} unit(s) outstanding for re-pick`).run();
+        }
+      }
     }
   } else {
     // Rejected — DC goes back to its previous status, no restock

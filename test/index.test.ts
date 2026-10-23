@@ -4931,6 +4931,42 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
     const r = await post("/api/delivery-challans/ODX-DC/partial", { delivered_qty: 3, total_qty: 6 }, adminToken);
     expect(r.status).toBe(404);
   });
+
+  it("approving a return on a shipped order reopens it to PARTIALLY_CLOSED so the goods can be re-picked", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-RET','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-ret-i1','OD-RET','SKU001','Rice',10,100,1000)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODR-DC','OD-RET','IN_TRANSIT',10,'ODR-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odr-di1','ODR-DC','SKU001','Rice',10,0)").run();
+
+    // the shipment is refused → a return is requested against the in-transit DC
+    const req = await post("/api/delivery-challans/ODR-DC/return", { reason: "Client refused delivery", items: [{ sku: "SKU001", qty: 10 }] }, adminToken);
+    expect(req.status).toBe(201);
+    const retId = (await req.json() as { id: string }).id;
+    // the DC is held RETURN_PENDING and the order is unchanged until approval
+    expect((await db.prepare("SELECT status FROM delivery_challans WHERE id='ODR-DC'").first() as { status: string }).status).toBe("RETURN_PENDING");
+
+    // warehouse approves the return → stock restored, DC cancelled, ORDER REOPENED
+    const ok = await post(`/api/returns/${retId}/approve`, {}, adminToken);
+    expect(ok.status).toBe(200);
+    expect((await db.prepare("SELECT status FROM delivery_challans WHERE id='ODR-DC'").first() as { status: string }).status).toBe("CANCELLED");
+    const ord = await db.prepare("SELECT status FROM orders WHERE id='OD-RET'").first() as { status: string };
+    expect(ord.status).toBe("PARTIALLY_CLOSED"); // no longer stuck IN_SHIPMENT — re-pick is now available
+  });
+
+  it("rejecting a return leaves the order in its shipped state (no reopen)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-RET2','c1','tst-ops','IN_SHIPMENT',500,0,500,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-ret2-i1','OD-RET2','SKU001','Rice',5,100,500)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODR2-DC','OD-RET2','IN_TRANSIT',5,'ODR2-1')").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('odr2-di1','ODR2-DC','SKU001','Rice',5,0)").run();
+    const retId = (await (await post("/api/delivery-challans/ODR2-DC/return", { reason: "mistake", items: [{ sku: "SKU001", qty: 5 }] }, adminToken)).json() as { id: string }).id;
+    const r = await post(`/api/returns/${retId}/reject`, {}, adminToken);
+    expect(r.status).toBe(200);
+    // DC reverts to its previous (in-transit) status; order stays as it was
+    expect((await db.prepare("SELECT status FROM delivery_challans WHERE id='ODR2-DC'").first() as { status: string }).status).toBe("IN_TRANSIT");
+    expect((await db.prepare("SELECT status FROM orders WHERE id='OD-RET2'").first() as { status: string }).status).toBe("IN_SHIPMENT");
+  });
 });
 
 describe("DC number entry at delivery (the number used in Zoho)", () => {
