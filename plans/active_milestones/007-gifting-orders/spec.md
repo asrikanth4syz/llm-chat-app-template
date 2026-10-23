@@ -182,6 +182,6 @@ Scenario: Advance guard on vendor
   sale / cost / margin rollup (also surfaced as a Margin column on the gifting pipeline).
   Routing/invoicing of branding cost remains a later concern.
 - ~~**Multi-round sample UI**~~ — ✅ BUILT (Slice 5).
-- **Vendor PO** — promote the Phase-1 vendor dropdown to the real procurement/GRN flow?
+- ~~**Vendor PO**~~ — ✅ BUILT (Slice 8): placing an order now raises a costed per-item PO (buying cost → procurement_cost_paise/margin, optional PO reference + expected date) and receiving records a GRN (received qty + actual cost). Self-contained; not wired into the main purchase_orders/vendor-bill tables.
 - ~~**Client portal**~~ — ✅ BUILT (Slice 7): an order-scoped tokenised `/gift-track/:token` page shows the client every item's live client-facing stage (with a link to approve any awaiting sample); read-only, no cost/margin/vendor or sibling-order data. Ops shares it via "Client tracking link" on the board.
 - ~~**Notifications**~~ — ✅ BUILT (Slice 6): client is notified (with the approval link) when a sample is sent; ops + the order's account owner are notified when the client approves/rejects.

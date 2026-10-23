@@ -142,6 +142,16 @@ function giftStageChip(s) {
 }
 // Integer paise → ₹ display (Slice 4 gifting cost/margin). Rupees, grouped, no decimals.
 function giftMoney(paise) { return '₹' + Math.round((Number(paise) || 0) / 100).toLocaleString('en-IN'); }
+// Slice 8: compact PO / GRN line for an ordered-or-later item (PO ref · expected ·
+// buying cost · received qty), shown above the stage action.
+function giftPoLine(it) {
+  const bits = [];
+  if (it.po_number) bits.push('PO ' + h(it.po_number));
+  if (it.po_expected_date) bits.push('exp ' + h(it.po_expected_date));
+  if (Number(it.procurement_cost_paise) > 0) bits.push(giftMoney(it.procurement_cost_paise));
+  if (it.received_qty != null && it.stage !== 'ORDERED') bits.push('recd ' + it.received_qty);
+  return bits.length ? `<div class="gift-sub">${bits.join(' · ')}</div>` : '';
+}
 // Sum the order's sale / cost / margin across its items (recomputed client-side as
 // costs are edited, so the header rollup stays live without a refetch).
 function giftComputeTotals(items) {
@@ -241,10 +251,16 @@ function giftingItemCard(it) {
       ${sm && sm.approval_token ? `<button class="btn btn-secondary btn-sm" ${dataAct('giftingCopyLink', sm.approval_token)}>🔗 Copy approval link</button>` : ''}`;
   } else if (it.stage === 'AT_OFFICE') {
     action = `<span class="gift-chip gift-ready">● At office — ready</span><div class="gift-sub">Dispatch from the header (partial OK)</div>`;
+  } else if (it.stage === 'TO_ORDER') {
+    // Slice 8: raise a costed PO (vendor required) via the order modal.
+    const dis = it.vendor_id ? '' : ' disabled';
+    action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingOrderModal', it.id)}${dis}>Place order →</button>`;
+  } else if (it.stage === 'ORDERED') {
+    // Slice 8: receive against the PO (GRN) via the receive modal.
+    action = `${giftPoLine(it)}<button class="btn btn-primary btn-sm" ${dataAct('giftingReceiveModal', it.id)}>Receive →</button>`;
   } else {
-    const label = it.stage==='TO_ORDER' ? 'Place order' : it.stage==='ORDERED' ? 'Mark received' : it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : 'Advance';
-    const dis = (it.stage==='TO_ORDER' && !it.vendor_id) ? ' disabled' : '';
-    action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}${dis}>${label} →</button>`;
+    const label = it.stage==='RECEIVED' ? (it.needs_branding?'Start branding':'Collect at office') : it.stage==='APPROVED' ? 'Collect at office' : 'Advance';
+    action = `${giftPoLine(it)}<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}>${label} →</button>`;
   }
   // Slice 4: per-item cost capture + margin. Buying cost always; branding cost only
   // for branded items. Editable until dispatched; margin = sale − (buying + branding).
@@ -296,6 +312,40 @@ async function giftingSaveCosts(itemId, el) {
 async function giftingAdvance(itemId) {
   const r = await api('/gifting-items/' + itemId + '/advance', { method:'POST', body: '{}' });
   if (r && r.stage) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.stage = r.stage; giftingRenderBoard(); }
+}
+// Slice 8: raise a costed per-item PO (vendor must already be set).
+function giftingOrderModal(itemId) {
+  const it = (APP._gift.items || []).find(x => x.id === itemId); if (!it) return;
+  openModal(`Place order — ${h(it.name)}`,
+    `<div class="form-hint" style="margin-bottom:10px">Vendor: <b>${h(it.vendor_name || it.vendor_id || '—')}</b> · Qty ${it.qty}</div>
+     <div class="form-group"><label>Buying cost for this item (₹)</label><input type="number" id="go-cost" min="0" step="0.01" value="${(Number(it.procurement_cost_paise) || 0) / 100 || ''}" placeholder="total buying cost"></div>
+     <div class="form-group"><label>PO number (optional)</label><input type="text" id="go-po" maxlength="60" placeholder="vendor PO / reference" value="${h(it.po_number || '')}"></div>
+     <div class="form-group"><label>Expected delivery (optional)</label><input type="date" id="go-exp" max="9999-12-31" value="${h(it.po_expected_date || '')}"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('giftingSubmitOrder', itemId)}>Place order</button>`);
+}
+async function giftingSubmitOrder(itemId) {
+  const cost = document.getElementById('go-cost')?.value;
+  const po_number = document.getElementById('go-po')?.value || '';
+  const expected_date = document.getElementById('go-exp')?.value || '';
+  const r = await api('/gifting-items/' + itemId + '/order', { method:'POST', body: JSON.stringify({ cost: cost === '' ? undefined : Number(cost), po_number, expected_date }) });
+  if (r && r.ok) { closeModal(); showToast('Order placed'); giftingOpenBoard(APP._gift.orderId); }
+}
+// Slice 8: record the GRN (received qty + actual cost) against the PO.
+function giftingReceiveModal(itemId) {
+  const it = (APP._gift.items || []).find(x => x.id === itemId); if (!it) return;
+  openModal(`Receive — ${h(it.name)}`,
+    `<div class="form-hint" style="margin-bottom:10px">Vendor: <b>${h(it.vendor_name || '—')}</b>${it.po_number ? ` · PO ${h(it.po_number)}` : ''} · Ordered qty ${it.qty}</div>
+     <div class="form-group"><label>Received qty</label><input type="number" id="gr-qty" min="0" step="1" value="${it.qty}"></div>
+     <div class="form-group"><label>Actual buying cost (₹, optional)</label><input type="number" id="gr-cost" min="0" step="0.01" value="${(Number(it.procurement_cost_paise) || 0) / 100 || ''}" placeholder="adjust if different"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('giftingSubmitReceive', itemId)}>Mark received</button>`);
+}
+async function giftingSubmitReceive(itemId) {
+  const received_qty = document.getElementById('gr-qty')?.value;
+  const cost = document.getElementById('gr-cost')?.value;
+  const r = await api('/gifting-items/' + itemId + '/receive', { method:'POST', body: JSON.stringify({ received_qty: received_qty === '' ? undefined : Number(received_qty), cost: cost === '' ? undefined : Number(cost) }) });
+  if (r && r.ok) { closeModal(); showToast(`Received ${r.received_qty} unit(s)`); giftingOpenBoard(APP._gift.orderId); }
 }
 async function giftingSendSample(itemId) {
   const inp = document.getElementById('gref-' + itemId);

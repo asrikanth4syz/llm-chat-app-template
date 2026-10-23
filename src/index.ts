@@ -5587,6 +5587,13 @@ async function ensureGiftingSchema(env: Env): Promise<void> {
     // (minted lazily when ops shares the link). Indexed for the public lookup.
     `ALTER TABLE orders ADD COLUMN gift_track_token TEXT;`,
     `CREATE INDEX IF NOT EXISTS idx_orders_gift_track ON orders (gift_track_token);`,
+    // Slice 8: per-item purchase order + GRN (receiving) with costing. The buying cost
+    // lives in procurement_cost_paise (added in Slice 4) and is captured at order time;
+    // these add the PO reference, expected date and received quantity. Self-contained
+    // (not wired into the main purchase_orders/vendor-bill tables).
+    `ALTER TABLE gifting_items ADD COLUMN po_number TEXT;`,
+    `ALTER TABLE gifting_items ADD COLUMN po_expected_date TEXT;`,
+    `ALTER TABLE gifting_items ADD COLUMN received_qty INTEGER;`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   _giftingSchemaReady = true;
@@ -5712,6 +5719,57 @@ async function handleGiftingItemVendor(request: Request, env: Env, path: string)
   await env.DB.prepare("UPDATE gifting_items SET vendor_id=?, vendor_name=?, updated_at=datetime('now') WHERE id=?")
     .bind(vid, vendor.name || vid, id).run();
   return json({ ok: true });
+}
+
+// POST /api/gifting-items/:id/order { cost?, expected_date?, po_number? } — Slice 8:
+// raise the per-item purchase order. Requires a vendor; captures the buying cost
+// (→ procurement_cost_paise, feeding the margin), an optional vendor PO reference and
+// expected date, then moves TO_ORDER → ORDERED. Costing replaces the bare advance.
+async function handleGiftingItemOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (item.stage !== "TO_ORDER") return json({ error: "This item has already been ordered", code: "E_STAGE" }, 409);
+  if (!item.vendor_id) return json({ error: "Pick a vendor before ordering", code: "E_NO_VENDOR" }, 409);
+  const body = await request.json().catch(() => ({})) as { cost?: number | string; expected_date?: string; po_number?: string };
+  const sets = ["stage='ORDERED'", "ordered_at=datetime('now')", "updated_at=datetime('now')"];
+  const binds: (string | number | null)[] = [];
+  if (body.cost !== undefined && String(body.cost).trim() !== "") {
+    const paise = Math.round(Number(body.cost) * 100);
+    if (!Number.isFinite(paise) || paise < 0) return json({ error: "cost must be a non-negative number", code: "E_VALIDATION" }, 422);
+    sets.push("procurement_cost_paise=?"); binds.push(paise);
+  }
+  sets.push("po_number=?"); binds.push((typeof body.po_number === "string" && body.po_number.trim()) ? body.po_number.trim().slice(0, 60) : null);
+  sets.push("po_expected_date=?"); binds.push((typeof body.expected_date === "string" && body.expected_date.trim()) ? body.expected_date.slice(0, 10) : null);
+  await env.DB.prepare(`UPDATE gifting_items SET ${sets.join(", ")} WHERE id=?`).bind(...binds, id).run();
+  return json({ ok: true, stage: "ORDERED" });
+}
+
+// POST /api/gifting-items/:id/receive { received_qty?, cost? } — Slice 8: record the
+// GRN. Defaults received_qty to the ordered qty; may correct the actual buying cost;
+// moves ORDERED → RECEIVED (the branding gate is then handled by /advance).
+async function handleGiftingItemReceive(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (item.stage !== "ORDERED") return json({ error: "Only an ordered item can be received", code: "E_STAGE" }, 409);
+  const body = await request.json().catch(() => ({})) as { received_qty?: number | string; cost?: number | string };
+  let rq = Number(body.received_qty);
+  if (!Number.isFinite(rq) || rq < 0) rq = Number(item.qty) || 0;        // default: full ordered qty
+  rq = Math.round(rq);
+  const sets = ["stage='RECEIVED'", "received_at=datetime('now')", "received_qty=?", "updated_at=datetime('now')"];
+  const binds: (string | number)[] = [rq];
+  if (body.cost !== undefined && String(body.cost).trim() !== "") {
+    const paise = Math.round(Number(body.cost) * 100);
+    if (!Number.isFinite(paise) || paise < 0) return json({ error: "cost must be a non-negative number", code: "E_VALIDATION" }, 422);
+    sets.push("procurement_cost_paise=?"); binds.push(paise);
+  }
+  await env.DB.prepare(`UPDATE gifting_items SET ${sets.join(", ")} WHERE id=?`).bind(...binds, id).run();
+  return json({ ok: true, stage: "RECEIVED", received_qty: rq });
 }
 
 // POST /api/gifting-items/:id/costs  { procurement_cost?, branding_cost? } — set the
@@ -6312,6 +6370,8 @@ export default {
       if (path.match(/^\/api\/gifting-orders\/[^/]+\/dispatch$/) && method==="POST") return handleGiftingDispatch(request,env,path);
       if (path.match(/^\/api\/gifting-orders\/[^/]+\/track-link$/) && method==="POST") return handleGiftingTrackLink(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/order$/)    && method==="POST") return handleGiftingItemOrder(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/receive$/)  && method==="POST") return handleGiftingItemReceive(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/costs$/)    && method==="POST") return handleGiftingItemCosts(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/sample$/)   && method==="POST") return handleGiftingItemSample(request,env,path);

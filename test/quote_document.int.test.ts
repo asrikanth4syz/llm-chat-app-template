@@ -543,6 +543,42 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect(bad.status).toBe(200);
     expect(await bad.text()).toContain("no longer valid");
   });
+
+  it("Slice 8: a per-item PO captures cost + reference, receiving records the GRN, and the cost flows into the margin", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(1);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
+    const itemOf = async () => (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items.find((x: any) => x.id === itemId);
+
+    // cannot raise a PO without a vendor
+    expect((await post(`/api/gifting-items/${itemId}/order`, { cost: 100 }, adminTok)).status).toBe(409);
+    await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
+
+    // place the PO — cost ₹60, reference, expected date
+    expect((await post(`/api/gifting-items/${itemId}/order`, { cost: 60, po_number: "PO-GIFT-1", expected_date: "2026-11-01" }, adminTok)).status).toBe(200);
+    let it = await itemOf();
+    expect(it.stage).toBe("ORDERED");
+    expect(it.po_number).toBe("PO-GIFT-1");
+    expect(it.po_expected_date).toBe("2026-11-01");
+    expect(it.procurement_cost_paise).toBe(6000);
+    expect(it.margin_paise).toBe(6000);           // sale 12000 − buying 6000
+
+    // re-ordering an already-ordered item is rejected
+    expect((await post(`/api/gifting-items/${itemId}/order`, { cost: 10 }, adminTok)).status).toBe(409);
+
+    // receive the GRN — short by one, actual cost ₹65 overrides the ordered cost
+    const rec = await post(`/api/gifting-items/${itemId}/receive`, { received_qty: 1, cost: 65 }, adminTok);
+    expect(rec.status).toBe(200);
+    it = await itemOf();
+    expect(it.stage).toBe("RECEIVED");
+    expect(it.received_qty).toBe(1);
+    expect(it.procurement_cost_paise).toBe(6500);  // actual cost replaced the ordered cost
+    expect(it.margin_paise).toBe(12000 - 6500);
+
+    // receiving again (wrong stage) is rejected
+    expect((await post(`/api/gifting-items/${itemId}/receive`, {}, adminTok)).status).toBe(409);
+  });
 });
 
 describe("per-quote purpose + payment terms override", () => {
