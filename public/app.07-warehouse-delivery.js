@@ -26,10 +26,17 @@ async function renderWarehouse(el) {
   loadWarehouseReturnsQueue();
 }
 
-/* ── Returns awaiting warehouse check & approval ── */
-async function loadWarehouseReturnsQueue() {
-  const wrap = document.getElementById('wh-returns-queue');
+/* ── Returns awaiting warehouse check & approval ──
+   The approval is a warehouse control: super_admin / ops_admin / warehouse_exec
+   verify the returned goods, then approve to restock (server enforces the same set).
+   The queue is shown both on the Warehouse page and on the Deliveries page (where the
+   RETURN_PENDING challan lives), so it's discoverable wherever the reviewer is. */
+function canReviewReturns() { return ['super_admin','ops_admin','warehouse_exec'].includes(APP.user && APP.user.role); }
+function loadWarehouseReturnsQueue() { return loadReturnsApprovalQueue('wh-returns-queue'); }
+async function loadReturnsApprovalQueue(containerId) {
+  const wrap = document.getElementById(containerId);
   if (!wrap) return;
+  if (!canReviewReturns()) { wrap.innerHTML = ''; return; }   // only reviewers see the approval queue
   const returns = await api('/returns').catch(()=>[]) || [];
   const pending = returns.filter(r => r.status === 'PENDING');
   if (!pending.length) { wrap.innerHTML = ''; return; }
@@ -76,7 +83,13 @@ async function confirmReviewReturn(retId, action) {
   closeModal();
   if (res) {
     showToast(action==='approve' ? `Return ${retId} approved — stock restored` : `Return ${retId} rejected`);
+    // Refresh whichever surface is open: the Warehouse banner, and/or the Deliveries
+    // view (the challan just changed status — CANCELLED on approve, reverted on reject).
     loadWarehouseReturnsQueue();
+    if (document.getElementById('dc-returns-queue')) {
+      if (typeof refreshDeliveryView === 'function') refreshDeliveryView('renderDelivery');
+      else loadReturnsApprovalQueue('dc-returns-queue');
+    }
   }
 }
 
@@ -1300,6 +1313,7 @@ async function renderDelivery(el) {
   const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
   const transit   = dcs.filter(d => d.status === 'IN_TRANSIT');
   const delivered = dcs.filter(d => d.status === 'DELIVERED');
+  const returnPending = dcs.filter(d => d.status === 'RETURN_PENDING');
   const returns   = dcs.filter(d => d.status === 'CANCELLED');
   const overdue   = transit.filter(d => d.expected_delivery_date && new Date(d.expected_delivery_date) < today);
   const pendingPOD  = delivered.filter(d => !d.pod_uploaded).length;
@@ -1312,6 +1326,7 @@ async function renderDelivery(el) {
       {label:'Scheduled',value:scheduled.length,sub:'ready to dispatch',accent:scheduled.length?'var(--primary)':'var(--success)'},
       {label:'In Transit',value:transit.length,sub:overdue.length?`${overdue.length} overdue`:'all on time',accent:overdue.length?'var(--danger)':transit.length?'var(--warning)':'var(--success)'},
       {label:'Pending Approval',value:pendingApproval,sub:'short/excess, awaiting review',accent:pendingApproval?'var(--danger)':'var(--success)'},
+      {label:'Returns to approve',value:returnPending.length,sub:'awaiting warehouse check',accent:returnPending.length?'var(--danger)':'var(--success)'},
       {label:'Pending POD/Scan',value:pendingPOD,sub:'delivered, docs missing',accent:pendingPOD?'var(--warning)':'var(--success)'},
       {label:'Unbilled',value:pendingBill,sub:'delivered but not billed',accent:pendingBill?'var(--danger)':'var(--success)'},
     ].map(tileHtml).join('')}
@@ -1324,7 +1339,7 @@ async function renderDelivery(el) {
     const podPending = delivered.filter(d => !d.pod_uploaded || !d.dc_scan_uploaded).length;
     return ['scheduled','transit','delivered','returns','pod','all'].map((t,i)=>{
       const labels = ['Scheduled','In Transit','Delivered','Returns','POD & Scans','All'];
-      const counts = [scheduled.length, transit.length, delivered.length, returns.length, delivered.length, dcs.length];
+      const counts = [scheduled.length, transit.length, delivered.length, returns.length + returnPending.length, delivered.length, dcs.length];
       const badge  = t === 'pod' && podPending ? `<span style="background:var(--warning);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px">${podPending}</span>` : `<span style="font-size:.72rem;opacity:.7">(${counts[i]})</span>`;
       return `<button class="tab-btn${active===t?' active':''}" ${dataActEl('switchDeliveryTab', t)}>${labels[i]} ${badge}</button>`;
     }).join('');
@@ -1462,10 +1477,13 @@ async function renderDelivery(el) {
       </div></div>`;
     }
     if (tab === 'returns') {
-      if (!returns.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
-      return `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
-        ${returns.map(dc=>`<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
-      </tbody></table></div></div>`;
+      if (!returns.length && !returnPending.length) return `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
+      const retRow = (dc, status) => `<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td><td>${status}</td></tr>`;
+      const tbl = (list, status) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th><th>Status</th></tr></thead><tbody>${list.map(dc=>retRow(dc, status)).join('')}</tbody></table></div></div>`;
+      let html = '';
+      if (returnPending.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Awaiting approval (${returnPending.length})${canReviewReturns()?' — approve from the queue above':''}</div>${tbl(returnPending, '<span class="badge badge-warning">Return pending</span>')}<div style="margin-bottom:16px"></div>`;
+      if (returns.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Returned (${returns.length})</div>${tbl(returns, '<span class="badge badge-secondary">Returned</span>')}`;
+      return html;
     }
     // all
     return `
@@ -1494,9 +1512,13 @@ async function renderDelivery(el) {
 
   el.innerHTML = `
   ${pageHeader('Deliveries', 'Delivery challans, dispatch, POD & returns')}
+  <div id="dc-returns-queue"></div>
   ${kpis}
   <div class="tabs" id="dc-tabs" style="margin-bottom:16px">${tabsHtml(APP._dcTab)}</div>
   <div id="dc-tab-content">${tabContent(APP._dcTab)}</div>`;
+  // Surface the returns-approval queue here too (for reviewers), so a RETURN_PENDING
+  // challan can be approved from the Deliveries page, not only the Warehouse page.
+  loadReturnsApprovalQueue('dc-returns-queue');
 }
 
 async function switchDeliveryTab(tab, btn) {
@@ -1514,6 +1536,7 @@ async function switchDeliveryTab(tab, btn) {
     const scheduled = dcs.filter(d => d.status === 'SCHEDULED');
     const transit   = dcs.filter(d => d.status === 'IN_TRANSIT');
     const delivered = dcs.filter(d => d.status === 'DELIVERED');
+    const returnPending = dcs.filter(d => d.status === 'RETURN_PENDING');
     const returns   = dcs.filter(d => d.status === 'CANCELLED');
 
     const content = document.getElementById('dc-tab-content');
@@ -1644,11 +1667,16 @@ async function switchDeliveryTab(tab, btn) {
       }
 
     } else if (tab === 'returns') {
-      content.innerHTML = returns.length
-        ? `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th></tr></thead><tbody>
-            ${returns.map(dc=>`<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td></tr>`).join('')}
-          </tbody></table></div></div>`
-        : `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
+      if (!returns.length && !returnPending.length) {
+        content.innerHTML = `<div class="card" style="padding:40px;text-align:center;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">↩</div>No returns recorded</div>`;
+      } else {
+        const retRow = (dc, status) => `<tr><td><b>${dc.dc_number||dc.id}</b></td><td>${dc.order_id}</td><td>${dc.client_name||'—'}</td><td>${dc.total_qty||'—'}</td><td>${dc.driver_name||'—'}</td><td>${fmtDate(dc.dispatched_at)}</td><td>${status}</td></tr>`;
+        const tbl = (list, status) => `<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th>Order</th><th>Client</th><th>Total Qty</th><th>Driver</th><th>Dispatched At</th><th>Status</th></tr></thead><tbody>${list.map(dc=>retRow(dc, status)).join('')}</tbody></table></div></div>`;
+        let html = '';
+        if (returnPending.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--warning);font-weight:600;margin-bottom:8px">Awaiting approval (${returnPending.length})${canReviewReturns()?' — approve from the queue above':''}</div>${tbl(returnPending, '<span class="badge badge-warning">Return pending</span>')}<div style="margin-bottom:16px"></div>`;
+        if (returns.length) html += `<div style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:8px">Returned (${returns.length})</div>${tbl(returns, '<span class="badge badge-secondary">Returned</span>')}`;
+        content.innerHTML = html;
+      }
 
     } else if (tab === 'all') {
       content.innerHTML = `
