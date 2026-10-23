@@ -6761,18 +6761,18 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   // Self-heal a stuck shipment: an order marked IN_SHIPMENT with units still
   // outstanding but NO active (scheduled/in-transit) challan has nothing in flight —
   // its only DC was returned/cancelled or delivered short with no follow-up — so it
-  // can never be re-picked from that state. Drop it to PARTIALLY_CLOSED (which offers
-  // Replenish → re-pick and Dispatch Remaining). Idempotent (guarded on IN_SHIPMENT),
-  // and only for staff — a client/vendor viewing their orders never triggers the write.
+  // can never be re-picked from that state. Drop it to READY_TO_PICK so ops can
+  // pick the outstanding balance and plan a fresh delivery. Idempotent (guarded on
+  // IN_SHIPMENT), and only for staff — a client/vendor viewing never triggers the write.
   const canHeal = !["client_admin", "client_approver", "client_user", "vendor_admin", "vendor_user"].includes(user!.role);
   if (canHeal) {
     for (const o of rows) {
       const total = Number(o.total_qty) || 0, delivered = Number(o.delivered_qty) || 0;
       if (o.status === "IN_SHIPMENT" && Number(o.active_dc_count) === 0 && total > 0 && delivered < total) {
-        await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED', updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(o.id as string).run();
+        await env.DB.prepare("UPDATE orders SET status='READY_TO_PICK', updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(o.id as string).run();
         await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
-          .bind(uid(), o.id as string, "IN_SHIPMENT", "PARTIALLY_CLOSED", user!.sub, user!.name, "Reopened — no active delivery challan while units remain outstanding").run();
-        o.status = "PARTIALLY_CLOSED";
+          .bind(uid(), o.id as string, "IN_SHIPMENT", "READY_TO_PICK", user!.sub, user!.name, "Reopened — no active delivery challan while units remain outstanding").run();
+        o.status = "READY_TO_PICK";
       }
     }
   }
@@ -10439,10 +10439,10 @@ async function handleReviewReturn(request: Request, env: Env, path: string, verd
         .bind(uid(), ret.order_id as string, user!.sub, user!.name, `Return ${retId} approved — ${items.length} item(s) restocked`).run();
       // A return puts goods back in the warehouse, so the returned quantity is
       // OUTSTANDING against the order again. An order that had shipped (IN_SHIPMENT) or
-      // fully closed (CLOSED) must reopen to PARTIALLY_CLOSED so ops can re-pick and
+      // fully closed (CLOSED) must reopen to READY_TO_PICK so ops can re-pick and
       // plan a fresh delivery — otherwise it stays stuck in a shipped state that offers
-      // no pick/replenish action. (Delivered tallies count DELIVERED challans only, so
-      // the just-cancelled DC's units are already back in "due".)
+      // no pick action. (Delivered tallies count DELIVERED challans only, so the
+      // just-cancelled DC's units are already back in "due".)
       const ord = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(ret.order_id as string).first() as { status?: string } | null;
       const oStatus = ord?.status || "";
       if (["IN_SHIPMENT", "CLOSED"].includes(oStatus)) {
@@ -10455,9 +10455,9 @@ async function handleReviewReturn(request: Request, env: Env, path: string, verd
           outstanding += Math.max(0, (oi.qty as number) - (row?.del || 0));
         }
         if (outstanding > 0) {
-          await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED', closed_at=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('CANCELLED','DRAFT')").bind(ret.order_id as string).run();
+          await env.DB.prepare("UPDATE orders SET status='READY_TO_PICK', closed_at=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('CANCELLED','DRAFT')").bind(ret.order_id as string).run();
           await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
-            .bind(uid(), ret.order_id as string, oStatus, "PARTIALLY_CLOSED", user!.sub, user!.name, `Reopened after return ${retId} — ${outstanding} unit(s) outstanding for re-pick`).run();
+            .bind(uid(), ret.order_id as string, oStatus, "READY_TO_PICK", user!.sub, user!.name, `Reopened after return ${retId} — ${outstanding} unit(s) outstanding for re-pick`).run();
         }
       }
     }

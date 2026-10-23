@@ -4932,7 +4932,7 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
     expect(r.status).toBe(404);
   });
 
-  it("approving a return on a shipped order reopens it to PARTIALLY_CLOSED so the goods can be re-picked", async () => {
+  it("approving a return on a shipped order reopens it to READY_TO_PICK so the goods can be re-picked", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-RET','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
     await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-ret-i1','OD-RET','SKU001','Rice',10,100,1000)").run();
@@ -4951,10 +4951,10 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
     expect(ok.status).toBe(200);
     expect((await db.prepare("SELECT status FROM delivery_challans WHERE id='ODR-DC'").first() as { status: string }).status).toBe("CANCELLED");
     const ord = await db.prepare("SELECT status FROM orders WHERE id='OD-RET'").first() as { status: string };
-    expect(ord.status).toBe("PARTIALLY_CLOSED"); // no longer stuck IN_SHIPMENT — re-pick is now available
+    expect(ord.status).toBe("READY_TO_PICK"); // no longer stuck IN_SHIPMENT — re-pick is now available
   });
 
-  it("self-heal: listing orders reopens an IN_SHIPMENT order that has outstanding units but no active challan", async () => {
+  it("self-heal: listing orders reopens to READY_TO_PICK an IN_SHIPMENT order that has outstanding units but no active challan", async () => {
     const db = env.DB as D1Database;
     // 10 ordered, 4 delivered on a now-CANCELLED (returned) DC's sibling, no active DC left.
     await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-STUCK','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
@@ -4966,9 +4966,9 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
 
     const list = await (await get("/api/orders", adminToken)).json() as any[];
     const row = list.find((o) => o.id === "OD-STUCK");
-    expect(row.status).toBe("PARTIALLY_CLOSED");         // healed in the response
+    expect(row.status).toBe("READY_TO_PICK");         // healed in the response
     const persisted = await db.prepare("SELECT status FROM orders WHERE id='OD-STUCK'").first() as { status: string };
-    expect(persisted.status).toBe("PARTIALLY_CLOSED");   // and persisted
+    expect(persisted.status).toBe("READY_TO_PICK");   // and persisted
 
     // an IN_SHIPMENT order WITH an active in-transit DC is left alone
     await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-LIVE','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
