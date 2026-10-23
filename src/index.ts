@@ -5645,12 +5645,20 @@ async function handleGetGiftingOrder(request: Request, env: Env, path: string): 
   ).bind(id).all();
   const byItem: Record<string, any> = {};
   for (const s of samples as any[]) byItem[s.item_id] = { round: s.round, ref: s.ref, approval_token: s.approval_token, decision: s.decision, reject_reason: s.reject_reason };
+  // Slice 5: how many sample rounds each item has had, so the board can offer a
+  // "sample history" view for items that went through one or more re-sample loops.
+  const { results: roundCounts } = await env.DB.prepare(
+    `SELECT s.item_id AS item_id, COUNT(*) AS n FROM gifting_samples s
+       JOIN gifting_items i ON i.id=s.item_id WHERE i.order_id=? GROUP BY s.item_id`
+  ).bind(id).all();
+  const roundsByItem: Record<string, number> = {};
+  for (const r of roundCounts as any[]) roundsByItem[r.item_id] = Number(r.n) || 0;
   // Slice 4: per-item cost + margin (sale carried from the quote line minus the
   // procurement + branding cost ops captured). Integer paise throughout.
   const out = (items as any[]).map((it) => {
     const sale = Number(it.sale_value_paise) || 0;
     const cost = (Number(it.procurement_cost_paise) || 0) + (Number(it.branding_cost_paise) || 0);
-    return { ...it, sample: byItem[it.id] || null, cost_paise: cost, margin_paise: sale - cost };
+    return { ...it, sample: byItem[it.id] || null, sample_rounds: roundsByItem[it.id] || 0, cost_paise: cost, margin_paise: sale - cost };
   });
   const totals = out.reduce((t, it) => {
     t.sale_paise += Number(it.sale_value_paise) || 0;
@@ -5787,6 +5795,23 @@ async function handleGiftingItemSample(request: Request, env: Env, path: string)
     env.DB.prepare("UPDATE gifting_items SET stage='SAMPLE_SENT', updated_at=datetime('now') WHERE id=?").bind(id),
   ]);
   return json({ ok: true, stage: "SAMPLE_SENT", approval_token: token, round: prevRound + 1 });
+}
+
+// GET /api/gifting-items/:id/samples — the full sample history for one item: every
+// round (ref, decision, reject reason, sent/decided timestamps), oldest first. The
+// data model always kept every round; Slice 5 surfaces the reject → re-sample trail.
+async function handleGiftingItemSamples(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureGiftingSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const item = await env.DB.prepare("SELECT id, name, sku, qty FROM gifting_items WHERE id=?").bind(id).first();
+  if (!item) return json({ error: "Not found" }, 404);
+  const { results } = await env.DB.prepare(
+    `SELECT round, ref, decision, reject_reason, sent_at, decided_at FROM gifting_samples
+      WHERE item_id=? ORDER BY round ASC`
+  ).bind(id).all();
+  return json({ item, samples: results });
 }
 
 // POST /api/gifting-orders/:id/dispatch — PARTIAL dispatch: hand every AT_OFFICE
@@ -6158,6 +6183,7 @@ export default {
       if (path.match(/^\/api\/gifting-items\/[^/]+\/costs$/)    && method==="POST") return handleGiftingItemCosts(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/sample$/)   && method==="POST") return handleGiftingItemSample(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/samples$/)  && method==="GET")  return handleGiftingItemSamples(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/advance$/)  && method==="POST") return handleGiftingItemAdvance(request,env,path);
       if (path==="/api/orders"                 && method==="GET")  return handleListOrders(request,env);
       if (path==="/api/orders"                 && method==="POST") return handleCreateOrder(request,env);

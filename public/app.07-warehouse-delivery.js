@@ -266,7 +266,7 @@ function giftingItemCard(it) {
       <label class="gift-brandtog"><input type="checkbox"${it.needs_branding?' checked':''}${canBrand?'':' disabled'} ${dataChangeEl('giftingToggleBranding', it.id)}> Needs branding</label>
     </div>
     <div class="gift-mid">${vendorCell}${costBlock}</div>
-    <div class="gift-act">${giftStageChip(it.stage)}${action}</div>
+    <div class="gift-act">${giftStageChip(it.stage)}${action}${it.sample_rounds > 1 ? `<button class="btn btn-secondary btn-sm gift-hist-btn" ${dataAct('giftingSampleHistory', it.id)}>🕑 Sample history (${it.sample_rounds})</button>` : ''}</div>
   </div>`;
 }
 async function giftingSetVendor(itemId, el) {
@@ -308,6 +308,26 @@ async function giftingDispatch(orderId) {
     showToast(`Dispatched ${r.dispatched} item${r.dispatched>1?'s':''} · DC ${r.dc_number}${r.all_dispatched?' · order fully dispatched':''}`);
     giftingOpenBoard(orderId);
   }
+}
+// Slice 5: full sample history for one item — every round, its sample ref, the
+// client's decision + reason, and the sent/decided timestamps, oldest first.
+async function giftingSampleHistory(itemId) {
+  const d = await api('/gifting-items/' + itemId + '/samples');
+  if (!d || !d.samples) return;
+  const chip = (s) => s.decision === 'APPROVED' ? '<span class="gift-chip gift-done">✓ Approved</span>'
+    : s.decision === 'REJECTED' ? '<span class="gift-chip gift-rej">✕ Rejected</span>'
+    : '<span class="gift-chip gift-wait">◷ Awaiting client</span>';
+  const rows = (d.samples || []).map(s => `<div class="gift-hist-row">
+      <div class="gift-hist-round">Round ${s.round}</div>
+      <div class="gift-hist-body">
+        <div class="gift-hist-head">${chip(s)} <span class="gift-hist-date">sent ${fmtDate(s.sent_at)}${s.decided_at ? ` · decided ${fmtDate(s.decided_at)}` : ''}</span></div>
+        ${s.ref ? `<div class="gift-hist-ref">Sample: ${h(s.ref)}</div>` : ''}
+        ${s.reject_reason ? `<div class="gift-hist-reason">Client feedback: “${h(s.reject_reason)}”</div>` : ''}
+      </div>
+    </div>`).join('');
+  openModal(`Sample history — ${h(d.item && d.item.name || 'item')}`,
+    `<div class="gift-hist">${rows || '<div class="form-hint">No samples sent yet.</div>'}</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 function giftingCopyLink(token) {
   const link = location.origin + '/gift-approve/' + token;

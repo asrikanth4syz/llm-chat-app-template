@@ -37,7 +37,7 @@
 - Branding cost capture / margin on gifting (Phase 1 branding is a status, not a priced line).
 - Client portal beyond the single tokenised sample-approval page.
 - Automated vendor emails / RFQs; inventory reservation; barcode scan of gifting items.
-- Multi-sample rounds history UI beyond the latest sample + decision (data model keeps rounds; UI shows current).
+- ✅ **BUILT (Slice 5):** Multi-sample rounds history UI — `GET /api/gifting-items/:id/samples` returns every round (ref, decision, reason, sent/decided timestamps) oldest-first; the board shows a "Sample history (N)" button on items that went through a re-sample loop. (Order detail still carries the current round for the card.)
 
 ## 👤 User Stories & Workflows
 - **As ops**, when an accepted gifting quote is converted, I get a **gifting order** with every line item listed and each sitting at *To order*, so I can start procurement.
@@ -181,7 +181,7 @@ Scenario: Advance guard on vendor
   sale value is seeded on convert, so the board shows per-item margin and an order-level
   sale / cost / margin rollup (also surfaced as a Margin column on the gifting pipeline).
   Routing/invoicing of branding cost remains a later concern.
-- **Multi-round sample UI** — show the full reject/re-sample history, not just the latest round?
+- ~~**Multi-round sample UI**~~ — ✅ BUILT (Slice 5).
 - **Vendor PO** — promote the Phase-1 vendor dropdown to the real procurement/GRN flow?
 - **Client portal** — expand the single approval page into an order-level client view?
 - **Notifications** — auto-notify the client when a sample is sent, and ops when a decision lands?

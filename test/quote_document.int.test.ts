@@ -453,6 +453,31 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect(locked.status).toBe(409);
     expect((await locked.json() as any).code).toBe("E_STAGE");
   });
+
+  it("Slice 5: sample history returns every round with its decision + reason, oldest first; detail reports the round count", async () => {
+    await prep();
+    const { orderId, itemId } = await brandedItemAtBranding();
+    // round 1 → rejected with a reason
+    const s1 = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "v1 small logo" }, adminTok)).json() as any;
+    await formPost(`/gift-approve/${s1.approval_token}`, "decision=REJECTED&reason=" + encodeURIComponent("Make the logo bigger"));
+    // round 2 → approved
+    const s2 = await (await post(`/api/gifting-items/${itemId}/sample`, { ref: "v2 big logo" }, adminTok)).json() as any;
+    expect(s2.round).toBe(2);
+    await formPost(`/gift-approve/${s2.approval_token}`, "decision=APPROVED");
+
+    const hist = await (await get(`/api/gifting-items/${itemId}/samples`, adminTok)).json() as any;
+    expect(hist.item.id).toBe(itemId);
+    expect(hist.samples.length).toBe(2);
+    expect(hist.samples[0]).toMatchObject({ round: 1, ref: "v1 small logo", decision: "REJECTED", reject_reason: "Make the logo bigger" });
+    expect(hist.samples[1]).toMatchObject({ round: 2, ref: "v2 big logo", decision: "APPROVED" });
+    expect(hist.samples[0].sent_at).toBeTruthy();
+    expect(hist.samples[1].decided_at).toBeTruthy();
+
+    // the order detail now reports how many rounds the item has had
+    const detail = await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any;
+    const it = detail.items.find((i: any) => i.id === itemId);
+    expect(it.sample_rounds).toBe(2);
+  });
 });
 
 describe("per-quote purpose + payment terms override", () => {
