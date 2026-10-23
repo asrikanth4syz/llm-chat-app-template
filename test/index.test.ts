@@ -4954,6 +4954,30 @@ describe("delivery-workflow hardening (risks 1-5)", () => {
     expect(ord.status).toBe("PARTIALLY_CLOSED"); // no longer stuck IN_SHIPMENT — re-pick is now available
   });
 
+  it("self-heal: listing orders reopens an IN_SHIPMENT order that has outstanding units but no active challan", async () => {
+    const db = env.DB as D1Database;
+    // 10 ordered, 4 delivered on a now-CANCELLED (returned) DC's sibling, no active DC left.
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-STUCK','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-stuck-i1','OD-STUCK','SKU001','Rice',10,100,1000)").run();
+    // a delivered DC for 4, and a cancelled (returned) DC — neither is active.
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number,delivered_qty) VALUES ('ODS-DC1','OD-STUCK','DELIVERED',4,'ODS-1',4)").run();
+    await db.prepare("INSERT OR REPLACE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES ('ods-di1','ODS-DC1','SKU001','Rice',4,4)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODS-DC2','OD-STUCK','CANCELLED',6,'ODS-2')").run();
+
+    const list = await (await get("/api/orders", adminToken)).json() as any[];
+    const row = list.find((o) => o.id === "OD-STUCK");
+    expect(row.status).toBe("PARTIALLY_CLOSED");         // healed in the response
+    const persisted = await db.prepare("SELECT status FROM orders WHERE id='OD-STUCK'").first() as { status: string };
+    expect(persisted.status).toBe("PARTIALLY_CLOSED");   // and persisted
+
+    // an IN_SHIPMENT order WITH an active in-transit DC is left alone
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-LIVE','c1','tst-ops','IN_SHIPMENT',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('od-live-i1','OD-LIVE','SKU001','Rice',10,100,1000)").run();
+    await db.prepare("INSERT OR REPLACE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES ('ODL-DC','OD-LIVE','IN_TRANSIT',10,'ODL-1')").run();
+    const list2 = await (await get("/api/orders", adminToken)).json() as any[];
+    expect(list2.find((o) => o.id === "OD-LIVE").status).toBe("IN_SHIPMENT");
+  });
+
   it("rejecting a return leaves the order in its shipped state (no reopen)", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('OD-RET2','c1','tst-ops','IN_SHIPMENT',500,0,500,'Regular')").run();

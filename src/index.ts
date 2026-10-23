@@ -6729,7 +6729,8 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
     (SELECT COUNT(*) FROM order_items WHERE order_id=o.id) AS item_count,
     (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty,
     (SELECT COALESCE(SUM(di.qty_delivered),0) FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id
-       WHERE dc.order_id=o.id AND dc.status='DELIVERED') AS delivered_qty
+       WHERE dc.order_id=o.id AND dc.status='DELIVERED') AS delivered_qty,
+    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status IN ('SCHEDULED','IN_TRANSIT')) AS active_dc_count
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE 1=1`;
   const params: string[] = [];
 
@@ -6756,7 +6757,26 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(query).bind(...params).all();
   // Gifting orders live in their own pipeline — exclude them from the regular list.
   // Filtered in JS (not SQL) so this works even where the order_kind column is absent.
-  return json((results as Record<string, unknown>[]).filter((o) => o.order_kind !== "GIFTING"));
+  const rows = (results as Record<string, unknown>[]).filter((o) => o.order_kind !== "GIFTING");
+  // Self-heal a stuck shipment: an order marked IN_SHIPMENT with units still
+  // outstanding but NO active (scheduled/in-transit) challan has nothing in flight —
+  // its only DC was returned/cancelled or delivered short with no follow-up — so it
+  // can never be re-picked from that state. Drop it to PARTIALLY_CLOSED (which offers
+  // Replenish → re-pick and Dispatch Remaining). Idempotent (guarded on IN_SHIPMENT),
+  // and only for staff — a client/vendor viewing their orders never triggers the write.
+  const canHeal = !["client_admin", "client_approver", "client_user", "vendor_admin", "vendor_user"].includes(user!.role);
+  if (canHeal) {
+    for (const o of rows) {
+      const total = Number(o.total_qty) || 0, delivered = Number(o.delivered_qty) || 0;
+      if (o.status === "IN_SHIPMENT" && Number(o.active_dc_count) === 0 && total > 0 && delivered < total) {
+        await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED', updated_at=datetime('now') WHERE id=? AND status='IN_SHIPMENT'").bind(o.id as string).run();
+        await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+          .bind(uid(), o.id as string, "IN_SHIPMENT", "PARTIALLY_CLOSED", user!.sub, user!.name, "Reopened — no active delivery challan while units remain outstanding").run();
+        o.status = "PARTIALLY_CLOSED";
+      }
+    }
+  }
+  return json(rows);
 }
 
 async function handleGetOrder(request: Request, env: Env, path: string): Promise<Response> {
