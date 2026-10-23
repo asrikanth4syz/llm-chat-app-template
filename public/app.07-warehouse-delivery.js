@@ -127,6 +127,18 @@ function giftStageChip(s) {
   const cls = (s==='DISPATCHED') ? 'gift-done' : (s==='AT_OFFICE'||s==='APPROVED') ? 'gift-ready' : (s==='SAMPLE_SENT') ? 'gift-wait' : (s==='BRANDING') ? 'gift-brand' : (s==='TO_ORDER') ? 'gift-pending' : 'gift-prog';
   return `<span class="gift-chip ${cls}">${GIFT_STAGE_LABEL[s]||s}</span>`;
 }
+// Integer paise → ₹ display (Slice 4 gifting cost/margin). Rupees, grouped, no decimals.
+function giftMoney(paise) { return '₹' + Math.round((Number(paise) || 0) / 100).toLocaleString('en-IN'); }
+// Sum the order's sale / cost / margin across its items (recomputed client-side as
+// costs are edited, so the header rollup stays live without a refetch).
+function giftComputeTotals(items) {
+  return (items || []).reduce((t, it) => {
+    const sale = Number(it.sale_value_paise) || 0;
+    const cost = (Number(it.procurement_cost_paise) || 0) + (Number(it.branding_cost_paise) || 0);
+    t.sale += sale; t.cost += cost; t.margin += (sale - cost);
+    return t;
+  }, { sale: 0, cost: 0, margin: 0 });
+}
 function renderWHGifting(el, orders) {
   if (!orders.length) {
     el.innerHTML = `<div class="card"><div class="empty-state empty-sm"><div class="empty-icon">🎁</div><div class="empty-title">No gifting orders yet</div><div class="empty-desc">Convert a quote marked <b>Gifting</b> to create one.</div></div></div>`;
@@ -139,15 +151,19 @@ function renderWHGifting(el, orders) {
       <th style="text-align:left;padding:11px 14px">Phase</th>
       <th style="text-align:left;padding:11px 14px">Ready</th>
       <th style="text-align:right;padding:11px 14px">Value</th>
+      <th style="text-align:right;padding:11px 14px">Margin</th>
     </tr></thead>
     <tbody>${orders.map(o => {
       const ready = o.item_count ? Math.round((o.ready_count/o.item_count)*100) : 0;
+      const margin = Number(o.margin_paise||0), sale = Number(o.sale_paise||0), hasCost = Number(o.cost_paise||0) > 0;
+      const mpct = sale > 0 ? Math.round(margin/sale*100) : 0;
       return `<tr class="q-trow" ${dataAct('giftingOpenBoard', o.id)}>
         <td style="padding:11px 14px;font-weight:700;color:var(--navy);white-space:nowrap">🎁 ${h(o.id)}</td>
         <td style="padding:11px 14px">${h(o.client_name||o.client_id||'')}</td>
         <td style="padding:11px 14px"><span class="gift-chip gift-prog">${GIFT_PHASE_LABEL[o.phase]||o.phase}</span></td>
         <td style="padding:11px 14px;white-space:nowrap"><span style="display:inline-block;width:80px;height:8px;border-radius:999px;background:var(--surface-3,var(--surface-2));vertical-align:middle;overflow:hidden"><i style="display:block;height:100%;width:${ready}%;background:linear-gradient(90deg,var(--navy),var(--teal,var(--navy)))"></i></span> <span style="font-size:.8rem;color:var(--text-muted)">${o.ready_count}/${o.item_count}</span></td>
         <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums">₹${Number(o.grand_total||0).toLocaleString('en-IN')}</td>
+        <td style="padding:11px 14px;text-align:right;font-variant-numeric:tabular-nums${margin<0?';color:var(--danger)':hasCost?';color:var(--success)':''}">${hasCost ? giftMoney(margin) + (sale>0?` · ${mpct}%`:'') : '<span style="color:var(--text-muted)">—</span>'}</td>
       </tr>`;
     }).join('')}</tbody>
   </table></div></div>`;
@@ -181,8 +197,14 @@ function giftingRenderBoard() {
         <button class="btn btn-primary" ${dataAct('giftingDispatch', g.order.id)}${atOffice?'':' disabled'}>🚚 Dispatch ready (${atOffice})</button>
       </div>
     </div>
+    ${(() => { const t = giftComputeTotals(items); const mcls = t.margin < 0 ? 'gift-m-neg' : 'gift-m-pos';
+      return `<div class="gift-rollup">
+        <div class="gift-rollup-cell"><span>Sale value</span><b>${giftMoney(t.sale)}</b></div>
+        <div class="gift-rollup-cell"><span>Cost (buying + branding)</span><b>${giftMoney(t.cost)}</b></div>
+        <div class="gift-rollup-cell"><span>Margin</span><b class="${mcls}">${giftMoney(t.margin)}${t.sale>0?` · ${Math.round(t.margin/t.sale*100)}%`:''}</b></div>
+      </div>`; })()}
     <div class="gift-board">${items.map(giftingItemCard).join('')}</div>
-    <div class="form-hint" style="margin-top:10px">Partial dispatch is allowed — dispatch items that are at office without waiting for the rest. Branding sample &amp; client approval arrive in the next slice.</div>`;
+    <div class="form-hint" style="margin-top:10px">Partial dispatch is allowed — dispatch items that are at office without waiting for the rest. Enter each item's buying &amp; branding cost to see live margin.</div>`;
 }
 function giftingItemCard(it) {
   const g = APP._gift;
@@ -210,13 +232,27 @@ function giftingItemCard(it) {
     const dis = (it.stage==='TO_ORDER' && !it.vendor_id) ? ' disabled' : '';
     action = `<button class="btn btn-primary btn-sm" ${dataAct('giftingAdvance', it.id)}${dis}>${label} →</button>`;
   }
+  // Slice 4: per-item cost capture + margin. Buying cost always; branding cost only
+  // for branded items. Editable until dispatched; margin = sale − (buying + branding).
+  const costEditable = it.stage !== 'DISPATCHED';
+  const rupees = (p) => ((Number(p) || 0) / 100) || '';
+  const sale = Number(it.sale_value_paise) || 0;
+  const cost = (Number(it.procurement_cost_paise) || 0) + (Number(it.branding_cost_paise) || 0);
+  const margin = sale - cost;
+  const costBlock = `<div class="gift-cost">
+    <label class="gift-cost-f"><span>Buying cost ₹</span>
+      <input type="number" min="0" step="0.01" id="gcost-proc-${it.id}" value="${rupees(it.procurement_cost_paise)}" placeholder="0"${costEditable ? '' : ' disabled'} ${dataChangeEl('giftingSaveCosts', it.id)}></label>
+    ${it.needs_branding ? `<label class="gift-cost-f"><span>Branding cost ₹</span>
+      <input type="number" min="0" step="0.01" id="gcost-brand-${it.id}" value="${rupees(it.branding_cost_paise)}" placeholder="0"${costEditable ? '' : ' disabled'} ${dataChangeEl('giftingSaveCosts', it.id)}></label>` : ''}
+    <div class="gift-cost-margin">Sale <b>${giftMoney(sale)}</b> · Margin <b class="${margin < 0 ? 'gift-m-neg' : 'gift-m-pos'}">${giftMoney(margin)}</b></div>
+  </div>`;
   return `<div class="gift-card">
     <div class="gift-id">
       <div class="gift-name">${h(it.name)}</div>
       <div class="gift-sku">SKU ${h(it.sku||'—')} · Qty ${it.qty}</div>
       <label class="gift-brandtog"><input type="checkbox"${it.needs_branding?' checked':''}${canBrand?'':' disabled'} ${dataChangeEl('giftingToggleBranding', it.id)}> Needs branding</label>
     </div>
-    <div class="gift-mid">${vendorCell}</div>
+    <div class="gift-mid">${vendorCell}${costBlock}</div>
     <div class="gift-act">${giftStageChip(it.stage)}${action}</div>
   </div>`;
 }
@@ -226,7 +262,22 @@ async function giftingSetVendor(itemId, el) {
 }
 async function giftingToggleBranding(itemId, el) {
   const r = await api('/gifting-items/' + itemId + '/branding', { method:'POST', body: JSON.stringify({ needs_branding: !!el.checked }) });
-  if (r) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.needs_branding = el.checked ? 1 : 0; }
+  if (r) { const it = (APP._gift.items||[]).find(x=>x.id===itemId); if (it) it.needs_branding = el.checked ? 1 : 0; giftingRenderBoard(); }
+}
+// Save a gifting item's buying / branding cost; refresh the margin readout + the
+// order rollup (recomputed from the locally-updated items).
+async function giftingSaveCosts(itemId, el) {
+  const procEl = document.getElementById('gcost-proc-' + itemId);
+  const brandEl = document.getElementById('gcost-brand-' + itemId);
+  const payload = {};
+  if (procEl) payload.procurement_cost = Number(procEl.value) || 0;
+  if (brandEl) payload.branding_cost = Number(brandEl.value) || 0;
+  const r = await api('/gifting-items/' + itemId + '/costs', { method:'POST', body: JSON.stringify(payload) });
+  if (r && r.ok) {
+    const it = (APP._gift.items||[]).find(x=>x.id===itemId);
+    if (it) { it.procurement_cost_paise = r.procurement_cost_paise; it.branding_cost_paise = r.branding_cost_paise; }
+    giftingRenderBoard();
+  }
 }
 async function giftingAdvance(itemId) {
   const r = await api('/gifting-items/' + itemId + '/advance', { method:'POST', body: '{}' });

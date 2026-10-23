@@ -176,7 +176,11 @@ Scenario: Advance guard on vendor
 - **No regression:** a REGULAR quote's convert path and the regular order/pick/deliver flow are byte-for-byte unchanged; gifting behaviour is entirely behind `order_kind='GIFTING'`.
 
 ## 🚧 Open questions for Phase 2 (not blocking Phase 1)
-- Branding **cost/margin** capture — do gifting items carry a branding price that should flow to invoicing?
+- ✅ **BUILT (Slice 4):** Branding **cost + margin** capture — each gifting item now carries a
+  buying cost and a branding cost (integer paise, editable until dispatch); the quote line's
+  sale value is seeded on convert, so the board shows per-item margin and an order-level
+  sale / cost / margin rollup (also surfaced as a Margin column on the gifting pipeline).
+  Routing/invoicing of branding cost remains a later concern.
 - **Multi-round sample UI** — show the full reject/re-sample history, not just the latest round?
 - **Vendor PO** — promote the Phase-1 vendor dropdown to the real procurement/GRN flow?
 - **Client portal** — expand the single approval page into an order-level client view?

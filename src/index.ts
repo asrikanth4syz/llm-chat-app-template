@@ -5523,8 +5523,8 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
   if (orderKind === "GIFTING") {
     await ensureGiftingSchema(env);
     for (const l of lines as any[]) {
-      stmts.push(env.DB.prepare("INSERT INTO gifting_items (id,order_id,sku,name,qty,needs_branding,stage) VALUES (?,?,?,?,?,0,'TO_ORDER')")
-        .bind(uid(), orderId, l.sku || null, l.description || l.sku || "Item", l.qty));
+      stmts.push(env.DB.prepare("INSERT INTO gifting_items (id,order_id,sku,name,qty,needs_branding,stage,sale_value_paise) VALUES (?,?,?,?,?,0,'TO_ORDER',?)")
+        .bind(uid(), orderId, l.sku || null, l.description || l.sku || "Item", l.qty, l.line_taxable_paise || 0));
     }
   }
   stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'DRAFT',?,?,?)")
@@ -5561,6 +5561,12 @@ async function ensureGiftingSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS gifting_samples ( id TEXT PRIMARY KEY, item_id TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 1, ref TEXT, approval_token TEXT NOT NULL, decision TEXT, decided_at TEXT, reject_reason TEXT, sent_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_gifting_samples_token ON gifting_samples (approval_token);`,
     `CREATE INDEX IF NOT EXISTS idx_gifting_samples_item ON gifting_samples (item_id, round);`,
+    // Slice 4: branding + procurement cost per item and the sale value carried from
+    // the quote line, so a gifting order shows realised cost and margin. Integer paise
+    // only (no REAL money) — added idempotently (ignored once the column exists).
+    `ALTER TABLE gifting_items ADD COLUMN sale_value_paise INTEGER NOT NULL DEFAULT 0;`,
+    `ALTER TABLE gifting_items ADD COLUMN procurement_cost_paise INTEGER NOT NULL DEFAULT 0;`,
+    `ALTER TABLE gifting_items ADD COLUMN branding_cost_paise INTEGER NOT NULL DEFAULT 0;`,
   ];
   for (const sql of ddl) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   _giftingSchemaReady = true;
@@ -5599,9 +5605,21 @@ async function handleListGiftingOrders(request: Request, env: Env): Promise<Resp
     o.total += r.n;
     if (r.stage === "AT_OFFICE" || r.stage === "DISPATCHED") o.ready += r.n;
   }
+  // Slice 4: per-order cost / sale / margin rollup (integer paise).
+  const { results: money } = await env.DB.prepare(
+    `SELECT order_id,
+        COALESCE(SUM(sale_value_paise),0) AS sale_paise,
+        COALESCE(SUM(procurement_cost_paise + branding_cost_paise),0) AS cost_paise
+      FROM gifting_items
+      WHERE order_id IN (SELECT id FROM orders WHERE order_kind='GIFTING') GROUP BY order_id`
+  ).all();
+  const moneyByOrder: Record<string, { sale_paise: number; cost_paise: number }> = {};
+  for (const r of money as any[]) moneyByOrder[r.order_id] = { sale_paise: Number(r.sale_paise) || 0, cost_paise: Number(r.cost_paise) || 0 };
   const out = (orders as any[]).map((o) => {
     const agg = byOrder[o.id] || { stages: [], total: 0, ready: 0 };
-    return { ...o, item_count: agg.total, ready_count: agg.ready, phase: giftingOrderPhase(agg.stages) };
+    const m = moneyByOrder[o.id] || { sale_paise: 0, cost_paise: 0 };
+    return { ...o, item_count: agg.total, ready_count: agg.ready, phase: giftingOrderPhase(agg.stages),
+      sale_paise: m.sale_paise, cost_paise: m.cost_paise, margin_paise: m.sale_paise - m.cost_paise };
   });
   return json(out);
 }
@@ -5627,8 +5645,22 @@ async function handleGetGiftingOrder(request: Request, env: Env, path: string): 
   ).bind(id).all();
   const byItem: Record<string, any> = {};
   for (const s of samples as any[]) byItem[s.item_id] = { round: s.round, ref: s.ref, approval_token: s.approval_token, decision: s.decision, reject_reason: s.reject_reason };
-  const out = (items as any[]).map((it) => ({ ...it, sample: byItem[it.id] || null }));
-  return json({ order, items: out });
+  // Slice 4: per-item cost + margin (sale carried from the quote line minus the
+  // procurement + branding cost ops captured). Integer paise throughout.
+  const out = (items as any[]).map((it) => {
+    const sale = Number(it.sale_value_paise) || 0;
+    const cost = (Number(it.procurement_cost_paise) || 0) + (Number(it.branding_cost_paise) || 0);
+    return { ...it, sample: byItem[it.id] || null, cost_paise: cost, margin_paise: sale - cost };
+  });
+  const totals = out.reduce((t, it) => {
+    t.sale_paise += Number(it.sale_value_paise) || 0;
+    t.procurement_paise += Number(it.procurement_cost_paise) || 0;
+    t.branding_paise += Number(it.branding_cost_paise) || 0;
+    return t;
+  }, { sale_paise: 0, procurement_paise: 0, branding_paise: 0 });
+  (totals as any).cost_paise = totals.procurement_paise + totals.branding_paise;
+  (totals as any).margin_paise = totals.sale_paise - (totals as any).cost_paise;
+  return json({ order, items: out, totals });
 }
 
 async function loadGiftingItem(env: Env, id: string): Promise<any | null> {
@@ -5652,6 +5684,40 @@ async function handleGiftingItemVendor(request: Request, env: Env, path: string)
   await env.DB.prepare("UPDATE gifting_items SET vendor_id=?, vendor_name=?, updated_at=datetime('now') WHERE id=?")
     .bind(vid, vendor.name || vid, id).run();
   return json({ ok: true });
+}
+
+// POST /api/gifting-items/:id/costs  { procurement_cost?, branding_cost? } — set the
+// item's buying / branding cost (rupees → integer paise). Editable until the item is
+// dispatched; either field may be sent on its own. Slice 4 (branding cost + margin).
+async function handleGiftingItemCosts(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const item = await loadGiftingItem(env, id);
+  if (!item) return json({ error: "Not found" }, 404);
+  if (item.stage === "DISPATCHED") return json({ error: "Costs lock once the item is dispatched", code: "E_STAGE" }, 409);
+  const body = await request.json().catch(() => ({})) as { procurement_cost?: number | string; branding_cost?: number | string };
+  const toPaise = (v: number | string | undefined) => {
+    const n = Math.round(Number(v) * 100);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const sets: string[] = []; const binds: (string | number)[] = [];
+  if (body.procurement_cost !== undefined) {
+    const p = toPaise(body.procurement_cost);
+    if (p === null) return json({ error: "procurement_cost must be a non-negative number", code: "E_VALIDATION" }, 422);
+    sets.push("procurement_cost_paise=?"); binds.push(p);
+  }
+  if (body.branding_cost !== undefined) {
+    const b = toPaise(body.branding_cost);
+    if (b === null) return json({ error: "branding_cost must be a non-negative number", code: "E_VALIDATION" }, 422);
+    sets.push("branding_cost_paise=?"); binds.push(b);
+  }
+  if (!sets.length) return json({ error: "Nothing to update", code: "E_VALIDATION" }, 422);
+  await env.DB.prepare(`UPDATE gifting_items SET ${sets.join(", ")}, updated_at=datetime('now') WHERE id=?`).bind(...binds, id).run();
+  const row = await env.DB.prepare("SELECT sale_value_paise, procurement_cost_paise, branding_cost_paise FROM gifting_items WHERE id=?").bind(id).first() as any;
+  const sale = Number(row.sale_value_paise) || 0;
+  const cost = (Number(row.procurement_cost_paise) || 0) + (Number(row.branding_cost_paise) || 0);
+  return json({ ok: true, procurement_cost_paise: Number(row.procurement_cost_paise) || 0, branding_cost_paise: Number(row.branding_cost_paise) || 0, cost_paise: cost, margin_paise: sale - cost });
 }
 
 // POST /api/gifting-items/:id/branding  { needs_branding } — only before it leaves receiving.
@@ -6089,6 +6155,7 @@ export default {
       if (path.match(/^\/api\/gifting-orders\/[^/]+$/) && method==="GET") return handleGetGiftingOrder(request,env,path);
       if (path.match(/^\/api\/gifting-orders\/[^/]+\/dispatch$/) && method==="POST") return handleGiftingDispatch(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/vendor$/)   && method==="POST") return handleGiftingItemVendor(request,env,path);
+      if (path.match(/^\/api\/gifting-items\/[^/]+\/costs$/)    && method==="POST") return handleGiftingItemCosts(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/branding$/) && method==="POST") return handleGiftingItemBranding(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/sample$/)   && method==="POST") return handleGiftingItemSample(request,env,path);
       if (path.match(/^\/api\/gifting-items\/[^/]+\/advance$/)  && method==="POST") return handleGiftingItemAdvance(request,env,path);

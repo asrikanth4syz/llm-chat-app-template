@@ -399,6 +399,60 @@ describe("gifting orders (milestone 007, Slice 1)", () => {
     expect(d2.all_dispatched).toBe(true);
     expect((await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok)).status).toBe(409);
   });
+
+  it("Slice 4: convert carries each line's sale value; setting costs yields margin and the order rollup aggregates", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(2);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const detail = await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any;
+    // line() → ex-GST cost 10000 × (1 + 20%) = 12000 paise sale per line.
+    expect(detail.items.every((i: any) => i.sale_value_paise === 12000)).toBe(true);
+    expect(detail.items.every((i: any) => i.cost_paise === 0 && i.margin_paise === 12000)).toBe(true);
+    expect(detail.totals).toMatchObject({ sale_paise: 24000, procurement_paise: 0, branding_paise: 0, cost_paise: 0, margin_paise: 24000 });
+
+    // set a buying + branding cost on the first item (rupees → paise)
+    const a = detail.items[0];
+    const r = await (await post(`/api/gifting-items/${a.id}/costs`, { procurement_cost: 50, branding_cost: 10 }, adminTok)).json() as any;
+    expect(r.procurement_cost_paise).toBe(5000);
+    expect(r.branding_cost_paise).toBe(1000);
+    expect(r.cost_paise).toBe(6000);
+    expect(r.margin_paise).toBe(6000); // 12000 sale − 6000 cost
+
+    // partial update: only branding on the same item leaves buying cost intact
+    await post(`/api/gifting-items/${a.id}/costs`, { branding_cost: 20 }, adminTok);
+    const after = await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any;
+    const a2 = after.items.find((i: any) => i.id === a.id);
+    expect(a2.procurement_cost_paise).toBe(5000);
+    expect(a2.branding_cost_paise).toBe(2000);
+    expect(a2.margin_paise).toBe(12000 - 7000);
+    expect(after.totals).toMatchObject({ sale_paise: 24000, cost_paise: 7000, margin_paise: 17000 });
+
+    // the pipeline list rollup reflects the same cost / margin
+    const row = (await (await get("/api/gifting-orders", adminTok)).json() as any[]).find((g) => g.id === orderId);
+    expect(row.sale_paise).toBe(24000);
+    expect(row.cost_paise).toBe(7000);
+    expect(row.margin_paise).toBe(17000);
+  });
+
+  it("Slice 4: a negative cost is rejected, and costs lock once the item is dispatched", async () => {
+    await prep();
+    const id = await acceptedGiftingQuote(1);
+    const orderId = (await (await post(`/api/quotes/${id}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const itemId = (await (await get(`/api/gifting-orders/${orderId}`, adminTok)).json() as any).items[0].id as string;
+
+    expect((await post(`/api/gifting-items/${itemId}/costs`, { procurement_cost: -5 }, adminTok)).status).toBe(422);
+
+    // drive to AT_OFFICE then dispatch (non-branded)
+    await post(`/api/gifting-items/${itemId}/vendor`, { vendor_id: "v-gift" }, adminTok);
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // ORDERED
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // RECEIVED
+    await post(`/api/gifting-items/${itemId}/advance`, {}, adminTok); // AT_OFFICE
+    await post(`/api/gifting-orders/${orderId}/dispatch`, {}, adminTok);
+
+    const locked = await post(`/api/gifting-items/${itemId}/costs`, { procurement_cost: 10 }, adminTok);
+    expect(locked.status).toBe(409);
+    expect((await locked.json() as any).code).toBe("E_STAGE");
+  });
 });
 
 describe("per-quote purpose + payment terms override", () => {
