@@ -3278,6 +3278,15 @@ async function fixCategoryNames(env: Env): Promise<void> {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run();
   } catch { /* exists */ }
   try {
+    // Client's own PO / order reference, mandatory when a client places an order.
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_reference TEXT").run();
+  } catch { /* exists */ }
+  try {
+    // A saved-but-not-finalised pick (quantities + bins) so a partial pick can be
+    // resumed/modified later. JSON array; no stock effect until the pick is submitted.
+    await env.DB.prepare("ALTER TABLE orders ADD COLUMN pick_draft TEXT").run();
+  } catch { /* exists */ }
+  try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN revision INTEGER DEFAULT 1").run();
   } catch { /* column already exists */ }
   try {
@@ -6431,6 +6440,8 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/pick-draft$/)   && method==="POST") return handleSavePickDraft(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/period$/)       && method==="POST") return handleSetOrderPeriod(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/allocations$/)  && method==="GET")  return handleGetAllocations(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/comments$/)     && method==="GET")  return handleListComments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/comments$/)     && method==="POST") return handleAddComment(request,env,path);
@@ -8027,6 +8038,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     save_as_draft?: boolean;
     image?: string;
     order_period?: string;
+    order_reference?: string;
   };
   const orderImage = body.image && body.image.startsWith("data:image/") && body.image.length <= 1_500_000 ? body.image : null;
   // Order period (YYYY-MM) — the business month this order is FOR; default to current month
@@ -8038,6 +8050,10 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     body.client_id = user!.client_id;
   }
   if (!body.client_id || !body.items?.length) return json({error:"client_id and items required"}, 400);
+  // Order reference (the client's own PO / reference) — mandatory when a client
+  // places the order; optional for an ops-placed order on the client's behalf.
+  const orderRef = typeof body.order_reference === "string" ? body.order_reference.trim().slice(0, 80) : "";
+  if (isClientRole && !orderRef) return json({ error: "An order reference is required", code: "E_ORDER_REF" }, 400);
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
   const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price, 0);
@@ -8049,8 +8065,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const validTypes = ['Regular','Urgent','Ad-Hoc'];
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
-    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod).run();
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, orderRef||null).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -8081,8 +8097,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   else if (rule?.auto_approve) status = "APPROVED";
   else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
 
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod).run();
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, orderRef||null).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -8846,7 +8862,7 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
 
   // Transition order to PICKED
   await env.DB.prepare(
-    "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),updated_at=datetime('now') WHERE id=?"
+    "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),pick_draft=NULL,updated_at=datetime('now') WHERE id=?"
   ).bind(user!.sub, user!.name, id).run();
   const pickNote = body.partial
     ? `Partial pick by ${user!.name} — ${body.items.map(i=>`${i.sku}:${i.qty}`).join(', ')}`
@@ -8866,6 +8882,51 @@ async function handleGetAllocations(request: Request, env: Env, path: string): P
   const id = path.split("/").slice(-2)[0];
   const {results} = await env.DB.prepare("SELECT * FROM order_allocations WHERE order_id=? ORDER BY sku").bind(id).all();
   return json(results);
+}
+
+// POST /api/orders/:id/pick-draft { items:[{sku,qty,bin_code}] } — save a pick in
+// progress so it can be resumed or modified later. NO stock effect: reservation still
+// happens only on the final submit. Warehouse/ops roles; order must be pickable.
+async function handleSavePickDraft(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureFeatureTables(env);
+  const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  if (!["ACKNOWLEDGED", "READY_TO_PICK", "PICKED", "QUALITY_CHECK", "PARTIALLY_CLOSED"].includes(order.status || ""))
+    return json({ error: `Cannot save a pick draft from status ${order.status}`, code: "E_STAGE" }, 409);
+  const body = await request.json().catch(() => ({})) as { items?: { sku: string; qty: number; bin_code?: string }[] };
+  const items = Array.isArray(body.items) ? body.items.filter(i => i && i.sku).map(i => ({
+    sku: String(i.sku), qty: Math.max(0, Math.round(Number(i.qty) || 0)), bin_code: i.bin_code ? String(i.bin_code).slice(0, 40) : "",
+  })) : [];
+  const payload = JSON.stringify({ items, saved_by: user!.name, saved_at: new Date().toISOString() });
+  await env.DB.prepare("UPDATE orders SET pick_draft=?, updated_at=datetime('now') WHERE id=?").bind(payload, id).run();
+  const st = order.status || "READY_TO_PICK";
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, st, st, user!.sub, user!.name, `Pick draft saved — ${items.filter(i => i.qty > 0).length} line(s) entered`).run();
+  return json({ ok: true, saved: items.filter(i => i.qty > 0).length });
+}
+
+// POST /api/orders/:id/period { order_period } — ops_manager / super_admin correct the
+// business month (YYYY-MM) of an order. Logged to the order history.
+async function handleSetOrderPeriod(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "ops_manager"].includes(user!.role))
+    return json({ error: "Only an ops manager or super admin can change the order period", code: "E_ROLE" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { order_period?: string };
+  const period = String(body.order_period || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(period)) return json({ error: "order_period must be YYYY-MM", code: "E_VALIDATION" }, 422);
+  const order = await env.DB.prepare("SELECT status, order_period FROM orders WHERE id=?").bind(id).first() as { status?: string; order_period?: string } | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  await env.DB.prepare("UPDATE orders SET order_period=?, updated_at=datetime('now') WHERE id=?").bind(period, id).run();
+  const st = order.status || "—";
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, st, st, user!.sub, user!.name, `Order month changed ${order.order_period || "—"} → ${period}`).run();
+  await audit(env, user, "SET_ORDER_PERIOD", "order", id, order.order_period || "", period);
+  return json({ ok: true, order_period: period });
 }
 
 async function handlePatchOrder(request: Request, env: Env, path: string): Promise<Response> {

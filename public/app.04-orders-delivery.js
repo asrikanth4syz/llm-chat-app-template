@@ -811,9 +811,10 @@ async function viewOrder(id) {
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
         <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
+        ${order.order_reference ? `<div><b>Ref:</b> ${h(order.order_reference)}</div>` : ''}
         <div><b>Placed:</b> ${fmtDate(order.created_at)}</div>
         <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('orderTimelineModal', id)}>🧭 Timeline</button>
-        ${order.order_period ? `<div><b>For:</b> ${new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'})}</div>` : ''}
+        <div><b>For:</b> <span>${order.order_period ? new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'}) : '—'}</span>${['super_admin','ops_manager'].includes(APP.user?.role) ? ` <button class="btn btn-secondary btn-sm" style="padding:2px 8px" ${dataAct('editOrderPeriodModal', id, order.order_period||'')} title="Correct the order month">✏️</button>` : ''}</div>
       </div>
       <!-- Row 2: dates -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:10px 12px;background:var(--bg,var(--surface-2));border-radius:8px;border:1px solid var(--border)">
@@ -940,6 +941,25 @@ async function savePredictedDelivery(orderId) {
   });
   if (!res) return;
   showToast('Predicted delivery date saved');
+  viewOrder(orderId);
+}
+
+// Ops-manager / super-admin correction of the order's business month (YYYY-MM).
+function editOrderPeriodModal(orderId, current) {
+  openModal('Correct order month',
+    `<div class="form-group"><label>Order is for (month)</label>
+       <input type="month" id="ord-period-input" value="${h(current || '')}" max="9999-12" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+     <div style="font-size:.78rem;color:var(--text-muted)">The business month this order counts against. Changing it is logged on the order history.</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveOrderPeriod', orderId)}>Save month</button>`);
+}
+async function saveOrderPeriod(orderId) {
+  const val = document.getElementById('ord-period-input')?.value || '';
+  if (!/^\d{4}-\d{2}$/.test(val)) { showToast('Pick a valid month', 'error'); return; }
+  const res = await api('/orders/' + orderId + '/period', { method: 'POST', body: JSON.stringify({ order_period: val }) });
+  if (!res || !res.ok) return;
+  closeModal();
+  showToast('Order month updated');
   viewOrder(orderId);
 }
 

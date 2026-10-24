@@ -1143,6 +1143,11 @@ async function submitOrder() {
         <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:2px">Ordering for</div>
         <div style="font-weight:700;font-size:1rem">${h(clientName)}</div>
       </div>
+      <div style="margin-bottom:16px">
+        <label style="display:block;margin-bottom:6px;font-weight:600">Order reference <span style="color:var(--danger)">*</span></label>
+        <input id="order-reference" maxlength="80" placeholder="Your PO / reference for this order" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:4px">Required — so you can reconcile this order on your side.</div>
+      </div>
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button class="btn btn-gold" ${dataAct('confirmOrder')}>Confirm & Submit</button>`
@@ -1160,6 +1165,10 @@ async function submitOrder() {
           ${clientOpts}
         </select>
       </div>
+      <div style="margin-bottom:16px">
+        <label style="display:block;margin-bottom:6px;font-weight:600">Order reference</label>
+        <input id="order-reference" maxlength="80" placeholder="Client PO / reference (optional)" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+      </div>
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button id="confirm-order-btn" class="btn btn-gold" ${dataAct('confirmOrder')} disabled>Confirm & Submit</button>`
@@ -1171,6 +1180,10 @@ async function confirmOrder(saveAsDraft) {
   const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
   const clientId = isClientRole ? (APP.user.client_id || '__self__') : document.getElementById('order-client')?.value;
   if (!isClientRole && !clientId) { showToast('Select a client', 'error'); return; }
+
+  // Order reference is mandatory when a client places the order (optional for ops-on-behalf).
+  const orderRef = document.getElementById('order-reference')?.value?.trim() || '';
+  if (isClientRole && !orderRef) { showToast('Please enter an order reference', 'error'); document.getElementById('order-reference')?.focus(); return; }
 
   const btn = document.querySelector('#modal-footer .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = saveAsDraft ? 'Saving…' : 'Submitting…'; }
@@ -1186,6 +1199,7 @@ async function confirmOrder(saveAsDraft) {
       items: APP.cart,
       order_type: orderType,
       ...(notes ? { notes } : {}),
+      ...(orderRef ? { order_reference: orderRef } : {}),
       ...(APP._orderImage ? { image: APP._orderImage } : {}),
       ...(needByDate ? { need_by_date: needByDate } : {}),
       ...(orderPeriod ? { order_period: orderPeriod } : {}),

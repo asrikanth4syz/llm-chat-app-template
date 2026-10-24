@@ -1476,6 +1476,7 @@ describe("Ad-hoc orders (no catalogue selection)", () => {
   const adhocBody = {
     client_id: "__self__",                // overridden server-side to the client's own id
     order_type: "Ad-Hoc",
+    order_reference: "ADHOC-REF-1",       // clients must supply an order reference
     notes: "Need 2 crates of imported sparkling water for an event",
     items: [
       { sku: "ADHOC-AAA111", name: "Imported sparkling water 750ml (crate)", qty: 2, unit_price: 0 },
@@ -4894,6 +4895,53 @@ describe("orders list surfaces delivered_qty for reconciliation", () => {
     const row = rows.find(x => x.id === "OD-RECON")!;
     expect(row.total_qty).toBe(10);
     expect(row.delivered_qty).toBe(3); // only the DELIVERED challan counts — order is partial even though status is READY_TO_PICK
+  });
+});
+
+describe("order reference, editable period, and pick draft", () => {
+  it("a client order requires an order reference (stored); ops-on-behalf is optional", async () => {
+    const noRef = await post("/api/orders", { items: [{ sku: "SKU001", name: "Rice", qty: 2, unit_price: 450 }] }, clientToken);
+    expect(noRef.status).toBe(400);
+    expect((await noRef.json() as { code: string }).code).toBe("E_ORDER_REF");
+
+    const okRes = await post("/api/orders", { items: [{ sku: "SKU001", name: "Rice", qty: 2, unit_price: 450 }], order_reference: "CLIENT-PO-77" }, clientToken);
+    expect(okRes.status).toBe(201);
+    const oid = (await okRes.json() as { id: string }).id;
+    const row = await (env.DB as D1Database).prepare("SELECT order_reference FROM orders WHERE id=?").bind(oid).first() as { order_reference: string };
+    expect(row.order_reference).toBe("CLIENT-PO-77");
+
+    // ops placing on a client's behalf may omit the reference
+    const opsOrder = await post("/api/orders", { client_id: "c1", items: [{ sku: "SKU001", name: "Rice", qty: 1, unit_price: 450 }] }, opsToken);
+    expect(opsOrder.status).toBe(201);
+  });
+
+  it("the order period is correctable by ops_manager/super_admin only, validated YYYY-MM", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,order_period) VALUES ('OP-PER','c1','tst-ops','APPROVED',100,0,100,'Regular','2026-01')").run();
+    expect((await post("/api/orders/OP-PER/period", { order_period: "2026-05" }, clientToken)).status).toBe(403);     // client forbidden
+    expect((await post("/api/orders/OP-PER/period", { order_period: "2026/5" }, opsToken)).status).toBe(422);         // bad format
+    const okRes = await post("/api/orders/OP-PER/period", { order_period: "2026-05" }, opsToken);
+    expect(okRes.status).toBe(200);
+    expect((await db.prepare("SELECT order_period FROM orders WHERE id='OP-PER'").first() as { order_period: string }).order_period).toBe("2026-05");
+  });
+
+  it("a pick draft saves quantities without touching stock, and finalizing the pick clears it", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('PD-1','c1','tst-ops','READY_TO_PICK',100,0,100,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('pd1-i1','PD-1','SKU001','Rice',10,450,4500)").run();
+    const reservedBefore = (await db.prepare("SELECT COALESCE(reserved,0) r FROM inventory WHERE sku='SKU001'").first() as { r: number }).r;
+
+    const sd = await post("/api/orders/PD-1/pick-draft", { items: [{ sku: "SKU001", qty: 4, bin_code: "A-1" }] }, opsToken);
+    expect(sd.status).toBe(200);
+    const draft = JSON.parse((await db.prepare("SELECT pick_draft FROM orders WHERE id='PD-1'").first() as { pick_draft: string }).pick_draft);
+    expect(draft.items[0]).toMatchObject({ sku: "SKU001", qty: 4, bin_code: "A-1" });
+    // the draft holds no stock
+    expect((await db.prepare("SELECT COALESCE(reserved,0) r FROM inventory WHERE sku='SKU001'").first() as { r: number }).r).toBe(reservedBefore);
+
+    // finalizing the pick clears the draft
+    const pick = await post("/api/orders/PD-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 4, bin_code: "A-1" }], partial: true }, opsToken);
+    expect(pick.status).toBe(200);
+    expect((await db.prepare("SELECT pick_draft FROM orders WHERE id='PD-1'").first() as { pick_draft: string | null }).pick_draft).toBeNull();
   });
 });
 

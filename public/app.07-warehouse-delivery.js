@@ -857,11 +857,37 @@ async function pickOrderModal(orderId) {
     if (def) APP._pickCtx.binSel[l.sku] = def;
   });
   if (firstBinCode) APP._pickCtx.lastBin = firstBinCode;
+  // Restore a saved pick draft (quantities + bins) so a partial pick resumes where it
+  // was left — no stock was held, this just repopulates the entered numbers.
+  let draftLoaded = false;
+  if (order && order.pick_draft) {
+    try {
+      const d = JSON.parse(order.pick_draft);
+      const bySku = {}; (d.items || []).forEach(it => { bySku[it.sku] = it; });
+      if ((d.items || []).some(it => (it.qty || 0) > 0)) {
+        APP._pickCtx.vals = lines.map(l => { const it = bySku[l.sku]; return it ? (parseInt(it.qty) || 0) : 0; });
+        lines.forEach(l => { const it = bySku[l.sku]; if (it && it.bin_code) APP._pickCtx.binSel[l.sku] = it.bin_code; });
+        draftLoaded = true;
+      }
+    } catch (_) { /* ignore a malformed draft */ }
+  }
   APP._pickScanMode = 'fill';
   openModal(`Pick Items — ${orderId}${clientName ? ` · ${clientName}` : ''}`, pickModalInner(), pickModalFooter());
   updatePickSummary();
   pickApplyFilters();
+  if (draftLoaded) showToast('Resumed your saved pick draft', 'info');
   const fs = document.getElementById('pick-search'); if (fs) fs.focus();
+}
+// Save the current pick (quantities + chosen bins) as a resumable draft. No stock is
+// held — reservation still happens only on the final Submit. Works from the picking
+// list (not the review screen).
+async function pickSaveDraft(orderId) {
+  const items = Array.from(document.querySelectorAll('.pick-qty')).map(inp => {
+    const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
+    return { sku: inp.dataset.sku, qty: parseInt(inp.value) || 0, bin_code: binSel ? (binSel.value || '') : '' };
+  });
+  const r = await api(`/orders/${orderId}/pick-draft`, { method: 'POST', body: JSON.stringify({ items }) });
+  if (r && r.ok) { showToast(`Draft saved — ${r.saved} line${r.saved === 1 ? '' : 's'}. Resume any time.`); closeModal(); }
 }
 
 // Roles allowed to pick MORE than the remaining qty (the authorised over-pick
@@ -912,6 +938,7 @@ function pickModalFooter() {
   return `${ctx.canAmend ? `<button class="btn btn-warning" ${dataActClose('amendOrderModal', ctx.orderId)} style="margin-right:auto" title="Change items — resends the order for approval">✏️ Amend items</button>` : ''}
     <span class="pk-foot-hint">You can pick less than remaining — a short pick is recorded.</span>
     <button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+    <button class="btn btn-secondary" ${dataAct('pickSaveDraft', ctx.orderId)} title="Save the entered quantities to finish later — no stock is held yet">💾 Save draft</button>
     <button class="btn btn-primary" ${dataAct('pickReview', ctx.orderId)}>Review &amp; confirm →</button>`;
 }
 
