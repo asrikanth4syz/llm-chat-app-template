@@ -371,7 +371,7 @@ async function renderClientBudget(el) {
         <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);cursor:pointer" ${dataAct('viewOrder', o.id)}>
           <div class="u-flex1">
             <div style="font-weight:700;font-size:.86rem">${o.id}</div>
-            <div style="font-size:.74rem;color:var(--text-muted)">${fmtDate(o.created_at)}</div>
+            <div style="font-size:.74rem;color:var(--text-muted)">${fmtDate(o.created_at)} · ${o.item_count||0} items · ${o.total_qty||0} qty</div>
           </div>
           <div style="font-weight:700;color:var(--navy)">${fmt(o.grand_total)}</div>
         </div>`).join('')||`<div style="padding:32px;text-align:center;color:var(--text-muted)">No completed orders yet</div>`}

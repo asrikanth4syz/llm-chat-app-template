@@ -7274,6 +7274,12 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
     const { results } = await env.DB.prepare(`SELECT order_id, MIN(id) p FROM purchase_orders WHERE order_id IS NOT NULL GROUP BY order_id`).all();
     for (const r of results as Array<Record<string,unknown>>) if (r.p) poRef[String(r.order_id)] = String(r.p);
   } catch { /* */ }
+  // Item line / unit roll-up per order (for the recent widget's Items · Qty counts).
+  const itemAgg: Record<string,{lines:number;qty:number}> = {};
+  try {
+    const { results } = await env.DB.prepare(`SELECT order_id, COUNT(*) lines, COALESCE(SUM(qty),0) qty FROM order_items WHERE order_id IS NOT NULL GROUP BY order_id`).all();
+    for (const r of results as Array<Record<string,unknown>>) itemAgg[String(r.order_id)] = { lines:Number(r.lines), qty:Number(r.qty) };
+  } catch { /* */ }
 
   const nowMs = Date.now();
   const slaCfg = await getSlaConfig(env);
@@ -7315,6 +7321,7 @@ async function handlePipeline(request: Request, env: Env): Promise<Response> {
       id: oid, client_name: o.client_name, value: Number(o.grand_total)||0,
       stage_key: key, stage_no: STAGE_META[key].no, stage_label: STAGE_META[key].label,
       dwell: fmtDwell(dwellH), sla: slaState,
+      item_count: itemAgg[oid]?.lines||0, total_qty: itemAgg[oid]?.qty||0,
     });
   }
 

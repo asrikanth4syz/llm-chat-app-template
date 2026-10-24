@@ -748,6 +748,7 @@ async function loadQuickReorder() {
         </div>
       </div>
       <div class="card-body" style="padding:10px 16px;font-size:.84rem;color:var(--text-muted)">
+        <div style="font-weight:600;color:var(--text);margin-bottom:4px">${o.item_count??(o.items||[]).length} items · ${o.total_qty??(o.items||[]).reduce((s,i)=>s+(Number(i.qty)||0),0)} qty</div>
         ${(o.items||[]).map(i=>`${h(i.name)} ×${i.qty}`).join(' · ')||'—'}
       </div>
     </div>`).join('');

@@ -225,7 +225,7 @@ async function mountRecentPipeline() {
     const slaText = o.sla === 'late' ? 'overdue' : (o.sla === 'ok' ? 'on track' : o.dwell);
     return `<a class="rpw-row" ${dataAct('orderTimelineModal', o.id)}>
       <div class="rpw-top"><span class="rpw-id">${h(o.id)}</span><span class="rpw-client">${h(o.client_name || '—')}</span></div>
-      <div class="rpw-val">${fmt(o.value)}</div>
+      <div class="rpw-val">${fmt(o.value)} <span class="u-muted" style="font-weight:500;font-size:.74rem">· ${o.item_count || 0} items · ${o.total_qty || 0} qty</span></div>
       <div class="rpw-line">
         <span class="rpw-prog">${pips}</span>
         <span class="rpw-stg"><b>${h(o.stage_label)}</b> · ${o.stage_no}/10</span>

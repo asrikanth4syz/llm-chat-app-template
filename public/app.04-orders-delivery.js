@@ -270,6 +270,7 @@ async function renderMyOrders(el) {
               ${(o.items||[]).length>4?`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
             </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--surface-2);border-radius:8px">📝 ${o.notes}</div>` : ''}
 
+            <div style="font-size:.74rem;color:var(--text-muted);margin-bottom:10px"><b style="color:var(--text)">${o.item_count!=null?o.item_count:(o.items||[]).length}</b> item${(o.item_count!=null?o.item_count:(o.items||[]).length)!=1?'s':''} · <b style="color:var(--text)">${(o.total_qty!=null?o.total_qty:totUnits)||0}</b> qty</div>
             ${o.need_by_date ? `<div style="padding:6px 12px;background:var(--red-soft-bg);border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid var(--red-soft-bg)">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
             ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'var(--success-bg)'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'var(--red-soft-bg)':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
             ${deliveryStarted && delUnits < totUnits?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">📦 Partially delivered — <b>${Math.min(delUnits,totUnits).toLocaleString('en-IN')}</b> of <b>${totUnits.toLocaleString('en-IN')}</b> units received · <b>${dueUnits.toLocaleString('en-IN')}</b> due</div>`:isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
@@ -530,10 +531,18 @@ function amendmentSummaryHTML(order) {
     </div>`;
   }
 
+  // Totals before → after, so the change is clear at a glance (counts + value).
+  const bLines = before.length, aLines = after.length;
+  const bQty = before.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const aQty = after.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const chg = (b, a2) => b === a2 ? `<b>${a2}</b>` : `<span class="u-muted" style="text-decoration:line-through">${b}</span> → <b>${a2}</b>`;
   const body = `
     <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px">Reason: <b style="color:var(--navy)">${h(a.reason || '')}</b>${a.actor_name ? ` · by ${h(a.actor_name)}` : ''}</div>
     ${rows.join('')}
     <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:.84rem">
+      <span>Items &amp; qty</span><span>${chg(bLines, aLines)} items · ${chg(bQty, aQty)} qty</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.84rem">
       <span>Order value</span><span><span class="u-muted" style="text-decoration:line-through">${fmt(before_total)}</span> → <b>${fmt(after_total)}</b> <span style="color:${delta>0?'#dc2626':delta<0?'#0d9488':'var(--text-muted)'};font-size:.78rem">(${deltaTxt})</span></span>
     </div>
     ${budgetHtml}`;
@@ -846,7 +855,7 @@ async function viewOrder(id) {
     </div>
     ${meterHtml}
     ${orderSection('Line items',
-      `${lineCount} line${lineCount!==1?'s':''} · ${totalQty} unit${totalQty!==1?'s':''}${qtyMode==='delivered'?' · delivered view':qtyMode==='picked'?' · ⚠ picked view':''}`,
+      `${lineCount} item${lineCount!==1?'s':''} · ${totalQty} qty${qtyMode==='delivered'?' · delivered view':qtyMode==='picked'?' · ⚠ picked view':''}`,
       `<table class="table" style="margin:0">
         <thead>${itemsTableHeader}</thead>
         <tbody>${itemsTableRows}</tbody>
@@ -1103,6 +1112,11 @@ async function amendOrderModal(id) {
     unit_price: (Number(it.unit_price) || 0) || invPrice[it.sku] || 0,
     delivered: deliveredMap[it.sku] || 0,
   })).join('');
+  // "Before" totals (effective prices, incl. GST) for the before → after summary.
+  const amendBeforeItems = (order.items || []);
+  const amendBeforeLines = amendBeforeItems.length;
+  const amendBeforeQty = amendBeforeItems.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const amendBeforeTotal = Math.round(amendBeforeItems.reduce((s, i) => s + (Number(i.qty) || 0) * ((Number(i.unit_price) || 0) || invPrice[i.sku] || 0), 0) * 1.18);
   openModal(`✏️ Amend Order ${id}`,
     `<div style="margin:0 0 12px;padding:9px 12px;background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:8px;font-size:.82rem;color:var(--amber-text)">
        ⚠️ Any change re-sends this order for <b>approval</b> and resets picking. Current status: <b>${h(order.status||'')}</b>.
@@ -1123,7 +1137,10 @@ async function amendOrderModal(id) {
      <label style="display:block;margin-top:12px;font-size:.82rem;font-weight:600">Reason for change <span style="color:var(--danger,#dc2626)">*</span>
        <textarea id="amend-reason" class="input" rows="2" placeholder="e.g. client swapped Product X for Product Y" style="width:100%;margin-top:4px"></textarea>
      </label>
-     <div class="cart-row cart-total" style="margin-top:12px"><span>Estimated total (incl. 18% GST)</span><span id="amend-total">${fmt(0)}</span></div>`,
+     <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:.86rem">
+       <div style="display:flex;justify-content:space-between;color:var(--text-muted)"><span>Before</span><span><b>${amendBeforeLines}</b> items · <b>${amendBeforeQty}</b> qty · ${fmt(amendBeforeTotal)}</span></div>
+       <div style="display:flex;justify-content:space-between;margin-top:5px;font-weight:700;color:var(--navy)"><span>After</span><span><span id="amend-counts">0 items · 0 qty</span> · <span id="amend-total">${fmt(0)}</span></span></div>
+     </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('submitAmendOrder', id)}>Save &amp; Re-submit for Approval</button>`);
   amendRecalc();
@@ -1167,14 +1184,16 @@ function amendRemoveRow(sku) {
 }
 
 function amendRecalc() {
-  let sub = 0;
+  let sub = 0, qty = 0, lines = 0;
   document.querySelectorAll('.amend-row').forEach(r => {
     const q = parseInt(r.querySelector('.amend-qty')?.value, 10) || 0;
     const p = parseFloat(r.querySelector('.amend-price')?.value) || 0;
-    sub += q * p;
+    sub += q * p; qty += q; lines += 1;
   });
   const el = document.getElementById('amend-total');
   if (el) el.textContent = fmt(Math.round(sub * 1.18));
+  const c = document.getElementById('amend-counts');
+  if (c) c.textContent = `${lines} items · ${qty} qty`;
 }
 
 async function submitAmendOrder(id) {
@@ -1247,9 +1266,9 @@ async function viewOrderDrilldown(orderId) {
     <div style="padding:14px 18px;min-width:0">
       <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px">Ordered vs Delivered</div>
       <div style="font-size:.86rem;line-height:1.55">
-        <div style="color:var(--navy);font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Ord</span>${summary.total_lines} lines · ${ordQty} qty</div>
-        <div style="color:#10b981;font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Del</span>${summary.delivered_lines} lines · ${delQty} qty</div>
-        <div style="color:${dueQty>0?'var(--red)':'var(--text-muted)'};font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Due</span>${dueLines} lines · ${dueQty} qty</div>
+        <div style="color:var(--navy);font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Ord</span>${summary.total_lines} items · ${ordQty} qty</div>
+        <div style="color:#10b981;font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Del</span>${summary.delivered_lines} items · ${delQty} qty</div>
+        <div style="color:${dueQty>0?'var(--red)':'var(--text-muted)'};font-weight:700"><span style="display:inline-block;min-width:32px;color:var(--text-muted);font-weight:600;font-size:.76rem">Due</span>${dueLines} items · ${dueQty} qty</div>
       </div>
     </div>`;
 
@@ -1436,9 +1455,9 @@ function ddExportCSV() {
     ['Delivery Breakdown', d.orderId],
     ['Client', d.order.client_name || ''],
     ['Status', statusLabel, '', 'Completion', `${d.qtyRate}% of units`],
-    ['Ordered', `${s.total_lines || 0} lines / ${d.ordQty || 0} qty`, '', 'Ordered value', s.total_ordered_value || 0],
-    ['Delivered', `${s.delivered_lines || 0} lines / ${d.delQty || 0} qty`, '', 'Delivered value', s.total_delivered_value || 0],
-    ['Due', `${dueLines} lines / ${dueQty} qty`, '', 'Due value', s.total_due_value || 0],
+    ['Ordered', `${s.total_lines || 0} items / ${d.ordQty || 0} qty`, '', 'Ordered value', s.total_ordered_value || 0],
+    ['Delivered', `${s.delivered_lines || 0} items / ${d.delQty || 0} qty`, '', 'Delivered value', s.total_delivered_value || 0],
+    ['Due', `${dueLines} items / ${dueQty} qty`, '', 'Due value', s.total_due_value || 0],
     [],
   ].map(r => r.map(esc).join(','));
   const head = ['Item','Ordered','Delivered','Due','Unit Price','Ordered Value','Delivered Value','Due Value','Delivered Via','Status'];
@@ -1531,9 +1550,9 @@ function ddExportPDF() {
       </div>
       <div class="ddp-sumbody">
         <div class="odd">
-          <div class="r ord"><span class="lab">Ord</span><b>${s.total_lines || 0} lines · ${d.ordQty || 0} qty</b></div>
-          <div class="r del"><span class="lab">Del</span><b>${s.delivered_lines || 0} lines · ${d.delQty || 0} qty</b></div>
-          <div class="r due"><span class="lab">Due</span><b>${dueLines} lines · ${dueQty} qty</b></div>
+          <div class="r ord"><span class="lab">Ord</span><b>${s.total_lines || 0} items · ${d.ordQty || 0} qty</b></div>
+          <div class="r del"><span class="lab">Del</span><b>${s.delivered_lines || 0} items · ${d.delQty || 0} qty</b></div>
+          <div class="r due"><span class="lab">Due</span><b>${dueLines} items · ${dueQty} qty</b></div>
           <div class="vals">
             <div class="val ord"><div class="k">Ordered value</div><div class="n">${rupee(ov)}</div></div>
             <div class="val del"><div class="k">Delivered</div><div class="n">${rupee(dv)}</div></div>
@@ -1922,7 +1941,7 @@ async function renderOrderQueue(el) {
           <span class="oq-numunit"><b>${o.item_count||0}</b> items</span>
         </td>
         <td data-label="Total Qty" class="u-center">
-          <span class="oq-numunit"><b>${o.total_qty||0}</b> units</span>
+          <span class="oq-numunit"><b>${o.total_qty||0}</b> qty</span>
           ${oqQtyBreakdown(o)}
         </td>
         <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
