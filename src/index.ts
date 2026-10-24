@@ -8035,6 +8035,10 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   const user = await getUser(request, env);
   const denied = requireUser(user);
   if (denied) return denied;
+  // Self-heal the newer order columns directly so a legacy DB (where these ALTERs
+  // in ensureFeatureTables never ran) can still accept an order instead of 500-ing.
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_reference TEXT").run(); } catch { /* exists */ }
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run(); } catch { /* exists */ }
 
   const body = await request.json() as {
     client_id: string;
@@ -8867,10 +8871,12 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
     ).bind(uid(), id, item.sku, item.name, item.qty, item.bin_code||null, user!.name).run();
   }
 
-  // Transition order to PICKED
+  // Transition order to PICKED. The pick-draft clear is best-effort and kept out of
+  // this critical UPDATE so a legacy DB missing the pick_draft column can still finalise.
   await env.DB.prepare(
-    "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),pick_draft=NULL,updated_at=datetime('now') WHERE id=?"
+    "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),updated_at=datetime('now') WHERE id=?"
   ).bind(user!.sub, user!.name, id).run();
+  try { await env.DB.prepare("UPDATE orders SET pick_draft=NULL WHERE id=?").bind(id).run(); } catch { /* column may be absent on legacy DBs */ }
   const pickNote = body.partial
     ? `Partial pick by ${user!.name} — ${body.items.map(i=>`${i.sku}:${i.qty}`).join(', ')}`
     : `Picked by ${user!.name}`;
@@ -8897,7 +8903,9 @@ async function handleGetAllocations(request: Request, env: Env, path: string): P
 async function handleSavePickDraft(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  await ensureFeatureTables(env);
+  // Self-heal the pick_draft column directly — don't depend on the whole
+  // ensureFeatureTables run succeeding on a legacy DB.
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN pick_draft TEXT").run(); } catch { /* exists */ }
   const id = path.split("/").slice(-2)[0];
   const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
   if (!order) return json({ error: "Not found" }, 404);
