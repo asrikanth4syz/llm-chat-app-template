@@ -1700,7 +1700,7 @@ async function renderProcurement(el) {
   // Vendor performance chart
   if (vendors?.length) {
     const ctx = document.getElementById('vendorChart');
-    if (ctx) {
+    if (ctx && window.Chart) {
       APP.charts.vendor = new Chart(ctx, {
         type:'bar',
         data:{

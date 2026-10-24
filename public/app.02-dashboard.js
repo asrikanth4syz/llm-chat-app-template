@@ -708,7 +708,7 @@ async function renderOpsDashboard(el) {
   const colors  = ['#C7CBEF','#A6ADE6','#818BD9','#5B67C9','#404DB0','#2B3690','#B8BDC8'];
   const counts  = labels.map(l => byStatus[l]||0);
   const ctx = document.getElementById('statusChart');
-  if (ctx) {
+  if (ctx && window.Chart) {
     if (APP.charts.status) { APP.charts.status.destroy(); delete APP.charts.status; }
     APP.charts.status = new Chart(ctx, {
       type: 'bar',
