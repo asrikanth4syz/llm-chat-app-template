@@ -1414,7 +1414,7 @@ function itemSearchMatch(query, ...fields) {
   const compact = hay.replace(/ /g, '');
   return tokens.every(t => hay.includes(t) || compact.includes(t));
 }
-function fmt(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
+function fmt(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
 function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
 function pct(n) { return (+(n || 0)).toFixed(1) + '%'; }
 

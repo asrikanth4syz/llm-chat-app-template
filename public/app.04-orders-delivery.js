@@ -180,171 +180,164 @@ async function renderMyOrders(el) {
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   if (isClient) {
-    const statuses = ['All','DRAFT','SUBMITTED','PARTIALLY_CLOSED','CLOSED','CANCELLED'];
-    // Client-facing buckets: internal pipeline statuses collapse into "Submitted"
-    // so an order in progress still appears under a meaningful filter (not only "All").
-    const MO_BUCKETS = {
-      DRAFT: ['DRAFT'],
-      SUBMITTED: ['SUBMITTED','PENDING_APPROVAL','APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','READY_TO_PICK','PICKED','QUALITY_CHECK','VENDOR_PO_RAISED','IN_SHIPMENT'],
-      PARTIALLY_CLOSED: ['PARTIALLY_CLOSED'],
-      CLOSED: ['CLOSED'],
-      CANCELLED: ['CANCELLED'],
+    // Status filter state (new model: active / transit / partial / delivered + All).
+    if (APP._moChip == null)     APP._moChip = 'All';
+    if (APP._moLateOnly == null) APP._moLateOnly = false;
+    if (APP._moSearch == null)   APP._moSearch = '';
+    if (APP._moPeriod == null)   APP._moPeriod = 'all';
+
+    // Colour + label per status. Palette: green=delivered, amber=partial,
+    // blue=in transit, grey=active; red is reserved for the late flag only.
+    const MO_META = {
+      active:    { label:'Active',     color:'#6b7280', icon:'🕓' },
+      transit:   { label:'In transit', color:'#3b82f6', icon:'🚚' },
+      partial:   { label:'Partial',    color:'#f59e0b', icon:'🔶' },
+      delivered: { label:'Delivered',  color:'#10b981', icon:'✅' },
     };
-    if (!APP._moTab) APP._moTab = 'All';
-    if (!APP._moSearch) APP._moSearch = '';
 
-    const STATUS_LABEL = { DRAFT:'Draft', PENDING_PRICING:'Awaiting Pricing', SUBMITTED:'Submitted', PENDING_APPROVAL:'Awaiting Approval', APPROVED:'Approved', ACKNOWLEDGED:'Processing', INVENTORY_CHECK:'Checking Stock', READY_TO_PICK:'Picking', PICKED:'Picked', QUALITY_CHECK:'Quality Check', VENDOR_PO_RAISED:'Procurement', IN_SHIPMENT:'In Shipment', PARTIALLY_CLOSED:'Partially Delivered', CLOSED:'Delivered', CANCELLED:'Cancelled' };
-    const STATUS_COLOR = { DRAFT:'#6b7280', PENDING_PRICING:'#d97706', SUBMITTED:'#3b82f6', PENDING_APPROVAL:'#f59e0b', APPROVED:'#3b82f6', ACKNOWLEDGED:'#8b5cf6', INVENTORY_CHECK:'#8b5cf6', READY_TO_PICK:'#0d9488', PICKED:'#0d9488', QUALITY_CHECK:'#06b6d4', VENDOR_PO_RAISED:'#8b5cf6', IN_SHIPMENT:'#06b6d4', PARTIALLY_CLOSED:'#f59e0b', CLOSED:'#10b981', CANCELLED:'#ef4444' };
+    // Cancelled orders sit outside the four live statuses, so they're excluded
+    // from the counts/list (the four statuses must sum to All).
+    const liveOrders = orders.filter(o => o.status !== 'CANCELLED');
+    const SUM = window.moSummarize(liveOrders); // mo-status.js (module) loads before any render
 
-    function moFiltered() {
-      let list;
-      if (APP._moTab === 'All') list = orders;
-      else { const bucket = MO_BUCKETS[APP._moTab] || [APP._moTab]; list = orders.filter(o => bucket.includes(o.status)); }
+    // One superadmin-style tile acting as a filter chip (aria-pressed, dimmed at 0).
+    const chip = (key, label, count, color, active) => `
+      <button type="button" class="tile" ${dataActEl('moChip', key)} aria-pressed="${active?'true':'false'}"
+        title="${label} — ${count} order${count!==1?'s':''}${count===0?' (none yet)':''}"
+        style="min-width:118px;text-align:left;${count===0?'opacity:.5;':''}">
+        <div class="tile-label"><span class="tile-dot" style="background:${color}"></span>${label}</div>
+        <div class="tile-value">${count}</div>
+      </button>`;
+    function chipsHtml() {
+      const c = SUM.counts, t = APP._moChip, late = APP._moLateOnly;
+      return [
+        chip('All',       'All',        c.all,       'var(--navy)', t==='All' && !late),
+        chip('active',    'Active',     c.active,    MO_META.active.color,    t==='active'    && !late),
+        chip('transit',   'In transit', c.transit,   MO_META.transit.color,   t==='transit'   && !late),
+        chip('partial',   'Partial',    c.partial,   MO_META.partial.color,   t==='partial'   && !late),
+        chip('delivered', 'Delivered',  c.delivered, MO_META.delivered.color, t==='delivered' && !late),
+      ].join('');
+    }
+
+    // Apply the active chip / late / period / search filters (all client-side).
+    function moVisible() {
+      let list = SUM.rows;
+      if (APP._moLateOnly) list = list.filter(r => r._mo.late);
+      else if (APP._moChip !== 'All') list = list.filter(r => r._mo.status === APP._moChip);
+      if (APP._moPeriod === 'month') {
+        const ym = new Date().toISOString().slice(0,7);
+        list = list.filter(r => String(r.created_at||'').slice(0,7) === ym);
+      } else if (APP._moPeriod === '30' || APP._moPeriod === '90') {
+        const cut = new Date(Date.now() - Number(APP._moPeriod)*86400000).toISOString().slice(0,10);
+        list = list.filter(r => String(r.created_at||'').slice(0,10) >= cut);
+      }
       if (APP._moSearch) {
         const q = APP._moSearch.toLowerCase();
-        list = list.filter(o => o.id.toLowerCase().includes(q) || (o.notes||'').toLowerCase().includes(q));
+        list = list.filter(r => r.id.toLowerCase().includes(q));
       }
       return list;
     }
 
-    function moRender() {
-      const filtered = moFiltered();
-      document.getElementById('mo-count').textContent = `${filtered.length} order${filtered.length!==1?'s':''}`;
-      const container = document.getElementById('mo-cards');
+    function rowHtml(r) {
+      const m = MO_META[r._mo.status];
+      const items = r.item_count!=null ? r.item_count : (r.items||[]).length;
+      const pw = Math.min(100, r._mo.pct);
+      const pill = `<span style="display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:800;color:${m.color};background:${m.color}1a;border:1px solid ${m.color};border-radius:999px;padding:3px 10px">${m.icon} ${m.label}</span>`;
+      const deliveredOn = r.closed_at || r.updated_at;
+      const dateLine = r._mo.status==='delivered'
+        ? `<span style="color:var(--success);font-weight:600">✓ Delivered${deliveredOn?' '+fmtDate(deliveredOn):''}</span>`
+        : r._mo.promised
+          ? `<span style="color:${r._mo.late?'var(--danger)':'var(--text-muted)'};font-weight:${r._mo.late?'700':'500'}">${r._mo.late?'⚠ ':'📅 '}Expected ${fmtDate(r._mo.promised)}${r._mo.late?' — overdue':''}</span>`
+          : `<span style="color:var(--text-muted)">📅 Delivery date not set</span>`;
+      return `
+      <div class="card" style="margin-bottom:12px;border-left:4px solid ${m.color}">
+        <div style="padding:14px 18px">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start">
+            <div>
+              <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${r.id}</div>
+              <div class="u-subtiny">${fmtDate(r.created_at)} · ${items} item${items!==1?'s':''}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              ${pill}
+              <div style="font-weight:800;font-size:1.05rem;color:var(--navy)">${fmt(r.grand_total)}</div>
+            </div>
+          </div>
+          <div style="margin:11px 0 4px">
+            <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:${pw}%;background:${m.color}"></i></div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">${r._mo.delivered.toLocaleString('en-IN')} of ${r._mo.ordered.toLocaleString('en-IN')} units · ${r._mo.pct}%</div>
+          </div>
+          <div style="font-size:.78rem;margin:6px 0 11px">${dateLine}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View Details</button>
+            ${r.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit Order</button>`:''}
+            <button class="btn btn-secondary btn-sm" disabled title="Invoice download isn't available to clients yet">🧾 Invoice</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', r.id)}>🔄 Reorder</button>
+            ${(r.status==='DRAFT'||r.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" ${dataAct('cancelOrder', r.id)} data-stop>Cancel</button>`:''}
+          </div>
+        </div>
+      </div>`;
+    }
 
-      if (filtered.length === 0) {
-        container.innerHTML = `<div style="padding:56px;text-align:center;background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
-          <div style="font-size:3rem;margin-bottom:12px">📋</div>
-          <div style="font-weight:700;font-size:1rem;color:var(--navy)">No orders found</div>
-          <div style="font-size:.83rem;color:var(--text-muted);margin-top:6px">Try "All" or clear the search filter</div>
-          ${canAccessPage('place_order') ? `<button class="btn btn-gold" style="margin-top:16px" ${dataAct('navigate', 'place_order')}>${iconPlus(13)} Place New Order</button>` : ''}
+    function moRender() {
+      const list = moVisible();
+      const countEl = document.getElementById('mo-count');
+      if (countEl) countEl.textContent = `${list.length} of ${SUM.counts.all} order${SUM.counts.all!==1?'s':''}`;
+      const chipsEl = document.getElementById('mo-chips');
+      if (chipsEl) chipsEl.innerHTML = chipsHtml();
+      const container = document.getElementById('mo-cards');
+      if (!container) return;
+      if (list.length === 0) {
+        container.innerHTML = `<div style="padding:48px;text-align:center;background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+          <div style="font-size:2.6rem;margin-bottom:10px">📋</div>
+          <div style="font-size:.9rem;color:var(--text-muted)">No orders match this filter. Clear the filter or search to see all orders.</div>
         </div>`;
         return;
       }
-
-      container.innerHTML = filtered.map(o => {
-        const sc = STATUS_COLOR[o.status] || '#6b7280';
-        const isCancelled = o.status === 'CANCELLED';
-        // Derive fulfilment from actual delivered units (handleListOrders -> delivered_qty)
-        // so the client sees the truth even when the workflow status lags behind.
-        const delUnits    = Number(o.delivered_qty) || 0;
-        const totUnits    = Number(o.total_qty) || 0;
-        const dueUnits    = Math.max(0, totUnits - Math.min(delUnits, totUnits));
-        const deliveryStarted = delUnits > 0 && !isCancelled;
-        const isPartial   = o.status === 'PARTIALLY_CLOSED' || (deliveryStarted && delUnits < totUnits);
-        const isDone      = o.status === 'CLOSED';
-        const itemNames   = (o.items||[]).slice(0,4).map(i=>i.name||i.item_name||'').filter(Boolean);
-
-        // Phase-based status stepper (shared component, single source of truth).
-        const progressBar = `<div style="margin:12px 0 8px">${phaseStepper(o.status, { compact:true })}</div>`;
-
-        return `
-        <div style="background:var(--surface);border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:12px;overflow:hidden;border:1px solid ${isCancelled?'var(--red-soft-bg)':isDone?'#bbf7d0':'var(--border)'}">
-          <!-- Card top bar -->
-          <div style="height:3px;background:${sc}"></div>
-          <div style="padding:16px 20px">
-            <!-- Row 1: ID + amount + status -->
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-              <div style="display:flex;align-items:center;gap:10px">
-                <div style="width:40px;height:40px;border-radius:10px;background:${sc}18;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
-                  ${isDone?'✅':isPartial?'🔶':isCancelled?'❌':o.status==='IN_SHIPMENT'?'🚚':o.status==='PENDING_PRICING'?'💰':o.status==='PENDING_APPROVAL'?'⏳':o.status==='DRAFT'?'✏️':'📄'}
-                </div>
-                <div>
-                  <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${o.id}</div>
-                  <div class="u-subtiny">${fmtDate(o.created_at)}${(o.items||[]).length?' · '+(o.items||[]).length+' item'+(o.items.length!==1?'s':''):''}</div>
-                </div>
-              </div>
-              <div style="text-align:right;flex-shrink:0">
-                <div style="font-weight:800;font-size:1.1rem;color:var(--navy)">${fmt(o.grand_total)}</div>
-                ${o.status==='CLOSED'&&(o.closed_at||o.updated_at)?`<div style="font-size:.7rem;color:var(--success);font-weight:600;margin-top:4px">✓ Closed ${fmtDate(o.closed_at||o.updated_at)}</div>`:''}
-                <div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">${statusBadge(o.status)} ${o.order_type&&o.order_type!=='Regular'?orderTypeBadge(o.order_type):''}</div>
-              </div>
-            </div>
-
-            <!-- Progress bar -->
-            ${progressBar}
-
-            <!-- Item preview chips -->
-            ${itemNames.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-              ${itemNames.map(n=>`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">${n}</span>`).join('')}
-              ${(o.items||[]).length>4?`<span style="background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:.72rem;color:var(--text-muted)">+${(o.items||[]).length-4} more</span>`:''}
-            </div>` : o.notes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--surface-2);border-radius:8px">📝 ${o.notes}</div>` : ''}
-
-            <div style="font-size:.74rem;color:var(--text-muted);margin-bottom:10px"><b style="color:var(--text)">${o.item_count!=null?o.item_count:(o.items||[]).length}</b> item${(o.item_count!=null?o.item_count:(o.items||[]).length)!=1?'s':''} · <b style="color:var(--text)">${(o.total_qty!=null?o.total_qty:totUnits)||0}</b> qty</div>
-            ${o.need_by_date ? `<div style="padding:6px 12px;background:var(--red-soft-bg);border-radius:8px;font-size:.78rem;color:var(--danger);font-weight:600;margin-bottom:8px;border:1px solid var(--red-soft-bg)">🚨 Need By: ${fmtDate(o.need_by_date)}</div>` : ''}
-            ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? (()=>{ const late=o.predicted_delivery_date<new Date().toISOString().slice(0,10); return `<div style="padding:6px 12px;background:${late?'#fff8f8':'var(--success-bg)'};border-radius:8px;font-size:.78rem;color:${late?'var(--danger)':'var(--success)'};font-weight:600;margin-bottom:8px;border:1px solid ${late?'var(--red-soft-bg)':'#bbf7d0'}">📅 Est. Delivery: ${fmtDate(o.predicted_delivery_date)}${late?' — Delayed':''}</div>`; })() : ''}
-            ${deliveryStarted && delUnits < totUnits?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">📦 Partially delivered — <b>${Math.min(delUnits,totUnits).toLocaleString('en-IN')}</b> of <b>${totUnits.toLocaleString('en-IN')}</b> units received · <b>${dueUnits.toLocaleString('en-IN')}</b> due</div>`:isPartial?`<div style="padding:8px 12px;background:var(--amber-bg);border-radius:8px;font-size:.78rem;color:var(--amber-text);font-weight:600;margin-bottom:12px">⚠️ Partial delivery received — awaiting balance shipment</div>`:''}
-
-            <!-- Action buttons -->
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View Details</button>
-              ${o.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', o.id)}>Submit Order</button>`:''}
-              ${(deliveryStarted||['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED'].includes(o.status))?`<button class="btn btn-primary btn-sm" ${dataAct('viewOrderDrilldown', o.id)}>📦 Delivery Breakdown</button>`:''}
-              ${o.status==='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', o.id)}>🔄 Reorder</button>`:''}
-              ${(o.status==='DRAFT'||o.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" ${dataAct('cancelOrder', o.id)} data-stop>Cancel</button>`:''}
-            </div>
-          </div>
-        </div>`;
-      }).join('');
+      container.innerHTML = list.map(rowHtml).join('');
     }
-
-    // Summary KPIs
-    const active      = orders.filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length;
-    const closed      = orders.filter(o=>o.status==='CLOSED').length;
-    const partial     = orders.filter(o=>o.status==='PARTIALLY_CLOSED').length;
-    const totalSpend  = orders.filter(o=>o.status==='CLOSED').reduce((s,o)=>s+(o.grand_total||0),0);
-    const inShipment  = orders.filter(o=>o.status==='IN_SHIPMENT').length;
 
     el.innerHTML = `
     <!-- Header -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Orders</div>
-        <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count">${orders.length} orders</div>
+        <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count"></div>
       </div>
       ${canAccessPage('place_order') ? `<button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>` : ''}
     </div>
 
-    <!-- KPI tiles -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:14px;margin-bottom:16px">
-      <div class="card" style="padding:14px 16px;border-top:3px solid var(--primary);margin-bottom:0;cursor:pointer" ${dataAct('moGoTabByStatus', 'All')}>
-        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Active</div>
-        <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${active}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">in progress</div>
-      </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid #06b6d4;margin-bottom:0;cursor:pointer" ${dataAct('moGoTab', 'IN_SHIPMENT')}>
-        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">In Transit</div>
-        <div style="font-size:1.8rem;font-weight:800;color:${inShipment?'#0891b2':'var(--navy)'};line-height:1.2;margin-top:4px">${inShipment}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">on the way</div>
-      </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid ${partial>0?'var(--amber)':'var(--gray-light)'};margin-bottom:0;cursor:pointer" ${dataAct('moGoTab', 'PARTIALLY_CLOSED')}>
-        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Partial</div>
-        <div style="font-size:1.8rem;font-weight:800;color:${partial>0?'var(--warning)':'var(--navy)'};line-height:1.2;margin-top:4px">${partial}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">balance pending</div>
-      </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid var(--success);margin-bottom:0;cursor:pointer" ${dataAct('moGoTabByStatus', 'CLOSED')}>
-        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Delivered</div>
-        <div style="font-size:1.8rem;font-weight:800;color:var(--navy);line-height:1.2;margin-top:4px">${closed}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">complete</div>
-      </div>
-      <div class="card" style="padding:14px 16px;border-top:3px solid var(--blue);margin-bottom:0">
-        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Total Spend</div>
-        <div style="font-size:1.3rem;font-weight:800;color:var(--navy);line-height:1.3;margin-top:4px">${fmt(totalSpend)}</div>
-        <div style="font-size:.72rem;color:var(--text-muted);margin-top:2px">on closed orders</div>
+    <!-- Summary: status chips (left) + spend panel (right) -->
+    <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px">
+      <div id="mo-chips" class="tile-grid" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:0;flex:1">${chipsHtml()}</div>
+      <div class="tile" style="min-width:230px;cursor:default">
+        <div class="tile-label"><span class="tile-dot" style="background:#6b7280"></span>Open order value</div>
+        <div class="tile-value">${fmt(SUM.openValue)}</div>
+        <div class="tile-sub">Billed on closed orders · <b style="color:var(--success)">${fmt(SUM.billedValue)}</b></div>
       </div>
     </div>
 
-    <!-- Search + filter row -->
-    <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <input type="search" placeholder="🔍  Search orders…" value="${APP._moSearch||''}"
-        style="flex:1;min-width:180px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
-        ${dataInputEl('moSearch')} data-focus>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${statuses.map(s=>`<button ${dataActEl('moGoTabPill', s)} data-s="${s}" class="tab-pill mo-pill${APP._moTab===s?' active':''}" style="font-size:.78rem;padding:5px 12px">${s==='All'?'All orders':STATUS_LABEL[s]||s.replace(/_/g,' ')}</button>`).join('')}
-      </div>
+    <!-- Late banner (only when any order is overdue) -->
+    ${SUM.lateCount>0 ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--red-soft-bg,#fdecea);border:1px solid #e3a59d;border-radius:10px;padding:10px 14px;margin-bottom:14px">
+      <span style="font-size:1.05rem">⚠️</span>
+      <span style="font-weight:700;color:var(--danger);font-size:.86rem">${SUM.lateCount} order${SUM.lateCount!==1?'s':''} past the promised date</span>
+      <button type="button" class="btn btn-sm" ${dataAct('moShowLate')} style="margin-left:auto;background:var(--danger);color:#fff;border:0">Show them</button>
+    </div>` : ''}
+
+    <!-- Controls: search by order number + period -->
+    <div style="background:var(--surface);border-radius:12px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <input type="search" id="mo-search" placeholder="🔍  Search order number…" value="${APP._moSearch||''}"
+        style="flex:1;min-width:200px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
+        ${dataInputEl('moSearchInput')} data-focus>
+      <select ${dataChangeEl('moPeriod')} aria-label="Filter by period"
+        style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;background:var(--surface);color:var(--text)">
+        <option value="all"${APP._moPeriod==='all'?' selected':''}>All time</option>
+        <option value="month"${APP._moPeriod==='month'?' selected':''}>This month</option>
+        <option value="30"${APP._moPeriod==='30'?' selected':''}>Last 30 days</option>
+        <option value="90"${APP._moPeriod==='90'?' selected':''}>Last 90 days</option>
+      </select>
     </div>
 
-    <!-- Order cards -->
+    <!-- Order rows -->
     <div id="mo-cards"></div>`;
 
     moRender();
@@ -441,6 +434,23 @@ function ddReconFilter(status) {
     b.style.outlineOffset = on ? '1px' : '';
   });
 }
+// ── Client "My Orders" filter handlers (new status-chip model) ───────────────
+// All filter the list client-side via window.moRender (set up by renderMyOrders).
+let _moSearchTimer = null;
+function moChip(key) {
+  if (key === 'All') { APP._moChip = 'All'; APP._moLateOnly = false; }
+  else if (APP._moChip === key && !APP._moLateOnly) { APP._moChip = 'All'; } // click active chip → clear
+  else { APP._moChip = key; APP._moLateOnly = false; }
+  if (window.moRender) window.moRender();
+}
+function moShowLate() { APP._moLateOnly = true; APP._moChip = 'All'; if (window.moRender) window.moRender(); }
+function moSearchInput(el) {               // debounced 300ms
+  const v = el.value;
+  clearTimeout(_moSearchTimer);
+  _moSearchTimer = setTimeout(() => { APP._moSearch = v; if (window.moRender) window.moRender(); }, 300);
+}
+function moPeriod(el) { APP._moPeriod = el.value; if (window.moRender) window.moRender(); }
+
 const ORDER_STAGES = ['Placed','Approved','Sourced','Picked','Dispatched','Delivered','Billed','Closed'];
 function orderStageIndex(status) {
   const m = { DRAFT:0,PENDING_PRICING:0,SUBMITTED:0,PENDING_APPROVAL:0,
