@@ -414,8 +414,32 @@ function injectOrderStepperCss() {
   .onext .obtn{margin-left:auto;white-space:nowrap}
   .odone{margin:0 0 16px;padding:11px 14px;border-radius:10px;background:var(--bg,#f4f7f9);border:1px solid var(--border);font-size:.86rem;color:var(--text-muted)}
   @media (prefers-color-scheme:dark){ .onext{background:#122430;border-color:#57A8DC} .onext .ol2,.onext .ot{color:#cfe6f5} .ostep.cur .od{background:var(--card);border-color:#57A8DC;color:#8fc7ea;box-shadow:0 0 0 4px #122430} }
+  /* Delivery reconciliation: stack the ORDERED|DELIVERED|DUE columns on mobile. */
+  @media (max-width:560px){
+    .recon-cols{flex-direction:column}
+    .recon-cols>div{border-right:0!important;border-bottom:1px solid var(--border);width:100%;text-align:left}
+    .recon-cols>div:last-child{border-bottom:0}
+  }
   `;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+// Filter the Order View line-item table by reconciliation status (full/partial/
+// pending). Toggles row visibility only — it does not rebuild the table — and the
+// same status click again clears the filter. Legend chips reflect the active state.
+function ddReconFilter(status) {
+  const tbl = document.getElementById('order-items-table');
+  if (!tbl) return;
+  const cur = tbl.getAttribute('data-recon-filter') || '';
+  const next = cur === status ? '' : status;
+  tbl.setAttribute('data-recon-filter', next);
+  tbl.querySelectorAll('tbody tr[data-recon]').forEach(tr => {
+    tr.style.display = (!next || tr.getAttribute('data-recon') === next) ? '' : 'none';
+  });
+  document.querySelectorAll('[data-recon-legend]').forEach(b => {
+    const on = b.getAttribute('data-recon-legend') === next;
+    b.style.outline = on ? '2px solid var(--navy)' : '';
+    b.style.outlineOffset = on ? '1px' : '';
+  });
 }
 const ORDER_STAGES = ['Placed','Approved','Sourced','Picked','Dispatched','Delivered','Billed','Closed'];
 function orderStageIndex(status) {
@@ -662,45 +686,73 @@ async function viewOrder(id) {
       <div class="ord-meter-warn" style="margin-top:6px;font-size:.8rem;color:var(--danger,#C6472A);background:var(--danger-bg,#FBE7E1);border:1px solid var(--danger,#C6472A);border-radius:8px;padding:7px 10px">
         ⚠ <b>${overUnits} unit${overUnits===1?'':'s'} over-delivered</b> — recorded deliveries exceed the ordered quantity. This usually means a duplicate or phantom delivery challan was counted. Review the DCs below and cancel any that shouldn't have shipped.
       </div>` : '';
-  // Layman reconciliation: three big numbers (Ordered / Delivered / Due), a
-  // progress bar, and a plain-language delivery status derived from the actual
-  // delivered units — independent of the workflow status, which can lag behind.
-  const reconTile = (label, val, color) => `
-    <div style="text-align:center;padding:10px 6px;border:1px solid var(--border);border-radius:10px;background:var(--bg,var(--surface-2))">
-      <div style="font-size:1.35rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums;line-height:1.1">${val.toLocaleString('en-IN')}</div>
-      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-top:3px">${label}</div>
-    </div>`;
-  const deliveredCapped = Math.min(deliveredUnits, orderedUnits);
-  const fullyDelivered  = deliveredCapped >= orderedUnits && orderedUnits > 0;
-  const delChip = fullyDelivered
-    ? `<span style="font-size:.72rem;font-weight:800;color:#0C8E6D;background:#E4F5EF;border:1px solid #0C8E6D;border-radius:999px;padding:3px 11px">✅ Fully Delivered</span>`
-    : `<span style="font-size:.72rem;font-weight:800;color:#B5731A;background:#FBF0DB;border:1px solid #B5731A;border-radius:999px;padding:3px 11px">📦 Partially Delivered</span>`;
+  // ---- Delivery reconciliation card (shared staff + client) -------------------
+  // Figures straight from the per-line ordered/delivered qty; counts from the
+  // full/partial/pending split above. Percentages are relative to Ordered, items
+  // and qty computed separately, rounded, divide-by-zero guarded.
+  const isClientView = ['client_admin','client_user','client_approver'].includes(APP.user?.role||'');
+  const ordItems = dLines.length;
+  const ordQty   = dLines.reduce((s,l)=>s+(Number(l.qty_ordered)||0),0) || orderedUnits;
+  const delItems = itFull;                                              // count of FULL items
+  const delQty   = dLines.reduce((s,l)=>s+(Number(l.qty_delivered)||0),0);
+  const dueItems = itPartial + itPending;
+  const dueQty   = dLines.reduce((s,l)=>s+Math.max(0,(Number(l.qty_ordered)||0)-(Number(l.qty_delivered)||0)),0);
+  const rpct = (n,d) => d>0 ? Math.round(n/d*100) : 0;                  // guard /0
+  const delPctItems = rpct(delItems, ordItems), delPctQty = rpct(delQty, ordQty);
+  const duePctItems = rpct(dueItems, ordItems), duePctQty = rpct(dueQty, ordQty);
+  const segFull = rpct(itFull, ordItems), segPart = rpct(itPartial, ordItems), segPend = rpct(itPending, ordItems);
+  const nfIn = n => Number(n||0).toLocaleString('en-IN');
+  // Plain-language status (grey when nothing delivered — red is reserved for overdue).
+  const reconStatus = ((ordItems>0 && delItems>=ordItems) || (ordQty>0 && delQty>=ordQty))
+    ? { label:'Delivered', icon:'✅', fg:'#0C8E6D', bg:'#E4F5EF' }
+    : (delItems===0 && delQty===0)
+      ? { label:'Not Delivered', icon:'•', fg:'#5c7180', bg:'var(--bg,#eef2f5)' }
+      : { label:'Partially Delivered', icon:'📦', fg:'#B5731A', bg:'#FBF0DB' };
   // If delivery has started but the workflow status hasn't caught up, say so plainly.
   const statusLagged = showDelivered && !['IN_SHIPMENT','PARTIALLY_CLOSED','CLOSED','DELIVERED'].includes(order.status);
   const workflowNote = statusLagged
-    ? `<div style="margin-top:8px;font-size:.76rem;color:var(--text-muted)">Workflow stage still shows ${statusBadge(order.status)} — a super-admin can run <b>Recompute order statuses</b> to align it.</div>`
+    ? `<div style="margin-top:10px;font-size:.76rem;color:var(--text-muted)">Workflow stage still shows ${statusBadge(order.status)} — a super-admin can run <b>Recompute order statuses</b> to align it.</div>`
     : '';
+  const legend = isClientView
+    ? { full:'Fully delivered', partial:'In progress', pending:'Awaiting dispatch' }
+    : { full:'Full', partial:'Partial', pending:'Pending' };
+  const DEF_DEL = 'Delivered % = fully delivered items (and delivered qty) ÷ ordered, rounded.';
+  const DEF_DUE = 'Due % = outstanding items (partial + pending) and qty ÷ ordered, rounded.';
+  // One ORDERED | DELIVERED | DUE column: bold "items / qty", optional pct + mini bar.
+  const reconCol = (label, items, qty, color, last, pItems, pQty, barPct, barColor, def) => `
+    <div style="flex:1;min-width:0;padding:6px 12px;text-align:center;${last?'':'border-right:1px solid var(--border)'}">
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:4px">${label}</div>
+      <div style="font-size:1.2rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums;line-height:1.2">${nfIn(items)} <span style="color:var(--text-muted);font-weight:600">/</span> ${nfIn(qty)}</div>
+      <div style="font-size:.58rem;color:var(--text-muted);margin-top:2px;text-transform:uppercase;letter-spacing:.04em">items / qty</div>
+      ${def!=null ? `
+        <div title="${def}" style="margin-top:7px;font-size:.7rem;font-weight:600;color:var(--text-muted);cursor:help;border-bottom:1px dotted var(--border);display:inline-block">${pItems}% items · ${pQty}% qty</div>
+        <div style="height:5px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-top:5px"><i style="display:block;height:100%;width:${Math.min(100,barPct)}%;background:${barColor}"></i></div>` : ''}
+    </div>`;
+  const legendChip = (key, color, label, count) => `
+    <button type="button" data-recon-legend="${key}" ${dataAct('ddReconFilter', key)} title="Click to filter the item list below by this status" style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface);border-radius:999px;padding:3px 11px;font-size:.76rem;font-weight:600;color:var(--navy);cursor:pointer">
+      <span style="width:9px;height:9px;border-radius:2px;background:${color};display:inline-block"></span>${label} <b style="font-variant-numeric:tabular-nums">${count}</b>
+    </button>`;
   const meterHtml = showDelivered ? `
     <div style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:18px;background:var(--surface)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="font-weight:800;color:var(--navy);font-size:.95rem">📦 Delivery reconciliation</div>
-        ${delChip}
+        <span style="font-size:.72rem;font-weight:800;color:${reconStatus.fg};background:${reconStatus.bg};border:1px solid ${reconStatus.fg};border-radius:999px;padding:3px 11px">${reconStatus.icon} ${reconStatus.label}</span>
       </div>
-      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">By quantity (units)</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
-        ${reconTile('Ordered', orderedUnits, 'var(--navy)')}
-        ${reconTile('Delivered', deliveredCapped, '#0C8E6D')}
-        ${reconTile('Due', dueUnits, dueUnits>0?'#B5731A':'var(--text-muted)')}
+      <div class="recon-cols" style="display:flex;align-items:flex-start;gap:0;flex-wrap:wrap;margin-bottom:12px">
+        ${reconCol('Ordered', ordItems, ordQty, 'var(--navy)', false)}
+        ${reconCol('Delivered', delItems, delQty, '#0C8E6D', false, delPctItems, delPctQty, delPctQty, '#0C8E6D', DEF_DEL)}
+        ${reconCol('Due', dueItems, dueQty, dueItems>0?'#B5731A':'var(--text-muted)', true, duePctItems, duePctQty, duePctQty, '#B5731A', DEF_DUE)}
       </div>
-      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">By line item</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
-        ${reconTile('Items Ordered', itOrdered, 'var(--navy)')}
-        ${reconTile('Fully Delivered', itFull, '#0C8E6D')}
-        ${reconTile('Partially Delivered', itPartial, itPartial>0?'#B5731A':'var(--text-muted)')}
-        ${reconTile('Pending', itPending, itPending>0?'#C6472A':'var(--text-muted)')}
+      <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#e5e7eb">
+        <i title="${legend.full}" style="width:${segFull}%;background:#0C8E6D"></i>
+        <i title="${legend.partial}" style="width:${segPart}%;background:#B5731A"></i>
+        <i title="${legend.pending}" style="width:${segPend}%;background:#9aa7b2"></i>
       </div>
-      <div class="ord-meter-bar"><i class="del" style="width:${fulfilPct}%"></i><i class="due" style="width:${100-fulfilPct}%"></i></div>
-      <div class="ord-meter-cap">${fulfilPct}% delivered by quantity${dueValue?` · ${fmt(dueValue)} still due`:''}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:9px">
+        ${legendChip('full', '#0C8E6D', legend.full, itFull)}
+        ${legendChip('partial', '#B5731A', legend.partial, itPartial)}
+        ${legendChip('pending', '#9aa7b2', legend.pending, itPending)}
+      </div>
       ${workflowNote}
       ${anomalyHtml}
     </div>` : '';
@@ -743,7 +795,9 @@ async function viewOrder(id) {
     if (qtyMode === 'delivered') {
       const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
       const short = d.due > 0;
-      return `<tr>
+      // Same full/partial/pending rule as the reconciliation card, for legend filtering.
+      const rstat = (d.delivered||0) <= 0 ? 'pending' : ((d.delivered||0) < (Number(i.qty)||0) ? 'partial' : 'full');
+      return `<tr data-recon="${rstat}">
         <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
         <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
@@ -876,7 +930,7 @@ async function viewOrder(id) {
     ${meterHtml}
     ${orderSection('Line items',
       `${lineCount} item${lineCount!==1?'s':''} · ${totalQty} qty${qtyMode==='delivered'?' · delivered view':qtyMode==='picked'?' · ⚠ picked view':''}`,
-      `<table class="table" style="margin:0">
+      `<table class="table" id="order-items-table" style="margin:0">
         <thead>${itemsTableHeader}</thead>
         <tbody>${itemsTableRows}</tbody>
       </table>
