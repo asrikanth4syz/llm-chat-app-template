@@ -306,13 +306,13 @@ async function renderMyOrders(el) {
       ${canAccessPage('place_order') ? `<button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>` : ''}
     </div>
 
-    <!-- Summary: status chips (left) + spend panel (right) -->
-    <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px">
-      <div id="mo-chips" class="tile-grid" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:0;flex:1">${chipsHtml()}</div>
-      <div class="tile" style="min-width:230px;cursor:default">
+    <!-- Summary: status chips + spend panel aligned as one equal-width tile row -->
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));align-items:stretch;margin-bottom:14px">
+      <div id="mo-chips" style="display:contents">${chipsHtml()}</div>
+      <div class="tile" style="cursor:default">
         <div class="tile-label"><span class="tile-dot" style="background:#6b7280"></span>Open order value</div>
         <div class="tile-value">${fmt(SUM.openValue)}</div>
-        <div class="tile-sub">Billed on closed orders · <b style="color:var(--success)">${fmt(SUM.billedValue)}</b></div>
+        <div class="tile-sub">Billed · <b style="color:var(--success)">${fmt(SUM.billedValue)}</b></div>
       </div>
     </div>
 
@@ -1025,6 +1025,344 @@ async function viewOrder(id) {
     })()
   );
 }
+
+/* ============================================================
+   ADMIN FULL-PAGE ORDER VIEW (#order_view/<id>) + quick-view drawer
+   Admin/ops only. Reuses the existing /orders endpoints and action
+   handlers; the client keeps the modal viewOrder. See order-recon.js
+   for the pure line-status / reconciliation / cancel-reason helpers.
+   ============================================================ */
+let _ofCssDone = false;
+function injectOrderFullCss() {
+  if (_ofCssDone) return; _ofCssDone = true;
+  const css = `
+  .ofbar{position:sticky;top:0;z-index:12;background:var(--surface);border-bottom:1px solid var(--border);margin:-16px -16px 0}
+  .ofbar .in{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 16px;max-width:1100px;margin:0 auto}
+  .ofcrumb{background:none;border:0;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:.86rem}
+  .ofcrumb:hover{text-decoration:underline}
+  .ofbar .oft{font-weight:800;font-size:1rem;color:var(--navy)}
+  .ofsp{flex:1}
+  .ofmenu{position:relative}
+  .ofpop{position:absolute;right:0;top:112%;background:var(--surface);border:1px solid var(--border);border-radius:10px;min-width:180px;padding:4px;display:none;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:20}
+  .ofpop.on{display:block}
+  .ofpop button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:.86rem;color:var(--text)}
+  .ofpop button:hover,.ofpop button:focus-visible{background:var(--bg,var(--surface-2))}
+  .ofpop .d{color:var(--danger);font-weight:700}
+  .ofgrid{display:grid;grid-template-columns:1fr 320px;gap:14px;margin-top:14px;align-items:start}
+  .ofstack>*+*{margin-top:14px}
+  .oftw{overflow-x:auto}
+  .oftw.scroll{max-height:520px;overflow:auto}
+  .oftable{width:100%;border-collapse:collapse;min-width:520px}
+  .oftable th,.oftable td{padding:7px 9px;border-bottom:1px solid var(--border);text-align:left;font-size:.84rem}
+  .oftable th{color:var(--text-muted);font-size:.74rem;font-weight:700;position:sticky;top:0;background:var(--surface);z-index:1}
+  .oftable .u-right{text-align:right;font-variant-numeric:tabular-nums}
+  .ofmini{height:6px;background:var(--bg,var(--surface-2));border-radius:3px;overflow:hidden;margin-top:10px}
+  .ofmini i{display:block;height:100%;background:var(--success)}
+  .oftot div{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+  .oftot .g{font-weight:800;font-size:1rem;border-top:1px solid var(--border);margin-top:4px;padding-top:8px}
+  .ofsec{border-top:1px solid var(--border);padding:10px 0}
+  .ofsec summary{cursor:pointer;font-weight:700}
+  .odscrim{position:fixed;inset:0;background:rgba(10,16,30,.45);opacity:0;pointer-events:none;transition:opacity .15s;z-index:1200}
+  .odscrim.on{opacity:1;pointer-events:auto}
+  .odrawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100%);background:var(--surface);border-left:1px solid var(--border);transform:translateX(100%);transition:transform .18s;z-index:1201;display:flex;flex-direction:column}
+  .odrawer.on{transform:none}
+  .odrawer .in{padding:18px;overflow:auto;flex:1}
+  .odkv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;margin:14px 0;font-size:.84rem}
+  .odkv span:nth-child(odd){color:var(--text-muted)}
+  @media (max-width:800px){ .ofgrid{grid-template-columns:1fr} }
+  `;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+// 3-cell reconciliation card from pure totals (order-recon.js). Green delivered,
+// amber due; no red (red is reserved for overdue elsewhere).
+function ofReconCardHtml(r) {
+  const n = v => Number(v||0).toLocaleString('en-IN');
+  return `<div class="rc" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
+    <div><div style="font-size:.7rem;font-weight:700;color:var(--text-muted)">ORDERED</div><div style="font-weight:800;font-variant-numeric:tabular-nums">${r.ordItems} / ${n(r.ordQty)}</div><small style="color:var(--text-muted)">items / qty</small></div>
+    <div><div style="font-size:.7rem;font-weight:700;color:var(--success)">DELIVERED</div><div style="font-weight:800;color:var(--success);font-variant-numeric:tabular-nums">${r.delItems} / ${n(r.delQty)}</div><small style="color:var(--text-muted)">${r.pctDelItems}% items · ${r.pctDelQty}% qty</small></div>
+    <div><div style="font-size:.7rem;font-weight:700;color:#B5731A">DUE</div><div style="font-weight:800;color:#B5731A;font-variant-numeric:tabular-nums">${r.dueItems} / ${n(r.dueQty)}</div><small style="color:var(--text-muted)">${r.pctDueItems}% items · ${r.pctDueQty}% qty</small></div>
+  </div>
+  <div class="ofmini" role="img" aria-label="${r.pctDelQty}% delivered by quantity"><i style="width:${Math.min(100,r.pctDelQty)}%"></i></div>`;
+}
+
+// Stepper-only (8 stages) for the main column; the one primary action lives in the bar.
+function ofStepperHtml(order) {
+  injectOrderStepperCss();
+  const curIdx = order.status === 'CLOSED' ? 7 : orderStageIndex(order.status);
+  const steps = ORDER_STAGES.map((lab, i) => {
+    const cls = i < curIdx ? 'done' : (i === curIdx ? 'cur' : '');
+    return `<div class="ostep ${cls}"><div class="od">${i < curIdx ? '✓' : String(i + 1)}</div><div class="ol">${lab}</div></div>`;
+  }).join('');
+  return `<div class="ostepper">${steps}</div>`;
+}
+
+// The one primary next-action, reusing opsNextStep (+ a DRAFT submit). Returns
+// {label, act} (act '' = waiting badge) or null when no action applies.
+function ofPrimaryAction(order, orderDCs) {
+  if (order.status === 'DRAFT') return { label: 'Submit for approval', act: dataAct('advanceOrder', order.id, 'SUBMITTED', 'Submitted for approval') };
+  const n = opsNextStep(order, orderDCs);
+  if (!n) return null;
+  return { label: n.verb, act: n.act || '' };
+}
+
+// Build the delivered/due map + reconciliation + line rows shared by page & drawer.
+function ofComputeLines(order, drill) {
+  const deliveredMap = {};
+  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: Number(l.qty_delivered) || 0 }; });
+  const reconLines = (order.items || []).map(i => ({
+    ordered: Number(i.qty) || 0,
+    delivered: Number((deliveredMap[i.sku] || {}).delivered) || 0,
+  }));
+  return { deliveredMap, recon: window.oreconTotals(reconLines) };
+}
+
+async function renderOrderFull(el) {
+  injectOrderFullCss();
+  const id = APP._navTab || parseHash().tab || '';
+  if (!id) { el.innerHTML = notImplemented('order_view'); return; }
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div>`;
+  const [order, comments, dcRes, drill] = await Promise.all([
+    api('/orders/' + id),
+    api('/orders/' + id + '/comments').catch(() => []),
+    api('/delivery-challans').catch(() => null),
+    api('/orders/' + id + '/drilldown').catch(() => null),
+  ]);
+  if (!order) {
+    el.innerHTML = `<div class="card" style="padding:40px;text-align:center">
+      <div style="font-size:2.4rem">🔍</div>
+      <div style="font-weight:800;color:var(--navy);margin-top:8px">Order not found</div>
+      <div style="color:var(--text-muted);font-size:.86rem;margin-top:4px">${h(id)} doesn't exist or you don't have access to it.</div>
+      <button class="btn btn-secondary" style="margin-top:16px" ${dataAct('ofBackToOrders')}>← Back to Orders</button>
+    </div>`;
+    return;
+  }
+  APP._viewOrder = order;
+  const orderDCs = (dcRes || []).filter(d => d.order_id === id);
+  const { deliveredMap, recon } = ofComputeLines(order, drill);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+  // Totals from the order record (not the mock's 5% placeholder).
+  const subtotalAmt = order.subtotal != null ? Number(order.subtotal) : (order.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
+  const grandAmt = order.grand_total != null ? Number(order.grand_total) : subtotalAmt;
+  const gstAmt = order.gst != null ? Number(order.gst) : Math.max(0, grandAmt - subtotalAmt);
+
+  // ALL line rows (not just 8). Internal scroll only when long (>20 rows).
+  const rows = (order.items || []).map(i => {
+    const ord = Number(i.qty) || 0, del = Number((deliveredMap[i.sku] || {}).delivered) || 0, due = Math.max(0, ord - del);
+    const st = window.olineStatus(ord, del);
+    const col = st === 'full' ? 'var(--success)' : st === 'partial' ? '#B5731A' : 'var(--text-muted)';
+    const lbl = st === 'full' ? 'Full' : st === 'partial' ? 'Partial' : 'Pending';
+    return `<tr>
+      <td>${h(i.name)}</td>
+      <td class="u-right">${ord.toLocaleString('en-IN')}</td>
+      <td class="u-right" style="color:${col};font-weight:700">${del.toLocaleString('en-IN')}</td>
+      <td class="u-right">${due.toLocaleString('en-IN')}</td>
+      <td class="u-right">${fmt(i.unit_price)}</td>
+      <td><span style="color:${col};font-weight:700">${lbl}</span></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:18px">No line items.</td></tr>`;
+  const manyRows = (order.items || []).length > 20;
+
+  const pa = ofPrimaryAction(order, orderDCs);
+  const primaryHtml = pa
+    ? (pa.act
+        ? `<button class="btn btn-primary" ${pa.act}>${h(pa.label)} →</button>`
+        : `<span class="badge badge-warning" style="padding:8px 12px">⏳ ${h(pa.label)}</span>`)
+    : `<span class="u-muted" style="font-size:.84rem">No further action</span>`;
+
+  const s = order.status;
+  const canDownload = !['DRAFT', 'CANCELLED'].includes(s);
+  const canAmend = ['APPROVED', 'ACKNOWLEDGED', 'INVENTORY_CHECK', 'VENDOR_PO_RAISED', 'READY_TO_PICK', 'PICKED', 'QUALITY_CHECK'].includes(s);
+  const canCancel = !['CLOSED', 'CANCELLED'].includes(s);
+  const moreItems = [
+    canDownload ? `<button ${dataAct('ofMoreDownload', id)}>⬇ Download / breakdown</button>` : '',
+    canAmend ? `<button ${dataAct('ofMoreAmend', id)}>✏️ Amend order</button>` : '',
+    canCancel ? `<button class="d" ${dataAct('orderCancelDialog', id)}>Cancel order…</button>` : '',
+  ].filter(Boolean).join('');
+
+  const timelineHtml = (order.history || []).length
+    ? `<div style="display:grid;gap:6px">${order.history.map(ev => `<div style="display:flex;gap:8px;font-size:.82rem">
+        <span style="color:var(--text-muted);min-width:92px">${fmtDate(ev.created_at)}</span>
+        <span>${statusBadge(ev.to_status)}</span>
+        <span class="u-muted">${h(ev.actor_name || '')}${ev.note ? ' — ' + h(ev.note) : ''}</span>
+      </div>`).join('')}</div>`
+    : `<p class="u-muted" style="font-size:.84rem;margin:6px 0 0">No events yet.</p>`;
+  const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(comments || []).length
+    ? comments.map(c => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem">
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(c.author_name)}</b><span class="u-muted">${timeAgo(c.created_at)}</span></div>
+        <div>${h(c.message)}</div></div>`).join('')
+    : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
+
+  el.innerHTML = `
+  <div class="ofbar"><div class="in">
+    <button class="ofcrumb" ${dataAct('ofBackToOrders')}>← Back to Orders</button>
+    <span class="oft">${h(order.id)}</span>${statusBadge(order.status)}
+    <span class="ofsp"></span>
+    ${primaryHtml}
+    ${moreItems ? `<div class="ofmenu"><button class="btn" id="of-more-btn" aria-haspopup="true" aria-expanded="false" ${dataActEl('orderMoreToggle')}>⋯ More</button>
+      <div class="ofpop" id="of-more-pop" role="menu">${moreItems}</div></div>` : ''}
+  </div></div>
+  <div class="page" style="padding:0">
+    <div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_reference ? ' · Ref ' + h(order.order_reference) : ''}</div>
+    <div class="ofgrid">
+      <div class="ofstack">
+        <div class="card">${ofStepperHtml(order)}</div>
+        ${amendmentSummaryHTML(order)}
+        <div class="card">
+          <h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Line items <span class="u-muted" style="font-weight:600">(${plural((order.items || []).length, 'item')})</span></h2>
+          <div class="oftw${manyRows ? ' scroll' : ''}"><table class="oftable">
+            <thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th><th class="u-right">Unit price</th><th>Status</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <details class="ofsec" open><summary>Timeline</summary><div style="margin-top:8px">${timelineHtml}</div></details>
+          <details class="ofsec"><summary>Comments${(comments || []).length ? ` (${comments.length})` : ''}</summary>
+            <div style="margin-top:8px">${commentsBody}
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
+                <button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', id)}>Post</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="ofstack">
+        <div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Delivery reconciliation</h2>${ofReconCardHtml(recon)}</div>
+        <div class="card oftot"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Totals</h2>
+          <div><span>Subtotal (before tax)</span><span>${fmt(subtotalAmt)}</span></div>
+          <div><span>GST</span><span>${fmt(gstAmt)}</span></div>
+          <div class="g"><span>Grand total</span><span>${fmt(grandAmt)}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  try { window.scrollTo(0, 0); } catch (_) {}
+}
+
+// Navigate to the full-page order view (admin), remembering the queue scroll.
+function openOrderFull(id) {
+  try { APP._oqScroll = window.scrollY || 0; } catch (_) { APP._oqScroll = 0; }
+  navigate('order_view', { tab: id });
+}
+function ofBackToOrders() { navigate('orders', { tab: 'queue' }); }
+
+// ⋯ More menu open/close (keyboard + outside-click aware).
+function orderMoreToggle(el) {
+  const pop = document.getElementById('of-more-pop'); if (!pop) return;
+  const open = !pop.classList.contains('on');
+  pop.classList.toggle('on', open);
+  el.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const close = (e) => {
+      if (e.type === 'keydown' && e.key !== 'Escape') return;
+      if (e.type === 'click' && (pop.contains(e.target) || el.contains(e.target))) return;
+      pop.classList.remove('on'); el.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('click', close, true); document.removeEventListener('keydown', close, true);
+      if (e.type === 'keydown') el.focus();
+    };
+    setTimeout(() => { document.addEventListener('click', close, true); document.addEventListener('keydown', close, true); }, 0);
+    const first = pop.querySelector('button'); if (first) first.focus();
+  }
+}
+function ofMoreDownload(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); viewOrderDrilldown(id); }
+function ofMoreAmend(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); amendOrderModal(id); }
+
+/* ── Cancel dialog with a required reason (maps to the transition note) ── */
+function orderCancelDialog(id) {
+  const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on');
+  const opts = (window.CANCEL_REASONS || ['Client requested', 'Out of stock', 'Duplicate order', 'Other'])
+    .map(r => `<option value="${h(r)}">${h(r)}</option>`).join('');
+  openModal(`Cancel order ${id}?`,
+    `<div class="u-muted" style="margin:0 0 4px">This can't be undone. Choose a reason so the client sees an explanation.</div>
+     <label for="oc-reason" style="display:block;font-size:.82rem;font-weight:600;margin-top:10px">Reason</label>
+     <select id="oc-reason" style="width:100%;margin-top:6px;padding:8px;border:1.5px solid var(--border);border-radius:8px;background:var(--surface)">
+       <option value="">— select a reason —</option>${opts}
+     </select>
+     <div id="oc-err" style="color:var(--danger);font-size:.8rem;margin-top:6px;display:none"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep order</button>
+     <button class="btn btn-danger" ${dataAct('confirmOrderCancel', id)}>Cancel order</button>`);
+}
+async function confirmOrderCancel(id) {
+  const reason = (document.getElementById('oc-reason') || {}).value || '';
+  const v = window.validateCancelReason(reason);
+  if (!v.ok) { const e = document.getElementById('oc-err'); if (e) { e.textContent = v.error; e.style.display = 'block'; } return; }
+  const res = await api(`/orders/${id}/transition`, { method: 'POST', body: JSON.stringify({ to: 'CANCELLED', note: `Cancelled — ${reason}` }) });
+  closeModal();
+  if (res) { showToast(`Order ${id} cancelled`); navigate('orders', { tab: 'queue' }); }
+}
+
+/* ── Quick-view drawer (from the list View button) ───────────── */
+let _odTrigger = null;
+function ensureOrderDrawer() {
+  if (document.getElementById('od-scrim')) return;
+  const scrim = document.createElement('div'); scrim.id = 'od-scrim'; scrim.className = 'odscrim';
+  scrim.addEventListener('click', closeOrderDrawer);
+  const aside = document.createElement('aside'); aside.id = 'od-drawer'; aside.className = 'odrawer';
+  aside.setAttribute('aria-label', 'Order quick view'); aside.setAttribute('role', 'dialog'); aside.setAttribute('aria-modal', 'true');
+  document.body.appendChild(scrim); document.body.appendChild(aside);
+}
+function closeOrderDrawer() {
+  const sc = document.getElementById('od-scrim'), dr = document.getElementById('od-drawer');
+  if (sc) sc.classList.remove('on'); if (dr) dr.classList.remove('on');
+  document.removeEventListener('keydown', _odKeydown, true);
+  if (_odTrigger && document.contains(_odTrigger)) { try { _odTrigger.focus(); } catch (_) {} }
+  _odTrigger = null;
+}
+function _odKeydown(e) {
+  if (e.key === 'Escape') { e.stopPropagation(); closeOrderDrawer(); return; }
+  if (e.key === 'Tab') { // simple focus trap
+    const dr = document.getElementById('od-drawer'); if (!dr) return;
+    const f = dr.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+}
+async function openOrderDrawer(id, triggerEl) {
+  injectOrderFullCss(); ensureOrderDrawer();
+  _odTrigger = triggerEl || document.activeElement;
+  const dr = document.getElementById('od-drawer'), sc = document.getElementById('od-scrim');
+  dr.innerHTML = `<div class="in"><div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div></div>`;
+  sc.classList.add('on'); dr.classList.add('on');
+  document.addEventListener('keydown', _odKeydown, true);
+  const [order, dcRes, drill] = await Promise.all([
+    api('/orders/' + id),
+    api('/delivery-challans').catch(() => null),
+    api('/orders/' + id + '/drilldown').catch(() => null),
+  ]);
+  if (!document.getElementById('od-drawer') || !dr.classList.contains('on')) return; // closed while loading
+  if (!order) { dr.innerHTML = `<div class="in"><div class="dh" style="display:flex;justify-content:space-between"><h2>Order not found</h2><button class="btn" ${dataAct('closeOrderDrawer')} aria-label="Close">✕</button></div></div>`; return; }
+  const orderDCs = (dcRes || []).filter(d => d.order_id === id);
+  const { recon } = ofComputeLines(order, drill);
+  const lineCount = (order.items || []).length;
+  const totalQty = (order.items || []).reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const pa = ofPrimaryAction(order, orderDCs);
+  const naBtn = pa && pa.act ? `<button class="btn" ${pa.act}>${h(pa.label)} →</button>` : '';
+  dr.innerHTML = `<div class="in">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+      <div><div style="font-size:1.1rem;font-weight:800;color:var(--navy)">${h(order.id)}</div><div class="u-muted" style="font-size:.84rem">${h(order.client_name || '—')}</div></div>
+      <button class="btn" id="od-x" ${dataAct('closeOrderDrawer')} aria-label="Close preview">✕</button>
+    </div>
+    <div style="margin-top:10px">${statusBadge(order.status)}</div>
+    <div class="odkv">
+      <span>Placed</span><span>${fmtDate(order.created_at)}</span>
+      <span>Type</span><span>${h(order.order_type || 'Regular')}</span>
+      <span>Value</span><span style="font-weight:700">${fmt(order.grand_total)}</span>
+      <span>Lines</span><span>${lineCount} item${lineCount !== 1 ? 's' : ''} · ${totalQty.toLocaleString('en-IN')} units</span>
+    </div>
+    <div class="card" style="padding:12px">${ofReconCardHtml(recon)}</div>
+    <div style="margin-top:14px">${ofStepperHtml(order)}</div>
+    <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap">
+      <button class="btn btn-primary" ${dataAct('ofDrawerOpenFull', id)}>Open full order →</button>
+      ${naBtn}
+    </div>
+  </div>`;
+  const x = document.getElementById('od-x'); if (x) x.focus();
+}
+function ofDrawerOpenFull(id) { closeOrderDrawer(); openOrderFull(id); }
 
 async function savePredictedDelivery(orderId) {
   const val = document.getElementById('pdd-input')?.value || '';
@@ -2013,7 +2351,7 @@ async function renderOrderQueue(el) {
         : 'var(--blue)';
       return `<tr style="--accent:${accent};${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
         <td class="card-title-cell">
-          <b>${o.id}</b>
+          <button type="button" class="oq-id-link" ${dataAct('openOrderFull', o.id)} title="Open full order view" style="background:none;border:0;padding:0;cursor:pointer;font-weight:700;color:var(--primary);font-size:inherit">${o.id}</button>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'var(--warning)'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
           ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
@@ -2067,6 +2405,13 @@ async function renderOrderQueue(el) {
 
   if (APP._oqTab === 'items') oqLoadItems();
   else if (APP._oqTab === 'operator') renderOperatorTab();
+
+  // Restore the scroll position saved when an order was opened from the queue,
+  // so Back (browser or the "← Back to Orders" link) returns you where you were.
+  if (APP._oqScroll) {
+    const y = APP._oqScroll; APP._oqScroll = 0;
+    requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (_) {} });
+  }
 }
 
 // The orders table card (phase stepper + table). Shared by the first render and
@@ -2411,7 +2756,7 @@ function orderQueueActions(o) {
   if (isClient) {
     return `<div style="display:flex;gap:6px;align-items:center">${statusBadge(o.status)}<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button></div>`;
   }
-  const btns = [`<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.id)}>View</button>`];
+  const btns = [`<button class="btn btn-secondary btn-sm" ${dataActEl('openOrderDrawer', o.id)}>View</button>`];
   switch (o.status) {
     case 'SUBMITTED':
       btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Approved by ops')}>✓ Approve</button>`);

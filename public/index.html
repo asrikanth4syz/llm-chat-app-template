@@ -1234,11 +1234,12 @@
 
 <!-- app.js was split into ordered domain modules (classic scripts share one global
      scope, so load order is preserved and inline onclick handlers keep working). -->
-<script src="app.01-core.js?v=20261025c"></script>
+<script src="app.01-core.js?v=20261025d"></script>
 <script src="app.02-dashboard.js?v=20261024c"></script>
 <script src="app.03-ordering.js?v=20261024c"></script>
 <script type="module" src="mo-status.js?v=20261025c"></script>
-<script src="app.04-orders-delivery.js?v=20261025c"></script>
+<script type="module" src="order-recon.js?v=20261025d"></script>
+<script src="app.04-orders-delivery.js?v=20261025d"></script>
 <script src="app.05-billing-inventory.js?v=20261013a"></script>
 <script src="app.06-vendors-procurement.js?v=20261024a"></script>
 <script src="app.07-warehouse-delivery.js?v=20261024b"></script>

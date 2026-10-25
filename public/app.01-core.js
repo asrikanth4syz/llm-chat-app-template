@@ -817,6 +817,8 @@ const ACTION_PAGES = {
   // #orders/pipeline · #orders/due deep links keep working for these roles.
   pipeline:         ['super_admin', 'ops_admin'],
   consolidated_due: ['super_admin', 'ops_admin'],
+  // Admin full-page order view (#order_view/<id>) — reached from the Order Queue.
+  order_view:       ['super_admin', 'ops_admin'],
   // Phase 2: Track Delivery is now a tab inside the client "My Orders" hub.
   track_delivery:   ['client_admin', 'client_approver', 'client_user'],
   // Phase 3: the delivery sub-pages are now tabs inside the "Deliveries" hub
@@ -1092,6 +1094,7 @@ const PAGE_MAP = {
   my_orders: 'renderMyOrdersHub',
   track_delivery: 'renderTrackDelivery',
   orders: 'renderOrdersHub',
+  order_view: 'renderOrderFull',
   dc_billing: 'renderDCBilling',
   inventory: 'renderInventory',
   vendors: 'renderVendors',
