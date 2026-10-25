@@ -646,6 +646,18 @@ async function viewOrder(id) {
   const overUnits      = drill?.summary?.total_over_delivered || dLines.reduce((s,l)=>s+(l.qty_over_delivered||0),0);
   const fulfilPct      = orderedUnits ? Math.min(100, Math.round(deliveredUnits/orderedUnits*100)) : 0;
   const dueValue       = drill?.summary?.total_due_value || 0;
+  // Line-item reconciliation counts to sit alongside the quantity totals.
+  // Rule: delivered_qty == 0 → pending; 0 < delivered < ordered → partial;
+  // delivered >= ordered → full.
+  let itFull = 0, itPartial = 0, itPending = 0;
+  dLines.forEach(l => {
+    const ord = Number(l.qty_ordered) || 0;
+    const del = Number(l.qty_delivered) || 0;
+    if (del <= 0) itPending++;
+    else if (del < ord) itPartial++;
+    else itFull++;
+  });
+  const itOrdered = dLines.length;
   const anomalyHtml    = overUnits > 0 ? `
       <div class="ord-meter-warn" style="margin-top:6px;font-size:.8rem;color:var(--danger,#C6472A);background:var(--danger-bg,#FBE7E1);border:1px solid var(--danger,#C6472A);border-radius:8px;padding:7px 10px">
         ⚠ <b>${overUnits} unit${overUnits===1?'':'s'} over-delivered</b> — recorded deliveries exceed the ordered quantity. This usually means a duplicate or phantom delivery challan was counted. Review the DCs below and cancel any that shouldn't have shipped.
@@ -674,10 +686,18 @@ async function viewOrder(id) {
         <div style="font-weight:800;color:var(--navy);font-size:.95rem">📦 Delivery reconciliation</div>
         ${delChip}
       </div>
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">By quantity (units)</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
         ${reconTile('Ordered', orderedUnits, 'var(--navy)')}
         ${reconTile('Delivered', deliveredCapped, '#0C8E6D')}
         ${reconTile('Due', dueUnits, dueUnits>0?'#B5731A':'var(--text-muted)')}
+      </div>
+      <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:6px">By line item</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+        ${reconTile('Items Ordered', itOrdered, 'var(--navy)')}
+        ${reconTile('Fully Delivered', itFull, '#0C8E6D')}
+        ${reconTile('Partially Delivered', itPartial, itPartial>0?'#B5731A':'var(--text-muted)')}
+        ${reconTile('Pending', itPending, itPending>0?'#C6472A':'var(--text-muted)')}
       </div>
       <div class="ord-meter-bar"><i class="del" style="width:${fulfilPct}%"></i><i class="due" style="width:${100-fulfilPct}%"></i></div>
       <div class="ord-meter-cap">${fulfilPct}% delivered by quantity${dueValue?` · ${fmt(dueValue)} still due`:''}</div>
