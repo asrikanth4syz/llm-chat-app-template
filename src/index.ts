@@ -3228,6 +3228,10 @@ async function fixCategoryNames(env: Env): Promise<void> {
       created_at TEXT DEFAULT (datetime('now')))`).run();
   } catch { /* ignore */ }
   try {
+    // Link a support ticket to the order it was raised from (client order view).
+    await env.DB.prepare("ALTER TABLE tickets ADD COLUMN order_id TEXT").run();
+  } catch { /* exists */ }
+  try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS returns (
       id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, order_id TEXT, client_id TEXT,
       reason TEXT, items TEXT NOT NULL, prev_dc_status TEXT,
@@ -6434,6 +6438,7 @@ export default {
       if (path==="/api/pipeline/sla"           && method==="POST") return handleSaveSla(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/lifecycle$/)    && method==="GET")  return handleOrderLifecycle(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/drilldown$/)    && method==="GET")  return handleOrderDrilldown(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/client-view$/)  && method==="GET")  return handleClientOrderView(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend$/)         && method==="POST") return handleAmendOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
@@ -7040,6 +7045,91 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
     if (b) budget = { monthly_budget: b.monthly_budget, used_excluding_this: b.used_excl };
   }
   return json({...order, items, history, comments, amendments, budget});
+}
+
+// GET /api/orders/:id/client-view — a curated, client-SAFE projection of one order
+// for the client order detail page. Enforces ownership (someone else's id → 404)
+// and deliberately omits every internal field: raw workflow stage names, costs,
+// margins, picker/warehouse/GRN refs, and internal notes never cross this wire.
+// Reuses the drilldown delivered-per-line logic (cancelled challans excluded).
+async function handleClientOrderView(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare(
+    `SELECT o.id, o.client_id, o.status, o.order_type, o.order_reference, o.order_period,
+            o.created_at, o.closed_at, o.predicted_delivery_date, o.subtotal, o.gst, o.grand_total,
+            c.name AS client_name
+     FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`
+  ).bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, order.client_id); if (cross) return cross;
+
+  const status = String(order.status);
+  const APPROVED_PLUS = ["APPROVED","ACKNOWLEDGED","INVENTORY_CHECK","VENDOR_PO_RAISED","READY_TO_PICK","PICKED","QUALITY_CHECK","IN_SHIPMENT","PARTIALLY_CLOSED","CLOSED","DELIVERED"];
+  const cancelled = ["CANCELLED","REJECTED"].includes(status);
+  const approved = APPROVED_PLUS.includes(status);
+
+  // Per-line delivered qty across DELIVERED challans (exclude cancelled), same rule
+  // as the drilldown: fall back to ordered only when a whole challan recorded nothing.
+  const { results: items } = await env.DB.prepare("SELECT sku,name,qty FROM order_items WHERE order_id=? ORDER BY name").bind(id).all();
+  const { results: dcs } = await env.DB.prepare("SELECT id FROM delivery_challans WHERE order_id=? AND status='DELIVERED'").bind(id).all();
+  const deliveredBySku: Record<string, number> = {};
+  for (const dc of dcs as Record<string, string>[]) {
+    const { results: dcItems } = await env.DB.prepare("SELECT sku, qty_ordered, qty_delivered FROM dc_items WHERE dc_id=?").bind(dc.id).all();
+    const rec = (dcItems as Record<string, number>[]).reduce((s, i) => s + (Number(i.qty_delivered) || 0), 0);
+    for (const it of dcItems as Record<string, number>[]) {
+      const d = rec > 0 ? (Number(it.qty_delivered) || 0) : (Number(it.qty_ordered) || 0);
+      deliveredBySku[it.sku as unknown as string] = (deliveredBySku[it.sku as unknown as string] || 0) + d;
+    }
+  }
+  const lines = (items as Record<string, unknown>[]).map(it => {
+    const ordered = Number(it.qty) || 0;
+    const delivered = Math.min(ordered, deliveredBySku[it.sku as string] || 0);
+    return { name: it.name, ordered, delivered, due: Math.max(0, ordered - delivered) };
+  });
+
+  // Client-safe timeline: map a few internal statuses to plain labels, drop the rest,
+  // de-dupe per day, newest first.
+  const { results: history } = await env.DB.prepare("SELECT to_status, created_at FROM order_history WHERE order_id=? ORDER BY created_at DESC").bind(id).all();
+  const CLIENT_EVENT: Record<string, string> = {
+    SUBMITTED: "Order submitted", PENDING_APPROVAL: "Order submitted", APPROVED: "Order approved",
+    PARTIALLY_CLOSED: "Delivery received", DELIVERED: "Delivery received", CLOSED: "Order delivered",
+    CANCELLED: "Order cancelled", REJECTED: "Order cancelled",
+  };
+  const seen = new Set<string>();
+  const timeline: Array<{ at: unknown; label: string }> = [];
+  for (const ev of history as Record<string, string>[]) {
+    const label = CLIENT_EVENT[ev.to_status]; if (!label) continue;
+    const key = label + "@" + String(ev.created_at).slice(0, 10);
+    if (seen.has(key)) continue; seen.add(key);
+    timeline.push({ at: ev.created_at, label });
+  }
+
+  const approvedRow = await env.DB.prepare("SELECT MIN(created_at) t FROM order_history WHERE order_id=? AND to_status='APPROVED'").bind(id).first() as { t?: string } | null;
+  const lastDeliv = await env.DB.prepare("SELECT MAX(delivered_at) d FROM delivery_challans WHERE order_id=? AND status='DELIVERED'").bind(id).first() as { d?: string } | null;
+
+  // Open tickets already raised from this order (avoid encouraging duplicates).
+  let tickets: Array<Record<string, unknown>> = [];
+  try {
+    const { results } = await env.DB.prepare("SELECT id, subject, status FROM tickets WHERE order_id=? AND status!='RESOLVED' ORDER BY created_at DESC").bind(id).all();
+    tickets = results as Array<Record<string, unknown>>;
+  } catch { /* order_id column pending */ }
+
+  return json({
+    id: order.id,
+    order_reference: order.order_reference || null,
+    client_name: order.client_name || null,
+    order_type: order.order_type || "Regular",
+    order_period: order.order_period || null,
+    created_at: order.created_at,
+    approved, cancelled,
+    predicted_delivery_date: order.predicted_delivery_date || null,
+    approved_at: approvedRow?.t || null,
+    delivered_on: lastDeliv?.d || order.closed_at || null,
+    subtotal: order.subtotal, gst: order.gst, grand_total: order.grand_total,
+    items: lines, timeline, tickets,
+  });
 }
 
 // PATCH /api/orders/:id/items/:itemId/delay — set a per-line delivery status/ETA/
@@ -11130,8 +11220,11 @@ async function handleCreateTicket(request: Request, env: Env): Promise<Response>
     const c = await env.DB.prepare("SELECT id FROM clients WHERE contact_email LIKE ?").bind(`%${domain}%`).first() as Record<string,string>|null;
     clientId = c?.id || "c1";
   }
-  await env.DB.prepare("INSERT INTO tickets (id,client_id,raised_by,subject,description,priority,status) VALUES (?,?,?,?,?,?,'OPEN')")
-    .bind(id,clientId,user!.sub,body.subject,body.description||null,body.priority||"MEDIUM").run();
+  // Optional order link (client order view raises a ticket pre-filled with its order).
+  const orderId = body.order_id ? String(body.order_id).slice(0, 40) : null;
+  try { await env.DB.prepare("ALTER TABLE tickets ADD COLUMN order_id TEXT").run(); } catch { /* exists */ }
+  await env.DB.prepare("INSERT INTO tickets (id,client_id,raised_by,subject,description,priority,status,order_id) VALUES (?,?,?,?,?,?,'OPEN',?)")
+    .bind(id,clientId,user!.sub,body.subject,body.description||null,body.priority||"MEDIUM",orderId).run();
   await pushNotification(env, "ops_admin", `New support ticket ${id}: ${body.subject}`);
   await audit(env, user, "CREATE", "ticket", id, undefined, body.subject);
   return json({id}, 201);

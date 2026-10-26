@@ -342,6 +342,8 @@ async function renderMyOrders(el) {
 
     moRender();
     window.moRender = moRender;
+    // Restore scroll saved when an order was opened, so Back returns you in place.
+    if (APP._moScroll) { const y = APP._moScroll; APP._moScroll = 0; requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (_) {} }); }
     return;
   }
 
@@ -645,6 +647,8 @@ async function saveOrderItemDelay(itemId) {
 }
 
 async function viewOrder(id) {
+  // Clients get the dedicated client-safe order page, not this (shared) modal.
+  if (['client_admin','client_user','client_approver'].includes(APP.user?.role||'')) { openClientOrder(id); return; }
   const [order, comments, dcRes, allocations, drill] = await Promise.all([
     api('/orders/' + id),
     api('/orders/' + id + '/comments'),
@@ -1363,6 +1367,248 @@ async function openOrderDrawer(id, triggerEl) {
   const x = document.getElementById('od-x'); if (x) x.focus();
 }
 function ofDrawerOpenFull(id) { closeOrderDrawer(); openOrderFull(id); }
+
+/* ============================================================
+   CLIENT ORDER DETAIL (#client_order/<id>)
+   Client-facing, client-safe. Data from /orders/:id/client-view
+   (ownership-enforced, no internal fields). Stepper/headline/recon from
+   client-order.js. Help card raises tickets via the existing /tickets
+   endpoint (order-linked).
+   ============================================================ */
+let _coCssDone = false;
+function injectClientOrderCss() {
+  if (_coCssDone) return; _coCssDone = true;
+  const css = `
+  .cohero{border-left:5px solid var(--co-c,var(--text-muted))}
+  .costepper{display:flex}
+  .costep{flex:1;text-align:center;position:relative;font-size:.78rem;color:var(--text-muted)}
+  .costep ic{display:flex;width:28px;height:28px;border-radius:50%;margin:0 auto 5px;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;background:var(--bg,var(--surface-2));border:2px solid var(--border);position:relative;z-index:1}
+  .costep::before{content:"";position:absolute;top:13px;left:-50%;width:100%;height:3px;background:var(--border)}
+  .costep:first-child::before{display:none}
+  .costep.done ic{background:#0C8E6D;border-color:#0C8E6D;color:#fff}
+  .costep.done::before,.costep.cur::before{background:#0C8E6D}
+  .costep.cur ic{border-color:#B5731A;color:#B5731A;background:var(--surface)}
+  .costep b{display:block;color:var(--text-muted);font-weight:700}
+  .costep.done b{color:#0C8E6D}.costep.cur b{color:var(--navy)}
+  .costep small{display:block;font-size:.68rem;color:var(--text-muted)}
+  .cocols{display:grid;grid-template-columns:repeat(3,1fr);margin-top:14px}
+  .cocol{padding:0 16px;border-left:1px solid var(--border);text-align:center}
+  .cocol:first-child{border:0;padding-left:0}
+  .cotw{overflow-x:auto;margin-top:8px}
+  .cotw.scroll{max-height:520px;overflow:auto}
+  .cotable{width:100%;border-collapse:collapse;min-width:460px}
+  .cotable th,.cotable td{padding:8px;border-bottom:1px solid var(--border);text-align:left;font-size:.84rem}
+  .cotable th{color:var(--text-muted);font-size:.74rem;font-weight:700;position:sticky;top:0;background:var(--surface);z-index:1}
+  .cotable .n{text-align:right;font-variant-numeric:tabular-nums}
+  .coseg{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin-top:16px;background:var(--bg,var(--surface-2))}
+  .coseg button{border:0;padding:0;cursor:pointer;height:100%}
+  .cotabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .cotab{border:1px solid var(--border);background:var(--bg,var(--surface-2));color:var(--text);border-radius:999px;padding:5px 12px;font-size:.82rem;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
+  .cotab[aria-pressed="true"]{border-color:var(--navy);font-weight:700}
+  @media (max-width:700px){.cocols{grid-template-columns:1fr}.cocol{border:0;border-top:1px solid var(--border);padding:12px 0 0;text-align:left}.cocol:first-child{border-top:0;padding-top:0}.costep small{display:none}}
+  `;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+const CO_COLORVAR = { grey: 'var(--text-muted)', amber: '#B5731A', green: '#0C8E6D' };
+
+function openClientOrder(id) {
+  try { APP._moScroll = window.scrollY || 0; } catch (_) { APP._moScroll = 0; }
+  navigate('client_order', { tab: id });
+}
+function clientBackToOrders() { navigate('my_orders', { tab: 'orders' }); }
+
+async function renderClientOrder(el) {
+  injectClientOrderCss();
+  const id = APP._navTab || parseHash().tab || '';
+  if (!id) { el.innerHTML = notImplemented('client_order'); return; }
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div>`;
+  const o = await api('/orders/' + id + '/client-view').catch(() => null);
+  if (!o || o.error) {
+    el.innerHTML = `<div class="card" style="padding:40px;text-align:center">
+      <div style="font-size:2.4rem">🔍</div>
+      <div style="font-weight:800;color:var(--navy);margin-top:8px">Order not found</div>
+      <div style="color:var(--text-muted);font-size:.86rem;margin-top:4px">We couldn't find ${h(id)} on your account.</div>
+      <button class="btn btn-secondary" style="margin-top:16px" ${dataAct('clientBackToOrders')}>← Back to My Orders</button>
+    </div>`;
+    return;
+  }
+  APP._coOrder = o;
+
+  const lines = (o.items || []).map(i => ({ name: i.name, ordered: Number(i.ordered) || 0, delivered: Number(i.delivered) || 0, due: Number(i.due) || 0 }));
+  const recon = window.oreconTotals(lines);
+  let cFull = 0, cPart = 0, cPend = 0;
+  lines.forEach(l => { const s = window.olineStatus(l.ordered, l.delivered); if (s === 'full') cFull++; else if (s === 'partial') cPart++; else cPend++; });
+
+  const headline = window.clientHeadline({
+    approved: o.approved, cancelled: o.cancelled,
+    orderedQty: recon.ordQty, deliveredQty: recon.delQty,
+    totalItems: recon.ordItems, fullItems: recon.delItems, dueItems: recon.dueItems, dueUnits: recon.dueQty,
+  });
+  const submittedDate = o.created_at ? fmtDate(o.created_at) : '';
+  const approvedDate = o.approved_at ? fmtDate(o.approved_at) : '';
+  const deliveredDate = o.delivered_on ? fmtDate(o.delivered_on) : '';
+  const steps = window.clientSteps({
+    approved: o.approved, cancelled: o.cancelled, orderedQty: recon.ordQty, deliveredQty: recon.delQty,
+    submittedDate, approvedDate, deliveredDate,
+  });
+  const colorVar = CO_COLORVAR[headline.color] || 'var(--text-muted)';
+
+  // Estimated delivery line.
+  const full = recon.ordQty > 0 && recon.delQty >= recon.ordQty;
+  const estText = o.cancelled ? ''
+    : full ? `Delivered${deliveredDate ? ' on ' + deliveredDate : ''}`
+    : o.predicted_delivery_date ? fmtDate(o.predicted_delivery_date)
+    : o.approved ? "We'll confirm the date shortly"
+    : "We'll confirm the date after approval";
+
+  const period = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
+  const reconBadgeColor = headline.badge === 'Delivered' ? '#0C8E6D' : headline.badge === 'Partially Delivered' ? '#B5731A' : 'var(--text-muted)';
+
+  // Ticket help card: list open tickets (don't encourage duplicates), else raise buttons.
+  const tickets = o.tickets || [];
+  const helpBody = tickets.length
+    ? `<div class="u-muted" style="margin:4px 0 10px">You already have ${tickets.length === 1 ? 'a support request' : 'support requests'} open for this order:</div>
+       <div style="display:grid;gap:8px;margin-bottom:10px">${tickets.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:8px;padding:9px 12px">
+         <div><button type="button" ${dataAct('navigate', 'service_desk')} style="background:none;border:0;padding:0;color:var(--primary);font-weight:700;cursor:pointer">${h(t.id)}</button> <span class="u-muted" style="font-size:.82rem">${h(t.subject || '')}</span></div>
+         <span class="badge" style="font-size:.7rem">${h(t.status || 'OPEN')}</span></div>`).join('')}</div>
+       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', id, 'support')}>Contact support</button><button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button></div>`
+    : `<div class="u-muted" style="margin:4px 0 10px">Questions about a late or missing item? Your account team can check it.</div>
+       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+         <button class="btn btn-primary" ${dataAct('clientOrderTicket', id, 'support')}>Contact support</button>
+         <button class="btn btn-secondary" ${dataAct('clientOrderTicket', id, 'issue')}>Report an issue</button>
+         <button class="btn btn-secondary" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button>
+       </div>`;
+
+  // Delivery notes: existing delivery breakdown when there's something delivered.
+  const deliveryNotesBtn = recon.delQty > 0
+    ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrderDrilldown', id)}>📄 Delivery notes</button>`
+    : `<button class="btn btn-secondary btn-sm" disabled title="Available once your order ships">📄 Delivery notes</button>`;
+
+  const stepperHtml = o.cancelled
+    ? `<div style="padding:12px 14px;background:var(--danger-soft-bg,#fef2f2);border:1px solid #fecaca;border-radius:10px;color:var(--danger);font-weight:700;font-size:.9rem">❌ This order was cancelled.</div>`
+    : `<div class="costepper">${steps.labels.map((lab, i) => {
+        const c = steps.states[i];
+        return `<div class="costep ${c}"><ic>${c === 'done' ? '✓' : (i + 1)}</ic><b>${lab}</b><small>${h(steps.subs[i] || '')}</small></div>`;
+      }).join('')}</div>`;
+
+  APP._coFilter = 'all';
+  el.innerHTML = `
+  <button class="btn btn-secondary btn-sm" style="margin-bottom:10px" ${dataAct('clientBackToOrders')}>← Back to My Orders</button>
+  <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start">
+    <div>
+      <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Order ${h(o.id)}${o.client_name ? ' · ' + h(o.client_name) : ''}</div>
+      <div style="color:var(--text-muted);font-size:.84rem;margin-top:2px">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.order_reference ? ' · Ref ' + h(o.order_reference) : ''}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" id="co-tl-btn" aria-expanded="false" ${dataActEl('clientOrderToggleTimeline')}>🧭 Timeline</button>
+      ${deliveryNotesBtn}
+    </div>
+  </div>
+
+  <section class="card" id="co-tlp" hidden aria-label="Timeline" style="margin-top:12px">
+    <h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Timeline</h2>
+    ${(o.timeline || []).length
+      ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:96px">${fmtDate(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
+      : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
+  </section>
+
+  <section class="card cohero" style="margin-top:12px" aria-live="polite">
+    <div style="font-size:1.15rem;font-weight:800;color:${colorVar}">${h(headline.status)}</div>
+    <div style="color:var(--text-muted);font-size:.9rem;margin-top:4px">${h(headline.detail)}</div>
+  </section>
+
+  <section class="card" aria-label="Progress" style="margin-top:12px">${stepperHtml}</section>
+
+  ${estText ? `<div style="display:flex;gap:8px;align-items:center;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:10px;padding:9px 14px;margin-top:12px;font-size:.86rem">📅 <b>Est. delivery:</b> <span>${h(estText)}</span></div>` : ''}
+
+  <section class="card" aria-label="Delivery reconciliation" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2 style="font-size:.95rem;margin:0;color:var(--navy)">📦 Delivery reconciliation</h2>
+      <span class="badge" style="color:${reconBadgeColor};border:1px solid ${reconBadgeColor};border-radius:999px;padding:2px 11px;font-size:.72rem;font-weight:700">📦 ${h(headline.badge)}</span></div>
+    <div class="cocols">
+      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.3px">ORDERED</div><div style="font-size:1.4rem;font-weight:800;font-variant-numeric:tabular-nums">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem">items / qty</div></div>
+      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:#0C8E6D;letter-spacing:.3px">DELIVERED</div><div style="font-size:1.4rem;font-weight:800;color:#0C8E6D;font-variant-numeric:tabular-nums">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div style="height:5px;background:var(--bg,var(--surface-2));border-radius:3px;overflow:hidden;margin-top:6px"><i style="display:block;height:100%;width:${Math.min(100, recon.pctDelQty)}%;background:#0C8E6D"></i></div></div>
+      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:#B5731A;letter-spacing:.3px">DUE</div><div style="font-size:1.4rem;font-weight:800;color:#B5731A;font-variant-numeric:tabular-nums">${recon.dueItems} / ${recon.dueQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem"><b>${recon.pctDueItems}%</b> items · <b>${recon.pctDueQty}%</b> qty</div><div style="height:5px;background:var(--bg,var(--surface-2));border-radius:3px;overflow:hidden;margin-top:6px"><i style="display:block;height:100%;width:${Math.min(100, recon.pctDueQty)}%;background:#B5731A"></i></div></div>
+    </div>
+    <div class="coseg" id="co-seg"></div>
+    <div class="cotabs" id="co-tabs" role="group" aria-label="Filter items by status"></div>
+    <div class="cotw${lines.length > 20 ? ' scroll' : ''}"><table class="cotable">
+      <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th>Status</th></tr></thead>
+      <tbody id="co-rows"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card" style="margin-top:12px"><h2 style="font-size:.95rem;margin:0;color:var(--navy)">Need help?</h2>${helpBody}</section>`;
+
+  // Store what the table/chip renderer needs, then draw.
+  APP._coLines = lines;
+  APP._coCounts = { full: cFull, partial: cPart, pending: cPend, all: lines.length };
+  coRenderItems();
+  window.coRenderItems = coRenderItems;
+
+  try { window.scrollTo(0, 0); } catch (_) {}
+}
+
+// Render the item table body + chips + segmented bar for the current filter.
+function coRenderItems() {
+  const lines = APP._coLines || [], counts = APP._coCounts || { all: 0 }, flt = APP._coFilter || 'all';
+  const LB = { full: ['Fully delivered', '#0C8E6D'], partial: ['In progress', '#B5731A'], pending: ['Awaiting dispatch', 'var(--text-muted)'] };
+  const seg = document.getElementById('co-seg');
+  if (seg) seg.innerHTML = ['full', 'partial', 'pending'].map(k => counts[k]
+    ? `<button data-cof="${k}" ${dataAct('clientOrderFilter', k)} style="width:${Math.round(counts[k] / (counts.all || 1) * 100)}%;background:${LB[k][1]}" aria-label="${LB[k][0]} ${counts[k]}"></button>` : '').join('');
+  const tabs = document.getElementById('co-tabs');
+  if (tabs) tabs.innerHTML = `<button class="cotab" ${dataAct('clientOrderFilter', 'all')} aria-pressed="${flt === 'all'}">All ${counts.all}</button>`
+    + ['full', 'partial', 'pending'].map(k => counts[k]
+      ? `<button class="cotab" ${dataAct('clientOrderFilter', k)} aria-pressed="${flt === k}"><span style="width:9px;height:9px;border-radius:50%;background:${LB[k][1]};display:inline-block"></span>${LB[k][0]} <b>${counts[k]}</b></button>` : '').join('');
+  const body = document.getElementById('co-rows');
+  if (!body) return;
+  const rows = lines.filter(l => flt === 'all' || window.olineStatus(l.ordered, l.delivered) === flt).map(l => {
+    const s = window.olineStatus(l.ordered, l.delivered);
+    const c = LB[s][1], lbl = LB[s][0];
+    return `<tr><td>${h(l.name)}</td><td class="n">${l.ordered.toLocaleString('en-IN')}</td><td class="n">${l.delivered.toLocaleString('en-IN')}</td><td class="n">${l.due.toLocaleString('en-IN')}</td><td><b style="color:${c}">${lbl}</b></td></tr>`;
+  }).join('');
+  body.innerHTML = rows || `<tr><td colspan="5" class="u-muted" style="padding:14px">No items in this status.</td></tr>`;
+}
+function clientOrderFilter(k) {
+  APP._coFilter = (APP._coFilter === k && k !== 'all') ? 'all' : k;  // click active chip clears
+  coRenderItems();
+}
+function clientOrderToggleTimeline(el) {
+  const p = document.getElementById('co-tlp'); if (!p) return;
+  const open = p.hidden; p.hidden = !open; el.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+// Raise a ticket pre-filled with this order (reuses the existing /tickets endpoint,
+// order-linked). kind: 'support' | 'issue'.
+function clientOrderTicket(orderId, kind) {
+  const o = APP._coOrder || { id: orderId };
+  const pre = window.ticketPrefill(o, kind);
+  openModal(kind === 'issue' ? 'Report an issue' : 'Contact support',
+    `<div class="form-group"><label>Subject</label><input type="text" id="co-tk-subject" value="${pre.subject.replace(/"/g, '&quot;')}"></div>
+     <div class="form-group"><label>Priority</label>
+       <select id="co-tk-priority"><option value="LOW">Low</option><option value="MEDIUM" selected>Medium</option><option value="HIGH">High</option></select></div>
+     <div class="form-group"><label>Describe it (optional)</label>
+       <textarea id="co-tk-desc" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="Tell us what's wrong or what you need…"></textarea></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('clientOrderSubmitTicket', orderId, kind)}>Send to support</button>`);
+}
+async function clientOrderSubmitTicket(orderId, kind) {
+  const subject = (document.getElementById('co-tk-subject') || {}).value || '';
+  if (!subject.trim()) { showToast('Subject required', 'error'); return; }
+  const o = APP._coOrder || { id: orderId };
+  const pre = window.ticketPrefill(o, kind);
+  const res = await api('/tickets', { method: 'POST', body: JSON.stringify({
+    subject,
+    priority: (document.getElementById('co-tk-priority') || {}).value || 'MEDIUM',
+    description: (document.getElementById('co-tk-desc') || {}).value || '',
+    order_id: orderId, category: pre.category || undefined,
+  }) });
+  closeModal();
+  if (res && res.id) {
+    showToast(`Ticket ${res.id} raised`);
+    const main = document.getElementById('main-content');
+    if (main && APP.page === 'client_order') renderClientOrder(main);
+  }
+}
 
 async function savePredictedDelivery(orderId) {
   const val = document.getElementById('pdd-input')?.value || '';

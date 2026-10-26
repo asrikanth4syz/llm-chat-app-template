@@ -819,6 +819,8 @@ const ACTION_PAGES = {
   consolidated_due: ['super_admin', 'ops_admin'],
   // Admin full-page order view (#order_view/<id>) — reached from the Order Queue.
   order_view:       ['super_admin', 'ops_admin'],
+  // Client order detail (#client_order/<id>) — reached from the client My Orders list.
+  client_order:     ['client_admin', 'client_approver', 'client_user'],
   // Phase 2: Track Delivery is now a tab inside the client "My Orders" hub.
   track_delivery:   ['client_admin', 'client_approver', 'client_user'],
   // Phase 3: the delivery sub-pages are now tabs inside the "Deliveries" hub
@@ -1095,6 +1097,7 @@ const PAGE_MAP = {
   track_delivery: 'renderTrackDelivery',
   orders: 'renderOrdersHub',
   order_view: 'renderOrderFull',
+  client_order: 'renderClientOrder',
   dc_billing: 'renderDCBilling',
   inventory: 'renderInventory',
   vendors: 'renderVendors',

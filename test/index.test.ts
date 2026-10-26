@@ -6027,3 +6027,58 @@ describe("Product search — handles & ( ) and MRP suffixes, order-independent",
     expect(await finds("kerala banana zzz")).toBe(false);  // an extra non-matching token excludes it
   });
 });
+
+// ── Client order view (client-safe projection) ───────────────────────────
+describe("GET /api/orders/:id/client-view", () => {
+  beforeAll(async () => {
+    const db = env.DB as D1Database;
+    // A second client + its own order (for the cross-client access test).
+    await db.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active) VALUES (?,?,?,?)")
+      .bind("c2", "Rival Corp", "rival@sp.test", 1).run();
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind("TST-CO-C2", "c2", "tst-ops", "APPROVED", 1000, 180, 1180, "rival private note", "Regular").run();
+    // A c1 order sitting at an INTERNAL workflow stage, with internal history.
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,picker_name) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .bind("TST-CO-INT", "c1", "tst-ops", "PICKED", 2250, 405, 2655, "INTERNAL staging note", "Regular", "Warehouse Picker 7").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("tst-coi-1", "TST-CO-INT", "SKU001", "Basmati Rice 5kg", 5, 450, 2250).run();
+    await db.prepare("INSERT OR IGNORE INTO order_history (id,order_id,from_status,to_status,actor_name,note) VALUES (?,?,?,?,?,?)")
+      .bind("tst-coh-1", "TST-CO-INT", "SUBMITTED", "APPROVED", "Ops Manager", "approved").run();
+    await db.prepare("INSERT OR IGNORE INTO order_history (id,order_id,from_status,to_status,actor_name,note) VALUES (?,?,?,?,?,?)")
+      .bind("tst-coh-2", "TST-CO-INT", "READY_TO_PICK", "PICKED", "Warehouse Picker 7", "INTERNAL: picked at bin A3, GRN-5521").run();
+  });
+
+  it("(c) a client cannot fetch another client's order (404)", async () => {
+    const res = await get("/api/orders/TST-CO-C2/client-view", clientToken);
+    expect(res.status).toBe(404);
+  });
+
+  it("(d) internal fields never appear in the client-view response", async () => {
+    const res = await get("/api/orders/TST-CO-INT/client-view", clientToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    // Client-safe shape is present…
+    expect(body.id).toBe("TST-CO-INT");
+    expect(body.approved).toBe(true);
+    expect(body.cancelled).toBe(false);
+    expect(Array.isArray(body.items)).toBe(true);
+    const item = (body.items as Array<Record<string, unknown>>)[0];
+    expect(Object.keys(item).sort()).toEqual(["delivered", "due", "name", "ordered"]);
+    // …and nothing internal leaks, anywhere in the payload.
+    const raw = JSON.stringify(body);
+    for (const leak of ["PICKED", "READY_TO_PICK", "Warehouse Picker 7", "GRN-5521", "INTERNAL", "picker_name", "unit_price", "cost", "margin", "bin A3"]) {
+      expect(raw).not.toContain(leak);
+    }
+    // Raw workflow status is not exposed as a field.
+    expect("status" in body).toBe(false);
+    // Timeline only carries client-safe labels.
+    const labels = (body.timeline as Array<{ label: string }>).map(t => t.label);
+    expect(labels).toContain("Order approved");
+    expect(labels.join(" ")).not.toContain("picked");
+  });
+
+  it("(d) a client gets 404 for an order that doesn't exist", async () => {
+    const res = await get("/api/orders/NOPE-123/client-view", clientToken);
+    expect(res.status).toBe(404);
+  });
+});
