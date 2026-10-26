@@ -10268,10 +10268,11 @@ async function handleDeliverDC(request: Request, env: Env, path: string): Promis
   return applyDeliveryFinalize(env, id, body.items, user!, dc, dcItems);
 }
 
-// Apply and finalize a delivery: clamp to order caps, deduct stock, mark DELIVERED,
-// spin up a follow-up DC for any shortfall, close/partial-close the order, and post
-// the delivered goods into the client's store inventory. Shared by the direct
-// (exact) delivery path and the approval path.
+// Apply and finalize a delivery: record the confirmed delivered qty (an over-pick
+// is kept in full, capped only by what this challan dispatched), deduct stock, mark
+// DELIVERED, spin up a follow-up DC for any shortfall against the order, close/
+// partial-close the order, and post the delivered goods into the client's store
+// inventory. Shared by the direct (exact) delivery path and the approval path.
 async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:string;qty_delivered:number}[]|undefined, user: JWTPayload, dc: Record<string,unknown>, dcItems: Record<string,unknown>[]): Promise<Response> {
 
   // Order-wide caps: total ordered per sku and what's already delivered on OTHER DCs.
@@ -10287,15 +10288,17 @@ async function applyDeliveryFinalize(env: Env, id: string, requestedItems: {sku:
     for (const r of delRows) deliveredElsewhere[r.sku as string] = r.del as number;
   }
 
-  // Merge per-item delivered qtys, clamped to min(dispatched, order remaining)
+  // Merge per-item delivered qtys. The confirmed delivered qty is stored as-is,
+  // capped ONLY by what was actually dispatched on THIS challan — a deliberate
+  // over-pick (picked/dispatched greater than ordered) is delivered and recorded
+  // in full, not silently reduced to the ordered qty. Reconciliation displays
+  // still cap at ordered and flag the surplus, and the dispatch guard still blocks
+  // a challan with nothing outstanding (duplicate/phantom protection).
   const deliveries = dcItems.map(di => {
     const override = requestedItems?.find(i => i.sku === di.sku);
     const dispatched = di.qty_ordered as number;
-    const cap = orderCap[di.sku as string] != null
-      ? Math.max(0, orderCap[di.sku as string] - (deliveredElsewhere[di.sku as string] || 0))
-      : dispatched;
     const requested = override !== undefined ? override.qty_delivered : dispatched;
-    const qty_delivered = Math.max(0, Math.min(requested, dispatched, cap));
+    const qty_delivered = Math.max(0, Math.min(requested, dispatched));
     // Outstanding for the whole order after this delivery (never negative)
     const order_remaining = orderCap[di.sku as string] != null
       ? Math.max(0, orderCap[di.sku as string] - (deliveredElsewhere[di.sku as string] || 0) - qty_delivered)

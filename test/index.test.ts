@@ -6082,3 +6082,39 @@ describe("GET /api/orders/:id/client-view", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ── Over-delivery: a deliberate over-pick is recorded in full ─────────────
+describe("delivery confirmation keeps picked qty above the ordered qty", () => {
+  beforeAll(async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR IGNORE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("OVP-ORD", "c1", "tst-ops", "IN_SHIPMENT", 4500, 810, 5310, "Regular").run();
+    await db.prepare("INSERT OR IGNORE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES (?,?,?,?,?,?,?)")
+      .bind("ovp-oi", "OVP-ORD", "SKU001", "Basmati Rice 5kg", 10, 450, 4500).run();
+    // A challan dispatched with 12 picked against a 10-unit order (deliberate over-pick).
+    await db.prepare("INSERT OR IGNORE INTO delivery_challans (id,order_id,status,total_qty,dc_number) VALUES (?,?,?,?,?)")
+      .bind("OVP-DC", "OVP-ORD", "IN_TRANSIT", 12, "OVP/0001").run();
+    await db.prepare("INSERT OR IGNORE INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)")
+      .bind("ovp-di", "OVP-DC", "SKU001", "Basmati Rice 5kg", 12, 0).run();
+  });
+
+  // One test (isolated storage rolls writes back between `it`s, so the deliver and
+  // the checks must share a test).
+  it("stores the full delivered qty (12), closes the order, and the display still caps + flags the surplus", async () => {
+    const res = await post("/api/delivery-challans/OVP-DC/deliver", { items: [{ sku: "SKU001", qty_delivered: 12 }] }, adminToken);
+    expect(ok(res.status)).toBe(true);
+    // Stored delivered qty is the real 12, not clamped to the ordered 10.
+    const row = await (env.DB as D1Database).prepare("SELECT qty_delivered FROM dc_items WHERE id='ovp-di'").first() as { qty_delivered: number };
+    expect(row.qty_delivered).toBe(12);
+    // Order closes (fully delivered: 12 >= 10).
+    const ord = await (env.DB as D1Database).prepare("SELECT status FROM orders WHERE id='OVP-ORD'").first() as { status: string };
+    expect(ord.status).toBe("CLOSED");
+    // The display still caps delivered at ordered and flags the surplus.
+    const dd = await (await get("/api/orders/OVP-ORD/drilldown", adminToken)).json() as { lines: Array<{ sku: string; qty_delivered: number; qty_delivered_raw: number; qty_over_delivered: number; qty_due: number }> };
+    const line = dd.lines.find(l => l.sku === "SKU001")!;
+    expect(line.qty_delivered_raw).toBe(12); // real delivered preserved
+    expect(line.qty_delivered).toBe(10);     // display capped at ordered
+    expect(line.qty_over_delivered).toBe(2); // surplus surfaced
+    expect(line.qty_due).toBe(0);
+  });
+});
