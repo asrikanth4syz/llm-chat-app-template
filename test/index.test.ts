@@ -4939,7 +4939,7 @@ describe("order reference, editable period, and pick draft", () => {
     expect((await db.prepare("SELECT COALESCE(reserved,0) r FROM inventory WHERE sku='SKU001'").first() as { r: number }).r).toBe(reservedBefore);
 
     // finalizing the pick clears the draft
-    const pick = await post("/api/orders/PD-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 4, bin_code: "A-1" }], partial: true }, opsToken);
+    const pick = await post("/api/orders/PD-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 4, bin_code: "A-1" }], partial: true, short_reason: "Out of stock" }, opsToken);
     expect(pick.status).toBe(200);
     expect((await db.prepare("SELECT pick_draft FROM orders WHERE id='PD-1'").first() as { pick_draft: string | null }).pick_draft).toBeNull();
   });
@@ -6116,5 +6116,69 @@ describe("delivery confirmation keeps picked qty above the ordered qty", () => {
     expect(line.qty_delivered).toBe(10);     // display capped at ordered
     expect(line.qty_over_delivered).toBe(2); // surplus surfaced
     expect(line.qty_due).toBe(0);
+  });
+});
+
+// ── Pick validation (admin order-to-delivery flow) ───────────────────────
+describe("POST /api/orders/:id/pick — validation", () => {
+  beforeAll(async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('PKV-1','c1','tst-ops','READY_TO_PICK',1000,0,1000,'Regular')").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('pkv-i1','PKV-1','SKU001','Rice',10,100,1000)").run();
+  });
+
+  it("(e) a client user cannot pick (403)", async () => {
+    const res = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 5, bin_code: "" }], short_reason: "x" }, clientToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("(b) a non-overpick role cannot pick more than due", async () => {
+    // ops_manager is not an over-pick role; due = 10.
+    const res = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 12, bin_code: "" }] }, opsToken);
+    expect(res.status).toBe(400);
+    expect((await res.json() as { code: string }).code).toBe("E_OVER_DUE");
+  });
+
+  it("(b) rejects a stale submission when the due qty changed", async () => {
+    // The screen thought due was 8, but it's really 10 → stale.
+    const res = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 5, bin_code: "", due: 8 }], short_reason: "Out of stock" }, opsToken);
+    expect(res.status).toBe(409);
+    expect((await res.json() as { code: string }).code).toBe("E_STALE");
+  });
+
+  it("(b) rejects non-integer / negative quantities", async () => {
+    const res = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: -3, bin_code: "" }] }, opsToken);
+    expect(res.status).toBe(400);
+  });
+
+  it("(c) a short pick requires a reason", async () => {
+    const noReason = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 6, bin_code: "" }] }, opsToken);
+    expect(noReason.status).toBe(400);
+    expect((await noReason.json() as { code: string }).code).toBe("E_SHORT_REASON");
+    const withReason = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 6, bin_code: "", due: 10 }], short_reason: "Out of stock" }, opsToken);
+    expect(withReason.status).toBe(200);
+  });
+
+  it("(b) confirm is idempotent — re-submitting rewrites the same allocation, no duplicates", async () => {
+    const db = env.DB as D1Database;
+    // super_admin may re-pick up to QC, so both submits are accepted (not status-blocked).
+    const body = { items: [{ sku: "SKU001", name: "Rice", qty: 10, bin_code: "A-1", due: 10 }] };
+    await post("/api/orders/PKV-1/pick", body, adminToken);
+    await post("/api/orders/PKV-1/pick", body, adminToken); // double submit
+    const { results } = await db.prepare("SELECT sku, qty FROM order_allocations WHERE order_id='PKV-1'").all() as { results: { sku: string; qty: number }[] };
+    expect(results.length).toBe(1);        // one allocation row, not two
+    expect(results[0].qty).toBe(10);
+  });
+
+  it("super_admin may over-pick (exempt from the due cap)", async () => {
+    const res = await post("/api/orders/PKV-1/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 12, bin_code: "" }] }, adminToken);
+    expect(res.status).toBe(200);
+  });
+
+  it("a cancelled order cannot be picked (409)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type) VALUES ('PKV-X','c1','tst-ops','CANCELLED',0,0,0,'Regular')").run();
+    const res = await post("/api/orders/PKV-X/pick", { items: [{ sku: "SKU001", name: "Rice", qty: 1, bin_code: "" }] }, opsToken);
+    expect(res.status).toBe(409);
   });
 });

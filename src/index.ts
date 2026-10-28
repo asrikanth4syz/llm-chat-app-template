@@ -6964,7 +6964,11 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
     (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty,
     (SELECT COALESCE(SUM(di.qty_delivered),0) FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id
        WHERE dc.order_id=o.id AND dc.status='DELIVERED') AS delivered_qty,
-    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status IN ('SCHEDULED','IN_TRANSIT')) AS active_dc_count
+    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id
+       AND oi.qty <= COALESCE((SELECT SUM(di.qty_delivered) FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id
+         WHERE dc2.order_id=o.id AND dc2.status='DELIVERED' AND di.sku=oi.sku),0)) AS delivered_items,
+    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status IN ('SCHEDULED','IN_TRANSIT')) AS active_dc_count,
+    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status!='CANCELLED') AS challan_count
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE 1=1`;
   const params: string[] = [];
 
@@ -8935,15 +8939,21 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   return json({id, status: body.to});
 }
 
-// POST /api/orders/:id/pick — save allocations, transition to PICKED, consume no stock yet
+// POST /api/orders/:id/pick — save allocations, transition to PICKED, consume no stock yet.
+// Body: { items:[{sku,name,qty,bin_code,due?}], partial?, short_reason? }. `due` (per
+// line, the still-due the pick screen displayed) drives the staleness check.
 async function handlePickOrder(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  // Pick/dispatch is staff-only — a client role can never reach this endpoint.
+  if (isExternalRole(user!.role)) return json({ error: "Forbidden" }, 403);
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string}[];partial?:boolean};
+  const body = await request.json() as {items: {sku:string;name:string;qty:number;bin_code:string;due?:number}[];partial?:boolean;short_reason?:string};
 
   const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!order) return json({error:"Not found"}, 404);
+  if (["CANCELLED","CLOSED"].includes(order.status))
+    return json({ error: `This order is ${order.status.toLowerCase()} — it can no longer be picked.`, code: "E_ORDER_CLOSED" }, 409);
   // Admins may re-pick an already-picked order (edit the allocation) up to QC; it
   // rewrites the allocation and lands the order back at PICKED.
   const canEditPick = ["super_admin","ops_admin"].includes(user!.role);
@@ -8953,7 +8963,39 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
   if (!pickable.includes(order.status))
     return json({error:`Cannot pick from status ${order.status}`}, 400);
 
-  // Save allocation records
+  // Still-due per SKU = ordered − already delivered (across DELIVERED challans).
+  const { results: oItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string,unknown>[] };
+  const ordered: Record<string, number> = {};
+  for (const oi of oItems) ordered[String(oi.sku)] = Number(oi.qty) || 0;
+  const { results: delRows } = await env.DB.prepare(
+    "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) del FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=? AND dc.status='DELIVERED' GROUP BY di.sku"
+  ).bind(id).all() as { results: Record<string,unknown>[] };
+  const delivered: Record<string, number> = {};
+  for (const r of delRows) delivered[String(r.sku)] = Number(r.del) || 0;
+  const stillDue = (sku: string) => Math.max(0, (ordered[sku] || 0) - (delivered[sku] || 0));
+
+  // super_admin / ops_admin may deliberately over-pick (ships extra); every other
+  // pick role is capped at the still-due qty.
+  const canOverpick = ["super_admin","ops_admin"].includes(user!.role);
+  let shortLines = 0, staleLines = 0;
+  for (const it of body.items || []) {
+    const q = Number(it.qty);
+    if (!Number.isInteger(q) || q < 0) return json({ error: `Pick quantities must be whole numbers (0 or more).`, code: "E_QTY" }, 400);
+    const due = stillDue(String(it.sku));
+    if (q > due && !canOverpick) return json({ error: `You picked ${q} of ${it.sku} but only ${due} is due.`, code: "E_OVER_DUE" }, 400);
+    if (it.due != null && Number(it.due) !== due) staleLines++;
+    if (q > 0 && q < due) shortLines++;
+  }
+  // Reject a stale submission: the due qty changed since the screen loaded.
+  if (staleLines > 0)
+    return json({ error: "The quantities due changed since you opened this screen. Refresh and pick again.", code: "E_STALE" }, 409);
+  // A short pick (any line picked below its due) needs a reason.
+  const shortReason = typeof body.short_reason === "string" ? body.short_reason.trim().slice(0, 120) : "";
+  if (shortLines > 0 && !shortReason)
+    return json({ error: "A reason is required for a short pick.", code: "E_SHORT_REASON" }, 400);
+
+  // Save allocation records (idempotent: a re-submit rewrites the same allocations;
+  // the challan is created later at dispatch, which is itself compare-and-swap guarded).
   await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
   for (const item of body.items) {
     await env.DB.prepare(
@@ -8967,8 +9009,8 @@ async function handlePickOrder(request: Request, env: Env, path: string): Promis
     "UPDATE orders SET status='PICKED',picker_id=?,picker_name=?,picked_at=datetime('now'),updated_at=datetime('now') WHERE id=?"
   ).bind(user!.sub, user!.name, id).run();
   try { await env.DB.prepare("UPDATE orders SET pick_draft=NULL WHERE id=?").bind(id).run(); } catch { /* column may be absent on legacy DBs */ }
-  const pickNote = body.partial
-    ? `Partial pick by ${user!.name} — ${body.items.map(i=>`${i.sku}:${i.qty}`).join(', ')}`
+  const pickNote = (body.partial || shortLines > 0)
+    ? `Partial pick by ${user!.name}${shortReason ? ` — short: ${shortReason}` : ''} — ${body.items.map(i=>`${i.sku}:${i.qty}`).join(', ')}`
     : `Picked by ${user!.name}`;
   await env.DB.prepare(
     "INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)"

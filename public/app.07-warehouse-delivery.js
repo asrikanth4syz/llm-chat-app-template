@@ -1068,7 +1068,11 @@ function pickReview(orderId) {
       <div class="pk-tile"><b>${picked} / ${toPick}</b><span>Units picked</span></div>
       <div class="pk-tile"><b>${Math.max(0, toPick - picked)}</b><span>Units short</span></div>
     </div>
-    ${shorts.length ? `<div class="pk-rev-sec pk-rev-warn"><b>⚠ ${shorts.length} line${shorts.length > 1 ? 's' : ''} picked short</b><ul>${shorts.map(s => `<li>${h(s.name)} — picked ${s.v} of ${s.rem}</li>`).join('')}</ul></div>` : `<div class="pk-rev-ok">✓ Every line picked in full.</div>`}
+    ${shorts.length ? `<div class="pk-rev-sec pk-rev-warn"><b>⚠ ${shorts.length} line${shorts.length > 1 ? 's' : ''} picked short</b><ul>${shorts.map(s => `<li>${h(s.name)} — picked ${s.v} of ${s.rem}</li>`).join('')}</ul>
+      <label for="pk-short-reason" style="display:block;font-size:.82rem;font-weight:700;margin-top:8px">Reason for the short pick (required)</label>
+      <select id="pk-short-reason" style="width:100%;margin-top:4px;padding:7px;border:1.5px solid var(--border);border-radius:8px;background:var(--surface)">
+        <option value="">Choose a reason…</option><option>Out of stock</option><option>Damaged</option><option>Bin mismatch</option><option>Other</option>
+      </select></div>` : `<div class="pk-rev-ok">✓ Every line picked in full.</div>`}
     ${over.length ? `<div class="pk-rev-sec pk-rev-bad"><b>▲ Over-pick on ${over.length} line${over.length > 1 ? 's' : ''}</b><ul>${over.map(s => `<li>${h(s.name)} — ${s.v} vs ${s.rem} remaining</li>`).join('')}</ul></div>` : ''}
     ${noBin ? `<div class="pk-rev-sec pk-rev-warn">${noBin} picked line${noBin > 1 ? 's' : ''} without a storage bin selected.</div>` : ''}
   </div>`;
@@ -1295,6 +1299,7 @@ async function confirmPick(orderId) {
       sku: l.sku, name: l.name,
       qty: parseInt(bySku[l.sku]) || 0,
       bin_code: binBySku[l.sku] || (ctx.binSel || {})[l.sku] || '',
+      due: parseInt(l.due) || 0,          // the still-due the screen showed → staleness check
     }));
     hasPartial = ctx.lines.some(l => (parseInt(bySku[l.sku]) || 0) < (parseInt(l.due) || 0));
   } else {
@@ -1302,12 +1307,17 @@ async function confirmPick(orderId) {
     items = Array.from(qtyInputs).map(inp => {
       const binSel = document.querySelector(`.pick-bin[data-sku="${inp.dataset.sku}"]`);
       const qty = parseInt(inp.value) || 0;
-      return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '' };
+      return { sku: inp.dataset.sku, name: inp.dataset.name, qty, bin_code: binSel?.value || '', due: +inp.dataset.ordered || 0 };
     });
     hasPartial = Array.from(qtyInputs).some(inp => (parseInt(inp.value) || 0) < +inp.dataset.ordered);
   }
   if (!items.some(i => i.qty > 0)) { showToast('Enter a quantity for at least one item', 'error'); return; }
-  const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial }) });
+  // A short pick (any positive line below its due) needs a reason — matches the server guard.
+  const shortNow = items.some(i => i.qty > 0 && i.qty < i.due);
+  const reasonEl = document.getElementById('pk-short-reason');
+  const shortReason = reasonEl ? reasonEl.value : '';
+  if (shortNow && !shortReason) { showToast('Choose a reason for the short pick', 'error'); return; }
+  const res = await api(`/orders/${orderId}/pick`, { method:'POST', body: JSON.stringify({ items, partial: hasPartial, short_reason: shortReason || undefined }) });
   if (res) {
     showToast(`Order ${orderId} marked as PICKED${hasPartial ? ' (partial)' : ''}`);
     closeModal();

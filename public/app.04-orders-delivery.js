@@ -2490,6 +2490,49 @@ function oqTileHtml(dot, label, count, hint, act, on) {
   return tileHtml({ label, value: count, sub: hint, accent: dot, active: on, act });
 }
 
+// ── Order Queue: per-order delivery progress (column + filter chips) ─────────
+// Uses handleListOrders fields: total_qty, delivered_qty, item_count,
+// delivered_items (count of fully-delivered lines).
+function oqDeliv(o) {
+  const tot = Number(o.total_qty) || 0, del = Number(o.delivered_qty) || 0;
+  const items = Number(o.item_count) || 0, delItems = Number(o.delivered_items) || 0;
+  const dueItems = Math.max(0, items - delItems);
+  const pct = tot > 0 ? Math.min(100, Math.round(del / tot * 100)) : 0;
+  return { pct, dueItems, started: del > 0, complete: items > 0 && dueItems === 0, del, tot };
+}
+function oqProgressCell(o) {
+  const d = oqDeliv(o);
+  const barColor = d.complete ? '#0C8E6D' : d.started ? '#B5731A' : 'var(--text-light,#9aa7b2)';
+  const text = !d.started ? '<span class="u-muted">Not started</span>'
+    : d.complete ? '<b>100%</b> <span class="u-muted">· Complete</span>'
+    : `<b>${d.pct}%</b> <span class="u-muted">· ${d.dueItems} due</span>`;
+  return `<button type="button" ${dataAct('openOrderDelivery', o.id)} title="Open delivery breakdown for ${o.id}" aria-label="Delivery progress for ${o.id}"
+    style="background:none;border:1px solid transparent;border-radius:8px;padding:4px 6px;margin:-4px -6px;cursor:pointer;text-align:left;display:block;width:100%;min-width:120px">
+    <span style="display:block;height:7px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-bottom:4px"><i style="display:block;height:100%;width:${d.pct}%;background:${barColor}"></i></span>
+    <span style="font-size:.8rem">${text}</span>
+  </button>`;
+}
+function oqDelivChipsHtml() {
+  const base = oqBase();
+  const n = { all: base.length, due: 0, done: 0, new: 0 };
+  base.forEach(o => { const d = oqDeliv(o); if (!d.started) n.new++; else if (d.complete) n.done++; else if (d.dueItems > 0) n.due++; });
+  const cur = APP._oqDelivFilter || 'all';
+  const chip = (k, label) => `<button type="button" ${dataAct('oqSetDelivFilter', k)} aria-pressed="${cur === k}"
+    style="border:1px solid ${cur === k ? 'var(--navy)' : 'var(--border)'};background:${cur === k ? 'var(--navy)' : 'var(--surface)'};color:${cur === k ? '#fff' : 'var(--text)'};border-radius:999px;padding:5px 13px;font-weight:600;font-size:.82rem;cursor:pointer">${label} <b>${n[k]}</b></button>`;
+  return `<div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin:0 2px 6px">By delivery</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${chip('all', 'All')}${chip('due', 'Due deliveries')}${chip('done', 'Delivered')}${chip('new', 'Not started')}</div>`;
+}
+function oqSetDelivFilter(k) {
+  APP._oqDelivFilter = k;
+  const chipsEl = document.getElementById('oq-deliv-chips');
+  if (chipsEl) chipsEl.innerHTML = oqDelivChipsHtml();
+  const sub = document.getElementById('oq-subtitle');
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+}
+// Progress cell → the existing admin delivery breakdown (By item / Due list / By challan).
+function openOrderDelivery(id) { viewOrderDrilldown(id); }
+
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
@@ -2515,6 +2558,9 @@ async function renderOrderQueue(el) {
       : orders;
     if (APP._oqTypeFilter) res = res.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter);
     if (APP._oqClient) { const q = APP._oqClient.toLowerCase(); res = res.filter(o=>(o.client_name||'').toLowerCase().includes(q)); }
+    const df = APP._oqDelivFilter;
+    if (df && df !== 'all') res = res.filter(o => { const d = oqDeliv(o);
+      return df === 'due' ? (d.started && d.dueItems > 0) : df === 'done' ? d.complete : df === 'new' ? !d.started : true; });
     return res;
   }
 
@@ -2604,6 +2650,7 @@ async function renderOrderQueue(el) {
         <td data-label="Client">${o.client_name||'—'}</td>
         <td data-label="Amount" style="font-weight:700">${fmt(o.grand_total)}</td>
         <td data-label="Status">${statusBadge(o.status)}${oqDeliveryBadge(o)}</td>
+        <td data-label="Delivery">${oqProgressCell(o)}</td>
         <td data-label="Type">${orderTypeBadge(o.order_type||'Regular')}</td>
         <td data-label="Items" class="u-center">
           <span class="oq-numunit"><b>${o.item_count||0}</b> items</span>
@@ -2615,7 +2662,7 @@ async function renderOrderQueue(el) {
         <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td data-label="Actions">${orderQueueActions(o)}</td>
       </tr>`;
-    }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
+    }).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
 
   APP._oqTabsHtml  = oqTabsHtml;
@@ -2640,6 +2687,8 @@ async function renderOrderQueue(el) {
   </div>
 
   <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
+
+  <div id="oq-deliv-chips" style="margin-bottom:14px">${oqDelivChipsHtml()}</div>
 
   <div class="tabs" style="margin-bottom:16px">
     <button class="tab-btn${APP._oqTab==='orders'?' active':''}" data-oqtab="orders" ${dataAct('switchOQMainTab', 'orders')}>Orders</button>
@@ -2670,7 +2719,7 @@ function oqOrdersTableHtml() {
       </div>
       <div class="table-wrap">
         <table class="table table-cards table-cards-2up" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml ? APP._oqTableHtml(APP._oqStatusTab) : ''}
         </table>
       </div>
