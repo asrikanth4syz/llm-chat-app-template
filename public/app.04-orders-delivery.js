@@ -1040,9 +1040,12 @@ let _ofCssDone = false;
 function injectOrderFullCss() {
   if (_ofCssDone) return; _ofCssDone = true;
   const css = `
-  .ofbar{position:sticky;top:0;z-index:12;background:var(--surface);border-bottom:1px solid var(--border);margin:-16px -16px 0}
-  .ofbar .in{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 16px;max-width:1100px;margin:0 auto}
-  .ofcrumb{background:none;border:0;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:.86rem}
+  .ofbar{position:sticky;top:0;z-index:12;background:var(--surface);border-bottom:1px solid var(--border)}
+  .ofbar .in{padding:10px 0;max-width:1100px;margin:0 auto}
+  .ofbt{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+  .ofbt .oft{font-weight:800;font-size:1rem;color:var(--navy)}
+  .oftabs{display:flex;gap:2px;overflow-x:auto;margin-top:8px}
+  .ofcrumb{background:none;border:0;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:.86rem;display:inline-block}
   .ofcrumb:hover{text-decoration:underline}
   .ofbar .oft{font-weight:800;font-size:1rem;color:var(--navy)}
   .ofsp{flex:1}
@@ -1189,14 +1192,16 @@ function ofShellHtml() {
   return `
   <div class="ofbar"><div class="in">
     <button class="ofcrumb" ${dataAct('ofBackToOrders')}>← Back to Orders</button>
-    <span class="oft">${h(order.id)}</span><span class="u-muted" style="font-size:.84rem">${h((order.client_name || '').slice(0, 42))}</span>${statusBadge(order.status)}
-    <span class="ofsp"></span>
-    ${primaryHtml}
-    ${moreItems ? `<div class="ofmenu"><button class="btn" id="of-more-btn" aria-haspopup="true" aria-expanded="false" ${dataActEl('orderMoreToggle')}>⋯ More</button>
-      <div class="ofpop" id="of-more-pop" role="menu">${moreItems}</div></div>` : ''}
-    <div id="of-tabs" role="tablist" style="display:flex;gap:2px;overflow-x:auto;width:100%;margin-top:6px">${ofTabsHtml()}</div>
+    <div class="ofbt">
+      <span class="oft">${h(order.id)}</span><span class="u-muted" style="font-size:.84rem">${h((order.client_name || '').slice(0, 42))}</span>${statusBadge(order.status)}
+      <span class="ofsp"></span>
+      ${primaryHtml}
+      ${moreItems ? `<div class="ofmenu"><button class="btn" id="of-more-btn" aria-haspopup="true" aria-expanded="false" ${dataActEl('orderMoreToggle')}>⋯ More</button>
+        <div class="ofpop" id="of-more-pop" role="menu">${moreItems}</div></div>` : ''}
+    </div>
+    <div id="of-tabs" class="oftabs" role="tablist">${ofTabsHtml()}</div>
   </div></div>
-  <div class="page" style="padding:0"><div id="of-body"></div></div>`;
+  <div style="max-width:1100px;margin:0 auto"><div id="of-body" style="margin-top:4px"></div></div>`;
 }
 function ofTabsHtml() {
   const c = APP._ofCtx;
