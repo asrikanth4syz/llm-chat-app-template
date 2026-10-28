@@ -810,7 +810,10 @@ async function confirmCreateDCFromPicklist(orderId) {
   else navigate(APP.page);
 }
 
-async function pickOrderModal(orderId) {
+// prefill (optional): a list/Set of SKUs to open prefilled to their FULL due qty —
+// used by the Delivery tab's "Pick & dispatch selected", so the chosen lines carry
+// straight through without being re-entered. Omitted → every due line opens at 0.
+async function pickOrderModal(orderId, prefill) {
   const [order, bins, drill] = await Promise.all([
     api(`/orders/${orderId}`),
     api('/bin-locations').catch(()=>[]),
@@ -870,6 +873,14 @@ async function pickOrderModal(orderId) {
         draftLoaded = true;
       }
     } catch (_) { /* ignore a malformed draft */ }
+  }
+  // "Pick & dispatch selected": open the chosen lines prefilled to their full due
+  // qty, keeping any saved-draft values for the lines that weren't selected.
+  if (prefill && !(prefill instanceof Set ? prefill.size === 0 : prefill.length === 0)) {
+    const sel = prefill instanceof Set ? prefill : new Set(prefill);
+    const base = APP._pickCtx.vals || lines.map(() => 0);
+    APP._pickCtx.vals = lines.map((l, i) => sel.has(l.sku) ? (parseInt(l.due) || 0) : (base[i] || 0));
+    draftLoaded = false;
   }
   APP._pickScanMode = 'fill';
   openModal(`Pick Items — ${orderId}${clientName ? ` · ${clientName}` : ''}`, pickModalInner(), pickModalFooter());

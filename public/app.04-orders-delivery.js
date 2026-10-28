@@ -1340,7 +1340,12 @@ function ofDueBar() {
     <button class="btn btn-sm btn-primary" ${dataAct('ofPickSelected', c.id)}>Pick &amp; dispatch selected →</button></span></div>`;
 }
 function ofClearDue() { const c = APP._ofCtx; if (!c) return; c.sel = {}; ofRenderBody(); }
-function ofPickSelected(id) { pickOrderModal(id); }   // opens the existing pick screen (all due lines)
+// Carry the selected due lines into the pick screen, prefilled to their full due qty.
+function ofPickSelected(id) {
+  const c = APP._ofCtx;
+  const sel = c ? Object.keys(c.sel).filter(sku => c.sel[sku]) : [];
+  pickOrderModal(id, sel);
+}
 function ofTabChallans() {
   const c = APP._ofCtx, dcs = (c.drill && c.drill.dcs) || [];
   const top = dcs.length ? `<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-secondary btn-sm" ${dataAct('ofAllChallanItems', c.id)}>View all items across challans</button></div>` : '';
