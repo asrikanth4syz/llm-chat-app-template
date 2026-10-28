@@ -1121,9 +1121,15 @@ function ofComputeLines(order, drill) {
   return { deliveredMap, recon: window.oreconTotals(reconLines) };
 }
 
+const OF_TABS = ['overview', 'delivery', 'challans', 'amend', 'timeline'];
 async function renderOrderFull(el) {
   injectOrderFullCss();
-  const id = APP._navTab || parseHash().tab || '';
+  registerHub('order_view', ofApplyToken);   // back/forward flips the tab in place
+  const token = APP._navTab || parseHash().tab || '';
+  const parts = String(token).split('.');
+  const id = parts[0] || '';
+  let tab = parts[1] || 'overview';
+  const view0 = parts[2] || '';
   if (!id) { el.innerHTML = notImplemented('order_view'); return; }
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div>`;
   const [order, comments, dcRes, drill] = await Promise.all([
@@ -1143,106 +1149,224 @@ async function renderOrderFull(el) {
   }
   APP._viewOrder = order;
   const orderDCs = (dcRes || []).filter(d => d.order_id === id);
-  const { deliveredMap, recon } = ofComputeLines(order, drill);
-  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const { recon } = ofComputeLines(order, drill);
 
-  // Totals from the order record (not the mock's 5% placeholder).
-  const subtotalAmt = order.subtotal != null ? Number(order.subtotal) : (order.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
-  const grandAmt = order.grand_total != null ? Number(order.grand_total) : subtotalAmt;
-  const gstAmt = order.gst != null ? Number(order.gst) : Math.max(0, grandAmt - subtotalAmt);
+  // Build the shared Delivery-breakdown read-model (APP._dd) so the existing
+  // By item / By challan / Due renderers and the Excel/PDF exports work inline.
+  const deliveredVia = {};
+  (drill?.dcs || []).forEach(dc => { if (dc.status !== 'DELIVERED') return; (dc.items || []).forEach(it => { const q = Number(it.qty_delivered) || 0; if (q <= 0) return; (deliveredVia[it.sku] = deliveredVia[it.sku] || []).push({ dc: dc.dc_number || dc.id, qty: q, date: dc.delivered_at }); }); });
+  const ddOrdQty = (drill?.lines || []).reduce((s, l) => s + (Number(l.qty_ordered) || 0), 0);
+  const ddDelQty = (drill?.lines || []).reduce((s, l) => s + (Number(l.qty_delivered) || 0), 0);
+  APP._dd = { orderId: id, order: (drill && drill.order) || order, lines: (drill && drill.lines) || [], dcs: (drill && drill.dcs) || [], summary: (drill && drill.summary) || {}, deliveredVia, ordQty: ddOrdQty, delQty: ddDelQty, qtyRate: ddOrdQty > 0 ? Math.round(ddDelQty / ddOrdQty * 100) : 0, view: 'item' };
 
-  // ALL line rows (not just 8). Internal scroll only when long (>20 rows).
-  const rows = (order.items || []).map(i => {
-    const ord = Number(i.qty) || 0, del = Number((deliveredMap[i.sku] || {}).delivered) || 0, due = Math.max(0, ord - del);
-    const st = window.olineStatus(ord, del);
-    const col = st === 'full' ? 'var(--success)' : st === 'partial' ? '#B5731A' : 'var(--text-muted)';
-    const lbl = st === 'full' ? 'Full' : st === 'partial' ? 'Partial' : 'Pending';
-    return `<tr>
-      <td>${h(i.name)}</td>
-      <td class="u-right">${ord.toLocaleString('en-IN')}</td>
-      <td class="u-right" style="color:${col};font-weight:700">${del.toLocaleString('en-IN')}</td>
-      <td class="u-right">${due.toLocaleString('en-IN')}</td>
-      <td class="u-right">${fmt(i.unit_price)}</td>
-      <td><span style="color:${col};font-weight:700">${lbl}</span></td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:18px">No line items.</td></tr>`;
-  const manyRows = (order.items || []).length > 20;
+  const dueLines = (drill?.lines || []).filter(l => (Number(l.qty_due) || 0) > 0);
+  const dueQty = dueLines.reduce((s, l) => s + Math.max(0, Number(l.qty_due) || 0), 0);
+  if (!OF_TABS.includes(tab)) tab = 'overview';
+  const view = view0 || (tab === 'delivery' ? (dueQty > 0 ? 'due' : 'item') : '');
+  APP._ofCtx = { id, order, comments, orderDCs, drill, recon, dueQty, dueLines, tab, view, sel: {} };
 
-  const pa = ofPrimaryAction(order, orderDCs);
-  const primaryHtml = pa
-    ? (pa.act
-        ? `<button class="btn btn-primary" ${pa.act}>${h(pa.label)} →</button>`
-        : `<span class="badge badge-warning" style="padding:8px 12px">⏳ ${h(pa.label)}</span>`)
-    : `<span class="u-muted" style="font-size:.84rem">No further action</span>`;
+  el.innerHTML = ofShellHtml();
+  ofRenderBody();
+  try { window.scrollTo(0, 0); } catch (_) {}
+}
 
-  const s = order.status;
-  const canDownload = !['DRAFT', 'CANCELLED'].includes(s);
-  const canAmend = ['APPROVED', 'ACKNOWLEDGED', 'INVENTORY_CHECK', 'VENDOR_PO_RAISED', 'READY_TO_PICK', 'PICKED', 'QUALITY_CHECK'].includes(s);
+// Sticky header (back, title, status, one primary, More menu) + the tab bar.
+function ofShellHtml() {
+  const c = APP._ofCtx, order = c.order, id = c.id, s = order.status;
+  const pa = ofPrimaryAction(order, c.orderDCs);
+  const primaryHtml = (pa && pa.act && c.dueQty > 0)
+    ? `<button class="btn btn-primary" ${pa.act}>${h(pa.label)} →</button>`
+    : (pa && pa.act ? `<button class="btn btn-primary" ${pa.act}>${h(pa.label)} →</button>` : `<span class="u-muted" style="font-size:.84rem">No further action</span>`);
+  const canExport = !['DRAFT', 'CANCELLED'].includes(s);
+  const canPreClose = ['IN_SHIPMENT', 'PARTIALLY_CLOSED'].includes(s);
   const canCancel = !['CLOSED', 'CANCELLED'].includes(s);
   const moreItems = [
-    canDownload ? `<button ${dataAct('ofMoreDownload', id)}>⬇ Download / breakdown</button>` : '',
-    canAmend ? `<button ${dataAct('ofMoreAmend', id)}>✏️ Amend order</button>` : '',
+    canExport ? `<button ${dataAct('ofMoreExcel', id)}>⬇ Export Excel</button>` : '',
+    canExport ? `<button ${dataAct('ofMorePDF', id)}>⬇ Export PDF</button>` : '',
+    canPreClose ? `<button ${dataAct('preCloseOrder', id)}>Pre-close order…</button>` : '',
     canCancel ? `<button class="d" ${dataAct('orderCancelDialog', id)}>Cancel order…</button>` : '',
   ].filter(Boolean).join('');
-
-  const timelineHtml = (order.history || []).length
-    ? `<div style="display:grid;gap:6px">${order.history.map(ev => `<div style="display:flex;gap:8px;font-size:.82rem">
-        <span style="color:var(--text-muted);min-width:92px">${fmtDate(ev.created_at)}</span>
-        <span>${statusBadge(ev.to_status)}</span>
-        <span class="u-muted">${h(ev.actor_name || '')}${ev.note ? ' — ' + h(ev.note) : ''}</span>
-      </div>`).join('')}</div>`
-    : `<p class="u-muted" style="font-size:.84rem;margin:6px 0 0">No events yet.</p>`;
-  const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(comments || []).length
-    ? comments.map(c => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem">
-        <div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(c.author_name)}</b><span class="u-muted">${timeAgo(c.created_at)}</span></div>
-        <div>${h(c.message)}</div></div>`).join('')
-    : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
-
-  el.innerHTML = `
+  return `
   <div class="ofbar"><div class="in">
     <button class="ofcrumb" ${dataAct('ofBackToOrders')}>← Back to Orders</button>
-    <span class="oft">${h(order.id)}</span>${statusBadge(order.status)}
+    <span class="oft">${h(order.id)}</span><span class="u-muted" style="font-size:.84rem">${h((order.client_name || '').slice(0, 42))}</span>${statusBadge(order.status)}
     <span class="ofsp"></span>
     ${primaryHtml}
     ${moreItems ? `<div class="ofmenu"><button class="btn" id="of-more-btn" aria-haspopup="true" aria-expanded="false" ${dataActEl('orderMoreToggle')}>⋯ More</button>
       <div class="ofpop" id="of-more-pop" role="menu">${moreItems}</div></div>` : ''}
+    <div id="of-tabs" role="tablist" style="display:flex;gap:2px;overflow-x:auto;width:100%;margin-top:6px">${ofTabsHtml()}</div>
   </div></div>
-  <div class="page" style="padding:0">
-    <div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_reference ? ' · Ref ' + h(order.order_reference) : ''}</div>
-    <div class="ofgrid">
-      <div class="ofstack">
-        <div class="card">${ofStepperHtml(order)}</div>
-        ${amendmentSummaryHTML(order)}
-        <div class="card">
-          <h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Line items <span class="u-muted" style="font-weight:600">(${plural((order.items || []).length, 'item')})</span></h2>
-          <div class="oftw${manyRows ? ' scroll' : ''}"><table class="oftable">
-            <thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivered</th><th class="u-right">Due</th><th class="u-right">Unit price</th><th>Status</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table></div>
-        </div>
-        <div class="card">
-          <details class="ofsec" open><summary>Timeline</summary><div style="margin-top:8px">${timelineHtml}</div></details>
-          <details class="ofsec"><summary>Comments${(comments || []).length ? ` (${comments.length})` : ''}</summary>
-            <div style="margin-top:8px">${commentsBody}
-              <div style="display:flex;gap:8px;margin-top:10px">
-                <input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
-                <button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', id)}>Post</button>
-              </div>
-            </div>
-          </details>
-        </div>
-      </div>
-      <div class="ofstack">
-        <div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Delivery reconciliation</h2>${ofReconCardHtml(recon)}</div>
-        <div class="card oftot"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Totals</h2>
-          <div><span>Subtotal (before tax)</span><span>${fmt(subtotalAmt)}</span></div>
-          <div><span>GST</span><span>${fmt(gstAmt)}</span></div>
-          <div class="g"><span>Grand total</span><span>${fmt(grandAmt)}</span></div>
-        </div>
-      </div>
+  <div class="page" style="padding:0"><div id="of-body"></div></div>`;
+}
+function ofTabsHtml() {
+  const c = APP._ofCtx;
+  const labels = { overview: 'Overview', delivery: `Delivery${c.dueQty > 0 ? ` · ${c.dueLines.length} due` : ''}`, challans: `Challans (${(c.drill && c.drill.dcs || []).length})`, amend: 'Amendments', timeline: 'Timeline' };
+  return OF_TABS.map(t => `<button role="tab" aria-selected="${c.tab === t}" ${dataAct('ofGoTab', t)}
+    style="background:none;border:0;border-bottom:3px solid ${c.tab === t ? 'var(--primary)' : 'transparent'};padding:8px 14px;font-weight:600;color:${c.tab === t ? 'var(--primary)' : 'var(--text-muted)'};cursor:pointer;white-space:nowrap">${labels[t]}</button>`).join('');
+}
+function ofGoTab(tab, view) {
+  const c = APP._ofCtx; if (!c) return;
+  if (!OF_TABS.includes(tab)) tab = 'overview';
+  c.tab = tab;
+  c.view = view || (tab === 'delivery' ? (c.dueQty > 0 ? 'due' : 'item') : '');
+  c.sel = {};
+  APP._navTab = c.id + '.' + tab + (c.view ? '.' + c.view : '');
+  writeHash('order_view', APP._navTab);
+  const tabsEl = document.getElementById('of-tabs'); if (tabsEl) tabsEl.innerHTML = ofTabsHtml();
+  ofRenderBody();
+}
+// Back/forward (real hash change) re-applies the token: same order → swap tab in
+// place; different order → full reload.
+function ofApplyToken(token) {
+  const parts = String(token || '').split('.');
+  const id = parts[0], tab = parts[1] || 'overview', view = parts[2] || '';
+  const c = APP._ofCtx;
+  if (c && c.id === id) {
+    c.tab = OF_TABS.includes(tab) ? tab : 'overview';
+    c.view = view || (c.tab === 'delivery' ? (c.dueQty > 0 ? 'due' : 'item') : '');
+    c.sel = {};
+    const tabsEl = document.getElementById('of-tabs'); if (tabsEl) tabsEl.innerHTML = ofTabsHtml();
+    ofRenderBody();
+  } else {
+    APP._navTab = token; renderOrderFull(document.getElementById('main-content'));
+  }
+}
+function ofRenderBody() {
+  const c = APP._ofCtx; const body = document.getElementById('of-body'); if (!c || !body) return;
+  body.innerHTML = c.tab === 'delivery' ? ofTabDelivery()
+    : c.tab === 'challans' ? ofTabChallans()
+    : c.tab === 'amend' ? ofTabAmend()
+    : c.tab === 'timeline' ? ofTabTimeline()
+    : ofTabOverview();
+  if (c.tab === 'delivery' && c.view === 'due') ofBindDueList();
+}
+
+function ofTotals(order) {
+  const sub = order.subtotal != null ? Number(order.subtotal) : (order.items || []).reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
+  const grand = order.grand_total != null ? Number(order.grand_total) : sub;
+  return { sub, grand, gst: order.gst != null ? Number(order.gst) : Math.max(0, grand - sub) };
+}
+function ofReconBoxesHtml(r) {
+  const n = v => Number(v || 0).toLocaleString('en-IN');
+  const box = (label, val, color, view) => `<button type="button" ${dataAct('ofGoTab', 'delivery', view)} aria-label="${label} — open the Delivery tab"
+    style="border:1px solid var(--border);background:var(--bg,var(--surface-2));border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;width:100%">
+    <span style="font-size:.72rem;font-weight:700;color:${color}">${label}</span><div style="font-size:1.25rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums">${val}</div></button>`;
+  return `<div style="display:flex;gap:14px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+    <span style="font-size:2rem;font-weight:800;color:#0C8E6D">${r.pctDelQty}%</span>
+    <div style="flex:1;min-width:140px"><div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, r.pctDelQty)}%;background:#0C8E6D"></i></div>
+    <div class="u-muted" style="margin-top:4px"><b>${n(r.delQty)} of ${n(r.ordQty)}</b> units</div></div></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+      ${box('ORDERED', r.ordItems + ' / ' + n(r.ordQty), 'var(--navy)', 'item')}
+      ${box('DELIVERED', r.delItems + ' / ' + n(r.delQty), '#0C8E6D', 'item')}
+      ${box('DUE', r.dueItems + ' / ' + n(r.dueQty), '#B5731A', 'due')}
+    </div>`;
+}
+function ofTabOverview() {
+  const c = APP._ofCtx, order = c.order, t = ofTotals(order);
+  const isFinance = ['super_admin', 'ops_admin', 'finance_admin'].includes(APP.user?.role || '');
+  const amend = amendmentSummaryHTML(order);
+  let budgetCard = '';
+  if (isFinance && order.budget && Number(order.budget.monthly_budget) > 0) {
+    const used = Number(order.budget.used_excluding_this || 0) + t.grand;
+    const pct = Math.min(100, Math.round(used / Number(order.budget.monthly_budget) * 100));
+    budgetCard = `<div class="card"><h2 style="font-size:.95rem;margin:0 0 6px;color:var(--navy)">Budget impact <span class="badge" style="font-size:.66rem">Finance</span></h2>
+      <div class="u-muted" style="font-size:.82rem">Month-to-date including this order</div>
+      <div style="font-size:1.15rem;font-weight:800;margin:4px 0">${fmt(used)} <span class="u-muted" style="font-weight:600">of ${fmt(order.budget.monthly_budget)}</span></div>
+      <div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:${pct > 90 ? 'var(--danger)' : 'var(--blue,#3b82f6)'}"></i></div>
+      <div class="u-muted" style="font-size:.78rem;margin-top:4px">${pct}% used · committed value</div></div>`;
+  }
+  const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(c.comments || []).length
+    ? c.comments.map(cm => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(cm.author_name)}</b><span class="u-muted">${timeAgo(cm.created_at)}</span></div><div>${h(cm.message)}</div></div>`).join('')
+    : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
+  return `<div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_period ? ' · For ' + new Date(order.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}${order.order_reference ? ' · Ref ' + h(order.order_reference) : ''}</div>
+  <div class="ofgrid">
+    <div class="ofstack">
+      <div class="card">${ofStepperHtml(order)}</div>
+      <div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Delivery reconciliation <span class="u-muted" style="font-weight:600">· click a box for the detail</span></h2>${ofReconBoxesHtml(c.recon)}</div>
+      ${amend ? `<div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Amendments</h2>${amend}</div>` : ''}
+    </div>
+    <div class="ofstack">
+      <div class="card oftot"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Totals</h2>
+        <div><span>Subtotal (before tax)</span><span>${fmt(t.sub)}</span></div>
+        <div><span>GST</span><span>${fmt(t.gst)}</span></div>
+        <div class="g"><span>Grand total</span><span>${fmt(t.grand)}</span></div></div>
+      ${budgetCard}
+      <div class="card"><h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Comments</h2>${commentsBody}
+        <div style="display:flex;gap:8px;margin-top:10px"><input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.85rem"><button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', c.id)}>Post</button></div></div>
     </div>
   </div>`;
-  try { window.scrollTo(0, 0); } catch (_) {}
+}
+function ofTabDelivery() {
+  const c = APP._ofCtx, r = c.recon, view = c.view || 'item';
+  const header = `<div class="card"><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span style="font-size:2rem;font-weight:800;color:#0C8E6D">${r.pctDelQty}%</span>
+    <div style="flex:1;min-width:160px"><div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, r.pctDelQty)}%;background:#0C8E6D"></i></div>
+    <div class="u-muted" style="margin-top:4px"><b>${r.delQty.toLocaleString('en-IN')} of ${r.ordQty.toLocaleString('en-IN')}</b> units · ${r.delItems} of ${r.ordItems} items</div></div></div>
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <button type="button" ${dataAct('ofGoTab', 'delivery', 'item')} aria-pressed="${view === 'item'}" style="border:1px solid ${view === 'item' ? 'var(--navy)' : 'var(--border)'};background:${view === 'item' ? 'var(--navy)' : 'var(--surface)'};color:${view === 'item' ? '#fff' : 'var(--text)'};border-radius:999px;padding:5px 13px;font-weight:600;font-size:.82rem;cursor:pointer">By item</button>
+      <button type="button" ${dataAct('ofGoTab', 'delivery', 'due')} aria-pressed="${view === 'due'}" style="border:1px solid ${view === 'due' ? 'var(--navy)' : 'var(--border)'};background:${view === 'due' ? 'var(--navy)' : 'var(--surface)'};color:${view === 'due' ? '#fff' : 'var(--text)'};border-radius:999px;padding:5px 13px;font-weight:600;font-size:.82rem;cursor:pointer">Due list (${c.dueLines.length})</button>
+    </div></div>`;
+  const body = view === 'due' ? ofDueListHtml() : `<div class="card">${renderDDByItem()}</div>`;
+  return header + body;
+}
+function ofDueListHtml() {
+  const c = APP._ofCtx, due = c.dueLines;
+  if (!due.length) return `<div class="card" style="text-align:center;color:#0C8E6D;font-weight:600;padding:28px">✓ Nothing is waiting to be delivered on this order.</div>`;
+  const rows = due.map(l => `<tr>
+    <td><input type="checkbox" data-ofdue="${h(l.sku)}" ${c.sel[l.sku] ? 'checked' : ''} aria-label="Select ${h(l.name || l.sku)}"></td>
+    <td><b>${h(l.name || l.sku)}</b><div class="u-subtiny" style="font-family:monospace">${h(l.sku)}</div></td>
+    <td class="u-right" style="color:var(--red);font-weight:800">${Number(l.qty_due).toLocaleString('en-IN')}</td>
+    <td class="u-right" style="color:var(--red)">${fmt(l.value_due)}</td>
+    <td class="u-right">${Number(l.qty_delivered).toLocaleString('en-IN')}</td></tr>`).join('');
+  return `<div class="card"><div class="oftw"><table class="oftable">
+      <thead><tr><th style="width:34px"><input type="checkbox" id="of-due-all" aria-label="Select all"></th><th>Item</th><th class="u-right">Still due</th><th class="u-right">Due ₹</th><th class="u-right">Delivered so far</th></tr></thead>
+      <tbody>${rows}</tbody></table></div></div>
+    <div id="of-duebar"></div>`;
+}
+function ofBindDueList() {
+  const c = APP._ofCtx;
+  const all = document.getElementById('of-due-all');
+  if (all) all.onchange = () => { c.dueLines.forEach(l => { c.sel[l.sku] = all.checked; }); document.querySelectorAll('[data-ofdue]').forEach(cb => { cb.checked = all.checked; }); ofDueBar(); };
+  document.querySelectorAll('[data-ofdue]').forEach(cb => { cb.onchange = () => { c.sel[cb.dataset.ofdue] = cb.checked; ofDueBar(); }; });
+  ofDueBar();
+}
+function ofDueBar() {
+  const c = APP._ofCtx, bar = document.getElementById('of-duebar'); if (!bar) return;
+  let n = 0, u = 0, v = 0;
+  c.dueLines.forEach(l => { if (c.sel[l.sku]) { n++; u += Number(l.qty_due) || 0; v += Number(l.value_due) || 0; } });
+  if (!n) { bar.innerHTML = ''; return; }
+  bar.innerHTML = `<div style="position:sticky;bottom:10px;background:var(--navy);color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px">
+    <span><b>${n} item${n > 1 ? 's' : ''} selected</b> · ${u.toLocaleString('en-IN')} units · ${fmt(v)}</span>
+    <span style="display:flex;gap:8px"><button class="btn btn-sm" ${dataAct('ofClearDue')} style="border-color:#fff;background:transparent;color:#fff">Clear</button>
+    <button class="btn btn-sm btn-primary" ${dataAct('ofPickSelected', c.id)}>Pick &amp; dispatch selected →</button></span></div>`;
+}
+function ofClearDue() { const c = APP._ofCtx; if (!c) return; c.sel = {}; ofRenderBody(); }
+function ofPickSelected(id) { pickOrderModal(id); }   // opens the existing pick screen (all due lines)
+function ofTabChallans() {
+  const c = APP._ofCtx, dcs = (c.drill && c.drill.dcs) || [];
+  const top = dcs.length ? `<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-secondary btn-sm" ${dataAct('ofAllChallanItems', c.id)}>View all items across challans</button></div>` : '';
+  return `<div class="card" style="margin-top:12px">${top}${renderDDByChallan()}</div>`;
+}
+function ofAllChallanItems(id) {
+  const d = APP._dd; if (!d) return;
+  const all = [];
+  (d.dcs || []).forEach(dc => (dc.items || []).forEach(it => all.push({ ...it, ref: dc.dc_number || dc.id })));
+  const totU = all.reduce((s, x) => s + (Number(x.qty_delivered) || 0), 0);
+  openModal(`All challan items — ${id}`,
+    `<div class="u-muted" style="margin-bottom:8px">${all.length} line${all.length === 1 ? '' : 's'} across ${(d.dcs || []).length} challan${(d.dcs || []).length === 1 ? '' : 's'} · ${totU.toLocaleString('en-IN')} units</div>
+     <div style="max-height:60vh;overflow:auto"><table class="table" style="font-size:.82rem;margin:0"><thead><tr><th>Item</th><th>SKU</th><th>Challan</th><th class="u-right">Delivered</th></tr></thead>
+       <tbody>${all.map(x => `<tr><td>${h(x.name || x.sku)}</td><td style="font-family:monospace;color:var(--text-muted)">${h(x.sku)}</td><td>${h(x.ref)}</td><td class="u-right">${Number(x.qty_delivered || 0).toLocaleString('en-IN')}</td></tr>`).join('') || '<tr><td colspan="4" class="u-muted" style="padding:14px">No items.</td></tr>'}</tbody></table></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button><button class="btn btn-secondary" ${dataAct('ddExportCSV')}>⬇ Excel</button>`);
+}
+function ofTabAmend() {
+  const c = APP._ofCtx, amend = amendmentSummaryHTML(c.order);
+  return amend ? `<div class="card" style="margin-top:12px"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Amendments</h2>${amend}</div>`
+    : `<div class="card" style="margin-top:12px;text-align:center;color:var(--text-muted);padding:28px">No amendments on this order.</div>`;
+}
+function ofTabTimeline() {
+  const c = APP._ofCtx, hist = c.order.history || [];
+  return `<div class="card" style="margin-top:12px"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Timeline</h2>${hist.length
+    ? `<div style="display:grid;gap:6px">${hist.slice().reverse().map(ev => `<div style="display:flex;gap:10px;font-size:.84rem"><span style="color:var(--text-muted);min-width:96px">${fmtDate(ev.created_at)}</span><span>${statusBadge(ev.to_status)}</span><span class="u-muted">${h(ev.actor_name || '')}${ev.note ? ' — ' + h(ev.note) : ''}</span></div>`).join('')}</div>`
+    : `<p class="u-muted" style="font-size:.84rem;margin:0">No events yet.</p>`}</div>`;
 }
 
 // Navigate to the full-page order view (admin), remembering the queue scroll.
@@ -1251,6 +1375,9 @@ function openOrderFull(id) {
   navigate('order_view', { tab: id });
 }
 function ofBackToOrders() { navigate('orders', { tab: 'queue' }); }
+// Export handlers reuse the drilldown read-model (APP._dd) set by renderOrderFull.
+function ofMoreExcel(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); ddExportCSV(); }
+function ofMorePDF(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); ddExportPDF(); }
 
 // ⋯ More menu open/close (keyboard + outside-click aware).
 function orderMoreToggle(el) {
@@ -2506,7 +2633,7 @@ function oqProgressCell(o) {
   const text = !d.started ? '<span class="u-muted">Not started</span>'
     : d.complete ? '<b>100%</b> <span class="u-muted">· Complete</span>'
     : `<b>${d.pct}%</b> <span class="u-muted">· ${d.dueItems} due</span>`;
-  return `<button type="button" ${dataAct('openOrderDelivery', o.id)} title="Open delivery breakdown for ${o.id}" aria-label="Delivery progress for ${o.id}"
+  return `<button type="button" ${dataAct('openOrderDelivery', o.id, d.dueItems > 0 ? 'due' : 'item')} title="Open delivery for ${o.id}" aria-label="Delivery progress for ${o.id}"
     style="background:none;border:1px solid transparent;border-radius:8px;padding:4px 6px;margin:-4px -6px;cursor:pointer;text-align:left;display:block;width:100%;min-width:120px">
     <span style="display:block;height:7px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-bottom:4px"><i style="display:block;height:100%;width:${d.pct}%;background:${barColor}"></i></span>
     <span style="font-size:.8rem">${text}</span>
@@ -2530,8 +2657,11 @@ function oqSetDelivFilter(k) {
   const tbody = document.getElementById('oq-tbody');
   if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
 }
-// Progress cell → the existing admin delivery breakdown (By item / Due list / By challan).
-function openOrderDelivery(id) { viewOrderDrilldown(id); }
+// Progress cell → the order page's Delivery tab (By item / Due list), deep-linked.
+function openOrderDelivery(id, view) {
+  try { APP._oqScroll = window.scrollY || 0; } catch (_) { APP._oqScroll = 0; }
+  navigate('order_view', { tab: id + '.delivery' + (view ? '.' + view : '') });
+}
 
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
