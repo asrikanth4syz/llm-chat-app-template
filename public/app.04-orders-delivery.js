@@ -1351,21 +1351,76 @@ function ofPickSelected(id) {
   const sel = c ? Object.keys(c.sel).filter(sku => c.sel[sku]) : [];
   pickOrderModal(id, sel);
 }
+const OF_DC_TONE = { DELIVERED: '#0C8E6D', IN_TRANSIT: '#06b6d4', SCHEDULED: '#B5731A', CANCELLED: '#ef4444' };
+function ofChallanValue(dc, priceMap) {
+  const useDel = dc.status === 'DELIVERED';
+  return (dc.items || []).reduce((s, it) => s + (useDel ? (Number(it.qty_delivered) || 0) : (Number(it.qty_ordered) || 0)) * (Number(priceMap[it.sku]) || 0), 0);
+}
 function ofTabChallans() {
   const c = APP._ofCtx, dcs = (c.drill && c.drill.dcs) || [];
-  const top = dcs.length ? `<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="btn btn-secondary btn-sm" ${dataAct('ofAllChallanItems', c.id)}>View all items across challans</button></div>` : '';
-  return `<div class="card" style="margin-top:12px">${top}${renderDDByChallan()}</div>`;
+  if (!dcs.length) return `<div class="card" style="margin-top:12px;text-align:center;color:var(--text-muted);padding:28px">No challans yet. Use "Dispatch remaining" to pick items and create the first one.</div>`;
+  const priceMap = {}; ((c.drill && c.drill.lines) || []).forEach(l => { priceMap[l.sku] = Number(l.unit_price) || 0; });
+  c.openDc = c.openDc || {};
+  const tone = s => OF_DC_TONE[s] || '#6b7280';
+  const rows = dcs.slice().reverse().map(dc => {
+    const ref = dc.dc_number || dc.id, items = dc.items || [], nItems = items.length, useDel = dc.status === 'DELIVERED';
+    const units = items.reduce((s, it) => s + (useDel ? (Number(it.qty_delivered) || 0) : (Number(it.qty_ordered) || 0)), 0);
+    const shortUnits = useDel ? items.reduce((s, it) => s + Math.max(0, (Number(it.qty_ordered) || 0) - (Number(it.qty_delivered) || 0)), 0) : 0;
+    const val = ofChallanValue(dc, priceMap), open = !!c.openDc[ref], pv = items.slice(0, 3);
+    const expand = open ? `<div style="grid-column:1/-1;background:var(--bg,var(--surface-2));border-radius:10px;padding:10px 12px;margin-top:8px">
+      <table class="table" style="font-size:.8rem;margin:0"><thead><tr><th>Item</th><th>SKU</th><th class="u-right">Qty</th></tr></thead>
+        <tbody>${pv.map(x => `<tr><td>${h(x.name || x.sku)}</td><td style="font-family:monospace;color:var(--text-muted)">${h(x.sku)}</td><td class="u-right">${Number((useDel ? x.qty_delivered : x.qty_ordered) || 0).toLocaleString('en-IN')}</td></tr>`).join('')}</tbody></table>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap"><span class="u-muted" style="font-size:.78rem">Showing ${pv.length} of ${nItems} items</span>${nItems > 3 ? `<button class="btn btn-primary btn-sm" ${dataAct('ofChallanPanel', ref)}>View all ${nItems} items →</button>` : ''}</div></div>` : '';
+    return `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:6px 14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)">
+      <div><b style="color:var(--navy)">${h(ref)}</b>
+        <span style="margin-left:6px;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${tone(dc.status)}22;color:${tone(dc.status)}">${dc.status}</span>
+        ${shortUnits > 0 ? `<span style="margin-left:4px;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:#B5731A22;color:#B5731A">${shortUnits.toLocaleString('en-IN')} short</span>` : ''}
+        <div class="u-muted" style="font-size:.78rem;margin-top:2px">${dc.delivered_at ? fmtDate(dc.delivered_at) + ' · ' : dc.dispatched_at ? fmtDate(dc.dispatched_at) + ' · ' : ''}${nItems} item${nItems !== 1 ? 's' : ''} · ${units.toLocaleString('en-IN')} units</div></div>
+      <b style="text-align:right;font-variant-numeric:tabular-nums">${fmt(val)}</b>
+      <button class="btn btn-secondary btn-sm" ${dataActEl('ofChallanToggle', ref)} aria-expanded="${open}">${open ? 'Hide items' : 'View items'}</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('ofChallanPDF', ref)}>PDF</button>
+      ${expand}
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px"><h2 style="font-size:.95rem;margin:0;color:var(--navy)">Delivery challans (${dcs.length})</h2>
+      <button class="btn btn-secondary btn-sm" ${dataAct('ofChallanPanel', '*')}>View all items across challans</button></div>
+    ${rows}</div>`;
 }
-function ofAllChallanItems(id) {
-  const d = APP._dd; if (!d) return;
+function ofChallanToggle(ref) {
+  const c = APP._ofCtx; if (!c) return; c.openDc = c.openDc || {};
+  c.openDc[ref] = !c.openDc[ref];
+  const y = window.scrollY; ofRenderBody(); try { window.scrollTo(0, y); } catch (_) {}
+}
+function ofChallanPDF() { ddExportPDF(); }   // per-challan PDF not available — reuse the order breakdown PDF
+// Searchable item panel (reuses the order drawer). ref '*' = all challans.
+function ofChallanPanel(ref) {
+  injectOrderFullCss(); ensureOrderDrawer();
+  _odTrigger = document.activeElement;
+  APP._ofPanel = { ref, q: '' };
+  document.getElementById('od-drawer').classList.add('on');
+  document.getElementById('od-scrim').classList.add('on');
+  document.addEventListener('keydown', _odKeydown, true);
+  ofRenderPanel();
+  const x = document.getElementById('ofp-x'); if (x) x.focus();
+}
+function ofRenderPanel() {
+  const p = APP._ofPanel, d = APP._dd, dr = document.getElementById('od-drawer'); if (!p || !d || !dr) return;
+  const multi = p.ref === '*';
   const all = [];
-  (d.dcs || []).forEach(dc => (dc.items || []).forEach(it => all.push({ ...it, ref: dc.dc_number || dc.id })));
-  const totU = all.reduce((s, x) => s + (Number(x.qty_delivered) || 0), 0);
-  openModal(`All challan items — ${id}`,
-    `<div class="u-muted" style="margin-bottom:8px">${all.length} line${all.length === 1 ? '' : 's'} across ${(d.dcs || []).length} challan${(d.dcs || []).length === 1 ? '' : 's'} · ${totU.toLocaleString('en-IN')} units</div>
-     <div style="max-height:60vh;overflow:auto"><table class="table" style="font-size:.82rem;margin:0"><thead><tr><th>Item</th><th>SKU</th><th>Challan</th><th class="u-right">Delivered</th></tr></thead>
-       <tbody>${all.map(x => `<tr><td>${h(x.name || x.sku)}</td><td style="font-family:monospace;color:var(--text-muted)">${h(x.sku)}</td><td>${h(x.ref)}</td><td class="u-right">${Number(x.qty_delivered || 0).toLocaleString('en-IN')}</td></tr>`).join('') || '<tr><td colspan="4" class="u-muted" style="padding:14px">No items.</td></tr>'}</tbody></table></div>`,
-    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button><button class="btn btn-secondary" ${dataAct('ddExportCSV')}>⬇ Excel</button>`);
+  (d.dcs || []).forEach(dc => { if (!multi && (dc.dc_number || dc.id) !== p.ref) return; const useDel = dc.status === 'DELIVERED'; (dc.items || []).forEach(it => all.push({ name: it.name, sku: it.sku, qty: Number((useDel ? it.qty_delivered : it.qty_ordered)) || 0, ref: dc.dc_number || dc.id })); });
+  const q = (p.q || '').toLowerCase();
+  const matched = all.filter(x => !q || (`${x.name || ''} ${x.sku || ''} ${x.ref}`).toLowerCase().includes(q));
+  const capped = matched.slice(0, 200), totU = matched.reduce((s, x) => s + x.qty, 0);
+  dr.innerHTML = `<div class="in"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h2 style="margin:0;font-size:1rem">${multi ? 'All challans' : h(p.ref)} · items</h2><button class="btn" id="ofp-x" ${dataAct('closeOrderDrawer')} aria-label="Close">✕</button></div>
+    <div class="u-muted" style="font-size:.82rem;margin:4px 0 10px">${all.length} line${all.length === 1 ? '' : 's'}${multi ? ` across ${(d.dcs || []).length} challans` : ''}</div>
+    <input type="text" id="ofp-q" placeholder="Search item, SKU${multi ? ' or challan' : ''}" value="${(p.q || '').replace(/"/g, '&quot;')}" aria-label="Search items" style="width:100%;margin-bottom:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px">
+    <div style="overflow:auto;max-height:58vh"><table class="table" style="font-size:.82rem;margin:0"><thead><tr><th>Item</th><th>SKU</th>${multi ? '<th>Challan</th>' : ''}<th class="u-right">Qty</th></tr></thead>
+      <tbody>${capped.length ? capped.map(x => `<tr><td>${h(x.name || x.sku)}</td><td style="font-family:monospace;color:var(--text-muted)">${h(x.sku)}</td>${multi ? `<td class="u-muted">${h(x.ref)}</td>` : ''}<td class="u-right">${x.qty.toLocaleString('en-IN')}</td></tr>`).join('') : `<tr><td colspan="${multi ? 4 : 3}" class="u-muted" style="padding:14px">No items match.</td></tr>`}</tbody></table></div>
+    ${matched.length > 200 ? `<div class="u-muted" style="font-size:.76rem;margin-top:6px">Showing first 200 of ${matched.length.toLocaleString('en-IN')} — refine your search to narrow the list.</div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;flex-wrap:wrap;gap:8px"><b>${matched.length.toLocaleString('en-IN')} item${matched.length === 1 ? '' : 's'} · ${totU.toLocaleString('en-IN')} units</b><span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm" ${dataAct('ddExportCSV')}>⬇ Excel</button><button class="btn btn-secondary btn-sm" ${dataAct('ddExportPDF')}>⬇ PDF</button></span></div></div>`;
+  const qi = document.getElementById('ofp-q');
+  if (qi) qi.oninput = function () { const pos = this.selectionStart; APP._ofPanel.q = this.value; ofRenderPanel(); const z = document.getElementById('ofp-q'); if (z) { z.focus(); try { z.setSelectionRange(pos, pos); } catch (_) {} } };
 }
 function ofTabAmend() {
   const c = APP._ofCtx, amend = amendmentSummaryHTML(c.order);
