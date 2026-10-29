@@ -1576,37 +1576,70 @@ let _coCssDone = false;
 function injectClientOrderCss() {
   if (_coCssDone) return; _coCssDone = true;
   const css = `
-  .cohero{border-left:5px solid var(--co-c,var(--text-muted))}
-  .costepper{display:flex}
-  .costep{flex:1;text-align:center;position:relative;font-size:.78rem;color:var(--text-muted)}
-  .costep ic{display:flex;width:28px;height:28px;border-radius:50%;margin:0 auto 5px;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;background:var(--bg,var(--surface-2));border:2px solid var(--border);position:relative;z-index:1}
+  /* Centred, document-width container so the order reads like an ERP record
+     page on wide screens (matches the admin order view's 1040–1100px band). */
+  .co-wrap{max-width:1040px;margin:0 auto}
+  .co-wrap > *{margin-top:12px}
+  .co-wrap > :first-child{margin-top:0}
+  .co-h2{font-size:.95rem;margin:0 0 10px;color:var(--navy);display:flex;align-items:center;gap:7px;font-weight:800}
+  /* header */
+  .co-crumb{margin-bottom:12px}
+  .co-head{display:flex;justify-content:space-between;gap:12px 16px;flex-wrap:wrap;align-items:flex-start}
+  .co-title h1{font-size:1.35rem;line-height:1.2;font-weight:800;color:var(--navy);margin:0}
+  .co-sub{color:var(--text-muted);font-size:.84rem;margin-top:4px}
+  .co-head-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .co-hbadge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 12px;font-size:.74rem;font-weight:700;border:1px solid currentColor;white-space:nowrap}
+  /* hero */
+  .cohero{border-left:4px solid var(--co-c,var(--text-muted))}
+  .cohero-status{font-size:1.15rem;font-weight:800;line-height:1.25}
+  .cohero-detail{color:var(--text-muted);font-size:.9rem;margin-top:4px}
+  .co-est{display:flex;gap:8px;align-items:center;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:.86rem;margin-top:12px}
+  .co-cancel{padding:12px 14px;background:var(--danger-bg);border:1px solid var(--danger);border-radius:var(--radius);color:var(--danger);font-weight:700;font-size:.9rem}
+  /* stepper */
+  .costepper{display:flex;gap:4px}
+  .costep{flex:1;min-width:66px;text-align:center;position:relative;font-size:.78rem;color:var(--text-muted)}
+  .costep ic{display:flex;width:28px;height:28px;border-radius:50%;margin:0 auto 5px;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;background:var(--surface-2);border:2px solid var(--border);position:relative;z-index:1}
   .costep::before{content:"";position:absolute;top:13px;left:-50%;width:100%;height:3px;background:var(--border)}
   .costep:first-child::before{display:none}
-  .costep.done ic{background:#0C8E6D;border-color:#0C8E6D;color:#fff}
-  .costep.done::before,.costep.cur::before{background:#0C8E6D}
-  .costep.cur ic{border-color:#B5731A;color:#B5731A;background:var(--surface)}
+  .costep.done ic{background:var(--success);border-color:var(--success);color:#fff}
+  .costep.done::before,.costep.cur::before{background:var(--success)}
+  .costep.cur ic{border-color:var(--warning);color:var(--warning);background:var(--surface)}
   .costep b{display:block;color:var(--text-muted);font-weight:700}
-  .costep.done b{color:#0C8E6D}.costep.cur b{color:var(--navy)}
-  .costep small{display:block;font-size:.68rem;color:var(--text-muted)}
+  .costep.done b{color:var(--success)}.costep.cur b{color:var(--navy)}
+  .costep small{display:block;font-size:.68rem;color:var(--text-muted);margin-top:1px}
+  /* reconciliation */
+  .co-recon-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
   .cocols{display:grid;grid-template-columns:repeat(3,1fr);margin-top:14px}
-  .cocol{padding:0 16px;border-left:1px solid var(--border);text-align:center}
+  .cocol{padding:0 16px;border-left:1px solid var(--border)}
   .cocol:first-child{border:0;padding-left:0}
-  .cotw{overflow-x:auto;margin-top:8px}
-  .cotw.scroll{max-height:520px;overflow:auto}
-  .cotable{width:100%;border-collapse:collapse;min-width:460px}
-  .cotable th,.cotable td{padding:8px;border-bottom:1px solid var(--border);text-align:left;font-size:.84rem}
-  .cotable th{color:var(--text-muted);font-size:.74rem;font-weight:700;position:sticky;top:0;background:var(--surface);z-index:1}
-  .cotable .n{text-align:right;font-variant-numeric:tabular-nums}
-  .coseg{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin-top:16px;background:var(--bg,var(--surface-2))}
+  .cocol-k{font-size:.72rem;font-weight:700;letter-spacing:.3px;color:var(--text-muted)}
+  .cocol-v{font-size:1.4rem;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px}
+  .cocol-s{color:var(--text-muted);font-size:.76rem;margin-top:3px}
+  .cocol-bar{height:5px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-top:6px}
+  .cocol-bar i{display:block;height:100%}
+  .coseg{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin-top:16px;background:var(--surface-2)}
   .coseg button{border:0;padding:0;cursor:pointer;height:100%}
   .cotabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-  .cotab{border:1px solid var(--border);background:var(--bg,var(--surface-2));color:var(--text);border-radius:999px;padding:5px 12px;font-size:.82rem;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
+  .cotab{border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:999px;padding:5px 12px;font-size:.82rem;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
   .cotab[aria-pressed="true"]{border-color:var(--navy);font-weight:700}
-  @media (max-width:700px){.cocols{grid-template-columns:1fr}.cocol{border:0;border-top:1px solid var(--border);padding:12px 0 0;text-align:left}.cocol:first-child{border-top:0;padding-top:0}.costep small{display:none}}
-  `;
+  .cotw{overflow-x:auto;margin-top:12px;border:1px solid var(--border);border-radius:var(--radius)}
+  .cotw.scroll{max-height:520px;overflow:auto}
+  .cotable{width:100%;border-collapse:collapse;min-width:460px}
+  .cotable th,.cotable td{padding:9px 12px;border-bottom:1px solid var(--border);text-align:left;font-size:.84rem}
+  .cotable tr:last-child td{border-bottom:0}
+  .cotable th{color:var(--text-muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.3px;position:sticky;top:0;background:var(--surface);z-index:1}
+  .cotable .n{text-align:right;font-variant-numeric:tabular-nums}
+  @media (max-width:700px){
+    .co-title h1{font-size:1.15rem}
+    .cocols{grid-template-columns:1fr}
+    .cocol{border:0;border-top:1px solid var(--border);padding:12px 0 0}
+    .cocol:first-child{border-top:0;padding-top:0}
+    .costepper{overflow-x:auto;padding-bottom:4px}
+    .costep small{display:none}
+  }`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
-const CO_COLORVAR = { grey: 'var(--text-muted)', amber: '#B5731A', green: '#0C8E6D' };
+const CO_COLORVAR = { grey: 'var(--text-muted)', amber: 'var(--warning)', green: 'var(--success)' };
 
 function openClientOrder(id) {
   try { APP._moScroll = window.scrollY || 0; } catch (_) { APP._moScroll = 0; }
@@ -1659,7 +1692,7 @@ async function renderClientOrder(el) {
     : "We'll confirm the date after approval";
 
   const period = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
-  const reconBadgeColor = headline.badge === 'Delivered' ? '#0C8E6D' : headline.badge === 'Partially Delivered' ? '#B5731A' : 'var(--text-muted)';
+  const reconBadgeColor = headline.badge === 'Delivered' ? 'var(--success)' : headline.badge === 'Partially Delivered' ? 'var(--warning)' : 'var(--text-muted)';
 
   // Ticket help card: list open tickets (don't encourage duplicates), else raise buttons.
   const tickets = o.tickets || [];
@@ -1682,7 +1715,7 @@ async function renderClientOrder(el) {
     : `<button class="btn btn-secondary btn-sm" disabled title="Available once your order ships">📄 Delivery notes</button>`;
 
   const stepperHtml = o.cancelled
-    ? `<div style="padding:12px 14px;background:var(--danger-soft-bg,#fef2f2);border:1px solid #fecaca;border-radius:10px;color:var(--danger);font-weight:700;font-size:.9rem">❌ This order was cancelled.</div>`
+    ? `<div class="co-cancel">❌ This order was cancelled.</div>`
     : `<div class="costepper">${steps.labels.map((lab, i) => {
         const c = steps.states[i];
         return `<div class="costep ${c}"><ic>${c === 'done' ? '✓' : (i + 1)}</ic><b>${lab}</b><small>${h(steps.subs[i] || '')}</small></div>`;
@@ -1706,52 +1739,56 @@ async function renderClientOrder(el) {
 
   APP._coFilter = 'all';
   el.innerHTML = `
-  <button class="btn btn-secondary btn-sm" style="margin-bottom:10px" ${dataAct('clientBackToOrders')}>← Back to My Orders</button>
-  <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start">
-    <div>
-      <div style="font-size:1.3rem;font-weight:800;color:var(--navy)">Order ${h(o.id)}${o.client_name ? ' · ' + h(o.client_name) : ''}</div>
-      <div style="color:var(--text-muted);font-size:.84rem;margin-top:2px">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.order_reference ? ' · Ref ' + h(o.order_reference) : ''}</div>
+  <div class="co-wrap">
+    <div class="co-crumb"><button class="btn btn-secondary btn-sm" ${dataAct('clientBackToOrders')}>← Back to My Orders</button></div>
+
+    <div class="co-head">
+      <div class="co-title">
+        <h1>Order ${h(o.id)}</h1>
+        <div class="co-sub">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.order_reference ? ' · Ref ' + h(o.order_reference) : ''}</div>
+      </div>
+      <div class="co-head-actions">
+        ${o.cancelled ? '' : `<span class="co-hbadge" style="color:${reconBadgeColor}">📦 ${h(headline.badge)}</span>`}
+        <button class="btn btn-secondary btn-sm" id="co-tl-btn" aria-expanded="false" ${dataActEl('clientOrderToggleTimeline')}>🧭 Timeline</button>
+        ${deliveryNotesBtn}
+      </div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-secondary btn-sm" id="co-tl-btn" aria-expanded="false" ${dataActEl('clientOrderToggleTimeline')}>🧭 Timeline</button>
-      ${deliveryNotesBtn}
-    </div>
-  </div>
-  ${amendReviewHtml}
 
-  <section class="card" id="co-tlp" hidden aria-label="Timeline" style="margin-top:12px">
-    <h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Timeline</h2>
-    ${(o.timeline || []).length
-      ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:96px">${fmtDate(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
-      : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
-  </section>
+    ${amendReviewHtml}
 
-  <section class="card cohero" style="margin-top:12px" aria-live="polite">
-    <div style="font-size:1.15rem;font-weight:800;color:${colorVar}">${h(headline.status)}</div>
-    <div style="color:var(--text-muted);font-size:.9rem;margin-top:4px">${h(headline.detail)}</div>
-  </section>
+    <section class="card" id="co-tlp" hidden aria-label="Timeline">
+      <h2 class="co-h2">🧭 Timeline</h2>
+      ${(o.timeline || []).length
+        ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:96px">${fmtDate(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
+        : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
+    </section>
 
-  <section class="card" aria-label="Progress" style="margin-top:12px">${stepperHtml}</section>
+    <section class="card cohero" style="--co-c:${colorVar}" aria-live="polite">
+      <div class="cohero-status" style="color:${colorVar}">${h(headline.status)}</div>
+      <div class="cohero-detail">${h(headline.detail)}</div>
+      ${estText ? `<div class="co-est">📅 <b>Est. delivery:</b> <span>${h(estText)}</span></div>` : ''}
+    </section>
 
-  ${estText ? `<div style="display:flex;gap:8px;align-items:center;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:10px;padding:9px 14px;margin-top:12px;font-size:.86rem">📅 <b>Est. delivery:</b> <span>${h(estText)}</span></div>` : ''}
+    <section class="card" aria-label="Progress">${stepperHtml}</section>
 
-  <section class="card" aria-label="Delivery reconciliation" style="margin-top:12px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2 style="font-size:.95rem;margin:0;color:var(--navy)">📦 Delivery reconciliation</h2>
-      <span class="badge" style="color:${reconBadgeColor};border:1px solid ${reconBadgeColor};border-radius:999px;padding:2px 11px;font-size:.72rem;font-weight:700">📦 ${h(headline.badge)}</span></div>
-    <div class="cocols">
-      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.3px">ORDERED</div><div style="font-size:1.4rem;font-weight:800;font-variant-numeric:tabular-nums">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem">items / qty</div></div>
-      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:#0C8E6D;letter-spacing:.3px">DELIVERED</div><div style="font-size:1.4rem;font-weight:800;color:#0C8E6D;font-variant-numeric:tabular-nums">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div style="height:5px;background:var(--bg,var(--surface-2));border-radius:3px;overflow:hidden;margin-top:6px"><i style="display:block;height:100%;width:${Math.min(100, recon.pctDelQty)}%;background:#0C8E6D"></i></div></div>
-      <div class="cocol"><div style="font-size:.72rem;font-weight:700;color:#B5731A;letter-spacing:.3px">DUE</div><div style="font-size:1.4rem;font-weight:800;color:#B5731A;font-variant-numeric:tabular-nums">${recon.dueItems} / ${recon.dueQty.toLocaleString('en-IN')}</div><div class="u-muted" style="font-size:.76rem"><b>${recon.pctDueItems}%</b> items · <b>${recon.pctDueQty}%</b> qty</div><div style="height:5px;background:var(--bg,var(--surface-2));border-radius:3px;overflow:hidden;margin-top:6px"><i style="display:block;height:100%;width:${Math.min(100, recon.pctDueQty)}%;background:#B5731A"></i></div></div>
-    </div>
-    <div class="coseg" id="co-seg"></div>
-    <div class="cotabs" id="co-tabs" role="group" aria-label="Filter items by status"></div>
-    <div class="cotw${lines.length > 20 ? ' scroll' : ''}"><table class="cotable">
-      <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th>Status</th></tr></thead>
-      <tbody id="co-rows"></tbody>
-    </table></div>
-  </section>
+    <section class="card" aria-label="Delivery reconciliation">
+      <div class="co-recon-head"><h2 class="co-h2" style="margin:0">📦 Delivery reconciliation</h2>
+        <span class="co-hbadge" style="color:${reconBadgeColor}">${h(headline.badge)}</span></div>
+      <div class="cocols">
+        <div class="cocol"><div class="cocol-k">ORDERED</div><div class="cocol-v">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="cocol-s">items / qty</div></div>
+        <div class="cocol"><div class="cocol-k" style="color:var(--success)">DELIVERED</div><div class="cocol-v" style="color:var(--success)">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDelQty)}%;background:var(--success)"></i></div></div>
+        <div class="cocol"><div class="cocol-k" style="color:var(--warning)">DUE</div><div class="cocol-v" style="color:var(--warning)">${recon.dueItems} / ${recon.dueQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDueItems}%</b> items · <b>${recon.pctDueQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDueQty)}%;background:var(--warning)"></i></div></div>
+      </div>
+      <div class="coseg" id="co-seg"></div>
+      <div class="cotabs" id="co-tabs" role="group" aria-label="Filter items by status"></div>
+      <div class="cotw${lines.length > 20 ? ' scroll' : ''}"><table class="cotable">
+        <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th>Status</th></tr></thead>
+        <tbody id="co-rows"></tbody>
+      </table></div>
+    </section>
 
-  <section class="card" style="margin-top:12px"><h2 style="font-size:.95rem;margin:0;color:var(--navy)">Need help?</h2>${helpBody}</section>`;
+    <section class="card"><h2 class="co-h2">Need help?</h2>${helpBody}</section>
+  </div>`;
 
   // Store what the table/chip renderer needs, then draw.
   APP._coLines = lines;
@@ -1765,7 +1802,7 @@ async function renderClientOrder(el) {
 // Render the item table body + chips + segmented bar for the current filter.
 function coRenderItems() {
   const lines = APP._coLines || [], counts = APP._coCounts || { all: 0 }, flt = APP._coFilter || 'all';
-  const LB = { full: ['Fully delivered', '#0C8E6D'], partial: ['In progress', '#B5731A'], pending: ['Awaiting dispatch', 'var(--text-muted)'] };
+  const LB = { full: ['Fully delivered', 'var(--success)'], partial: ['In progress', 'var(--warning)'], pending: ['Awaiting dispatch', 'var(--text-muted)'] };
   const seg = document.getElementById('co-seg');
   if (seg) seg.innerHTML = ['full', 'partial', 'pending'].map(k => counts[k]
     ? `<button data-cof="${k}" ${dataAct('clientOrderFilter', k)} style="width:${Math.round(counts[k] / (counts.all || 1) * 100)}%;background:${LB[k][1]}" aria-label="${LB[k][0]} ${counts[k]}"></button>` : '').join('');
