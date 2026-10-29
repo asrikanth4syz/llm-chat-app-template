@@ -6081,6 +6081,34 @@ describe("GET /api/orders/:id/client-view", () => {
     const res = await get("/api/orders/NOPE-123/client-view", clientToken);
     expect(res.status).toBe(404);
   });
+
+  it("surfaces a pending amendment for the client to review & approve (client-safe)", async () => {
+    const db = env.DB as D1Database;
+    await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,revision) VALUES ('CV-AMD','c1','tst-ops','PENDING_APPROVAL',6000,1080,7080,'Regular',2)").run();
+    await db.prepare("INSERT OR REPLACE INTO order_items (id,order_id,sku,name,qty,unit_price,total) VALUES ('cvamd-i','CV-AMD','SKU001','Basmati Rice 5kg',12,450,5400)").run();
+    const before = JSON.stringify([{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 10, unit_price: 450 }]);
+    const after = JSON.stringify([{ sku: "SKU001", name: "Basmati Rice 5kg", qty: 12, unit_price: 450 }]);
+    await db.prepare("INSERT OR REPLACE INTO order_amendments (id,order_id,revision,actor_name,reason,before_items,after_items,before_total,after_total,from_status) VALUES ('cvamd-a','CV-AMD',2,'Order Ops','Adjusted qty',?,?,4500,5400,'APPROVED')").bind(before, after).run();
+
+    const res = await get("/api/orders/CV-AMD/client-view", clientToken);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.awaiting_amendment_approval).toBe(true);
+    const am = body.amendment as Record<string, unknown>;
+    expect(am).toBeTruthy();
+    expect(am.reason).toBe("Adjusted qty");
+    expect(String(am.before_items)).toContain("SKU001");
+    // No raw workflow status leaks even while an amendment is pending.
+    expect("status" in body).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("PENDING_APPROVAL");
+  });
+
+  it("no pending amendment on an un-amended order", async () => {
+    const res = await get("/api/orders/TST-CO-INT/client-view", clientToken);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.awaiting_amendment_approval).toBe(false);
+    expect(body.amendment).toBeNull();
+  });
 });
 
 // ── Over-delivery: a deliberate over-pick is recorded in full ─────────────

@@ -1683,6 +1683,22 @@ async function renderClientOrder(el) {
         return `<div class="costep ${c}"><ic>${c === 'done' ? '✓' : (i + 1)}</ic><b>${lab}</b><small>${h(steps.subs[i] || '')}</small></div>`;
       }).join('')}</div>`;
 
+  // A change our team made that is waiting for THIS client to approve.
+  const isApprover = ['client_admin', 'client_approver'].includes(APP.user?.role || '');
+  const amendReviewHtml = o.awaiting_amendment_approval ? `
+  <section class="card" style="margin-top:12px;border:1px solid #B5731A;background:var(--amber-bg,#fff8ec)" aria-label="Changes awaiting your approval">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:1.1rem">✏️</span>
+      <h2 style="font-size:1rem;margin:0;color:#8a5a00">Changes awaiting your approval</h2></div>
+    <div class="u-muted" style="font-size:.86rem;margin:6px 0 10px">Our team updated this order${o.amendment && o.amendment.reason ? ' — ' + h(o.amendment.reason) : ''}. Review the change, then approve to resume fulfilment or reject to keep the previous version.</div>
+    ${amendmentSummaryHTML({ amendments: [o.amendment] })}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      ${isApprover
+        ? `<button class="btn btn-primary" ${dataAct('approveOrder', o.id)}>✓ Approve changes</button>
+           <button class="btn btn-secondary" style="color:var(--danger);border-color:var(--danger)" ${dataAct('rejectAmendment', o.id)}>✕ Reject changes</button>`
+        : `<span class="badge badge-warning" style="padding:8px 12px">⏳ Pending your approver's review</span>`}
+    </div>
+  </section>` : '';
+
   APP._coFilter = 'all';
   el.innerHTML = `
   <button class="btn btn-secondary btn-sm" style="margin-bottom:10px" ${dataAct('clientBackToOrders')}>← Back to My Orders</button>
@@ -1696,6 +1712,7 @@ async function renderClientOrder(el) {
       ${deliveryNotesBtn}
     </div>
   </div>
+  ${amendReviewHtml}
 
   <section class="card" id="co-tlp" hidden aria-label="Timeline" style="margin-top:12px">
     <h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Timeline</h2>

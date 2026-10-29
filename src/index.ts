@@ -7061,7 +7061,7 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
   const denied = requireUser(user); if (denied) return denied;
   const id = path.split("/").slice(-2)[0];
   const order = await env.DB.prepare(
-    `SELECT o.id, o.client_id, o.status, o.order_type, o.order_reference, o.order_period,
+    `SELECT o.id, o.client_id, o.status, o.order_type, o.order_reference, o.order_period, o.revision,
             o.created_at, o.closed_at, o.predicted_delivery_date, o.subtotal, o.gst, o.grand_total,
             c.name AS client_name
      FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`
@@ -7120,6 +7120,20 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
     tickets = results as Array<Record<string, unknown>>;
   } catch { /* order_id column pending */ }
 
+  // A change the admin made to this order that is waiting for the CLIENT to approve
+  // before fulfilment resumes. Carries the before/after line items (names, qty and
+  // the client's own selling price only) so the client can review the change.
+  const revision = Number(order.revision) || 1;
+  let amendment: Record<string, unknown> | null = null;
+  if (status === "PENDING_APPROVAL" && revision > 1) {
+    try {
+      const am = await env.DB.prepare(
+        "SELECT revision, reason, before_items, after_items, before_total, after_total, created_at FROM order_amendments WHERE order_id=? AND revision=? ORDER BY revision DESC LIMIT 1"
+      ).bind(id, revision).first() as Record<string, unknown> | null;
+      if (am) amendment = am;
+    } catch { /* order_amendments table pending */ }
+  }
+
   return json({
     id: order.id,
     order_reference: order.order_reference || null,
@@ -7128,6 +7142,8 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
     order_period: order.order_period || null,
     created_at: order.created_at,
     approved, cancelled,
+    awaiting_amendment_approval: !!amendment,
+    amendment,
     predicted_delivery_date: order.predicted_delivery_date || null,
     approved_at: approvedRow?.t || null,
     delivered_on: lastDeliv?.d || order.closed_at || null,
