@@ -620,6 +620,7 @@ function initApp() {
   loadBranding();          // document letterhead details; async, non-blocking
   loadNotifications();
   startNotificationPolling();
+  startUpdateWatcher();    // offer a reload when a newer build is deployed
   loadQuoteAccess();       // Quotations (006) entitlement → inject nav tile if enabled
 
   document.addEventListener('click', e => {
@@ -634,6 +635,64 @@ function initApp() {
   });
 }
 function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+/* ── Update watcher ──────────────────────────────────────────────────────
+   Smart Pantry is a single-page app: once a tab is open it keeps running the
+   JS it first downloaded and never picks up a new deploy until a full reload.
+   People leave ERP tabs open for hours, so we periodically re-fetch the
+   (no-cache) shell, read the asset version stamped on its scripts, and if it
+   changed, offer a one-click reload instead of letting them run stale code. */
+function _currentBuildVer() {
+  try {
+    const s = document.querySelector('script[src*="app.01-core.js"]');
+    const m = s && /[?&]v=([^"&]+)/.exec(s.getAttribute('src') || '');
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+let _updateDone = false;         // true once we've shown the banner (don't nag)
+async function checkForUpdate() {
+  if (_updateDone || !APP.user || document.hidden) return;
+  const mine = _currentBuildVer();
+  if (!mine) return;             // dev/unversioned build — nothing to compare
+  try {
+    const res = await fetch('index.html', { cache: 'no-store' });
+    if (!res.ok) return;
+    const html = await res.text();
+    const m = /app\.01-core\.js\?v=([^"&]+)/.exec(html);
+    const live = m ? m[1] : null;
+    if (live && live !== mine) showUpdateBanner();
+  } catch (_) { /* offline / transient — try again next tick */ }
+}
+function showUpdateBanner() {
+  if (_updateDone || document.getElementById('sp-update-bar')) return;
+  _updateDone = true;
+  if (!document.getElementById('sp-update-css')) {
+    const st = document.createElement('style'); st.id = 'sp-update-css';
+    st.textContent = `#sp-update-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:4000;display:flex;align-items:center;gap:14px;max-width:min(560px,calc(100vw - 28px));background:var(--navy);color:#fff;border-radius:12px;padding:11px 16px;box-shadow:0 8px 28px rgba(0,0,0,.28);font-size:.88rem;animation:spUbIn .25s ease}
+    @keyframes spUbIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+    #sp-update-bar .sp-ub-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+    #sp-update-bar #sp-update-reload{background:#fff;color:var(--navy);border:0;border-radius:8px;padding:6px 14px;font-weight:700;cursor:pointer;font-size:.84rem}
+    #sp-update-bar #sp-update-dismiss{background:transparent;color:#fff;border:0;cursor:pointer;font-size:1rem;opacity:.85;padding:2px 4px;line-height:1}
+    @media (max-width:520px){#sp-update-bar{left:14px;right:14px;transform:none;bottom:14px;animation:none}}`;
+    document.head.appendChild(st);
+  }
+  const bar = document.createElement('div');
+  bar.id = 'sp-update-bar';
+  bar.setAttribute('role', 'status');
+  bar.innerHTML = `<span>✨ A new version of Smart Pantry is available.</span>
+    <span class="sp-ub-actions">
+      <button type="button" id="sp-update-reload">Reload</button>
+      <button type="button" id="sp-update-dismiss" aria-label="Dismiss">✕</button>
+    </span>`;
+  document.body.appendChild(bar);
+  document.getElementById('sp-update-reload').onclick = () => { try { location.reload(); } catch (_) { location.href = location.pathname; } };
+  document.getElementById('sp-update-dismiss').onclick = () => { bar.remove(); };
+}
+function startUpdateWatcher() {
+  setTimeout(checkForUpdate, 20000);                 // shortly after load
+  setInterval(checkForUpdate, 5 * 60 * 1000);        // then every 5 min
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+}
 
 /* ── Header: Quick actions + Profile menu ── */
 function closeTbMenus() {
