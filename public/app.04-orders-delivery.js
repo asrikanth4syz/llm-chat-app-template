@@ -1285,6 +1285,23 @@ function ofTabOverview() {
       <div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:${pct > 90 ? 'var(--danger)' : 'var(--blue,#3b82f6)'}"></i></div>
       <div class="u-muted" style="font-size:.78rem;margin-top:4px">${pct}% used · committed value</div></div>`;
   }
+  // Estimated-delivery card — ops sets the date the client sees on their order
+  // page. Hidden on terminal states (delivered/closed/cancelled).
+  const today = new Date().toISOString().slice(0, 10);
+  const pdd = order.predicted_delivery_date;
+  const pddTerminal = ['CLOSED', 'DELIVERED', 'CANCELLED'].includes(order.status);
+  const pddLate = pdd && pdd < today && !pddTerminal;
+  const estCard = pddTerminal ? '' : `<div class="card"><h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">📅 Estimated delivery</h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="date" id="of-pdd-input" value="${pdd || ''}" min="${today}" aria-label="Estimated delivery date"
+        style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:.85rem;background:var(--surface);color:var(--text)">
+      <button class="btn btn-primary btn-sm" ${dataAct('savePredictedDelivery', order.id)}>Save</button>
+      ${pdd ? `<button class="btn btn-secondary btn-sm" ${dataAct('clearPredictedDelivery', order.id)}>Clear</button>` : ''}
+    </div>
+    <div class="u-muted" style="font-size:.78rem;margin-top:8px">${pdd
+      ? `Set to <b style="color:${pddLate ? 'var(--danger)' : 'var(--success)'}">${fmtDate(pdd)}${pddLate ? ' · overdue' : ''}</b>. `
+      : 'Not set — the client sees “We’ll confirm the date shortly”. '}This is shown to the client as their estimated delivery date.</div>
+  </div>`;
   const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(c.comments || []).length
     ? c.comments.map(cm => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(cm.author_name)}</b><span class="u-muted">${timeAgo(cm.created_at)}</span></div><div>${h(cm.message)}</div></div>`).join('')
     : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
@@ -1300,6 +1317,7 @@ function ofTabOverview() {
         <div><span>Subtotal (before tax)</span><span>${fmt(t.sub)}</span></div>
         <div><span>GST</span><span>${fmt(t.gst)}</span></div>
         <div class="g"><span>Grand total</span><span>${fmt(t.grand)}</span></div></div>
+      ${estCard}
       ${budgetCard}
       <div class="card"><h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Comments</h2>${commentsBody}
         <div style="display:flex;gap:8px;margin-top:10px"><input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.85rem"><button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', c.id)}>Post</button></div></div>
@@ -1862,14 +1880,25 @@ async function clientOrderSubmitTicket(orderId, kind) {
 }
 
 async function savePredictedDelivery(orderId) {
-  const val = document.getElementById('pdd-input')?.value || '';
+  // Works from the full order page (#of-pdd-input) and the quick-view drawer (#pdd-input).
+  const el = document.getElementById('of-pdd-input') || document.getElementById('pdd-input');
+  const val = el ? (el.value || '') : '';
   const res = await api('/orders/' + orderId, {
     method: 'PATCH',
     body: JSON.stringify({ predicted_delivery_date: val || null }),
   });
   if (!res) return;
-  showToast('Predicted delivery date saved');
-  viewOrder(orderId);
+  showToast(val ? 'Estimated delivery date saved — the client can now see it' : 'Estimated delivery date cleared');
+  // Re-render whichever view the setter was used from.
+  if (APP.page === 'order_view' && APP._ofCtx && String(APP._ofCtx.id) === String(orderId)) {
+    renderOrderFull(document.getElementById('main-content'));
+  } else {
+    viewOrder(orderId);
+  }
+}
+async function clearPredictedDelivery(orderId) {
+  const el = document.getElementById('of-pdd-input'); if (el) el.value = '';
+  await savePredictedDelivery(orderId);
 }
 
 // Ops-manager / super-admin correction of the order's business month (YYYY-MM).
