@@ -1526,7 +1526,7 @@ async function renderApprovals(el) {
 
 async function approveOrder(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'APPROVED', note:'Approved by approver' }) });
-  if (res) { showToast(`Order ${id} approved`); navigate('approvals'); }
+  if (res) { showToast(`Order ${id} approved`); afterOrderAction(id, 'approvals'); }
 }
 
 // Reject a pending amendment — the order reverts to the version before the
@@ -1540,7 +1540,7 @@ function rejectAmendment(id) {
 async function confirmRejectAmendment(id) {
   const res = await api(`/orders/${id}/amend-reject`, { method:'POST', body: JSON.stringify({}) });
   closeModal();
-  if (res && !res.error) { showToast(`Change rejected — order ${id} reverted to its previous version`); navigate('approvals'); }
+  if (res && !res.error) { showToast(`Change rejected — order ${id} reverted to its previous version`); afterOrderAction(id, 'approvals'); }
 }
 
 function rejectOrder(id) {
@@ -1559,5 +1559,5 @@ async function confirmRejectOrder(id) {
   if (!reason) { showToast('Please provide a rejection reason','error'); return; }
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note: reason }) });
   closeModal();
-  if (res) { showToast(`Order ${id} rejected`); navigate('approvals'); }
+  if (res) { showToast(`Order ${id} rejected`); afterOrderAction(id, 'approvals'); }
 }

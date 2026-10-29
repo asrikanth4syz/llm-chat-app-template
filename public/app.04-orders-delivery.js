@@ -1950,7 +1950,7 @@ async function submitReprice(id) {
   closeModal();
   if (res) {
     showToast(`Order ${id} priced — ${res.status==='PENDING_APPROVAL'?'sent for approval':res.status==='APPROVED'?'auto-approved':'released to 4SYZ'}`);
-    navigate('orders');
+    afterOrderAction(id, 'orders');
   }
 }
 
@@ -1964,7 +1964,11 @@ function amendRowHTML(it) {
   const delivered = Number(it.delivered) || 0;
   const minQty = delivered > 0 ? delivered : 1;
   const startQty = Math.max(Number(it.qty) || 1, minQty);
-  return `<tr class="amend-row" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-delivered="${delivered}">
+  // A per-row id independent of SKU: order lines can share a blank or duplicated
+  // SKU, so remove/merge must target the exact row the user clicked, not the
+  // first row that happens to match a SKU.
+  const rid = 'ar' + (APP._amendRid = (APP._amendRid || 0) + 1);
+  return `<tr class="amend-row" data-rid="${rid}" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-delivered="${delivered}">
     <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div>${delivered>0?`<div style="font-size:.68rem;color:var(--success,#0d9488);font-weight:600">${delivered} delivered · min qty ${delivered}</div>`:''}</td>
     <td><input type="number" min="${minQty}" step="1" class="amend-qty" value="${startQty}" ${dataInput('amendRecalc')}
       style="width:66px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
@@ -1972,7 +1976,7 @@ function amendRowHTML(it) {
       style="width:92px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
     <td style="text-align:right">${delivered>0
       ? `<span title="Part-delivered — this line can't be removed">🔒</span>`
-      : `<button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', it.sku)} title="Remove line">×</button>`}</td>
+      : `<button class="btn btn-danger btn-sm" ${dataAct('amendRemoveRow', rid)} title="Remove line">×</button>`}</td>
   </tr>`;
 }
 
@@ -2058,9 +2062,9 @@ function amendAddFromSearch(sku) {
   amendRecalc();
 }
 
-function amendRemoveRow(sku) {
-  const sel = (window.CSS && CSS.escape) ? CSS.escape(sku) : sku;
-  const row = document.querySelector(`.amend-row[data-sku="${sel}"]`);
+function amendRemoveRow(rid) {
+  const sel = (window.CSS && CSS.escape) ? CSS.escape(rid) : rid;
+  const row = document.querySelector(`.amend-row[data-rid="${sel}"]`);
   if (row) row.remove();
   amendRecalc();
 }
@@ -2093,7 +2097,7 @@ async function submitAmendOrder(id) {
   closeModal();
   if (res && !res.error) {
     showToast(`Order ${id} amended (rev ${res.revision}) — sent for re-approval`);
-    navigate('orders');
+    afterOrderAction(id, 'orders');
   } else if (res && res.error) {
     showToast(res.error, 'error');
   }
@@ -3464,12 +3468,27 @@ async function preCloseOrder(orderId) {
 async function confirmPreClose(orderId) {
   const res = await api(`/orders/${orderId}/transition`, { method:'POST', body: JSON.stringify({ to:'CLOSED', note:'Pre-closed by ops — partial delivery accepted' }) });
   closeModal();
-  if (res) { showToast(`Order ${orderId} pre-closed`); navigate('orders'); }
+  if (res) { showToast(`Order ${orderId} pre-closed`); afterOrderAction(orderId, 'orders'); }
+}
+
+// After a workflow action, stay on whichever order page the user is viewing
+// (admin order_view or the client order detail) and re-render it in place, so
+// the new status and next action show without a trip back to the list. Falls
+// back to the list only when the action was taken from somewhere else.
+function afterOrderAction(id, fallback) {
+  const main = document.getElementById('main-content');
+  if (main && APP.page === 'order_view' && APP._ofCtx && String(APP._ofCtx.id) === String(id)) {
+    renderOrderFull(main); try { updateNavBadges(); } catch (_) {} return;
+  }
+  if (main && APP.page === 'client_order' && String(APP._navTab || parseHash().tab || '') === String(id)) {
+    renderClientOrder(main); try { updateNavBadges(); } catch (_) {} return;
+  }
+  navigate(fallback || 'orders');
 }
 
 async function advanceOrder(id, to, note) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to, note: note||undefined }) });
-  if (res) { showToast(`Order ${id} → ${to.replace(/_/g,' ')}`); navigate('orders'); }
+  if (res) { showToast(`Order ${id} → ${to.replace(/_/g,' ')}`); afterOrderAction(id, 'orders'); }
 }
 
 function opsRejectOrder(id) {
@@ -3484,5 +3503,5 @@ async function confirmOpsReject(id) {
   const reason = document.getElementById('reject-reason').value.trim() || 'Rejected by operations';
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'CANCELLED', note: reason }) });
   closeModal();
-  if (res) { showToast(`Order ${id} cancelled`); navigate('orders'); }
+  if (res) { showToast(`Order ${id} cancelled`); afterOrderAction(id, 'orders'); }
 }
