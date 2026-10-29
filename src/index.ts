@@ -5517,8 +5517,64 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
   const payloadObj = ver ? JSON.parse(ver.payload_canonical) : null;
   const totals = payloadObj?.totals ?? null;
   const chargeRows = Array.isArray(payloadObj?.charges) ? payloadObj.charges : [];
-  const { results: lines } = await env.DB.prepare("SELECT sku, description, qty, line_taxable_paise FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
+  const { results: lines } = await env.DB.prepare("SELECT sku, description, qty, line_taxable_paise, line_no FROM quote_lines WHERE quote_id=? AND version=? ORDER BY line_no").bind(id, q.current_version).all();
   if (!lines.length) return json({ error: "quote has no lines", code: "E_NO_LINES" }, 409);
+
+  // ── Catalogue linkage ───────────────────────────────────────────────────
+  // Resolve every quote line to a real Smart Pantry catalogue SKU where we can,
+  // so the order references the catalogue instead of the shared "QUOTE" / "CHARGE"
+  // placeholders (which collided during amend). The convert dialog sends an explicit
+  // per-line mapping; an empty body (API callers, older clients) falls back to
+  // auto-matching by SKU then by name. Anything still unmatched becomes a CUSTOM
+  // line with its own unique SKU — never a shared placeholder.
+  let convBody: { mappings?: Array<{ line_no?: number; sku?: string | null; custom?: boolean }> } = {};
+  try { convBody = (await request.json()) as typeof convBody; } catch { convBody = {}; }
+  const mapByLine = new Map<number, { sku: string | null; custom: boolean }>();
+  for (const m of (convBody.mappings || [])) {
+    if (m && m.line_no != null) {
+      const s = m.sku == null ? "" : String(m.sku).trim();
+      mapByLine.set(Number(m.line_no), { sku: s || null, custom: !!m.custom });
+    }
+  }
+  // Look up the catalogue rows the mapping/lines reference (name + validity).
+  const wantSkus = Array.from(new Set(
+    [...(lines as any[]).map(l => l.sku), ...Array.from(mapByLine.values()).map(v => v.sku)]
+      .map(s => (s == null ? "" : String(s).trim())).filter(Boolean)
+  ));
+  const skuInfo = new Map<string, { name: string; unit_price: number }>();
+  for (const part of chunkSkus(wantSkus)) {
+    if (!part.length) continue;
+    const ph = part.map(() => "?").join(",");
+    const { results: inv } = await env.DB.prepare(`SELECT sku,name,unit_price FROM inventory WHERE sku IN (${ph})`).bind(...part).all() as { results: any[] };
+    for (const r of inv) skuInfo.set(String(r.sku), { name: String(r.name || ""), unit_price: Number(r.unit_price) || 0 });
+  }
+  // One resolved record per quote line: catalogSku (a real SKU, or null for custom),
+  // the SKU the order line will carry (unique when custom), its name and a note.
+  const resolved: Array<{ catalogSku: string | null; orderSku: string; name: string; note: string | null; qty: number; taxablePaise: number }> = [];
+  for (const l of lines as any[]) {
+    const m = mapByLine.get(Number(l.line_no));
+    const desc = l.description || l.sku || "Item";
+    let catalogSku: string | null = null;
+    if (m && m.custom) {
+      catalogSku = null;                                  // user chose to keep it custom
+    } else if (m && m.sku) {
+      if (!skuInfo.has(m.sku)) return json({ error: `Catalogue item ${m.sku} not found`, code: "E_SKU_NOT_FOUND", line_no: l.line_no }, 422);
+      catalogSku = m.sku;                                 // user linked it to the catalogue
+    } else {
+      const lsku = l.sku ? String(l.sku).trim() : "";
+      if (lsku && skuInfo.has(lsku)) catalogSku = lsku;   // auto: exact SKU
+      else {                                              // auto: exact (case-insensitive) name
+        const hit = await env.DB.prepare("SELECT sku,name,unit_price FROM inventory WHERE lower(name)=lower(?) LIMIT 1").bind(String(desc)).first() as any;
+        if (hit) { catalogSku = String(hit.sku); skuInfo.set(catalogSku, { name: String(hit.name || ""), unit_price: Number(hit.unit_price) || 0 }); }
+      }
+    }
+    if (catalogSku) {
+      const name = skuInfo.get(catalogSku)!.name || desc;
+      resolved.push({ catalogSku, orderSku: catalogSku, name, note: (name && desc && name !== desc) ? `Quoted as: ${desc}` : null, qty: l.qty, taxablePaise: l.line_taxable_paise || 0 });
+    } else {
+      resolved.push({ catalogSku: null, orderSku: `CUSTOM-${uid()}`, name: desc, note: "Custom line (not in catalogue)", qty: l.qty, taxablePaise: l.line_taxable_paise || 0 });
+    }
+  }
 
   const gstPaise = (totals?.cgst_total || 0) + (totals?.sgst_total || 0) + (totals?.igst_total || 0);
   const subtotalPaise = totals?.subtotal_paise ?? (lines as any[]).reduce((s, l) => s + (l.line_taxable_paise || 0), 0);
@@ -5535,21 +5591,22 @@ async function handleQuoteConvert(request: Request, env: Env, id: string): Promi
     env.DB.prepare("INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,order_period,source,source_quote_id,order_kind) VALUES (?,?,?,'DRAFT',?,?,?,?,'Regular',?,'quote',?,?)")
       .bind(orderId, q.client_id, acc.user.sub, subtotalPaise / 100, gstPaise / 100, grandPaise / 100, note, orderPeriod, id, orderKind),
   ];
-  for (const l of lines as any[]) {
-    const unit = l.qty ? (l.line_taxable_paise || 0) / l.qty / 100 : (l.line_taxable_paise || 0) / 100;
+  for (const r of resolved) {
+    const unit = r.qty ? r.taxablePaise / r.qty / 100 : r.taxablePaise / 100;
     stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uid(), orderId, l.sku || "QUOTE", l.description || l.sku || "Item", l.qty, unit, (l.line_taxable_paise || 0) / 100, null));
+      .bind(uid(), orderId, r.orderSku, r.name, r.qty, unit, r.taxablePaise / 100, r.note));
   }
   for (const c of chargeRows as any[]) {
+    // A unique CHARGE- SKU per charge so freight/branding lines never collide.
     stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uid(), orderId, "CHARGE", c.label || "Charge", 1, (c.amount_paise || 0) / 100, (c.amount_paise || 0) / 100, "Quote charge"));
+      .bind(uid(), orderId, `CHARGE-${uid()}`, c.label || "Charge", 1, (c.amount_paise || 0) / 100, (c.amount_paise || 0) / 100, "Quote charge"));
   }
   // A GIFTING order seeds one gifting_items row per line (charges are not gifted items).
   if (orderKind === "GIFTING") {
     await ensureGiftingSchema(env);
-    for (const l of lines as any[]) {
+    for (const r of resolved) {
       stmts.push(env.DB.prepare("INSERT INTO gifting_items (id,order_id,sku,name,qty,needs_branding,stage,sale_value_paise) VALUES (?,?,?,?,?,0,'TO_ORDER',?)")
-        .bind(uid(), orderId, l.sku || null, l.description || l.sku || "Item", l.qty, l.line_taxable_paise || 0));
+        .bind(uid(), orderId, r.catalogSku, r.name, r.qty, r.taxablePaise));
     }
   }
   stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,'DRAFT',?,?,?)")

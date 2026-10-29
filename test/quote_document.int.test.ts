@@ -241,6 +241,43 @@ describe("convert accepted quote to order", () => {
     expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(200);
     expect((await post(`/api/quotes/${id}/convert`, {}, salesTok)).status).toBe(409); // already converted
   });
+  it("maps a quoted line to a Smart Pantry catalogue item — the order line carries the real SKU and catalogue name", async () => {
+    await prep();
+    await (env.DB as D1Database).prepare("INSERT OR IGNORE INTO inventory (sku,name,category,unit_price,stock) VALUES ('CAT-TEA','Premium Masala Tea 250g','Beverages',150,500)").run();
+    const id = await acceptedQuote();
+    const q = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    const r = await post(`/api/quotes/${id}/convert`, { mappings: [{ line_no: q.lines[0].line_no, sku: "CAT-TEA" }] }, salesTok);
+    expect(r.status).toBe(200);
+    const orderId = (await r.json() as any).order_id as string;
+    const order = await (await get(`/api/orders/${orderId}`, adminTok)).json() as any;
+    expect(order.items.length).toBe(1);
+    expect(order.items[0].sku).toBe("CAT-TEA");
+    expect(order.items[0].name).toBe("Premium Masala Tea 250g");
+  });
+  it("gives every unmatched/custom line its own unique SKU — never the shared QUOTE placeholder", async () => {
+    await prep();
+    const body = { client_id: "c1", place_of_supply: "KL", lines: [line(true), line(true)] };
+    const qid = (await (await post("/api/quotes", body, salesTok)).json() as any).id as string;
+    await post(`/api/quotes/${qid}/submit`, {}, salesTok);
+    await post(`/api/quotes/${qid}/approve`, { leg: "manager" }, mgrTok);
+    await post(`/api/quotes/${qid}/send`, {}, salesTok);
+    await post(`/api/quotes/${qid}/accept`, {}, salesTok);
+    const orderId = (await (await post(`/api/quotes/${qid}/convert`, {}, salesTok)).json() as any).order_id as string;
+    const order = await (await get(`/api/orders/${orderId}`, adminTok)).json() as any;
+    const skus = order.items.map((i: any) => i.sku as string);
+    expect(skus.length).toBe(2);
+    expect(new Set(skus).size).toBe(2);            // unique — the collision bug would make these equal
+    expect(skus.every((s) => s.startsWith("CUSTOM-"))).toBe(true);
+    expect(skus).not.toContain("QUOTE");
+  });
+  it("rejects a mapping that points to a SKU not in the catalogue", async () => {
+    await prep();
+    const id = await acceptedQuote();
+    const q = await (await get(`/api/quotes/${id}`, salesTok)).json() as any;
+    const r = await post(`/api/quotes/${id}/convert`, { mappings: [{ line_no: q.lines[0].line_no, sku: "NO-SUCH-SKU" }] }, salesTok);
+    expect(r.status).toBe(422);
+    expect((await r.json() as any).code).toBe("E_SKU_NOT_FOUND");
+  });
 });
 
 describe("gifting orders (milestone 007, Slice 1)", () => {

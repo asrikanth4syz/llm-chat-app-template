@@ -446,9 +446,88 @@ async function quoteRevise(id) {
   const r = await api('/quotes/' + id + '/revise', { method: 'POST', body: '{}' });
   if (r && r.id) { showToast(`Revision ${r.revision} created as draft`); await quoteOpenDetail(r.id); if (window.quoteRefreshBell) quoteRefreshBell(); }
 }
+// Convert-to-order now routes through a catalogue mapping gate: every quoted line
+// must point to a real Smart Pantry catalogue item (so the order tracks stock), or
+// be explicitly marked a custom one-off line. Lines are auto-matched by SKU then by
+// name; the rest the user resolves before the draft order is created.
 async function quoteConvert(id) {
-  const r = await api('/quotes/' + id + '/convert', { method: 'POST', body: '{}' });
-  if (r && r.order_id) { showToast(`Converted to draft order ${r.order_id}`); await quoteReload(id); }
+  const d = (qState().detail && qState().detail.id === id) ? qState().detail : await api('/quotes/' + id);
+  if (!d) return;
+  const lines = d.lines || [];
+  if (!lines.length) { showToast('This quote has no lines to convert', 'error'); return; }
+  const inv = await api('/inventory').catch(() => []);
+  const catalog = (inv || [])
+    .map(i => ({ sku: String(i.sku || ''), name: String(i.name || ''), price: Number(i.unit_price != null ? i.unit_price : (i.price || 0)) || 0 }))
+    .filter(i => i.sku);
+  const bySku = new Map(catalog.map(i => [i.sku, i]));
+  const byName = new Map(catalog.map(i => [i.name.trim().toLowerCase(), i]));
+  const rows = lines.map(l => {
+    const lsku = (l.sku || '').trim();
+    const hit = (lsku && bySku.get(lsku)) || byName.get(String(l.description || '').trim().toLowerCase()) || null;
+    return { line_no: l.line_no, desc: l.description || l.sku || 'Item', qsku: lsku, qty: l.qty, sku: hit ? hit.sku : null, custom: false };
+  });
+  APP._qConv = { id, rows, catalog, searchIdx: -1, searchResults: [] };
+  openModal(`Convert quote ${h(d.quote_no || id)} to order`,
+    `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:10px">Link each quoted line to a Smart Pantry catalogue item so the order tracks real stock. A line with no catalogue match must be linked, or kept as a custom one-off line.</div>
+     <div id="qconv-body"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-gold" id="qconv-go" ${dataAct('qConvSubmit')}>Create draft order</button>`);
+  qConvRenderBody();
+}
+function qConvRenderBody() {
+  const st = APP._qConv; const body = document.getElementById('qconv-body'); if (!st || !body) return;
+  const unresolved = st.rows.filter(r => !r.sku && !r.custom).length;
+  body.innerHTML = st.rows.map((r, i) => {
+    const cat = r.sku ? st.catalog.find(c => c.sku === r.sku) : null;
+    let control;
+    if (r.sku && cat) {
+      control = `<div style="color:var(--success);font-weight:600;font-size:.82rem">✓ ${h(cat.name)} <span style="font-family:monospace;color:var(--text-muted)">${h(cat.sku)}</span></div>
+        <div style="margin-top:4px;display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-secondary btn-sm" ${dataAct('qConvRelink', i)}>Change</button><button class="btn btn-secondary btn-sm" ${dataAct('qConvCustom', i)}>Keep custom</button></div>`;
+    } else if (r.custom) {
+      control = `<div style="color:var(--amber-text);font-weight:600;font-size:.82rem">⚑ Custom one-off line</div>
+        <div style="margin-top:4px;justify-content:flex-end;display:flex"><button class="btn btn-secondary btn-sm" ${dataAct('qConvRelink', i)}>Link to catalogue</button></div>`;
+    } else {
+      control = `<div style="color:var(--danger);font-weight:600;font-size:.82rem">⚠ No catalogue match</div>
+        <div style="margin-top:4px;display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-gold btn-sm" ${dataAct('qConvRelink', i)}>Link to catalogue</button><button class="btn btn-secondary btn-sm" ${dataAct('qConvCustom', i)}>Keep as custom</button></div>`;
+    }
+    const searchHtml = st.searchIdx === i ? `
+      <div style="margin-top:8px">
+        <input id="qconv-search" autocomplete="off" placeholder="Search catalogue by name or SKU…" ${dataInputVal('qConvSearch', i)}
+          style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.84rem;box-sizing:border-box">
+        <div id="qconv-results" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;${st.searchResults.length ? '' : 'display:none'}">
+          ${st.searchResults.map(c => `<div ${dataAct('qConvPick', i, c.sku)} style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:.82rem">${h(c.name)} <span style="font-family:monospace;color:var(--text-muted)">${h(c.sku)}</span></div>`).join('')}
+        </div>
+      </div>` : '';
+    return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+        <div style="flex:1;min-width:160px"><div style="font-weight:600;font-size:.88rem">${h(r.desc)}</div>
+          <div style="font-size:.74rem;color:var(--text-muted)">Qty ${h(String(r.qty))}${r.qsku ? ` · quoted SKU ${h(r.qsku)}` : ''}</div></div>
+        <div style="min-width:190px">${control}</div>
+      </div>${searchHtml}</div>`;
+  }).join('');
+  const go = document.getElementById('qconv-go');
+  if (go) { go.disabled = unresolved > 0; go.textContent = unresolved > 0 ? `Resolve ${unresolved} line${unresolved > 1 ? 's' : ''} to continue` : 'Create draft order'; }
+  if (st.searchIdx >= 0) { const s = document.getElementById('qconv-search'); if (s) s.focus(); }
+}
+function qConvRelink(i) { const st = APP._qConv; if (!st) return; st.searchIdx = i; st.searchResults = []; qConvRenderBody(); }
+function qConvCustom(i) { const st = APP._qConv; if (!st) return; st.rows[i].custom = true; st.rows[i].sku = null; st.searchIdx = -1; st.searchResults = []; qConvRenderBody(); }
+function qConvPick(i, sku) { const st = APP._qConv; if (!st) return; st.rows[i].sku = sku; st.rows[i].custom = false; st.searchIdx = -1; st.searchResults = []; qConvRenderBody(); }
+function qConvSearch(i, val) {
+  const st = APP._qConv; if (!st) return;
+  const q = String(val || '').trim().toLowerCase();
+  st.searchResults = q ? st.catalog.filter(c => c.name.toLowerCase().includes(q) || c.sku.toLowerCase().includes(q)).slice(0, 12) : [];
+  const box = document.getElementById('qconv-results'); if (!box) return;
+  box.style.display = st.searchResults.length ? '' : 'none';
+  box.innerHTML = st.searchResults.map(c => `<div ${dataAct('qConvPick', i, c.sku)} style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:.82rem">${h(c.name)} <span style="font-family:monospace;color:var(--text-muted)">${h(c.sku)}</span></div>`).join('');
+}
+async function qConvSubmit() {
+  const st = APP._qConv; if (!st) return;
+  if (st.rows.some(r => !r.sku && !r.custom)) { showToast('Resolve every line first', 'error'); return; }
+  const mappings = st.rows.map(r => ({ line_no: r.line_no, sku: r.sku, custom: !r.sku }));
+  const btn = document.getElementById('qconv-go'); if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  const res = await api('/quotes/' + st.id + '/convert', { method: 'POST', body: JSON.stringify({ mappings }) });
+  if (res && res.order_id) { closeModal(); showToast(`Converted to draft order ${res.order_id}`); await quoteReload(st.id); }
+  else { if (btn) { btn.disabled = false; btn.textContent = 'Create draft order'; } showToast((res && res.error) || 'Convert failed', 'error'); }
 }
 function quoteRejectPrompt(id, leg) {
   openModal('Reject quote', `<div class="form-field">
