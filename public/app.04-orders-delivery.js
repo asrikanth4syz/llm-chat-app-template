@@ -521,16 +521,21 @@ function amendmentSummaryHTML(order) {
   let before = [], after = [];
   try { before = JSON.parse(a.before_items || '[]'); } catch (_) {}
   try { after = JSON.parse(a.after_items || '[]'); } catch (_) {}
-  const bMap = new Map(before.map(i => [i.sku, i]));
-  const aMap = new Map(after.map(i => [i.sku, i]));
+  // Identity for before/after matching. Keying on SKU alone collapses lines
+  // that share a blank or duplicated SKU (legacy/ad-hoc orders), which makes
+  // every untouched line diff against one arbitrary entry and hides removals.
+  // A SKU+name composite keeps distinct lines distinct in every real case.
+  const keyOf = i => `${String(i.sku || '').trim()}\u001f${String(i.name || '').trim().toLowerCase()}`;
+  const bMap = new Map(before.map(i => [keyOf(i), i]));
+  const aMap = new Map(after.map(i => [keyOf(i), i]));
   const line = (tag, color, name, txt) =>
     `<div style="display:flex;gap:8px;align-items:baseline;font-size:.82rem;padding:3px 0">
       <span style="min-width:64px;font-weight:700;color:${color}">${tag}</span>
       <span style="flex:1">${h(name)}</span><span style="color:var(--text-muted)">${txt}</span></div>`;
   const rows = [];
-  before.forEach(i => { if (!aMap.has(i.sku)) rows.push(line('Removed', '#dc2626', i.name, `was qty ${i.qty} @ ${fmt(i.unit_price||0)}`)); });
+  before.forEach(i => { if (!aMap.has(keyOf(i))) rows.push(line('Removed', '#dc2626', i.name, `was qty ${i.qty} @ ${fmt(i.unit_price||0)}`)); });
   after.forEach(i => {
-    const b = bMap.get(i.sku);
+    const b = bMap.get(keyOf(i));
     if (!b) { rows.push(line('Added', '#0d9488', i.name, `qty ${i.qty} @ ${fmt(i.unit_price||0)}`)); return; }
     const qtyChg = Number(b.qty) !== Number(i.qty);
     const priceChg = Number(b.unit_price||0) !== Number(i.unit_price||0);
@@ -1686,10 +1691,10 @@ async function renderClientOrder(el) {
   // A change our team made that is waiting for THIS client to approve.
   const isApprover = ['client_admin', 'client_approver'].includes(APP.user?.role || '');
   const amendReviewHtml = o.awaiting_amendment_approval ? `
-  <section class="card" style="margin-top:12px;border:1px solid #B5731A;background:var(--amber-bg,#fff8ec)" aria-label="Changes awaiting your approval">
+  <section class="card" style="margin-top:12px;border:1px solid var(--gold-border);background:var(--amber-bg)" aria-label="Changes awaiting your approval">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:1.1rem">✏️</span>
-      <h2 style="font-size:1rem;margin:0;color:#8a5a00">Changes awaiting your approval</h2></div>
-    <div class="u-muted" style="font-size:.86rem;margin:6px 0 10px">Our team updated this order${o.amendment && o.amendment.reason ? ' — ' + h(o.amendment.reason) : ''}. Review the change, then approve to resume fulfilment or reject to keep the previous version.</div>
+      <h2 style="font-size:1rem;margin:0;color:var(--amber-text)">Changes awaiting your approval</h2></div>
+    <div style="font-size:.86rem;margin:6px 0 10px;color:var(--amber-text)">Our team updated this order${o.amendment && o.amendment.reason ? ' — ' + h(o.amendment.reason) : ''}. Review the change, then approve to resume fulfilment or reject to keep the previous version.</div>
     ${amendmentSummaryHTML({ amendments: [o.amendment] })}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
       ${isApprover
