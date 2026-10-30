@@ -180,169 +180,177 @@ async function renderMyOrders(el) {
   const isClient = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
 
   if (isClient) {
-    // Status filter state (new model: active / transit / partial / delivered + All).
-    if (APP._moChip == null)     APP._moChip = 'All';
-    if (APP._moLateOnly == null) APP._moLateOnly = false;
-    if (APP._moSearch == null)   APP._moSearch = '';
-    if (APP._moPeriod == null)   APP._moPeriod = 'all';
+    injectMyOrdersCss();
+    if (APP._moSearch == null)  APP._moSearch = '';
+    if (APP._moType == null)    APP._moType = 'all';
+    if (APP._moStatusF == null) APP._moStatusF = 'all';
+    if (APP._moPeriod == null)  APP._moPeriod = 'all';
+    if (APP._moSort == null)    APP._moSort = { key: 'date', dir: 'desc' };
 
-    // Colour + label per status. Palette: green=delivered, amber=partial,
-    // blue=in transit, grey=active; red is reserved for the late flag only.
-    const MO_META = {
-      active:    { label:'Active',     color:'#6b7280', icon:'🕓' },
-      transit:   { label:'In transit', color:'#3b82f6', icon:'🚚' },
-      partial:   { label:'Partial',    color:'#f59e0b', icon:'🔶' },
-      delivered: { label:'Delivered',  color:'#10b981', icon:'✅' },
-    };
+    // One enriched row per order: delivery classification (_mo, from mo-status.js)
+    // plus client-safe lifecycle and approval labels (_lc, _ap). No internal codes
+    // are shown; the API response and all figures are used exactly as returned.
+    const rows = orders.map(o => Object.assign({}, o, {
+      _mo: window.moClassify(o), _lc: moLifecycle(o.status), _ap: moApproval(o.status),
+    }));
+    const counts = { total: rows.length, awaiting: 0, progress: 0, partial: 0, delivered: 0 };
+    let openValue = 0, billedValue = 0, lateCount = 0;
+    rows.forEach(r => {
+      if (counts[r._lc.bucket] != null) counts[r._lc.bucket]++;
+      if (r._mo.status === 'delivered') billedValue += r._mo.value;
+      else if (r.status !== 'CANCELLED') openValue += r._mo.value;
+      if (r._mo.late) lateCount++;
+    });
+    const SUMMARY = [
+      { key: 'all',       label: 'Total Orders',        n: counts.total,     color: 'var(--navy)' },
+      { key: 'awaiting',  label: 'Awaiting Approval',   n: counts.awaiting,  color: '#d97706' },
+      { key: 'progress',  label: 'In Progress',         n: counts.progress,  color: '#3b82f6' },
+      { key: 'partial',   label: 'Partially Delivered', n: counts.partial,   color: '#f59e0b' },
+      { key: 'delivered', label: 'Delivered / Closed',  n: counts.delivered, color: '#10b981' },
+    ];
 
-    // Cancelled orders sit outside the four live statuses, so they're excluded
-    // from the counts/list (the four statuses must sum to All).
-    const liveOrders = orders.filter(o => o.status !== 'CANCELLED');
-    const SUM = window.moSummarize(liveOrders); // mo-status.js (module) loads before any render
-
-    // One superadmin-style tile acting as a filter chip (aria-pressed, dimmed at 0).
-    const chip = (key, label, count, color, active) => `
-      <button type="button" class="tile" ${dataActEl('moChip', key)} aria-pressed="${active?'true':'false'}"
-        title="${label} — ${count} order${count!==1?'s':''}${count===0?' (none yet)':''}"
-        style="min-width:118px;text-align:left;${count===0?'opacity:.5;':''}">
-        <div class="tile-label"><span class="tile-dot" style="background:${color}"></span>${label}</div>
-        <div class="tile-value">${count}</div>
-      </button>`;
-    function chipsHtml() {
-      const c = SUM.counts, t = APP._moChip, late = APP._moLateOnly;
-      return [
-        chip('All',       'All',        c.all,       'var(--navy)', t==='All' && !late),
-        chip('active',    'Active',     c.active,    MO_META.active.color,    t==='active'    && !late),
-        chip('transit',   'In transit', c.transit,   MO_META.transit.color,   t==='transit'   && !late),
-        chip('partial',   'Partial',    c.partial,   MO_META.partial.color,   t==='partial'   && !late),
-        chip('delivered', 'Delivered',  c.delivered, MO_META.delivered.color, t==='delivered' && !late),
-      ].join('');
-    }
-
-    // Apply the active chip / late / period / search filters (all client-side).
     function moVisible() {
-      let list = SUM.rows;
-      if (APP._moLateOnly) list = list.filter(r => r._mo.late);
-      else if (APP._moChip !== 'All') list = list.filter(r => r._mo.status === APP._moChip);
-      if (APP._moPeriod === 'month') {
-        const ym = new Date().toISOString().slice(0,7);
-        list = list.filter(r => String(r.created_at||'').slice(0,7) === ym);
-      } else if (APP._moPeriod === '30' || APP._moPeriod === '90') {
-        const cut = new Date(Date.now() - Number(APP._moPeriod)*86400000).toISOString().slice(0,10);
-        list = list.filter(r => String(r.created_at||'').slice(0,10) >= cut);
-      }
-      if (APP._moSearch) {
-        const q = APP._moSearch.toLowerCase();
-        list = list.filter(r => r.id.toLowerCase().includes(q));
-      }
+      let list = rows.slice();
+      if (APP._moStatusF === 'overdue') list = list.filter(r => r._mo.late);
+      else if (APP._moStatusF !== 'all') list = list.filter(r => r._lc.bucket === APP._moStatusF);
+      if (APP._moType !== 'all') list = list.filter(r => (r.order_type || 'Regular') === APP._moType);
+      if (APP._moPeriod === 'month') { const ym = new Date().toISOString().slice(0,7); list = list.filter(r => String(r.created_at||'').slice(0,7) === ym); }
+      else if (APP._moPeriod === '30' || APP._moPeriod === '90') { const cut = new Date(Date.now() - Number(APP._moPeriod)*86400000).toISOString().slice(0,10); list = list.filter(r => String(r.created_at||'').slice(0,10) >= cut); }
+      if (APP._moSearch) { const qq = APP._moSearch.toLowerCase(); list = list.filter(r => r.id.toLowerCase().includes(qq) || String(r.order_reference||'').toLowerCase().includes(qq)); }
+      const { key, dir } = APP._moSort, s = dir === 'asc' ? 1 : -1;
+      const kv = r => key==='value' ? Number(r.grand_total||0) : key==='progress' ? (r._mo.pct||0)
+        : key==='updated' ? String(r.updated_at||r.created_at||'') : key==='status' ? r._lc.label : String(r.created_at||'');
+      list.sort((a,b) => { const va=kv(a), vb=kv(b); return va<vb?-s : va>vb?s : 0; });
       return list;
     }
 
+    const prog = r => {
+      const ord = r._mo.ordered, del = r._mo.delivered, pct = Math.min(100, r._mo.pct);
+      if (!ord) return '<span class="u-muted">—</span>';
+      return `<div class="mo-prog"><div class="mo-prog-bar"><i style="width:${pct}%;background:${r._lc.color}"></i></div><span class="mo-prog-t num">${del.toLocaleString('en-IN')}/${ord.toLocaleString('en-IN')}</span></div>`;
+    };
+    const badge = (lbl, color) => lbl === '—'
+      ? '<span class="u-muted">—</span>'
+      : `<span class="mo-badge" style="color:${color};border-color:${color}">${h(lbl)}</span>`;
+
     function rowHtml(r) {
-      const m = MO_META[r._mo.status];
       const items = r.item_count!=null ? r.item_count : (r.items||[]).length;
-      const pw = Math.min(100, r._mo.pct);
-      const pill = `<span style="display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:800;color:${m.color};background:${m.color}1a;border:1px solid ${m.color};border-radius:999px;padding:3px 10px">${m.icon} ${m.label}</span>`;
-      const deliveredOn = r.closed_at || r.updated_at;
-      const dateLine = r._mo.status==='delivered'
-        ? `<span style="color:var(--success);font-weight:600">✓ Delivered${deliveredOn?' '+fmtDate(deliveredOn):''}</span>`
-        : r._mo.promised
-          ? `<span style="color:${r._mo.late?'var(--danger)':'var(--text-muted)'};font-weight:${r._mo.late?'700':'500'}">${r._mo.late?'⚠ ':'📅 '}Expected ${fmtDate(r._mo.promised)}${r._mo.late?' — overdue':''}</span>`
-          : `<span style="color:var(--text-muted)">📅 Delivery date not set</span>`;
-      return `
-      <div class="card" style="margin-bottom:12px;border-left:4px solid ${m.color}">
-        <div style="padding:14px 18px">
-          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start">
-            <div>
-              <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${r.id}</div>
-              <div class="u-subtiny">${fmtDate(r.created_at)} · ${items} item${items!==1?'s':''}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              ${pill}
-              <div style="font-weight:800;font-size:1.05rem;color:var(--navy)">${fmt(r.grand_total)}</div>
-            </div>
-          </div>
-          <div style="margin:11px 0 4px">
-            <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:${pw}%;background:${m.color}"></i></div>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">${r._mo.delivered.toLocaleString('en-IN')} of ${r._mo.ordered.toLocaleString('en-IN')} units · ${r._mo.pct}%</div>
-          </div>
-          <div style="font-size:.78rem;margin:6px 0 11px">${dateLine}</div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View Details</button>
-            ${r.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit Order</button>`:''}
-            <button class="btn btn-secondary btn-sm" disabled title="Invoice download isn't available to clients yet">🧾 Invoice</button>
-            <button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', r.id)}>🔄 Reorder</button>
-            ${(r.status==='DRAFT'||r.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger)" ${dataAct('cancelOrder', r.id)} data-stop>Cancel</button>`:''}
-          </div>
-        </div>
+      return `<tr ${dataAct('viewOrder', r.id)} style="cursor:pointer">
+        <td><span class="mo-id">${h(r.id)}</span></td>
+        <td class="num">${fmtDate(r.created_at)}</td>
+        <td>${h(r.order_type||'Regular')}</td>
+        <td class="num">${items}</td>
+        <td class="num">${fmt(r.grand_total)}</td>
+        <td>${badge(r._ap.label, r._ap.color)}</td>
+        <td>${badge(r._lc.label, r._lc.color)}</td>
+        <td class="col-prog">${prog(r)}</td>
+        <td class="num col-updated u-muted">${r.updated_at?fmtDate(r.updated_at):'—'}</td>
+        <td class="col-act"><div class="mo-acts">
+          <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View</button>
+          ${r.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>`:''}
+          ${(r.status==='DRAFT'||r.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm mo-cancel" ${dataAct('cancelOrder', r.id)}>Cancel</button>`:''}
+        </div></td>
+      </tr>`;
+    }
+
+    function cardHtml(r) {
+      const items = r.item_count!=null ? r.item_count : (r.items||[]).length;
+      const acts = [
+        `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View</button>`,
+        r.status==='DRAFT' ? `<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>` : '',
+        (r.status==='DRAFT'||r.status==='SUBMITTED') ? `<button class="btn btn-secondary btn-sm mo-cancel" ${dataAct('cancelOrder', r.id)}>Cancel</button>` : '',
+        (r.status!=='DRAFT'&&r.status!=='CANCELLED') ? `<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', r.id)}>Reorder</button>` : '',
+      ].filter(Boolean).join('');
+      // Clickable card (opens the order); inner buttons win via closest() delegation.
+      return `<div class="mo-card" ${dataAct('viewOrder', r.id)}>
+        <div class="mo-card-top"><span class="mo-id">${h(r.id)}</span>${badge(r._lc.label, r._lc.color)}</div>
+        <div class="mo-card-meta">${fmtDate(r.created_at)} · ${h(r.order_type||'Regular')} · ${items} item${items!==1?'s':''}</div>
+        <div>${prog(r)}</div>
+        <div class="mo-card-foot"><span class="mo-val num">${fmt(r.grand_total)}</span>${badge(r._ap.label, r._ap.color)}</div>
+        <div class="mo-acts mo-card-acts">${acts}</div>
       </div>`;
+    }
+
+    function summaryHtml() {
+      return SUMMARY.map(c => {
+        const active = c.key==='all' ? APP._moStatusF==='all' : APP._moStatusF===c.key;
+        return `<button type="button" class="mo-sum${active?' on':''}" ${dataAct('moCardFilter', c.key)} aria-pressed="${active}">
+          <span class="mo-sum-k"><span class="mo-sum-dot" style="background:${c.color}"></span>${c.label}</span>
+          <span class="mo-sum-v num">${c.n}</span></button>`;
+      }).join('');
     }
 
     function moRender() {
       const list = moVisible();
-      const countEl = document.getElementById('mo-count');
-      if (countEl) countEl.textContent = `${list.length} of ${SUM.counts.all} order${SUM.counts.all!==1?'s':''}`;
-      const chipsEl = document.getElementById('mo-chips');
-      if (chipsEl) chipsEl.innerHTML = chipsHtml();
-      const container = document.getElementById('mo-cards');
-      if (!container) return;
+      const countEl = document.getElementById('mo-count'); if (countEl) countEl.textContent = `${list.length} of ${counts.total} order${counts.total!==1?'s':''}`;
+      const sumEl = document.getElementById('mo-summary'); if (sumEl) sumEl.innerHTML = summaryHtml();
+      document.querySelectorAll('#mo-table th[data-sort]').forEach(th => {
+        const k = th.getAttribute('data-sort'), on = APP._moSort.key===k;
+        th.setAttribute('aria-sort', on ? (APP._moSort.dir==='asc'?'ascending':'descending') : 'none');
+        th.innerHTML = (th.getAttribute('data-label')||'') + (on ? (APP._moSort.dir==='asc'?' ▲':' ▼') : '');
+      });
+      const tb = document.getElementById('mo-tbody'), cards = document.getElementById('mo-cards');
       if (list.length === 0) {
-        container.innerHTML = `<div style="padding:48px;text-align:center;background:var(--surface);border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
-          <div style="font-size:2.6rem;margin-bottom:10px">📋</div>
-          <div style="font-size:.9rem;color:var(--text-muted)">No orders match this filter. Clear the filter or search to see all orders.</div>
-        </div>`;
+        const empty = `<div class="mo-empty"><div style="font-size:2.4rem">📋</div><div>No orders match these filters.</div><button class="btn btn-secondary btn-sm" style="margin-top:12px" ${dataAct('moClearFilters')}>Clear filters</button></div>`;
+        if (tb) tb.innerHTML = `<tr><td colspan="10" style="padding:0;border:0">${empty}</td></tr>`;
+        if (cards) cards.innerHTML = empty;
         return;
       }
-      container.innerHTML = list.map(rowHtml).join('');
+      if (tb) tb.innerHTML = list.map(rowHtml).join('');
+      if (cards) cards.innerHTML = list.map(cardHtml).join('');
     }
 
+    const sortTh = (key, label, extra) => `<th class="num ${extra||''}" data-sort="${key}" data-label="${label}" ${dataAct('moSortBy', key)} style="cursor:pointer">${label}</th>`;
     el.innerHTML = `
-    <!-- Header -->
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div class="mo-head">
       <div>
-        <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">My Orders</div>
-        <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="mo-count"></div>
+        <h1 class="mo-title">My Orders</h1>
+        <div class="mo-sub" id="mo-count"></div>
+        <div class="mo-sub2">View order progress, approvals and deliveries.</div>
       </div>
-      ${canAccessPage('place_order') ? `<button class="btn btn-gold" ${dataAct('navigate', 'place_order')}>${iconPlus(14)} New Order</button>` : ''}
+      ${canAccessPage('place_order') ? `<button class="btn btn-gold" ${dataAct('navigate','place_order')}>${iconPlus(14)} New Order</button>` : ''}
     </div>
 
-    <!-- Summary: status chips + spend panel aligned as one equal-width tile row -->
-    <div class="tile-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));align-items:stretch;margin-bottom:14px">
-      <div id="mo-chips" style="display:contents">${chipsHtml()}</div>
-      <div class="tile" style="cursor:default">
-        <div class="tile-label"><span class="tile-dot" style="background:#6b7280"></span>Open order value</div>
-        <div class="tile-value">${fmt(SUM.openValue)}</div>
-        <div class="tile-sub">Billed · <b style="color:var(--success)">${fmt(SUM.billedValue)}</b></div>
-      </div>
-    </div>
+    <div class="mo-summary" id="mo-summary">${summaryHtml()}</div>
 
-    <!-- Late banner (only when any order is overdue) -->
-    ${SUM.lateCount>0 ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--red-soft-bg,#fdecea);border:1px solid #e3a59d;border-radius:10px;padding:10px 14px;margin-bottom:14px">
-      <span style="font-size:1.05rem">⚠️</span>
-      <span style="font-weight:700;color:var(--danger);font-size:.86rem">${SUM.lateCount} order${SUM.lateCount!==1?'s':''} past the promised date</span>
-      <button type="button" class="btn btn-sm" ${dataAct('moShowLate')} style="margin-left:auto;background:var(--danger);color:#fff;border:0">Show them</button>
-    </div>` : ''}
+    ${lateCount>0 ? `<div class="mo-late"><span>⚠️</span><span><b>${lateCount}</b> order${lateCount!==1?'s':''} past the expected delivery date</span>
+      <button type="button" class="btn btn-sm" ${dataAct('moCardFilter','overdue')} style="margin-left:auto;background:var(--danger);color:#fff;border:0">Show</button></div>` : ''}
 
-    <!-- Controls: search by order number + period -->
-    <div style="background:var(--surface);border-radius:12px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <input type="search" id="mo-search" placeholder="🔍  Search order number…" value="${APP._moSearch||''}"
-        style="flex:1;min-width:200px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
-        ${dataInputEl('moSearchInput')} data-focus>
-      <select ${dataChangeEl('moPeriod')} aria-label="Filter by period"
-        style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;background:var(--surface);color:var(--text)">
-        <option value="all"${APP._moPeriod==='all'?' selected':''}>All time</option>
-        <option value="month"${APP._moPeriod==='month'?' selected':''}>This month</option>
-        <option value="30"${APP._moPeriod==='30'?' selected':''}>Last 30 days</option>
-        <option value="90"${APP._moPeriod==='90'?' selected':''}>Last 90 days</option>
+    <div class="mo-filters">
+      <input type="search" id="mo-search" class="mo-f-search" placeholder="🔍  Search order number…" value="${h(APP._moSearch||'')}" ${dataInputEl('moSearchInput')} data-focus>
+      <select id="mo-type-sel" class="mo-f-sel" aria-label="Order type" ${dataChangeEl('moTypeFilter')}>
+        ${['all','Regular','Urgent','Ad-Hoc'].map(t=>`<option value="${t}"${APP._moType===t?' selected':''}>${t==='all'?'All types':t}</option>`).join('')}
       </select>
+      <select id="mo-status-sel" class="mo-f-sel" aria-label="Order status" ${dataChangeEl('moStatusFilter')}>
+        ${[['all','All statuses'],['awaiting','Awaiting approval'],['progress','In progress'],['partial','Partially delivered'],['delivered','Delivered / closed'],['draft','Draft'],['cancelled','Cancelled']].map(([v,l])=>`<option value="${v}"${APP._moStatusF===v?' selected':''}>${l}</option>`).join('')}
+      </select>
+      <select id="mo-period-sel" class="mo-f-sel" aria-label="Period" ${dataChangeEl('moPeriodFilter')}>
+        ${[['all','All time'],['month','This month'],['30','Last 30 days'],['90','Last 90 days']].map(([v,l])=>`<option value="${v}"${APP._moPeriod===v?' selected':''}>${l}</option>`).join('')}
+      </select>
+      <button class="btn btn-secondary btn-sm mo-f-clear" ${dataAct('moClearFilters')}>Clear</button>
     </div>
 
-    <!-- Order rows -->
-    <div id="mo-cards"></div>`;
+    <div class="mo-table-wrap">
+      <table class="mo-table" id="mo-table">
+        <thead><tr>
+          <th>Order #</th>
+          ${sortTh('date','Order Date')}
+          <th>Type</th>
+          <th class="num">Items</th>
+          ${sortTh('value','Value')}
+          <th>Approval</th>
+          ${sortTh('status','Status')}
+          ${sortTh('progress','Delivery','col-prog')}
+          ${sortTh('updated','Updated','col-updated')}
+          <th class="col-act">Action</th>
+        </tr></thead>
+        <tbody id="mo-tbody"></tbody>
+      </table>
+    </div>
+    <div class="mo-cards" id="mo-cards"></div>`;
 
     moRender();
     window.moRender = moRender;
-    // Restore scroll saved when an order was opened, so Back returns you in place.
     if (APP._moScroll) { const y = APP._moScroll; APP._moScroll = 0; requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch (_) {} }); }
     return;
   }
@@ -439,19 +447,103 @@ function ddReconFilter(status) {
 // ── Client "My Orders" filter handlers (new status-chip model) ───────────────
 // All filter the list client-side via window.moRender (set up by renderMyOrders).
 let _moSearchTimer = null;
-function moChip(key) {
-  if (key === 'All') { APP._moChip = 'All'; APP._moLateOnly = false; }
-  else if (APP._moChip === key && !APP._moLateOnly) { APP._moChip = 'All'; } // click active chip → clear
-  else { APP._moChip = key; APP._moLateOnly = false; }
-  if (window.moRender) window.moRender();
+// Client-safe lifecycle + approval labels derived from the internal status code.
+// These never change or expose the backend status; they only translate it into
+// plain language for the client, and bucket it for the summary cards / filter.
+function moLifecycle(status) {
+  if (status === 'DRAFT') return { bucket:'draft', label:'Draft', color:'#6b7280' };
+  if (status === 'SUBMITTED' || status === 'PENDING_PRICING') return { bucket:'awaiting', label:'Submitted', color:'#6b7280' };
+  if (status === 'PENDING_APPROVAL') return { bucket:'awaiting', label:'Awaiting approval', color:'#d97706' };
+  if (['APPROVED','ACKNOWLEDGED','INVENTORY_CHECK','VENDOR_PO_RAISED','READY_TO_PICK','PICKED','QUALITY_CHECK'].includes(status)) return { bucket:'progress', label:'Being prepared', color:'#3b82f6' };
+  if (status === 'IN_SHIPMENT') return { bucket:'progress', label:'In shipment', color:'#3b82f6' };
+  if (status === 'PARTIALLY_CLOSED') return { bucket:'partial', label:'Partially delivered', color:'#f59e0b' };
+  if (status === 'CLOSED' || status === 'DELIVERED') return { bucket:'delivered', label:'Delivered', color:'#10b981' };
+  if (status === 'CANCELLED') return { bucket:'cancelled', label:'Cancelled', color:'#6b7280' };
+  return { bucket:'other', label:String(status||'—'), color:'#6b7280' };
 }
-function moShowLate() { APP._moLateOnly = true; APP._moChip = 'All'; if (window.moRender) window.moRender(); }
-function moSearchInput(el) {               // debounced 300ms
+function moApproval(status) {
+  if (status === 'DRAFT' || status === 'CANCELLED') return { label:'—', color:'var(--text-muted)' };
+  if (['SUBMITTED','PENDING_PRICING','PENDING_APPROVAL'].includes(status)) return { label:'Pending', color:'#d97706' };
+  return { label:'Approved', color:'#10b981' };
+}
+function moSearchInput(el) {               // debounced 250ms
   const v = el.value;
   clearTimeout(_moSearchTimer);
-  _moSearchTimer = setTimeout(() => { APP._moSearch = v; if (window.moRender) window.moRender(); }, 300);
+  _moSearchTimer = setTimeout(() => { APP._moSearch = v.trim(); if (window.moRender) window.moRender(); }, 250);
 }
-function moPeriod(el) { APP._moPeriod = el.value; if (window.moRender) window.moRender(); }
+function moTypeFilter(el)   { APP._moType = el.value;    if (window.moRender) window.moRender(); }
+function moStatusFilter(el) { APP._moStatusF = el.value; if (window.moRender) window.moRender(); }
+function moPeriodFilter(el) { APP._moPeriod = el.value;  if (window.moRender) window.moRender(); }
+function moCardFilter(key) {
+  APP._moStatusF = (APP._moStatusF === key && key !== 'all') ? 'all' : key;
+  const sel = document.getElementById('mo-status-sel');
+  if (sel) sel.value = ['all','awaiting','progress','partial','delivered','draft','cancelled'].includes(APP._moStatusF) ? APP._moStatusF : 'all';
+  if (window.moRender) window.moRender();
+}
+function moSortBy(key) {
+  const s = APP._moSort || { key:'date', dir:'desc' };
+  APP._moSort = s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir:'desc' };
+  if (window.moRender) window.moRender();
+}
+function moClearFilters() {
+  APP._moSearch=''; APP._moType='all'; APP._moStatusF='all'; APP._moPeriod='all'; APP._moSort={ key:'date', dir:'desc' };
+  const s = document.getElementById('mo-search'); if (s) s.value='';
+  ['mo-type-sel','mo-status-sel','mo-period-sel'].forEach(idd => { const e=document.getElementById(idd); if (e) e.value='all'; });
+  if (window.moRender) window.moRender();
+}
+let _moCssDone = false;
+function injectMyOrdersCss() {
+  if (_moCssDone) return; _moCssDone = true;
+  const css = `
+  .mo-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .mo-title{font-size:1.3rem;font-weight:800;color:var(--navy);margin:0;line-height:1.2}
+  .mo-sub{font-size:.82rem;color:var(--text-muted);margin-top:4px}
+  .mo-sub2{font-size:.8rem;color:var(--text-muted);margin-top:1px}
+  .mo-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+  .mo-sum{display:flex;flex-direction:column;gap:7px;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left}
+  .mo-sum:hover{border-color:var(--border-mid)}
+  .mo-sum.on{border-color:var(--navy);box-shadow:inset 0 0 0 1px var(--navy)}
+  .mo-sum-k{display:flex;align-items:center;gap:7px;font-size:.75rem;font-weight:600;color:var(--text-muted)}
+  .mo-sum-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+  .mo-sum-v{font-size:1.5rem;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1}
+  .mo-late{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--danger-bg);border:1px solid var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:.86rem;color:var(--danger);font-weight:600}
+  .mo-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:14px}
+  .mo-f-search{flex:1;min-width:190px;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;background:var(--surface);color:var(--text);outline:none}
+  .mo-f-sel{padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;background:var(--surface);color:var(--text)}
+  .mo-f-clear{white-space:nowrap}
+  .mo-table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:auto}
+  .mo-table{width:100%;border-collapse:collapse;font-size:.85rem}
+  .mo-table th,.mo-table td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+  .mo-table thead th{font-size:.69rem;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);font-weight:700;background:var(--surface-2);position:sticky;top:0;z-index:1}
+  .mo-table thead th[aria-sort="ascending"],.mo-table thead th[aria-sort="descending"]{color:var(--navy)}
+  .mo-table tbody tr:last-child td{border-bottom:0}
+  .mo-table tbody tr:hover{background:var(--surface-2)}
+  .mo-table .num{text-align:right;font-variant-numeric:tabular-nums}
+  .mo-id{color:var(--navy);font-weight:700}
+  .mo-badge{display:inline-block;font-size:.72rem;font-weight:700;border:1px solid;border-radius:999px;padding:2px 9px;white-space:nowrap}
+  .mo-prog{display:flex;align-items:center;gap:8px;min-width:112px}
+  .mo-prog-bar{flex:1;min-width:48px;height:6px;background:var(--surface-3,var(--surface-2));border-radius:4px;overflow:hidden}
+  .mo-prog-bar i{display:block;height:100%}
+  .mo-prog-t{font-size:.72rem;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .mo-empty{padding:46px 20px;text-align:center;color:var(--text-muted);font-size:.9rem;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .mo-cards{display:none;flex-direction:column;gap:10px}
+  .mo-card{display:flex;flex-direction:column;gap:9px;text-align:left;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 15px;cursor:pointer}
+  .mo-card:hover{border-color:var(--border-mid)}
+  .mo-card-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .mo-card-top .mo-id{font-size:.92rem}
+  .mo-card-meta{font-size:.76rem;color:var(--text-muted)}
+  .mo-card-foot{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .mo-val{font-weight:800;color:var(--navy);font-size:1.02rem}
+  .mo-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .mo-cancel{color:var(--danger);border-color:var(--danger)}
+  .mo-card-acts{margin-top:2px;padding-top:10px;border-top:1px solid var(--border)}
+  @media (max-width:1040px){ .mo-table .col-updated{display:none} }
+  @media (max-width:860px){ .mo-summary{grid-template-columns:repeat(3,1fr)} }
+  @media (max-width:768px){ .mo-table-wrap{display:none} .mo-cards{display:flex} }
+  @media (max-width:560px){ .mo-summary{grid-template-columns:repeat(2,1fr)} .mo-sum-v{font-size:1.25rem} .mo-f-sel{flex:1 1 44%} }
+  `;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
 
 const ORDER_STAGES = ['Placed','Approved','Sourced','Picked','Dispatched','Delivered','Billed','Closed'];
 function orderStageIndex(status) {
