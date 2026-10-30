@@ -53,6 +53,22 @@ describe("(b) client stepper state", () => {
     const s = clientSteps({ ...base, approved: true, orderedQty: 46, deliveredQty: 46 });
     expect(s.states).toEqual(["done", "done", "done", "done"]);
   });
+  it("out for delivery: stepper sub + headline agree (no 'being prepared')", () => {
+    const s = clientSteps({ ...base, approved: true, orderedQty: 46, deliveredQty: 0, outForDelivery: true });
+    expect(s.states).toEqual(["done", "done", "cur", ""]);
+    expect(s.subs[2]).toBe("Out for delivery");
+    const h = clientHeadline({ approved: true, orderedQty: 46, deliveredQty: 0, outForDelivery: true });
+    expect(h.status).toBe("Out for delivery");
+    expect(h.badge).toBe("Out for delivery");
+  });
+  it("delivery scheduled (not yet out): 'Scheduled for delivery' everywhere", () => {
+    const s = clientSteps({ ...base, approved: true, orderedQty: 46, deliveredQty: 0, scheduled: true });
+    expect(s.subs[2]).toBe("Scheduled for delivery");
+    expect(clientHeadline({ approved: true, orderedQty: 46, deliveredQty: 0, scheduled: true }).status).toBe("Scheduled for delivery");
+  });
+  it("out-for-delivery takes precedence over scheduled", () => {
+    expect(clientHeadline({ approved: true, orderedQty: 46, deliveredQty: 0, outForDelivery: true, scheduled: true }).status).toBe("Out for delivery");
+  });
 
   it("headline reflects each state", () => {
     expect(clientHeadline({ approved: false, orderedQty: 46, deliveredQty: 0 }).status).toBe("Awaiting approval");

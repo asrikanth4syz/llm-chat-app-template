@@ -14,12 +14,19 @@ export const CLIENT_LINE_LABEL = { full: "Fully delivered", partial: "In progres
 
 // 4-step client stepper state, derived from line/delivery data (never the raw
 // workflow stage). Steps: Submitted | Approved | In Shipment | Delivered.
-//   o: { approved, cancelled, orderedQty, deliveredQty,
+//   o: { approved, cancelled, orderedQty, deliveredQty, outForDelivery, scheduled,
 //        submittedDate, approvedDate, deliveredDate }
+// outForDelivery / scheduled come from the order's live challans, so the "In
+// Shipment" sub-label matches the headline and the Deliveries list exactly.
 export function clientSteps(o) {
   const ord = Number(o.orderedQty) || 0, del = Number(o.deliveredQty) || 0;
   const full = ord > 0 && del >= ord;
   const pct = ord > 0 ? Math.round(del / ord * 100) : 0;
+  const shipSub = full ? (o.deliveredDate || "")
+    : del > 0 ? `${pct}% delivered`
+    : o.outForDelivery ? "Out for delivery"
+    : o.scheduled ? "Scheduled for delivery"
+    : "Being prepared";
   const labels = ["Submitted", "Approved", "In Shipment", "Delivered"];
   const states = [
     "done",                                        // Submitted — always done
@@ -30,21 +37,25 @@ export function clientSteps(o) {
   const subs = [
     o.submittedDate || "",
     o.approved ? (o.approvedDate || "") : "Under review",
-    !o.approved ? "" : (del <= 0 ? "Being prepared" : full ? (o.deliveredDate || "") : `${pct}% delivered`),
+    !o.approved ? "" : shipSub,
     full ? (o.deliveredDate || "") : "",
   ];
   return { labels, states, subs };
 }
 
 // The single headline status + one supporting sentence + colour + recon badge.
-//   o: { approved, cancelled, orderedQty, deliveredQty,
+//   o: { approved, cancelled, orderedQty, deliveredQty, outForDelivery, scheduled,
 //        totalItems, fullItems, dueItems, dueUnits }
 export function clientHeadline(o) {
   const ord = Number(o.orderedQty) || 0, del = Number(o.deliveredQty) || 0;
   const full = ord > 0 && del >= ord;
   if (o.cancelled) return { status: "Cancelled", detail: "This order was cancelled.", color: "grey", badge: "Cancelled" };
   if (!o.approved) return { status: "Awaiting approval", detail: "We've received your order and it's being reviewed.", color: "grey", badge: "Not Delivered" };
-  if (del <= 0) return { status: "Approved · being prepared", detail: "Your order is approved and our team is preparing it for shipment.", color: "grey", badge: "Not Delivered" };
+  if (del <= 0) {
+    if (o.outForDelivery) return { status: "Out for delivery", detail: "Your order has been dispatched and is on its way.", color: "blue", badge: "Out for delivery" };
+    if (o.scheduled)      return { status: "Scheduled for delivery", detail: "A delivery has been scheduled for your order.", color: "grey", badge: "Scheduled" };
+    return { status: "Approved · being prepared", detail: "Your order is approved and our team is preparing it for shipment.", color: "grey", badge: "Not Delivered" };
+  }
   if (!full) {
     const pq = ord > 0 ? Math.round(del / ord * 100) : 0;
     return {

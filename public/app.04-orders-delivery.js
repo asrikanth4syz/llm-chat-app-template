@@ -1767,7 +1767,7 @@ function injectClientOrderCss() {
   }`;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
-const CO_COLORVAR = { grey: 'var(--text-muted)', amber: 'var(--warning)', green: 'var(--success)' };
+const CO_COLORVAR = { grey: 'var(--text-muted)', amber: 'var(--warning)', green: 'var(--success)', blue: '#3b82f6' };
 
 function openClientOrder(id) {
   try { APP._moScroll = window.scrollY || 0; } catch (_) { APP._moScroll = 0; }
@@ -1839,8 +1839,14 @@ async function renderClientOrder(el) {
   let cFull = 0, cPart = 0, cPend = 0;
   lines.forEach(l => { const s = window.olineStatus(l.ordered, l.delivered); if (s === 'full') cFull++; else if (s === 'partial') cPart++; else cPend++; });
 
+  // One dispatch signal from the real challans so the headline, the stepper and
+  // the Deliveries list all describe the same state (no "being prepared" while a
+  // challan is already out for delivery).
+  const _chs = o.challans || [];
+  const outForDelivery = _chs.some(c => c.status === 'IN_TRANSIT' || c.status === 'DISPATCHED');
+  const scheduled = _chs.some(c => c.status === 'SCHEDULED');
   const headline = window.clientHeadline({
-    approved: o.approved, cancelled: o.cancelled,
+    approved: o.approved, cancelled: o.cancelled, outForDelivery, scheduled,
     orderedQty: recon.ordQty, deliveredQty: recon.delQty,
     totalItems: recon.ordItems, fullItems: recon.delItems, dueItems: recon.dueItems, dueUnits: recon.dueQty,
   });
@@ -1848,7 +1854,8 @@ async function renderClientOrder(el) {
   const approvedDate = o.approved_at ? fmtDate(o.approved_at) : '';
   const deliveredDate = o.delivered_on ? fmtDate(o.delivered_on) : '';
   const steps = window.clientSteps({
-    approved: o.approved, cancelled: o.cancelled, orderedQty: recon.ordQty, deliveredQty: recon.delQty,
+    approved: o.approved, cancelled: o.cancelled, outForDelivery, scheduled,
+    orderedQty: recon.ordQty, deliveredQty: recon.delQty,
     submittedDate, approvedDate, deliveredDate,
   });
   const colorVar = CO_COLORVAR[headline.color] || 'var(--text-muted)';
@@ -1862,7 +1869,7 @@ async function renderClientOrder(el) {
     : "We'll confirm the date after approval";
 
   const period = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
-  const reconBadgeColor = headline.badge === 'Delivered' ? 'var(--success)' : headline.badge === 'Partially Delivered' ? 'var(--warning)' : 'var(--text-muted)';
+  const reconBadgeColor = headline.badge === 'Delivered' ? 'var(--success)' : headline.badge === 'Partially Delivered' ? 'var(--warning)' : headline.badge === 'Out for delivery' ? '#3b82f6' : 'var(--text-muted)';
 
   // Ticket help card: list open tickets (don't encourage duplicates), else raise buttons.
   const tickets = o.tickets || [];
