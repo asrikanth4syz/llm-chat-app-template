@@ -7025,7 +7025,8 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
        AND oi.qty <= COALESCE((SELECT SUM(di.qty_delivered) FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id
          WHERE dc2.order_id=o.id AND dc2.status='DELIVERED' AND di.sku=oi.sku),0)) AS delivered_items,
     (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status IN ('SCHEDULED','IN_TRANSIT')) AS active_dc_count,
-    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status!='CANCELLED') AS challan_count
+    (SELECT COUNT(*) FROM delivery_challans dc WHERE dc.order_id=o.id AND dc.status!='CANCELLED') AS challan_count,
+    (SELECT GROUP_CONCAT(name, ' · ') FROM order_items WHERE order_id=o.id) AS item_names
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE 1=1`;
   const params: string[] = [];
 
@@ -7170,6 +7171,37 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
   const approvedRow = await env.DB.prepare("SELECT MIN(created_at) t FROM order_history WHERE order_id=? AND to_status='APPROVED'").bind(id).first() as { t?: string } | null;
   const lastDeliv = await env.DB.prepare("SELECT MAX(delivered_at) d FROM delivery_challans WHERE order_id=? AND status='DELIVERED'").bind(id).first() as { d?: string } | null;
 
+  // Delivery challans for this order — client-safe only (no driver, vehicle, PO,
+  // billing or internal notes). Each carries its own line items so the client can
+  // expand a delivery and see exactly what arrived. Cancelled challans are hidden.
+  const { results: chRows } = await env.DB.prepare(
+    `SELECT id, dc_number, status, dispatched_at, delivered_at, COALESCE(total_qty,0) AS total_qty,
+            COALESCE(delivered_qty,0) AS delivered_qty, COALESCE(pod_uploaded,0) AS pod
+       FROM delivery_challans WHERE order_id=? AND status!='CANCELLED'
+      ORDER BY (delivered_at IS NULL), delivered_at DESC, dispatched_at DESC`
+  ).bind(id).all();
+  const challans: Array<Record<string, unknown>> = [];
+  for (const dc of chRows as Record<string, unknown>[]) {
+    const { results: di } = await env.DB.prepare(
+      "SELECT name, qty_ordered, qty_delivered FROM dc_items WHERE dc_id=? ORDER BY name"
+    ).bind(dc.id).all();
+    const its = (di as Record<string, unknown>[]).map(x => ({
+      name: x.name, qty: Number(x.qty_ordered) || 0, qty_delivered: Number(x.qty_delivered) || 0,
+    }));
+    const deliveredUnits = its.reduce((s, x) => s + x.qty_delivered, 0);
+    challans.push({
+      dc_number: dc.dc_number || dc.id,
+      status: String(dc.status),
+      dispatched_at: dc.dispatched_at || null,
+      delivered_at: dc.delivered_at || null,
+      item_count: its.length,
+      delivered_units: deliveredUnits || (Number(dc.delivered_qty) || 0),
+      total_units: Number(dc.total_qty) || 0,
+      pod_available: Number(dc.pod) === 1,
+      items: its,
+    });
+  }
+
   // Open tickets already raised from this order (avoid encouraging duplicates).
   let tickets: Array<Record<string, unknown>> = [];
   try {
@@ -7205,7 +7237,7 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
     approved_at: approvedRow?.t || null,
     delivered_on: lastDeliv?.d || order.closed_at || null,
     subtotal: order.subtotal, gst: order.gst, grand_total: order.grand_total,
-    items: lines, timeline, tickets,
+    items: lines, challans, timeline, tickets,
   });
 }
 

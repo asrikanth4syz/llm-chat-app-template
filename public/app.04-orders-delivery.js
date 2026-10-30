@@ -216,7 +216,7 @@ async function renderMyOrders(el) {
       if (APP._moType !== 'all') list = list.filter(r => (r.order_type || 'Regular') === APP._moType);
       if (APP._moPeriod === 'month') { const ym = new Date().toISOString().slice(0,7); list = list.filter(r => String(r.created_at||'').slice(0,7) === ym); }
       else if (APP._moPeriod === '30' || APP._moPeriod === '90') { const cut = new Date(Date.now() - Number(APP._moPeriod)*86400000).toISOString().slice(0,10); list = list.filter(r => String(r.created_at||'').slice(0,10) >= cut); }
-      if (APP._moSearch) { const qq = APP._moSearch.toLowerCase(); list = list.filter(r => r.id.toLowerCase().includes(qq) || String(r.order_reference||'').toLowerCase().includes(qq)); }
+      if (APP._moSearch) { const qq = APP._moSearch.toLowerCase(); list = list.filter(r => r.id.toLowerCase().includes(qq) || String(r.order_reference||'').toLowerCase().includes(qq) || String(r.item_names||'').toLowerCase().includes(qq)); }
       const { key, dir } = APP._moSort, s = dir === 'asc' ? 1 : -1;
       const kv = r => key==='value' ? Number(r.grand_total||0) : key==='progress' ? (r._mo.pct||0)
         : key==='updated' ? String(r.updated_at||r.created_at||'') : key==='status' ? r._lc.label : String(r.created_at||'');
@@ -317,7 +317,7 @@ async function renderMyOrders(el) {
       <button type="button" class="btn btn-sm" ${dataAct('moCardFilter','overdue')} style="margin-left:auto;background:var(--danger);color:#fff;border:0">Show</button></div>` : ''}
 
     <div class="mo-filters">
-      <input type="search" id="mo-search" class="mo-f-search" placeholder="🔍  Search order number…" value="${h(APP._moSearch||'')}" ${dataInputEl('moSearchInput')} data-focus>
+      <input type="search" id="mo-search" class="mo-f-search" placeholder="🔍  Search order number or item…" value="${h(APP._moSearch||'')}" ${dataInputEl('moSearchInput')} data-focus>
       <select id="mo-type-sel" class="mo-f-sel" aria-label="Order type" ${dataChangeEl('moTypeFilter')}>
         ${['all','Regular','Urgent','Ad-Hoc'].map(t=>`<option value="${t}"${APP._moType===t?' selected':''}>${t==='all'?'All types':t}</option>`).join('')}
       </select>
@@ -1739,6 +1739,24 @@ function injectClientOrderCss() {
   .cotable tr:last-child td{border-bottom:0}
   .cotable th{color:var(--text-muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.3px;position:sticky;top:0;background:var(--surface);z-index:1}
   .cotable .n{text-align:right;font-variant-numeric:tabular-nums}
+  /* deliveries (per-challan tracking) */
+  .co-dc-list{display:flex;flex-direction:column;gap:8px}
+  .co-dc{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface)}
+  .co-dc-sum{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px;cursor:pointer;list-style:none;font-size:.84rem}
+  .co-dc-sum::-webkit-details-marker{display:none}
+  .co-dc-no{font-weight:700;color:var(--navy)}
+  .co-dc-badge{font-size:.7rem;font-weight:700;border:1px solid;border-radius:999px;padding:2px 9px;white-space:nowrap}
+  .co-dc-meta{color:var(--text-muted);font-size:.8rem}
+  .co-dc-pod{font-size:.72rem;color:var(--success);font-weight:600}
+  .co-dc-chev{margin-left:auto;color:var(--text-muted);transition:transform .15s}
+  .co-dc[open] .co-dc-chev{transform:rotate(180deg)}
+  .co-dc-body{padding:0 14px 12px;border-top:1px solid var(--border)}
+  .co-dc-tbl{width:100%;border-collapse:collapse;margin-top:8px;font-size:.82rem}
+  .co-dc-tbl th,.co-dc-tbl td{padding:7px 8px;border-bottom:1px solid var(--border);text-align:left}
+  .co-dc-tbl tr:last-child td{border-bottom:0}
+  .co-dc-tbl th{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:700}
+  .co-dc-tbl .n{text-align:right;font-variant-numeric:tabular-nums}
+  @media (prefers-reduced-motion:reduce){.co-dc-chev{transition:none}}
   @media (max-width:700px){
     .co-title h1{font-size:1.15rem}
     .cocols{grid-template-columns:1fr}
@@ -1756,6 +1774,48 @@ function openClientOrder(id) {
   navigate('client_order', { tab: id });
 }
 function clientBackToOrders() { navigate('my_orders', { tab: 'orders' }); }
+
+// Client-safe delivery tracking (spec 5E): one expandable row per challan with
+// its number, status, dates, item/unit counts and POD availability. Each expands
+// to the items that arrived. Driver, vehicle, PO, billing and notes are never
+// included (the server already omits them from the client-view payload).
+const COC_TONE = {
+  DELIVERED:  ['Delivered', 'var(--success)'],
+  IN_TRANSIT: ['Out for delivery', '#3b82f6'],
+  DISPATCHED: ['Dispatched', '#3b82f6'],
+  SCHEDULED:  ['Scheduled', 'var(--warning)'],
+};
+function coChallanTone(s) {
+  return COC_TONE[s] || [String(s||'').charAt(0).toUpperCase() + String(s||'').slice(1).toLowerCase(), 'var(--text-muted)'];
+}
+function coChallansHtml(o) {
+  const list = (o && o.challans) || [];
+  if (!list.length) return '';
+  const rows = list.map(dc => {
+    const [lbl, color] = coChallanTone(dc.status);
+    const date = dc.delivered_at ? fmtDate(dc.delivered_at)
+      : dc.dispatched_at ? 'Dispatched ' + fmtDate(dc.dispatched_at) : '';
+    const pod = dc.pod_available ? '<span class="co-dc-pod">📄 POD available</span>' : '';
+    const body = (dc.items || []).length
+      ? `<table class="co-dc-tbl"><thead><tr><th>Item</th><th class="n">Delivered</th></tr></thead><tbody>${dc.items.map(it =>
+          `<tr><td>${h(it.name)}</td><td class="n">${(Number(it.qty_delivered)||0).toLocaleString('en-IN')}${it.qty?` <span class="u-muted">/ ${(Number(it.qty)||0).toLocaleString('en-IN')}</span>`:''}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="u-muted" style="font-size:.82rem;padding-top:8px">No item detail recorded for this delivery.</div>';
+    return `<details class="co-dc">
+      <summary class="co-dc-sum">
+        <span class="co-dc-no">${h(String(dc.dc_number||'Delivery'))}</span>
+        <span class="co-dc-badge" style="color:${color};border-color:${color}">${h(lbl)}</span>
+        <span class="co-dc-meta">${date?h(date)+' · ':''}${dc.item_count} item${dc.item_count!==1?'s':''} · ${(Number(dc.delivered_units)||0).toLocaleString('en-IN')} units</span>
+        ${pod}
+        <span class="co-dc-chev" aria-hidden="true">▾</span>
+      </summary>
+      <div class="co-dc-body">${body}</div>
+    </details>`;
+  }).join('');
+  return `<section class="card" aria-label="Deliveries">
+    <h2 class="co-h2">🚚 Deliveries <span class="u-muted" style="font-weight:600;font-size:.82rem">· ${list.length} challan${list.length!==1?'s':''}</span></h2>
+    <div class="co-dc-list">${rows}</div>
+  </section>`;
+}
 
 async function renderClientOrder(el) {
   injectClientOrderCss();
@@ -1896,6 +1956,8 @@ async function renderClientOrder(el) {
         <tbody id="co-rows"></tbody>
       </table></div>
     </section>
+
+    ${coChallansHtml(o)}
 
     <section class="card"><h2 class="co-h2">Need help?</h2>${helpBody}</section>
   </div>`;
