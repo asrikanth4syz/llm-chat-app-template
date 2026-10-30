@@ -1476,7 +1476,7 @@ describe("Ad-hoc orders (no catalogue selection)", () => {
   const adhocBody = {
     client_id: "__self__",                // overridden server-side to the client's own id
     order_type: "Ad-Hoc",
-    order_reference: "ADHOC-REF-1",       // clients must supply an order reference
+    order_reference: "ADHOC-REF-1",       // explicit reference is optional but still honoured
     notes: "Need 2 crates of imported sparkling water for an event",
     items: [
       { sku: "ADHOC-AAA111", name: "Imported sparkling water 750ml (crate)", qty: 2, unit_price: 0 },
@@ -4899,20 +4899,28 @@ describe("orders list surfaces delivered_qty for reconciliation", () => {
 });
 
 describe("order reference, editable period, and pick draft", () => {
-  it("a client order requires an order reference (stored); ops-on-behalf is optional", async () => {
+  it("auto-generates the order reference (defaults to the order number), honours an explicit one, and clears it on cancel", async () => {
+    const db = env.DB as D1Database;
+    // No reference supplied → order is created and its reference defaults to the order number.
     const noRef = await post("/api/orders", { items: [{ sku: "SKU001", name: "Rice", qty: 2, unit_price: 450 }] }, clientToken);
-    expect(noRef.status).toBe(400);
-    expect((await noRef.json() as { code: string }).code).toBe("E_ORDER_REF");
+    expect(noRef.status).toBe(201);
+    const autoId = (await noRef.json() as { id: string }).id;
+    const autoRow = await db.prepare("SELECT order_reference FROM orders WHERE id=?").bind(autoId).first() as { order_reference: string };
+    expect(autoRow.order_reference).toBe(autoId);
 
+    // An explicit reference is still honoured and stored as given.
     const okRes = await post("/api/orders", { items: [{ sku: "SKU001", name: "Rice", qty: 2, unit_price: 450 }], order_reference: "CLIENT-PO-77" }, clientToken);
     expect(okRes.status).toBe(201);
     const oid = (await okRes.json() as { id: string }).id;
-    const row = await (env.DB as D1Database).prepare("SELECT order_reference FROM orders WHERE id=?").bind(oid).first() as { order_reference: string };
+    const row = await db.prepare("SELECT order_reference FROM orders WHERE id=?").bind(oid).first() as { order_reference: string };
     expect(row.order_reference).toBe("CLIENT-PO-77");
 
-    // ops placing on a client's behalf may omit the reference
-    const opsOrder = await post("/api/orders", { client_id: "c1", items: [{ sku: "SKU001", name: "Rice", qty: 1, unit_price: 450 }] }, opsToken);
-    expect(opsOrder.status).toBe(201);
+    // Cancelling an order gives up its reference; the order number itself is kept.
+    const cancel = await post(`/api/orders/${oid}/transition`, { to: "CANCELLED", note: "test cancel" }, opsToken);
+    expect(cancel.status).toBe(200);
+    const after = await db.prepare("SELECT id, order_reference FROM orders WHERE id=?").bind(oid).first() as { id: string; order_reference: string | null };
+    expect(after.id).toBe(oid);
+    expect(after.order_reference).toBeNull();
   });
 
   it("the order period is correctable by ops_manager/super_admin only, validated YYYY-MM", async () => {

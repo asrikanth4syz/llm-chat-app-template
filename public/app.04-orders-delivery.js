@@ -913,7 +913,7 @@ async function viewOrder(id) {
         <div><b>Status:</b> ${statusBadge(order.status)}</div>
         <div><b>Type:</b> ${orderTypeBadge(order.order_type||'Regular')}</div>
         <div><b>Client:</b> ${order.client_name||'—'}</div>
-        ${order.order_reference ? `<div><b>Ref:</b> ${h(order.order_reference)}</div>` : ''}
+        ${order.order_reference && order.order_reference !== order.id ? `<div><b>Ref:</b> ${h(order.order_reference)}</div>` : ''}
         <div><b>Placed:</b> ${fmtDate(order.created_at)}</div>
         <button class="btn btn-secondary btn-sm" style="margin-left:auto" ${dataAct('orderTimelineModal', id)}>🧭 Timeline</button>
         <div><b>For:</b> <span>${order.order_period ? new Date(order.order_period+'-01').toLocaleDateString('en-IN',{month:'short',year:'numeric'}) : '—'}</span>${['super_admin','ops_manager'].includes(APP.user?.role) ? ` <button class="btn btn-secondary btn-sm" style="padding:2px 8px" ${dataAct('editOrderPeriodModal', id, order.order_period||'')} title="Correct the order month">✏️</button>` : ''}</div>
@@ -1305,7 +1305,7 @@ function ofTabOverview() {
   const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(c.comments || []).length
     ? c.comments.map(cm => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(cm.author_name)}</b><span class="u-muted">${timeAgo(cm.created_at)}</span></div><div>${h(cm.message)}</div></div>`).join('')
     : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
-  return `<div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_period ? ' · For ' + new Date(order.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}${order.order_reference ? ' · Ref ' + h(order.order_reference) : ''}</div>
+  return `<div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_period ? ' · For ' + new Date(order.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}${order.order_reference && order.order_reference !== order.id ? ' · Ref ' + h(order.order_reference) : ''}</div>
   <div class="ofgrid">
     <div class="ofstack">
       <div class="card">${ofStepperHtml(order)}</div>
@@ -1763,7 +1763,7 @@ async function renderClientOrder(el) {
     <div class="co-head">
       <div class="co-title">
         <h1>Order ${h(o.id)}</h1>
-        <div class="co-sub">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.order_reference ? ' · Ref ' + h(o.order_reference) : ''}</div>
+        <div class="co-sub">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.order_reference && o.order_reference !== o.id ? ' · Ref ' + h(o.order_reference) : ''}</div>
       </div>
       <div class="co-head-actions">
         ${o.cancelled ? '' : `<span class="co-hbadge" style="color:${reconBadgeColor}">📦 ${h(headline.badge)}</span>`}

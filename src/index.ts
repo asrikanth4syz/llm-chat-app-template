@@ -8230,10 +8230,15 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   if (!body.client_id || !body.items?.length) return json({error:"client_id and items required"}, 400);
   // Order reference (the client's own PO / reference) — mandatory when a client
   // places the order; optional for an ops-placed order on the client's behalf.
+  // The order reference is no longer typed by the client. It is auto-generated:
+  // it defaults to the order's own number (so a draft keeps the same number when
+  // it is later submitted), and an explicit reference is still honoured if one is
+  // ever passed (e.g. an ops-entered client PO). It is cleared when the order is
+  // cancelled (see the CANCELLED branch in handleTransitionOrder).
   const orderRef = typeof body.order_reference === "string" ? body.order_reference.trim().slice(0, 80) : "";
-  if (isClientRole && !orderRef) return json({ error: "An order reference is required", code: "E_ORDER_REF" }, 400);
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
+  const effRef = orderRef || id;
   const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price, 0);
   const gst = await computeOrderGst(env, body.items);
   const grand_total = subtotal+gst;
@@ -8244,7 +8249,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
     await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, orderRef||null).run();
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -8276,7 +8281,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
 
   await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, orderRef||null).run();
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -8962,12 +8967,15 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
     .bind(uid(), id, order.status, body.to, user!.sub, user!.name, body.note||null).run();
 
-  // Gap 9: release reservation on cancel
+  // Gap 9: release reservation on cancel. Also clear the order reference — a
+  // cancelled order gives up its number (the primary order id is kept so delivery
+  // history, invoices and the audit trail stay intact).
   if (body.to === "CANCELLED") {
     const {results:items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all();
     for (const item of items as Record<string,unknown>[]) {
       await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
     }
+    await env.DB.prepare("UPDATE orders SET order_reference=NULL WHERE id=?").bind(id).run();
   }
 
   // Auto-create DC when IN_SHIPMENT — use picked allocations if available, else order items
