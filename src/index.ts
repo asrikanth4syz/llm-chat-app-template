@@ -8975,6 +8975,20 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     for (const item of items as Record<string,unknown>[]) {
       await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
     }
+    // A cancelled DRAFT is discarded entirely — number and all — since it has no
+    // deliveries, invoices or audit history worth keeping. Live orders (already
+    // submitted or further along) keep their record and only give up the reference.
+    if (order.status === "DRAFT") {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id),
+        env.DB.prepare("DELETE FROM order_history WHERE order_id=?").bind(id),
+        env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id),
+        env.DB.prepare("DELETE FROM order_amendments WHERE order_id=?").bind(id),
+        env.DB.prepare("DELETE FROM order_comments WHERE order_id=?").bind(id),
+        env.DB.prepare("DELETE FROM orders WHERE id=?").bind(id),
+      ]);
+      return json({ id, status: "CANCELLED", deleted: true });
+    }
     await env.DB.prepare("UPDATE orders SET order_reference=NULL WHERE id=?").bind(id).run();
   }
 

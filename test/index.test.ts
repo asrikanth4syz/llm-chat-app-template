@@ -4923,6 +4923,18 @@ describe("order reference, editable period, and pick draft", () => {
     expect(after.order_reference).toBeNull();
   });
 
+  it("cancelling a DRAFT discards it entirely (number and all); a live order is kept", async () => {
+    const db = env.DB as D1Database;
+    const draft = await post("/api/orders", { items: [{ sku: "SKU001", name: "Rice", qty: 1, unit_price: 450 }], save_as_draft: true }, clientToken);
+    expect(draft.status).toBe(201);
+    const did = (await draft.json() as { id: string }).id;
+    const cancel = await post(`/api/orders/${did}/transition`, { to: "CANCELLED", note: "discard" }, clientToken);
+    expect(cancel.status).toBe(200);
+    expect((await cancel.json() as { deleted?: boolean }).deleted).toBe(true);
+    expect(await db.prepare("SELECT id FROM orders WHERE id=?").bind(did).first()).toBeNull();
+    expect(await db.prepare("SELECT id FROM order_items WHERE order_id=?").bind(did).first()).toBeNull();
+  });
+
   it("the order period is correctable by ops_manager/super_admin only, validated YYYY-MM", async () => {
     const db = env.DB as D1Database;
     await db.prepare("INSERT OR REPLACE INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,order_type,order_period) VALUES ('OP-PER','c1','tst-ops','APPROVED',100,0,100,'Regular','2026-01')").run();
