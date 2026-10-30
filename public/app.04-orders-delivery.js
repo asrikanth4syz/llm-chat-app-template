@@ -1699,12 +1699,17 @@ function injectClientOrderCss() {
   .co-sub{color:var(--text-muted);font-size:.84rem;margin-top:4px}
   .co-head-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .co-hbadge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 12px;font-size:.74rem;font-weight:700;border:1px solid currentColor;white-space:nowrap}
-  /* hero */
-  .cohero{border-left:4px solid var(--co-c,var(--text-muted))}
-  .cohero-status{font-size:1.15rem;font-weight:800;line-height:1.25}
-  .cohero-detail{color:var(--text-muted);font-size:.9rem;margin-top:4px}
-  .co-est{display:flex;gap:8px;align-items:center;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:.86rem;margin-top:12px}
+  /* single status banner */
+  .co-status{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;border-left:4px solid var(--co-c,var(--text-muted))}
+  .co-status-main{display:flex;align-items:center;gap:14px;min-width:0}
+  .co-status-ic{font-size:1.9rem;line-height:1;flex-shrink:0}
+  .co-status-h{font-size:1.2rem;font-weight:800;line-height:1.2}
+  .co-status-d{color:var(--text-muted);font-size:.88rem;margin-top:3px}
+  .co-status-eta{text-align:right;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 14px;white-space:nowrap}
+  .co-eta-k{display:block;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+  .co-eta-v{display:block;font-weight:800;color:var(--navy);font-size:.95rem;margin-top:2px}
   .co-cancel{padding:12px 14px;background:var(--danger-bg);border:1px solid var(--danger);border-radius:var(--radius);color:var(--danger);font-weight:700;font-size:.9rem}
+  @media (max-width:560px){ .co-status-eta{text-align:left;width:100%} }
   /* stepper */
   .costepper{display:flex;gap:4px}
   .costep{flex:1;min-width:66px;text-align:center;position:relative;font-size:.78rem;color:var(--text-muted)}
@@ -1768,6 +1773,17 @@ function injectClientOrderCss() {
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 }
 const CO_COLORVAR = { grey: 'var(--text-muted)', amber: 'var(--warning)', green: 'var(--success)', blue: '#3b82f6' };
+// One icon per status phase for the single status banner.
+function coStatusIcon(hl) {
+  const b = hl.badge, s = hl.status || '';
+  if (b === 'Cancelled') return '❌';
+  if (b === 'Delivered') return '✅';
+  if (b === 'Partially Delivered') return '📦';
+  if (b === 'Out for delivery') return '🚚';
+  if (b === 'Scheduled') return '🗓️';
+  if (s.indexOf('Awaiting') === 0) return '⏳';
+  return '📦';
+}
 
 function openClientOrder(id) {
   try { APP._moScroll = window.scrollY || 0; } catch (_) { APP._moScroll = 0; }
@@ -1886,10 +1902,10 @@ async function renderClientOrder(el) {
          <button class="btn btn-secondary" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button>
        </div>`;
 
-  // Delivery notes: existing delivery breakdown when there's something delivered.
+  // Delivery Breakdown: the full delivery drilldown (available once something ships).
   const deliveryNotesBtn = recon.delQty > 0
-    ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrderDrilldown', id)}>📄 Delivery notes</button>`
-    : `<button class="btn btn-secondary btn-sm" disabled title="Available once your order ships">📄 Delivery notes</button>`;
+    ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrderDrilldown', id)}>📊 Delivery Breakdown</button>`
+    : `<button class="btn btn-secondary btn-sm" disabled title="Available once your order ships">📊 Delivery Breakdown</button>`;
 
   const stepperHtml = o.cancelled
     ? `<div class="co-cancel">❌ This order was cancelled.</div>`
@@ -1925,7 +1941,6 @@ async function renderClientOrder(el) {
         <div class="co-sub">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.order_reference && o.order_reference !== o.id ? ' · Ref ' + h(o.order_reference) : ''}</div>
       </div>
       <div class="co-head-actions">
-        ${o.cancelled ? '' : `<span class="co-hbadge" style="color:${reconBadgeColor}">📦 ${h(headline.badge)}</span>`}
         <button class="btn btn-secondary btn-sm" id="co-tl-btn" aria-expanded="false" ${dataActEl('clientOrderToggleTimeline')}>🧭 Timeline</button>
         ${deliveryNotesBtn}
       </div>
@@ -1940,17 +1955,26 @@ async function renderClientOrder(el) {
         : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
     </section>
 
-    <section class="card cohero" style="--co-c:${colorVar}" aria-live="polite">
-      <div class="cohero-status" style="color:${colorVar}">${h(headline.status)}</div>
-      <div class="cohero-detail">${h(headline.detail)}</div>
-      ${estText ? `<div class="co-est">📅 <b>Est. delivery:</b> <span>${h(estText)}</span></div>` : ''}
+    ${o.cancelled ? `<section class="card co-status co-status-cancel" style="--co-c:var(--danger)"><div class="co-status-main"><span class="co-status-ic">❌</span><div><div class="co-status-h" style="color:var(--danger)">Cancelled</div><div class="co-status-d">This order was cancelled.</div></div></div></section>` : `
+    <section class="card co-status" style="--co-c:${colorVar}" aria-live="polite">
+      <div class="co-status-main">
+        <span class="co-status-ic">${coStatusIcon(headline)}</span>
+        <div>
+          <div class="co-status-h" style="color:${colorVar}">${h(headline.status)}</div>
+          <div class="co-status-d">${h(headline.detail)}</div>
+        </div>
+      </div>
+      ${estText ? `<div class="co-status-eta"><span class="co-eta-k">📅 Estimated delivery</span><span class="co-eta-v">${h(estText)}</span></div>` : ''}
+    </section>`}
+
+    <section class="card" aria-label="Order progress">
+      <h2 class="co-h2" style="margin:0 0 14px">Order progress</h2>
+      ${stepperHtml}
     </section>
 
-    <section class="card" aria-label="Progress">${stepperHtml}</section>
-
-    <section class="card" aria-label="Delivery reconciliation">
-      <div class="co-recon-head"><h2 class="co-h2" style="margin:0">📦 Delivery reconciliation</h2>
-        <span class="co-hbadge" style="color:${reconBadgeColor}">${h(headline.badge)}</span></div>
+    <section class="card" aria-label="Delivery summary">
+      <div class="co-recon-head"><h2 class="co-h2" style="margin:0">📦 Delivery summary</h2>
+        <span class="u-muted" style="font-size:.8rem">${recon.delQty.toLocaleString('en-IN')} of ${recon.ordQty.toLocaleString('en-IN')} units received</span></div>
       <div class="cocols">
         <div class="cocol"><div class="cocol-k">ORDERED</div><div class="cocol-v">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="cocol-s">items / qty</div></div>
         <div class="cocol"><div class="cocol-k" style="color:var(--success)">DELIVERED</div><div class="cocol-v" style="color:var(--success)">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDelQty)}%;background:var(--success)"></i></div></div>
@@ -1981,7 +2005,7 @@ async function renderClientOrder(el) {
 // Render the item table body + chips + segmented bar for the current filter.
 function coRenderItems() {
   const lines = APP._coLines || [], counts = APP._coCounts || { all: 0 }, flt = APP._coFilter || 'all';
-  const LB = { full: ['Fully delivered', 'var(--success)'], partial: ['In progress', 'var(--warning)'], pending: ['Awaiting dispatch', 'var(--text-muted)'] };
+  const LB = { full: ['Fully delivered', 'var(--success)'], partial: ['Partly delivered', 'var(--warning)'], pending: ['Awaiting delivery', 'var(--text-muted)'] };
   const seg = document.getElementById('co-seg');
   if (seg) seg.innerHTML = ['full', 'partial', 'pending'].map(k => counts[k]
     ? `<button data-cof="${k}" ${dataAct('clientOrderFilter', k)} style="width:${Math.round(counts[k] / (counts.all || 1) * 100)}%;background:${LB[k][1]}" aria-label="${LB[k][0]} ${counts[k]}"></button>` : '').join('');

@@ -10,7 +10,7 @@ import { olineStatus, oreconTotals } from "./order-recon.js";
 export { olineStatus, oreconTotals };
 
 // Client-facing line-status labels (map order-recon's full/partial/pending).
-export const CLIENT_LINE_LABEL = { full: "Fully delivered", partial: "In progress", pending: "Awaiting dispatch" };
+export const CLIENT_LINE_LABEL = { full: "Fully delivered", partial: "Partly delivered", pending: "Awaiting delivery" };
 
 // 4-step client stepper state, derived from line/delivery data (never the raw
 // workflow stage). Steps: Submitted | Approved | In Shipment | Delivered.
@@ -22,23 +22,27 @@ export function clientSteps(o) {
   const ord = Number(o.orderedQty) || 0, del = Number(o.deliveredQty) || 0;
   const full = ord > 0 && del >= ord;
   const pct = ord > 0 ? Math.round(del / ord * 100) : 0;
-  const shipSub = full ? (o.deliveredDate || "")
-    : del > 0 ? `${pct}% delivered`
-    : o.outForDelivery ? "Out for delivery"
+  // "shipped" = the order has reached the out-for-delivery phase (a challan is in
+  // transit, or something has already been delivered). Being prepared / scheduled
+  // still sit at the Approved stage, so the current stage always matches the
+  // single status headline and never reads two different phases at once.
+  const shipped = del > 0 || !!o.outForDelivery;
+  const labels = ["Submitted", "Approved", "Out for delivery", "Delivered"];
+  const states = [
+    "done",                                                         // Submitted
+    !o.approved ? "cur" : (shipped ? "done" : "cur"),               // Approved (cur while preparing/scheduled)
+    !o.approved ? "" : (full || del > 0 ? "done" : o.outForDelivery ? "cur" : ""), // Out for delivery
+    full ? "done" : (del > 0 ? "cur" : ""),                         // Delivered
+  ];
+  const approvedSub = !o.approved ? "Under review"
+    : shipped ? (o.approvedDate || "")
     : o.scheduled ? "Scheduled for delivery"
     : "Being prepared";
-  const labels = ["Submitted", "Approved", "In Shipment", "Delivered"];
-  const states = [
-    "done",                                        // Submitted — always done
-    o.approved ? "done" : "cur",                   // Approved
-    !o.approved ? "" : (full ? "done" : "cur"),    // In Shipment
-    full ? "done" : "",                            // Delivered
-  ];
   const subs = [
     o.submittedDate || "",
-    o.approved ? (o.approvedDate || "") : "Under review",
-    !o.approved ? "" : shipSub,
-    full ? (o.deliveredDate || "") : "",
+    approvedSub,
+    "",                                                             // the stage label is self-describing
+    full ? (o.deliveredDate || "") : (del > 0 ? `${pct}% received` : ""),
   ];
   return { labels, states, subs };
 }
