@@ -1149,6 +1149,27 @@ async function toggleClientActive(id, name, active) {
 /* ============================================================
    SERVICE DESK
    ============================================================ */
+// ── Service-desk helpers: unread tracking + 48h reopen window ──
+const TK_RAISER_ROLES = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'];
+// Parse a SQLite 'YYYY-MM-DD HH:MM:SS' (UTC) or ISO timestamp to epoch ms.
+function tkParseTs(s){ const ms = Date.parse(String(s||'').replace(' ','T').replace(/Z?$/,'Z')); return isNaN(ms)?0:ms; }
+// Per-viewer "last seen" map, kept in localStorage (a convenience only).
+function tkSeenMap(){ try { return JSON.parse(localStorage.getItem('sp_ticket_seen')||'{}')||{}; } catch { return {}; } }
+function tkMarkSeen(id){ try { const m=tkSeenMap(); m[id]=Date.now(); localStorage.setItem('sp_ticket_seen', JSON.stringify(m)); } catch { /* private mode */ } }
+// Unread when the latest comment is from the OTHER party and newer than last seen.
+function tkUnread(t){
+  if (!t || !t.last_comment_at) return false;
+  const amRaiser = TK_RAISER_ROLES.includes(APP.user?.role);
+  const lastFromOther = amRaiser ? !TK_RAISER_ROLES.includes(t.last_comment_role)
+                                 : TK_RAISER_ROLES.includes(t.last_comment_role);
+  if (!lastFromOther) return false;
+  return tkParseTs(t.last_comment_at) > (tkSeenMap()[t.id] || 0);
+}
+// Hours a CLOSED ticket stays reopenable (48h from closed_at).
+const TK_REOPEN_MS = 48*3600*1000;
+function tkReopenable(t){ return !!(t && t.closed_at) && (Date.now() - tkParseTs(t.closed_at)) <= TK_REOPEN_MS; }
+function tkReopenHoursLeft(t){ if (!t || !t.closed_at) return 0; return Math.max(0, Math.ceil((TK_REOPEN_MS - (Date.now()-tkParseTs(t.closed_at)))/3600000)); }
+
 async function renderServiceDesk(el) {
   const allTickets = await api('/tickets');
   if (!allTickets) return;
@@ -1192,6 +1213,7 @@ async function renderServiceDesk(el) {
             <span style="font-weight:700;font-size:.88rem;color:var(--blue)">${t.id}</span>
             <span style="font-size:.68rem;font-weight:700;background:${pm.bg};color:${pm.color};border-radius:4px;padding:1px 7px">${pm.label}</span>
             <span style="font-size:.68rem;font-weight:700;background:${sm.bg};color:${sm.color};border-radius:4px;padding:1px 7px">${sm.dot} ${t.status.replace('_',' ')}</span>
+            ${tkUnread(t)?`<span title="New reply" style="display:inline-flex;align-items:center;gap:4px;font-size:.64rem;font-weight:800;background:var(--danger,#dc2626);color:#fff;border-radius:20px;padding:1px 8px">● New reply</span>`:''}
           </div>
           <div style="font-size:.88rem;font-weight:600;color:var(--navy);margin-top:6px">${h(t.subject)}</div>
           <div style="font-size:.74rem;color:var(--text-muted);margin-top:3px">
@@ -1208,9 +1230,16 @@ async function renderServiceDesk(el) {
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           <button class="btn btn-primary btn-sm" ${dataAct('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
           <button class="btn btn-secondary btn-sm" ${dataAct('reopenTicket', t.id)}>↩ Reopen</button>
+        </div>` : t.status==='CLOSED' ? `
+        <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;align-items:flex-end">
+          ${tkReopenable(t)
+            ? `<button class="btn btn-secondary btn-sm" ${dataAct('reopenTicket', t.id)}>↩ Reopen</button>
+               <div style="font-size:.64rem;color:var(--text-muted);text-align:right">${tkReopenHoursLeft(t)}h left to reopen</div>`
+            : `<button class="btn btn-secondary btn-sm" ${dataAct('raiseFollowUpTicket', t.id)}>+ New ticket</button>
+               <div style="font-size:.64rem;color:var(--text-muted);text-align:right;max-width:130px">Closed &gt; 48h ago</div>`}
         </div>` : `
         <div style="flex-shrink:0;font-size:.72rem;color:var(--text-muted);text-align:right;max-width:120px">
-          ${t.status==='CLOSED'?'Closed':'Being handled by support team'}
+          Being handled by support team
         </div>`}
       </div>
     </div>`;
@@ -1372,57 +1401,145 @@ async function viewTicketModal(id) {
       <div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:12px">Loading…</div>
     </div>
     ${t.status!=='CLOSED'?`
-    <div style="display:flex;gap:8px">
+    <div id="ticket-att-chip" style="margin-bottom:6px"></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="file" id="ticket-file" style="display:none"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
+        ${dataChangeEl('ticketFilePicked')}>
+      <button class="btn btn-secondary" title="Attach a file (max 1.5 MB)" ${dataAct('ticketAttachClick')} style="padding:9px 12px">📎</button>
       <input type="text" id="ticket-chat-input" maxlength="2000" placeholder="Write a message…"
         style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:.85rem;outline:none"
         ${dataEnter('postTicketComment', t.id)}>
       <button class="btn btn-primary" ${dataAct('postTicketComment', t.id)}>Send</button>
-    </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">Ticket closed — conversation is read-only</div>`}`,
+    </div>`:`<div style="font-size:.76rem;color:var(--text-muted);text-align:center;padding:6px">
+      Ticket closed — conversation is read-only${tkReopenable(t)?` · you can reopen it for ${tkReopenHoursLeft(t)}h more`:''}
+    </div>`}`,
     `${isRaiserRole && t.status==='RESOLVED' ? `
       <button class="btn btn-primary" ${dataActClose('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
       <button class="btn btn-secondary" ${dataActClose('reopenTicket', t.id)}>↩ Reopen</button>` : ''}
+     ${isRaiserRole && t.status==='CLOSED' ? (tkReopenable(t)
+       ? `<button class="btn btn-secondary" ${dataActClose('reopenTicket', t.id)}>↩ Reopen</button>`
+       : `<button class="btn btn-primary" ${dataActClose('raiseFollowUpTicket', t.id)}>+ Raise a new ticket</button>`) : ''}
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 
+  APP._tkAtt = null;
   loadTicketChat(id);
 }
 
 const RAISER_ROLES_SET = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'];
 
+// Render one comment's attachment (image inline, everything else as a download chip).
+function tkAttachmentHtml(c, onDark) {
+  if (!c.attachment_name || !c.attachment_data) return '';
+  const type = c.attachment_type || 'application/octet-stream';
+  const url  = `data:${type};base64,${c.attachment_data}`;
+  const name = h(c.attachment_name);
+  if (type.indexOf('image/') === 0) {
+    return `<a href="${url}" target="_blank" rel="noopener" title="${name}" style="display:block;margin-top:6px">
+      <img src="${url}" alt="${name}" style="max-width:220px;max-height:180px;border-radius:8px;display:block"></a>`;
+  }
+  const chipCol = onDark ? 'rgba(255,255,255,.18)' : 'var(--surface-2,#eef2f7)';
+  const txtCol  = onDark ? '#fff' : 'var(--blue,#2563eb)';
+  return `<a href="${url}" download="${name}" style="display:inline-flex;align-items:center;gap:6px;margin-top:6px;background:${chipCol};color:${txtCol};border-radius:8px;padding:6px 10px;font-size:.78rem;font-weight:600;text-decoration:none;max-width:220px">
+    📎 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span></a>`;
+}
+
 async function loadTicketChat(ticketId) {
   const wrap = document.getElementById('ticket-chat');
   if (!wrap) return;
   const comments = await api(`/tickets/${ticketId}/comments`).catch(()=>[]) || [];
-  const fmtDT = s => { const d = new Date((s||'').replace(' ','T')+'Z'); return isNaN(d) ? (s||'') : d.toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); };
-  if (!comments.length) {
-    wrap.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:12px">No messages yet — start the conversation below.</div>';
-    return;
-  }
-  wrap.innerHTML = comments.map(c => {
+  const t = APP._sdTicketsById?.[ticketId] || {};
+  const fmtDT = s => { const d = new Date(tkParseTs(s)); return tkParseTs(s) ? d.toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : (s||''); };
+
+  // Weave the message bubbles with synthesized lifecycle events, ordered by time.
+  const items = [];
+  if (t.created_at)  items.push({ kind:'evt', ic:'🎫', text:`Ticket raised${t.raiser_name?` by ${h(t.raiser_name)}`:''}`, at:tkParseTs(t.created_at), time:fmtDT(t.created_at) });
+  comments.forEach(c => items.push({ kind:'msg', c, at:tkParseTs(c.created_at), time:fmtDT(c.created_at) }));
+  if (t.resolved_at) items.push({ kind:'evt', ic:'🟢', text:'Marked resolved by Smart Pantry Support', at:tkParseTs(t.resolved_at), time:fmtDT(t.resolved_at) });
+  if (t.closed_at)   items.push({ kind:'evt', ic:'⚫', text:'Ticket closed', at:tkParseTs(t.closed_at), time:fmtDT(t.closed_at) });
+  items.sort((a,b)=> a.at - b.at);
+
+  wrap.innerHTML = items.map(it => {
+    if (it.kind === 'evt') {
+      return `<div style="align-self:center;display:flex;align-items:center;gap:6px;font-size:.7rem;color:var(--text-muted);background:var(--surface-2,#f1f3f6);border-radius:20px;padding:3px 12px;margin:2px 0">
+        <span>${it.ic}</span><b style="font-weight:600">${it.text}</b><span style="opacity:.7">· ${it.time}</span></div>`;
+    }
+    const c = it.c;
     const mine = c.author_id === APP.user?.sub;
     const isSupportAuthor = !RAISER_ROLES_SET.includes(c.author_role);
-    const tag = isSupportAuthor ? '🛠 Support' : '🙋 Requester';
+    const who = mine
+      ? 'You'
+      : (isSupportAuthor
+          ? (c.author_name ? `${h(c.author_name)} · Smart Pantry Support` : 'Smart Pantry Support')
+          : h(c.author_name || 'Requester'));
     const bubbleBg = mine ? 'var(--primary)' : (isSupportAuthor ? '#eef2ff' : '#f3f4f6');
     const textCol  = mine ? '#fff' : 'var(--text)';
+    const att = tkAttachmentHtml(c, mine);
+    const msg = c.message ? `<div style="white-space:pre-wrap;word-break:break-word">${h(c.message)}</div>` : '';
     return `
     <div style="display:flex;flex-direction:column;align-items:${mine?'flex-end':'flex-start'}">
       <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:2px;padding:0 4px">
-        <b style="color:${isSupportAuthor?'#4f46e5':'#b45309'}">${h(c.author_name)}</b> · ${tag} · ${fmtDT(c.created_at)}
+        <b style="color:${mine?'var(--primary)':(isSupportAuthor?'#4f46e5':'#b45309')}">${who}</b> · ${it.time}
       </div>
-      <div style="max-width:82%;background:${bubbleBg};color:${textCol};border-radius:${mine?'12px 12px 3px 12px':'12px 12px 12px 3px'};padding:8px 12px;font-size:.83rem;line-height:1.5;white-space:pre-wrap;word-break:break-word">${h(c.message)}</div>
+      <div style="max-width:82%;background:${bubbleBg};color:${textCol};border-radius:${mine?'12px 12px 3px 12px':'12px 12px 12px 3px'};padding:8px 12px;font-size:.83rem;line-height:1.5">${msg}${att}</div>
     </div>`;
-  }).join('');
+  }).join('') || '<div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:12px">No messages yet — start the conversation below.</div>';
   wrap.scrollTop = wrap.scrollHeight;
+  tkMarkSeen(ticketId);
+}
+
+// ── Attachment picker (composer) ──
+const TK_ATT_MAX = 1.5 * 1024 * 1024; // 1.5 MB raw file
+function ticketAttachClick() { document.getElementById('ticket-file')?.click(); }
+function clearTicketAtt() {
+  APP._tkAtt = null;
+  const f = document.getElementById('ticket-file'); if (f) f.value = '';
+  const chip = document.getElementById('ticket-att-chip'); if (chip) chip.innerHTML = '';
+}
+function ticketFilePicked(el) {
+  const file = el?.files?.[0];
+  if (!file) return;
+  if (file.size > TK_ATT_MAX) {
+    showToast('That file is too large — please keep attachments under 1.5 MB.', 'error');
+    el.value = ''; return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const data = String(reader.result || '').split(',')[1] || ''; // strip data:...;base64,
+    APP._tkAtt = { name: file.name, type: file.type || 'application/octet-stream', data };
+    const chip = document.getElementById('ticket-att-chip');
+    if (chip) chip.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--surface-2,#eef2f7);border-radius:8px;padding:4px 8px;font-size:.76rem;max-width:100%">
+      📎 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">${h(file.name)}</span>
+      <button class="link-btn" ${dataAct('clearTicketAtt')} title="Remove" style="border:none;background:none;cursor:pointer;color:var(--danger,#dc2626);font-weight:700">✕</button></span>`;
+  };
+  reader.onerror = () => showToast('Could not read that file.', 'error');
+  reader.readAsDataURL(file);
 }
 
 async function postTicketComment(ticketId) {
   const input = document.getElementById('ticket-chat-input');
-  const message = input?.value?.trim();
-  if (!message) return;
-  input.disabled = true;
-  const res = await api(`/tickets/${ticketId}/comments`, { method:'POST', body: JSON.stringify({ message }) });
-  input.disabled = false;
-  if (res) { input.value = ''; loadTicketChat(ticketId); }
-  input.focus();
+  const message = input?.value?.trim() || '';
+  const att = APP._tkAtt || null;
+  if (!message && !att) return;
+  if (input) input.disabled = true;
+  const res = await api(`/tickets/${ticketId}/comments`, { method:'POST', body: JSON.stringify({ message, attachment: att || undefined }) });
+  if (input) input.disabled = false;
+  if (res) { if (input) input.value = ''; clearTicketAtt(); loadTicketChat(ticketId); }
+  input?.focus();
+}
+
+// Closed > 48h ago: open a fresh ticket pre-filled with a reference to the old one.
+function raiseFollowUpTicket(oldId) {
+  const prev = APP._sdTicketsById?.[oldId] || {};
+  closeModal();
+  newTicketModal();
+  const subj = document.getElementById('tk-subject');
+  const desc = document.getElementById('tk-desc');
+  const pri  = document.getElementById('tk-priority');
+  if (subj) subj.value = prev.subject ? (/^re:/i.test(prev.subject) ? prev.subject : `Re: ${prev.subject}`) : '';
+  if (desc) desc.value = `Follow-up to ${oldId} (closed more than 48 hours ago).\n\n`;
+  if (pri && prev.priority) pri.value = prev.priority;
+  if (desc) { desc.focus(); desc.setSelectionRange(desc.value.length, desc.value.length); }
 }
 
 /* Raiser-only actions on a RESOLVED ticket */
@@ -1432,16 +1549,42 @@ async function confirmCloseTicket(id) {
 }
 
 async function reopenTicket(id) {
+  const t = APP._sdTicketsById?.[id] || {};
+  const window = (t.status==='CLOSED' && t.closed_at)
+    ? `<p style="margin:8px 0 0;font-size:.8rem;color:var(--text-muted)">This ticket was closed ${fmtDate(t.closed_at)}. Closed tickets can be reopened within 48 hours — about ${tkReopenHoursLeft(t)}h left.</p>`
+    : '';
   openModal(`Reopen Ticket ${id}`,
-    `<p style="margin:0;color:var(--text-muted)">The support team will be notified that the issue is not fully resolved. Reopen this ticket?</p>`,
+    `<p style="margin:0;color:var(--text-muted)">The support team will be notified that the issue is not fully resolved. Reopen this ticket?</p>${window}`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('confirmReopenTicket', id)}>↩ Reopen Ticket</button>`);
 }
 
 async function confirmReopenTicket(id) {
-  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ status:'OPEN' }) });
+  // Direct fetch so we can read the 48h-window 409 (the shared api() helper swallows it).
+  let res, data = {};
+  try {
+    res = await fetch(`/api/tickets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type':'application/json', ...(APP.token?{Authorization:`Bearer ${APP.token}`}:{}) },
+      body: JSON.stringify({ status:'OPEN' }),
+    });
+    data = await res.json().catch(()=>({}));
+  } catch {
+    closeModal(); showToast('Network error — please try again.', 'error'); return;
+  }
+  if (res.status === 401) { doLogout(); return; }
+  if (res.ok) { closeModal(); showToast(`Ticket ${id} reopened — support team notified`); navigate('service_desk'); return; }
+  if (data.code === 'E_REOPEN_WINDOW') {
+    // Past the 48h window — offer to raise a new, linked ticket instead.
+    openModal('Reopen window has passed',
+      `<p style="margin:0 0 10px;color:var(--text)">${h(data.error||'This ticket was closed more than 48 hours ago.')}</p>
+       <p style="margin:0;font-size:.82rem;color:var(--text-muted)">You can raise a new ticket — we'll pre-fill it with a reference to ${id}.</p>`,
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+       <button class="btn btn-primary" ${dataAct('raiseFollowUpTicket', id)}>+ Raise a new ticket</button>`);
+    return;
+  }
   closeModal();
-  if (res) { showToast(`Ticket ${id} reopened — support team notified`); navigate('service_desk'); }
+  showToast('Error: ' + (data.error || res.statusText), 'error');
 }
 
 /* ============================================================

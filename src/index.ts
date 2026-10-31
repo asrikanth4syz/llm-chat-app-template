@@ -3231,6 +3231,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
     // Link a support ticket to the order it was raised from (client order view).
     await env.DB.prepare("ALTER TABLE tickets ADD COLUMN order_id TEXT").run();
   } catch { /* exists */ }
+  // closed_at drives the 48-hour reopen window; attachments live on each comment.
+  for (const sql of [
+    "ALTER TABLE tickets ADD COLUMN closed_at TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_name TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_type TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_data TEXT",
+  ]) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS returns (
       id TEXT PRIMARY KEY, dc_id TEXT NOT NULL, order_id TEXT, client_id TEXT,
@@ -11373,7 +11380,9 @@ async function handleListTickets(request: Request, env: Env): Promise<Response> 
   }
   // Platform roles (super_admin, ops, finance, delivery…) see all tickets
 
-  const {results} = await env.DB.prepare(`SELECT t.*,c.name as client_name,u.name as raiser_name
+  const {results} = await env.DB.prepare(`SELECT t.*,c.name as client_name,u.name as raiser_name,
+    (SELECT MAX(created_at) FROM ticket_comments WHERE ticket_id=t.id) AS last_comment_at,
+    (SELECT author_role FROM ticket_comments WHERE ticket_id=t.id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_comment_role
     FROM tickets t LEFT JOIN clients c ON t.client_id=c.id LEFT JOIN users u ON t.raised_by=u.id
     ${where} ORDER BY t.created_at DESC`).bind(...binds).all();
   return json(results);
@@ -11432,14 +11441,23 @@ async function handleAddTicketComment(request: Request, env: Env, path: string):
   const denied = requireUser(user); if (denied) return denied;
   const ticketId = path.split("/")[3];
   if (!await canAccessTicket(env, user!, ticketId)) return json({error:"Forbidden"}, 403);
-  const body = await request.json() as {message?:string};
+  const body = await request.json() as {message?:string; attachment?:{name?:string;type?:string;data?:string}};
   const message = (body.message||"").trim();
-  if (!message) return json({error:"Message required"}, 400);
+  const att = body.attachment;
+  const hasAtt = !!(att && att.data && att.name);
+  if (!message && !hasAtt) return json({error:"Message or attachment required"}, 400);
   if (message.length > 2000) return json({error:"Message too long"}, 400);
+  let aName: string|null = null, aType: string|null = null, aData: string|null = null;
+  if (hasAtt) {
+    aData = String(att!.data);                               // base64 (no data: prefix)
+    if (aData.length > 2_200_000) return json({error:"Attachment is too large — please keep it under about 1.5 MB.", code:"E_ATTACH_SIZE"}, 400);
+    aName = String(att!.name).slice(0, 120);
+    aType = String(att!.type || "application/octet-stream").slice(0, 100);
+  }
 
   const cid = uid();
-  await env.DB.prepare("INSERT INTO ticket_comments (id,ticket_id,author_id,author_name,author_role,message) VALUES (?,?,?,?,?,?)")
-    .bind(cid, ticketId, user!.sub, user!.name, user!.role, message).run();
+  await env.DB.prepare("INSERT INTO ticket_comments (id,ticket_id,author_id,author_name,author_role,message,attachment_name,attachment_type,attachment_data) VALUES (?,?,?,?,?,?,?,?,?)")
+    .bind(cid, ticketId, user!.sub, user!.name, user!.role, message, aName, aType, aData).run();
 
   // Notify the other party
   const isRaiserSide = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role);
@@ -11461,29 +11479,46 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
   // confirm resolution (→ CLOSED) or reopen it (→ OPEN). Nothing else.
   const isRaiserRole = ["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(user!.role);
   if (isRaiserRole) {
-    const t = await env.DB.prepare("SELECT client_id,raised_by,status FROM tickets WHERE id=?").bind(id).first() as {client_id:string;raised_by:string;status:string}|null;
+    const t = await env.DB.prepare("SELECT client_id,raised_by,status,closed_at FROM tickets WHERE id=?").bind(id).first() as {client_id:string;raised_by:string;status:string;closed_at:string|null}|null;
     if (!t) return json({error:"Ticket not found"}, 404);
     const ownsTicket = ["vendor_admin","vendor_user"].includes(user!.role)
       ? t.raised_by === user!.sub
       : (user!.client_id ? t.client_id === user!.client_id : t.raised_by === user!.sub);
     if (!ownsTicket) return json({error:"Forbidden"}, 403);
-    if (t.status !== "RESOLVED" || body.priority || !["CLOSED","OPEN"].includes(body.status||"")) {
-      return json({error:"You can only confirm or reopen a resolved ticket"}, 403);
+    if (body.priority || !["CLOSED","OPEN"].includes(body.status||"")) {
+      return json({error:"You can only confirm or reopen a ticket"}, 403);
     }
-    if (body.status === "OPEN") {
+    // Confirm & close: only from RESOLVED.
+    if (body.status === "CLOSED") {
+      if (t.status !== "RESOLVED") return json({error:"Only a resolved ticket can be closed."}, 409);
+      await env.DB.prepare("UPDATE tickets SET status='CLOSED', closed_at=datetime('now') WHERE id=?").bind(id).run();
+      await audit(env, user, "UPDATE", "ticket", id, undefined, "raiser:CLOSED");
+      return json({id, status: "CLOSED"});
+    }
+    // Reopen: always allowed from RESOLVED; from CLOSED only within 48 hours of closing.
+    if (t.status === "RESOLVED") {
       await env.DB.prepare("UPDATE tickets SET status='OPEN', resolved_at=NULL WHERE id=?").bind(id).run();
-      await pushNotification(env, "ops_admin", `Ticket ${id} was REOPENED by ${user!.name} — resolution disputed`);
+    } else if (t.status === "CLOSED") {
+      const closedMs = t.closed_at ? Date.parse(String(t.closed_at).replace(" ", "T") + "Z") : NaN;
+      const withinWindow = Number.isFinite(closedMs) && (Date.now() - closedMs) <= 48 * 3600 * 1000;
+      if (!withinWindow) {
+        return json({ error: "This ticket was closed more than 48 hours ago. Please raise a new ticket — you can reference this one.", code: "E_REOPEN_WINDOW" }, 409);
+      }
+      await env.DB.prepare("UPDATE tickets SET status='OPEN', resolved_at=NULL, closed_at=NULL WHERE id=?").bind(id).run();
     } else {
-      await env.DB.prepare("UPDATE tickets SET status='CLOSED' WHERE id=?").bind(id).run();
+      return json({error:"Only a resolved or recently closed ticket can be reopened."}, 409);
     }
-    await audit(env, user, "UPDATE", "ticket", id, undefined, `raiser:${body.status}`);
-    return json({id, status: body.status});
+    await pushNotification(env, "ops_admin", `Ticket ${id} was REOPENED by ${user!.name}`);
+    await audit(env, user, "UPDATE", "ticket", id, undefined, "raiser:OPEN");
+    return json({id, status: "OPEN"});
   }
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.status) {
     updates.push("status=?"); vals.push(body.status);
     if (body.status==="RESOLVED") updates.push("resolved_at=datetime('now')");
+    if (body.status==="CLOSED") updates.push("closed_at=datetime('now')");
+    if (body.status==="OPEN") { updates.push("resolved_at=NULL"); updates.push("closed_at=NULL"); }
   }
   if (body.priority) { updates.push("priority=?"); vals.push(body.priority); }
   if (!updates.length) return json({error:"Nothing to update"}, 400);
