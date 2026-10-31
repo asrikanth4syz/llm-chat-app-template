@@ -1226,7 +1226,7 @@ async function renderServiceDesk(el) {
           <button class="btn btn-primary btn-sm" ${dataAct('viewTicketModal', t.id)}>💬 Open${tkUnread(t)?' <span style="background:#fff;color:var(--danger,#dc2626);border-radius:10px;padding:0 5px;font-size:.6rem;font-weight:800">new</span>':''}</button>
           ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-secondary btn-sm" ${dataAct('resolveTicket', t.id)}>✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" ${dataAct('startTicket', t.id)}>▶ Start</button>`:''}
-          ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('editTicketModal', t.id, t.subject||'', t.priority||'MEDIUM', t.status||'OPEN', (t.description||'').replace(/\n/g,' '))}>✎ Edit</button>`:''}
+          ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('retriageTicketModal', t.id, t.priority||'MEDIUM')}>⚑ Priority</button>`:''}
         </div>` : t.status==='RESOLVED' ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
           <button class="btn btn-primary btn-sm" ${dataAct('confirmCloseTicket', t.id)}>✓ Confirm &amp; Close</button>
@@ -1329,41 +1329,27 @@ async function saveTicket() {
   if (res) { showToast(`Ticket ${res.id} created`); navigate('service_desk'); }
 }
 
-function editTicketModal(id, subject, priority, status, description) {
-  openModal(`Edit Ticket ${id}`,
-    `<div class="form-group"><label>Subject</label><input type="text" id="etk-subject" value="${subject.replace(/"/g,'&quot;')}" placeholder="Brief summary"></div>
-     <div class="form-group"><label>Priority</label>
-       <select id="etk-priority">
-         <option value="LOW"${priority==='LOW'?' selected':''}>Low</option>
-         <option value="MEDIUM"${priority==='MEDIUM'?' selected':''}>Medium</option>
-         <option value="HIGH"${priority==='HIGH'?' selected':''}>High</option>
-       </select>
+// Staff re-triage: priority is the only ticket field this edits. Status is
+// driven by the Resolve/Start/close workflow buttons, and the subject /
+// description are the raiser's own words (the backend never persisted staff
+// edits to them), so neither belongs here.
+function retriageTicketModal(id, priority) {
+  const opt = (v, label) => `<option value="${v}"${priority===v?' selected':''}>${label}</option>`;
+  openModal(`Set priority · ${id}`,
+    `<div class="form-group"><label>Priority</label>
+       <select id="rtk-priority">${opt('LOW','Low')}${opt('MEDIUM','Medium')}${opt('HIGH','High')}</select>
      </div>
-     <div class="form-group"><label>Status</label>
-       <select id="etk-status">
-         <option value="OPEN"${status==='OPEN'?' selected':''}>Open</option>
-         <option value="IN_PROGRESS"${status==='IN_PROGRESS'?' selected':''}>In Progress</option>
-         <option value="RESOLVED"${status==='RESOLVED'?' selected':''}>Resolved</option>
-       </select>
-     </div>
-     <div class="form-group"><label>Description</label>
-       <textarea id="etk-desc" rows="4" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${description}</textarea>
-     </div>`,
+     <div style="font-size:.78rem;color:var(--text-muted)">Re-triage this ticket. To change its status, use Start / Resolve on the card.</div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-primary" ${dataAct('updateTicket', id)}>Save Changes</button>`);
+     <button class="btn btn-primary" ${dataAct('saveTicketPriority', id)}>Save priority</button>`);
 }
 
-async function updateTicket(id) {
-  const body = {
-    subject:     document.getElementById('etk-subject').value,
-    priority:    document.getElementById('etk-priority').value,
-    status:      document.getElementById('etk-status').value,
-    description: document.getElementById('etk-desc').value,
-  };
-  if (!body.subject) { showToast('Subject required','error'); return; }
-  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify(body) });
+async function saveTicketPriority(id) {
+  const priority = document.getElementById('rtk-priority')?.value;
+  if (!priority) return;
+  const res = await api(`/tickets/${id}`, { method:'PATCH', body: JSON.stringify({ priority }) });
   closeModal();
-  if (res) { showToast(`Ticket ${id} updated`); navigate('service_desk'); }
+  if (res) { showToast(`Ticket ${id} set to ${priority.toLowerCase()} priority`); navigate('service_desk'); }
 }
 
 async function resolveTicket(id) {
