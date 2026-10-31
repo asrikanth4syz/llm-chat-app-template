@@ -1281,6 +1281,7 @@ function ofShellHtml() {
   const canPreClose = ['IN_SHIPMENT', 'PARTIALLY_CLOSED'].includes(s);
   const canCancel = !['CLOSED', 'CANCELLED'].includes(s);
   const moreItems = [
+    canExport ? `<button ${dataAct('ofMoreDownload', id)}>📊 Delivery Breakdown</button>` : '',
     canExport ? `<button ${dataAct('ofMoreExcel', id)}>⬇ Export Excel</button>` : '',
     canExport ? `<button ${dataAct('ofMorePDF', id)}>⬇ Export PDF</button>` : '',
     canPreClose ? `<button ${dataAct('preCloseOrder', id)}>Pre-close order…</button>` : '',
@@ -1302,7 +1303,7 @@ function ofShellHtml() {
 }
 function ofTabsHtml() {
   const c = APP._ofCtx;
-  const labels = { overview: 'Overview', delivery: `Delivery${c.dueQty > 0 ? ` · ${c.dueLines.length} due` : ''}`, challans: `Challans (${(c.drill && c.drill.dcs || []).length})`, amend: 'Amendments', timeline: 'Timeline' };
+  const labels = { overview: 'Overview', delivery: `Delivery Breakdown${c.dueQty > 0 ? ` · ${c.dueLines.length} due` : ''}`, challans: `Challans (${(c.drill && c.drill.dcs || []).length})`, amend: 'Amendments', timeline: 'Timeline' };
   return OF_TABS.map(t => `<button role="tab" aria-selected="${c.tab === t}" ${dataAct('ofGoTab', t)}
     style="background:none;border:0;border-bottom:3px solid ${c.tab === t ? 'var(--primary)' : 'transparent'};padding:8px 14px;font-weight:600;color:${c.tab === t ? 'var(--primary)' : 'var(--text-muted)'};cursor:pointer;white-space:nowrap">${labels[t]}</button>`).join('');
 }
