@@ -1223,7 +1223,8 @@ async function renderServiceDesk(el) {
         </div>
         ${!isRaiserRole ? `
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-          ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-primary btn-sm" ${dataAct('resolveTicket', t.id)}>✓ Resolve</button>`:''}
+          <button class="btn btn-primary btn-sm" ${dataAct('viewTicketModal', t.id)}>💬 Open${tkUnread(t)?' <span style="background:#fff;color:var(--danger,#dc2626);border-radius:10px;padding:0 5px;font-size:.6rem;font-weight:800">new</span>':''}</button>
+          ${t.status==='OPEN'||t.status==='IN_PROGRESS'?`<button class="btn btn-secondary btn-sm" ${dataAct('resolveTicket', t.id)}>✓ Resolve</button>`:''}
           ${t.status==='OPEN'?`<button class="btn btn-secondary btn-sm" ${dataAct('startTicket', t.id)}>▶ Start</button>`:''}
           ${t.status!=='CLOSED'?`<button class="btn btn-secondary btn-sm" ${dataAct('editTicketModal', t.id, t.subject||'', t.priority||'MEDIUM', t.status||'OPEN', (t.description||'').replace(/\n/g,' '))}>✎ Edit</button>`:''}
         </div>` : t.status==='RESOLVED' ? `
@@ -1377,7 +1378,13 @@ async function startTicket(id) {
 
 /* Full ticket detail with chat-style comment thread — all roles */
 async function viewTicketModal(id) {
-  const t = APP._sdTicketsById?.[id];
+  let t = APP._sdTicketsById?.[id];
+  if (!t) {
+    // Opened from somewhere other than the Service Desk list (e.g. the client
+    // order view) — fetch the ticket set so the modal has the full record.
+    const all = await api('/tickets').catch(()=>null);
+    if (all) { APP._sdTicketsById = Object.fromEntries(all.map(x=>[x.id,x])); t = APP._sdTicketsById[id]; }
+  }
   if (!t) { showToast('Ticket not found', 'error'); return; }
   const isRaiserRole = ['client_admin','client_user','client_approver','vendor_admin','vendor_user'].includes(APP.user?.role);
   const pmColor = t.priority==='HIGH' ? '#dc2626' : t.priority==='MEDIUM' ? '#d97706' : '#2563eb';

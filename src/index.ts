@@ -11360,9 +11360,33 @@ async function handleRemoveClientCatalogItem(request: Request, env: Env, path: s
 // TICKETS
 // ════════════════════════════════════════════════════════════════════
 
+// Awaited self-heal for the Phase-2 ticket columns (closed_at + comment
+// attachments). ensureFeatureTables adds these too, but only runs via a
+// fire-and-forget waitUntil / a few unrelated routes, so a freshly deployed
+// DB can reach the ticket handlers before those ALTERs land — hitting
+// "no such column: closed_at" (500). Run them inline, idempotently, first.
+let _ticketColsReady = false;
+async function ensureTicketCols(env: Env): Promise<void> {
+  if (_ticketColsReady) return;
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ticket_comments (
+      id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, author_id TEXT NOT NULL,
+      author_name TEXT NOT NULL, author_role TEXT NOT NULL, message TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')))`).run();
+  } catch { /* exists */ }
+  for (const sql of [
+    "ALTER TABLE tickets ADD COLUMN closed_at TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_name TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_type TEXT",
+    "ALTER TABLE ticket_comments ADD COLUMN attachment_data TEXT",
+  ]) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
+  _ticketColsReady = true;
+}
+
 async function handleListTickets(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensureTicketCols(env);
 
   let where = "";
   const binds: string[] = [];
@@ -11428,6 +11452,7 @@ async function canAccessTicket(env: Env, user: JWTPayload, ticketId: string): Pr
 async function handleListTicketComments(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensureTicketCols(env);
   const ticketId = path.split("/")[3];
   if (!await canAccessTicket(env, user!, ticketId)) return json({error:"Forbidden"}, 403);
   try {
@@ -11439,6 +11464,7 @@ async function handleListTicketComments(request: Request, env: Env, path: string
 async function handleAddTicketComment(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensureTicketCols(env);
   const ticketId = path.split("/")[3];
   if (!await canAccessTicket(env, user!, ticketId)) return json({error:"Forbidden"}, 403);
   const body = await request.json() as {message?:string; attachment?:{name?:string;type?:string;data?:string}};
@@ -11470,6 +11496,7 @@ async function handleAddTicketComment(request: Request, env: Env, path: string):
 async function handlePatchTicket(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensureTicketCols(env);
   const id = path.split("/").pop()!;
 
   const body = await request.json() as {status?:string;priority?:string};

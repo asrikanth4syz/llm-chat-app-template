@@ -1892,7 +1892,7 @@ async function renderClientOrder(el) {
   const helpBody = tickets.length
     ? `<div class="u-muted" style="margin:4px 0 10px">You already have ${tickets.length === 1 ? 'a support request' : 'support requests'} open for this order:</div>
        <div style="display:grid;gap:8px;margin-bottom:10px">${tickets.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:8px;padding:9px 12px">
-         <div><button type="button" ${dataAct('navigate', 'service_desk')} style="background:none;border:0;padding:0;color:var(--primary);font-weight:700;cursor:pointer">${h(t.id)}</button> <span class="u-muted" style="font-size:.82rem">${h(t.subject || '')}</span></div>
+         <div><button type="button" ${dataAct('viewTicketModal', t.id)} style="background:none;border:0;padding:0;color:var(--primary);font-weight:700;cursor:pointer">${h(t.id)}</button> <span class="u-muted" style="font-size:.82rem">${h(t.subject || '')}</span></div>
          <span class="badge" style="font-size:.7rem">${h(t.status || 'OPEN')}</span></div>`).join('')}</div>
        <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', id, 'support')}>Contact support</button><button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button></div>`
     : `<div class="u-muted" style="margin:4px 0 10px">Questions about a late or missing item? Your account team can check it.</div>
