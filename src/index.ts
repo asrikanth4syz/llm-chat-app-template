@@ -10653,18 +10653,6 @@ async function handleCorrectDelivery(request: Request, env: Env, path: string): 
   const { results: dcItems } = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(dcId).all() as { results: Record<string, unknown>[] };
   const bySku = new Map(dcItems.map(d => [d.sku as string, d]));
 
-  // Order-wide caps: ordered per sku, and what's already delivered on OTHER challans.
-  const orderCap: Record<string, number> = {};
-  const deliveredElsewhere: Record<string, number> = {};
-  if (dc.order_id) {
-    const { results: oItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as { results: Record<string, unknown>[] };
-    for (const oi of oItems) orderCap[oi.sku as string] = Number(oi.qty) || 0;
-    const { results: delRows } = await env.DB.prepare(
-      "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.dc_id!=? AND dc2.status!='CANCELLED' GROUP BY di.sku"
-    ).bind(dc.order_id, dcId).all() as { results: Record<string, unknown>[] };
-    for (const r of delRows) deliveredElsewhere[r.sku as string] = Number(r.del) || 0;
-  }
-
   const clientId = dc.order_id
     ? ((await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(dc.order_id).first() as Record<string, string> | null)?.client_id || null)
     : null;
@@ -10679,10 +10667,10 @@ async function handleCorrectDelivery(request: Request, env: Env, path: string): 
     const newQty = Math.round(Number(req.qty_delivered));
     if (!Number.isFinite(newQty) || newQty < 0) return json({ error: `Invalid quantity for ${name}` }, 400);
     if (newQty === oldQty) continue;
+    // Match the delivery engine: delivered is capped only at what was dispatched on
+    // this challan (an over-pick beyond the ordered qty is recorded in full; the
+    // reconciliation views display it capped at ordered and flag the surplus).
     if (newQty > dispatched) return json({ error: `${name}: delivered (${newQty}) cannot exceed the ${dispatched} dispatched on this challan`, code: "EXCEEDS_DISPATCHED" }, 400);
-    if (orderCap[req.sku] != null && (deliveredElsewhere[req.sku] || 0) + newQty > orderCap[req.sku]) {
-      return json({ error: `${name}: total delivered (${(deliveredElsewhere[req.sku] || 0) + newQty}) would exceed the ${orderCap[req.sku]} ordered`, code: "EXCEEDS_ORDERED" }, 400);
-    }
     const delta = newQty - oldQty;
     await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?").bind(newQty, dcId, req.sku).run();
     // Warehouse ledger: a higher delivered qty deducts more stock (and releases more

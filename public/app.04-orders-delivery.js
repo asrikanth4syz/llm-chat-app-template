@@ -1579,7 +1579,7 @@ function correctDeliveryModal(dcId) {
     </tr>`;
   }).join('');
   openModal(`Correct delivered qty · ${h(dc.dc_number || dc.id)}`,
-    `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Fix a mis-keyed delivered quantity. Delivered can't exceed the dispatched qty on this challan, and the order total can't exceed what was ordered. Warehouse stock and the client's store inventory adjust automatically, and the change is logged.</div>
+    `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Fix a mis-keyed delivered quantity. Delivered can't exceed the <b>dispatched</b> qty on this challan; an over-delivery beyond what was ordered is allowed and recorded in full (reconciliation flags the surplus). Warehouse stock and the client's store inventory adjust automatically, and the change is logged.</div>
      <div style="overflow:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th></tr></thead><tbody>${rows}</tbody></table></div>
      <div class="form-group" style="margin-top:12px"><label>Reason (required)</label>
        <textarea id="cd-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. delivered qty mis-keyed at confirmation — corrected to actual"></textarea></div>`,

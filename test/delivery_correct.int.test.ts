@@ -85,11 +85,14 @@ describe("delivered-qty correction — guards", () => {
     expect((await res.json() as any).code).toBe("EXCEEDS_DISPATCHED");
   });
 
-  it("rejects a total above what was ordered", async () => {
-    await db().prepare("UPDATE order_items SET qty=250 WHERE id='oi1'").run(); // ordered 250, dispatched still 288
-    const res = await correct("dc1", { items: [{ sku: "YB-PROT", qty_delivered: 288 }], reason: "x" }, opsTok);
-    expect(res.status).toBe(400);
-    expect((await res.json() as any).code).toBe("EXCEEDS_ORDERED");
+  it("allows an over-delivery beyond ordered, as long as it is within dispatched", async () => {
+    await db().prepare("UPDATE order_items SET qty=200 WHERE id='oi1'").run(); // ordered 200, dispatched 288
+    const res = await correct("dc1", { items: [{ sku: "YB-PROT", qty_delivered: 288 }], reason: "over-delivery accepted by client" }, opsTok);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.applied[0]).toMatchObject({ old: 200, new: 288, delta: 88 });
+    const di = await db().prepare("SELECT qty_delivered FROM dc_items WHERE id='di1'").first() as any;
+    expect(di.qty_delivered).toBe(288); // recorded in full even though ordered was 200
   });
 
   it("requires a written reason", async () => {
