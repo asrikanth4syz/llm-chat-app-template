@@ -1486,7 +1486,7 @@ function ofTabChallans() {
     const expand = open ? `<div style="grid-column:1/-1;background:var(--bg,var(--surface-2));border-radius:10px;padding:10px 12px;margin-top:8px">
       <table class="table" style="font-size:.8rem;margin:0"><thead><tr><th>Item</th><th>SKU</th><th class="u-right">Qty</th></tr></thead>
         <tbody>${pv.map(x => `<tr><td>${h(x.name || x.sku)}</td><td style="font-family:monospace;color:var(--text-muted)">${h(x.sku)}</td><td class="u-right">${Number((useDel ? x.qty_delivered : x.qty_ordered) || 0).toLocaleString('en-IN')}</td></tr>`).join('')}</tbody></table>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap"><span class="u-muted" style="font-size:.78rem">Showing ${pv.length} of ${nItems} items</span>${nItems > 3 ? `<button class="btn btn-primary btn-sm" ${dataAct('ofChallanPanel', ref)}>View all ${nItems} items →</button>` : ''}</div></div>` : '';
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap"><span class="u-muted" style="font-size:.78rem">Showing ${pv.length} of ${nItems} items</span><span style="display:flex;gap:8px">${useDel && ofCanCorrect() ? `<button class="btn btn-secondary btn-sm" ${dataAct('correctDeliveryModal', dc.id)}>⚖ Correct delivered qty</button>` : ''}${nItems > 3 ? `<button class="btn btn-primary btn-sm" ${dataAct('ofChallanPanel', ref)}>View all ${nItems} items →</button>` : ''}</span></div></div>` : '';
     return `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:6px 14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)">
       <div><b style="color:var(--navy)">${h(ref)}</b>
         <span style="margin-left:6px;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:${tone(dc.status)}22;color:${tone(dc.status)}">${dc.status}</span>
@@ -1559,6 +1559,50 @@ function ofBackToOrders() { navigate('orders', { tab: 'queue' }); }
 // Export handlers reuse the drilldown read-model (APP._dd) set by renderOrderFull.
 function ofMoreExcel(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); ddExportCSV(); }
 function ofMorePDF(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); ddExportPDF(); }
+
+// ---- Delivered-quantity correction (super-admin / ops-admin) -----------------
+// A guarded data-fix for a mis-keyed delivered qty on a DELIVERED challan. The
+// backend keeps the delivered≤dispatched≤ordered invariants, moves stock and the
+// client's store inventory by the delta, and re-evaluates the order's close state.
+function ofCanCorrect() { return ['super_admin', 'ops_admin'].includes(APP.user?.role); }
+function correctDeliveryModal(dcId) {
+  const dc = (APP._dd?.dcs || []).find(x => x.id === dcId || x.dc_number === dcId);
+  if (!dc) { showToast('Challan not found', 'error'); return; }
+  if (dc.status !== 'DELIVERED') { showToast('Only a delivered challan can be corrected', 'error'); return; }
+  const rows = (dc.items || []).map(it => {
+    const disp = Number(it.qty_ordered) || 0, del = Number(it.qty_delivered) || 0;
+    return `<tr>
+      <td><b>${h(it.name || it.sku)}</b><div class="u-subtiny" style="font-family:monospace;color:var(--text-muted)">${h(it.sku)}</div></td>
+      <td class="u-right" style="font-variant-numeric:tabular-nums">${disp.toLocaleString('en-IN')}</td>
+      <td class="u-right"><input type="number" min="0" max="${disp}" value="${del}" data-cd-sku="${h(it.sku)}" data-cd-old="${del}"
+        style="width:88px;text-align:right;padding:5px 8px;border:1px solid var(--border);border-radius:6px"></td>
+    </tr>`;
+  }).join('');
+  openModal(`Correct delivered qty · ${h(dc.dc_number || dc.id)}`,
+    `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Fix a mis-keyed delivered quantity. Delivered can't exceed the dispatched qty on this challan, and the order total can't exceed what was ordered. Warehouse stock and the client's store inventory adjust automatically, and the change is logged.</div>
+     <div style="overflow:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th></tr></thead><tbody>${rows}</tbody></table></div>
+     <div class="form-group" style="margin-top:12px"><label>Reason (required)</label>
+       <textarea id="cd-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. delivered qty mis-keyed at confirmation — corrected to actual"></textarea></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveDeliveryCorrection', dc.id)}>Save correction</button>`);
+}
+async function saveDeliveryCorrection(dcId) {
+  const reason = document.getElementById('cd-reason')?.value?.trim();
+  if (!reason) { showToast('Please enter a reason for the correction', 'error'); return; }
+  const items = [];
+  document.querySelectorAll('[data-cd-sku]').forEach(inp => {
+    const n = Math.round(Number(inp.value)), old = Number(inp.dataset.cdOld) || 0;
+    if (Number.isFinite(n) && n >= 0 && n !== old) items.push({ sku: inp.dataset.cdSku, qty_delivered: n });
+  });
+  if (!items.length) { showToast('No quantities changed', 'error'); return; }
+  const res = await api(`/delivery-challans/${dcId}/correct`, { method: 'POST', body: JSON.stringify({ items, reason }) });
+  if (res && res.ok) {
+    closeModal();
+    showToast(`Corrected ${res.applied.length} line${res.applied.length > 1 ? 's' : ''}${res.order_status ? ` · order ${res.order_status.replace('_', ' ').toLowerCase()}` : ''}`);
+    const main = document.getElementById('main-content');
+    if (main && APP._ofCtx?.id) renderOrderFull(main);
+  }
+}
 
 // ⋯ More menu open/close (keyboard + outside-click aware).
 function orderMoreToggle(el) {

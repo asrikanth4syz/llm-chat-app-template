@@ -6584,6 +6584,7 @@ export default {
       if (path.match(/^\/api\/delivery-challans\/[^/]+$/)           && method==="GET")  return handleGetDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver$/)  && method==="POST") return handleDeliverDC(request,env,path);
+      if (path.match(/^\/api\/delivery-challans\/[^/]+\/correct$/)  && method==="POST") return handleCorrectDelivery(request,env,path);
       if (path==="/api/delivery-approvals"                          && method==="GET")  return handleListDeliveryApprovals(request,env);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/deliver-decision$/) && method==="POST") return handleDeliveryDecision(request,env,path);
 
@@ -10626,6 +10627,115 @@ async function handleDeliveryDecision(request: Request, env: Env, path: string):
   }
 
   return json({error:"decision must be 'approve' or 'reject'"}, 400);
+}
+
+// One-time correction of the recorded delivered quantity on an already-DELIVERED
+// challan — a data-fix tool for keying errors, gated to super-admin / ops-admin.
+// It preserves the same invariants the normal delivery path enforces (delivered ≤
+// dispatched on the line, and cumulative delivered ≤ ordered across the order),
+// moves the warehouse stock ledger and the client's store inventory by the delta,
+// writes an auditable stock_movement, and re-evaluates the order's close status
+// (a downward fix can re-open a CLOSED order). A written reason is mandatory.
+async function handleCorrectDelivery(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "ops_admin"].includes(user!.role)) return json({ error: "Only a super admin or ops admin may correct a delivered quantity" }, 403);
+  const dcId = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { items?: { sku: string; qty_delivered: number }[]; reason?: string };
+  const reason = (body.reason || "").trim();
+  if (!reason) return json({ error: "A written reason is required to correct a delivered quantity", code: "REASON_REQUIRED" }, 400);
+  if (!Array.isArray(body.items) || !body.items.length) return json({ error: "No corrections provided" }, 400);
+
+  const dc = await env.DB.prepare("SELECT * FROM delivery_challans WHERE id=?").bind(dcId).first() as Record<string, unknown> | null;
+  if (!dc) return json({ error: "Delivery challan not found" }, 404);
+  if (dc.status !== "DELIVERED") return json({ error: "Only a delivered challan's quantities can be corrected", code: "NOT_DELIVERED" }, 409);
+
+  const { results: dcItems } = await env.DB.prepare("SELECT * FROM dc_items WHERE dc_id=?").bind(dcId).all() as { results: Record<string, unknown>[] };
+  const bySku = new Map(dcItems.map(d => [d.sku as string, d]));
+
+  // Order-wide caps: ordered per sku, and what's already delivered on OTHER challans.
+  const orderCap: Record<string, number> = {};
+  const deliveredElsewhere: Record<string, number> = {};
+  if (dc.order_id) {
+    const { results: oItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as { results: Record<string, unknown>[] };
+    for (const oi of oItems) orderCap[oi.sku as string] = Number(oi.qty) || 0;
+    const { results: delRows } = await env.DB.prepare(
+      "SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) del FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND di.dc_id!=? AND dc2.status!='CANCELLED' GROUP BY di.sku"
+    ).bind(dc.order_id, dcId).all() as { results: Record<string, unknown>[] };
+    for (const r of delRows) deliveredElsewhere[r.sku as string] = Number(r.del) || 0;
+  }
+
+  const clientId = dc.order_id
+    ? ((await env.DB.prepare("SELECT client_id FROM orders WHERE id=?").bind(dc.order_id).first() as Record<string, string> | null)?.client_id || null)
+    : null;
+
+  const applied: { sku: string; name: string; old: number; new: number; delta: number }[] = [];
+  for (const req of body.items) {
+    const line = bySku.get(req.sku);
+    if (!line) return json({ error: `Item ${req.sku} is not on this challan` }, 400);
+    const name = (line.name as string) || req.sku;
+    const dispatched = Number(line.qty_ordered) || 0;
+    const oldQty = Number(line.qty_delivered) || 0;
+    const newQty = Math.round(Number(req.qty_delivered));
+    if (!Number.isFinite(newQty) || newQty < 0) return json({ error: `Invalid quantity for ${name}` }, 400);
+    if (newQty === oldQty) continue;
+    if (newQty > dispatched) return json({ error: `${name}: delivered (${newQty}) cannot exceed the ${dispatched} dispatched on this challan`, code: "EXCEEDS_DISPATCHED" }, 400);
+    if (orderCap[req.sku] != null && (deliveredElsewhere[req.sku] || 0) + newQty > orderCap[req.sku]) {
+      return json({ error: `${name}: total delivered (${(deliveredElsewhere[req.sku] || 0) + newQty}) would exceed the ${orderCap[req.sku]} ordered`, code: "EXCEEDS_ORDERED" }, 400);
+    }
+    const delta = newQty - oldQty;
+    await env.DB.prepare("UPDATE dc_items SET qty_delivered=? WHERE dc_id=? AND sku=?").bind(newQty, dcId, req.sku).run();
+    // Warehouse ledger: a higher delivered qty deducts more stock (and releases more
+    // reserved); a lower one puts it back. Mirrors the deliver path (stock-=qty).
+    await env.DB.prepare("UPDATE inventory SET stock=MAX(0,stock-?), reserved=MAX(0,reserved-?) WHERE sku=?").bind(delta, delta, req.sku).run();
+    await env.DB.prepare("INSERT INTO stock_movements (id,sku,type,qty_change,reference_id,reference_type,note,actor) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), req.sku, "DELIVERY_CORRECTION", -delta, dcId, "delivery_challan", `Correction: ${name} delivered ${oldQty}→${newQty} on DC ${dc.dc_number || dcId}. ${reason}`, user!.name).run();
+    // Client store inventory moves by the same delta.
+    if (clientId) {
+      await env.DB.prepare("UPDATE client_inventory SET qty_on_hand=MAX(0,qty_on_hand+?), updated_at=datetime('now') WHERE client_id=? AND sku=?").bind(delta, clientId, req.sku).run();
+    }
+    applied.push({ sku: req.sku, name, old: oldQty, new: newQty, delta });
+  }
+
+  if (!applied.length) return json({ error: "No changes to apply" }, 400);
+
+  // Refresh the challan's stored total.
+  const tot = await env.DB.prepare("SELECT COALESCE(SUM(qty_delivered),0) q FROM dc_items WHERE dc_id=?").bind(dcId).first() as { q: number };
+  await env.DB.prepare("UPDATE delivery_challans SET delivered_qty=? WHERE id=?").bind(tot.q, dcId).run();
+
+  // Re-evaluate the order's close status across ALL challans.
+  let orderStatus: string | undefined;
+  if (dc.order_id) {
+    const { results: orderItems } = await env.DB.prepare("SELECT sku, qty FROM order_items WHERE order_id=?").bind(dc.order_id).all() as { results: Record<string, unknown>[] };
+    let allDelivered = true, anyDelivered = false;
+    for (const oi of orderItems) {
+      const row = await env.DB.prepare("SELECT COALESCE(SUM(di.qty_delivered),0) total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND dc2.status!='CANCELLED' AND di.sku=?").bind(dc.order_id, oi.sku).first() as Record<string, unknown> | null;
+      const del = Number(row?.total) || 0;
+      if (del < (Number(oi.qty) || 0)) allDelivered = false;
+      if (del > 0) anyDelivered = true;
+    }
+    const prev = (await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(dc.order_id).first() as { status?: string } | null)?.status || "";
+    if (prev !== "CANCELLED") {
+      if (allDelivered && prev !== "CLOSED") {
+        await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=?").bind(dc.order_id).run();
+        await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)").bind(uid(), dc.order_id, prev || null, "CLOSED", user!.sub, user!.name, `Delivered-qty correction on DC ${dc.dc_number || dcId}`).run();
+        await env.DB.prepare("UPDATE delivery_challans SET status='CANCELLED' WHERE order_id=? AND status='SCHEDULED'").bind(dc.order_id).run();
+        orderStatus = "CLOSED";
+      } else if (!allDelivered && anyDelivered && prev !== "PARTIALLY_CLOSED") {
+        // A downward correction can re-open a previously CLOSED order.
+        await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',closed_at=NULL,updated_at=datetime('now') WHERE id=?").bind(dc.order_id).run();
+        await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)").bind(uid(), dc.order_id, prev || null, "PARTIALLY_CLOSED", user!.sub, user!.name, `Delivered-qty correction on DC ${dc.dc_number || dcId}`).run();
+        orderStatus = "PARTIALLY_CLOSED";
+      } else {
+        orderStatus = prev;
+      }
+    } else {
+      orderStatus = prev;
+    }
+  }
+
+  await audit(env, user, "DELIVERY_CORRECTION", "delivery_challan", dcId, undefined, JSON.stringify({ applied, reason }));
+  return json({ ok: true, dc_id: dcId, applied, order_status: orderStatus });
 }
 
 // NOTE: the legacy proportional "partial delivery" engine (POST /delivery-challans/:id/
