@@ -6505,6 +6505,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/client-view$/)  && method==="GET")  return handleClientOrderView(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reprice$/)      && method==="POST") return handleRepriceOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend$/)         && method==="POST") return handleAmendOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/adjust-quantity$/) && method==="POST") return handleAdjustOrderQuantity(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
@@ -8902,6 +8903,91 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   await pushNotification(env, "client_approver", `Order ${id} was changed (rev ${revision}) — your approval is needed`);
   await audit(env, user, "AMEND", "order", id, fromStatus, `rev:${revision},total:${grand_total},reason:${reason.slice(0, 80)}`);
   return json({ id, status: "PENDING_APPROVAL", revision, grand_total });
+}
+
+// POST /api/orders/:id/adjust-quantity — correct the ORDERED quantity on an order
+// whose fulfilment has already started (IN_SHIPMENT / PARTIALLY_CLOSED / CLOSED),
+// which the normal pre-dispatch amend flow refuses. Used to reconcile an order to
+// what was actually delivered (e.g. a client accepted an over-delivery, so the
+// order line should read the delivered qty). Unlike amend, it does NOT re-open
+// approval or re-pick — reservations are already settled post-dispatch. It only
+// re-prices the existing lines, re-evaluates the order's close state, and records
+// an amendment for audit. Body: { items:[{sku,qty}], reason }.
+async function handleAdjustOrderQuantity(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "ops_admin"].includes(user!.role)) return json({ error: "Only a super admin or ops admin may adjust a delivered order's quantity" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { items?: Array<{ sku: string; qty: number }>; reason?: string };
+  const reason = String(body.reason || "").trim();
+  if (!reason) return json({ error: "A written reason is required to adjust an order quantity", code: "REASON_REQUIRED" }, 400);
+  if (!body.items?.length) return json({ error: "No adjustments provided" }, 400);
+
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Order not found" }, 404);
+  const status = String(order.status);
+  if (["DRAFT", "CANCELLED"].includes(status)) return json({ error: `An order in ${status} cannot be adjusted this way` }, 400);
+  // Pre-dispatch orders belong to the normal amend flow (which re-approves/re-picks).
+  if (!["IN_SHIPMENT", "PARTIALLY_CLOSED", "CLOSED"].includes(status)) {
+    return json({ error: `This tool is for orders already in fulfilment. Order ${id} is ${status} — use Amend instead.`, code: "USE_AMEND" }, 400);
+  }
+
+  const { results: oldItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
+  const bySku = new Map(oldItems.map(i => [i.sku as string, i]));
+  const reqBySku = new Map(body.items.map(i => [String(i.sku), Math.round(Number(i.qty))]));
+
+  const applied: { sku: string; name: string; old: number; new: number }[] = [];
+  for (const [sku, qty] of reqBySku) {
+    const line = bySku.get(sku);
+    if (!line) return json({ error: `Item ${sku} is not on this order` }, 400);
+    if (!Number.isFinite(qty) || qty <= 0) return json({ error: `Quantity for ${line.name || sku} must be greater than zero` }, 400);
+    if (qty !== (Number(line.qty) || 0)) applied.push({ sku, name: String(line.name || sku), old: Number(line.qty) || 0, new: qty });
+  }
+  if (!applied.length) return json({ error: "No quantities changed" }, 400);
+
+  // Rebuild the full line-set with the new quantities (prices unchanged).
+  const newItems = oldItems.map(i => {
+    const nq = reqBySku.has(i.sku as string) ? reqBySku.get(i.sku as string)! : (Number(i.qty) || 0);
+    return { sku: i.sku as string, name: i.name as string, qty: nq, unit_price: Number(i.unit_price) || 0 };
+  });
+  const subtotal = newItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
+  const gst = await computeOrderGst(env, newItems);
+  const grand_total = subtotal + gst;
+  const revision = (Number(order.revision) || 1) + 1;
+
+  for (const it of newItems) {
+    await env.DB.prepare("UPDATE order_items SET qty=?, total=? WHERE order_id=? AND sku=?")
+      .bind(it.qty, it.qty * it.unit_price, id, it.sku).run();
+  }
+
+  // Re-evaluate close state against delivered-across-all-DCs (no re-approval).
+  let allDelivered = true, anyDelivered = false;
+  for (const it of newItems) {
+    const row = await env.DB.prepare("SELECT COALESCE(SUM(di.qty_delivered),0) total FROM dc_items di JOIN delivery_challans dc2 ON di.dc_id=dc2.id WHERE dc2.order_id=? AND dc2.status!='CANCELLED' AND di.sku=?").bind(id, it.sku).first() as Record<string, unknown> | null;
+    const del = Number(row?.total) || 0;
+    if (del < it.qty) allDelivered = false;
+    if (del > 0) anyDelivered = true;
+  }
+  let newStatus = status;
+  if (allDelivered) {
+    newStatus = "CLOSED";
+    await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status='CLOSED', revision=?, closed_at=COALESCE(closed_at,datetime('now')), updated_at=datetime('now') WHERE id=?")
+      .bind(subtotal, gst, grand_total, revision, id).run();
+  } else {
+    newStatus = anyDelivered ? "PARTIALLY_CLOSED" : status;
+    await env.DB.prepare("UPDATE orders SET subtotal=?, gst=?, grand_total=?, status=?, revision=?, closed_at=NULL, updated_at=datetime('now') WHERE id=?")
+      .bind(subtotal, gst, grand_total, newStatus, revision, id).run();
+  }
+
+  const beforeSnap = JSON.stringify(oldItems.map(i => ({ sku: i.sku, name: i.name, qty: i.qty, unit_price: i.unit_price })));
+  const afterSnap = JSON.stringify(newItems.map(i => ({ sku: i.sku, name: i.name, qty: i.qty, unit_price: i.unit_price })));
+  await env.DB.prepare(`INSERT INTO order_amendments (id,order_id,revision,actor_id,actor_name,reason,before_items,after_items,before_total,after_total,from_status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(uid(), id, revision, user!.sub, user!.name, `Post-delivery quantity adjustment — ${reason}`, beforeSnap, afterSnap, Number(order.grand_total) || 0, grand_total, status).run();
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, status, newStatus, user!.sub, user!.name, `Quantity adjusted post-delivery (rev ${revision}) — ${reason}`).run();
+  await audit(env, user, "ADJUST_QTY", "order", id, status, JSON.stringify({ applied, grand_total, reason: reason.slice(0, 80) }));
+  return json({ ok: true, id, status: newStatus, revision, grand_total, applied });
 }
 
 // GET /api/orders/:id/amendments — amendment history for an order (ops only).

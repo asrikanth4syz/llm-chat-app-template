@@ -1280,10 +1280,12 @@ function ofShellHtml() {
   const canExport = !['DRAFT', 'CANCELLED'].includes(s);
   const canPreClose = ['IN_SHIPMENT', 'PARTIALLY_CLOSED'].includes(s);
   const canCancel = !['CLOSED', 'CANCELLED'].includes(s);
+  const canAdjustQty = ofCanCorrect() && ['IN_SHIPMENT', 'PARTIALLY_CLOSED', 'CLOSED'].includes(s);
   const moreItems = [
     canExport ? `<button ${dataAct('ofMoreDownload', id)}>📊 Delivery Breakdown</button>` : '',
     canExport ? `<button ${dataAct('ofMoreExcel', id)}>⬇ Export Excel</button>` : '',
     canExport ? `<button ${dataAct('ofMorePDF', id)}>⬇ Export PDF</button>` : '',
+    canAdjustQty ? `<button ${dataAct('ofMoreAdjustQty', id)}>⚖ Adjust ordered qty…</button>` : '',
     canPreClose ? `<button ${dataAct('preCloseOrder', id)}>Pre-close order…</button>` : '',
     canCancel ? `<button class="d" ${dataAct('orderCancelDialog', id)}>Cancel order…</button>` : '',
   ].filter(Boolean).join('');
@@ -1601,6 +1603,48 @@ async function saveDeliveryCorrection(dcId) {
     showToast(`Corrected ${res.applied.length} line${res.applied.length > 1 ? 's' : ''}${res.order_status ? ` · order ${res.order_status.replace('_', ' ').toLowerCase()}` : ''}`);
     const main = document.getElementById('main-content');
     if (main && APP._ofCtx?.id) renderOrderFull(main);
+  }
+}
+
+// ---- Post-delivery ordered-quantity adjustment (super-admin / ops-admin) ------
+// For an in-fulfilment order the normal Amend refuses (it re-approves + re-picks):
+// re-price the existing lines to a corrected ordered qty — e.g. to match an
+// accepted over-delivery — and re-evaluate close state, without re-approval.
+function ofMoreAdjustQty(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); adjustOrderQtyModal(id); }
+function adjustOrderQtyModal(id) {
+  const lines = APP._dd?.lines || [];
+  if (!lines.length) { showToast('No order lines to adjust', 'error'); return; }
+  const rows = lines.map(l => {
+    const ord = Number(l.qty_ordered) || 0, del = Number(l.qty_delivered) || 0;
+    return `<tr>
+      <td><b>${h(l.name || l.sku)}</b><div class="u-subtiny" style="font-family:monospace;color:var(--text-muted)">${h(l.sku)}</div></td>
+      <td class="u-right" style="font-variant-numeric:tabular-nums">${del.toLocaleString('en-IN')}</td>
+      <td class="u-right"><input type="number" min="1" value="${ord}" data-aq-sku="${h(l.sku)}" data-aq-old="${ord}"
+        style="width:92px;text-align:right;padding:5px 8px;border:1px solid var(--border);border-radius:6px"></td>
+    </tr>`;
+  }).join('');
+  openModal(`Adjust ordered qty · ${h(id)}`,
+    `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Correct the ordered quantity on this in-fulfilment order — e.g. to match an accepted over-delivery. The order value and GST re-compute and the close status is re-evaluated. This does <b>not</b> re-open client approval or re-pick stock.</div>
+     <div style="overflow:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Delivered</th><th class="u-right">Ordered</th></tr></thead><tbody>${rows}</tbody></table></div>
+     <div class="form-group" style="margin-top:12px"><label>Reason (required)</label>
+       <textarea id="aq-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. client accepted over-delivery — order aligned to delivered qty"></textarea></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveOrderQtyAdjust', id)}>Save adjustment</button>`);
+}
+async function saveOrderQtyAdjust(id) {
+  const reason = document.getElementById('aq-reason')?.value?.trim();
+  if (!reason) { showToast('Please enter a reason for the adjustment', 'error'); return; }
+  const items = [];
+  document.querySelectorAll('[data-aq-sku]').forEach(inp => {
+    const n = Math.round(Number(inp.value)), old = Number(inp.dataset.aqOld) || 0;
+    if (Number.isFinite(n) && n > 0 && n !== old) items.push({ sku: inp.dataset.aqSku, qty: n });
+  });
+  if (!items.length) { showToast('No quantities changed', 'error'); return; }
+  const res = await api(`/orders/${id}/adjust-quantity`, { method: 'POST', body: JSON.stringify({ items, reason }) });
+  if (res && res.ok) {
+    closeModal();
+    showToast(`Order adjusted · ${res.status.replace('_', ' ').toLowerCase()} · ${fmt(res.grand_total)}`);
+    const main = document.getElementById('main-content'); if (main) renderOrderFull(main);
   }
 }
 
