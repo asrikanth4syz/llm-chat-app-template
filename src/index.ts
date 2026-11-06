@@ -3252,6 +3252,13 @@ async function fixCategoryNames(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE orders ADD COLUMN closed_at TEXT").run();
   } catch { /* column already exists */ }
+  // Monthly order index: per-client sequence within an index month, assigned at
+  // approval (index_manual=1 when an approver overrode the month or number).
+  for (const sql of [
+    "ALTER TABLE orders ADD COLUMN index_month TEXT",
+    "ALTER TABLE orders ADD COLUMN index_seq INTEGER",
+    "ALTER TABLE orders ADD COLUMN index_manual INTEGER DEFAULT 0",
+  ]) { try { await env.DB.prepare(sql).run(); } catch { /* exists */ } }
   for (const col of ["notes TEXT","visit_frequency TEXT","visit_day TEXT",
     "registration_type TEXT DEFAULT 'unregistered'","gstin TEXT","pan TEXT",
     "vendor_type TEXT DEFAULT 'non_food'","fssai_licence TEXT","fssai_expiry TEXT",
@@ -6509,6 +6516,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/index$/)        && method==="POST") return handleSetOrderIndex(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick-draft$/)   && method==="POST") return handleSavePickDraft(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/period$/)       && method==="POST") return handleSetOrderPeriod(request,env,path);
@@ -9051,13 +9059,54 @@ async function handleRejectAmendment(request: Request, env: Env, path: string): 
   return json({ id, status: restoreStatus, reverted: true, revision: order.revision });
 }
 
+// ── Monthly order index helpers ──────────────────────────────────────
+// YYYY-MM slice of a date string ('YYYY-MM-DD …'), or null.
+function ymOf(dt: string | null | undefined): string | null {
+  const m = String(dt || "").slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(m) ? m : null;
+}
+function nextYm(ym: string): string { let [y, m] = ym.split("-").map(Number); m++; if (m > 12) { m = 1; y++; } return `${y}-${String(m).padStart(2, "0")}`; }
+// Default index month: the delivery / need-by month when it falls in a later
+// month than the order was created (an advance order), else the created month.
+function orderDefaultIndexMonth(order: Record<string, unknown>): string {
+  const created = ymOf(order.created_at as string) || new Date().toISOString().slice(0, 7);
+  const need = ymOf(order.need_by_date as string) || ymOf(order.predicted_delivery_date as string);
+  return (need && need > created) ? need : created;
+}
+// Next per-client sequence in a month = max existing + 1. Cancelled orders keep
+// their index_seq, so a cancelled number is never reused (it leaves a gap).
+async function nextIndexSeq(env: Env, clientId: string, ym: string): Promise<number> {
+  const r = await env.DB.prepare("SELECT COALESCE(MAX(index_seq),0) m FROM orders WHERE client_id=? AND index_month=?").bind(clientId, ym).first() as { m: number } | null;
+  return (Number(r?.m) || 0) + 1;
+}
+// Assign the monthly index to an order. Staff may override the month and/or the
+// number; a duplicate (client, month, seq) is rejected. Returns the assignment,
+// or {error} on a duplicate. Auto path fills month/seq itself.
+async function assignOrderIndex(env: Env, order: Record<string, unknown>, opts: { month?: string; seq?: number; staff: boolean }): Promise<{ month: string; seq: number; manual: number } | { error: string }> {
+  const def = orderDefaultIndexMonth(order);
+  let month = def, manual = 0;
+  if (opts.staff && opts.month && /^\d{4}-\d{2}$/.test(opts.month)) { month = opts.month; if (month !== def) manual = 1; }
+  let seq: number;
+  if (opts.staff && opts.seq && Number(opts.seq) > 0) {
+    seq = Math.floor(Number(opts.seq));
+    const dup = await env.DB.prepare("SELECT 1 FROM orders WHERE client_id=? AND index_month=? AND index_seq=? AND id!=? LIMIT 1").bind(order.client_id, month, seq, order.id).first();
+    if (dup) return { error: `#${String(seq).padStart(2, "0")} is already used for this client in ${month}` };
+    manual = 1;
+  } else {
+    seq = await nextIndexSeq(env, order.client_id as string, month);
+  }
+  await env.DB.prepare("UPDATE orders SET index_month=?, index_seq=?, index_manual=? WHERE id=?").bind(month, seq, manual, order.id).run();
+  return { month, seq, manual };
+}
+const INDEX_STAFF_ROLES = ["super_admin", "ops_admin", "ops_manager", "procurement_manager"];
+
 async function handleTransitionOrder(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
   if (denied) return denied;
 
   const id = path.split("/").slice(-2)[0];
-  const body = await request.json() as {to:string;note?:string};
+  const body = await request.json() as {to:string;note?:string;index_month?:string;index_seq?:number};
   const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (!order) return json({error:"Not found"}, 404);
 
@@ -9079,6 +9128,15 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
     }
   }
 
+  // Pre-validate a manual index override before flipping the status, so a
+  // duplicate number can never leave the order APPROVED without an index.
+  if (body.to === "APPROVED" && !order.index_seq && INDEX_STAFF_ROLES.includes(user!.role) && Number(body.index_seq) > 0) {
+    const month = (body.index_month && /^\d{4}-\d{2}$/.test(body.index_month)) ? body.index_month : orderDefaultIndexMonth(order);
+    const seq = Math.floor(Number(body.index_seq));
+    const dup = await env.DB.prepare("SELECT 1 FROM orders WHERE client_id=? AND index_month=? AND index_seq=? AND id!=? LIMIT 1").bind(order.client_id, month, seq, id).first();
+    if (dup) return json({ error: `#${String(seq).padStart(2, "0")} is already used for this client in ${month}`, code: "E_INDEX_TAKEN" }, 409);
+  }
+
   // Atomic compare-and-swap on the status: only the call that actually flips the
   // order does the side effects (history, reservation release, DC creation). A
   // concurrent double-click or a network retry finds the status already changed →
@@ -9092,6 +9150,16 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   }
   await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)`)
     .bind(uid(), id, order.status, body.to, user!.sub, user!.name, body.note||null).run();
+
+  // Monthly order index: assigned once, at approval. Per client, per index month
+  // (auto = next free number; staff may override the month/number at approval).
+  let orderIndex: { month: string; seq: number; manual: number } | undefined;
+  if (body.to === "APPROVED" && !order.index_seq) {
+    const staff = INDEX_STAFF_ROLES.includes(user!.role);
+    const res = await assignOrderIndex(env, order, { month: body.index_month, seq: body.index_seq, staff });
+    if ("error" in res) return json({ error: res.error, code: "E_INDEX_TAKEN" }, 409);
+    orderIndex = res;
+  }
 
   // Gap 9: release reservation on cancel. Also clear the order reference — a
   // cancelled order gives up its number (the primary order id is kept so delivery
@@ -9157,7 +9225,25 @@ async function handleTransitionOrder(request: Request, env: Env, path: string): 
   // confirmation for the person performing it, not a broadcast to every login.
   await pushNotification(env, null, `Order ${id} → ${body.to.replace(/_/g," ")}`, user!.sub);
   await audit(env, user, "TRANSITION", "order", id, order.status, body.to);
-  return json({id, status: body.to});
+  return json({ id, status: body.to, ...(orderIndex ? { index_month: orderIndex.month, index_seq: orderIndex.seq, index_manual: orderIndex.manual } : {}) });
+}
+
+// POST /api/orders/:id/index — set or override the monthly index after approval
+// (staff only). Body: { index_month?: "YYYY-MM", index_seq?: number }. Omitting
+// index_seq re-derives the next free number for the chosen month.
+async function handleSetOrderIndex(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!["super_admin", "ops_admin"].includes(user!.role)) return json({ error: "Only a super admin or ops admin may set an order's monthly index" }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const body = await request.json().catch(() => ({})) as { index_month?: string; index_seq?: number };
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Order not found" }, 404);
+  if (["DRAFT", "CANCELLED"].includes(String(order.status))) return json({ error: `An order in ${order.status} cannot be indexed` }, 400);
+  const res = await assignOrderIndex(env, order, { month: body.index_month, seq: body.index_seq, staff: true });
+  if ("error" in res) return json({ error: res.error, code: "E_INDEX_TAKEN" }, 409);
+  await audit(env, user, "SET_INDEX", "order", id, undefined, `${res.month} #${res.seq}${res.manual ? " (manual)" : ""}`);
+  return json({ ok: true, id, index_month: res.month, index_seq: res.seq, index_manual: res.manual });
 }
 
 // POST /api/orders/:id/pick — save allocations, transition to PICKED, consume no stock yet.

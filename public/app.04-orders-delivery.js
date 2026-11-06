@@ -3208,6 +3208,7 @@ async function renderOrderQueue(el) {
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'var(--warning)'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
           ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
+        <td data-label="Monthly index">${oqIndexBadge(o)}</td>
         <td data-label="Client">${o.client_name||'—'}</td>
         <td data-label="Amount" style="font-weight:700">${fmt(o.grand_total)}</td>
         <td data-label="Status">${statusBadge(o.status)}${oqDeliveryBadge(o)}</td>
@@ -3223,7 +3224,7 @@ async function renderOrderQueue(el) {
         <td data-label="Created" style="font-size:.82rem;color:var(--text-muted)">${fmtDate(o.created_at)}</td>
         <td data-label="Actions">${orderQueueActions(o)}</td>
       </tr>`;
-    }).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
+    }).join('')||'<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:24px">No orders</td></tr>'}</tbody>`;
   }
 
   APP._oqTabsHtml  = oqTabsHtml;
@@ -3280,7 +3281,7 @@ function oqOrdersTableHtml() {
       </div>
       <div class="table-wrap">
         <table class="table table-cards table-cards-2up" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th>Monthly index</th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml ? APP._oqTableHtml(APP._oqStatusTab) : ''}
         </table>
       </div>
@@ -3615,7 +3616,7 @@ function orderQueueActions(o) {
   const btns = [`<button class="btn btn-secondary btn-sm" ${dataActEl('openOrderDrawer', o.id)}>View</button>`];
   switch (o.status) {
     case 'SUBMITTED':
-      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Approved by ops')}>✓ Approve</button>`);
+      btns.push(`<button class="btn btn-success btn-sm" ${dataAct('approveOrderWithIndex', o.id)}>✓ Approve</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
       break;
     case 'PENDING_APPROVAL':
@@ -3623,7 +3624,7 @@ function orderQueueActions(o) {
         // An amended order can only be approved by the client — no ops approve.
         btns.push(`<span class="badge badge-warning" style="font-size:.7rem">✏️ Amended · awaiting client</span>`);
       } else {
-        btns.push(`<button class="btn btn-success btn-sm" ${dataAct('advanceOrder', o.id, 'APPROVED', 'Client/ops approval')}>✓ Approve</button>`);
+        btns.push(`<button class="btn btn-success btn-sm" ${dataAct('approveOrderWithIndex', o.id)}>✓ Approve</button>`);
         btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
       }
       break;
@@ -3829,6 +3830,102 @@ function afterOrderAction(id, fallback) {
 async function advanceOrder(id, to, note) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to, note: note||undefined }) });
   if (res) { showToast(`Order ${id} → ${to.replace(/_/g,' ')}`); afterOrderAction(id, 'orders'); }
+}
+
+// ── Monthly order index: shown as a column, set at approval, staff-overridable ──
+const OQ_MON = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function oqMonthLabel(ym) { if (!ym) return ''; const [y, m] = String(ym).split('-'); return (OQ_MON[+m] || '?') + " '" + String(y).slice(2); }
+function oqNextYm(ym) { let [y, m] = String(ym).split('-').map(Number); m++; if (m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0'); }
+function oqIndexCanSet() { return ['super_admin', 'ops_admin'].includes(APP.user?.role || ''); }
+function oqIndexBadge(o) {
+  const can = oqIndexCanSet();
+  const base = 'font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:2px 7px';
+  if (!o.index_seq || !o.index_month) {
+    if (['DRAFT', 'CANCELLED'].includes(o.status)) return '<span style="color:var(--text-muted);font-size:.74rem">—</span>';
+    if (!can) return '<span style="color:var(--text-muted);font-size:.74rem">—</span>';
+    const lbl = o.status === 'PENDING_APPROVAL' || o.status === 'SUBMITTED' ? 'Set at approval' : 'Set index';
+    return `<button type="button" data-stop ${dataAct('orderIndexModal', o.id)} style="font-size:.72rem;font-weight:600;color:#a86513;background:var(--surface-2);border:1px dashed var(--border);border-radius:6px;padding:2px 8px;cursor:pointer">◇ ${lbl}</button>`;
+  }
+  const adv = o.index_month !== (o.created_at || '').slice(0, 7);
+  const col = adv ? '#6d4bd6' : 'var(--blue)';
+  const label = `${oqMonthLabel(o.index_month)} · #${String(o.index_seq).padStart(2, '0')}`;
+  const tag = adv ? ' <span style="font-size:.56rem;font-weight:800">ADV</span>' : (o.index_manual ? ' <span style="font-size:.56rem;font-weight:800;opacity:.65">MAN</span>' : '');
+  const style = `${base};color:${col}${can ? ';cursor:pointer' : ''}`;
+  const ttl = `${h(o.client_name || '')} — order #${o.index_seq} of ${oqMonthLabel(o.index_month)}${adv ? ' (advance / next month)' : ''}`;
+  return can ? `<button type="button" data-stop ${dataAct('orderIndexModal', o.id)} style="${style}" title="${ttl}">${label}${tag}</button>`
+             : `<span style="${style}" title="${ttl}">${label}${tag}</span>`;
+}
+
+function orderIndexModal(id) { orderIndexDialog(id, false); }
+function approveOrderWithIndex(id) { orderIndexDialog(id, true); }
+function orderIndexDialog(id, approve) {
+  const o = (APP._oqOrders || []).find(x => x.id === id);
+  if (!o) { showToast('Order not found', 'error'); return; }
+  const createdYm = (o.created_at || '').slice(0, 7) || new Date().toISOString().slice(0, 7);
+  const needYm = (o.need_by_date || o.predicted_delivery_date || '').slice(0, 7);
+  const nextYm = oqNextYm(createdYm);
+  const defMonth = (needYm && needYm > createdYm) ? needYm : createdYm;
+  const monthsOpts = [...new Set([createdYm, nextYm, defMonth])];
+  APP._idxDlg = { id, month: (o.index_month || defMonth), override: false, approve, client_id: o.client_id, createdYm };
+  const seg = monthsOpts.map(ym => `<button type="button" class="btn btn-sm" data-stop ${dataAct('idxPickMonth', ym)} id="idxm-${ym}"
+      style="border:1px solid var(--border)">${oqMonthLabel(ym)}${ym === createdYm ? ' · this month' : ym === nextYm ? ' · next' : ''}</button>`).join('');
+  openModal(approve ? `Approve order ${id}` : `Monthly index · ${id}`,
+    `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:6px">${h(o.client_name || '')} · ${fmt(o.grand_total)}</div>
+     <div class="form-group"><label>Count under month</label>
+       <div style="display:flex;gap:6px;flex-wrap:wrap" id="idx-month-seg">${seg}</div></div>
+     <label style="display:flex;align-items:center;gap:8px;font-size:.86rem;cursor:pointer">
+       <input type="checkbox" id="idx-ovr" ${dataChangeEl('idxToggleOvr')}> Override number (otherwise the next free number is used)</label>
+     <div class="form-group" id="idx-ovr-wrap" style="display:none;margin-top:10px">
+       <label>Assign number</label>
+       <input type="number" min="1" id="idx-num" ${dataInputEl('idxNumInput')} style="width:120px;padding:7px 10px;border:1px solid var(--border);border-radius:7px">
+     </div>
+     <div id="idx-hint" style="font-size:.8rem;color:var(--text-muted);background:var(--surface-2);border-radius:8px;padding:9px 11px;margin-top:12px"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('saveOrderIndexDialog')}>${approve ? '✓ Approve & assign' : 'Save index'}</button>`);
+  idxRenderDialog();
+}
+function idxUsed(clientId, month) {
+  return (APP._oqOrders || []).filter(x => x.client_id === clientId && x.index_month === month && x.index_seq && x.id !== APP._idxDlg.id).map(x => x.index_seq);
+}
+function idxSuggest(clientId, month) { const u = idxUsed(clientId, month); return (u.length ? Math.max(...u) : 0) + 1; }
+function idxPickMonth(ym) { if (!APP._idxDlg) return; APP._idxDlg.month = ym; idxRenderDialog(); }
+function idxToggleOvr(el) { if (!APP._idxDlg) return; APP._idxDlg.override = el.checked; const w = document.getElementById('idx-ovr-wrap'); if (w) w.style.display = el.checked ? '' : 'none'; idxRenderDialog(); }
+function idxNumInput() { idxRenderDialog(true); }
+function idxRenderDialog(skipInput) {
+  const d = APP._idxDlg; if (!d) return;
+  const sug = idxSuggest(d.client_id, d.month), taken = idxUsed(d.client_id, d.month);
+  document.querySelectorAll('[id^="idxm-"]').forEach(b => {
+    const on = b.id === 'idxm-' + d.month;
+    b.style.background = on ? 'var(--primary)' : 'var(--surface)';
+    b.style.color = on ? '#fff' : 'var(--text)';
+  });
+  const numEl = document.getElementById('idx-num');
+  if (numEl && !skipInput && d.override && !numEl.value) numEl.value = sug;
+  const picked = d.override && numEl && numEl.value ? Math.round(+numEl.value) : sug;
+  const adv = d.month !== d.createdYm;
+  const hint = document.getElementById('idx-hint');
+  if (hint) {
+    let msg = `Will be <b style="color:var(--text)">${oqMonthLabel(d.month)} · #${String(picked).padStart(2, '0')}</b>`;
+    if (adv) msg += ` · <span style="color:#6d4bd6;font-weight:700">advance (next month)</span>`;
+    if (d.override && taken.includes(picked)) msg = `<b style="color:var(--danger)">#${String(picked).padStart(2, '0')} is already used this month for this client.</b> Pick another.`;
+    else if (!d.override) msg += ` — the next free number. Cancelled orders keep their slot, so numbers aren't reused.`;
+    hint.innerHTML = msg;
+  }
+}
+async function saveOrderIndexDialog() {
+  const d = APP._idxDlg; if (!d) return;
+  const numEl = document.getElementById('idx-num');
+  const body = { index_month: d.month };
+  if (d.override && numEl && numEl.value) body.index_seq = Math.round(+numEl.value);
+  let res;
+  if (d.approve) res = await api(`/orders/${d.id}/transition`, { method: 'POST', body: JSON.stringify({ to: 'APPROVED', note: 'Approved with monthly index', ...body }) });
+  else res = await api(`/orders/${d.id}/index`, { method: 'POST', body: JSON.stringify(body) });
+  if (res) {
+    closeModal();
+    const seq = res.index_seq, mon = res.index_month;
+    showToast(d.approve ? `Order ${d.id} approved · ${oqMonthLabel(mon)} #${String(seq).padStart(2, '0')}` : `Index set · ${oqMonthLabel(mon)} #${String(seq).padStart(2, '0')}`);
+    afterOrderAction(d.id, 'orders');
+  }
 }
 
 function opsRejectOrder(id) {
