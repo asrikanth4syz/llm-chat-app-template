@@ -3119,6 +3119,7 @@ async function renderOrderQueue(el) {
       : orders;
     if (APP._oqTypeFilter) res = res.filter(o=>(o.order_type||'Regular')===APP._oqTypeFilter);
     if (APP._oqClient) { const q = APP._oqClient.toLowerCase(); res = res.filter(o=>(o.client_name||'').toLowerCase().includes(q)); }
+    if (APP._oqIdxFilter === 'needs') res = res.filter(o => oqNeedsIndex(o));
     const df = APP._oqDelivFilter;
     if (df && df !== 'all') res = res.filter(o => { const d = oqDeliv(o);
       return df === 'due' ? (d.started && d.dueItems > 0) : df === 'done' ? d.complete : df === 'new' ? !d.started : true; });
@@ -3190,7 +3191,16 @@ async function renderOrderQueue(el) {
     else if (tab.startsWith('phase:')) { const ph = ORDER_PHASES.find(p => p.key === tab.slice(6)); filtered = ph ? fOrders.filter(o => ph.statuses.includes(o.status)) : fOrders; }
     else filtered = fOrders.filter(o=>o.status===tab);
     if (APP._oqBucket) filtered = filtered.filter(o => oqBucketMatch(o, APP._oqBucket));
-    const sorted   = [...filtered].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+    const byCreated = (a,b)=>new Date(b.created_at)-new Date(a.created_at);
+    const sorted = APP._oqSort === 'index'
+      ? [...filtered].sort((a,b)=>{
+          const ai = a.index_seq && a.index_month, bi = b.index_seq && b.index_month;
+          if (ai && !bi) return -1; if (!ai && bi) return 1;      // indexed first
+          if (!ai && !bi) return byCreated(a,b);
+          if (a.index_month !== b.index_month) return a.index_month < b.index_month ? 1 : -1; // newest month first
+          return (a.client_name||'').localeCompare(b.client_name||'') || (a.index_seq||0)-(b.index_seq||0);
+        })
+      : [...filtered].sort(byCreated);
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
       const todayStr = new Date().toISOString().slice(0,10);
@@ -3245,6 +3255,9 @@ async function renderOrderQueue(el) {
         style="font-size:.82rem;min-width:200px" aria-label="Search orders by client">
       <datalist id="oq-client-list">${clientNames.map(n=>`<option value="${h(n)}"></option>`).join('')}</datalist>
       <div id="oq-month-picker">${monthPickerHtml()}</div>
+      ${oqIndexCanSet() ? `<button class="filter-select" id="oq-needs-idx" ${dataAct('oqToggleNeedsIndex')}
+        title="Approved orders still missing a monthly index"
+        style="font-size:.82rem;cursor:pointer;${APP._oqIdxFilter==='needs'?'background:var(--navy);color:#fff;border-color:var(--navy)':''}">⚑ Needs index${(()=>{const n=orders.filter(oqNeedsIndex).length;return n?` (${n})`:'';})()}</button>` : ''}
     </div>
   </div>
 
@@ -3281,7 +3294,7 @@ function oqOrdersTableHtml() {
       </div>
       <div class="table-wrap">
         <table class="table table-cards table-cards-2up" style="margin:0">
-          <thead><tr><th>Order ID</th><th>Monthly index</th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Order ID</th><th ${dataAct('oqToggleIndexSort')} id="oq-idx-th" style="cursor:pointer;white-space:nowrap" title="Sort by monthly index">Monthly index <span id="oq-idx-arrow" style="opacity:${APP._oqSort==='index'?'1':'.45'}">${APP._oqSort==='index'?'▼':'⇅'}</span></th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
           ${APP._oqTableHtml ? APP._oqTableHtml(APP._oqStatusTab) : ''}
         </table>
       </div>
@@ -3837,6 +3850,25 @@ const OQ_MON = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 function oqMonthLabel(ym) { if (!ym) return ''; const [y, m] = String(ym).split('-'); return (OQ_MON[+m] || '?') + " '" + String(y).slice(2); }
 function oqNextYm(ym) { let [y, m] = String(ym).split('-').map(Number); m++; if (m > 12) { m = 1; y++; } return y + '-' + String(m).padStart(2, '0'); }
 function oqIndexCanSet() { return ['super_admin', 'ops_admin'].includes(APP.user?.role || ''); }
+// Approved-or-later orders that somehow have no monthly index (back-fill candidates).
+const OQ_PRE_INDEX = ['DRAFT', 'CANCELLED', 'REJECTED', 'PENDING_PRICING', 'SUBMITTED', 'PENDING_APPROVAL'];
+function oqNeedsIndex(o) { return !o.index_seq && !OQ_PRE_INDEX.includes(o.status); }
+function oqToggleIndexSort() {
+  APP._oqSort = APP._oqSort === 'index' ? 'created' : 'index';
+  const ar = document.getElementById('oq-idx-arrow');
+  if (ar) { ar.textContent = APP._oqSort === 'index' ? '▼' : '⇅'; ar.style.opacity = APP._oqSort === 'index' ? '1' : '.45'; }
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+}
+function oqToggleNeedsIndex() {
+  APP._oqIdxFilter = APP._oqIdxFilter === 'needs' ? null : 'needs';
+  const btn = document.getElementById('oq-needs-idx');
+  if (btn) { const on = APP._oqIdxFilter === 'needs'; btn.style.background = on ? 'var(--navy)' : ''; btn.style.color = on ? '#fff' : ''; btn.style.borderColor = on ? 'var(--navy)' : ''; }
+  const tabsEl = document.getElementById('oq-tabs');
+  if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
+  const tbody = document.getElementById('oq-tbody');
+  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+}
 function oqIndexBadge(o) {
   const can = oqIndexCanSet();
   const base = 'font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:2px 7px';
