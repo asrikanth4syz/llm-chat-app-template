@@ -6469,6 +6469,7 @@ export default {
       if (path==="/api/orders/parse-paste"     && method==="POST") return handleParsePaste(request,env);
       if (path==="/api/orders/paste-search"    && method==="POST") return handlePasteSearch(request,env);
       if (path==="/api/orders/from-paste"      && method==="POST") return handleFromPaste(request,env);
+      if (path==="/api/orders/consolidated"    && method==="POST") return handleConsolidatedOrders(request,env);
 
       // Quotations (milestone 006) — entitlement gate (Slice 2). /access is EXEMPT
       // from requireQuoteAccess; /calc is the first guarded route; admin routes
@@ -7022,6 +7023,52 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 // ════════════════════════════════════════════════════════════════════
 // ORDERS (Gap 9 stock reservation, Gap 15 comments)
 // ════════════════════════════════════════════════════════════════════
+
+// POST /api/orders/consolidated { ids:[...] } — a read-only consolidated view of
+// several orders of the SAME client in the SAME month (by monthly index month,
+// else created month): per-order rollup + merged per-SKU ordered/delivered. Ops
+// see any; a client sees only their own orders. Nothing is merged or mutated.
+async function handleConsolidatedOrders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  const body = await request.json().catch(() => ({})) as { ids?: string[] };
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(x => typeof x === "string"))].slice(0, 100) : [];
+  if (ids.length < 2) return json({ error: "Select at least two orders to consolidate", code: "E_MIN" }, 400);
+  const place = ids.map(() => "?").join(",");
+  const { results: orders } = await env.DB.prepare(`SELECT o.*, c.name AS client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id IN (${place})`).bind(...ids).all() as { results: Record<string, unknown>[] };
+  if (orders.length !== ids.length) return json({ error: "Some of those orders were not found" }, 404);
+  const isClient = ["client_admin", "client_approver", "client_user"].includes(user!.role);
+  if (isClient && user!.client_id && orders.some(o => o.client_id !== user!.client_id)) return json({ error: "Forbidden" }, 403);
+  const clientId = orders[0].client_id;
+  if (orders.some(o => o.client_id !== clientId)) return json({ error: "All orders must be for the same client", code: "E_CLIENT" }, 400);
+  const monthOf = (o: Record<string, unknown>) => (o.index_month as string) || String(o.created_at || "").slice(0, 7);
+  const month = monthOf(orders[0]);
+  if (orders.some(o => monthOf(o) !== month)) return json({ error: "All orders must be in the same month", code: "E_MONTH" }, 400);
+
+  const orderOut: Record<string, unknown>[] = [];
+  const skuMap: Record<string, { sku: string; name: string; ordered: number; delivered: number }> = {};
+  let totOrdU = 0, totDelU = 0, totVal = 0, totDelVal = 0;
+  for (const o of orders) {
+    const { results: its } = await env.DB.prepare("SELECT sku,name,qty,unit_price FROM order_items WHERE order_id=?").bind(o.id).all() as { results: Record<string, unknown>[] };
+    const { results: del } = await env.DB.prepare("SELECT di.sku, COALESCE(SUM(di.qty_delivered),0) d FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=? AND dc.status='DELIVERED' GROUP BY di.sku").bind(o.id).all() as { results: Record<string, unknown>[] };
+    const delBySku: Record<string, number> = {}; for (const r of del) delBySku[r.sku as string] = Number(r.d) || 0;
+    let ou = 0, du = 0, dval = 0;
+    for (const it of its) {
+      const ord = Number(it.qty) || 0, raw = delBySku[it.sku as string] || 0, capped = Math.min(ord, raw);
+      ou += ord; du += capped; dval += capped * (Number(it.unit_price) || 0);
+      const k = it.sku as string;
+      (skuMap[k] = skuMap[k] || { sku: k, name: it.name as string, ordered: 0, delivered: 0 });
+      skuMap[k].ordered += ord; skuMap[k].delivered += raw;
+    }
+    totOrdU += ou; totDelU += du; totVal += Number(o.grand_total) || 0; totDelVal += dval;
+    orderOut.push({ id: o.id, index_month: o.index_month, index_seq: o.index_seq, status: o.status, grand_total: Number(o.grand_total) || 0, ordered_units: ou, delivered_units: du });
+  }
+  const skus = Object.values(skuMap).map(s => ({ ...s, due: Math.max(0, s.ordered - s.delivered) })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return json({
+    client_id: clientId, client_name: orders[0].client_name, month, orders: orderOut, skus,
+    totals: { orders: orders.length, value: totVal, delivered_value: totDelVal, ordered_units: totOrdU, delivered_units: totDelU,
+      fully_delivered: orderOut.filter(o => (o.ordered_units as number) > 0 && o.delivered_units === o.ordered_units).length },
+  });
+}
 
 async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);

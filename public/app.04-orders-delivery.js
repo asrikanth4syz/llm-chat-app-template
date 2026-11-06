@@ -193,6 +193,7 @@ async function renderMyOrders(el) {
     const rows = orders.map(o => Object.assign({}, o, {
       _mo: window.moClassify(o), _lc: moLifecycle(o.status), _ap: moApproval(o.status),
     }));
+    APP._consolOrders = rows; oqConsolReset();
     const counts = { total: rows.length, awaiting: 0, progress: 0, partial: 0, delivered: 0 };
     let openValue = 0, billedValue = 0, lateCount = 0;
     rows.forEach(r => {
@@ -236,6 +237,7 @@ async function renderMyOrders(el) {
     function rowHtml(r) {
       const items = r.item_count!=null ? r.item_count : (r.items||[]).length;
       return `<tr ${dataAct('viewOrder', r.id)} style="cursor:pointer">
+        <td ${dataAct('oqConsolNoop')} data-stop style="text-align:center">${oqConsolCheckbox(r)}</td>
         <td><span class="mo-id">${h(r.id)}</span></td>
         <td class="num">${fmtDate(r.created_at)}</td>
         <td>${h(r.order_type||'Regular')}</td>
@@ -263,7 +265,7 @@ async function renderMyOrders(el) {
       ].filter(Boolean).join('');
       // Clickable card (opens the order); inner buttons win via closest() delegation.
       return `<div class="mo-card" ${dataAct('viewOrder', r.id)}>
-        <div class="mo-card-top"><span class="mo-id">${h(r.id)}</span>${badge(r._lc.label, r._lc.color)}</div>
+        <div class="mo-card-top"><span ${dataAct('oqConsolNoop')} data-stop style="display:inline-flex;align-items:center;margin-right:2px">${oqConsolCheckbox(r)}</span><span class="mo-id">${h(r.id)}</span>${badge(r._lc.label, r._lc.color)}</div>
         <div class="mo-card-meta">${fmtDate(r.created_at)} · ${h(r.order_type||'Regular')} · ${items} item${items!==1?'s':''}</div>
         <div>${prog(r)}</div>
         <div class="mo-card-foot"><span class="mo-val num">${fmt(r.grand_total)}</span>${badge(r._ap.label, r._ap.color)}</div>
@@ -292,7 +294,7 @@ async function renderMyOrders(el) {
       const tb = document.getElementById('mo-tbody'), cards = document.getElementById('mo-cards');
       if (list.length === 0) {
         const empty = `<div class="mo-empty"><div style="font-size:2.4rem">📋</div><div>No orders match these filters.</div><button class="btn btn-secondary btn-sm" style="margin-top:12px" ${dataAct('moClearFilters')}>Clear filters</button></div>`;
-        if (tb) tb.innerHTML = `<tr><td colspan="10" style="padding:0;border:0">${empty}</td></tr>`;
+        if (tb) tb.innerHTML = `<tr><td colspan="11" style="padding:0;border:0">${empty}</td></tr>`;
         if (cards) cards.innerHTML = empty;
         return;
       }
@@ -333,6 +335,7 @@ async function renderMyOrders(el) {
     <div class="mo-table-wrap">
       <table class="mo-table" id="mo-table">
         <thead><tr>
+          <th style="width:34px" title="Select to consolidate"></th>
           <th>Order #</th>
           ${sortTh('date','Order Date')}
           <th>Type</th>
@@ -3101,6 +3104,7 @@ async function renderOrderQueue(el) {
   if (!APP._oqMonth) APP._oqMonth = '';          // '' = all months
   if (!APP._oqItemView) APP._oqItemView = 'brand';
   APP._oqOrders = orders;
+  APP._consolOrders = orders; oqConsolReset();
 
   // Build month options from orders
   const monthsSet = new Set(orders.map(o=>(o.created_at||'').slice(0,7)).filter(Boolean));
@@ -3214,7 +3218,7 @@ async function renderOrderQueue(el) {
         : 'var(--blue)';
       return `<tr style="--accent:${accent};${isUrgent||o.order_type==='Urgent'?'background:var(--warning-bg)':''}">
         <td class="card-title-cell">
-          <button type="button" class="oq-id-link" ${dataAct('openOrderFull', o.id)} title="Open full order view" style="background:none;border:0;padding:0;cursor:pointer;font-weight:700;color:var(--primary);font-size:inherit">${o.id}</button>
+          <span style="margin-right:7px">${oqConsolCheckbox(o)}</span><button type="button" class="oq-id-link" ${dataAct('openOrderFull', o.id)} title="Open full order view" style="background:none;border:0;padding:0;cursor:pointer;font-weight:700;color:var(--primary);font-size:inherit">${o.id}</button>
           ${o.need_by_date ? `<div style="font-size:.7rem;color:${o.need_by_date<todayStr?'var(--danger)':'var(--warning)'};font-weight:600;margin-top:2px">🚨 Need by ${fmtDate(o.need_by_date)}</div>` : ''}
           ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
@@ -3868,6 +3872,104 @@ function oqToggleNeedsIndex() {
   if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody');
   if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+}
+
+// ── Consolidated view: pick same-client, same-month orders → one status + merged
+// delivery breakdown. Read-only; nothing is merged. Shared by the ops Order Queue
+// and the client My Orders list (both set APP._consolOrders before rendering). ──
+function oqConsolReset() { APP._consolSel = new Set(); const b = document.getElementById('oq-consol-bar'); if (b) b.remove(); }
+function oqConsolMonth(o) { return o.index_month || String(o.created_at || '').slice(0, 7); }
+function oqConsolFirst() { const s = APP._consolSel; if (!s || !s.size) return null; return (APP._consolOrders || []).find(x => s.has(x.id)) || null; }
+function oqConsolLocked(o) { const f = oqConsolFirst(); if (!f) return false; if (APP._consolSel.has(o.id)) return false; return o.client_id !== f.client_id || oqConsolMonth(o) !== oqConsolMonth(f); }
+function oqConsolCheckbox(o) {
+  const sel = APP._consolSel = APP._consolSel || new Set(); const on = sel.has(o.id), dis = oqConsolLocked(o);
+  return `<input type="checkbox" data-stop data-consol="${o.id}" ${on ? 'checked' : ''} ${dis ? 'disabled' : ''} ${dataChangeEl('oqConsolToggle')}
+    title="Select to consolidate (same client &amp; month)" style="width:15px;height:15px;accent-color:var(--primary);cursor:${dis ? 'not-allowed' : 'pointer'};vertical-align:middle">`;
+}
+function oqConsolApplyLocks() {
+  const sel = APP._consolSel || new Set();
+  document.querySelectorAll('[data-consol]').forEach(cb => {
+    const o = (APP._consolOrders || []).find(x => x.id === cb.dataset.consol); if (!o) return;
+    cb.checked = sel.has(o.id); cb.disabled = oqConsolLocked(o); const tr = cb.closest('tr'); if (tr) tr.style.opacity = cb.disabled ? '.45' : '';
+  });
+}
+function oqConsolToggle(el) { const sel = APP._consolSel = APP._consolSel || new Set(); if (el.checked) sel.add(el.dataset.consol); else sel.delete(el.dataset.consol); oqConsolApplyLocks(); oqConsolUpdateBar(); }
+function oqConsolClear() { APP._consolSel = new Set(); oqConsolApplyLocks(); oqConsolUpdateBar(); }
+function oqConsolNoop() { /* shadows a row-level click so ticking the box doesn't open the order */ }
+function oqConsolUpdateBar() {
+  const sel = APP._consolSel || new Set(); let bar = document.getElementById('oq-consol-bar');
+  if (sel.size < 2) { if (bar) bar.remove(); return; }
+  const list = (APP._consolOrders || []).filter(o => sel.has(o.id)); const f = list[0]; const val = list.reduce((s, o) => s + (o.grand_total || 0), 0);
+  const ml = oqMonthLabel(oqConsolMonth(f)) || oqConsolMonth(f);
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'oq-consol-bar';
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;justify-content:center;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));pointer-events:none';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = `<div style="pointer-events:auto;background:var(--navy);color:#fff;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.28);padding:11px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:1160px;width:100%">
+    <span><b>${sel.size}</b> orders · <b>${h(f.client_name || '')}</b> · ${ml} · <b>${fmt(val)}</b></span>
+    <span style="margin-left:auto;display:flex;gap:8px">
+      <button class="btn btn-sm" ${dataAct('oqConsolClear')} style="border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff">Clear</button>
+      <button class="btn btn-sm btn-primary" ${dataAct('oqConsolOpen')}>Consolidate →</button></span></div>`;
+}
+async function oqConsolOpen() {
+  const ids = [...(APP._consolSel || new Set())]; if (ids.length < 2) return;
+  const d = await api('/orders/consolidated', { method: 'POST', body: JSON.stringify({ ids }) }); if (!d) return;
+  APP._consolData = d; renderConsolModal(d);
+}
+function consolStatusChip(status) {
+  if (['client_admin', 'client_user', 'client_approver'].includes(APP.user?.role || '') && typeof moLifecycle === 'function') {
+    const l = moLifecycle(status); return `<span style="font-size:.66rem;font-weight:700;border-radius:5px;padding:2px 8px;background:${l.color}22;color:${l.color}">${h(l.label)}</span>`;
+  }
+  return (typeof statusBadge === 'function') ? statusBadge(status) : h(status);
+}
+function renderConsolModal(d) {
+  const t = d.totals, pct = t.ordered_units ? Math.round(t.delivered_units / t.ordered_units * 100) : 0, dueVal = t.value - t.delivered_value, ml = oqMonthLabel(d.month) || d.month;
+  const tile = (k, v, s) => `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px"><div style="font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:700">${k}</div><div style="font-size:1.2rem;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums">${v}</div><div style="font-size:.74rem;color:var(--text-muted);margin-top:2px">${s}</div></div>`;
+  const orows = d.orders.map(o => { const u = o.ordered_units, del = o.delivered_units, p = u ? Math.round(del / u * 100) : 0;
+    return `<div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:8px 12px">
+      <span style="font-family:ui-monospace,monospace;font-size:.7rem;font-weight:700;color:var(--blue)">#${String(o.index_seq || 0).padStart(2, '0')}</span>
+      <div><b style="font-family:ui-monospace,monospace;font-size:.82rem">${h(o.id)}</b> <span style="color:var(--text-muted);font-size:.8rem">· ${fmt(o.grand_total)}</span></div>
+      ${consolStatusChip(o.status)}<span style="color:var(--text-muted);font-size:.8rem;font-variant-numeric:tabular-nums">${p}%</span></div>`; }).join('');
+  const cell = 'padding:8px 10px;border-bottom:1px solid var(--border)';
+  const skuRows = d.skus.map(s => { const p = s.ordered ? Math.round(s.delivered / s.ordered * 100) : 0;
+    return `<tr><td style="${cell}"><b>${h(s.name)}</b><div style="font-family:ui-monospace,monospace;font-size:.72rem;color:var(--text-muted)">${h(s.sku)}</div></td>
+      <td style="${cell};text-align:right;font-variant-numeric:tabular-nums">${s.ordered.toLocaleString('en-IN')}</td>
+      <td style="${cell};text-align:right;color:var(--success);font-variant-numeric:tabular-nums">${s.delivered.toLocaleString('en-IN')}</td>
+      <td style="${cell};text-align:right;color:${s.due > 0 ? '#a86513' : 'var(--text-muted)'};font-variant-numeric:tabular-nums">${s.due.toLocaleString('en-IN')}</td>
+      <td style="${cell};text-align:right;font-variant-numeric:tabular-nums">${p}%</td></tr>`; }).join('');
+  const th = 'text-align:right;font-size:.66rem;text-transform:uppercase;color:var(--text-muted);padding:7px 10px;border-bottom:1px solid var(--border)';
+  openModal(`Consolidated · ${h(d.client_name || '')} · ${ml}`,
+    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+       ${tile('Orders', t.orders, `${t.fully_delivered} fully delivered`)}
+       ${tile('Total value', fmt(t.value), `${fmt(t.delivered_value)} delivered`)}
+       ${tile('Units', `${t.delivered_units.toLocaleString('en-IN')} / ${t.ordered_units.toLocaleString('en-IN')}`, `${(t.ordered_units - t.delivered_units).toLocaleString('en-IN')} still due`)}
+       ${tile('Due value', fmt(dueVal), `${d.skus.filter(s => s.due > 0).length} items`)}</div>
+     <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:16px">
+       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><b>Consolidated fulfilment · ${pct}% of units</b><span style="font-size:.78rem;color:var(--text-muted)">${t.fully_delivered} of ${t.orders} orders fully delivered</span></div>
+       <div style="height:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:8px"><i style="display:block;height:100%;width:${pct}%;background:var(--success)"></i></div></div>
+     <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--primary);font-weight:700;margin-bottom:8px">Orders in this view</div>
+     <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px">${orows}</div>
+     <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--primary);font-weight:700;margin-bottom:6px">Merged delivery breakdown — ordered vs delivered per item</div>
+     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.84rem"><thead><tr>
+       <th style="${th};text-align:left">Item</th><th style="${th}">Ordered</th><th style="${th}">Delivered</th><th style="${th}">Due</th><th style="${th}">%</th></tr></thead><tbody>${skuRows}</tbody></table></div>`,
+    `<button class="btn btn-secondary" ${dataAct('oqConsolCsv')}>⬇ Excel</button>
+     <button class="btn btn-primary" ${dataAct('closeModal')}>Done</button>`);
+}
+function oqConsolCsv() {
+  const d = APP._consolData; if (!d) return;
+  const esc = c => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`;
+  const rows = [['Consolidated', d.client_name, d.month], [], ['Order', 'Index', 'Status', 'Value', 'Ordered units', 'Delivered units'],
+    ...d.orders.map(o => [o.id, `${d.month} #${String(o.index_seq || '').padStart(2, '0')}`, o.status, o.grand_total, o.ordered_units, o.delivered_units]),
+    [], ['Item', 'SKU', 'Ordered', 'Delivered', 'Due'], ...d.skus.map(s => [s.name, s.sku, s.ordered, s.delivered, s.due]),
+    [], ['Totals', '', `${d.totals.orders} orders`, d.totals.value, d.totals.ordered_units, d.totals.delivered_units]];
+  const csv = rows.map(r => r.map(esc).join(',')).join('\n');
+  try {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' }), url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = `consolidated_${String(d.client_name || 'client').replace(/\s+/g, '_')}_${d.month}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Consolidated statement exported');
+  } catch (e) { showToast('Export failed', 'error'); }
 }
 function oqIndexBadge(o) {
   const can = oqIndexCanSet();
