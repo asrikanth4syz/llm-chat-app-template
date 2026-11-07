@@ -3879,12 +3879,15 @@ function oqToggleNeedsIndex() {
 // and the client My Orders list (both set APP._consolOrders before rendering). ──
 function oqConsolReset() { APP._consolSel = new Set(); const b = document.getElementById('oq-consol-bar'); if (b) b.remove(); }
 function oqConsolMonth(o) { return o.index_month || String(o.created_at || '').slice(0, 7); }
+// Legal-company key (PAN via company_key), so same-company branches can consolidate
+// but different companies never can; falls back to client id when unknown.
+function oqConsolKey(o) { return o.company_key || o.client_id; }
 function oqConsolFirst() { const s = APP._consolSel; if (!s || !s.size) return null; return (APP._consolOrders || []).find(x => s.has(x.id)) || null; }
-function oqConsolLocked(o) { const f = oqConsolFirst(); if (!f) return false; if (APP._consolSel.has(o.id)) return false; return o.client_id !== f.client_id || oqConsolMonth(o) !== oqConsolMonth(f); }
+function oqConsolLocked(o) { const f = oqConsolFirst(); if (!f) return false; if (APP._consolSel.has(o.id)) return false; return oqConsolKey(o) !== oqConsolKey(f) || oqConsolMonth(o) !== oqConsolMonth(f); }
 function oqConsolCheckbox(o) {
   const sel = APP._consolSel = APP._consolSel || new Set(); const on = sel.has(o.id), dis = oqConsolLocked(o);
   return `<input type="checkbox" data-stop data-consol="${o.id}" ${on ? 'checked' : ''} ${dis ? 'disabled' : ''} ${dataChangeEl('oqConsolToggle')}
-    title="Select to consolidate (same client &amp; month)" style="width:15px;height:15px;accent-color:var(--primary);cursor:${dis ? 'not-allowed' : 'pointer'};vertical-align:middle">`;
+    title="Select to consolidate (same legal company &amp; month)" style="width:15px;height:15px;accent-color:var(--primary);cursor:${dis ? 'not-allowed' : 'pointer'};vertical-align:middle">`;
 }
 function oqConsolApplyLocks() {
   const sel = APP._consolSel || new Set();
@@ -3953,8 +3956,79 @@ function renderConsolModal(d) {
      <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--primary);font-weight:700;margin-bottom:6px">Merged delivery breakdown — ordered vs delivered per item</div>
      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.84rem"><thead><tr>
        <th style="${th};text-align:left">Item</th><th style="${th}">Ordered</th><th style="${th}">Delivered</th><th style="${th}">Due</th><th style="${th}">%</th></tr></thead><tbody>${skuRows}</tbody></table></div>`,
-    `<button class="btn btn-secondary" ${dataAct('oqConsolCsv')}>⬇ Excel</button>
+    `<button class="btn btn-secondary" ${dataAct('consolExportPDF')}>⬇ PDF statement</button>
+     <button class="btn btn-secondary" ${dataAct('oqConsolCsv')}>⬇ Excel</button>
      <button class="btn btn-primary" ${dataAct('closeModal')}>Done</button>`);
+}
+// Branded consolidated statement → print / Save as PDF (reuses brandInfo() letterhead).
+function consolExportPDF() {
+  const d = APP._consolData; if (!d) { showToast('Open a consolidated view first', 'error'); return; }
+  const b = (typeof brandInfo === 'function') ? brandInfo() : { company_name: '4SYZ', accent: '#16284a' };
+  const rupee = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const t = d.totals, pct = t.ordered_units ? Math.round(t.delivered_units / t.ordered_units * 100) : 0, dueVal = t.value - t.delivered_value;
+  const ml = oqMonthLabel(d.month) || d.month;
+  const ids = [b.gstin ? 'GSTIN ' + b.gstin : '', b.cin ? 'CIN ' + b.cin : '', b.pan ? 'PAN ' + b.pan : ''].filter(Boolean).join(' · ');
+  const brandBlock = b.logo_url ? `<img class="cp-logo" src="${h(b.logo_url)}" alt="">` : `<div class="cp-word">${h(b.company_name || '4SYZ')}</div>`;
+  const orows = d.orders.map(o => { const u = o.ordered_units, del = o.delivered_units, p = u ? Math.round(del / u * 100) : 0;
+    return `<tr><td class="n">#${String(o.index_seq || 0).padStart(2, '0')}</td><td>${h(o.id)}</td><td>${h(String(o.status || '').replace(/_/g, ' '))}</td>
+      <td class="n">${rupee(o.grand_total)}</td><td class="n">${u.toLocaleString('en-IN')}</td><td class="n">${del.toLocaleString('en-IN')}</td><td class="n">${p}%</td></tr>`; }).join('');
+  const srows = d.skus.map(s => { const p = s.ordered ? Math.round(s.delivered / s.ordered * 100) : 0;
+    return `<tr><td>${h(s.name)}<div class="sku">${h(s.sku)}</div></td><td class="n">${s.ordered.toLocaleString('en-IN')}</td>
+      <td class="n">${s.delivered.toLocaleString('en-IN')}</td><td class="n">${s.due.toLocaleString('en-IN')}</td><td class="n">${p}%</td></tr>`; }).join('');
+  const doc = `<div class="cp-wrap">
+    <div class="cp-head"><div class="cp-brand">${brandBlock}<div class="cp-legal">${h(b.legal_name || b.company_name || '4SYZ')}</div>${b.tagline ? `<div class="cp-tag">${h(b.tagline)}</div>` : ''}</div>
+      <div class="cp-co">${b.address ? h(b.address) + '<br>' : ''}${ids ? ids + '<br>' : ''}${[b.contact, b.website].filter(Boolean).map(h).join(' · ')}</div></div>
+    <div class="cp-rule"></div>
+    <div class="cp-title"><div><span>Consolidated statement</span>${h(d.client_name || '')}</div>
+      <div class="cp-meta"><div><em>Month</em> ${ml}</div><div><em>Orders</em> ${t.orders}</div><div><em>Generated</em> ${fmtDate(new Date().toISOString())}</div></div></div>
+    <div class="cp-sum">
+      <div class="cell"><div class="k">Total value</div><div class="v">${rupee(t.value)}</div></div>
+      <div class="cell"><div class="k">Delivered value</div><div class="v">${rupee(t.delivered_value)}</div></div>
+      <div class="cell"><div class="k">Due value</div><div class="v">${rupee(dueVal)}</div></div>
+      <div class="cell"><div class="k">Fulfilment</div><div class="v">${pct}% · ${t.delivered_units.toLocaleString('en-IN')}/${t.ordered_units.toLocaleString('en-IN')} units</div></div></div>
+    <div class="cp-h">Orders in this statement</div>
+    <table class="cp-tbl"><thead><tr><th class="n">#</th><th>Order</th><th>Status</th><th class="n">Value</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">%</th></tr></thead><tbody>${orows}</tbody></table>
+    <div class="cp-h">Merged delivery breakdown — ordered vs delivered per item</div>
+    <table class="cp-tbl"><thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th class="n">%</th></tr></thead><tbody>${srows}</tbody></table>
+    <div class="cp-foot"><span>${h(b.legal_name || b.company_name || '4SYZ')} — consolidated statement</span><span class="gold">${ids || ''}</span></div>
+  </div>`;
+  const acc = h(b.accent || '#16284a');
+  const css = `@media print{body>*{display:none!important}#consol-print{display:block!important}@page{size:A4;margin:12mm}}
+  #consol-print{font-family:'Space Grotesk',-apple-system,Segoe UI,Roboto,sans-serif;color:#1c2433}
+  #consol-print *{box-sizing:border-box}
+  #consol-print .cp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;background:linear-gradient(155deg,${acc},#0f1c33);color:#fff;padding:20px 24px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #consol-print .cp-logo{height:38px;max-width:170px;object-fit:contain;filter:brightness(0) invert(1)}
+  #consol-print .cp-word{font-size:22px;font-weight:800;letter-spacing:.22em;color:#c79a4b;text-transform:uppercase}
+  #consol-print .cp-legal{margin-top:6px;font-size:14px;font-weight:700}#consol-print .cp-tag{margin-top:2px;font-size:11px;color:#aeb8cc}
+  #consol-print .cp-co{text-align:right;font-size:10.5px;line-height:1.6;color:#c6cfde;max-width:300px}
+  #consol-print .cp-rule{height:3px;background:linear-gradient(90deg,#c79a4b 0 62%,transparent 62%);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #consol-print .cp-title{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;padding:16px 24px 0}
+  #consol-print .cp-title>div:first-child{font:700 19px/1.15 'Space Grotesk',sans-serif;color:${acc}}
+  #consol-print .cp-title span{display:block;font-size:10.5px;letter-spacing:.16em;color:#c79a4b;text-transform:uppercase;margin-bottom:3px;font-weight:600}
+  #consol-print .cp-meta{display:flex;gap:16px;font-size:11px;color:#6b7488;flex-wrap:wrap}#consol-print .cp-meta em{font-style:normal;color:#99a0ad;margin-right:5px}
+  #consol-print .cp-sum{margin:14px 24px 0;display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #e6e4dc;border-radius:8px;overflow:hidden}
+  #consol-print .cp-sum .cell{padding:10px 14px;border-right:1px solid #e6e4dc}#consol-print .cp-sum .cell:last-child{border-right:0}
+  #consol-print .cell .k{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#99a0ad;font-weight:600}
+  #consol-print .cell .v{margin-top:4px;font-weight:700;color:${acc};font-size:13px;font-variant-numeric:tabular-nums}
+  #consol-print .cp-h{margin:18px 24px 6px;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:#c79a4b;font-weight:600}
+  #consol-print .cp-tbl{width:calc(100% - 48px);margin:0 24px;border-collapse:collapse;font-size:11px}
+  #consol-print .cp-tbl th{text-align:left;background:#f7f6f1;color:#6b7488;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:7px 8px;border-bottom:1px solid #e6e4dc;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #consol-print .cp-tbl td{padding:7px 8px;border-bottom:1px solid #eee;vertical-align:top}
+  #consol-print .cp-tbl .n{text-align:right;font-variant-numeric:tabular-nums}#consol-print .cp-tbl th.n{text-align:right}
+  #consol-print .sku{font-size:9px;color:#99a0ad;font-family:ui-monospace,monospace}
+  #consol-print .cp-foot{margin:18px 24px 0;background:#f7f6f1;border-top:1px solid #e6e4dc;padding:10px 14px;display:flex;justify-content:space-between;gap:12px;font-size:10px;color:#6b7488}
+  #consol-print .cp-foot .gold{color:#c79a4b;font-weight:600}`;
+  if (!document.getElementById('ddp-font')) {
+    const lk = document.createElement('link'); lk.id = 'ddp-font'; lk.rel = 'stylesheet';
+    lk.href = 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap';
+    document.head.appendChild(lk);
+  }
+  document.getElementById('consol-print')?.remove(); document.getElementById('consol-print-style')?.remove();
+  const style = document.createElement('style'); style.id = 'consol-print-style'; style.textContent = css;
+  const div = document.createElement('div'); div.id = 'consol-print'; div.style.display = 'none'; div.innerHTML = doc;
+  document.body.appendChild(style); document.body.appendChild(div);
+  showToast('Opening print — choose "Save as PDF"');
+  setTimeout(() => { window.print(); setTimeout(() => { div.remove(); style.remove(); }, 800); }, 250);
 }
 function oqConsolCsv() {
   const d = APP._consolData; if (!d) return;

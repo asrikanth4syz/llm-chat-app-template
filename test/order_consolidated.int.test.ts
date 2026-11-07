@@ -90,10 +90,23 @@ describe("consolidated view", () => {
     expect((await res.json() as any).code).toBe("E_MIN");
   });
 
-  it("rejects orders of different clients", async () => {
+  it("rejects orders of different legal companies", async () => {
     const res = await consolidate(["A1", "B1"], opsTok);
     expect(res.status).toBe(400);
-    expect((await res.json() as any).code).toBe("E_CLIENT");
+    expect((await res.json() as any).code).toBe("E_COMPANY");
+  });
+
+  it("allows consolidating sibling client records of the SAME legal company (same PAN)", async () => {
+    const d = db();
+    await d.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active,pan) VALUES ('cC1','Acme Bengaluru','x@y.z',1,'AAACA1111A')").run();
+    await d.prepare("INSERT OR IGNORE INTO clients (id,name,contact_email,active,pan) VALUES ('cC2','Acme Mumbai','x@y.z',1,'AAACA1111A')").run();
+    await mkOrder("C1", "cC1", "2026-11", 1000, [{ sku: "X", name: "Item X", qty: 10, price: 100, delivered: 0 }]);
+    await mkOrder("C2", "cC2", "2026-11", 2000, [{ sku: "X", name: "Item X", qty: 20, price: 100, delivered: 0 }]);
+    const res = await consolidate(["C1", "C2"], opsTok);
+    expect(res.status).toBe(200);
+    const r = await res.json() as any;
+    expect(r.totals.orders).toBe(2);
+    expect(r.skus.find((s: any) => s.sku === "X").ordered).toBe(30); // merged across both records
   });
 
   it("rejects orders in different months", async () => {

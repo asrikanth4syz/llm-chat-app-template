@@ -7034,12 +7034,20 @@ async function handleConsolidatedOrders(request: Request, env: Env): Promise<Res
   const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(x => typeof x === "string"))].slice(0, 100) : [];
   if (ids.length < 2) return json({ error: "Select at least two orders to consolidate", code: "E_MIN" }, 400);
   const place = ids.map(() => "?").join(",");
-  const { results: orders } = await env.DB.prepare(`SELECT o.*, c.name AS client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id IN (${place})`).bind(...ids).all() as { results: Record<string, unknown>[] };
+  const { results: orders } = await env.DB.prepare(`SELECT o.*, c.name AS client_name, c.pan AS client_pan, c.gstin AS client_gstin FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id IN (${place})`).bind(...ids).all() as { results: Record<string, unknown>[] };
   if (orders.length !== ids.length) return json({ error: "Some of those orders were not found" }, 404);
   const isClient = ["client_admin", "client_approver", "client_user"].includes(user!.role);
   if (isClient && user!.client_id && orders.some(o => o.client_id !== user!.client_id)) return json({ error: "Forbidden" }, 403);
+  // Legal company = PAN (one entity, possibly several state GSTINs/client records);
+  // fall back to the PAN embedded in the GSTIN, then to the client id.
+  const companyKey = (o: Record<string, unknown>) => {
+    const pan = String(o.client_pan || "").trim(); if (pan) return "PAN:" + pan.toUpperCase();
+    const g = String(o.client_gstin || "").trim(); if (g.length >= 12) return "PAN:" + g.slice(2, 12).toUpperCase();
+    return "CID:" + o.client_id;
+  };
+  const key0 = companyKey(orders[0]);
+  if (orders.some(o => companyKey(o) !== key0)) return json({ error: "All orders must belong to the same legal company", code: "E_COMPANY" }, 400);
   const clientId = orders[0].client_id;
-  if (orders.some(o => o.client_id !== clientId)) return json({ error: "All orders must be for the same client", code: "E_CLIENT" }, 400);
   const monthOf = (o: Record<string, unknown>) => (o.index_month as string) || String(o.created_at || "").slice(0, 7);
   const month = monthOf(orders[0]);
   if (orders.some(o => monthOf(o) !== month)) return json({ error: "All orders must be in the same month", code: "E_MONTH" }, 400);
@@ -7081,6 +7089,7 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const q = url.searchParams.get("q");
 
   let query = `SELECT o.*,c.name as client_name,u.name as creator_name,
+    COALESCE(NULLIF(c.pan,''), NULLIF(SUBSTR(c.gstin,3,10),''), o.client_id) AS company_key,
     (SELECT COUNT(*) FROM order_items WHERE order_id=o.id) AS item_count,
     (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty,
     (SELECT COALESCE(SUM(di.qty_delivered),0) FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id
