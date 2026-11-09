@@ -3254,10 +3254,6 @@ async function renderOrderQueue(el) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="oq-subtitle">${filteredOrders().filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <input type="search" list="oq-client-list" id="oq-client-input" class="filter-select"
-        placeholder="🔍 Search client…" value="${h(APP._oqClient||'')}" ${dataInputVal('oqSetClient')}
-        style="font-size:.82rem;min-width:200px" aria-label="Search orders by client">
-      <datalist id="oq-client-list">${clientNames.map(n=>`<option value="${h(n)}"></option>`).join('')}</datalist>
       <div id="oq-month-picker">${monthPickerHtml()}</div>
       ${oqIndexCanSet() ? `<button class="filter-select" id="oq-needs-idx" ${dataAct('oqToggleNeedsIndex')}
         title="Approved orders still missing a monthly index"
@@ -3267,7 +3263,10 @@ async function renderOrderQueue(el) {
 
   <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
 
-  <div id="oq-deliv-chips" style="margin-bottom:14px">${oqDelivChipsHtml()}</div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+    <div id="oq-deliv-chips">${oqDelivChipsHtml()}</div>
+    <div id="oq-client-box">${oqClientSearchHtml()}</div>
+  </div>
 
   <div class="tabs" style="margin-bottom:16px">
     <button class="tab-btn${APP._oqTab==='orders'?' active':''}" data-oqtab="orders" ${dataAct('switchOQMainTab', 'orders')}>Orders</button>
@@ -3397,6 +3396,76 @@ function oqSetClient(val) {
   if (APP._oqTab === 'operator') { renderOperatorTab(); return; }
   const tabsEl = document.getElementById('oq-tabs'); if (tabsEl && APP._oqTabsHtml) tabsEl.innerHTML = APP._oqTabsHtml();
   const tbody = document.getElementById('oq-tbody'); if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+}
+
+// ── Client search beside "By delivery": a live type-ahead that filters the queue
+// as you type and suggests matching clients. Reuses oqSetClient() for the refresh.
+function injectOqSearchCss() {
+  if (document.getElementById('oq-search-css')) return;
+  const s = document.createElement('style'); s.id = 'oq-search-css';
+  s.textContent = `#oq-client-ajax:focus{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 22%,transparent)}
+  .oq-sugg{position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:5px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 34px rgba(16,28,45,.18);overflow:hidden;max-height:300px;overflow-y:auto}
+  .oq-sugg-item{display:flex;justify-content:space-between;gap:10px;width:100%;padding:9px 12px;border:0;border-bottom:1px solid var(--border);background:none;cursor:pointer;font:inherit;font-size:.84rem;color:var(--text);text-align:left}
+  .oq-sugg-item:last-child{border-bottom:0}.oq-sugg-item:hover,.oq-sugg-item:focus{background:var(--surface-2)}
+  .oq-sugg-item .c{color:var(--text-muted);font-size:.78rem;font-variant-numeric:tabular-nums}
+  .oq-sugg-empty{padding:10px 12px;color:var(--text-muted);font-size:.82rem}`;
+  document.head.appendChild(s);
+  if (!APP._oqSearchOutside) {
+    APP._oqSearchOutside = true;
+    document.addEventListener('click', e => {
+      const box = document.getElementById('oq-client-sugg');
+      if (box && box.style.display !== 'none' && !e.target.closest('#oq-cs')) box.style.display = 'none';
+    });
+  }
+}
+function oqClientSearchHtml() {
+  injectOqSearchCss();
+  const v = APP._oqClient || '';
+  return `<div id="oq-cs" style="position:relative;min-width:230px">
+    <div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);margin:0 2px 6px">Client</div>
+    <div style="position:relative">
+      <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:.9rem;pointer-events:none">🔍</span>
+      <input type="search" id="oq-client-ajax" autocomplete="off" placeholder="Search client…" value="${h(v)}"
+        ${dataInputEl('oqClientSearch')} ${dataActEl('oqClientFocus')}
+        style="width:100%;padding:8px 30px 8px 32px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit;font-size:.84rem;outline:none">
+      <button id="oq-client-clear" ${dataAct('oqClientClear')} aria-label="Clear client search"
+        style="position:absolute;right:7px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--text-muted);cursor:pointer;font-size:.9rem;display:${v ? 'block' : 'none'}">✕</button>
+    </div>
+    <div id="oq-client-sugg" class="oq-sugg" style="display:none"></div>
+  </div>`;
+}
+function oqClientMatches(q) {
+  const names = [...new Set((APP._oqOrders || []).map(o => o.client_name).filter(Boolean))].sort();
+  const ql = (q || '').trim().toLowerCase();
+  return names.filter(n => !ql || n.toLowerCase().includes(ql));
+}
+function oqUpdateClientSuggest(q) {
+  const box = document.getElementById('oq-client-sugg'); if (!box) return;
+  const matches = oqClientMatches(q).slice(0, 8);
+  const count = n => (APP._oqOrders || []).filter(o => o.client_name === n).length;
+  box.innerHTML = matches.length
+    ? matches.map(n => `<button type="button" class="oq-sugg-item" ${dataAct('oqClientPick', n)}><span>${h(n)}</span><span class="c">${count(n)}</span></button>`).join('')
+    : `<div class="oq-sugg-empty">No matching client</div>`;
+  box.style.display = '';
+}
+function oqClientSearch(el) {
+  oqSetClient(el.value);
+  const c = document.getElementById('oq-client-clear'); if (c) c.style.display = el.value ? 'block' : 'none';
+  oqUpdateClientSuggest(el.value);
+}
+function oqClientFocus(el) { oqUpdateClientSuggest(el.value); }
+function oqClientPick(name) {
+  const inp = document.getElementById('oq-client-ajax'); if (inp) inp.value = name;
+  oqSetClient(name);
+  const c = document.getElementById('oq-client-clear'); if (c) c.style.display = 'block';
+  const box = document.getElementById('oq-client-sugg'); if (box) box.style.display = 'none';
+}
+function oqClientClear() {
+  const inp = document.getElementById('oq-client-ajax'); if (inp) { inp.value = ''; }
+  oqSetClient('');
+  const c = document.getElementById('oq-client-clear'); if (c) c.style.display = 'none';
+  const box = document.getElementById('oq-client-sugg'); if (box) box.style.display = 'none';
+  if (inp) inp.focus();
 }
 
 function oqFilterByType(type) {
