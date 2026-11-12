@@ -135,11 +135,20 @@ instead of re-zeroing already-fetched rows:
    `zoho_dc_reported_total`.
 4. **Phase B — detail backfill** (`zohoDCBackfillDetails`): fetches
    `GET /inventory/v1/deliverychallans/{id}` for up to `DETAIL_BATCH` (100)
-   challans **where `detail_ok=0`**, newest first — line count, quantity total,
-   invoice numbers — then sets `detail_ok=1`. A challan it can't reach
-   (rate-limit / timeout) stays `detail_ok=0` and is retried next run.
-   `runZohoDCSync({full:true})` loops Phase B (bounded by `DETAIL_FULL_MAX`) until
-   nothing is pending.
+   challans **where `detail_ok=0`** — line count, quantity total, invoice numbers
+   — then sets `detail_ok=1`. **Eager detail is scoped to the recent window only**
+   (`RECENT_MONTHS`, 6): `ym >= cutoff`. This keeps every sync inside Zoho's API
+   quota (~100 req/min + a per-day cap, and there is no bulk line-item export).
+   Older challans are **not** mass-detailed; they are fetched on demand (below).
+
+### On-demand detail (older challans)
+
+`POST …/delivery-challans/detail-now` with `{ids:[…]}` (≤ `DETAIL_NOW_MAX`, 50)
+fetches detail for exactly the challans a user is viewing and returns the fresh
+rows. The register calls it when you drill into a customer/month (auto, small
+sets) or press **"Load detail"**, so older challans fill in lazily instead of a
+multi-day full backfill. Repeat calls are cheap — only still-pending ids are
+fetched.
 5. Records a `zoho-dc-sync` job in `import_jobs` and stamps `zoho_dc_last_sync_at`
    / `zoho_dc_last_result` (with `mirrored`, `reported_total`, `detailed_now`,
    `pending`, `failed`) in `app_config`.
@@ -150,8 +159,10 @@ The list endpoint returns a `health` block the register renders as a status stri
 
 - `mirrored` — challans in the mirror; `reported_total` — what Zoho's list reported.
   `headers_complete` is true when `mirrored >= reported_total`.
-- `detailed` / `pending` — challans with / without line-qty-invoice detail.
-  `details_complete` is true when `pending == 0`.
+- `detailed` / `pending` — challans with / without line-qty-invoice detail;
+  `pending_recent` / `pending_old` split that by the recent window.
+  `details_complete` is true when `pending_recent == 0` (the eager window is done;
+  older challans are expected to be on-demand, so they don't block completeness).
 - `suspicious` — challans marked detailed but still showing 0 lines (a data
   anomaly worth checking in Zoho).
 

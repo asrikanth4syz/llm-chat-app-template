@@ -123,6 +123,23 @@ describe("Zoho Delivery Challans register", () => {
     expect(body.health.details_complete).toBe(false);
   });
 
+  it("treats older challans as on-demand (recent-window completeness)", async () => {
+    await db().prepare("UPDATE zoho_delivery_challans SET detail_ok=1").run(); // all 4 recent rows detailed
+    await seedDC({ id: "zOld", number: "DC-00001", date: "2020-01-15", ym: "2020-01", custId: "cust-li", custName: "LinkedIn India", lines: 3, qty: 30, status: "invoiced", invoices: ["INV-1"], total: 1000 });
+    const body = await (await get(LIST, superTok)).json() as any;
+    expect(body.health.pending_recent).toBe(0);
+    expect(body.health.pending_old).toBe(1);
+    expect(body.health.details_complete).toBe(true); // recent window complete; old is on-demand
+    const old = body.rows.find((r: any) => r.dc_number === "DC-00001");
+    expect(old.detail_ok).toBe(0);
+  });
+
+  it("detail-now is gated and reports not_configured without Zoho", async () => {
+    expect((await post(`${LIST}/detail-now`, { ids: ["z1"] }, cliTok)).status).toBe(403);
+    const body = await (await post(`${LIST}/detail-now`, { ids: ["z1"] }, superTok)).json() as any;
+    expect(body.status).toBe("not_configured");
+  });
+
   it("forbids client roles from syncing", async () => {
     expect((await post(`${LIST}/sync`, {}, cliTok)).status).toBe(403);
   });

@@ -1403,7 +1403,7 @@ function _zdcPaint(main) {
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcToggleHelp')}>${_ZDC.help ? 'Hide help' : 'Help'}</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcCsv')}>Export CSV</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcRefresh')}>Refresh</button>
-        ${(d.health && d.health.pending > 0) ? `<button class="btn btn-secondary btn-sm" ${dataAct('zdcSyncFull')} title="Fetch line/qty/invoice detail for every remaining challan now (runs in the background)">Fetch all details (${d.health.pending})</button>` : ''}
+        ${_zdcShownMissing().length ? `<button class="btn btn-secondary btn-sm" ${dataAct('zdcLoadShown')} title="Fetch line/qty/invoice detail now for the challans shown below that aren’t loaded yet">Load detail (${_zdcShownMissing().length})</button>` : ''}
         <button class="btn btn-primary btn-sm" ${dataAct('zdcSync')}>↻ Sync now</button>
       </div>
     </div>
@@ -1432,6 +1432,11 @@ function _zdcVisible() {
          || (r.invoice_numbers || []).some(n => String(n).toLowerCase().includes(q))));
 }
 
+// Visible (filtered) rows whose line/qty/invoice detail hasn't been loaded yet.
+function _zdcShownMissing() {
+  try { return _zdcVisible().filter(r => !r.detail_ok); } catch { return []; }
+}
+
 function _zdcInvCell(r) {
   const nos = r.invoice_numbers || [];
   if (!nos.length) return '<span class="zdc-dash">—</span>';
@@ -1446,14 +1451,18 @@ function _zdcRenderTable() {
   const list = _zdcSorted(_zdcVisible());
   const body = list.length ? list.map(r => {
     const im = _zdcInvMeta(r.invoiced_status);
+    const loaded = !!r.detail_ok;
+    // Not-yet-loaded rows (older than the eager window) show a "·" placeholder with
+    // a hint, instead of a misleading 0, until detail is fetched on demand.
+    const na = '<span class="zdc-dash" title="Detail not loaded yet — use “Load detail”">·</span>';
     return `<tr>
       <td data-label="DC number" class="zdc-dcno">${h(String(r.dc_number || ''))}</td>
       <td data-label="DC date" class="zdc-muted">${h(String(r.dc_date || ''))}</td>
       <td data-label="Billed to" style="font-weight:600">${h(String(r.customer_name || ''))}</td>
-      <td data-label="Lines" class="zdc-c">${Number(r.line_count || 0)}</td>
-      <td data-label="Qty" class="zdc-r">${Number(r.qty_count || 0).toLocaleString('en-IN')}</td>
+      <td data-label="Lines" class="zdc-c">${loaded ? Number(r.line_count || 0) : na}</td>
+      <td data-label="Qty" class="zdc-r">${loaded ? Number(r.qty_count || 0).toLocaleString('en-IN') : na}</td>
       <td data-label="Invoiced?"><span class="zdc-pill ${im[1]}">${im[0]}</span></td>
-      <td data-label="Invoice #">${_zdcInvCell(r)}</td>
+      <td data-label="Invoice #">${loaded ? _zdcInvCell(r) : na}</td>
       <td data-label="Total" class="zdc-r zdc-total">${_zdcINR(r.total)}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="8" style="padding:28px;text-align:center;color:var(--muted,#64748b)">No delivery challans match these filters.</td></tr>`;
@@ -1471,8 +1480,30 @@ function _zdcRenderTable() {
 }
 
 // ── delegated handlers (top-level globals) ──
-function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); }
-function zdcPickMonth(v) { _ZDC.month = v || 'all'; _zdcRenderTable(); }
+function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); _zdcMaybeAutoLoad(); }
+function zdcPickMonth(v) { _ZDC.month = v || 'all'; _zdcRenderTable(); _zdcMaybeAutoLoad(); }
+// When the user drills into a specific customer/month and the shown set is small,
+// fetch the missing detail for exactly those rows automatically.
+function _zdcMaybeAutoLoad() {
+  const narrowed = _ZDC.cust !== 'all' || _ZDC.month !== 'all';
+  const missing = _zdcShownMissing();
+  if (narrowed && missing.length && missing.length <= 40) zdcLoadShown(true);
+}
+async function zdcLoadShown(auto) {
+  const missing = _zdcShownMissing();
+  if (!missing.length) { if (!auto) showToast('All shown challans already have detail.', 'info'); return; }
+  const ids = missing.slice(0, 200).map(r => r.zoho_dc_id).filter(Boolean);
+  if (!auto) showToast(`Loading detail for ${ids.length} challan${ids.length === 1 ? '' : 's'}…`, 'info');
+  for (let i = 0; i < ids.length; i += 25) {
+    const r = await api('/integrations/zoho-inventory/delivery-challans/detail-now', { method: 'POST', body: JSON.stringify({ ids: ids.slice(i, i + 25) }) });
+    if (!r) return;
+    if (r.status === 'not_configured') { showToast('Zoho is not configured yet — connect it in Finance Setup first.', 'error'); return; }
+    (r.rows || []).forEach(u => { const row = (_ZDC.data.rows || []).find(x => x.zoho_dc_id === u.zoho_dc_id); if (row) Object.assign(row, u); });
+    _zdcRenderTable();
+  }
+  await zdcRefresh(); // re-pull health + header counts so the status panel is accurate
+  if (!auto) showToast('Detail loaded.', 'success');
+}
 function zdcSearch(v) { _ZDC.q = v || ''; _zdcRenderTable(); }
 function zdcSetInv(k) { _ZDC.inv = k; _zdcPaint(); }
 function zdcSort(col) {
@@ -1496,13 +1527,6 @@ async function zdcSync() {
   if (!r) return; // api() already showed the error toast
   if (r.status === 'not_configured') { showToast('Zoho is not configured — set the Zoho secrets in Finance Setup first.', 'error'); return; }
   showToast('Sync started — refreshing headers and fetching a batch of details in the background.', 'success');
-  _zdcAutoRefresh();
-}
-async function zdcSyncFull() {
-  const r = await api('/integrations/zoho-inventory/delivery-challans/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
-  if (!r) return;
-  if (r.status === 'not_configured') { showToast('Zoho is not configured yet — connect it in Finance Setup first.', 'error'); return; }
-  showToast('Fetching challan details from Zoho in the background — the pending count will drop as they load. Large backlogs take several rounds.', 'success');
   _zdcAutoRefresh();
 }
 function zdcCsv() {
@@ -1531,7 +1555,7 @@ function _zdcHelp() {
       <li><strong>Invoice #</strong> — the linked invoice number(s). A challan can map to more than one invoice; extras show as <span class="zdc-more">+N</span> (hover to see them all). A <span class="zdc-ptag">partial</span> tag means only part of the challan is invoiced. A dash means it is not invoiced yet.</li>
     </ul>
     <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by month, or by the invoiced state; search matches DC number, customer or invoice number; click any column header to sort. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
-    <p style="margin:8px 0 0;color:var(--muted,#64748b)"><strong>Line/qty detail</strong> is pulled per challan from Zoho and can take more than one sync for a large history. The status strip above shows how many challans still await detail — <strong>“Fetch all details”</strong> completes them now, and the nightly sync finishes any remainder. “Done in full” means every mirrored challan has its detail and the mirror count matches Zoho’s reported total.</p>
+    <p style="margin:8px 0 0;color:var(--muted,#64748b)"><strong>Line/qty & invoice detail</strong> is pulled per challan from Zoho, which rate-limits the API — so the last few months are detailed automatically (headers + nightly sync), and older challans load <strong>on demand</strong>: filter to a customer/month and they fill in, or press <strong>“Load detail”</strong>. Rows not yet loaded show a “·” in Lines/Qty/Invoice. The status strip shows recent-window progress and how many older challans are still on demand.</p>
   </div>`;
 }
 
@@ -1558,9 +1582,12 @@ function _zdcStatus(d) {
   } else if (lr.status === 'error') {
     sev = 'err'; pill = 'Last sync failed';
     headline = 'Last sync failed: ' + (lr.error || 'unknown error') + ' — press “Sync now” to retry.';
-  } else if ((hl.pending || 0) > 0 || hl.headers_complete === false) {
+  } else if ((hl.pending_recent || 0) > 0 || hl.headers_complete === false) {
     sev = 'prog'; pill = 'Sync in progress';
-    headline = `${n(hl.detailed)} of ${n(hl.mirrored)} challans fully synced · ${n(hl.pending)} still being fetched. Use “Fetch all details”, or it finishes on the nightly sync.`;
+    headline = `${n(hl.detailed)} of ${n(hl.mirrored)} challans detailed · ${n(hl.pending_recent)} recent still loading${hl.pending_old ? ` · ${n(hl.pending_old)} older load on demand` : ''}.`;
+  } else if ((hl.pending_old || 0) > 0) {
+    sev = 'ok'; pill = 'Up to date';
+    headline = `Recent ${n(hl.recent_months || 6)} months fully synced · ${n(hl.pending_old)} older challans load on demand when you open them (filter to a customer/month, or use “Load detail”).`;
   } else {
     sev = 'ok'; pill = 'Up to date';
     headline = `All ${n(hl.mirrored)} challans synced in full.`;
@@ -1570,7 +1597,8 @@ function _zdcStatus(d) {
   const rows = [metric('Last sync', syncedAt ? h(syncedAt) : '—')];
   if (d.configured && (syncedAt || hl.mirrored)) {
     rows.push(metric('Challans mirrored', hl.reported_total ? `${n(hl.mirrored)} of ${n(hl.reported_total)}` : n(hl.mirrored), hl.reported_total ? hl.headers_complete : undefined));
-    rows.push(metric('Line/qty detail', `${n(hl.detailed)} done · ${n(hl.pending)} pending`, hl.details_complete));
+    rows.push(metric(`Recent detail (${n(hl.recent_months || 6)}mo)`, `${n(hl.pending_recent)} pending`, (hl.pending_recent || 0) === 0));
+    if (hl.pending_old > 0) rows.push(metric('Older (on demand)', `${n(hl.pending_old)} not loaded`));
     if (hl.suspicious > 0) rows.push(metric('Check in Zoho', `${n(hl.suspicious)} show 0 lines`, false));
     if (lr.detailed_now !== undefined) rows.push(metric('Last run added', `${n(lr.detailed_now)} detailed${lr.failed ? ` · ${n(lr.failed)} failed` : ''}`));
   }

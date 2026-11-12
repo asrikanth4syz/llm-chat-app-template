@@ -2154,8 +2154,10 @@ const ZOHO_DC = {
   PER_PAGE: 200,
   MAX_PAGES_PER_RUN: 50,
   DETAIL_BATCH: 100,       // per-run detail backfill cap (headers are cheap; details converge)
-  DETAIL_FULL_MAX: 700,    // hard ceiling for a background "fetch all details" run (Workers ~1000 subrequests/invocation)
+  DETAIL_FULL_MAX: 700,    // hard ceiling for a background recent-window detail run (Workers ~1000 subrequests/invocation)
   WRITE_CHUNK: 100,        // D1 statements per batch() call (each batch = one subrequest)
+  RECENT_MONTHS: 6,        // how far back detail is pulled eagerly; older challans are detailed on demand
+  DETAIL_NOW_MAX: 50,      // cap for an on-demand "load detail for these rows" call
   MAX_RETRIES: 4,
   RETRY_BASE_MS: 1000,
   RETRY_CAP_MS: 20000,
@@ -2178,6 +2180,15 @@ async function ensureZohoDCTable(env: Env): Promise<void> {
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_customer ON zoho_delivery_challans(customer_id)").run().catch(() => {});
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_detail ON zoho_delivery_challans(detail_ok)").run().catch(() => {});
   _zdcReady = true;
+}
+
+// The ym (YYYY-MM) `RECENT_MONTHS` before `now` — the lower bound of the window
+// whose detail is pulled eagerly. Older challans are detailed on demand.
+function zohoDcRecentCutoff(now: number): string {
+  const d = new Date(now * 1000);
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - (ZOHO_DC.RECENT_MONTHS - 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function zohoDcYm(d: unknown): string {
@@ -2319,12 +2330,14 @@ async function zohoDCSyncHeaders(env: Env, fetchImpl: FetchImpl, now: number, r:
 // `cap` challans that still need it (detail_ok=0), newest first. A DC we reach is
 // marked detail_ok=1 even if it has no lines, so it is not retried forever; a DC we
 // cannot reach (timeout / rate-limit) is left pending and retried next run.
-async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number, stamp: string, r: ZohoDCSyncResult): Promise<number> {
+async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number, stamp: string, r: ZohoDCSyncResult, minYm?: string): Promise<number> {
   let token = await zohoGetToken(env, fetchImpl);
   let reAuthed = false, processed = 0;
   const { results } = await env.DB.prepare(
-    "SELECT zoho_dc_id, dc_number FROM zoho_delivery_challans WHERE detail_ok=0 ORDER BY dc_date DESC, dc_number DESC LIMIT ?"
-  ).bind(cap).all();
+    `SELECT zoho_dc_id, dc_number FROM zoho_delivery_challans
+       WHERE detail_ok=0 ${minYm ? "AND ym >= ?" : ""}
+       ORDER BY dc_date DESC, dc_number DESC LIMIT ?`
+  ).bind(...(minYm ? [minYm, cap] : [cap])).all();
   const up = env.DB.prepare(
     "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
   );
@@ -2368,6 +2381,33 @@ async function _zdcPending(env: Env): Promise<number> {
   return scalarCount(env, "SELECT COUNT(*) AS n FROM zoho_delivery_challans WHERE detail_ok=0");
 }
 
+// On-demand detail for a specific set of challans (the ones a user is looking at).
+// Small and bounded, so it stays well inside Zoho's rate limit.
+async function zohoDCDetailByIds(env: Env, fetchImpl: FetchImpl, ids: string[], stamp: string,
+  r: Pick<ZohoDCSyncResult, "detailed_now" | "failed" | "errors">): Promise<void> {
+  let token = await zohoGetToken(env, fetchImpl);
+  let reAuthed = false;
+  for (const id of ids) {
+    let detail: Record<string, unknown> | null = null;
+    let reached = false;
+    try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); reached = true; }
+    catch (e) {
+      if (e instanceof ZohoAuthError && !reAuthed) {
+        try { token = await zohoGetToken(env, fetchImpl, true); reAuthed = true; detail = await zohoDCFetchDetail(env, token, id, fetchImpl); reached = true; } catch { /* leave pending */ }
+      } else { if (r.errors.length < 50) r.errors.push(`detail fetch stopped: ${(e as Error).message}`); break; }
+    }
+    if (!reached) { r.failed++; continue; }
+    const lines: unknown[] = detail && Array.isArray(detail.line_items) ? detail.line_items as unknown[] : [];
+    const qty = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
+    try {
+      await env.DB.prepare(
+        "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
+      ).bind(lines.length, qty, JSON.stringify(zohoDcInvoiceNumbers(detail, {})), stamp, id).run();
+      r.detailed_now++;
+    } catch (e) { r.failed++; if (r.errors.length < 50) r.errors.push((e as Error).message); }
+  }
+}
+
 // One Zoho→app pull of the delivery-challan register: refresh all headers, then
 // fill in missing detail. `full` keeps backfilling (bounded) until nothing is
 // pending, for an on-demand "fetch everything now". Non-throwing (safe for cron
@@ -2402,18 +2442,22 @@ async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: Fetch
     } else {
       r.reported_total = parseInt(await getConfig(env, "zoho_dc_reported_total", "0"), 10) || 0;
     }
+    // Eager detail is scoped to the recent window only (RECENT_MONTHS); older
+    // challans are detailed on demand when a user opens them. This keeps every
+    // sync comfortably inside Zoho's per-minute + daily API quota.
+    const cutoff = zohoDcRecentCutoff(now);
     if (opts.full) {
-      // Chip away in bounded batches until nothing is pending (or a batch makes
-      // no progress), so a cron / request can never run unbounded.
+      // Chip away in bounded batches until the recent window is fully detailed
+      // (or a batch makes no progress), so a cron / request never runs unbounded.
       let done = 0;
       for (let b = 0; b < Math.ceil(ZOHO_DC.DETAIL_FULL_MAX / ZOHO_DC.DETAIL_BATCH); b++) {
         if (done >= ZOHO_DC.DETAIL_FULL_MAX) break;
-        const n = await zohoDCBackfillDetails(env, fetchImpl, ZOHO_DC.DETAIL_BATCH, stamp, r);
+        const n = await zohoDCBackfillDetails(env, fetchImpl, ZOHO_DC.DETAIL_BATCH, stamp, r, cutoff);
         done += n;
         if (n === 0) break;
       }
     } else {
-      await zohoDCBackfillDetails(env, fetchImpl, ZOHO_DC.DETAIL_BATCH, stamp, r);
+      await zohoDCBackfillDetails(env, fetchImpl, ZOHO_DC.DETAIL_BATCH, stamp, r, cutoff);
     }
     r.mirrored = await scalarCount(env, "SELECT COUNT(*) AS n FROM zoho_delivery_challans");
     r.pending = await _zdcPending(env);
@@ -2454,7 +2498,7 @@ async function handleZohoDCList(request: Request, env: Env): Promise<Response> {
   if (customer) { where.push("customer_id = ?"); binds.push(customer); }
   if (month) { where.push("ym = ?"); binds.push(month); }
   if (q) { where.push("(LOWER(dc_number) LIKE ? OR LOWER(customer_name) LIKE ? OR LOWER(invoice_numbers) LIKE ?)"); binds.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-  const sql = `SELECT zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,line_count,qty_count,invoiced_status,invoice_numbers,total,currency_code
+  const sql = `SELECT zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,line_count,qty_count,invoiced_status,invoice_numbers,total,currency_code,detail_ok
                FROM zoho_delivery_challans ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY dc_date DESC, dc_number DESC LIMIT 1000`;
   const { results } = await env.DB.prepare(sql).bind(...binds).all();
@@ -2473,22 +2517,31 @@ async function handleZohoDCList(request: Request, env: Env): Promise<Response> {
   // mirror, how many have their line/qty/invoice detail, how many are still pending,
   // and any detailed-but-still-empty rows (a data anomaly worth flagging), vs. the
   // total Zoho's list reported at the last header pass.
+  const cutoff = zohoDcRecentCutoff(Math.floor(Date.now() / 1000));
   const hc = await env.DB.prepare(
     `SELECT COUNT(*) AS mirrored,
             SUM(CASE WHEN detail_ok=1 THEN 1 ELSE 0 END) AS detailed,
             SUM(CASE WHEN detail_ok=0 THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN detail_ok=0 AND ym >= ? THEN 1 ELSE 0 END) AS pending_recent,
+            SUM(CASE WHEN detail_ok=0 AND (ym < ? OR ym IS NULL OR ym='') THEN 1 ELSE 0 END) AS pending_old,
             SUM(CASE WHEN detail_ok=1 AND line_count=0 THEN 1 ELSE 0 END) AS suspicious
        FROM zoho_delivery_challans`
-  ).first() as { mirrored?: number; detailed?: number; pending?: number; suspicious?: number } | null;
+  ).bind(cutoff, cutoff).first() as { mirrored?: number; detailed?: number; pending?: number; pending_recent?: number; pending_old?: number; suspicious?: number } | null;
   const reportedTotal = parseInt(await getConfig(env, "zoho_dc_reported_total", "0"), 10) || 0;
   const health = {
     mirrored: Number(hc?.mirrored ?? 0),
     detailed: Number(hc?.detailed ?? 0),
     pending: Number(hc?.pending ?? 0),
+    pending_recent: Number(hc?.pending_recent ?? 0),
+    pending_old: Number(hc?.pending_old ?? 0),
     suspicious: Number(hc?.suspicious ?? 0),
     reported_total: reportedTotal,
+    recent_months: ZOHO_DC.RECENT_MONTHS,
+    recent_cutoff: cutoff,
     headers_complete: reportedTotal === 0 ? null : Number(hc?.mirrored ?? 0) >= reportedTotal,
-    details_complete: Number(hc?.pending ?? 0) === 0 && Number(hc?.mirrored ?? 0) > 0,
+    // "Complete" means the eager recent window is fully detailed; older challans
+    // are expected to load on demand, so they don't count against completeness.
+    details_complete: Number(hc?.pending_recent ?? 0) === 0 && Number(hc?.mirrored ?? 0) > 0,
   };
   return json({
     rows,
@@ -2526,6 +2579,39 @@ async function handleZohoDCSync(request: Request, env: Env, ctx: ExecutionContex
     ctx.waitUntil(runZohoDCSync(env, { actor: user!.sub, full: false, headers: true }));
   }
   return json({ status: "started", full: !!body.full, async: true });
+}
+
+// POST /api/integrations/zoho-inventory/delivery-challans/detail-now — fetch line/
+// qty/invoice detail for a specific set of challans the user is viewing (lazy, on
+// demand), for older rows outside the eager recent window. Returns the fresh rows.
+async function handleZohoDCDetailNow(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureZohoDCTable(env);
+  if (!(await zohoConfigured(env))) return json({ status: "not_configured", error: "Zoho is not configured" });
+  const body = await request.json().catch(() => ({})) as { ids?: unknown };
+  const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x): x is string => typeof x === "string" && !!x).slice(0, ZOHO_DC.DETAIL_NOW_MAX);
+  if (!ids.length) return json({ error: "no ids" }, 400);
+  // Only the ones still missing detail, so repeat clicks are cheap no-ops.
+  const placeholders = ids.map(() => "?").join(",");
+  const { results: pend } = await env.DB.prepare(
+    `SELECT zoho_dc_id FROM zoho_delivery_challans WHERE detail_ok=0 AND zoho_dc_id IN (${placeholders})`
+  ).bind(...ids).all();
+  const todo = (pend as { zoho_dc_id: string }[]).map((x) => x.zoho_dc_id);
+  const r = { detailed_now: 0, failed: 0, errors: [] as string[] };
+  if (todo.length) {
+    const stamp = new Date().toISOString();
+    await zohoDCDetailByIds(env, fetch, todo, stamp, r);
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT zoho_dc_id,line_count,qty_count,invoiced_status,invoice_numbers,detail_ok FROM zoho_delivery_challans WHERE zoho_dc_id IN (${placeholders})`
+  ).bind(...ids).all();
+  const rows = (results as Record<string, unknown>[]).map((rw) => ({
+    ...rw,
+    invoice_numbers: (() => { try { return JSON.parse(String(rw.invoice_numbers || "[]")); } catch { return []; } })(),
+  }));
+  return json({ ok: true, detailed: r.detailed_now, failed: r.failed, rows });
 }
 
 async function handleZohoInvStatus(request: Request, env: Env): Promise<Response> {
@@ -7074,6 +7160,7 @@ export default {
       // Zoho Delivery Challans — read-only finance register (Billing & Finance).
       if (path==="/api/integrations/zoho-inventory/delivery-challans"      && method==="GET")  return handleZohoDCList(request,env);
       if (path==="/api/integrations/zoho-inventory/delivery-challans/sync" && method==="POST") return handleZohoDCSync(request,env,ctx);
+      if (path==="/api/integrations/zoho-inventory/delivery-challans/detail-now" && method==="POST") return handleZohoDCDetailNow(request,env);
 
       // Phase 3 Finance — Receivables (003-finance-ar). Await the AR schema before
       // any finance handler so a cold isolate never races the waitUntil self-heal.
