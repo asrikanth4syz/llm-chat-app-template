@@ -104,6 +104,25 @@ describe("Zoho Delivery Challans register", () => {
     expect(body.rows[0].dc_number).toBe("DC-00051");
   });
 
+  it("reports detail completeness in health (all pending until detail is fetched)", async () => {
+    const body = await (await get(LIST, finTok)).json() as any;
+    expect(body.health.mirrored).toBe(4);
+    expect(body.health.pending).toBe(4);     // seeded rows have detail_ok=0
+    expect(body.health.detailed).toBe(0);
+    expect(body.health.details_complete).toBe(false);
+  });
+
+  it("counts detailed and suspicious (detailed-but-empty) rows", async () => {
+    // Mark two rows detailed; one of them has 0 line items → suspicious.
+    await db().prepare("UPDATE zoho_delivery_challans SET detail_ok=1 WHERE zoho_dc_id IN ('z1','z2')").run();
+    await db().prepare("UPDATE zoho_delivery_challans SET line_count=0 WHERE zoho_dc_id='z2'").run();
+    const body = await (await get(LIST, superTok)).json() as any;
+    expect(body.health.detailed).toBe(2);
+    expect(body.health.pending).toBe(2);
+    expect(body.health.suspicious).toBe(1);
+    expect(body.health.details_complete).toBe(false);
+  });
+
   it("forbids client roles from syncing", async () => {
     expect((await post(`${LIST}/sync`, {}, cliTok)).status).toBe(403);
   });

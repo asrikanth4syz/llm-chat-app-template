@@ -1407,10 +1407,12 @@ function _zdcPaint(main) {
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcToggleHelp')}>${_ZDC.help ? 'Hide help' : 'Help'}</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcCsv')}>Export CSV</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcRefresh')}>Refresh</button>
+        ${(d.health && d.health.pending > 0) ? `<button class="btn btn-secondary btn-sm" ${dataAct('zdcSyncFull')} title="Fetch line/qty/invoice detail for every remaining challan now (runs in the background)">Fetch all details (${d.health.pending})</button>` : ''}
         <button class="btn btn-primary btn-sm" ${dataAct('zdcSync')}>↻ Sync now</button>
       </div>
     </div>
     ${_ZDC.help ? _zdcHelp() : ''}
+    ${_zdcHealth(d.health)}
     <div class="zdc-tools">
       <label class="zdc-fld"><span>DC for (customer)</span><select ${dataChangeVal('zdcPickCust')}>${custOpts}</select></label>
       <label class="zdc-fld"><span>Month</span><select ${dataChangeVal('zdcPickMonth')}>${monthOpts}</select></label>
@@ -1495,8 +1497,14 @@ async function zdcSync() {
   if (r.status === 'not_configured') { showToast('Zoho is not configured — set the Zoho secrets in Finance Setup first.', 'error'); return; }
   if (r.status === 'error') showToast('Sync failed: ' + ((r.errors && r.errors[0]) || 'unknown error'), 'error');
   else if (r.status === 'skipped') showToast('A sync is already running — try again shortly.', 'info');
-  else showToast(`Synced ${r.written || 0} challan${r.written === 1 ? '' : 's'}${r.failed ? ` · ${r.failed} failed` : ''}.`, 'success');
+  else showToast(`Synced ${r.mirrored || 0} challan${r.mirrored === 1 ? '' : 's'} · ${r.detailed_now || 0} detailed${r.pending ? ` · ${r.pending} still awaiting detail` : ''}${r.failed ? ` · ${r.failed} failed` : ''}.`, 'success');
   await zdcRefresh();
+}
+async function zdcSyncFull() {
+  const r = await api('/integrations/zoho-inventory/delivery-challans/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
+  if (!r) return;
+  if (r.status === 'not_configured') { showToast('Zoho is not configured yet — connect it in Finance Setup first.', 'error'); return; }
+  showToast('Fetching all challan details from Zoho in the background — press Refresh in a moment to watch the count drop.', 'success');
 }
 function zdcCsv() {
   const list = _zdcVisible();
@@ -1523,12 +1531,43 @@ function _zdcHelp() {
       <li><strong>Invoiced?</strong> — whether Zoho has invoiced the challan (<em>Invoiced</em>, <em>Partially</em> or <em>Not</em>).</li>
       <li><strong>Invoice #</strong> — the linked invoice number(s). A challan can map to more than one invoice; extras show as <span class="zdc-more">+N</span> (hover to see them all). A <span class="zdc-ptag">partial</span> tag means only part of the challan is invoiced. A dash means it is not invoiced yet.</li>
     </ul>
-    <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by month, or by the invoiced state; search matches DC number, customer or invoice number. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
+    <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by month, or by the invoiced state; search matches DC number, customer or invoice number; click any column header to sort. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
+    <p style="margin:8px 0 0;color:var(--muted,#64748b)"><strong>Line/qty detail</strong> is pulled per challan from Zoho and can take more than one sync for a large history. The status strip above shows how many challans still await detail — <strong>“Fetch all details”</strong> completes them now, and the nightly sync finishes any remainder. “Done in full” means every mirrored challan has its detail and the mirror count matches Zoho’s reported total.</p>
+  </div>`;
+}
+
+// Sync completeness strip: answers "is the sync done in full?" — how many
+// challans are mirrored vs. what Zoho reported, how many still await line/qty
+// detail, and any detailed-but-empty anomalies.
+function _zdcHealth(hl) {
+  if (!hl || !hl.mirrored) return '';
+  const n = v => Number(v || 0).toLocaleString('en-IN');
+  const items = [];
+  // Headers: mirrored vs. Zoho's reported total.
+  if (hl.reported_total && hl.headers_complete === false) {
+    items.push({ sev: 'warn', t: `${n(hl.reported_total - hl.mirrored)} challan(s) not yet mirrored — run Sync again (Zoho reports ${n(hl.reported_total)}, we have ${n(hl.mirrored)}).` });
+  }
+  // Detail: line/qty/invoice coverage.
+  if (hl.pending > 0) {
+    items.push({ sev: 'warn', t: `${n(hl.pending)} of ${n(hl.mirrored)} challans still awaiting line/qty detail — use “Fetch all details”, or it finishes on the nightly sync.` });
+  } else {
+    items.push({ sev: 'ok', t: `All ${n(hl.mirrored)} challans have line/qty detail${hl.reported_total ? ` (Zoho reports ${n(hl.reported_total)})` : ''}.` });
+  }
+  // Anomaly: detailed but still zero lines.
+  if (hl.suspicious > 0) {
+    items.push({ sev: 'warn', t: `${n(hl.suspicious)} challan(s) came back with 0 line items from Zoho — verify those in Zoho.` });
+  }
+  const anyWarn = items.some(i => i.sev === 'warn');
+  const bg = anyWarn ? 'var(--amber-bg,#fdf1dd)' : 'var(--success-bg,#e6f5ef)';
+  const bd = anyWarn ? 'var(--amber,#a86513)' : 'var(--success,#0a7a5c)';
+  return `<div class="zdc-healthbar" style="border:1px solid ${bd};background:${bg};color:${bd}">
+    ${items.map(i => `<div>${i.sev === 'ok' ? '✓' : '⚠'} ${h(i.t)}</div>`).join('')}
   </div>`;
 }
 
 function _zdcCss() {
   return `<style>
+  .zdc-healthbar{border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.84rem;display:flex;flex-direction:column;gap:3px}
   .zdc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}
   .zdc-sub{font-size:.8rem;font-weight:600;color:var(--muted,#64748b)}
   .zdc-synced{color:var(--muted,#64748b);font-size:.84rem;margin-top:4px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
