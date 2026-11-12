@@ -6671,6 +6671,12 @@ export default {
         const full = (controller.cron || "") === "30 3 * * *";
         await runZohoSync(env, { full });
       } catch (e) { console.error("zoho sync cron error:", String(e)); }
+      // Zoho Delivery Challans — nightly refresh of the read-only finance register.
+      // Independent of the inventory kill switch; self-gates on Zoho being configured
+      // (a no-op until the secrets are set), and its own try/catch keeps a DC-side
+      // failure from touching the inventory pull above.
+      try { await runZohoDCSync(env, { actor: "cron" }); }
+      catch (e) { console.error("zoho DC sync cron error:", String(e)); }
     })());
   },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

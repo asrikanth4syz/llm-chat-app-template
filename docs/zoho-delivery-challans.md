@@ -130,7 +130,9 @@ Pulls fresh from Zoho and upserts the mirror. Returns:
    `zoho_dc_last_result` in `app_config`.
 
 It reuses the existing Zoho OAuth (`zohoGetToken`) and data-centre (`ZOHO_DC`)
-plumbing, and is non-throwing (safe to wire to cron later).
+plumbing, and is non-throwing. It runs nightly from `scheduled()` on the
+`"30 3 * * *"` tick (alongside the inventory reconcile) and on demand from the
+**Sync now** button.
 
 ### Configuration
 
@@ -145,8 +147,10 @@ default `in`).
 - The detail pull is an N+1 (one call per challan), bounded by
   `MAX_DETAIL_PER_RUN` (300) and `MAX_PAGES_PER_RUN` (50) per run. For very large
   histories, run the sync more than once or raise the caps.
-- The sync is **manual** today (the "Sync now" button). Wiring it to the nightly
-  `scheduled()` cron is a small, isolated follow-up.
+- The sync runs **nightly** on the `"30 3 * * *"` cron (09:00 IST — the same tick
+  as the Zoho Inventory reconcile) and on demand via the **Sync now** button. The
+  cron step self-gates on Zoho being configured and has its own try/catch, so it
+  is a no-op until the secrets are set and never affects the inventory pull.
 - The register reads the mirror only (up to 1,000 rows per view); it does not
   live-call Zoho on every page load.
 
