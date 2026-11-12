@@ -1320,7 +1320,19 @@ async function renderMyStatement(main) {
  * All dataAct / data-change / data-input targets are top-level globals so the
  * smoke test's delegated-target check resolves them.
  * ========================================================== */
-const _ZDC = { data: null, cust: 'all', month: 'all', inv: 'all', q: '', help: false };
+const _ZDC = { data: null, cust: 'all', month: 'all', inv: 'all', q: '', help: false, sort: { col: 'dc_date', dir: 'desc' } };
+// Column metadata for the register — label, cell class, and whether a header click
+// defaults to descending (numbers / dates) or ascending (text).
+const _ZDC_COLS = [
+  { k: 'dc_number', label: 'DC number', cls: '', desc: false },
+  { k: 'dc_date', label: 'DC date', cls: '', desc: true },
+  { k: 'customer_name', label: 'Billed to', cls: '', desc: false },
+  { k: 'line_count', label: 'Lines', cls: 'zdc-c', desc: true },
+  { k: 'qty_count', label: 'Qty', cls: 'zdc-r', desc: true },
+  { k: 'invoiced_status', label: 'Invoiced?', cls: '', desc: true },
+  { k: 'invoice_numbers', label: 'Invoice #', cls: '', desc: false },
+  { k: 'total', label: 'Total', cls: 'zdc-r', desc: true },
+];
 const _ZDC_MON = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function _zdcMonthLabel(ym) {
   const m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
@@ -1342,6 +1354,27 @@ function _zdcInvKey(s) {
   if (k === 'invoiced') return 'inv';
   if (k === 'partially_invoiced') return 'part';
   return 'not';
+}
+// Comparable value per column: numbers for Lines/Qty/Total, a rank for the
+// invoiced state, the first invoice number (blanks last), else lower-cased text.
+function _zdcSortVal(r, col) {
+  switch (col) {
+    case 'line_count': return Number(r.line_count || 0);
+    case 'qty_count': return Number(r.qty_count || 0);
+    case 'total': return Number(r.total || 0);
+    case 'invoiced_status': { const k = _zdcInvKey(r.invoiced_status); return k === 'not' ? 0 : k === 'part' ? 1 : 2; }
+    case 'invoice_numbers': { const a = r.invoice_numbers || []; return a.length ? String(a[0]).toLowerCase() : '￿'; }
+    default: return String(r[col] || '').toLowerCase();
+  }
+}
+function _zdcSorted(list) {
+  const { col, dir } = _ZDC.sort; const mul = dir === 'desc' ? -1 : 1;
+  return list.slice().sort((a, b) => {
+    const va = _zdcSortVal(a, col), vb = _zdcSortVal(b, col);
+    if (va < vb) return -1 * mul;
+    if (va > vb) return 1 * mul;
+    return String(b.dc_date || '').localeCompare(String(a.dc_date || '')); // tie-break: newest first
+  });
 }
 
 async function renderZohoDC(main) {
@@ -1412,7 +1445,7 @@ function _zdcInvCell(r) {
 
 function _zdcRenderTable() {
   const host = document.getElementById('zdc-table'); if (!host) return;
-  const list = _zdcVisible();
+  const list = _zdcSorted(_zdcVisible());
   const body = list.length ? list.map(r => {
     const im = _zdcInvMeta(r.invoiced_status);
     return `<tr>
@@ -1426,12 +1459,10 @@ function _zdcRenderTable() {
       <td data-label="Total" class="zdc-r zdc-total">${_zdcINR(r.total)}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="8" style="padding:28px;text-align:center;color:var(--muted,#64748b)">No delivery challans match these filters.</td></tr>`;
+  const arrow = k => _ZDC.sort.col === k ? `<span class="zdc-arrow">${_ZDC.sort.dir === 'asc' ? '▲' : '▼'}</span>` : '';
+  const thh = c => `<th class="zdc-sortable ${c.cls}${_ZDC.sort.col === c.k ? ' zdc-sorted' : ''}" ${dataAct('zdcSort', c.k)} title="Sort by ${c.label}">${c.label}${arrow(c.k)}</th>`;
   host.innerHTML = `<table class="zdc-tbl">
-    <thead><tr>
-      <th>DC number</th><th>DC date</th><th>Billed to</th>
-      <th class="zdc-c">Lines</th><th class="zdc-r">Qty</th>
-      <th>Invoiced?</th><th>Invoice #</th><th class="zdc-r">Total</th>
-    </tr></thead><tbody>${body}</tbody></table>`;
+    <thead><tr>${_ZDC_COLS.map(thh).join('')}</tr></thead><tbody>${body}</tbody></table>`;
   const sumEl = document.getElementById('zdc-summary');
   if (sumEl) {
     const qty = list.reduce((s, r) => s + Number(r.qty_count || 0), 0);
@@ -1446,6 +1477,12 @@ function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); }
 function zdcPickMonth(v) { _ZDC.month = v || 'all'; _zdcRenderTable(); }
 function zdcSearch(v) { _ZDC.q = v || ''; _zdcRenderTable(); }
 function zdcSetInv(k) { _ZDC.inv = k; _zdcPaint(); }
+function zdcSort(col) {
+  const s = _ZDC.sort;
+  if (s.col === col) { s.dir = s.dir === 'asc' ? 'desc' : 'asc'; }
+  else { s.col = col; s.dir = (_ZDC_COLS.find(c => c.k === col) || {}).desc ? 'desc' : 'asc'; }
+  _zdcRenderTable();
+}
 function zdcToggleHelp() { _ZDC.help = !_ZDC.help; _zdcPaint(); }
 async function zdcRefresh() {
   const data = await api('/integrations/zoho-inventory/delivery-challans');
@@ -1512,6 +1549,10 @@ function _zdcCss() {
   .zdc-summary b{color:inherit;font-variant-numeric:tabular-nums}
   .zdc-tbl{border-collapse:collapse;width:100%;min-width:820px;font-size:.86rem}
   .zdc-tbl thead th{position:sticky;top:0;background:var(--surface-2,#f2f5f8);text-align:left;font-size:.67rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#64748b);font-weight:700;padding:11px 14px;border-bottom:1px solid var(--border,#dde3ea);white-space:nowrap}
+  .zdc-sortable{cursor:pointer;user-select:none}
+  .zdc-sortable:hover{color:var(--primary,#0d7a68)}
+  .zdc-sorted{color:var(--primary,#0d7a68)}
+  .zdc-arrow{margin-left:4px;font-size:.85em}
   .zdc-tbl tbody td{padding:12px 14px;border-bottom:1px solid var(--border,#eceff3);vertical-align:middle}
   .zdc-tbl tbody tr:last-child td{border-bottom:0}
   .zdc-c{text-align:center}.zdc-r{text-align:right;font-variant-numeric:tabular-nums}
