@@ -141,7 +141,7 @@ const PAGE_ICON = {
   inventory: iconInventory, warehouse: iconWarehouse, my_inventory: iconInventory,
   // Billing & finance
   dc_billing: iconBilling, dunning: iconMail, porter_expenses: iconReceipt,
-  client_budget: iconWallet,
+  client_budget: iconWallet, zoho_dc: iconTruck,
   // Reports & insight
   exec_bi: iconPie, consolidated_report: iconFile, reports: iconReports,
   sla_dashboard: iconGauge, client_reports: iconPie, client_consumption: iconReports,
@@ -197,6 +197,7 @@ const NAV = {
     { id:'finance_dashboard',label:'Finance Dashboard',icon:iconPie,     badge:null },
     { id:'dunning',         label:'Dunning',          icon:iconMail,     badge:null },
     { id:'porter_expenses', label:'Porter Expenses',  icon:iconWallet,   badge:null },
+    { id:'zoho_dc',         label:'Delivery Challans (Zoho)', icon:iconTruck, badge:null },
     { section:'Reports & Insights' },
     { id:'sales_analytics',      label:'Sales Analytics',     icon:iconPie,     badge:null },
     { id:'exec_bi',              label:'Executive BI',        icon:iconPie,     badge:null },
@@ -234,6 +235,7 @@ const NAV = {
     { id:'reminders',           label:'Payment Reminders',icon:iconBell,      badge:null },
     { id:'reconciliation',      label:'Reconciliation',   icon:iconFlow,      badge:null },
     { id:'finance_dashboard',   label:'Finance Dashboard',icon:iconPie,       badge:null },
+    { id:'zoho_dc',             label:'Delivery Challans (Zoho)', icon:iconTruck, badge:null },
     { section:'Clients' },
     { id:'service_desk',        label:'Service Desk',     icon:iconHeadset,   badge:null },
     { section:'Alerts & Exceptions' },
@@ -286,6 +288,7 @@ const NAV = {
     { id:'payables',    label:'Payables',      icon:iconWallet,    badge:null },
     { id:'reminders',   label:'Payment Reminders', icon:iconMail,  badge:null },
     { id:'reconciliation', label:'Reconciliation', icon:iconFlow,  badge:null },
+    { id:'zoho_dc',     label:'Delivery Challans (Zoho)', icon:iconTruck, badge:null },
     { section:'Reports & Insights' },
     { id:'finance_dashboard', label:'Finance Dashboard', icon:iconPie, badge:null },
     { id:'reports',     label:'Reports & BI',  icon:iconReports,   badge:null },
@@ -1210,6 +1213,8 @@ const PAGE_MAP = {
   my_statement: 'renderMyStatement',
   // Sales Analytics (app.17) — super-admin only (platform nav).
   sales_analytics: 'renderSalesAnalytics',
+  // Zoho Delivery Challans — read-only finance register (Billing & Finance).
+  zoho_dc: 'renderZohoDC',
   // Smart Paste Order (app.19) — off-nav page reached via the ordering surface;
   // ACL lives in ACTION_PAGES (matches the endpoint role gate).
   smart_paste: 'renderSmartPaste',

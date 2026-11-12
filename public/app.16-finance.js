@@ -1310,3 +1310,226 @@ async function renderMyStatement(main) {
     <h3 style="margin:18px 0 10px">Open Invoices</h3>
     ${_financeInvoiceTable(invoices, false)}`;
 }
+
+/* ============================================================
+ * Zoho Delivery Challans — read-only finance register (Billing & Finance).
+ * Mirrors Zoho Inventory's delivery challans so Finance can see, per customer
+ * and per month, each DC's number / date / billed-to / line count / qty count /
+ * invoiced state and the linked invoice number(s). Read-only: "Sync now" pulls
+ * fresh from Zoho; nothing on this screen writes back to Zoho or the ERP.
+ * All dataAct / data-change / data-input targets are top-level globals so the
+ * smoke test's delegated-target check resolves them.
+ * ========================================================== */
+const _ZDC = { data: null, cust: 'all', month: 'all', inv: 'all', q: '', help: false };
+const _ZDC_MON = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function _zdcMonthLabel(ym) {
+  const m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
+  return m ? _ZDC_MON[+m[2]] + '-' + m[1] : ym;
+}
+function _zdcINR(n) {
+  const v = Number(n || 0);
+  try { return '₹' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+  catch { return '₹' + v.toFixed(2); }
+}
+const _ZDC_INV = {
+  invoiced:           ['Invoiced', 'zdc-inv'],
+  partially_invoiced: ['Partially invoiced', 'zdc-part'],
+  not_invoiced:       ['Not invoiced', 'zdc-not'],
+};
+function _zdcInvMeta(s) { return _ZDC_INV[String(s || '').toLowerCase()] || ['—', 'zdc-not']; }
+function _zdcInvKey(s) {
+  const k = String(s || '').toLowerCase();
+  if (k === 'invoiced') return 'inv';
+  if (k === 'partially_invoiced') return 'part';
+  return 'not';
+}
+
+async function renderZohoDC(main) {
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading delivery challans…</p></div>`;
+  const data = await api('/integrations/zoho-inventory/delivery-challans');
+  if (!data) { main.innerHTML = `<div class="card" style="padding:20px">Unable to load delivery challans.</div>`; return; }
+  _ZDC.data = data;
+  _zdcPaint(main);
+}
+
+function _zdcPaint(main) {
+  main = main || document.getElementById('main-content'); if (!main) return;
+  const d = _ZDC.data || { rows: [], customers: [], months: [] };
+  const synced = d.last_synced ? new Date(d.last_synced).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null;
+  const custOpts = ['<option value="all">All customers</option>']
+    .concat((d.customers || []).map(c => `<option value="${h(String(c.id))}"${_ZDC.cust === c.id ? ' selected' : ''}>${h(String(c.name))}</option>`)).join('');
+  const monthOpts = ['<option value="all">All months</option>']
+    .concat((d.months || []).map(m => `<option value="${h(m)}"${_ZDC.month === m ? ' selected' : ''}>${h(_zdcMonthLabel(m))}</option>`)).join('');
+  const chip = (k, l) => `<button class="zdc-chip${_ZDC.inv === k ? ' active' : ''}" ${dataAct('zdcSetInv', k)}>${l}</button>`;
+  main.innerHTML = `
+    ${_zdcCss()}
+    <div class="zdc-head">
+      <div>
+        <h2 style="margin:0">Delivery Challans <span class="zdc-sub">· from Zoho</span></h2>
+        <div class="zdc-synced">${synced
+          ? `<span class="zdc-dot"></span> Last synced ${h(synced)}`
+          : (d.configured ? 'Not synced yet — press “Sync now”.' : 'Zoho is not configured yet — set the Zoho secrets in Finance Setup first.')}</div>
+      </div>
+      <div class="zdc-hbtns">
+        <button class="btn btn-secondary btn-sm" ${dataAct('zdcToggleHelp')}>${_ZDC.help ? 'Hide help' : 'Help'}</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('zdcCsv')}>Export CSV</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('zdcRefresh')}>Refresh</button>
+        <button class="btn btn-primary btn-sm" ${dataAct('zdcSync')}>↻ Sync now</button>
+      </div>
+    </div>
+    ${_ZDC.help ? _zdcHelp() : ''}
+    <div class="zdc-tools">
+      <label class="zdc-fld"><span>DC for (customer)</span><select ${dataChangeVal('zdcPickCust')}>${custOpts}</select></label>
+      <label class="zdc-fld"><span>Month</span><select ${dataChangeVal('zdcPickMonth')}>${monthOpts}</select></label>
+      <label class="zdc-fld zdc-grow"><span>Search</span><input class="zdc-search" placeholder="DC number, customer or invoice…" value="${h(_ZDC.q)}" ${dataInputVal('zdcSearch')}></label>
+      <div class="zdc-fld"><span>Invoiced</span><div class="zdc-chips">${chip('all', 'All')}${chip('inv', 'Invoiced')}${chip('part', 'Partial')}${chip('not', 'Not')}</div></div>
+    </div>
+    <div id="zdc-summary" class="zdc-summary"></div>
+    <div class="card" style="padding:0;overflow:hidden"><div id="zdc-table" style="overflow-x:auto"></div></div>`;
+  _zdcRenderTable();
+}
+
+function _zdcVisible() {
+  const rows = (_ZDC.data && _ZDC.data.rows) || [];
+  const q = _ZDC.q.trim().toLowerCase();
+  return rows.filter(r =>
+    (_ZDC.cust === 'all' || r.customer_id === _ZDC.cust) &&
+    (_ZDC.month === 'all' || r.ym === _ZDC.month) &&
+    (_ZDC.inv === 'all' || _zdcInvKey(r.invoiced_status) === _ZDC.inv) &&
+    (!q || String(r.dc_number || '').toLowerCase().includes(q)
+         || String(r.customer_name || '').toLowerCase().includes(q)
+         || (r.invoice_numbers || []).some(n => String(n).toLowerCase().includes(q))));
+}
+
+function _zdcInvCell(r) {
+  const nos = r.invoice_numbers || [];
+  if (!nos.length) return '<span class="zdc-dash">—</span>';
+  const first = `<span class="zdc-invno">${h(String(nos[0]))}</span>`;
+  const more = nos.length > 1 ? `<span class="zdc-more" title="${h(nos.join(', '))}">+${nos.length - 1}</span>` : '';
+  const ptag = _zdcInvKey(r.invoiced_status) === 'part' ? '<span class="zdc-ptag">partial</span>' : '';
+  return first + more + ptag;
+}
+
+function _zdcRenderTable() {
+  const host = document.getElementById('zdc-table'); if (!host) return;
+  const list = _zdcVisible();
+  const body = list.length ? list.map(r => {
+    const im = _zdcInvMeta(r.invoiced_status);
+    return `<tr>
+      <td data-label="DC number" class="zdc-dcno">${h(String(r.dc_number || ''))}</td>
+      <td data-label="DC date" class="zdc-muted">${h(String(r.dc_date || ''))}</td>
+      <td data-label="Billed to" style="font-weight:600">${h(String(r.customer_name || ''))}</td>
+      <td data-label="Lines" class="zdc-c">${Number(r.line_count || 0)}</td>
+      <td data-label="Qty" class="zdc-r">${Number(r.qty_count || 0).toLocaleString('en-IN')}</td>
+      <td data-label="Invoiced?"><span class="zdc-pill ${im[1]}">${im[0]}</span></td>
+      <td data-label="Invoice #">${_zdcInvCell(r)}</td>
+      <td data-label="Total" class="zdc-r zdc-total">${_zdcINR(r.total)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="8" style="padding:28px;text-align:center;color:var(--muted,#64748b)">No delivery challans match these filters.</td></tr>`;
+  host.innerHTML = `<table class="zdc-tbl">
+    <thead><tr>
+      <th>DC number</th><th>DC date</th><th>Billed to</th>
+      <th class="zdc-c">Lines</th><th class="zdc-r">Qty</th>
+      <th>Invoiced?</th><th>Invoice #</th><th class="zdc-r">Total</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+  const sumEl = document.getElementById('zdc-summary');
+  if (sumEl) {
+    const qty = list.reduce((s, r) => s + Number(r.qty_count || 0), 0);
+    const val = list.reduce((s, r) => s + Number(r.total || 0), 0);
+    const invN = list.filter(r => _zdcInvKey(r.invoiced_status) === 'inv').length;
+    sumEl.innerHTML = `<b>${list.length}</b> challans · <b>${qty.toLocaleString('en-IN')}</b> qty · <b>${_zdcINR(val)}</b> · <b>${invN}</b> invoiced`;
+  }
+}
+
+// ── delegated handlers (top-level globals) ──
+function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); }
+function zdcPickMonth(v) { _ZDC.month = v || 'all'; _zdcRenderTable(); }
+function zdcSearch(v) { _ZDC.q = v || ''; _zdcRenderTable(); }
+function zdcSetInv(k) { _ZDC.inv = k; _zdcPaint(); }
+function zdcToggleHelp() { _ZDC.help = !_ZDC.help; _zdcPaint(); }
+async function zdcRefresh() {
+  const data = await api('/integrations/zoho-inventory/delivery-challans');
+  if (data) { _ZDC.data = data; _zdcPaint(); }
+}
+async function zdcSync() {
+  showToast('Syncing delivery challans from Zoho…', 'info');
+  const r = await api('/integrations/zoho-inventory/delivery-challans/sync', { method: 'POST', body: JSON.stringify({}) });
+  if (!r) return; // api() already showed the error toast
+  if (r.status === 'not_configured') { showToast('Zoho is not configured — set the Zoho secrets in Finance Setup first.', 'error'); return; }
+  if (r.status === 'error') showToast('Sync failed: ' + ((r.errors && r.errors[0]) || 'unknown error'), 'error');
+  else if (r.status === 'skipped') showToast('A sync is already running — try again shortly.', 'info');
+  else showToast(`Synced ${r.written || 0} challan${r.written === 1 ? '' : 's'}${r.failed ? ` · ${r.failed} failed` : ''}.`, 'success');
+  await zdcRefresh();
+}
+function zdcCsv() {
+  const list = _zdcVisible();
+  if (!list.length) { showToast('Nothing to export for these filters.', 'info'); return; }
+  const head = ['DC number', 'DC date', 'Billed to', 'Lines', 'Qty', 'Invoiced', 'Invoice numbers', 'Total'];
+  const esc = s => `"${String(s == null ? '' : s).replace(/"/g, '""')}"`;
+  const lines = [head.join(',')].concat(list.map(r => [
+    r.dc_number, r.dc_date, r.customer_name, r.line_count, r.qty_count,
+    _zdcInvMeta(r.invoiced_status)[0], (r.invoice_numbers || []).join(' '), r.total,
+  ].map(esc).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'zoho-delivery-challans.csv'; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
+
+function _zdcHelp() {
+  return `<div class="card zdc-help">
+    <h3 style="margin:0 0 8px">About this screen</h3>
+    <p>A read-only mirror of your <strong>Zoho Inventory</strong> delivery challans, for the finance team. Nothing here changes Zoho or the ERP — press <strong>Sync now</strong> to pull the latest challans.</p>
+    <ul style="margin:8px 0 0;padding-left:18px;line-height:1.7">
+      <li><strong>DC number / date / Billed to</strong> — the challan header, straight from Zoho.</li>
+      <li><strong>Lines / Qty</strong> — the number of line items and the total quantity on the challan.</li>
+      <li><strong>Invoiced?</strong> — whether Zoho has invoiced the challan (<em>Invoiced</em>, <em>Partially</em> or <em>Not</em>).</li>
+      <li><strong>Invoice #</strong> — the linked invoice number(s). A challan can map to more than one invoice; extras show as <span class="zdc-more">+N</span> (hover to see them all). A <span class="zdc-ptag">partial</span> tag means only part of the challan is invoiced. A dash means it is not invoiced yet.</li>
+    </ul>
+    <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by month, or by the invoiced state; search matches DC number, customer or invoice number. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
+  </div>`;
+}
+
+function _zdcCss() {
+  return `<style>
+  .zdc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+  .zdc-sub{font-size:.8rem;font-weight:600;color:var(--muted,#64748b)}
+  .zdc-synced{color:var(--muted,#64748b);font-size:.84rem;margin-top:4px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .zdc-dot{width:7px;height:7px;border-radius:50%;background:var(--success,#0C8E6D);display:inline-block}
+  .zdc-hbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .zdc-help{padding:16px 18px;margin-bottom:14px;font-size:.9rem}
+  .zdc-help p{margin:0 0 6px}
+  .zdc-tools{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px}
+  .zdc-fld{display:flex;flex-direction:column;gap:5px}
+  .zdc-fld>span{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#94a3b8)}
+  .zdc-fld select,.zdc-search{font:inherit;font-size:.86rem;padding:8px 11px;border:1px solid var(--border,#dde3ea);border-radius:9px;background:var(--card,#fff);color:inherit;min-width:180px}
+  .zdc-grow{flex:1;min-width:200px}.zdc-grow .zdc-search{width:100%}
+  .zdc-fld select:focus,.zdc-search:focus{outline:none;border-color:var(--primary,#0d7a68);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary,#0d7a68) 20%,transparent)}
+  .zdc-chips{display:inline-flex;background:var(--surface-2,rgba(128,128,128,.08));border:1px solid var(--border,#dde3ea);border-radius:10px;padding:3px;gap:2px}
+  .zdc-chip{font:inherit;font-size:.8rem;font-weight:600;color:var(--muted,#64748b);background:none;border:0;border-radius:7px;padding:6px 12px;cursor:pointer}
+  .zdc-chip.active{background:var(--card,#fff);color:inherit;box-shadow:0 1px 2px rgba(16,28,45,.14)}
+  .zdc-summary{font-size:.85rem;color:var(--muted,#64748b);margin-bottom:10px}
+  .zdc-summary b{color:inherit;font-variant-numeric:tabular-nums}
+  .zdc-tbl{border-collapse:collapse;width:100%;min-width:820px;font-size:.86rem}
+  .zdc-tbl thead th{position:sticky;top:0;background:var(--surface-2,#f2f5f8);text-align:left;font-size:.67rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#64748b);font-weight:700;padding:11px 14px;border-bottom:1px solid var(--border,#dde3ea);white-space:nowrap}
+  .zdc-tbl tbody td{padding:12px 14px;border-bottom:1px solid var(--border,#eceff3);vertical-align:middle}
+  .zdc-tbl tbody tr:last-child td{border-bottom:0}
+  .zdc-c{text-align:center}.zdc-r{text-align:right;font-variant-numeric:tabular-nums}
+  .zdc-muted{color:var(--muted,#64748b);white-space:nowrap}
+  .zdc-dcno{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600;color:var(--primary,#0d7a68)}
+  .zdc-total{font-weight:700;white-space:nowrap}
+  .zdc-pill{display:inline-block;font-size:.66rem;font-weight:700;border-radius:20px;padding:2px 10px;white-space:nowrap}
+  .zdc-inv{background:#e6f5ef;color:#0a7a5c}.zdc-part{background:#fdf1dd;color:#a86513}.zdc-not{background:rgba(128,128,128,.14);color:var(--muted,#64748b)}
+  .zdc-invno{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600;font-size:.82rem}
+  .zdc-dash{color:var(--muted,#94a3b8)}
+  .zdc-more{display:inline-block;margin-left:5px;font-size:.62rem;font-weight:700;background:var(--surface-2,rgba(128,128,128,.14));color:var(--muted,#64748b);border-radius:10px;padding:1px 6px;vertical-align:middle}
+  .zdc-ptag{display:inline-block;margin-left:5px;font-size:.58rem;font-weight:700;color:#a86513;text-transform:uppercase;letter-spacing:.03em}
+  @media (max-width:820px){
+    .zdc-tbl{min-width:0}.zdc-tbl thead{display:none}
+    .zdc-tbl tbody tr{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;border:1px solid var(--border,#dde3ea);border-radius:12px;margin:0 0 10px;padding:14px}
+    .zdc-tbl tbody td{display:block;padding:0;border:0!important;text-align:left!important}
+    .zdc-tbl td::before{content:attr(data-label);display:block;font-size:.6rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#94a3b8);font-weight:700;margin-bottom:2px}
+    .zdc-dcno{grid-column:1/-1}.zdc-dcno::before{display:none}
+  }
+  </style>`;
+}

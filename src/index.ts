@@ -2143,6 +2143,278 @@ async function scalarCount(env: Env, sql: string, binds: unknown[] = []): Promis
   catch { return 0; }
 }
 
+// ── Zoho Delivery Challans — read-only finance register ───────────────────
+// A bounded mirror of Zoho Inventory's Delivery Challans for the Billing &
+// Finance "Delivery Challans" screen. Header fields (number, date, billed-to,
+// total, invoiced state) come from the DC list; the line count and quantity
+// total come from each DC's detail; the invoice number(s) come from the DC's
+// linked invoices (one-to-many) where Zoho exposes them. Writes ONLY to
+// zoho_delivery_challans — never to inventory/orders. Non-throwing by design.
+const ZOHO_DC = {
+  PER_PAGE: 200,
+  MAX_PAGES_PER_RUN: 50,
+  MAX_DETAIL_PER_RUN: 300, // cap the per-DC detail calls (line/qty/invoice) per run
+  MAX_RETRIES: 4,
+  RETRY_BASE_MS: 1000,
+  RETRY_CAP_MS: 20000,
+} as const;
+
+let _zdcReady = false;
+async function ensureZohoDCTable(env: Env): Promise<void> {
+  if (_zdcReady) return;
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS zoho_delivery_challans (
+       zoho_dc_id TEXT PRIMARY KEY, dc_number TEXT, dc_date TEXT, ym TEXT,
+       customer_id TEXT, customer_name TEXT, line_count INTEGER DEFAULT 0,
+       qty_count REAL DEFAULT 0, invoiced_status TEXT, invoice_numbers TEXT DEFAULT '[]',
+       total REAL DEFAULT 0, currency_code TEXT, zoho_modified TEXT, synced_at TEXT)`
+  ).run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_ym ON zoho_delivery_challans(ym)").run().catch(() => {});
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_customer ON zoho_delivery_challans(customer_id)").run().catch(() => {});
+  _zdcReady = true;
+}
+
+function zohoDcYm(d: unknown): string {
+  const m = String(d ?? "").trim().match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : "";
+}
+
+// Defensive invoice-number extraction: Zoho may expose linked invoices under
+// invoices[] (with invoice_number), invoice_numbers[], or a scalar invoice_number,
+// on either the detail or the list header. We read whatever is present.
+function zohoDcInvoiceNumbers(detail: Record<string, unknown> | null, header: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => { const s = String(v ?? "").trim(); if (s && !out.includes(s)) out.push(s); };
+  const scan = (src: Record<string, unknown> | null | undefined) => {
+    if (!src) return;
+    const invs = (src as { invoices?: unknown }).invoices;
+    if (Array.isArray(invs)) invs.forEach((iv) => push((iv as { invoice_number?: unknown; number?: unknown })?.invoice_number ?? (iv as { number?: unknown })?.number));
+    const invNos = (src as { invoice_numbers?: unknown }).invoice_numbers;
+    if (Array.isArray(invNos)) invNos.forEach(push);
+    push((src as { invoice_number?: unknown }).invoice_number);
+  };
+  scan(detail); scan(header);
+  return out;
+}
+
+async function zohoDCFetchPage(
+  env: Env, token: string, page: number, fetchImpl: FetchImpl,
+): Promise<{ items: Record<string, unknown>[]; hasMore: boolean; total: number }> {
+  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID || "";
+  const qs = new URLSearchParams({ organization_id: orgId, per_page: String(ZOHO_DC.PER_PAGE), page: String(page) });
+  const headers: Record<string, string> = { "Authorization": `Zoho-oauthtoken ${token}` };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/inventory/v1/deliverychallans?${qs.toString()}`, { headers });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt >= ZOHO_DC.MAX_RETRIES) throw new Error(`Zoho DC page ${page}: HTTP ${res.status} after ${attempt} retries`);
+      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+      await _zSleep(Number.isFinite(ra) ? ra * 1000 : Math.min(ZOHO_DC.RETRY_CAP_MS, ZOHO_DC.RETRY_BASE_MS * 2 ** attempt));
+      continue;
+    }
+    if (res.status === 401) throw new ZohoAuthError(`401 on DC page ${page}`);
+    if (!res.ok) throw new Error(`Zoho DC page ${page}: HTTP ${res.status}`);
+    const data = await res.json().catch(() => ({})) as { deliverychallans?: Record<string, unknown>[]; page_context?: { has_more_page?: boolean; total?: number } };
+    return {
+      items: Array.isArray(data.deliverychallans) ? data.deliverychallans : [],
+      hasMore: !!data.page_context?.has_more_page,
+      total: Number(data.page_context?.total ?? 0),
+    };
+  }
+}
+
+async function zohoDCFetchDetail(
+  env: Env, token: string, id: string, fetchImpl: FetchImpl,
+): Promise<Record<string, unknown> | null> {
+  const orgId = env.ZOHO_INVENTORY_ORG_ID || env.ZOHO_BOOKS_ORG_ID || "";
+  const qs = new URLSearchParams({ organization_id: orgId });
+  const headers: Record<string, string> = { "Authorization": `Zoho-oauthtoken ${token}` };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/inventory/v1/deliverychallans/${encodeURIComponent(id)}?${qs.toString()}`, { headers });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt >= ZOHO_DC.MAX_RETRIES) throw new Error(`Zoho DC detail ${id}: HTTP ${res.status}`);
+      const ra = parseInt(res.headers.get("Retry-After") || "", 10);
+      await _zSleep(Number.isFinite(ra) ? ra * 1000 : Math.min(ZOHO_DC.RETRY_CAP_MS, ZOHO_DC.RETRY_BASE_MS * 2 ** attempt));
+      continue;
+    }
+    if (res.status === 401) throw new ZohoAuthError(`401 on DC detail ${id}`);
+    if (!res.ok) return null; // detail is best-effort; the header row is still saved
+    const data = await res.json().catch(() => ({})) as { deliverychallan?: Record<string, unknown> };
+    return data.deliverychallan || null;
+  }
+}
+
+interface ZohoDCSyncResult {
+  status: "ok" | "not_configured" | "error" | "skipped";
+  total: number; written: number; detailed: number; failed: number; errors: string[];
+}
+
+// One Zoho→app pull of the delivery-challan register. Non-throwing (safe for cron
+// or a manual "Sync now"). `fetchImpl` is injected in tests.
+async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: FetchImpl } = {}): Promise<ZohoDCSyncResult> {
+  const fetchImpl = opts.fetchImpl || fetch;
+  const actor = opts.actor || "system";
+  const r: ZohoDCSyncResult = { status: "ok", total: 0, written: 0, detailed: 0, failed: 0, errors: [] };
+  await ensureZohoDCTable(env);
+  const missing = await zohoMissingSecrets(env);
+  if (missing.length) { r.status = "not_configured"; r.errors.push(`Zoho secrets not configured — missing: ${missing.join(", ")}`); return r; }
+
+  // Non-overlap lock (CAS on app_config), same pattern as the inventory sync.
+  const now = Math.floor(Date.now() / 1000);
+  const runToken = `${now}:${uid()}`;
+  const staleBefore = now - 15 * 60;
+  await env.DB.prepare("INSERT OR IGNORE INTO app_config (key,value) VALUES ('zoho_dc_sync_lock','')").run().catch(() => {});
+  const acq = await env.DB.prepare(
+    `UPDATE app_config SET value=?, updated_at=datetime('now'), updated_by=? WHERE key='zoho_dc_sync_lock'
+       AND (value='' OR value IS NULL OR CAST(substr(value,1,instr(value,':')-1) AS INTEGER) < ?)`
+  ).bind(runToken, actor, staleBefore).run();
+  if (!(acq.meta?.changes)) { r.status = "skipped"; r.errors.push("another DC sync in flight"); return r; }
+
+  try {
+    let token = await zohoGetToken(env, fetchImpl);
+    const headerRows: Record<string, unknown>[] = [];
+    let page = 1, hasMore = true, reAuthed = false;
+    while (hasMore) {
+      if (page > ZOHO_DC.MAX_PAGES_PER_RUN) { r.errors.push(`page cap ${ZOHO_DC.MAX_PAGES_PER_RUN} hit — some challans not fetched`); break; }
+      let pg;
+      try {
+        pg = await zohoDCFetchPage(env, token, page, fetchImpl);
+      } catch (e) {
+        if (e instanceof ZohoAuthError && !reAuthed) { token = await zohoGetToken(env, fetchImpl, true); reAuthed = true; continue; }
+        throw e;
+      }
+      headerRows.push(...pg.items);
+      page++;
+      hasMore = pg.hasMore || pg.items.length >= ZOHO_DC.PER_PAGE;
+      if (pg.items.length === 0) hasMore = false;
+    }
+    r.total = headerRows.length;
+
+    const stamp = new Date(now * 1000).toISOString();
+    let detailCalls = 0;
+    for (const hdr of headerRows) {
+      const id = String(hdr.deliverychallan_id ?? hdr.id ?? "").trim();
+      if (!id) { r.failed++; if (r.errors.length < 50) r.errors.push("delivery challan with no id — skipped"); continue; }
+      const dcNumber = String(hdr.deliverychallan_number ?? hdr.dc_number ?? "").trim();
+      const date = String(hdr.date ?? hdr.delivery_date ?? "").trim();
+      const custId = String(hdr.customer_id ?? "").trim();
+      const custName = String(hdr.customer_name ?? "").trim();
+      const invStatus = String(hdr.invoiced_status ?? hdr.status ?? "").trim();
+      const total = Number(hdr.total ?? 0) || 0;
+      const currency = String(hdr.currency_code ?? "").trim();
+      const modified = String(hdr.last_modified_time ?? hdr.last_modified ?? "").trim();
+
+      // Detail → line count, quantity total, invoice numbers (bounded N+1).
+      let detail: Record<string, unknown> | null = null;
+      if (detailCalls < ZOHO_DC.MAX_DETAIL_PER_RUN) {
+        try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); detailCalls++; r.detailed++; }
+        catch (e) {
+          if (e instanceof ZohoAuthError && !reAuthed) {
+            token = await zohoGetToken(env, fetchImpl, true); reAuthed = true;
+            try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); detailCalls++; r.detailed++; } catch { /* best-effort */ }
+          }
+        }
+      }
+      const lines: unknown[] = detail && Array.isArray(detail.line_items) ? detail.line_items as unknown[]
+        : Array.isArray((hdr as { line_items?: unknown }).line_items) ? (hdr as { line_items: unknown[] }).line_items : [];
+      const lineCount = lines.length;
+      const qtyCount = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
+      const invoiceNos = zohoDcInvoiceNumbers(detail, hdr);
+
+      try {
+        await env.DB.prepare(
+          `INSERT INTO zoho_delivery_challans
+             (zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,line_count,qty_count,invoiced_status,invoice_numbers,total,currency_code,zoho_modified,synced_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(zoho_dc_id) DO UPDATE SET
+             dc_number=excluded.dc_number, dc_date=excluded.dc_date, ym=excluded.ym,
+             customer_id=excluded.customer_id, customer_name=excluded.customer_name,
+             line_count=excluded.line_count, qty_count=excluded.qty_count,
+             invoiced_status=excluded.invoiced_status, invoice_numbers=excluded.invoice_numbers,
+             total=excluded.total, currency_code=excluded.currency_code,
+             zoho_modified=excluded.zoho_modified, synced_at=excluded.synced_at`
+        ).bind(id, dcNumber, date, zohoDcYm(date), custId, custName, lineCount, qtyCount, invStatus, JSON.stringify(invoiceNos), total, currency, modified, stamp).run();
+        r.written++;
+      } catch (e) {
+        r.failed++; if (r.errors.length < 50) r.errors.push(`DC ${dcNumber || id}: ${(e as Error).message}`);
+      }
+    }
+
+    await setConfig(env, "zoho_dc_last_sync_at", stamp, actor).catch(() => {});
+    await setConfig(env, "zoho_dc_last_result", JSON.stringify({
+      status: r.status, total: r.total, written: r.written, detailed: r.detailed, failed: r.failed,
+      at: new Date().toISOString(), error: r.errors[0] || "",
+    }), actor).catch(() => {});
+    try {
+      await env.DB.prepare("INSERT INTO import_jobs (id,type,total,success_count,failed_count,errors,created_by) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), "zoho-dc-sync", r.total, r.written, r.failed, JSON.stringify(r.errors.slice(0, 50)), actor).run();
+    } catch { /* import_jobs may be missing — non-fatal */ }
+    return r;
+  } catch (e) {
+    r.status = "error"; r.errors.unshift((e as Error).message || "DC sync failed");
+    await setConfig(env, "zoho_dc_last_result", JSON.stringify({ status: "error", error: r.errors[0], at: new Date().toISOString() }), actor).catch(() => {});
+    return r;
+  } finally {
+    await env.DB.prepare("UPDATE app_config SET value='' WHERE key='zoho_dc_sync_lock' AND value=?").bind(runToken).run().catch(() => {});
+  }
+}
+
+// GET /api/integrations/zoho-inventory/delivery-challans — the finance register.
+// Filters: ?customer=<id> &month=YYYY-MM &q=<text>. Returns rows + the distinct
+// customer and month lists (for the dropdowns) + last-synced + configured flag.
+async function handleZohoDCList(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureZohoDCTable(env);
+  const url = new URL(request.url);
+  const customer = (url.searchParams.get("customer") || "").trim();
+  const month = (url.searchParams.get("month") || "").trim();
+  const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+  const where: string[] = []; const binds: unknown[] = [];
+  if (customer) { where.push("customer_id = ?"); binds.push(customer); }
+  if (month) { where.push("ym = ?"); binds.push(month); }
+  if (q) { where.push("(LOWER(dc_number) LIKE ? OR LOWER(customer_name) LIKE ? OR LOWER(invoice_numbers) LIKE ?)"); binds.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+  const sql = `SELECT zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,line_count,qty_count,invoiced_status,invoice_numbers,total,currency_code
+               FROM zoho_delivery_challans ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+               ORDER BY dc_date DESC, dc_number DESC LIMIT 1000`;
+  const { results } = await env.DB.prepare(sql).bind(...binds).all();
+  const rows = (results as Record<string, unknown>[]).map((rw) => ({
+    ...rw,
+    invoice_numbers: (() => { try { return JSON.parse(String(rw.invoice_numbers || "[]")); } catch { return []; } })(),
+  }));
+  const custRows = await env.DB.prepare(
+    "SELECT customer_id AS id, customer_name AS name FROM zoho_delivery_challans WHERE COALESCE(customer_name,'') <> '' GROUP BY customer_id, customer_name ORDER BY customer_name"
+  ).all();
+  const monthRows = await env.DB.prepare(
+    "SELECT DISTINCT ym FROM zoho_delivery_challans WHERE COALESCE(ym,'') <> '' ORDER BY ym DESC"
+  ).all();
+  const lastResultRaw = await getConfig(env, "zoho_dc_last_result", "");
+  return json({
+    rows,
+    customers: custRows.results || [],
+    months: (monthRows.results as { ym: string }[] || []).map((m) => m.ym),
+    last_synced: (await getConfig(env, "zoho_dc_last_sync_at", "")) || null,
+    last_result: lastResultRaw ? (() => { try { return JSON.parse(lastResultRaw); } catch { return null; } })() : null,
+    configured: await zohoConfigured(env),
+    missing_secrets: await zohoMissingSecrets(env),
+    count: rows.length,
+  });
+}
+
+// POST /api/integrations/zoho-inventory/delivery-challans/sync — pull from Zoho now.
+async function handleZohoDCSync(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureZohoDCTable(env);
+  if (!(await zohoConfigured(env))) {
+    return json({ status: "not_configured", error: "Zoho is not configured", missing_secrets: await zohoMissingSecrets(env) });
+  }
+  await audit(env, user, "SYNC", "integration", "zoho_delivery_challans", undefined, "pull delivery challans");
+  const result = await runZohoDCSync(env, { actor: user!.sub });
+  return json(result);
+}
+
 async function handleZohoInvStatus(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
@@ -6680,6 +6952,9 @@ export default {
       if (path==="/api/integrations/zoho-inventory/delete-inactive-nonzoho" && method==="POST") return handleZohoDeleteInactiveNonZoho(request,env);
       if (path==="/api/reports/client-catalog-export"             && method==="GET")  return handleClientCatalogExport(request,env);
       if (path==="/api/integrations/zoho-inventory/webhook" && method==="POST") return handleZohoInvWebhook(request,env);
+      // Zoho Delivery Challans — read-only finance register (Billing & Finance).
+      if (path==="/api/integrations/zoho-inventory/delivery-challans"      && method==="GET")  return handleZohoDCList(request,env);
+      if (path==="/api/integrations/zoho-inventory/delivery-challans/sync" && method==="POST") return handleZohoDCSync(request,env,ctx);
 
       // Phase 3 Finance — Receivables (003-finance-ar). Await the AR schema before
       // any finance handler so a cold isolate never races the waitUntil self-heal.
