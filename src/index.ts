@@ -2153,8 +2153,9 @@ async function scalarCount(env: Env, sql: string, binds: unknown[] = []): Promis
 const ZOHO_DC = {
   PER_PAGE: 200,
   MAX_PAGES_PER_RUN: 50,
-  DETAIL_BATCH: 120,       // per-run detail backfill cap (headers are cheap; details converge)
-  DETAIL_FULL_MAX: 1500,   // hard ceiling for a background "fetch all details" run
+  DETAIL_BATCH: 100,       // per-run detail backfill cap (headers are cheap; details converge)
+  DETAIL_FULL_MAX: 700,    // hard ceiling for a background "fetch all details" run (Workers ~1000 subrequests/invocation)
+  WRITE_CHUNK: 100,        // D1 statements per batch() call (each batch = one subrequest)
   MAX_RETRIES: 4,
   RETRY_BASE_MS: 1000,
   RETRY_CAP_MS: 20000,
@@ -2277,6 +2278,22 @@ async function zohoDCSyncHeaders(env: Env, fetchImpl: FetchImpl, now: number, r:
     if (pg.items.length === 0) hasMore = false;
   }
   const stamp = new Date(now * 1000).toISOString();
+  // Batch the upserts: ~10k individual awaited writes blow the Worker subrequest
+  // limit (every D1 call counts) and kill the run before the detail phase. One
+  // batch() per WRITE_CHUNK rows is a single subrequest.
+  const up = env.DB.prepare(
+    `INSERT INTO zoho_delivery_challans
+       (zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,invoiced_status,total,currency_code,zoho_modified,synced_at,line_count,qty_count,invoice_numbers,detail_ok)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,0,'[]',0)
+     ON CONFLICT(zoho_dc_id) DO UPDATE SET
+       dc_number=excluded.dc_number, dc_date=excluded.dc_date, ym=excluded.ym,
+       customer_id=excluded.customer_id, customer_name=excluded.customer_name,
+       invoiced_status=excluded.invoiced_status, total=excluded.total,
+       currency_code=excluded.currency_code, synced_at=excluded.synced_at,
+       detail_ok=CASE WHEN COALESCE(zoho_delivery_challans.zoho_modified,'') <> excluded.zoho_modified THEN 0 ELSE zoho_delivery_challans.detail_ok END,
+       zoho_modified=excluded.zoho_modified`
+  );
+  const stmts: D1PreparedStatement[] = [];
   for (const hdr of headerRows) {
     const id = String(hdr.deliverychallan_id ?? hdr.id ?? "").trim();
     if (!id) { r.failed++; if (r.errors.length < 50) r.errors.push("delivery challan with no id — skipped"); continue; }
@@ -2288,22 +2305,11 @@ async function zohoDCSyncHeaders(env: Env, fetchImpl: FetchImpl, now: number, r:
     const total = Number(hdr.total ?? 0) || 0;
     const currency = String(hdr.currency_code ?? "").trim();
     const modified = String(hdr.last_modified_time ?? hdr.last_modified ?? "").trim();
-    try {
-      await env.DB.prepare(
-        `INSERT INTO zoho_delivery_challans
-           (zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,invoiced_status,total,currency_code,zoho_modified,synced_at,line_count,qty_count,invoice_numbers,detail_ok)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,0,0,'[]',0)
-         ON CONFLICT(zoho_dc_id) DO UPDATE SET
-           dc_number=excluded.dc_number, dc_date=excluded.dc_date, ym=excluded.ym,
-           customer_id=excluded.customer_id, customer_name=excluded.customer_name,
-           invoiced_status=excluded.invoiced_status, total=excluded.total,
-           currency_code=excluded.currency_code, synced_at=excluded.synced_at,
-           detail_ok=CASE WHEN COALESCE(zoho_delivery_challans.zoho_modified,'') <> excluded.zoho_modified THEN 0 ELSE zoho_delivery_challans.detail_ok END,
-           zoho_modified=excluded.zoho_modified`
-      ).bind(id, dcNumber, date, zohoDcYm(date), custId, custName, invStatus, total, currency, modified, stamp).run();
-    } catch (e) {
-      r.failed++; if (r.errors.length < 50) r.errors.push(`DC ${dcNumber || id}: ${(e as Error).message}`);
-    }
+    stmts.push(up.bind(id, dcNumber, date, zohoDcYm(date), custId, custName, invStatus, total, currency, modified, stamp));
+  }
+  for (let i = 0; i < stmts.length; i += ZOHO_DC.WRITE_CHUNK) {
+    try { await env.DB.batch(stmts.slice(i, i + ZOHO_DC.WRITE_CHUNK)); }
+    catch (e) { r.failed++; if (r.errors.length < 50) r.errors.push(`header write batch failed: ${(e as Error).message}`); }
   }
   r.reported_total = reportedTotal;
   return stamp;
@@ -2319,31 +2325,42 @@ async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number
   const { results } = await env.DB.prepare(
     "SELECT zoho_dc_id, dc_number FROM zoho_delivery_challans WHERE detail_ok=0 ORDER BY dc_date DESC, dc_number DESC LIMIT ?"
   ).bind(cap).all();
+  const up = env.DB.prepare(
+    "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
+  );
+  const writes: D1PreparedStatement[] = [];
+  const flush = async () => {
+    for (let i = 0; i < writes.length; i += ZOHO_DC.WRITE_CHUNK) {
+      try { await env.DB.batch(writes.slice(i, i + ZOHO_DC.WRITE_CHUNK)); }
+      catch (e) { if (r.errors.length < 50) r.errors.push(`detail write batch failed: ${(e as Error).message}`); }
+    }
+    writes.length = 0;
+  };
   for (const row of (results as { zoho_dc_id: string; dc_number: string }[])) {
     const id = row.zoho_dc_id;
     let detail: Record<string, unknown> | null = null;
-    let reached = false;
+    let reached = false, fatal = false;
     try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); reached = true; }
     catch (e) {
       if (e instanceof ZohoAuthError && !reAuthed) {
-        token = await zohoGetToken(env, fetchImpl, true); reAuthed = true;
-        try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); reached = true; } catch { /* leave pending */ }
+        try { token = await zohoGetToken(env, fetchImpl, true); reAuthed = true; detail = await zohoDCFetchDetail(env, token, id, fetchImpl); reached = true; }
+        catch { fatal = true; }
+      } else {
+        // Rate-limit / 5xx exhausted / subrequest ceiling — stop this run cleanly
+        // and leave the rest pending for the next run, rather than burning through.
+        fatal = true; if (r.errors.length < 50) r.errors.push(`detail fetch stopped at ${row.dc_number || id}: ${(e as Error).message}`);
       }
     }
-    if (!reached) { r.failed++; if (r.errors.length < 50) r.errors.push(`DC ${row.dc_number || id}: detail fetch failed (will retry)`); continue; }
+    if (!reached) { r.failed++; if (fatal) break; else continue; }
     const lines: unknown[] = detail && Array.isArray(detail.line_items) ? detail.line_items as unknown[] : [];
     const lineCount = lines.length;
     const qtyCount = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
     const invoiceNos = zohoDcInvoiceNumbers(detail, {});
-    try {
-      await env.DB.prepare(
-        "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
-      ).bind(lineCount, qtyCount, JSON.stringify(invoiceNos), stamp, id).run();
-      r.detailed_now++; processed++;
-    } catch (e) {
-      r.failed++; if (r.errors.length < 50) r.errors.push(`DC ${row.dc_number || id}: ${(e as Error).message}`);
-    }
+    writes.push(up.bind(lineCount, qtyCount, JSON.stringify(invoiceNos), stamp, id));
+    r.detailed_now++; processed++;
+    if (writes.length >= ZOHO_DC.WRITE_CHUNK) await flush();
   }
+  await flush();
   return processed;
 }
 
@@ -2355,7 +2372,7 @@ async function _zdcPending(env: Env): Promise<number> {
 // fill in missing detail. `full` keeps backfilling (bounded) until nothing is
 // pending, for an on-demand "fetch everything now". Non-throwing (safe for cron
 // or a manual "Sync now"). `fetchImpl` is injected in tests.
-async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: FetchImpl; full?: boolean } = {}): Promise<ZohoDCSyncResult> {
+async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: FetchImpl; full?: boolean; headers?: boolean } = {}): Promise<ZohoDCSyncResult> {
   const fetchImpl = opts.fetchImpl || fetch;
   const actor = opts.actor || "system";
   const r: ZohoDCSyncResult = { status: "ok", mirrored: 0, reported_total: 0, detailed_now: 0, pending: 0, failed: 0, errors: [] };
@@ -2375,7 +2392,16 @@ async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: Fetch
   if (!(acq.meta?.changes)) { r.status = "skipped"; r.errors.push("another DC sync in flight"); return r; }
 
   try {
-    const stamp = await zohoDCSyncHeaders(env, fetchImpl, now, r);
+    const stamp = new Date(now * 1000).toISOString();
+    if (opts.headers !== false) {
+      await zohoDCSyncHeaders(env, fetchImpl, now, r);
+      // Record straight after the (batched) header pass, so "last sync" and the
+      // mirror total show immediately even if the long detail phase is cut short.
+      await setConfig(env, "zoho_dc_last_sync_at", stamp, actor).catch(() => {});
+      await setConfig(env, "zoho_dc_reported_total", String(r.reported_total || 0), actor).catch(() => {});
+    } else {
+      r.reported_total = parseInt(await getConfig(env, "zoho_dc_reported_total", "0"), 10) || 0;
+    }
     if (opts.full) {
       // Chip away in bounded batches until nothing is pending (or a batch makes
       // no progress), so a cron / request can never run unbounded.
@@ -2392,8 +2418,7 @@ async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: Fetch
     r.mirrored = await scalarCount(env, "SELECT COUNT(*) AS n FROM zoho_delivery_challans");
     r.pending = await _zdcPending(env);
 
-    await setConfig(env, "zoho_dc_last_sync_at", stamp, actor).catch(() => {});
-    await setConfig(env, "zoho_dc_reported_total", String(r.reported_total || 0), actor).catch(() => {});
+    await setConfig(env, "zoho_dc_last_sync_at", new Date().toISOString(), actor).catch(() => {});
     await setConfig(env, "zoho_dc_last_result", JSON.stringify({
       status: r.status, mirrored: r.mirrored, reported_total: r.reported_total,
       detailed_now: r.detailed_now, pending: r.pending, failed: r.failed,
@@ -2490,13 +2515,17 @@ async function handleZohoDCSync(request: Request, env: Env, ctx: ExecutionContex
     return json({ status: "not_configured", error: "Zoho is not configured", missing_secrets: await zohoMissingSecrets(env) });
   }
   const body = await request.json().catch(() => ({})) as { full?: boolean };
-  await audit(env, user, "SYNC", "integration", "zoho_delivery_challans", undefined, `pull delivery challans${body.full ? " (full)" : ""}`);
+  await audit(env, user, "SYNC", "integration", "zoho_delivery_challans", undefined, `pull delivery challans${body.full ? " (full details)" : ""}`);
+  // Both modes run in the background: the header pass alone can touch thousands of
+  // rows, so we never block the request on it. "Fetch all details" (full) skips the
+  // header re-page and spends the whole budget on detail; "Sync now" refreshes
+  // headers then does one detail batch. The client polls via Refresh.
   if (body.full) {
-    ctx.waitUntil(runZohoDCSync(env, { actor: user!.sub, full: true }));
-    return json({ status: "started", full: true, async: true });
+    ctx.waitUntil(runZohoDCSync(env, { actor: user!.sub, full: true, headers: false }));
+  } else {
+    ctx.waitUntil(runZohoDCSync(env, { actor: user!.sub, full: false, headers: true }));
   }
-  const result = await runZohoDCSync(env, { actor: user!.sub });
-  return json(result);
+  return json({ status: "started", full: !!body.full, async: true });
 }
 
 async function handleZohoInvStatus(request: Request, env: Env): Promise<Response> {

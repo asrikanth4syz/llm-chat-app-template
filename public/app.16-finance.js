@@ -1486,21 +1486,24 @@ async function zdcRefresh() {
   const data = await api('/integrations/zoho-inventory/delivery-challans');
   if (data) { _ZDC.data = data; _zdcPaint(); }
 }
+// Auto-refresh the panel a few times after a sync starts, so headers appear and
+// the pending count visibly drops without the user clicking Refresh.
+function _zdcAutoRefresh() {
+  [4000, 12000, 25000].forEach(ms => setTimeout(() => { if (APP.page === 'zoho_dc') zdcRefresh(); }, ms));
+}
 async function zdcSync() {
-  showToast('Syncing delivery challans from Zoho…', 'info');
   const r = await api('/integrations/zoho-inventory/delivery-challans/sync', { method: 'POST', body: JSON.stringify({}) });
   if (!r) return; // api() already showed the error toast
   if (r.status === 'not_configured') { showToast('Zoho is not configured — set the Zoho secrets in Finance Setup first.', 'error'); return; }
-  if (r.status === 'error') showToast('Sync failed: ' + ((r.errors && r.errors[0]) || 'unknown error'), 'error');
-  else if (r.status === 'skipped') showToast('A sync is already running — try again shortly.', 'info');
-  else showToast(`Synced ${r.mirrored || 0} challan${r.mirrored === 1 ? '' : 's'} · ${r.detailed_now || 0} detailed${r.pending ? ` · ${r.pending} still awaiting detail` : ''}${r.failed ? ` · ${r.failed} failed` : ''}.`, 'success');
-  await zdcRefresh();
+  showToast('Sync started — refreshing headers and fetching a batch of details in the background.', 'success');
+  _zdcAutoRefresh();
 }
 async function zdcSyncFull() {
   const r = await api('/integrations/zoho-inventory/delivery-challans/sync', { method: 'POST', body: JSON.stringify({ full: true }) });
   if (!r) return;
   if (r.status === 'not_configured') { showToast('Zoho is not configured yet — connect it in Finance Setup first.', 'error'); return; }
-  showToast('Fetching all challan details from Zoho in the background — press Refresh in a moment to watch the count drop.', 'success');
+  showToast('Fetching challan details from Zoho in the background — the pending count will drop as they load. Large backlogs take several rounds.', 'success');
+  _zdcAutoRefresh();
 }
 function zdcCsv() {
   const list = _zdcVisible();

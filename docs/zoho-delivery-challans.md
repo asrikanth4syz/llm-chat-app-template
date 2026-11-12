@@ -175,11 +175,20 @@ default `in`).
 
 ## Limits & future work
 
-- The detail pull is an N+1 (one call per challan), bounded by `DETAIL_BATCH`
-  (100) per ordinary run and `DETAIL_FULL_MAX` (1500) per `full` run, and
-  `MAX_PAGES_PER_RUN` (50) for headers. Because detail is fetched only for rows
-  still missing it, successive runs (manual, "Fetch all details", or nightly)
-  converge to full coverage for large histories.
+- DB writes are batched via `env.DB.batch()` in `WRITE_CHUNK` (100) chunks —
+  essential because every D1 call counts against the Worker's ~1000-subrequest
+  limit, so ~10k individual header writes would kill the run before the detail
+  phase (and before "last sync" is recorded). Header writes and detail updates are
+  both batched.
+- The detail pull is an N+1 (one Zoho call per challan), bounded by `DETAIL_BATCH`
+  (100) per ordinary "Sync now" and `DETAIL_FULL_MAX` (700) per `full`/"Fetch all
+  details" run (staying under the subrequest ceiling), with `MAX_PAGES_PER_RUN`
+  (50) for headers. Because detail is fetched only for rows still missing it,
+  successive runs converge to full coverage. **A large backlog (e.g. ~10k
+  challans) needs several rounds** — keep pressing "Fetch all details", or let the
+  nightly sync chip away ~700/night. "Sync now" refreshes headers + one detail
+  batch; "Fetch all details" skips the header re-page and spends the whole budget
+  on detail.
 - The sync runs **nightly** on the `"30 3 * * *"` cron (09:00 IST — the same tick
   as the Zoho Inventory reconcile) and on demand via the **Sync now** button. The
   cron step self-gates on Zoho being configured and has its own try/catch, so it
