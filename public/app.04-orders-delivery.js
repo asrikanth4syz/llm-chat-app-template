@@ -1579,17 +1579,50 @@ function correctDeliveryModal(dcId) {
     return `<tr>
       <td><b>${h(it.name || it.sku)}</b><div class="u-subtiny" style="font-family:monospace;color:var(--text-muted)">${h(it.sku)}</div></td>
       <td class="u-right" style="font-variant-numeric:tabular-nums">${disp.toLocaleString('en-IN')}</td>
-      <td class="u-right"><input type="number" min="0" max="${disp}" value="${del}" data-cd-sku="${h(it.sku)}" data-cd-old="${del}"
+      <td class="u-right"><input type="number" min="0" max="${disp}" value="${del}" data-cd-sku="${h(it.sku)}" data-cd-old="${del}" ${dataInput('cdRecalc')}
         style="width:88px;text-align:right;padding:5px 8px;border:1px solid var(--border);border-radius:6px"></td>
     </tr>`;
   }).join('');
   openModal(`Correct delivered qty · ${h(dc.dc_number || dc.id)}`,
     `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Fix a mis-keyed delivered quantity. Delivered can't exceed the <b>dispatched</b> qty on this challan; an over-delivery beyond what was ordered is allowed and recorded in full (reconciliation flags the surplus). Warehouse stock and the client's store inventory adjust automatically, and the change is logged.</div>
      <div style="overflow:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Dispatched</th><th class="u-right">Delivered</th></tr></thead><tbody>${rows}</tbody></table></div>
+     <div id="cd-summary" style="margin-top:12px"></div>
      <div class="form-group" style="margin-top:12px"><label>Reason (required)</label>
        <textarea id="cd-reason" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="e.g. delivered qty mis-keyed at confirmation — corrected to actual"></textarea></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveDeliveryCorrection', dc.id)}>Save correction</button>`);
+  cdRecalc(); // paint the Before/After summary with the current values
+}
+// Live Before/After panel for the correction window: item count (lines with a
+// delivered qty) and total delivered quantity, as they stand now vs. after the
+// edits in the inputs. Recomputed on every keystroke in a delivered-qty field.
+function cdRecalc() {
+  const inps = Array.from(document.querySelectorAll('[data-cd-sku]'));
+  const el = document.getElementById('cd-summary'); if (!el) return;
+  let qtyBefore = 0, qtyAfter = 0, cntBefore = 0, cntAfter = 0, changed = 0;
+  inps.forEach(inp => {
+    const oldV = Number(inp.dataset.cdOld) || 0;
+    const raw = Math.round(Number(inp.value));
+    const newV = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+    qtyBefore += oldV; qtyAfter += newV;
+    if (oldV > 0) cntBefore++;
+    if (newV > 0) cntAfter++;
+    if (newV !== oldV) changed++;
+  });
+  const n = v => Number(v).toLocaleString('en-IN');
+  const delta = d => d === 0 ? '' : ` <span style="font-weight:700;color:${d > 0 ? 'var(--success,#0C8E6D)' : 'var(--danger,#c23b3b)'}">(${d > 0 ? '+' : ''}${n(d)})</span>`;
+  const col = (label, items, qty, dItems, dQty) => `
+    <div style="flex:1;min-width:150px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--surface-2,rgba(128,128,128,.05))">
+      <div style="font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">${label}</div>
+      <div style="margin-top:4px;font-size:.84rem">Items delivered: <b>${n(items)}</b>${dItems === undefined ? '' : delta(dItems)}</div>
+      <div style="font-size:.84rem">Delivered qty: <b style="font-variant-numeric:tabular-nums">${n(qty)}</b>${dQty === undefined ? '' : delta(dQty)}</div>
+    </div>`;
+  el.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${col('Before', cntBefore, qtyBefore)}
+      ${col('After', cntAfter, qtyAfter, cntAfter - cntBefore, qtyAfter - qtyBefore)}
+    </div>
+    <div style="font-size:.76rem;color:var(--text-muted);margin-top:6px">${changed ? `${changed} line${changed > 1 ? 's' : ''} will change.` : 'No changes yet — edit a delivered quantity above.'}</div>`;
 }
 async function saveDeliveryCorrection(dcId) {
   const reason = document.getElementById('cd-reason')?.value?.trim();
