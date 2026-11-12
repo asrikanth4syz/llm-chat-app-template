@@ -2482,6 +2482,97 @@ async function runZohoDCSync(env: Env, opts: { actor?: string; fetchImpl?: Fetch
   }
 }
 
+// Detail + upsert ONE challan from its Zoho detail record (header + line_items +
+// invoices in a single GET), marking it fully synced. Used by the webhook for
+// incremental, real-time updates. Non-throwing.
+async function zohoDCSyncOne(env: Env, fetchImpl: FetchImpl, id: string): Promise<boolean> {
+  await ensureZohoDCTable(env);
+  let token = await zohoGetToken(env, fetchImpl);
+  let detail: Record<string, unknown> | null = null;
+  try { detail = await zohoDCFetchDetail(env, token, id, fetchImpl); }
+  catch (e) {
+    if (e instanceof ZohoAuthError) { try { token = await zohoGetToken(env, fetchImpl, true); detail = await zohoDCFetchDetail(env, token, id, fetchImpl); } catch { return false; } }
+    else return false;
+  }
+  if (!detail) return false;
+  const dcNumber = String(detail.deliverychallan_number ?? "").trim();
+  const date = String(detail.date ?? detail.delivery_date ?? "").trim();
+  const custId = String(detail.customer_id ?? "").trim();
+  const custName = String(detail.customer_name ?? "").trim();
+  const invStatus = String(detail.invoiced_status ?? detail.status ?? "").trim();
+  const total = Number(detail.total ?? 0) || 0;
+  const currency = String(detail.currency_code ?? "").trim();
+  const modified = String(detail.last_modified_time ?? detail.last_modified ?? "").trim();
+  const lines: unknown[] = Array.isArray(detail.line_items) ? detail.line_items as unknown[] : [];
+  const qty = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
+  const invoiceNos = zohoDcInvoiceNumbers(detail, {});
+  await env.DB.prepare(
+    `INSERT INTO zoho_delivery_challans
+       (zoho_dc_id,dc_number,dc_date,ym,customer_id,customer_name,invoiced_status,total,currency_code,zoho_modified,synced_at,line_count,qty_count,invoice_numbers,detail_ok)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+     ON CONFLICT(zoho_dc_id) DO UPDATE SET
+       dc_number=excluded.dc_number, dc_date=excluded.dc_date, ym=excluded.ym,
+       customer_id=excluded.customer_id, customer_name=excluded.customer_name,
+       invoiced_status=excluded.invoiced_status, total=excluded.total,
+       currency_code=excluded.currency_code, zoho_modified=excluded.zoho_modified,
+       synced_at=excluded.synced_at, line_count=excluded.line_count,
+       qty_count=excluded.qty_count, invoice_numbers=excluded.invoice_numbers, detail_ok=1`
+  ).bind(id, dcNumber, date, zohoDcYm(date), custId, custName, invStatus, total, currency, modified, new Date().toISOString(), lines.length, qty, JSON.stringify(invoiceNos)).run();
+  return true;
+}
+
+// Pull a delivery-challan id out of a Zoho workflow webhook payload, which varies
+// by how the rule is configured (full module JSON, a bare field, or a URL param).
+function zohoDCExtractId(body: unknown, url: URL): string {
+  const q = (url.searchParams.get("id") || url.searchParams.get("deliverychallan_id") || "").trim();
+  if (q) return q;
+  const b = body as Record<string, any> | null;
+  const cand = b?.deliverychallan?.deliverychallan_id ?? b?.deliverychallan_id ?? b?.deliverychallan?.id
+    ?? b?.data?.deliverychallan_id ?? b?.data?.deliverychallan?.deliverychallan_id ?? b?.id;
+  return String(cand ?? "").trim();
+}
+
+// POST …/delivery-challans/webhook?token=<secret> — Zoho calls this on challan
+// create/edit. Verified by a rotatable shared secret (not a logged-in user), it
+// details just that one challan in the background and acks fast. Always 200 for a
+// valid token (even when there's nothing to do) so Zoho doesn't retry-storm.
+async function handleZohoDCWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  await ensureZohoDCTable(env);
+  const url = new URL(request.url);
+  const secret = (await getConfig(env, "zoho_dc_webhook_secret", "")).trim();
+  const provided = (url.searchParams.get("token") || request.headers.get("x-dc-webhook-token") || "").trim();
+  if (!secret || provided !== secret) return json({ error: "invalid or missing webhook token" }, 401);
+  const body = await request.json().catch(() => ({}));
+  const id = zohoDCExtractId(body, url);
+  if (!id) return json({ ok: false, reason: "no delivery challan id in payload" });
+  if (!(await zohoConfigured(env))) return json({ ok: false, reason: "zoho not configured" });
+  ctx.waitUntil((async () => { try { await zohoDCSyncOne(env, fetch, id); } catch (e) { console.error("zoho DC webhook sync error:", String(e)); } })());
+  return json({ ok: true, id });
+}
+
+// GET …/delivery-challans/webhook-info — admin: the webhook URL to paste into Zoho
+// (mints the secret on first read). POST …/webhook-rotate regenerates it.
+async function handleZohoDCWebhookInfo(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  let secret = (await getConfig(env, "zoho_dc_webhook_secret", "")).trim();
+  if (!secret) { secret = uid() + uid(); await setConfig(env, "zoho_dc_webhook_secret", secret, user!.sub); }
+  const origin = new URL(request.url).origin;
+  return json({ url: `${origin}/api/integrations/zoho-inventory/delivery-challans/webhook?token=${secret}`, configured: await zohoConfigured(env) });
+}
+
+async function handleZohoDCWebhookRotate(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!FIN_FULL_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  const secret = uid() + uid();
+  await setConfig(env, "zoho_dc_webhook_secret", secret, user!.sub);
+  await audit(env, user, "ROTATE", "integration", "zoho_dc_webhook", undefined, "regenerated DC webhook secret");
+  const origin = new URL(request.url).origin;
+  return json({ url: `${origin}/api/integrations/zoho-inventory/delivery-challans/webhook?token=${secret}` });
+}
+
 // GET /api/integrations/zoho-inventory/delivery-challans — the finance register.
 // Filters: ?customer=<id> &month=YYYY-MM &q=<text>. Returns rows + the distinct
 // customer and month lists (for the dropdowns) + last-synced + configured flag.
@@ -7161,6 +7252,9 @@ export default {
       if (path==="/api/integrations/zoho-inventory/delivery-challans"      && method==="GET")  return handleZohoDCList(request,env);
       if (path==="/api/integrations/zoho-inventory/delivery-challans/sync" && method==="POST") return handleZohoDCSync(request,env,ctx);
       if (path==="/api/integrations/zoho-inventory/delivery-challans/detail-now" && method==="POST") return handleZohoDCDetailNow(request,env);
+      if (path==="/api/integrations/zoho-inventory/delivery-challans/webhook"        && method==="POST") return handleZohoDCWebhook(request,env,ctx);
+      if (path==="/api/integrations/zoho-inventory/delivery-challans/webhook-info"   && method==="GET")  return handleZohoDCWebhookInfo(request,env);
+      if (path==="/api/integrations/zoho-inventory/delivery-challans/webhook-rotate" && method==="POST") return handleZohoDCWebhookRotate(request,env);
 
       // Phase 3 Finance — Receivables (003-finance-ar). Await the AR schema before
       // any finance handler so a cold isolate never races the waitUntil self-heal.

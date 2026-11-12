@@ -1401,6 +1401,7 @@ function _zdcPaint(main) {
       </div>
       <div class="zdc-hbtns">
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcToggleHelp')}>${_ZDC.help ? 'Hide help' : 'Help'}</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('zdcWebhookSetup')} title="Set up Zoho to push each challan to the app as it's created or edited">Live updates</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcCsv')}>Export CSV</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcRefresh')}>Refresh</button>
         ${_zdcShownMissing().length ? `<button class="btn btn-secondary btn-sm" ${dataAct('zdcLoadShown')} title="Fetch line/qty/invoice detail now for the challans shown below that aren’t loaded yet">Load detail (${_zdcShownMissing().length})</button>` : ''}
@@ -1528,6 +1529,40 @@ async function zdcSync() {
   if (r.status === 'not_configured') { showToast('Zoho is not configured — set the Zoho secrets in Finance Setup first.', 'error'); return; }
   showToast('Sync started — refreshing headers and fetching a batch of details in the background.', 'success');
   _zdcAutoRefresh();
+}
+// Live updates: show the Zoho webhook URL + setup steps so each challan is
+// detailed the moment it's created/edited in Zoho (no waiting for a sync).
+async function zdcWebhookSetup() {
+  const info = await api('/integrations/zoho-inventory/delivery-challans/webhook-info');
+  if (!info) return;
+  openModal('Live updates — Zoho webhook',
+    `<p style="margin:0 0 10px">Point Zoho at this URL and every delivery challan is detailed the moment it's <strong>created or edited</strong> — no waiting for the nightly or manual sync.</p>
+     <div class="form-group"><label>Webhook URL <span style="color:var(--danger,#b3261e)">(keep secret)</span></label>
+       <input id="zdc-wh-url" readonly value="${h(info.url)}" onclick="this.select()" style="width:100%;font-family:monospace;font-size:.78rem;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+     <ol style="line-height:1.7;font-size:.88rem;margin:6px 0 0;padding-left:18px">
+       <li>In Zoho Inventory: <strong>Settings → Automations → Workflow Rules</strong>.</li>
+       <li>New rule on the <strong>Delivery Challan</strong> module; trigger on <strong>Created</strong> and <strong>Edited</strong>.</li>
+       <li>Add an <strong>action → Webhook</strong>: method <strong>POST</strong>, the URL above, and send the <strong>Delivery Challan</strong> record (module JSON).</li>
+       <li>Save &amp; associate the rule, then activate it.</li>
+     </ol>
+     ${info.configured ? '' : '<p style="margin:10px 0 0;font-size:.82rem;color:var(--amber,#a86513)">⚠ Connect Zoho in Finance Setup first — otherwise incremental updates can’t fetch the challan detail.</p>'}`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>
+     <button class="btn btn-secondary" ${dataAct('zdcWebhookCopy')}>Copy URL</button>
+     <button class="btn btn-secondary" ${dataAct('zdcWebhookRotate')}>Regenerate</button>`);
+}
+function zdcWebhookCopy() {
+  const el = document.getElementById('zdc-wh-url'); if (!el) return;
+  el.select();
+  try { navigator.clipboard.writeText(el.value); showToast('Webhook URL copied', 'success'); }
+  catch { try { document.execCommand('copy'); showToast('Webhook URL copied', 'success'); } catch { showToast('Select the URL and copy it', 'info'); } }
+}
+async function zdcWebhookRotate() {
+  if (!confirm('Regenerate the webhook URL?\n\nThe current URL will stop working immediately — you must paste the new one into Zoho.')) return;
+  const info = await api('/integrations/zoho-inventory/delivery-challans/webhook-rotate', { method: 'POST', body: JSON.stringify({}) });
+  if (!info) return;
+  closeModal();
+  showToast('New webhook URL generated — update it in Zoho.', 'success');
+  zdcWebhookSetup();
 }
 function zdcCsv() {
   const list = _zdcVisible();

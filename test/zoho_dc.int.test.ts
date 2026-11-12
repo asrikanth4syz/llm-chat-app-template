@@ -140,6 +140,27 @@ describe("Zoho Delivery Challans register", () => {
     expect(body.status).toBe("not_configured");
   });
 
+  it("webhook rejects a missing/invalid token", async () => {
+    const res = await SELF.fetch(`${BASE}${LIST}/webhook`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deliverychallan_id: "x" }) });
+    expect(res.status).toBe(401);
+  });
+
+  it("webhook-info is admin-only and returns a tokenised URL the webhook accepts", async () => {
+    expect((await get(`${LIST}/webhook-info`, cliTok)).status).toBe(403);
+    const info = await (await get(`${LIST}/webhook-info`, superTok)).json() as any;
+    expect(info.url).toContain("/delivery-challans/webhook?token=");
+    const token = new URL(info.url).searchParams.get("token")!;
+    const res = await SELF.fetch(`${BASE}${LIST}/webhook?token=${token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    expect(res.status).toBe(200); // valid token, no id → ack (no retry storm), not 401
+    expect((await res.json() as any).ok).toBe(false);
+  });
+
+  it("webhook-rotate is admin-only and returns a fresh URL", async () => {
+    expect((await post(`${LIST}/webhook-rotate`, {}, cliTok)).status).toBe(403);
+    const info = await (await post(`${LIST}/webhook-rotate`, {}, superTok)).json() as any;
+    expect(info.url).toContain("token=");
+  });
+
   it("forbids client roles from syncing", async () => {
     expect((await post(`${LIST}/sync`, {}, cliTok)).status).toBe(403);
   });

@@ -149,6 +149,24 @@ rows. The register calls it when you drill into a customer/month (auto, small
 sets) or press **"Load detail"**, so older challans fill in lazily instead of a
 multi-day full backfill. Repeat calls are cheap — only still-pending ids are
 fetched.
+
+### Live updates (incremental webhook)
+
+So new/edited challans appear without waiting for a sync, Zoho can push each one:
+
+- `POST …/delivery-challans/webhook?token=<secret>` — called by a Zoho **Workflow
+  Rule** on the Delivery Challan module (Created + Edited). Verified by a rotatable
+  shared secret (not a logged-in user); it details just that one challan
+  (`zohoDCSyncOne`) in the background and acks fast. Always 200 on a valid token so
+  Zoho never retry-storms; the id is read from the module JSON, a bare field, or a
+  `?id=` param.
+- `GET …/delivery-challans/webhook-info` (admin) returns the tokenised URL to paste
+  into Zoho (mints the secret on first read); `POST …/delivery-challans/webhook-rotate`
+  regenerates it. The register's **"Live updates"** button shows the URL + the Zoho
+  setup steps, with Copy and Regenerate.
+
+The secret lives in `app_config.zoho_dc_webhook_secret`. Once the webhook is set
+up, steady-state cost is ~1 API call per changed challan — no bulk polling.
 5. Records a `zoho-dc-sync` job in `import_jobs` and stamps `zoho_dc_last_sync_at`
    / `zoho_dc_last_result` (with `mirrored`, `reported_total`, `detailed_now`,
    `pending`, `failed`) in `app_config`.
