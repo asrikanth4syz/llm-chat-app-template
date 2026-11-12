@@ -1388,7 +1388,6 @@ async function renderZohoDC(main) {
 function _zdcPaint(main) {
   main = main || document.getElementById('main-content'); if (!main) return;
   const d = _ZDC.data || { rows: [], customers: [], months: [] };
-  const synced = d.last_synced ? new Date(d.last_synced).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null;
   const custOpts = ['<option value="all">All customers</option>']
     .concat((d.customers || []).map(c => `<option value="${h(String(c.id))}"${_ZDC.cust === c.id ? ' selected' : ''}>${h(String(c.name))}</option>`)).join('');
   const monthOpts = ['<option value="all">All months</option>']
@@ -1399,9 +1398,6 @@ function _zdcPaint(main) {
     <div class="zdc-head">
       <div>
         <h2 style="margin:0">Delivery Challans <span class="zdc-sub">· from Zoho</span></h2>
-        <div class="zdc-synced">${synced
-          ? `<span class="zdc-dot"></span> Last synced ${h(synced)}`
-          : (d.configured ? 'Not synced yet — press “Sync now”.' : 'Zoho is not configured yet — set the Zoho secrets in Finance Setup first.')}</div>
       </div>
       <div class="zdc-hbtns">
         <button class="btn btn-secondary btn-sm" ${dataAct('zdcToggleHelp')}>${_ZDC.help ? 'Hide help' : 'Help'}</button>
@@ -1412,7 +1408,7 @@ function _zdcPaint(main) {
       </div>
     </div>
     ${_ZDC.help ? _zdcHelp() : ''}
-    ${_zdcHealth(d.health)}
+    ${_zdcStatus(d)}
     <div class="zdc-tools">
       <label class="zdc-fld"><span>DC for (customer)</span><select ${dataChangeVal('zdcPickCust')}>${custOpts}</select></label>
       <label class="zdc-fld"><span>Month</span><select ${dataChangeVal('zdcPickMonth')}>${monthOpts}</select></label>
@@ -1539,35 +1535,67 @@ function _zdcHelp() {
 // Sync completeness strip: answers "is the sync done in full?" — how many
 // challans are mirrored vs. what Zoho reported, how many still await line/qty
 // detail, and any detailed-but-empty anomalies.
-function _zdcHealth(hl) {
-  if (!hl || !hl.mirrored) return '';
+// Always-visible sync status: a pill (Up to date / In progress / Failed / Never
+// synced / Not connected), the last-sync date & time, and the counts — how many
+// challans are mirrored vs. Zoho's total, and how many have line/qty detail vs.
+// are still pending. This is the "is the sync done, and how far?" panel.
+function _zdcStatus(d) {
+  const hl = d.health || {};
+  const lr = d.last_result || {};
   const n = v => Number(v || 0).toLocaleString('en-IN');
-  const items = [];
-  // Headers: mirrored vs. Zoho's reported total.
-  if (hl.reported_total && hl.headers_complete === false) {
-    items.push({ sev: 'warn', t: `${n(hl.reported_total - hl.mirrored)} challan(s) not yet mirrored — run Sync again (Zoho reports ${n(hl.reported_total)}, we have ${n(hl.mirrored)}).` });
-  }
-  // Detail: line/qty/invoice coverage.
-  if (hl.pending > 0) {
-    items.push({ sev: 'warn', t: `${n(hl.pending)} of ${n(hl.mirrored)} challans still awaiting line/qty detail — use “Fetch all details”, or it finishes on the nightly sync.` });
+  const syncedAt = d.last_synced ? new Date(d.last_synced).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : null;
+
+  let sev, pill, headline;
+  if (!d.configured) {
+    sev = 'warn'; pill = 'Not connected';
+    headline = 'Zoho isn’t connected yet — connect it in Finance Setup, then press “Sync now”.';
+  } else if (!syncedAt && !hl.mirrored) {
+    sev = 'warn'; pill = 'Never synced';
+    headline = 'Not synced yet — press “Sync now” to pull your delivery challans from Zoho.';
+  } else if (lr.status === 'error') {
+    sev = 'err'; pill = 'Last sync failed';
+    headline = 'Last sync failed: ' + (lr.error || 'unknown error') + ' — press “Sync now” to retry.';
+  } else if ((hl.pending || 0) > 0 || hl.headers_complete === false) {
+    sev = 'prog'; pill = 'Sync in progress';
+    headline = `${n(hl.detailed)} of ${n(hl.mirrored)} challans fully synced · ${n(hl.pending)} still being fetched. Use “Fetch all details”, or it finishes on the nightly sync.`;
   } else {
-    items.push({ sev: 'ok', t: `All ${n(hl.mirrored)} challans have line/qty detail${hl.reported_total ? ` (Zoho reports ${n(hl.reported_total)})` : ''}.` });
+    sev = 'ok'; pill = 'Up to date';
+    headline = `All ${n(hl.mirrored)} challans synced in full.`;
   }
-  // Anomaly: detailed but still zero lines.
-  if (hl.suspicious > 0) {
-    items.push({ sev: 'warn', t: `${n(hl.suspicious)} challan(s) came back with 0 line items from Zoho — verify those in Zoho.` });
+
+  const metric = (label, value, ok) => `<div class="zdc-metric"><span>${label}</span><b>${value}${ok === true ? ' <span class="zdc-tick">✓</span>' : ok === false ? ' <span class="zdc-cross">⚠</span>' : ''}</b></div>`;
+  const rows = [metric('Last sync', syncedAt ? h(syncedAt) : '—')];
+  if (d.configured && (syncedAt || hl.mirrored)) {
+    rows.push(metric('Challans mirrored', hl.reported_total ? `${n(hl.mirrored)} of ${n(hl.reported_total)}` : n(hl.mirrored), hl.reported_total ? hl.headers_complete : undefined));
+    rows.push(metric('Line/qty detail', `${n(hl.detailed)} done · ${n(hl.pending)} pending`, hl.details_complete));
+    if (hl.suspicious > 0) rows.push(metric('Check in Zoho', `${n(hl.suspicious)} show 0 lines`, false));
+    if (lr.detailed_now !== undefined) rows.push(metric('Last run added', `${n(lr.detailed_now)} detailed${lr.failed ? ` · ${n(lr.failed)} failed` : ''}`));
   }
-  const anyWarn = items.some(i => i.sev === 'warn');
-  const bg = anyWarn ? 'var(--amber-bg,#fdf1dd)' : 'var(--success-bg,#e6f5ef)';
-  const bd = anyWarn ? 'var(--amber,#a86513)' : 'var(--success,#0a7a5c)';
-  return `<div class="zdc-healthbar" style="border:1px solid ${bd};background:${bg};color:${bd}">
-    ${items.map(i => `<div>${i.sev === 'ok' ? '✓' : '⚠'} ${h(i.t)}</div>`).join('')}
+  return `<div class="zdc-status zdc-${sev}">
+    <div class="zdc-status-head"><span class="zdc-stpill zdc-st-${sev}">${pill}</span><span class="zdc-status-headline">${h(headline)}</span></div>
+    <div class="zdc-metrics">${rows.join('')}</div>
   </div>`;
 }
 
 function _zdcCss() {
   return `<style>
-  .zdc-healthbar{border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.84rem;display:flex;flex-direction:column;gap:3px}
+  .zdc-status{border:1px solid var(--border,#dde3ea);border-left-width:4px;border-radius:12px;padding:12px 14px;margin-bottom:14px;background:var(--card,#fff)}
+  .zdc-status.zdc-ok{border-left-color:var(--success,#0a7a5c)}
+  .zdc-status.zdc-prog{border-left-color:var(--blue,#2563eb)}
+  .zdc-status.zdc-warn{border-left-color:var(--amber,#a86513)}
+  .zdc-status.zdc-err{border-left-color:var(--danger,#c23b3b)}
+  .zdc-status-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .zdc-status-headline{font-size:.9rem;font-weight:600}
+  .zdc-stpill{font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border-radius:20px;padding:3px 10px;white-space:nowrap}
+  .zdc-st-ok{background:#e6f5ef;color:#0a7a5c}
+  .zdc-st-prog{background:#e7efff;color:#2159c9}
+  .zdc-st-warn{background:#fdf1dd;color:#a86513}
+  .zdc-st-err{background:#f6e0e0;color:#b3261e}
+  .zdc-metrics{display:flex;flex-wrap:wrap;gap:10px 24px;margin-top:10px}
+  .zdc-metric{display:flex;flex-direction:column;font-size:.86rem}
+  .zdc-metric>span{font-size:.62rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#94a3b8);font-weight:700;margin-bottom:1px}
+  .zdc-metric b{font-variant-numeric:tabular-nums}
+  .zdc-tick{color:var(--success,#0a7a5c)}.zdc-cross{color:var(--amber,#a86513)}
   .zdc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}
   .zdc-sub{font-size:.8rem;font-weight:600;color:var(--muted,#64748b)}
   .zdc-synced{color:var(--muted,#64748b);font-size:.84rem;margin-top:4px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
