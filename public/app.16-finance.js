@@ -1320,7 +1320,7 @@ async function renderMyStatement(main) {
  * All dataAct / data-change / data-input targets are top-level globals so the
  * smoke test's delegated-target check resolves them.
  * ========================================================== */
-const _ZDC = { data: null, cust: 'all', month: 'all', inv: 'all', q: '', help: false, sort: { col: 'dc_date', dir: 'desc' } };
+const _ZDC = { data: null, cust: 'all', months: [], inv: 'all', q: '', help: false, sort: { col: 'dc_date', dir: 'desc' } };
 // Column metadata for the register — label, cell class, and whether a header click
 // defaults to descending (numbers / dates) or ascending (text).
 const _ZDC_COLS = [
@@ -1390,8 +1390,7 @@ function _zdcPaint(main) {
   const d = _ZDC.data || { rows: [], customers: [], months: [] };
   const custOpts = ['<option value="all">All customers</option>']
     .concat((d.customers || []).map(c => `<option value="${h(String(c.id))}"${_ZDC.cust === c.id ? ' selected' : ''}>${h(String(c.name))}</option>`)).join('');
-  const monthOpts = ['<option value="all">All months</option>']
-    .concat((d.months || []).map(m => `<option value="${h(m)}"${_ZDC.month === m ? ' selected' : ''}>${h(_zdcMonthLabel(m))}</option>`)).join('');
+  const monthOpts = (d.months || []).map(m => `<option value="${h(m)}"${_ZDC.months.includes(m) ? ' selected' : ''}>${h(_zdcMonthLabel(m))}</option>`).join('');
   const chip = (k, l) => `<button class="zdc-chip${_ZDC.inv === k ? ' active' : ''}" ${dataAct('zdcSetInv', k)}>${l}</button>`;
   main.innerHTML = `
     ${_zdcCss()}
@@ -1412,9 +1411,9 @@ function _zdcPaint(main) {
     ${_zdcStatus(d)}
     <div class="zdc-tools">
       <label class="zdc-fld"><span>DC for (customer)</span><select ${dataChangeVal('zdcPickCust')}>${custOpts}</select></label>
-      <label class="zdc-fld"><span>Month</span><select ${dataChangeVal('zdcPickMonth')}>${monthOpts}</select></label>
+      <label class="zdc-fld"><span>Month${_ZDC.months.length ? ` · ${_ZDC.months.length} selected` : ' · all'}</span><select multiple size="4" class="zdc-msel" title="Ctrl/Cmd-click to pick several months; select none for all" ${dataChangeEl('zdcPickMonths')}>${monthOpts}</select></label>
       <label class="zdc-fld zdc-grow"><span>Search</span><input class="zdc-search" placeholder="DC number, customer or invoice…" value="${h(_ZDC.q)}" ${dataInputVal('zdcSearch')}></label>
-      <div class="zdc-fld"><span>Invoiced</span><div class="zdc-chips">${chip('all', 'All')}${chip('inv', 'Invoiced')}${chip('part', 'Partial')}${chip('not', 'Not')}</div></div>
+      <div class="zdc-fld"><span>Invoiced</span><div class="zdc-chips">${chip('all', 'All')}${chip('inv', 'Invoiced')}${chip('part', 'Partial')}${chip('not', 'Not')}${chip('open', 'Not + Partial')}</div></div>
     </div>
     <div id="zdc-summary" class="zdc-summary"></div>
     <div class="card" style="padding:0;overflow:hidden"><div id="zdc-table" style="overflow-x:auto"></div></div>`;
@@ -1426,8 +1425,11 @@ function _zdcVisible() {
   const q = _ZDC.q.trim().toLowerCase();
   return rows.filter(r =>
     (_ZDC.cust === 'all' || r.customer_id === _ZDC.cust) &&
-    (_ZDC.month === 'all' || r.ym === _ZDC.month) &&
-    (_ZDC.inv === 'all' || _zdcInvKey(r.invoiced_status) === _ZDC.inv) &&
+    (!_ZDC.months.length || _ZDC.months.includes(r.ym)) &&
+    (_ZDC.inv === 'all'
+      || (_ZDC.inv === 'open'
+        ? (_zdcInvKey(r.invoiced_status) === 'not' || _zdcInvKey(r.invoiced_status) === 'part')
+        : _zdcInvKey(r.invoiced_status) === _ZDC.inv)) &&
     (!q || String(r.dc_number || '').toLowerCase().includes(q)
          || String(r.customer_name || '').toLowerCase().includes(q)
          || (r.invoice_numbers || []).some(n => String(n).toLowerCase().includes(q))));
@@ -1482,11 +1484,11 @@ function _zdcRenderTable() {
 
 // ── delegated handlers (top-level globals) ──
 function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); _zdcMaybeAutoLoad(); }
-function zdcPickMonth(v) { _ZDC.month = v || 'all'; _zdcRenderTable(); _zdcMaybeAutoLoad(); }
+function zdcPickMonths(el) { _ZDC.months = Array.from(el.selectedOptions || []).map(o => o.value); _zdcRenderTable(); _zdcMaybeAutoLoad(); }
 // When the user drills into a specific customer/month and the shown set is small,
 // fetch the missing detail for exactly those rows automatically.
 function _zdcMaybeAutoLoad() {
-  const narrowed = _ZDC.cust !== 'all' || _ZDC.month !== 'all';
+  const narrowed = _ZDC.cust !== 'all' || _ZDC.months.length > 0;
   const missing = _zdcShownMissing();
   if (narrowed && missing.length && missing.length <= 40) zdcLoadShown(true);
 }
@@ -1589,7 +1591,7 @@ function _zdcHelp() {
       <li><strong>Invoiced?</strong> — whether Zoho has invoiced the challan (<em>Invoiced</em>, <em>Partially</em> or <em>Not</em>).</li>
       <li><strong>Invoice #</strong> — the linked invoice number(s). A challan can map to more than one invoice; extras show as <span class="zdc-more">+N</span> (hover to see them all). A <span class="zdc-ptag">partial</span> tag means only part of the challan is invoiced. A dash means it is not invoiced yet.</li>
     </ul>
-    <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by month, or by the invoiced state; search matches DC number, customer or invoice number; click any column header to sort. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
+    <p style="margin:10px 0 0;color:var(--muted,#64748b)">Filter by customer (<strong>DC for</strong>), by <strong>one or more months</strong> (Ctrl/Cmd-click; none = all), or by the invoiced state — <strong>Not + Partial</strong> shows everything not yet fully invoiced. Search matches DC number, customer or invoice number; click any column header to sort. <strong>Export CSV</strong> downloads exactly what you are viewing.</p>
     <p style="margin:8px 0 0;color:var(--muted,#64748b)"><strong>Line/qty & invoice detail</strong> is pulled per challan from Zoho, which rate-limits the API — so the last few months are detailed automatically (headers + nightly sync), and older challans load <strong>on demand</strong>: filter to a customer/month and they fill in, or press <strong>“Load detail”</strong>. Rows not yet loaded show a “·” in Lines/Qty/Invoice. The status strip shows recent-window progress and how many older challans are still on demand.</p>
   </div>`;
 }
@@ -1673,6 +1675,9 @@ function _zdcCss() {
   .zdc-fld{display:flex;flex-direction:column;gap:5px}
   .zdc-fld>span{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#94a3b8)}
   .zdc-fld select,.zdc-search{font:inherit;font-size:.86rem;padding:8px 11px;border:1px solid var(--border,#dde3ea);border-radius:9px;background:var(--card,#fff);color:inherit;min-width:180px}
+  .zdc-msel{padding:4px!important;min-width:190px;max-width:240px}
+  .zdc-msel option{padding:3px 7px;border-radius:5px}
+  .zdc-msel option:checked{background:color-mix(in srgb,var(--primary,#0d7a68) 22%,var(--card,#fff));color:inherit}
   .zdc-grow{flex:1;min-width:200px}.zdc-grow .zdc-search{width:100%}
   .zdc-fld select:focus,.zdc-search:focus{outline:none;border-color:var(--primary,#0d7a68);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary,#0d7a68) 20%,transparent)}
   .zdc-chips{display:inline-flex;background:var(--surface-2,rgba(128,128,128,.08));border:1px solid var(--border,#dde3ea);border-radius:10px;padding:3px;gap:2px}
