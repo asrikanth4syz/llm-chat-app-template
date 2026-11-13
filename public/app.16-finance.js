@@ -1320,7 +1320,7 @@ async function renderMyStatement(main) {
  * All dataAct / data-change / data-input targets are top-level globals so the
  * smoke test's delegated-target check resolves them.
  * ========================================================== */
-const _ZDC = { data: null, cust: 'all', months: [], inv: 'all', q: '', help: false, sort: { col: 'dc_date', dir: 'desc' } };
+const _ZDC = { data: null, cust: 'all', months: [], monthOpen: false, inv: 'all', q: '', help: false, sort: { col: 'dc_date', dir: 'desc' } };
 // Column metadata for the register — label, cell class, and whether a header click
 // defaults to descending (numbers / dates) or ascending (text).
 const _ZDC_COLS = [
@@ -1390,7 +1390,6 @@ function _zdcPaint(main) {
   const d = _ZDC.data || { rows: [], customers: [], months: [] };
   const custOpts = ['<option value="all">All customers</option>']
     .concat((d.customers || []).map(c => `<option value="${h(String(c.id))}"${_ZDC.cust === c.id ? ' selected' : ''}>${h(String(c.name))}</option>`)).join('');
-  const monthOpts = (d.months || []).map(m => `<option value="${h(m)}"${_ZDC.months.includes(m) ? ' selected' : ''}>${h(_zdcMonthLabel(m))}</option>`).join('');
   const chip = (k, l) => `<button class="zdc-chip${_ZDC.inv === k ? ' active' : ''}" ${dataAct('zdcSetInv', k)}>${l}</button>`;
   main.innerHTML = `
     ${_zdcCss()}
@@ -1411,13 +1410,69 @@ function _zdcPaint(main) {
     ${_zdcStatus(d)}
     <div class="zdc-tools">
       <label class="zdc-fld"><span>DC for (customer)</span><select ${dataChangeVal('zdcPickCust')}>${custOpts}</select></label>
-      <label class="zdc-fld"><span>Month${_ZDC.months.length ? ` · ${_ZDC.months.length} selected` : ' · all'}</span><select multiple size="4" class="zdc-msel" title="Ctrl/Cmd-click to pick several months; select none for all" ${dataChangeEl('zdcPickMonths')}>${monthOpts}</select></label>
+      <div class="zdc-fld"><span>Month</span><div id="zdc-ms" class="zdc-ms">${_zdcMonthControlInner()}</div></div>
       <label class="zdc-fld zdc-grow"><span>Search</span><input class="zdc-search" placeholder="DC number, customer or invoice…" value="${h(_ZDC.q)}" ${dataInputVal('zdcSearch')}></label>
       <div class="zdc-fld"><span>Invoiced</span><div class="zdc-chips">${chip('all', 'All')}${chip('inv', 'Invoiced')}${chip('part', 'Partial')}${chip('not', 'Not')}${chip('open', 'Not + Partial')}</div></div>
     </div>
     <div id="zdc-summary" class="zdc-summary"></div>
     <div class="card" style="padding:0;overflow:hidden"><div id="zdc-table" style="overflow-x:auto"></div></div>`;
   _zdcRenderTable();
+  if (!_ZDC._outsideBound) { _ZDC._outsideBound = true; document.addEventListener('click', _zdcOutside, true); }
+}
+
+// ── Month multi-select (checkbox dropdown + presets) ──
+function _zdcAvailMonths() { return (_ZDC.data && _ZDC.data.months) || []; }
+function _zdcMonthBtnLabel() {
+  if (!_ZDC.months.length) return 'All months';
+  if (_ZDC.months.length === 1) return _zdcMonthLabel(_ZDC.months[0]);
+  return `${_ZDC.months.length} months`;
+}
+function _zdcMonthControlInner() {
+  const avail = _zdcAvailMonths();
+  const sel = new Set(_ZDC.months);
+  const groups = {};
+  avail.forEach(ym => { const y = String(ym).slice(0, 4); (groups[y] = groups[y] || []).push(ym); });
+  const years = Object.keys(groups).sort().reverse();
+  const listHtml = years.map(y =>
+    `<div class="zdc-ms-year">${h(y)}</div>` +
+    groups[y].map(ym => `<button type="button" class="zdc-ms-opt${sel.has(ym) ? ' on' : ''}" ${dataAct('zdcMonthCheck', ym)}><span class="zdc-ms-box">${sel.has(ym) ? '✓' : ''}</span>${h(_zdcMonthLabel(ym))}</button>`).join('')
+  ).join('');
+  const preset = (k, l) => `<button type="button" class="zdc-ms-preset" ${dataAct('zdcMonthPreset', k)}>${l}</button>`;
+  return `<button type="button" class="zdc-ms-btn${_ZDC.months.length ? ' has' : ''}${_ZDC.monthOpen ? ' open' : ''}" ${dataAct('zdcMonthToggle')}>
+      <span class="zdc-ms-lbl">${h(_zdcMonthBtnLabel())}</span><span class="zdc-ms-caret">▾</span></button>
+    ${_ZDC.monthOpen ? `<div class="zdc-ms-pop">
+      <div class="zdc-ms-presets">${preset('this', 'This month')}${preset('l3', 'Last 3')}${preset('fy', 'This FY')}${preset('all', 'All')}</div>
+      <div class="zdc-ms-list">${listHtml || '<div class="zdc-ms-empty">No months yet — run a sync.</div>'}</div>
+    </div>` : ''}`;
+}
+function _zdcRefreshMonth() {
+  const wrap = document.getElementById('zdc-ms'); if (!wrap) return;
+  const list = wrap.querySelector('.zdc-ms-list'); const st = list ? list.scrollTop : 0;
+  wrap.innerHTML = _zdcMonthControlInner();
+  const list2 = wrap.querySelector('.zdc-ms-list'); if (list2) list2.scrollTop = st;
+}
+function _zdcOutside(e) {
+  if (!_ZDC.monthOpen) return;
+  const wrap = document.getElementById('zdc-ms');
+  if (wrap && !wrap.contains(e.target)) { _ZDC.monthOpen = false; _zdcRefreshMonth(); }
+}
+function _zdcYmNow(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+function _zdcRecentYms(n) { const out = []; const d = new Date(); d.setDate(1); for (let i = 0; i < n; i++) { out.push(_zdcYmNow(d)); d.setMonth(d.getMonth() - 1); } return out; }
+function _zdcFyYms() { const d = new Date(); const y = d.getFullYear(); const startY = (d.getMonth() + 1) >= 4 ? y : y - 1; const out = []; for (let i = 0; i < 12; i++) { const mm = 4 + i; out.push((startY + Math.floor((mm - 1) / 12)) + '-' + String(((mm - 1) % 12) + 1).padStart(2, '0')); } return out; }
+function zdcMonthToggle() { _ZDC.monthOpen = !_ZDC.monthOpen; _zdcRefreshMonth(); }
+function zdcMonthCheck(ym) {
+  const i = _ZDC.months.indexOf(ym);
+  if (i >= 0) _ZDC.months.splice(i, 1); else _ZDC.months.push(ym);
+  _zdcRenderTable(); _zdcRefreshMonth(); _zdcMaybeAutoLoad();
+}
+function zdcMonthPreset(kind) {
+  const avail = new Set(_zdcAvailMonths());
+  let sel = [];
+  if (kind === 'this') sel = _zdcRecentYms(1);
+  else if (kind === 'l3') sel = _zdcRecentYms(3);
+  else if (kind === 'fy') sel = _zdcFyYms();
+  _ZDC.months = sel.filter(y => avail.has(y));
+  _zdcRenderTable(); _zdcRefreshMonth(); _zdcMaybeAutoLoad();
 }
 
 function _zdcVisible() {
@@ -1484,7 +1539,6 @@ function _zdcRenderTable() {
 
 // ── delegated handlers (top-level globals) ──
 function zdcPickCust(v) { _ZDC.cust = v || 'all'; _zdcRenderTable(); _zdcMaybeAutoLoad(); }
-function zdcPickMonths(el) { _ZDC.months = Array.from(el.selectedOptions || []).map(o => o.value); _zdcRenderTable(); _zdcMaybeAutoLoad(); }
 // When the user drills into a specific customer/month and the shown set is small,
 // fetch the missing detail for exactly those rows automatically.
 function _zdcMaybeAutoLoad() {
@@ -1675,9 +1729,23 @@ function _zdcCss() {
   .zdc-fld{display:flex;flex-direction:column;gap:5px}
   .zdc-fld>span{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#94a3b8)}
   .zdc-fld select,.zdc-search{font:inherit;font-size:.86rem;padding:8px 11px;border:1px solid var(--border,#dde3ea);border-radius:9px;background:var(--card,#fff);color:inherit;min-width:180px}
-  .zdc-msel{padding:4px!important;min-width:190px;max-width:240px}
-  .zdc-msel option{padding:3px 7px;border-radius:5px}
-  .zdc-msel option:checked{background:color-mix(in srgb,var(--primary,#0d7a68) 22%,var(--card,#fff));color:inherit}
+  .zdc-ms{position:relative;min-width:190px}
+  .zdc-ms-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;font:inherit;font-size:.86rem;padding:8px 11px;border:1px solid var(--border,#dde3ea);border-radius:9px;background:var(--card,#fff);color:inherit;cursor:pointer;text-align:left}
+  .zdc-ms-btn.has{border-color:var(--primary,#0d7a68);font-weight:600}
+  .zdc-ms-btn.open{border-color:var(--primary,#0d7a68);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary,#0d7a68) 20%,transparent)}
+  .zdc-ms-caret{color:var(--muted,#94a3b8);font-size:.7rem}
+  .zdc-ms-pop{position:absolute;z-index:50;top:calc(100% + 4px);left:0;min-width:230px;background:var(--card,#fff);border:1px solid var(--border,#dde3ea);border-radius:10px;box-shadow:0 10px 28px rgba(16,28,45,.16);overflow:hidden}
+  .zdc-ms-presets{display:flex;flex-wrap:wrap;gap:6px;padding:10px;border-bottom:1px solid var(--border,#eceff3)}
+  .zdc-ms-preset{font:inherit;font-size:.76rem;font-weight:600;color:var(--primary-ink,#0a5f52);background:var(--surface-2,rgba(13,122,104,.08));border:1px solid transparent;border-radius:7px;padding:5px 10px;cursor:pointer}
+  .zdc-ms-preset:hover{border-color:var(--primary,#0d7a68)}
+  .zdc-ms-list{max-height:260px;overflow:auto;padding:6px}
+  .zdc-ms-year{font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,#94a3b8);padding:8px 8px 3px}
+  .zdc-ms-opt{display:flex;align-items:center;gap:9px;width:100%;font:inherit;font-size:.85rem;padding:7px 8px;border:0;border-radius:7px;background:none;color:inherit;cursor:pointer;text-align:left}
+  .zdc-ms-opt:hover{background:var(--surface-2,rgba(128,128,128,.08))}
+  .zdc-ms-opt.on{font-weight:600}
+  .zdc-ms-box{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;flex:0 0 17px;border:1.5px solid var(--border-strong,#cbd4de);border-radius:5px;font-size:.7rem;color:#fff}
+  .zdc-ms-opt.on .zdc-ms-box{background:var(--primary,#0d7a68);border-color:var(--primary,#0d7a68)}
+  .zdc-ms-empty{padding:14px;color:var(--muted,#94a3b8);font-size:.82rem;text-align:center}
   .zdc-grow{flex:1;min-width:200px}.zdc-grow .zdc-search{width:100%}
   .zdc-fld select:focus,.zdc-search:focus{outline:none;border-color:var(--primary,#0d7a68);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary,#0d7a68) 20%,transparent)}
   .zdc-chips{display:inline-flex;background:var(--surface-2,rgba(128,128,128,.08));border:1px solid var(--border,#dde3ea);border-radius:10px;padding:3px;gap:2px}
