@@ -151,6 +151,44 @@ Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, 
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
 Object.assign(DICT.hi, { navDirectory: "निर्देशिका", search: "नाम, भूमिका, स्थान खोजें", noResults: "कोई मेल नहीं।", manager: "प्रबंधक" });
 
+// FR-04 Approvals + inline-help strings.
+Object.assign(DICT.en, {
+  navApprovals: "Approvals", delegation: "Delegation", delegateTo: "Delegate to",
+  delegate: "Add delegate", delegationCreated: "Delegation added.", revoke: "Revoke",
+  active: "active", inactive: "inactive", kind_leave: "Leave", kind_attendance: "Attendance",
+  kind_profile: "Profile",
+  sensitive_help: "Bank, PAN and Aadhaar are hidden by default. Reveal shows the full value and is logged.",
+  leaveBalances_help: "Balance changes only after approval. Pending requests are held against it.",
+  attendance_help: "Punches come from the biometric system. Flags mark missing punches, absences and short hours.",
+  directory_help: "Non-confidential contact and role info only — salary and identity are never shown.",
+  approvals_help: "Requests awaiting your decision across leave, attendance and profile — including any delegated to you.",
+  delegation_help: "Let a colleague approve your team's requests while you're away, for a date range.",
+});
+Object.assign(DICT.kn, {
+  navApprovals: "ಅನುಮೋದನೆಗಳು", delegation: "ನಿಯೋಜನೆ", delegateTo: "ಗೆ ನಿಯೋಜಿಸಿ",
+  delegate: "ನಿಯೋಜಿತರನ್ನು ಸೇರಿಸಿ", delegationCreated: "ನಿಯೋಜನೆ ಸೇರಿಸಲಾಗಿದೆ.", revoke: "ಹಿಂಪಡೆ",
+  active: "ಸಕ್ರಿಯ", inactive: "ನಿಷ್ಕ್ರಿಯ", kind_leave: "ರಜೆ", kind_attendance: "ಹಾಜರಾತಿ",
+  kind_profile: "ಪ್ರೊಫೈಲ್",
+  sensitive_help: "ಬ್ಯಾಂಕ್, ಪ್ಯಾನ್, ಆಧಾರ್ ಪೂರ್ವನಿಯೋಜಿತವಾಗಿ ಮರೆಮಾಡಲಾಗಿದೆ. ತೋರಿಸಿದರೆ ದಾಖಲಿಸಲಾಗುತ್ತದೆ.",
+  leaveBalances_help: "ಅನುಮೋದನೆಯ ನಂತರ ಮಾತ್ರ ಬಾಕಿ ಬದಲಾಗುತ್ತದೆ.",
+  attendance_help: "ಪಂಚ್‌ಗಳು ಬಯೋಮೆಟ್ರಿಕ್ ವ್ಯವಸ್ಥೆಯಿಂದ ಬರುತ್ತವೆ. ಗುರುತುಗಳು ಸಮಸ್ಯೆಗಳನ್ನು ತೋರಿಸುತ್ತವೆ.",
+  directory_help: "ಗೌಪ್ಯವಲ್ಲದ ಮಾಹಿತಿ ಮಾತ್ರ — ಸಂಬಳ/ಗುರುತು ತೋರಿಸುವುದಿಲ್ಲ.",
+  approvals_help: "ನಿಮ್ಮ ನಿರ್ಧಾರಕ್ಕೆ ಕಾಯುತ್ತಿರುವ ವಿನಂತಿಗಳು — ನಿಯೋಜಿತವಾದವೂ ಸೇರಿ.",
+  delegation_help: "ನೀವು ಇಲ್ಲದಿದ್ದಾಗ ಸಹೋದ್ಯೋಗಿ ನಿಮ್ಮ ತಂಡದ ವಿನಂತಿಗಳನ್ನು ಅನುಮೋದಿಸಬಹುದು.",
+});
+Object.assign(DICT.hi, {
+  navApprovals: "अनुमोदन", delegation: "प्रतिनिधिमंडल", delegateTo: "को सौंपें",
+  delegate: "प्रतिनिधि जोड़ें", delegationCreated: "प्रतिनिधि जोड़ा गया।", revoke: "रद्द करें",
+  active: "सक्रिय", inactive: "निष्क्रिय", kind_leave: "अवकाश", kind_attendance: "उपस्थिति",
+  kind_profile: "प्रोफ़ाइल",
+  sensitive_help: "बैंक, पैन, आधार डिफ़ॉल्ट रूप से छिपे हैं। दिखाने पर लॉग होता है।",
+  leaveBalances_help: "शेष केवल अनुमोदन के बाद बदलता है।",
+  attendance_help: "पंच बायोमेट्रिक सिस्टम से आते हैं। ध्वज समस्याएँ दर्शाते हैं।",
+  directory_help: "केवल गैर-गोपनीय जानकारी — वेतन/पहचान नहीं दिखाई जाती।",
+  approvals_help: "आपके निर्णय की प्रतीक्षा में अनुरोध — सौंपे गए सहित।",
+  delegation_help: "आपकी अनुपस्थिति में सहकर्मी आपकी टीम के अनुरोध अनुमोदित कर सकते हैं।",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -256,47 +294,74 @@ function langSelect() {
   return sel;
 }
 
-// ---- app shell -----------------------------------------------------------------
-async function renderApp() {
-  removeBar();
-  clear(app());
-  // header
-  const bar = el("header", { class: "bar" }, [
-    el("div", { class: "bar-in" }, [
-      el("h1", { text: t("appTitle") }),
-      langSelect(),
-      el("button", { class: "sm", text: t("logout"), onclick: doLogout }),
-    ]),
+// ---- app shell (HRMS-style: sidebar + topbar) ----------------------------------
+const VIEWS = [
+  { id: "profile", icon: "user", titleKey: "myProfile" },
+  { id: "leave", icon: "calendar", titleKey: "navLeave" },
+  { id: "attendance", icon: "clock", titleKey: "navAttendance" },
+  { id: "directory", icon: "users", titleKey: "navDirectory" },
+  { id: "approvals", icon: "check", titleKey: "navApprovals" },
+];
+const ICONS = {
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  check: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+};
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [k, v] of Object.entries({ viewBox: "0 0 24 24", width: "18", height: "18", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" })) svg.setAttribute(k, v);
+  try { svg.innerHTML = ICONS[name] || ""; } catch { /* older engines: label still shows */ }
+  return svg;
+}
+function help(tip) { return el("span", { class: "help", title: tip, "data-tip": tip, tabindex: "0", "aria-label": tip }, ["?"]); }
+function h2help(text, tip) { return el("h2", {}, [text, help(tip)]); }
+function initials(s) { return (s || "?").trim().split(/\s+/).map((w) => w[0] || "").slice(0, 2).join("").toUpperCase(); }
+
+function sidebar() {
+  const items = VIEWS.map((v) => el("button", { class: `navitem${state.view === v.id ? " active" : ""}`, onclick: () => switchView(v.id) }, [icon(v.icon), el("span", { text: t(v.titleKey) })]));
+  return el("nav", { class: "sidebar", id: "sidebar" }, [
+    el("div", { class: "brand" }, [el("div", { class: "logo", text: "4S" }), el("div", {}, [document.createTextNode("4SYZ"), el("small", { text: t("appTitle") })])]),
+    ...items,
+    el("div", { class: "spacer" }),
+    el("div", { class: "side-foot" }, [langSelect(), el("button", { class: "sm", text: t("logout"), onclick: doLogout })]),
   ]);
-  document.body.insertBefore(bar, app());
-  app().appendChild(nav());
-  app().appendChild(el("div", { id: "flash" }));
-  app().appendChild(el("div", { id: "body" }));
-  await switchView(state.view || "profile");
 }
 
-function nav() {
-  const mk = (view, label) => el("button", { class: `sm${state.view === view ? " primary" : ""}`, text: label, onclick: () => switchView(view) });
-  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave")), mk("attendance", t("navAttendance")), mk("directory", t("navDirectory"))]);
+async function renderApp() {
+  clear(app());
+  const content = el("div", { class: "content", id: "body" });
+  const main = el("div", { class: "main" }, [
+    el("div", { class: "topbar" }, [
+      el("h1", { id: "pagetitle", text: "" }),
+      el("div", { class: "userchip" }, [el("span", { text: state.role || "" }), el("div", { class: "avatar", text: initials(state.role) })]),
+    ]),
+    el("div", { id: "flash" }),
+    content,
+  ]);
+  app().appendChild(el("div", { class: "shell" }, [sidebar(), main]));
+  await switchView(state.view || "profile");
 }
 
 async function switchView(view) {
   state.view = view;
-  const navEl = document.getElementById("nav");
-  if (navEl && navEl.parentNode) navEl.parentNode.replaceChild(nav(), navEl);
+  const sb = document.getElementById("sidebar");
+  if (sb && sb.parentNode) sb.parentNode.replaceChild(sidebar(), sb);
+  const v = VIEWS.find((x) => x.id === view);
+  const titleEl = document.getElementById("pagetitle");
+  if (titleEl && v) titleEl.textContent = t(v.titleKey);
   flash("", "");
   if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
   else if (view === "directory") await loadDirectoryView();
+  else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
 }
-
-function removeBar() { const b = document.querySelector("header.bar"); if (b) b.remove(); }
 
 function doLogout() {
   state.token = null; state.role = null; state.emp = null; state.revealed = {};
   ss.del("ep_token"); ss.del("ep_role");
-  removeBar();
   renderLogin();
 }
 
@@ -336,7 +401,7 @@ function renderProfile() {
   body.appendChild(contact);
 
   // sensitive (masked + reveal + request change)
-  const sens = el("div", { class: "card" }, [ el("h2", { text: t("sensitiveInfo") }) ]);
+  const sens = el("div", { class: "card" }, [ h2help(t("sensitiveInfo"), t("sensitive_help")) ]);
   for (const f of SENSITIVE) sens.appendChild(sensitiveRow(f));
   body.appendChild(sens);
 
@@ -488,7 +553,7 @@ async function loadBalances() {
 function renderBalances() {
   const card = document.getElementById("lv_bal");
   if (!card) return;
-  clear(card); card.appendChild(el("h2", { text: t("leaveBalances") }));
+  clear(card); card.appendChild(h2help(t("leaveBalances"), t("leaveBalances_help")));
   if (!state.leaveBalances.length) { card.appendChild(el("div", { class: "muted", text: t("none") })); return; }
   for (const b of state.leaveBalances) {
     const avail = b.entitled - b.used - (b.pending || 0);
@@ -603,7 +668,7 @@ async function loadAttendanceView() {
   monthInput.addEventListener("change", () => { state.attMonth = monthInput.value; loadAttendanceMonth(); });
   state.attMonth = monthInput.value;
   body.appendChild(el("div", { class: "card" }, [
-    el("h2", { text: t("navAttendance") }),
+    h2help(t("navAttendance"), t("attendance_help")),
     el("div", { class: "actions" }, [el("label", { text: t("month"), style: "margin:0" }), monthInput]),
     el("div", { id: "att_summary", class: "muted", style: "margin-top:8px;font-size:13px" }),
   ]));
@@ -729,7 +794,7 @@ async function loadDirectoryView() {
   const box = el("input", { type: "search", placeholder: t("search"), id: "dir_q" });
   let timer;
   box.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => loadDirectory(box.value), 250); });
-  body.appendChild(el("div", { class: "card" }, [el("h2", { text: t("navDirectory") }), box]));
+  body.appendChild(el("div", { class: "card" }, [h2help(t("navDirectory"), t("directory_help")), box]));
   body.appendChild(el("div", { class: "card", id: "dir_list" }, [el("div", { class: "muted", text: "…" })]));
   await loadDirectory("");
 }
@@ -749,6 +814,101 @@ async function loadDirectory(q) {
           e.managerName ? el("div", { class: "muted", style: "font-size:12px", text: `${t("manager")}: ${e.managerName}` }) : null,
         ]),
       ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
+async function loadApprovalsView() {
+  const body = document.getElementById("body"); clear(body);
+  body.appendChild(el("div", { class: "card", id: "ap_inbox" }, [h2help(t("navApprovals"), t("approvals_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "ap_deleg" }, [h2help(t("delegation"), t("delegation_help")), el("div", { class: "muted", text: "…" })]));
+  await loadApprovalsInbox();
+  loadDelegations();
+}
+
+async function loadApprovalsInbox() {
+  const card = document.getElementById("ap_inbox"); if (!card) return;
+  try {
+    const { approvals } = await api("/api/approvals");
+    clear(card); card.appendChild(h2help(t("navApprovals"), t("approvals_help")));
+    if (!approvals.length) { card.appendChild(el("div", { class: "muted", text: t("noPending") })); return; }
+    for (const a of approvals) {
+      const comment = el("input", { placeholder: t("comment") });
+      const decide = async (verb) => {
+        try { await api(`${a.decideBase}/${verb}`, { method: "POST", body: { comment: comment.value || undefined } }); loadApprovalsInbox(); }
+        catch (ex) { flash("err", ex.message); }
+      };
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [
+          el("div", { class: "actions" }, [el("span", { class: "pill", text: t("kind_" + a.kind) }), el("span", { style: "font-weight:600", text: a.employeeName || "" })]),
+          el("div", { class: "muted", style: "font-size:12px", text: a.title }),
+        ]),
+        el("div", { class: "v stack" }, [
+          el("div", { class: "muted", style: "font-size:12px", text: a.detail }),
+          comment,
+          el("div", { class: "actions" }, [
+            el("button", { class: "primary sm", text: t("approve"), onclick: () => decide("approve") }),
+            el("button", { class: "sm", text: t("reject"), onclick: () => decide("reject") }),
+          ]),
+        ]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadDelegations() {
+  const card = document.getElementById("ap_deleg"); if (!card) return;
+  try {
+    const data = await api("/api/approvals/delegations");
+    clear(card); card.appendChild(h2help(t("delegation"), t("delegation_help")));
+
+    // Only approvers can delegate their own authority; offer a create form to them.
+    if (canApproveLeave()) {
+      let dir = { entries: [] };
+      try { dir = await api("/api/directory"); } catch { /* keep empty */ }
+      const sel = el("select", {});
+      sel.appendChild(el("option", { value: "", text: "—" }));
+      for (const e of dir.entries) sel.appendChild(el("option", { value: e.id, text: `${e.name}${e.designation ? " (" + e.designation + ")" : ""}` }));
+      const start = el("input", { type: "date" });
+      const end = el("input", { type: "date" });
+      const btn = el("button", { class: "primary sm", text: t("delegate") });
+      btn.addEventListener("click", async () => {
+        if (!sel.value) return;
+        btn.disabled = true;
+        try { await api("/api/approvals/delegations", { method: "POST", body: { delegateEmployeeId: sel.value, startsOn: start.value || undefined, endsOn: end.value || undefined } }); flash("ok", t("delegationCreated")); loadDelegations(); }
+        catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; }
+      });
+      card.appendChild(el("div", { class: "stack" }, [
+        el("label", { text: t("delegateTo") }), sel,
+        el("label", { text: t("startDate") }), start,
+        el("label", { text: t("endDate") }), end,
+        el("div", { class: "actions", style: "margin-top:8px" }, [btn]),
+      ]));
+    }
+
+    const list = (arr, dirn) => {
+      for (const d of (arr || [])) {
+        const who = dirn === "out" ? (d.delegate_name || d.delegate_employee_id) : (d.delegator_name || d.delegator_employee_id);
+        const cells = [
+          el("span", { class: "pill " + (d.active ? "active" : "inactive"), text: d.active ? t("active") : t("inactive") }),
+          el("span", { class: "muted", style: "font-size:12px", text: `${d.starts_on || "—"} ${t("to")} ${d.ends_on || "—"}` }),
+        ];
+        if (dirn === "out" && d.active) {
+          const rb = el("button", { class: "sm", text: t("revoke") });
+          rb.addEventListener("click", async () => { try { await api(`/api/approvals/delegations/${encodeURIComponent(d.id)}/revoke`, { method: "POST" }); loadDelegations(); } catch (ex) { flash("err", ex.message); } });
+          cells.push(rb);
+        }
+        card.appendChild(el("div", { class: "row" }, [
+          el("div", { class: "k" }, [el("div", { text: who }), el("div", { class: "muted", style: "font-size:11px", text: dirn === "out" ? t("delegateTo") : t("manager") })]),
+          el("div", { class: "v" }, [el("div", { class: "actions" }, cells)]),
+        ]));
+      }
+    };
+    list(data.delegatedOut, "out");
+    list(data.delegatedToMe, "in");
+    if (!(data.delegatedOut || []).length && !(data.delegatedToMe || []).length && !canApproveLeave()) {
+      card.appendChild(el("div", { class: "muted", text: t("none") }));
     }
   } catch (ex) { flash("err", ex.message); }
 }

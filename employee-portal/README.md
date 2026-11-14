@@ -85,11 +85,13 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (FR-01 Profile + FR-03 Leave + FR-02 Attendance + FR-08 Directory)
+## UI (Profile, Leave, Attendance, Directory, Approvals)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
-`wrangler.jsonc`; `/api/*` still falls through to the Worker), with **Profile**,
-**Leave**, **Attendance** and **Directory** tabs. Open the Worker URL in a browser:
+`wrangler.jsonc`; `/api/*` still falls through to the Worker). It uses an HRMS-style
+**sidebar + topbar** layout (a scrollable tab bar on phones) with **Profile**,
+**Leave**, **Attendance**, **Directory** and **Approvals** sections, and **inline
+`?` help** tooltips on the key section headers. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — employment details (read-only), contact fields you can edit inline
@@ -107,6 +109,9 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 - **Directory** — search all colleagues by name / role / location; shows name,
   designation, location, segment, work email and manager only. No salary, bank,
   identity or personal contact.
+- **Approvals** — one inbox of everything awaiting your decision (leave, attendance
+  corrections, and — for HR — profile changes), approve/reject with a comment; plus
+  **delegation** (hand your approval authority to a colleague for a date range).
 - Language switcher: **English / ಕನ್ನಡ / हिन्दी** (kn/hi strings are initial — have a
   native speaker review before go-live).
 
@@ -135,6 +140,20 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 | GET·POST | `/api/attendance/corrections` | any login | own corrections; submit `{date,type,requestedIn?,requestedOut?,reason?}` |
 | GET | `/api/attendance/corrections/approvals` | manager, hr_admin, super_admin | pending corrections — team for a manager, all for HR |
 | POST | `/api/attendance/corrections/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide; approve writes the day back (status P, source manual) |
+| GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
+| GET·POST | `/api/approvals/delegations` | approvers | list my delegations (out/to-me); create `{delegateEmployeeId,startsOn?,endsOn?}` |
+| POST | `/api/approvals/delegations/:id/revoke` | delegator, it_admin, super_admin | deactivate a delegation |
+
+## FR-04 Approvals
+
+- **One inbox** aggregates every pending item the signed-in user may decide — leave
+  requests, attendance corrections, and (for `profile.verify` holders) profile
+  changes — each with its own decide URL. Self-approval is blocked throughout.
+- **Delegation:** an approver can grant their authority to a colleague for a date
+  range (`approval_delegations`, migration `0006`). While active, the delegate's inbox
+  includes the delegator's team's requests and they may decide them — the leave and
+  attendance decide endpoints honour delegated authority, not just the base role
+  scope. Revoking (or the window lapsing) withdraws it immediately.
 
 ## FR-02 Attendance (biometric)
 

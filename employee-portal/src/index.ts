@@ -28,6 +28,7 @@ import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
 import { encryptField, decryptField } from "./fieldcrypto.ts";
 import { countLeaveDays, canTakeLeave } from "./leave.ts";
 import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./attendance.ts";
+import { isDelegationActive } from "./approvals.ts";
 
 export interface Env {
   DB: D1Database;
@@ -432,7 +433,7 @@ async function handleLeaveDecide(actor: Actor, env: Env, id: string, action: "ap
   if (!r) return json({ error: "not found" }, 404);
   if (r.status !== "pending") return json({ error: `already ${r.status}` }, 409);
   const target = await loadEmployee(env, r.employee_id);
-  if (!target || !canApproveLeaveFor(actor, target)) {
+  if (!target || !(canApproveLeaveFor(actor, target) || await hasDelegatedAuthority(env, actor, target))) {
     await audit(env, actor.userId, "DENY", "leave", id, "approve denied by policy");
     return json({ error: "forbidden" }, 403);
   }
@@ -558,7 +559,7 @@ async function handleAttCorrectionDecide(actor: Actor, env: Env, id: string, act
   if (!c) return json({ error: "not found" }, 404);
   if (c.status !== "pending") return json({ error: `already ${c.status}` }, 409);
   const target = await loadEmployee(env, c.employee_id);
-  if (!target || !canApproveAttendanceFor(actor, target)) {
+  if (!target || !(canApproveAttendanceFor(actor, target) || await hasDelegatedAuthority(env, actor, target))) {
     await audit(env, actor.userId, "DENY", "attendance", id, "correction approve denied by policy");
     return json({ error: "forbidden" }, 403);
   }
@@ -581,6 +582,104 @@ async function handleAttCorrectionDecide(actor: Actor, env: Env, id: string, act
     .bind(actor.userId, body.comment ?? null, id).run();
   await audit(env, actor.userId, "ATTENDANCE_CORRECTION_REJECT", "attendance", id, `${c.date} for ${c.employee_id}`);
   return json({ ok: true, rejected: true });
+}
+
+// ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
+function isApprover(actor: Actor): boolean {
+  return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
+    || hasPermission(actor.role, "attendance.approve_team") || hasPermission(actor.role, "attendance.approve_all");
+}
+
+// Employee ids of people who have delegated active approval authority to this employee.
+async function activeDelegatorIds(env: Env, delegateEmployeeId: string): Promise<string[]> {
+  const today = todayISO();
+  const rows = (await env.DB.prepare("SELECT delegator_employee_id, starts_on, ends_on, active FROM approval_delegations WHERE delegate_employee_id = ?")
+    .bind(delegateEmployeeId).all<{ delegator_employee_id: string; starts_on: string | null; ends_on: string | null; active: number }>()).results;
+  return rows.filter((r) => isDelegationActive({ active: r.active, startsOn: r.starts_on, endsOn: r.ends_on }, today)).map((r) => r.delegator_employee_id);
+}
+
+// Whose requests this actor may approve: "ALL" for HR/super, else own direct reports
+// plus the direct reports of anyone who has delegated to them.
+async function approvableEmployeeIds(env: Env, actor: Actor): Promise<"ALL" | string[]> {
+  if (hasPermission(actor.role, "leave.approve_all") || hasPermission(actor.role, "attendance.approve_all")) return "ALL";
+  const ids = new Set<string>();
+  if (actor.employeeId) {
+    const managers = [actor.employeeId, ...await activeDelegatorIds(env, actor.employeeId)];
+    for (const mgr of managers) {
+      const reports = (await env.DB.prepare("SELECT id FROM employees WHERE manager_id = ?").bind(mgr).all<{ id: string }>()).results;
+      for (const r of reports) ids.add(r.id);
+    }
+  }
+  return [...ids];
+}
+
+// Does this actor hold delegated authority over this specific employee right now?
+async function hasDelegatedAuthority(env: Env, actor: Actor, target: EmployeeRecord): Promise<boolean> {
+  if (!actor.employeeId || !target.managerId) return false;
+  return (await activeDelegatorIds(env, actor.employeeId)).includes(target.managerId);
+}
+
+async function handleApprovals(actor: Actor, env: Env): Promise<Response> {
+  const scope = await approvableEmployeeIds(env, actor);
+  const items: Array<Record<string, unknown>> = [];
+  const placeholders = (ids: string[]) => ids.map(() => "?").join(",");
+
+  const pendingLeave = async (where: string, binds: unknown[]): Promise<any[]> => (await env.DB.prepare(
+    `SELECT r.id, r.employee_id, e.name AS employee_name, t.code AS type_code, r.start_date, r.end_date, r.days, r.reason, r.created_at FROM leave_requests r JOIN employees e ON e.id=r.employee_id JOIN leave_types t ON t.id=r.leave_type_id WHERE r.status='pending' AND ${where} ORDER BY r.created_at ASC LIMIT 200`
+  ).bind(...binds).all()).results as any[];
+  const pendingAtt = async (where: string, binds: unknown[]): Promise<any[]> => (await env.DB.prepare(
+    `SELECT c.id, c.employee_id, e.name AS employee_name, c.date, c.type, c.requested_in, c.requested_out, c.reason, c.created_at FROM attendance_corrections c JOIN employees e ON e.id=c.employee_id WHERE c.status='pending' AND ${where} ORDER BY c.created_at ASC LIMIT 200`
+  ).bind(...binds).all()).results as any[];
+
+  let leaveRows: any[] = [], attRows: any[] = [];
+  if (scope === "ALL") {
+    leaveRows = await pendingLeave("r.employee_id != ?", [actor.employeeId ?? ""]);
+    attRows = await pendingAtt("c.employee_id != ?", [actor.employeeId ?? ""]);
+  } else if (scope.length) {
+    leaveRows = await pendingLeave(`r.employee_id IN (${placeholders(scope)})`, scope);
+    attRows = await pendingAtt(`c.employee_id IN (${placeholders(scope)})`, scope);
+  }
+  for (const r of leaveRows) items.push({ kind: "leave", id: r.id, employeeName: r.employee_name, title: `${r.type_code} · ${r.days}d`, detail: `${r.start_date} → ${r.end_date}${r.reason ? " · " + r.reason : ""}`, createdAt: r.created_at, decideBase: `/api/leave/requests/${r.id}` });
+  for (const r of attRows) items.push({ kind: "attendance", id: r.id, employeeName: r.employee_name, title: `${r.type} · ${r.date}`, detail: `${r.requested_in || "--:--"} → ${r.requested_out || "--:--"}${r.reason ? " · " + r.reason : ""}`, createdAt: r.created_at, decideBase: `/api/attendance/corrections/${r.id}` });
+
+  if (hasPermission(actor.role, "profile.verify")) {
+    const pcs = (await env.DB.prepare("SELECT p.id, p.employee_id, e.name AS employee_name, p.field, p.requested_at FROM profile_change_requests p LEFT JOIN employees e ON e.id=p.employee_id WHERE p.status='pending' ORDER BY p.requested_at ASC LIMIT 200").all()).results as any[];
+    for (const r of pcs) items.push({ kind: "profile", id: r.id, employeeName: r.employee_name || r.employee_id, title: `profile · ${r.field}`, detail: "identity/financial change", createdAt: r.requested_at, decideBase: `/api/admin/profile/changes/${r.id}` });
+  }
+  items.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return json({ approvals: items, count: items.length });
+}
+
+async function handleDelegationList(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ delegatedOut: [], delegatedToMe: [] });
+  const delegatedOut = (await env.DB.prepare("SELECT d.id, d.delegate_employee_id, e.name AS delegate_name, d.starts_on, d.ends_on, d.active FROM approval_delegations d LEFT JOIN employees e ON e.id=d.delegate_employee_id WHERE d.delegator_employee_id=? ORDER BY d.created_at DESC").bind(actor.employeeId).all()).results;
+  const delegatedToMe = (await env.DB.prepare("SELECT d.id, d.delegator_employee_id, e.name AS delegator_name, d.starts_on, d.ends_on, d.active FROM approval_delegations d LEFT JOIN employees e ON e.id=d.delegator_employee_id WHERE d.delegate_employee_id=? ORDER BY d.created_at DESC").bind(actor.employeeId).all()).results;
+  return json({ delegatedOut, delegatedToMe });
+}
+
+async function handleDelegationCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!isApprover(actor) || !actor.employeeId) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { delegateEmployeeId?: string; startsOn?: string; endsOn?: string };
+  const delegate = String(b.delegateEmployeeId ?? "").trim();
+  if (!delegate) return json({ error: "delegateEmployeeId required" }, 400);
+  if (delegate === actor.employeeId) return json({ error: "cannot delegate to yourself" }, 400);
+  const emp = await env.DB.prepare("SELECT id FROM employees WHERE id=?").bind(delegate).first();
+  if (!emp) return json({ error: "unknown delegate" }, 404);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO approval_delegations (id, delegator_employee_id, delegate_employee_id, starts_on, ends_on, created_by) VALUES (?,?,?,?,?,?)")
+    .bind(id, actor.employeeId, delegate, b.startsOn || null, b.endsOn || null, actor.userId).run();
+  await audit(env, actor.userId, "DELEGATION_CREATE", "approval", id, `to ${delegate} ${b.startsOn || ""}..${b.endsOn || ""}`);
+  return json({ ok: true, id });
+}
+
+async function handleDelegationRevoke(actor: Actor, env: Env, id: string): Promise<Response> {
+  const d = await env.DB.prepare("SELECT delegator_employee_id FROM approval_delegations WHERE id=?").bind(id).first<{ delegator_employee_id: string }>();
+  if (!d) return json({ error: "not found" }, 404);
+  const canRevoke = d.delegator_employee_id === actor.employeeId || hasPermission(actor.role, "user.manage") || actor.role === "super_admin";
+  if (!canRevoke) return json({ error: "forbidden" }, 403);
+  await env.DB.prepare("UPDATE approval_delegations SET active=0 WHERE id=?").bind(id).run();
+  await audit(env, actor.userId, "DELEGATION_REVOKE", "approval", id, "");
+  return json({ ok: true, revoked: true });
 }
 
 export default {
@@ -629,6 +728,13 @@ export default {
       if (path === "/api/attendance/corrections/approvals" && method === "GET") return await handleAttCorrectionQueue(actor, env);
       const acd = path.match(/^\/api\/attendance\/corrections\/([^/]+)\/(approve|reject)$/);
       if (acd && method === "POST") return await handleAttCorrectionDecide(actor, env, decodeURIComponent(acd[1]), acd[2] as "approve" | "reject", request);
+
+      // FR-04 Approvals (unified inbox + delegation)
+      if (path === "/api/approvals" && method === "GET") return await handleApprovals(actor, env);
+      if (path === "/api/approvals/delegations" && method === "GET") return await handleDelegationList(actor, env);
+      if (path === "/api/approvals/delegations" && method === "POST") return await handleDelegationCreate(actor, env, request);
+      const drev = path.match(/^\/api\/approvals\/delegations\/([^/]+)\/revoke$/);
+      if (drev && method === "POST") return await handleDelegationRevoke(actor, env, decodeURIComponent(drev[1]));
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {
