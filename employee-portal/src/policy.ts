@@ -42,9 +42,12 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   super_admin: [], // allow-all via hasPermission
 };
 
-// DEC-02: MFA is mandatory for privileged roles (HR, Finance, IT/Admin, Auditor,
-// super_admin). A plain employee or a manager logs in with one factor.
-const MFA_ROLES: Role[] = ["hr_admin", "finance", "it_admin", "auditor", "super_admin"];
+// DEC-02 (extended to all users): two-factor auth is mandatory for EVERY role —
+// employee and manager included, no exemptions. The second factor is still the dev
+// stub (verifyOtp accepts 000000) until the real factor (TOTP / DLT mobile-OTP)
+// replaces it; this enforces the 2FA flow for all logins now. To exempt a role
+// later, add it to this list (kept empty on purpose: 2FA for all).
+const MFA_EXEMPT_ROLES: Role[] = [];
 
 export interface Actor {
   userId: string;
@@ -77,7 +80,7 @@ export function hasPermission(role: Role, perm: Permission): boolean {
 }
 
 export function requiresMfa(role: Role): boolean {
-  return MFA_ROLES.includes(role);
+  return !MFA_EXEMPT_ROLES.includes(role); // every role requires a second factor (2FA for all)
 }
 
 function isSelf(actor: Actor, target: EmployeeRecord): boolean {

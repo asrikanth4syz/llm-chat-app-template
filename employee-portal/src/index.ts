@@ -82,7 +82,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!row || !row.active || !checkPassword(row.password_hash, body.password)) {
     return json({ error: "invalid credentials" }, 401);
   }
-  // DEC-02: privileged roles must present a second factor.
+  // DEC-02 (extended): every role must present a second factor — 2FA for all users.
   if (requiresMfa(row.role as Role)) {
     if (!body.otp) return json({ error: "mfa required", mfa_required: true }, 401);
     if (!verifyOtp(body.otp)) return json({ error: "invalid mfa code", mfa_required: true }, 401);

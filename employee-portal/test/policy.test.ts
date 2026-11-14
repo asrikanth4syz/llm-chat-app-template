@@ -87,12 +87,10 @@ test("default deny: no permission is granted that a role was not given", () => {
   assert.equal(hasPermission("super_admin", "employee.sensitive.read_all"), true);
 });
 
-test("MFA is required for privileged roles, not for employee/manager (DEC-02)", () => {
-  for (const r of ["hr_admin", "finance", "it_admin", "auditor", "super_admin"] as const) {
+test("2FA is mandatory for EVERY role — employee and manager included (DEC-02 extended)", () => {
+  for (const r of ["employee", "manager", "hr_admin", "finance", "it_admin", "auditor", "super_admin"] as const) {
     assert.equal(requiresMfa(r), true);
   }
-  assert.equal(requiresMfa("employee"), false);
-  assert.equal(requiresMfa("manager"), false);
 });
 
 test("permission matrix lists every role with its permissions and MFA flag", () => {
@@ -103,7 +101,7 @@ test("permission matrix lists every role with its permissions and MFA flag", () 
   assert.equal(su?.mfa, true);
   const emp = m.find((x) => x.role === "employee");
   assert.equal(emp?.permissions.includes("employee.read_all"), false);
-  assert.equal(emp?.mfa, false);
+  assert.equal(emp?.mfa, true); // 2FA now required for all roles, employee included
   assert.equal(m.find((x) => x.role === "it_admin")?.permissions.includes("user.manage"), true);
 });
 

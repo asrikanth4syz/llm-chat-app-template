@@ -44,12 +44,13 @@ npm run dev
 Dev logins (password `pw123`): `admin@4syz.com` (super_admin), `hr@4syz.com` (HR), `meera@4syz.com` (manager), `asha@4syz.com` / `bala@4syz.com` (employees).
 
 ```bash
-# Asha logs in and sees only herself:
-TOKEN=$(curl -s localhost:8787/api/auth/login -d '{"email":"asha@4syz.com","password":"pw123"}' | jq -r .token)
+# Asha logs in (2FA for all → password + otp) and sees only herself:
+TOKEN=$(curl -s localhost:8787/api/auth/login -d '{"email":"asha@4syz.com","password":"pw123","otp":"000000"}' | jq -r .token)
 curl -s localhost:8787/api/employees -H "Authorization: Bearer $TOKEN"   # → just Asha
 curl -s localhost:8787/api/employees/e_bala -H "Authorization: Bearer $TOKEN"   # → 403 forbidden
+# Omitting "otp" now returns {"mfa_required":true} for every role, employee included.
 # Super admin sees everyone, with sensitive fields:
-TOKEN=$(curl -s localhost:8787/api/auth/login -d '{"email":"admin@4syz.com","password":"pw123"}' | jq -r .token)
+TOKEN=$(curl -s localhost:8787/api/auth/login -d '{"email":"admin@4syz.com","password":"pw123","otp":"000000"}' | jq -r .token)
 curl -s localhost:8787/api/employees -H "Authorization: Bearer $TOKEN"   # → all, incl. pan/bank/ctc
 ```
 
@@ -82,7 +83,7 @@ Deploy from your machine instead (from `employee-portal/`):
 
 | Method | Path | Who | Returns |
 | --- | --- | --- | --- |
-| POST | `/api/auth/login` | anyone | JWT; privileged roles must also send `otp` (dev `000000`) — MFA, DEC-02 |
+| POST | `/api/auth/login` | anyone | JWT; **all** roles must also send `otp` (dev `000000`) — 2FA for all, DEC-02 |
 | GET | `/api/me` | any login | own employee record (full detail) |
 | GET | `/api/employees` | any login | scoped list — self / team / all by role |
 | GET | `/api/employees/:id` | any login | one record if policy allows, else 403 (+ DENY audit) |
@@ -90,11 +91,12 @@ Deploy from your machine instead (from `employee-portal/`):
 | GET | `/api/policy/matrix` | it_admin, auditor, super_admin | role → permission matrix (G1 artefact) |
 | POST | `/api/admin/users/:id/revoke` | it_admin, super_admin | kill a user's sessions (`{"deactivate":true}` also disables login) |
 
-## MFA & access revocation
+## 2FA & access revocation
 
-- **MFA (DEC-02):** HR, Finance, IT/Admin, Auditor and super_admin logins require a
-  second factor at `/api/auth/login` (dev OTP `000000`; replace with TOTP / DLT SMS).
-  Employee and manager logins stay single-factor.
+- **2FA for all (DEC-02, extended):** *every* login — employee and manager included —
+  must present a second factor at `/api/auth/login` (dev OTP `000000`). The flow is
+  enforced for all roles now; the real factor (TOTP / DLT mobile-OTP) replaces the
+  stub later via `verifyOtp` in `src/auth.ts`. No role is single-factor.
 - **Revocation (SLA):** each login carries a token version; `…/revoke` bumps the
   user's version so **every live session for them is rejected immediately** — the
   "sessions killed within 1 h of exit or role change" control. Flip `deactivate`
