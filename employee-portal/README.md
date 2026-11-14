@@ -85,11 +85,11 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (FR-01 Profile + FR-03 Leave)
+## UI (FR-01 Profile + FR-03 Leave + FR-02 Attendance)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
-`wrangler.jsonc`; `/api/*` still falls through to the Worker), with **Profile** and
-**Leave** tabs. Open the Worker URL in a browser:
+`wrangler.jsonc`; `/api/*` still falls through to the Worker), with **Profile**,
+**Leave** and **Attendance** tabs. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — employment details (read-only), contact fields you can edit inline
@@ -100,6 +100,10 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 - **Leave** — balances per type (entitled / used / pending / available), an apply form
   (type, dates, half-day, reason), your request history with **Cancel**, and — for
   managers (team) and HR/super_admin (all) — a **Leave approvals** queue.
+- **Attendance** — pick a month: per-day IN/OUT, worked hours and status from the
+  biometric system, with **exception flags** (missing punch, absence, short hours);
+  a **Request correction** form (regularisation / on-duty / client visit / WFH);
+  your corrections; and, for managers/HR, a **Correction approvals** queue.
 - Language switcher: **English / ಕನ್ನಡ / हिन्दी** (kn/hi strings are initial — have a
   native speaker review before go-live).
 
@@ -122,6 +126,34 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 | POST | `/api/leave/requests/:id/cancel` | owner | cancel own pending/approved request (approved restores balance) |
 | GET | `/api/leave/approvals` | manager, hr_admin, super_admin | pending requests to decide — team for a manager, all for HR |
 | POST | `/api/leave/requests/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide `{comment?}`; self-approval blocked; approve adds to `used` |
+| POST | `/api/admin/attendance/import` | hr_admin, it_admin, super_admin | FR-02: ingest biometric rows `{month,rows[]}`; matches `attendance_code`→employee, upserts days, reports unmatched codes |
+| GET | `/api/attendance?month=YYYY-MM` | any login | own days (IN/OUT/work/status) + per-day exceptions + monthly summary |
+| GET·POST | `/api/attendance/corrections` | any login | own corrections; submit `{date,type,requestedIn?,requestedOut?,reason?}` |
+| GET | `/api/attendance/corrections/approvals` | manager, hr_admin, super_admin | pending corrections — team for a manager, all for HR |
+| POST | `/api/attendance/corrections/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide; approve writes the day back (status P, source manual) |
+
+## FR-02 Attendance (biometric)
+
+Daily punches come from the biometric attendance system's **monthly report** (an `.xls`
+of 10-row blocks per employee). Flow:
+
+1. Map each person's biometric **Empcode** to their portal record (`employees.attendance_code`).
+   Migration `0005` sets a demo mapping for the seed users.
+2. Convert the report to the import payload and POST it (one-time per month):
+   ```bash
+   pip install xlrd
+   python3 employee-portal/scripts/parse_biometric.py monthreport.xls > import.json
+   TOKEN=$(curl -s $URL/api/auth/login -d '{"email":"hr@4syz.com","password":"pw123","otp":"000000"}' | jq -r .token)
+   curl -s $URL/api/admin/attendance/import -H "Authorization: Bearer $TOKEN" \
+        -H 'content-type: application/json' --data-binary @import.json
+   ```
+   The response reports `imported`, matched `employees`, and any `unmatchedCodes`.
+3. Employees see their month in the **Attendance** tab; **exceptions** flag missing
+   punches, absences and short hours (future days are not flagged).
+4. **Corrections** (regularisation / on-duty / client-visit / WFH) go through the same
+   manager→team / HR→all approval scoping as leave (self-approval blocked); an approved
+   correction writes the day back as a manual record. Payroll cut-off locking (FR-16,
+   e.g. the 25th) and working-day/holiday-calendar hour counting are follow-ups.
 
 ## FR-03 Leave
 

@@ -21,10 +21,12 @@ import {
   permissionMatrix,
   isSessionCurrent,
   canApproveLeaveFor,
+  canApproveAttendanceFor,
 } from "./policy.ts";
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
 import { encryptField, decryptField } from "./fieldcrypto.ts";
 import { countLeaveDays, canTakeLeave } from "./leave.ts";
+import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./attendance.ts";
 
 export interface Env {
   DB: D1Database;
@@ -438,6 +440,129 @@ async function handleLeaveDecide(actor: Actor, env: Env, id: string, action: "ap
   return json({ ok: true, rejected: true });
 }
 
+// ---- FR-02 Attendance ----------------------------------------------------------
+const todayISO = (): string => new Date().toISOString().slice(0, 10);
+const ATT_CORRECTION_TYPES = new Set(["regularisation", "on_duty", "client_visit", "wfh"]);
+
+interface AttRow {
+  id: string; employee_id: string; date: string; in_time: string | null; out_time: string | null;
+  work_minutes: number; ot_minutes: number; status: string; source: string;
+}
+
+// Admin import of biometric data. Matches each row's biometric code to an employee
+// via attendance_code and upserts that day. Unknown codes are reported, not failed.
+async function handleAttendanceImport(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
+  const body = await request.json().catch(() => ({})) as {
+    month?: string;
+    rows?: Array<{ code?: string; date?: string; in?: string | null; out?: string | null; workMinutes?: number; otMinutes?: number; status?: string }>;
+  };
+  const rows = Array.isArray(body.rows) ? body.rows : [];
+  if (!rows.length) return json({ error: "no rows" }, 400);
+  const emps = (await env.DB.prepare("SELECT id, attendance_code FROM employees WHERE attendance_code IS NOT NULL AND attendance_code != ''")
+    .all<{ id: string; attendance_code: string }>()).results;
+  const byCode = new Map(emps.map((e) => [String(e.attendance_code), e.id]));
+  const ops: D1PreparedStatement[] = [];
+  const unmatched = new Set<string>();
+  const matched = new Set<string>();
+  for (const r of rows) {
+    const code = String(r.code ?? "").trim();
+    const date = String(r.date ?? "").trim();
+    if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const empId = byCode.get(code);
+    if (!empId) { unmatched.add(code); continue; }
+    matched.add(empId);
+    ops.push(env.DB.prepare(
+      "INSERT INTO attendance_days (id, employee_id, date, in_time, out_time, work_minutes, ot_minutes, status, source, updated_at) " +
+      "VALUES (?,?,?,?,?,?,?,?, 'biometric', datetime('now')) " +
+      "ON CONFLICT(employee_id, date) DO UPDATE SET in_time=excluded.in_time, out_time=excluded.out_time, work_minutes=excluded.work_minutes, ot_minutes=excluded.ot_minutes, status=excluded.status, source='biometric', updated_at=datetime('now')"
+    ).bind(uid(), empId, date, r.in ?? null, r.out ?? null, Math.max(0, Math.round(Number(r.workMinutes) || 0)), Math.max(0, Math.round(Number(r.otMinutes) || 0)), String(r.status ?? "")));
+  }
+  for (let i = 0; i < ops.length; i += 50) await env.DB.batch(ops.slice(i, i + 50)); // chunk under the batch cap
+  await audit(env, actor.userId, "ATTENDANCE_IMPORT", "attendance", null, `month ${body.month ?? "?"}: ${ops.length} days, ${matched.size} employees, ${unmatched.size} unmatched`);
+  return json({ ok: true, imported: ops.length, employees: matched.size, unmatchedCodes: [...unmatched] });
+}
+
+async function handleAttendanceMonth(actor: Actor, env: Env, monthParam: string): Promise<Response> {
+  if (!actor.employeeId) return json({ month: monthParam, days: [], summary: null });
+  const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : todayISO().slice(0, 7);
+  const rows = (await env.DB.prepare(
+    "SELECT id, employee_id, date, in_time, out_time, work_minutes, ot_minutes, status, source FROM attendance_days WHERE employee_id = ? AND date LIKE ? ORDER BY date"
+  ).bind(actor.employeeId, `${month}-%`).all<AttRow>()).results;
+  const today = todayISO();
+  const toDay = (r: AttRow): AttendanceDay => ({ date: r.date, inTime: r.in_time, outTime: r.out_time, workMinutes: r.work_minutes, status: r.status });
+  const days = rows.map((r) => ({
+    date: r.date, in: r.in_time, out: r.out_time, workMinutes: r.work_minutes, otMinutes: r.ot_minutes,
+    status: r.status, source: r.source, exceptions: dayExceptions(toDay(r), today),
+  }));
+  return json({ month, days, summary: summarize(rows.map(toDay), today) });
+}
+
+async function handleAttCorrectionSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { date?: string; type?: string; requestedIn?: string; requestedOut?: string; reason?: string };
+  const date = String(b.date ?? "").trim();
+  const type = String(b.type ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "valid date required" }, 400);
+  if (!ATT_CORRECTION_TYPES.has(type)) return json({ error: "invalid correction type" }, 400);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO attendance_corrections (id, employee_id, date, type, requested_in, requested_out, reason) VALUES (?,?,?,?,?,?,?)")
+    .bind(id, actor.employeeId, date, type, b.requestedIn ?? null, b.requestedOut ?? null, b.reason ?? null).run();
+  await audit(env, actor.userId, "ATTENDANCE_CORRECTION_REQUEST", "attendance", id, `${type} ${date}`);
+  return json({ ok: true, id, status: "pending" });
+}
+
+async function handleAttCorrections(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ corrections: [] });
+  const corrections = (await env.DB.prepare(
+    "SELECT id, date, type, requested_in, requested_out, reason, status, decision_comment, decided_at, created_at FROM attendance_corrections WHERE employee_id = ? ORDER BY created_at DESC LIMIT 100"
+  ).bind(actor.employeeId).all()).results;
+  return json({ corrections });
+}
+
+async function handleAttCorrectionQueue(actor: Actor, env: Env): Promise<Response> {
+  const cols = "c.id, c.employee_id, e.name AS employee_name, c.date, c.type, c.requested_in, c.requested_out, c.reason, c.created_at";
+  const join = "FROM attendance_corrections c JOIN employees e ON e.id = c.employee_id";
+  let corrections: unknown[] = [];
+  if (hasPermission(actor.role, "attendance.approve_all")) {
+    corrections = (await env.DB.prepare(`SELECT ${cols} ${join} WHERE c.status = 'pending' AND c.employee_id != ? ORDER BY c.created_at ASC LIMIT 200`).bind(actor.employeeId ?? "").all()).results;
+  } else if (hasPermission(actor.role, "attendance.approve_team") && actor.employeeId) {
+    corrections = (await env.DB.prepare(`SELECT ${cols} ${join} WHERE c.status = 'pending' AND e.manager_id = ? ORDER BY c.created_at ASC LIMIT 200`).bind(actor.employeeId).all()).results;
+  }
+  return json({ corrections, count: corrections.length });
+}
+
+async function handleAttCorrectionDecide(actor: Actor, env: Env, id: string, action: "approve" | "reject", request: Request): Promise<Response> {
+  const c = await env.DB.prepare("SELECT employee_id, date, requested_in, requested_out, status FROM attendance_corrections WHERE id = ?")
+    .bind(id).first<{ employee_id: string; date: string; requested_in: string | null; requested_out: string | null; status: string }>();
+  if (!c) return json({ error: "not found" }, 404);
+  if (c.status !== "pending") return json({ error: `already ${c.status}` }, 409);
+  const target = await loadEmployee(env, c.employee_id);
+  if (!target || !canApproveAttendanceFor(actor, target)) {
+    await audit(env, actor.userId, "DENY", "attendance", id, "correction approve denied by policy");
+    return json({ error: "forbidden" }, 403);
+  }
+  const body = await request.json().catch(() => ({})) as { comment?: string };
+  if (action === "approve") {
+    const inM = hhmmToMinutes(c.requested_in), outM = hhmmToMinutes(c.requested_out);
+    const work = inM != null && outM != null ? Math.max(0, outM - inM) : 0;
+    await env.DB.batch([
+      env.DB.prepare("UPDATE attendance_corrections SET status = 'approved', approver_id = ?, decision_comment = ?, decided_at = datetime('now') WHERE id = ?")
+        .bind(actor.userId, body.comment ?? null, id),
+      env.DB.prepare(
+        "INSERT INTO attendance_days (id, employee_id, date, in_time, out_time, work_minutes, ot_minutes, status, source, updated_at) VALUES (?,?,?,?,?,?,0,'P','manual', datetime('now')) " +
+        "ON CONFLICT(employee_id, date) DO UPDATE SET in_time=excluded.in_time, out_time=excluded.out_time, work_minutes=excluded.work_minutes, status='P', source='manual', updated_at=datetime('now')"
+      ).bind(uid(), c.employee_id, c.date, c.requested_in, c.requested_out, work),
+    ]);
+    await audit(env, actor.userId, "ATTENDANCE_CORRECTION_APPROVE", "attendance", id, `${c.date} for ${c.employee_id}`);
+    return json({ ok: true, approved: true });
+  }
+  await env.DB.prepare("UPDATE attendance_corrections SET status = 'rejected', approver_id = ?, decision_comment = ?, decided_at = datetime('now') WHERE id = ?")
+    .bind(actor.userId, body.comment ?? null, id).run();
+  await audit(env, actor.userId, "ATTENDANCE_CORRECTION_REJECT", "attendance", id, `${c.date} for ${c.employee_id}`);
+  return json({ ok: true, rejected: true });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -474,6 +599,15 @@ export default {
       if (path === "/api/leave/approvals" && method === "GET") return await handleLeaveApprovals(actor, env);
       const ldecide = path.match(/^\/api\/leave\/requests\/([^/]+)\/(approve|reject)$/);
       if (ldecide && method === "POST") return await handleLeaveDecide(actor, env, decodeURIComponent(ldecide[1]), ldecide[2] as "approve" | "reject", request);
+
+      // FR-02 Attendance
+      if (path === "/api/admin/attendance/import" && method === "POST") return await handleAttendanceImport(actor, env, request);
+      if (path === "/api/attendance" && method === "GET") return await handleAttendanceMonth(actor, env, url.searchParams.get("month") || "");
+      if (path === "/api/attendance/corrections" && method === "POST") return await handleAttCorrectionSubmit(actor, env, request);
+      if (path === "/api/attendance/corrections" && method === "GET") return await handleAttCorrections(actor, env);
+      if (path === "/api/attendance/corrections/approvals" && method === "GET") return await handleAttCorrectionQueue(actor, env);
+      const acd = path.match(/^\/api\/attendance\/corrections\/([^/]+)\/(approve|reject)$/);
+      if (acd && method === "POST") return await handleAttCorrectionDecide(actor, env, decodeURIComponent(acd[1]), acd[2] as "approve" | "reject", request);
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {

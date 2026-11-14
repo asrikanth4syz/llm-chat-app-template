@@ -108,6 +108,44 @@ Object.assign(DICT.hi, {
   leaveSubmitted: "अवकाश अनुरोध सबमिट किया गया।", cancelRequest: "रद्द करें", to: "से",
 });
 
+// FR-02 Attendance strings (kn/hi initial, review before go-live).
+Object.assign(DICT.en, {
+  navAttendance: "Attendance", month: "Month", present: "Present", absent: "Absent",
+  weekoff: "Week-off", holiday: "Holiday", leaveWord: "Leave", workHours: "Work",
+  exceptionsWord: "Exceptions", colDate: "Date", colIn: "In", colOut: "Out",
+  colWork: "Work", colStatus: "Status", requestCorrection: "Request correction",
+  correctionType: "Type", t_regularisation: "Regularisation", t_on_duty: "On-duty",
+  t_client_visit: "Client visit", t_wfh: "Work from home", requestedIn: "In (HH:MM)",
+  requestedOut: "Out (HH:MM)", myCorrections: "My corrections",
+  correctionApprovals: "Correction approvals", noAttendance: "No attendance for this month.",
+  correctionSubmitted: "Correction request submitted.", ex_missing_out: "missing out",
+  ex_missing_in: "missing in", ex_absent: "absent", ex_short_hours: "short hours",
+});
+Object.assign(DICT.kn, {
+  navAttendance: "ಹಾಜರಾತಿ", month: "ತಿಂಗಳು", present: "ಹಾಜರ್", absent: "ಗೈರು",
+  weekoff: "ವಾರದ ರಜೆ", holiday: "ರಜಾದಿನ", leaveWord: "ರಜೆ", workHours: "ಕೆಲಸ",
+  exceptionsWord: "ಸಮಸ್ಯೆಗಳು", colDate: "ದಿನಾಂಕ", colIn: "ಒಳಗೆ", colOut: "ಹೊರಗೆ",
+  colWork: "ಕೆಲಸ", colStatus: "ಸ್ಥಿತಿ", requestCorrection: "ತಿದ್ದುಪಡಿ ವಿನಂತಿ",
+  correctionType: "ಪ್ರಕಾರ", t_regularisation: "ಕ್ರಮಬದ್ಧಗೊಳಿಸುವಿಕೆ", t_on_duty: "ಕರ್ತವ್ಯ",
+  t_client_visit: "ಗ್ರಾಹಕ ಭೇಟಿ", t_wfh: "ಮನೆಯಿಂದ ಕೆಲಸ", requestedIn: "ಒಳಗೆ (HH:MM)",
+  requestedOut: "ಹೊರಗೆ (HH:MM)", myCorrections: "ನನ್ನ ತಿದ್ದುಪಡಿಗಳು",
+  correctionApprovals: "ತಿದ್ದುಪಡಿ ಅನುಮೋದನೆಗಳು", noAttendance: "ಈ ತಿಂಗಳ ಹಾಜರಾತಿ ಇಲ್ಲ.",
+  correctionSubmitted: "ತಿದ್ದುಪಡಿ ವಿನಂತಿ ಸಲ್ಲಿಸಲಾಗಿದೆ.", ex_missing_out: "ಹೊರಗೆ ಇಲ್ಲ",
+  ex_missing_in: "ಒಳಗೆ ಇಲ್ಲ", ex_absent: "ಗೈರು", ex_short_hours: "ಕಡಿಮೆ ಸಮಯ",
+});
+Object.assign(DICT.hi, {
+  navAttendance: "उपस्थिति", month: "माह", present: "उपस्थित", absent: "अनुपस्थित",
+  weekoff: "साप्ताहिक अवकाश", holiday: "छुट्टी", leaveWord: "अवकाश", workHours: "कार्य",
+  exceptionsWord: "समस्याएँ", colDate: "तिथि", colIn: "इन", colOut: "आउट",
+  colWork: "कार्य", colStatus: "स्थिति", requestCorrection: "सुधार अनुरोध",
+  correctionType: "प्रकार", t_regularisation: "नियमितीकरण", t_on_duty: "ड्यूटी पर",
+  t_client_visit: "क्लाइंट विज़िट", t_wfh: "घर से कार्य", requestedIn: "इन (HH:MM)",
+  requestedOut: "आउट (HH:MM)", myCorrections: "मेरे सुधार",
+  correctionApprovals: "सुधार अनुमोदन", noAttendance: "इस माह की कोई उपस्थिति नहीं।",
+  correctionSubmitted: "सुधार अनुरोध सबमिट किया गया।", ex_missing_out: "आउट नहीं",
+  ex_missing_in: "इन नहीं", ex_absent: "अनुपस्थित", ex_short_hours: "कम घंटे",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -122,6 +160,7 @@ const state = {
   emp: null,
   revealed: {}, // field -> full value
   leaveBalances: [],
+  attMonth: null,
 };
 const DIRECT = ["phone", "personalEmail", "address", "emergencyContact"];
 const SENSITIVE = ["pan", "bankAccount", "aadhaarLast4"];
@@ -233,7 +272,7 @@ async function renderApp() {
 
 function nav() {
   const mk = (view, label) => el("button", { class: `sm${state.view === view ? " primary" : ""}`, text: label, onclick: () => switchView(view) });
-  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave"))]);
+  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave")), mk("attendance", t("navAttendance"))]);
 }
 
 async function switchView(view) {
@@ -242,6 +281,7 @@ async function switchView(view) {
   if (navEl && navEl.parentNode) navEl.parentNode.replaceChild(nav(), navEl);
   flash("", "");
   if (view === "leave") await loadLeaveView();
+  else if (view === "attendance") await loadAttendanceView();
   else await loadProfile();
 }
 
@@ -534,6 +574,138 @@ async function loadLeaveQueue() {
         el("div", { class: "k" }, [el("div", { text: a.employee_name || a.employee_id }), el("div", { class: "muted", style: "font-size:12px", text: `${a.type_code} · ${a.days} ${t("daysUnit")}` })]),
         el("div", { class: "v stack" }, [
           el("div", { class: "muted", style: "font-size:12px", text: `${a.start_date} ${t("to")} ${a.end_date}${a.reason ? " · " + a.reason : ""}` }),
+          comment,
+          el("div", { class: "actions" }, [
+            el("button", { class: "primary sm", text: t("approve"), onclick: () => decide("approve") }),
+            el("button", { class: "sm", text: t("reject"), onclick: () => decide("reject") }),
+          ]),
+        ]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-02 Attendance ----------------------------------------------------------
+const ST_WORD = { P: "present", A: "absent", WO: "weekoff", HL: "holiday", LV: "leaveWord" };
+function statusWord(code) { return ST_WORD[code] ? t(ST_WORD[code]) : (code || "—"); }
+function minToHHMM(m) { m = Math.max(0, Math.round(m || 0)); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; }
+
+async function loadAttendanceView() {
+  const body = document.getElementById("body");
+  clear(body);
+  const monthInput = el("input", { type: "month", value: state.attMonth || new Date().toISOString().slice(0, 7), style: "width:auto" });
+  monthInput.addEventListener("change", () => { state.attMonth = monthInput.value; loadAttendanceMonth(); });
+  state.attMonth = monthInput.value;
+  body.appendChild(el("div", { class: "card" }, [
+    el("h2", { text: t("navAttendance") }),
+    el("div", { class: "actions" }, [el("label", { text: t("month"), style: "margin:0" }), monthInput]),
+    el("div", { id: "att_summary", class: "muted", style: "margin-top:8px;font-size:13px" }),
+  ]));
+  body.appendChild(el("div", { class: "card", id: "att_table" }, [el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "att_corr_form" }, [el("h2", { text: t("requestCorrection") })]));
+  body.appendChild(el("div", { class: "card", id: "att_mycorr" }, [el("h2", { text: t("myCorrections") }), el("div", { class: "muted", text: "…" })]));
+  if (canApproveLeave()) body.appendChild(el("div", { class: "card", id: "att_queue" }, [el("h2", { text: t("correctionApprovals") }), el("div", { class: "muted", text: "…" })]));
+  await loadAttendanceMonth();
+  renderCorrectionForm();
+  loadMyCorrections();
+  if (canApproveLeave()) loadAttCorrQueue();
+}
+
+async function loadAttendanceMonth() {
+  const sumEl = document.getElementById("att_summary");
+  const tableEl = document.getElementById("att_table");
+  if (!tableEl) return;
+  try {
+    const data = await api(`/api/attendance?month=${encodeURIComponent(state.attMonth)}`);
+    const s = data.summary;
+    if (sumEl && s) sumEl.textContent = `${t("present")}: ${s.present} · ${t("absent")}: ${s.absent} · ${t("leaveWord")}: ${s.leave} · ${t("weekoff")}: ${s.weekoff} · ${t("holiday")}: ${s.holiday} · ${t("workHours")}: ${minToHHMM(s.workMinutes)} · ${t("exceptionsWord")}: ${s.exceptionDays}`;
+    clear(tableEl);
+    if (!data.days || !data.days.length) { tableEl.appendChild(el("div", { class: "muted", text: t("noAttendance") })); return; }
+    for (const d of data.days) {
+      const flags = (d.exceptions || []).map((x) => el("span", { class: "pill pending", style: "margin-right:4px", text: t("ex_" + x) }));
+      tableEl.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: d.date.slice(8) }), el("div", { class: "muted", style: "font-size:11px", text: d.date })]),
+        el("div", { class: "v" }, [
+          el("div", { text: `${d.in || "--:--"} → ${d.out || "--:--"} · ${minToHHMM(d.workMinutes)} · ${statusWord(d.status)}` }),
+          flags.length ? el("div", { style: "margin-top:4px" }, flags) : null,
+          el("div", { style: "margin-top:4px" }, [el("button", { class: "sm", text: t("requestCorrection"), onclick: () => prefillCorrection(d.date, d.in, d.out) })]),
+        ]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+function renderCorrectionForm() {
+  const card = document.getElementById("att_corr_form");
+  if (!card) return;
+  clear(card); card.appendChild(el("h2", { text: t("requestCorrection") }));
+  const date = el("input", { type: "date", id: "cf_date" });
+  const type = el("select", { id: "cf_type" });
+  for (const [v, k] of [["regularisation", "t_regularisation"], ["on_duty", "t_on_duty"], ["client_visit", "t_client_visit"], ["wfh", "t_wfh"]]) type.appendChild(el("option", { value: v, text: t(k) }));
+  const inp = el("input", { id: "cf_in", placeholder: t("requestedIn") });
+  const outp = el("input", { id: "cf_out", placeholder: t("requestedOut") });
+  const reason = el("input", { id: "cf_reason", placeholder: t("reasonOptional") });
+  const btn = el("button", { class: "primary", text: t("submit") });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api("/api/attendance/corrections", { method: "POST", body: { date: date.value, type: type.value, requestedIn: inp.value || undefined, requestedOut: outp.value || undefined, reason: reason.value || undefined } });
+      flash("ok", t("correctionSubmitted"));
+      date.value = ""; inp.value = ""; outp.value = ""; reason.value = "";
+      loadMyCorrections();
+    } catch (ex) { flash("err", ex.message); }
+    finally { btn.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "stack" }, [
+    el("label", { text: t("colDate") }), date,
+    el("label", { text: t("correctionType") }), type,
+    el("label", { text: t("requestedIn") }), inp,
+    el("label", { text: t("requestedOut") }), outp,
+    el("label", { text: t("reasonOptional") }), reason,
+    el("div", { class: "actions", style: "margin-top:10px" }, [btn]),
+  ]));
+}
+
+function prefillCorrection(date, inVal, outVal) {
+  const d = document.getElementById("cf_date"); if (d) d.value = date;
+  const i = document.getElementById("cf_in"); if (i && inVal && inVal !== "--:--") i.value = inVal;
+  const o = document.getElementById("cf_out"); if (o && outVal && outVal !== "--:--") o.value = outVal;
+  const card = document.getElementById("att_corr_form"); if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function loadMyCorrections() {
+  const card = document.getElementById("att_mycorr");
+  if (!card) return;
+  try {
+    const { corrections } = await api("/api/attendance/corrections");
+    clear(card); card.appendChild(el("h2", { text: t("myCorrections") }));
+    if (!corrections.length) { card.appendChild(el("div", { class: "muted", text: t("none") })); return; }
+    for (const c of corrections) {
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: c.date }), el("div", { class: "muted", style: "font-size:12px", text: t("t_" + c.type) })]),
+        el("div", { class: "v" }, [el("div", { class: "actions" }, [statusPill(c.status), el("span", { class: "muted", style: "font-size:12px", text: `${c.requested_in || "--:--"} → ${c.requested_out || "--:--"}` })])]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadAttCorrQueue() {
+  const card = document.getElementById("att_queue");
+  if (!card) return;
+  try {
+    const { corrections } = await api("/api/attendance/corrections/approvals");
+    clear(card); card.appendChild(el("h2", { text: t("correctionApprovals") }));
+    if (!corrections.length) { card.appendChild(el("div", { class: "muted", text: t("noPending") })); return; }
+    for (const c of corrections) {
+      const comment = el("input", { placeholder: t("comment") });
+      const decide = async (verb) => {
+        try { await api(`/api/attendance/corrections/${encodeURIComponent(c.id)}/${verb}`, { method: "POST", body: { comment: comment.value || undefined } }); loadAttCorrQueue(); }
+        catch (ex) { flash("err", ex.message); }
+      };
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: c.employee_name || c.employee_id }), el("div", { class: "muted", style: "font-size:12px", text: `${c.date} · ${t("t_" + c.type)}` })]),
+        el("div", { class: "v stack" }, [
+          el("div", { class: "muted", style: "font-size:12px", text: `${c.requested_in || "--:--"} → ${c.requested_out || "--:--"}${c.reason ? " · " + c.reason : ""}` }),
           comment,
           el("div", { class: "actions" }, [
             el("button", { class: "primary sm", text: t("approve"), onclick: () => decide("approve") }),

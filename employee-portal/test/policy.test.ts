@@ -14,6 +14,7 @@ import {
   maskEmployee,
   maskValue,
   canApproveLeaveFor,
+  canApproveAttendanceFor,
   hasPermission,
   requiresMfa,
   permissionMatrix,
@@ -141,4 +142,12 @@ test("leave approval: manager approves direct reports only, HR anyone, never sel
   assert.equal(canApproveLeaveFor(actorAsha, bala), false);  // a plain employee approves no one
   assert.equal(canApproveLeaveFor(actorHr, asha), true);     // HR covers anyone (their function)
   assert.equal(canApproveLeaveFor(actorSuper, meera), true); // super_admin covers anyone
+});
+
+test("attendance correction approval mirrors leave scoping (team/all, never self) (FR-02)", () => {
+  assert.equal(canApproveAttendanceFor(actorMeera, asha), true);  // direct report
+  assert.equal(canApproveAttendanceFor(actorMeera, meera), false); // self-approval blocked
+  assert.equal(canApproveAttendanceFor(actorAsha, bala), false);  // plain employee approves no one
+  assert.equal(canApproveAttendanceFor(actorHr, bala), true);     // HR covers anyone
+  assert.equal(canApproveAttendanceFor(actorSuper, asha), true);  // super_admin covers anyone
 });

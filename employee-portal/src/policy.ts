@@ -30,17 +30,20 @@ export type Permission =
   | "user.manage"
   | "profile.verify" // approve controlled bank/identity profile changes (FR-01)
   | "leave.approve_team" // approve leave for direct reports (FR-03/FR-04)
-  | "leave.approve_all"; // approve leave for anyone (HR function)
+  | "leave.approve_all" // approve leave for anyone (HR function)
+  | "attendance.manage" // import biometric data, administer attendance (FR-02)
+  | "attendance.approve_team" // approve attendance corrections for direct reports
+  | "attendance.approve_all"; // approve attendance corrections for anyone
 
 // Role → permissions. Default deny: a role holds only what is listed here.
 // super_admin is handled as an allow-all in `hasPermission`, so it never has to
 // be enumerated and can never accidentally be under-provisioned.
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
-  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all"],
+  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all"],
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
-  it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage"],
+  it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage", "attendance.manage"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
   super_admin: [], // allow-all via hasPermission
 };
@@ -139,6 +142,15 @@ export function canApproveLeaveFor(actor: Actor, target: EmployeeRecord): boolea
   if (actor.employeeId != null && actor.employeeId === target.id) return false; // no self-approval
   if (hasPermission(actor.role, "leave.approve_all")) return true;
   if (hasPermission(actor.role, "leave.approve_team") && managesTarget(actor, target)) return true;
+  return false;
+}
+
+/** Can this actor approve/reject an attendance correction for this employee? Same
+ *  shape as leave: team for a manager, all for HR, never self (FR-02/FR-04). */
+export function canApproveAttendanceFor(actor: Actor, target: EmployeeRecord): boolean {
+  if (actor.employeeId != null && actor.employeeId === target.id) return false; // no self-approval
+  if (hasPermission(actor.role, "attendance.approve_all")) return true;
+  if (hasPermission(actor.role, "attendance.approve_team") && managesTarget(actor, target)) return true;
   return false;
 }
 
