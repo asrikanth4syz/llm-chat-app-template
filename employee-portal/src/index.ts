@@ -22,6 +22,7 @@ import {
   isSessionCurrent,
   canApproveLeaveFor,
   canApproveAttendanceFor,
+  canAssignTaskTo,
   toDirectoryEntry,
 } from "./policy.ts";
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
@@ -31,6 +32,7 @@ import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./a
 import { isDelegationActive } from "./approvals.ts";
 import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, canHandleTicket } from "./helpdesk.ts";
 import { isValidAudience, audienceMatches } from "./announcements.ts";
+import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 
 export interface Env {
   DB: D1Database;
@@ -898,6 +900,107 @@ async function handleAnnouncementAcks(actor: Actor, env: Env, id: string): Promi
   return json({ version: a.version, acks });
 }
 
+// ---- FR-05 Tasks ----------------------------------------------------------------
+async function handleMyTasks(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ tasks: [] });
+  const today = todayISO();
+  const rows = (await env.DB.prepare(
+    "SELECT t.id, t.title, t.description, t.due_date, t.priority, t.status, t.evidence, t.created_at, t.completed_at, be.name AS assigned_by_name " +
+    "FROM tasks t LEFT JOIN users u ON u.id = t.assigned_by_user_id LEFT JOIN employees be ON be.id = u.employee_id " +
+    "WHERE t.assignee_employee_id = ? ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END, t.due_date IS NULL, t.due_date ASC LIMIT 200"
+  ).bind(actor.employeeId).all()).results as any[];
+  const tasks = rows.map((r) => ({ id: r.id, title: r.title, description: r.description, dueDate: r.due_date, priority: r.priority, status: r.status, evidence: r.evidence, assignedByName: r.assigned_by_name, overdue: taskOverdue(r.due_date, r.status, today) }));
+  return json({ tasks });
+}
+
+async function handleAssignedTasks(actor: Actor, env: Env): Promise<Response> {
+  const today = todayISO();
+  const rows = (await env.DB.prepare(
+    "SELECT t.id, t.title, t.due_date, t.priority, t.status, e.name AS assignee_name FROM tasks t LEFT JOIN employees e ON e.id = t.assignee_employee_id WHERE t.assigned_by_user_id = ? ORDER BY t.created_at DESC LIMIT 200"
+  ).bind(actor.userId).all()).results as any[];
+  const tasks = rows.map((r) => ({ id: r.id, title: r.title, dueDate: r.due_date, priority: r.priority, status: r.status, assigneeName: r.assignee_name, overdue: taskOverdue(r.due_date, r.status, today) }));
+  return json({ tasks });
+}
+
+async function handleTaskCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  const b = await request.json().catch(() => ({})) as { assigneeEmployeeId?: string; title?: string; description?: string; dueDate?: string; priority?: string };
+  const title = String(b.title ?? "").trim();
+  const assignee = String(b.assigneeEmployeeId ?? "").trim() || actor.employeeId || "";
+  const priority = String(b.priority ?? "medium").trim();
+  if (!title) return json({ error: "title required" }, 400);
+  if (!assignee) return json({ error: "no assignee" }, 400);
+  if (!isValidPriority(priority)) return json({ error: "invalid priority" }, 400);
+  const target = await loadEmployee(env, assignee);
+  if (!target) return json({ error: "unknown assignee" }, 404);
+  if (!canAssignTaskTo(actor, target)) return json({ error: "forbidden" }, 403);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO tasks (id, title, description, assignee_employee_id, assigned_by_user_id, due_date, priority) VALUES (?,?,?,?,?,?,?)")
+    .bind(id, title, String(b.description ?? ""), assignee, actor.userId, b.dueDate || null, priority).run();
+  await audit(env, actor.userId, "TASK_CREATE", "task", id, `assigned to ${assignee}`);
+  return json({ ok: true, id });
+}
+
+async function handleTaskUpdate(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  const t = await env.DB.prepare("SELECT assignee_employee_id, assigned_by_user_id FROM tasks WHERE id = ?").bind(id).first<{ assignee_employee_id: string; assigned_by_user_id: string }>();
+  if (!t) return json({ error: "not found" }, 404);
+  const isAssignee = !!actor.employeeId && actor.employeeId === t.assignee_employee_id;
+  const isAssigner = actor.userId === t.assigned_by_user_id;
+  if (!isAssignee && !isAssigner) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { status?: string; evidence?: string };
+  const sets: string[] = []; const binds: unknown[] = [];
+  if (typeof b.status === "string") {
+    if (!isValidTaskStatus(b.status)) return json({ error: "invalid status" }, 400);
+    sets.push("status = ?"); binds.push(b.status);
+    sets.push(`completed_at = ${b.status === "done" ? "datetime('now')" : "NULL"}`);
+  }
+  if (typeof b.evidence === "string") { sets.push("evidence = ?"); binds.push(b.evidence); }
+  if (!sets.length) return json({ error: "nothing to update" }, 400);
+  sets.push("updated_at = datetime('now')"); binds.push(id);
+  await env.DB.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+  await audit(env, actor.userId, "TASK_UPDATE", "task", id, b.status || "evidence");
+  return json({ ok: true });
+}
+
+// ---- FR-13 Notifications (computed in-app reminders) ----------------------------
+async function handleNotifications(actor: Actor, env: Env): Promise<Response> {
+  const today = todayISO();
+  const items: Array<Record<string, unknown>> = [];
+  const cnt = async (sql: string, binds: unknown[]) => Number(((await env.DB.prepare(sql).bind(...binds).first()) as { n?: number } | null)?.n ?? 0);
+
+  const scope = await approvableEmployeeIds(env, actor);
+  let ap = 0;
+  if (scope === "ALL") {
+    ap += await cnt("SELECT COUNT(*) AS n FROM leave_requests WHERE status='pending' AND employee_id != ?", [actor.employeeId ?? ""]);
+    ap += await cnt("SELECT COUNT(*) AS n FROM attendance_corrections WHERE status='pending' AND employee_id != ?", [actor.employeeId ?? ""]);
+  } else if (scope.length) {
+    const ph = scope.map(() => "?").join(",");
+    ap += await cnt(`SELECT COUNT(*) AS n FROM leave_requests WHERE status='pending' AND employee_id IN (${ph})`, scope);
+    ap += await cnt(`SELECT COUNT(*) AS n FROM attendance_corrections WHERE status='pending' AND employee_id IN (${ph})`, scope);
+  }
+  if (hasPermission(actor.role, "profile.verify")) ap += await cnt("SELECT COUNT(*) AS n FROM profile_change_requests WHERE status='pending'", []);
+  if (ap) items.push({ kind: "approvals", view: "approvals", count: ap });
+
+  if (actor.employeeId) {
+    const seg = await employeeSegment(env, actor);
+    const unack = await cnt("SELECT COUNT(*) AS n FROM announcements a WHERE a.active=1 AND a.requires_ack=1 AND (a.audience='all' OR a.audience=?) AND NOT EXISTS (SELECT 1 FROM announcement_acks k WHERE k.announcement_id=a.id AND k.employee_id=? AND k.version=a.version)", [seg ?? "", actor.employeeId]);
+    if (unack) items.push({ kind: "announcements", view: "announcements", count: unack });
+    const tasks = await cnt("SELECT COUNT(*) AS n FROM tasks WHERE assignee_employee_id=? AND status IN ('open','in_progress')", [actor.employeeId]);
+    if (tasks) items.push({ kind: "tasks", view: "tasks", count: tasks, overdue: await cnt("SELECT COUNT(*) AS n FROM tasks WHERE assignee_employee_id=? AND status IN ('open','in_progress') AND due_date IS NOT NULL AND due_date < ?", [actor.employeeId, today]) });
+  }
+
+  const isAgent = hasPermission(actor.role, "helpdesk.agent");
+  const committee = await isPoshCommittee(env, actor);
+  if (isAgent || committee) {
+    const conds: string[] = [];
+    if (isAgent) conds.push("category != 'posh'");
+    if (committee) conds.push("category = 'posh'");
+    const hq = await cnt(`SELECT COUNT(*) AS n FROM tickets WHERE (${conds.join(" OR ")}) AND status IN ('open','in_progress') AND employee_id != ?`, [actor.employeeId ?? ""]);
+    if (hq) items.push({ kind: "helpdesk", view: "helpdesk", count: hq });
+  }
+
+  return json({ items, total: items.reduce((s, i) => s + (i.count as number), 0) });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -980,6 +1083,16 @@ export default {
       if (aact && method === "POST") return await handleAnnouncementActive(actor, env, decodeURIComponent(aact[1]), request);
       const aupd = path.match(/^\/api\/admin\/announcements\/([^/]+)$/);
       if (aupd && method === "POST") return await handleAnnouncementUpdate(actor, env, decodeURIComponent(aupd[1]), request);
+
+      // FR-05 Tasks
+      if (path === "/api/tasks" && method === "GET") return await handleMyTasks(actor, env);
+      if (path === "/api/tasks/assigned" && method === "GET") return await handleAssignedTasks(actor, env);
+      if (path === "/api/tasks" && method === "POST") return await handleTaskCreate(actor, env, request);
+      const tupd = path.match(/^\/api\/tasks\/([^/]+)$/);
+      if (tupd && method === "POST") return await handleTaskUpdate(actor, env, decodeURIComponent(tupd[1]), request);
+
+      // FR-13 Notifications
+      if (path === "/api/notifications" && method === "GET") return await handleNotifications(actor, env);
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {

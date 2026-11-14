@@ -36,15 +36,17 @@ export type Permission =
   | "attendance.approve_all" // approve attendance corrections for anyone
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
   | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
-  | "announcement.publish"; // publish announcements and see acknowledgements (FR-07)
+  | "announcement.publish" // publish announcements and see acknowledgements (FR-07)
+  | "task.assign_team" // assign tasks to direct reports (FR-05)
+  | "task.assign_all"; // assign tasks to anyone (HR function)
 
 // Role → permissions. Default deny: a role holds only what is listed here.
 // super_admin is handled as an allow-all in `hasPermission`, so it never has to
 // be enumerated and can never accidentally be under-provisioned.
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
-  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish"],
+  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team", "task.assign_team"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all"],
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage", "attendance.manage", "helpdesk.agent"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
@@ -146,6 +148,15 @@ export function canApproveLeaveFor(actor: Actor, target: EmployeeRecord): boolea
   if (actor.employeeId != null && actor.employeeId === target.id) return false; // no self-approval
   if (hasPermission(actor.role, "leave.approve_all")) return true;
   if (hasPermission(actor.role, "leave.approve_team") && managesTarget(actor, target)) return true;
+  return false;
+}
+
+/** Can this actor assign a task to this employee? Self-assignment is allowed; a
+ *  manager may assign to direct reports; HR/super_admin to anyone (FR-05). */
+export function canAssignTaskTo(actor: Actor, target: EmployeeRecord): boolean {
+  if (actor.employeeId != null && actor.employeeId === target.id) return true; // self-task
+  if (hasPermission(actor.role, "task.assign_all")) return true;
+  if (hasPermission(actor.role, "task.assign_team") && managesTarget(actor, target)) return true;
   return false;
 }
 

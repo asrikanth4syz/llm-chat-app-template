@@ -258,6 +258,38 @@ Object.assign(DICT.hi, {
   retire: "वापस लें", reactivate: "पुनः सक्रिय", edit: "संपादित करें", noAnnouncements: "कोई घोषणा नहीं।",
 });
 
+// FR-05 Tasks + FR-13 Notifications strings.
+Object.assign(DICT.en, {
+  navTasks: "Tasks", tasks_help: "Your assigned tasks — update status and add evidence. Managers and HR can assign to their team.",
+  newTask: "New task", assignTo: "Assign to", myself: "Myself", dueDate: "Due date", priority: "Priority",
+  prio_low: "Low", prio_medium: "Medium", prio_high: "High",
+  myTasks: "My tasks", assignedByMe: "Assigned by me", noTasks: "No tasks.", addTask: "Add task",
+  markInProgress: "Start", markDone: "Mark done", evidenceLabel: "Evidence / note", assignedBy: "Assigned by",
+  tstatus_open: "open", tstatus_in_progress: "in progress", tstatus_done: "done", tstatus_cancelled: "cancelled",
+  notifications: "Notifications", notifEmpty: "You're all caught up.",
+  notif_approvals: "Approvals pending", notif_announcements: "To acknowledge", notif_tasks: "Open tasks", notif_helpdesk: "Tickets to handle",
+});
+Object.assign(DICT.kn, {
+  navTasks: "ಕಾರ್ಯಗಳು", tasks_help: "ನಿಮ್ಮ ಕಾರ್ಯಗಳು — ಸ್ಥಿತಿ ನವೀಕರಿಸಿ, ಸಾಕ್ಷ್ಯ ಸೇರಿಸಿ. ವ್ಯವಸ್ಥಾಪಕರು/HR ತಂಡಕ್ಕೆ ನಿಯೋಜಿಸಬಹುದು.",
+  newTask: "ಹೊಸ ಕಾರ್ಯ", assignTo: "ಗೆ ನಿಯೋಜಿಸಿ", myself: "ನನಗೆ", dueDate: "ಗಡುವು", priority: "ಆದ್ಯತೆ",
+  prio_low: "ಕಡಿಮೆ", prio_medium: "ಮಧ್ಯಮ", prio_high: "ಹೆಚ್ಚು",
+  myTasks: "ನನ್ನ ಕಾರ್ಯಗಳು", assignedByMe: "ನಾನು ನಿಯೋಜಿಸಿದವು", noTasks: "ಕಾರ್ಯಗಳಿಲ್ಲ.", addTask: "ಕಾರ್ಯ ಸೇರಿಸಿ",
+  markInProgress: "ಪ್ರಾರಂಭಿಸಿ", markDone: "ಪೂರ್ಣಗೊಳಿಸಿ", evidenceLabel: "ಸಾಕ್ಷ್ಯ / ಟಿಪ್ಪಣಿ", assignedBy: "ನಿಯೋಜಿಸಿದವರು",
+  tstatus_open: "ತೆರೆದಿದೆ", tstatus_in_progress: "ಪ್ರಗತಿಯಲ್ಲಿ", tstatus_done: "ಮುಗಿದಿದೆ", tstatus_cancelled: "ರದ್ದಾಗಿದೆ",
+  notifications: "ಅಧಿಸೂಚನೆಗಳು", notifEmpty: "ಎಲ್ಲವೂ ಮುಗಿದಿದೆ.",
+  notif_approvals: "ಅನುಮೋದನೆ ಬಾಕಿ", notif_announcements: "ಒಪ್ಪಿಗೆ ಬೇಕು", notif_tasks: "ತೆರೆದ ಕಾರ್ಯಗಳು", notif_helpdesk: "ಟಿಕೆಟ್‌ಗಳು",
+});
+Object.assign(DICT.hi, {
+  navTasks: "कार्य", tasks_help: "आपके कार्य — स्थिति अपडेट करें, साक्ष्य जोड़ें। प्रबंधक/HR टीम को सौंप सकते हैं।",
+  newTask: "नया कार्य", assignTo: "को सौंपें", myself: "स्वयं", dueDate: "नियत तिथि", priority: "प्राथमिकता",
+  prio_low: "निम्न", prio_medium: "मध्यम", prio_high: "उच्च",
+  myTasks: "मेरे कार्य", assignedByMe: "मेरे द्वारा सौंपे", noTasks: "कोई कार्य नहीं।", addTask: "कार्य जोड़ें",
+  markInProgress: "शुरू करें", markDone: "पूर्ण करें", evidenceLabel: "साक्ष्य / नोट", assignedBy: "सौंपा गया",
+  tstatus_open: "खुला", tstatus_in_progress: "प्रगति में", tstatus_done: "पूर्ण", tstatus_cancelled: "रद्द",
+  notifications: "सूचनाएँ", notifEmpty: "सब पूरा हो गया।",
+  notif_approvals: "अनुमोदन लंबित", notif_announcements: "स्वीकृति हेतु", notif_tasks: "खुले कार्य", notif_helpdesk: "टिकट",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -369,6 +401,7 @@ const VIEWS = [
   { id: "profile", icon: "user", titleKey: "myProfile" },
   { id: "leave", icon: "calendar", titleKey: "navLeave" },
   { id: "attendance", icon: "clock", titleKey: "navAttendance" },
+  { id: "tasks", icon: "task", titleKey: "navTasks" },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
   { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
   { id: "helpdesk", icon: "help", titleKey: "navHelpdesk" },
@@ -382,6 +415,7 @@ const ICONS = {
   check: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   help: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  task: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -452,7 +486,9 @@ async function renderApp() {
   const main = el("div", { class: "main" }, [
     el("div", { class: "topbar" }, [
       el("h1", { id: "pagetitle", text: "" }),
+      el("button", { class: "notifbtn", id: "notifbtn", title: t("notifications"), "aria-label": t("notifications"), onclick: toggleNotif }, [icon("bell"), el("span", { class: "notif-badge", id: "notifbadge", style: "display:none" })]),
       el("div", { class: "userchip", id: "userchip" }, userChip()),
+      el("div", { class: "notifpanel", id: "notifpanel", style: "display:none" }),
     ]),
     el("div", { id: "flash" }),
     content,
@@ -471,11 +507,36 @@ async function switchView(view) {
   flash("", "");
   if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
+  else if (view === "tasks") await loadTasksView();
   else if (view === "directory") await loadDirectoryView();
   else if (view === "announcements") await loadAnnouncementsView();
   else if (view === "helpdesk") await loadHelpdeskView();
   else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
+  loadNotifications();
+}
+
+function toggleNotif() {
+  const p = document.getElementById("notifpanel"); if (!p) return;
+  if (!p.style.display || p.style.display === "none") { p.style.display = "block"; loadNotifications(); }
+  else p.style.display = "none";
+}
+
+async function loadNotifications() {
+  try {
+    const { items, total } = await api("/api/notifications");
+    const badge = document.getElementById("notifbadge");
+    if (badge) { if (total) { badge.textContent = total > 99 ? "99+" : String(total); badge.style.display = "grid"; } else badge.style.display = "none"; }
+    const p = document.getElementById("notifpanel");
+    if (!p || !p.style.display || p.style.display === "none") return;
+    clear(p);
+    if (!items.length) { p.appendChild(el("div", { class: "nrow muted", text: t("notifEmpty") })); return; }
+    for (const it of items) {
+      const right = el("div", { class: "actions" }, [el("span", { class: "pill", text: String(it.count) })]);
+      if (it.kind === "tasks" && it.overdue) right.appendChild(el("span", { class: "pill rejected", text: `${it.overdue} ${t("overdue")}` }));
+      p.appendChild(el("div", { class: "nrow", onclick: () => { p.style.display = "none"; switchView(it.view); } }, [el("span", { text: t("notif_" + it.kind) }), right]));
+    }
+  } catch { /* ignore notification errors */ }
 }
 
 function doLogout() {
@@ -1240,6 +1301,95 @@ async function loadAnnAcks(id, title) {
     clear(card); card.appendChild(el("h2", { text: `${t("acksTitle")}: ${title} (v${version})` }));
     if (!acks.length) { card.appendChild(el("div", { class: "muted", text: t("noAcks") })); return; }
     for (const k of acks) card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: k.name || k.employee_id }), el("div", { class: "v muted", style: "font-size:12px", text: k.acked_at })]));
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-05 Tasks ---------------------------------------------------------------
+function canAssignTasks() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
+
+async function loadTasksView() {
+  const body = document.getElementById("body"); clear(body);
+  body.appendChild(el("div", { class: "card", id: "tk_new" }, [h2help(t("newTask"), t("tasks_help"))]));
+  body.appendChild(el("div", { class: "card", id: "tk_mine" }, [el("h2", { text: t("myTasks") }), el("div", { class: "muted", text: "…" })]));
+  if (canAssignTasks()) body.appendChild(el("div", { class: "card", id: "tk_assigned" }, [el("h2", { text: t("assignedByMe") }), el("div", { class: "muted", text: "…" })]));
+  renderTaskForm();
+  loadMyTasks();
+  if (canAssignTasks()) loadAssignedTasks();
+}
+
+async function renderTaskForm() {
+  const card = document.getElementById("tk_new"); if (!card) return;
+  clear(card); card.appendChild(h2help(t("newTask"), t("tasks_help")));
+  const title = el("input", { placeholder: t("title") });
+  const desc = el("input", { placeholder: t("description") });
+  const due = el("input", { type: "date" });
+  const prio = el("select", {}); for (const p of ["low", "medium", "high"]) prio.appendChild(el("option", { value: p, text: t("prio_" + p), ...(p === "medium" ? { selected: "" } : {}) }));
+  const kids = [el("label", { text: t("title") }), title, el("label", { text: t("description") }), desc];
+  let assignee = null;
+  if (canAssignTasks()) {
+    assignee = el("select", {});
+    assignee.appendChild(el("option", { value: "", text: t("myself") }));
+    try { const dir = await api("/api/directory"); for (const e of dir.entries) assignee.appendChild(el("option", { value: e.id, text: e.name })); } catch { /* keep self only */ }
+    kids.push(el("label", { text: t("assignTo") }), assignee);
+  }
+  kids.push(el("label", { text: t("dueDate") }), due, el("label", { text: t("priority") }), prio);
+  const btn = el("button", { class: "primary", text: t("addTask") });
+  btn.addEventListener("click", async () => {
+    if (!title.value.trim()) return; btn.disabled = true;
+    try {
+      await api("/api/tasks", { method: "POST", body: { title: title.value, description: desc.value, assigneeEmployeeId: assignee && assignee.value ? assignee.value : undefined, dueDate: due.value || undefined, priority: prio.value } });
+      flash("ok", t("saved")); title.value = ""; desc.value = ""; due.value = "";
+      loadMyTasks(); if (canAssignTasks()) loadAssignedTasks();
+    } catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; }
+  });
+  kids.push(el("div", { class: "actions", style: "margin-top:10px" }, [btn]));
+  card.appendChild(el("div", { class: "stack" }, kids));
+}
+
+async function updTask(id, body) {
+  try { await api(`/api/tasks/${encodeURIComponent(id)}`, { method: "POST", body }); flash("ok", t("saved")); loadMyTasks(); if (canAssignTasks()) loadAssignedTasks(); }
+  catch (ex) { flash("err", ex.message); }
+}
+
+function myTaskRow(tk) {
+  const meta = [el("span", { class: "pill", text: t("tstatus_" + tk.status) })];
+  if (tk.overdue) meta.push(el("span", { class: "pill rejected", text: t("overdue") }));
+  if (tk.dueDate) meta.push(el("span", { class: "muted", style: "font-size:12px", text: tk.dueDate }));
+  meta.push(el("span", { class: "muted", style: "font-size:12px", text: t("prio_" + tk.priority) }));
+  const acts = el("div", { class: "actions", style: "margin-top:6px" });
+  const isOpen = tk.status === "open" || tk.status === "in_progress";
+  if (tk.status === "open") acts.appendChild(el("button", { class: "sm", text: t("markInProgress"), onclick: () => updTask(tk.id, { status: "in_progress" }) }));
+  if (isOpen) acts.appendChild(el("button", { class: "primary sm", text: t("markDone"), onclick: () => updTask(tk.id, { status: "done" }) }));
+  const ev = el("input", { placeholder: t("evidenceLabel"), value: tk.evidence || "" });
+  const evb = el("button", { class: "sm", text: t("save"), onclick: () => updTask(tk.id, { evidence: ev.value }) });
+  return el("div", { class: "row" }, [
+    el("div", { class: "k" }, [el("div", { style: "font-weight:600", text: tk.title }), tk.assignedByName ? el("div", { class: "muted", style: "font-size:12px", text: `${t("assignedBy")}: ${tk.assignedByName}` }) : null, tk.description ? el("div", { class: "muted", style: "font-size:12px", text: tk.description }) : null]),
+    el("div", { class: "v stack" }, [el("div", { class: "actions" }, meta), acts, el("div", { class: "actions" }, [el("div", { class: "grow" }, [ev]), evb])]),
+  ]);
+}
+
+async function loadMyTasks() {
+  const card = document.getElementById("tk_mine"); if (!card) return;
+  try {
+    const { tasks } = await api("/api/tasks");
+    clear(card); card.appendChild(el("h2", { text: t("myTasks") }));
+    if (!tasks.length) { card.appendChild(el("div", { class: "muted", text: t("noTasks") })); return; }
+    for (const tk of tasks) card.appendChild(myTaskRow(tk));
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadAssignedTasks() {
+  const card = document.getElementById("tk_assigned"); if (!card) return;
+  try {
+    const { tasks } = await api("/api/tasks/assigned");
+    clear(card); card.appendChild(el("h2", { text: t("assignedByMe") }));
+    if (!tasks.length) { card.appendChild(el("div", { class: "muted", text: t("noTasks") })); return; }
+    for (const tk of tasks) {
+      const meta = [el("span", { class: "pill", text: t("tstatus_" + tk.status) })];
+      if (tk.overdue) meta.push(el("span", { class: "pill rejected", text: t("overdue") }));
+      if (tk.dueDate) meta.push(el("span", { class: "muted", style: "font-size:12px", text: tk.dueDate }));
+      card.appendChild(el("div", { class: "row" }, [el("div", { class: "k" }, [el("div", { style: "font-weight:600", text: tk.title }), el("div", { class: "muted", style: "font-size:12px", text: tk.assigneeName || "" })]), el("div", { class: "v" }, [el("div", { class: "actions" }, meta)])]));
+    }
   } catch (ex) { flash("err", ex.message); }
 }
 

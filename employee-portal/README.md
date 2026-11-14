@@ -85,14 +85,14 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (Profile, Leave, Attendance, Directory, Announcements, Helpdesk, Approvals)
+## UI (Profile, Leave, Attendance, Tasks, Directory, Announcements, Helpdesk, Approvals)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `wrangler.jsonc`; `/api/*` still falls through to the Worker). It uses an HRMS-style
 **sidebar + topbar** layout (a scrollable tab bar on phones) with **Profile**,
-**Leave**, **Attendance**, **Directory**, **Announcements**, **Helpdesk** and
-**Approvals** sections, and **inline `?` help** tooltips on the key section headers.
-Open the Worker URL in a browser:
+**Leave**, **Attendance**, **Tasks**, **Directory**, **Announcements**, **Helpdesk** and
+**Approvals** sections, a **notifications bell** in the top bar, and **inline `?` help**
+tooltips on the key section headers. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — a welcome header (time-based greeting + name + **profile photo**,
@@ -109,6 +109,12 @@ Open the Worker URL in a browser:
   biometric system, with **exception flags** (missing punch, absence, short hours);
   a **Request correction** form (regularisation / on-duty / client visit / WFH);
   your corrections; and, for managers/HR, a **Correction approvals** queue.
+- **Tasks** — your assigned tasks (status, priority, due date, overdue flag); update
+  status and add evidence. Managers/HR assign tasks within their scope; employees can
+  self-assign. An "assigned by me" list shows what you've delegated.
+- **Notifications** — the top-bar bell shows a live count of what needs you (pending
+  approvals, must-acknowledge announcements, open tasks, tickets to handle); click an
+  item to jump to it.
 - **Directory** — search all colleagues by name / role / location; shows name,
   designation, location, segment, work email and manager only. No salary, bank,
   identity or personal contact.
@@ -165,6 +171,22 @@ Open the Worker URL in a browser:
 | GET·POST | `/api/admin/announcements` | announcement.publish | list all (with ack counts); create `{title,body,audience,requiresAck}` |
 | POST | `/api/admin/announcements/:id` · `/:id/active` | announcement.publish | re-publish (bumps version → re-ack); activate/retire |
 | GET | `/api/admin/announcements/:id/acks` | announcement.publish | who acknowledged the current version |
+| GET·POST | `/api/tasks` | any login | FR-05: tasks assigned to me; create `{assigneeEmployeeId?,title,description,dueDate,priority}` |
+| GET | `/api/tasks/assigned` | any login | tasks I assigned to others |
+| POST | `/api/tasks/:id` | assignee or assigner | update `{status?,evidence?}` (done sets completed_at) |
+| GET | `/api/notifications` | any login | FR-13: computed counts (approvals, must-ack announcements, open tasks, helpdesk queue) |
+
+## FR-05 Tasks & FR-13 Notifications
+
+- **Tasks** (migration `0010`): owner, due date, priority, status and an evidence note.
+  `canAssignTaskTo` allows self-assignment, a manager assigning to direct reports
+  (`task.assign_team`), and HR/super_admin to anyone (`task.assign_all`). Both the
+  assignee and the assigner may update a task.
+- **Notifications** are **computed on demand** (no new storage) from existing state —
+  pending approvals in your scope, unacknowledged must-ack announcements, your open
+  tasks (with an overdue count), and your helpdesk queue. The top-bar bell shows the
+  total and refreshes on navigation. Email/push reminders and escalations are a
+  follow-up (R2).
 
 ## FR-07 Announcements
 

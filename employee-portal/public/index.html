@@ -46,6 +46,13 @@
     .topbar h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 650; }
     .content { padding: 20px; max-width: 880px; width: 100%; }
     .userchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+    .notifbtn { position: relative; border: 0; background: none; color: var(--muted); padding: 6px; border-radius: 8px; cursor: pointer; display: grid; place-items: center; }
+    .notifbtn:hover { background: var(--bg); color: var(--ink); }
+    .notif-badge { position: absolute; top: 0; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+    .notifpanel { position: absolute; top: calc(100% + 4px); right: 12px; width: 300px; max-width: calc(100vw - 24px); background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); z-index: 20; overflow: hidden; }
+    .notifpanel .nrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+    .notifpanel .nrow:first-child { border-top: 0; }
+    .notifpanel .nrow:hover { background: var(--bg); }
     .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; overflow: hidden; flex: none; }
     img.avatar { object-fit: cover; }
     .avatar-lg { width: 60px; height: 60px; font-size: 22px; }
@@ -118,6 +125,6 @@
 </head>
 <body>
   <div id="app"></div>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
