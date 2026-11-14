@@ -20,9 +20,11 @@ import {
   requiresMfa,
   permissionMatrix,
   isSessionCurrent,
+  canApproveLeaveFor,
 } from "./policy.ts";
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
 import { encryptField, decryptField } from "./fieldcrypto.ts";
+import { countLeaveDays, canTakeLeave } from "./leave.ts";
 
 export interface Env {
   DB: D1Database;
@@ -293,6 +295,149 @@ async function handleProfileChangeReview(actor: Actor, env: Env, id: string, act
   return json({ ok: true, rejected: true });
 }
 
+// ---- FR-03 Leave ----------------------------------------------------------------
+const currentYear = (): number => new Date().getUTCFullYear();
+
+interface LeaveTypeRow { id: string; code: string; name: string; default_quota: number; }
+
+// Make sure the employee has a balance row for every leave type this year, seeded
+// from each type's default quota. Idempotent.
+async function ensureBalances(env: Env, employeeId: string, year: number): Promise<void> {
+  const types = (await env.DB.prepare("SELECT id, default_quota FROM leave_types").all<{ id: string; default_quota: number }>()).results;
+  const have = (await env.DB.prepare("SELECT leave_type_id FROM leave_balances WHERE employee_id = ? AND year = ?").bind(employeeId, year).all<{ leave_type_id: string }>()).results;
+  const haveSet = new Set(have.map((h) => h.leave_type_id));
+  const missing = types.filter((t) => !haveSet.has(t.id));
+  if (missing.length) {
+    await env.DB.batch(missing.map((t) =>
+      env.DB.prepare("INSERT OR IGNORE INTO leave_balances (id, employee_id, leave_type_id, year, entitled, used) VALUES (?,?,?,?,?,0)")
+        .bind(uid(), employeeId, t.id, year, t.default_quota)));
+  }
+}
+
+async function handleLeaveTypes(env: Env): Promise<Response> {
+  const types = (await env.DB.prepare("SELECT id, code, name, default_quota FROM leave_types ORDER BY code").all<LeaveTypeRow>()).results;
+  return json({ types });
+}
+
+async function handleLeaveBalances(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ year: currentYear(), balances: [] });
+  const year = currentYear();
+  await ensureBalances(env, actor.employeeId, year);
+  const balances = (await env.DB.prepare(
+    "SELECT b.leave_type_id, t.code, t.name, b.entitled, b.used, " +
+    "COALESCE((SELECT SUM(r.days) FROM leave_requests r WHERE r.employee_id = b.employee_id AND r.leave_type_id = b.leave_type_id AND r.status = 'pending'), 0) AS pending " +
+    "FROM leave_balances b JOIN leave_types t ON t.id = b.leave_type_id WHERE b.employee_id = ? AND b.year = ? ORDER BY t.code"
+  ).bind(actor.employeeId, year).all()).results;
+  return json({ year, balances });
+}
+
+async function handleLeaveRequests(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ requests: [] });
+  const requests = (await env.DB.prepare(
+    "SELECT r.id, r.leave_type_id, t.code AS type_code, t.name AS type_name, r.start_date, r.end_date, r.days, r.half_day, r.reason, r.status, r.decision_comment, r.decided_at, r.created_at " +
+    "FROM leave_requests r JOIN leave_types t ON t.id = r.leave_type_id WHERE r.employee_id = ? ORDER BY r.created_at DESC LIMIT 100"
+  ).bind(actor.employeeId).all()).results;
+  return json({ requests });
+}
+
+async function handleLeaveSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { leaveTypeId?: string; startDate?: string; endDate?: string; halfDay?: boolean; reason?: string };
+  const leaveTypeId = (b.leaveTypeId || "").trim();
+  const startDate = (b.startDate || "").trim();
+  const endDate = (b.endDate || "").trim() || startDate;
+  if (!leaveTypeId || !startDate) return json({ error: "leaveTypeId and startDate required" }, 400);
+  const type = await env.DB.prepare("SELECT id FROM leave_types WHERE id = ?").bind(leaveTypeId).first();
+  if (!type) return json({ error: "unknown leave type" }, 400);
+  const days = countLeaveDays(startDate, endDate, !!b.halfDay);
+  if (days <= 0) return json({ error: "invalid date range" }, 400);
+
+  const year = currentYear();
+  await ensureBalances(env, actor.employeeId, year);
+  const bal = await env.DB.prepare("SELECT entitled, used FROM leave_balances WHERE employee_id = ? AND leave_type_id = ? AND year = ?")
+    .bind(actor.employeeId, leaveTypeId, year).first<{ entitled: number; used: number }>();
+  const pend = await env.DB.prepare("SELECT COALESCE(SUM(days),0) AS p FROM leave_requests WHERE employee_id = ? AND leave_type_id = ? AND status = 'pending'")
+    .bind(actor.employeeId, leaveTypeId).first<{ p: number }>();
+  const entitled = bal?.entitled ?? 0, used = bal?.used ?? 0, pending = pend?.p ?? 0;
+  if (!canTakeLeave(entitled, used, pending, days)) {
+    return json({ error: "insufficient balance", available: entitled - used - pending, requested: days }, 409);
+  }
+
+  const id = uid();
+  await env.DB.prepare(
+    "INSERT INTO leave_requests (id, employee_id, leave_type_id, start_date, end_date, days, half_day, reason, status) VALUES (?,?,?,?,?,?,?,?, 'pending')"
+  ).bind(id, actor.employeeId, leaveTypeId, startDate, endDate, days, b.halfDay ? 1 : 0, b.reason ?? null).run();
+  await audit(env, actor.userId, "LEAVE_REQUEST", "leave", id, `${days}d ${startDate}..${endDate}`);
+  return json({ ok: true, id, days, status: "pending" });
+}
+
+async function handleLeaveCancel(actor: Actor, env: Env, id: string): Promise<Response> {
+  const r = await env.DB.prepare("SELECT employee_id, leave_type_id, days, status FROM leave_requests WHERE id = ?")
+    .bind(id).first<{ employee_id: string; leave_type_id: string; days: number; status: string }>();
+  if (!r) return json({ error: "not found" }, 404);
+  if (r.employee_id !== actor.employeeId) return json({ error: "forbidden" }, 403); // own requests only
+  if (r.status !== "pending" && r.status !== "approved") return json({ error: `cannot cancel ${r.status}` }, 409);
+  const ops = [env.DB.prepare("UPDATE leave_requests SET status = 'cancelled' WHERE id = ?").bind(id)];
+  if (r.status === "approved") {
+    // restore the approved days to the balance
+    ops.push(env.DB.prepare("UPDATE leave_balances SET used = MAX(0, used - ?) WHERE employee_id = ? AND leave_type_id = ? AND year = ?")
+      .bind(r.days, r.employee_id, r.leave_type_id, currentYear()));
+  }
+  await env.DB.batch(ops);
+  await audit(env, actor.userId, "LEAVE_CANCEL", "leave", id, `was ${r.status}`);
+  return json({ ok: true, cancelled: true });
+}
+
+// The approver's queue: pending requests this actor may decide (team for a manager,
+// all for HR), never their own.
+async function handleLeaveApprovals(actor: Actor, env: Env): Promise<Response> {
+  const cols = "r.id, r.employee_id, e.name AS employee_name, t.code AS type_code, r.start_date, r.end_date, r.days, r.reason, r.status, r.created_at";
+  const join = "FROM leave_requests r JOIN employees e ON e.id = r.employee_id JOIN leave_types t ON t.id = r.leave_type_id";
+  let approvals: unknown[] = [];
+  if (hasPermission(actor.role, "leave.approve_all")) {
+    approvals = (await env.DB.prepare(`SELECT ${cols} ${join} WHERE r.status = 'pending' AND r.employee_id != ? ORDER BY r.created_at ASC LIMIT 200`)
+      .bind(actor.employeeId ?? "").all()).results;
+  } else if (hasPermission(actor.role, "leave.approve_team") && actor.employeeId) {
+    approvals = (await env.DB.prepare(`SELECT ${cols} ${join} WHERE r.status = 'pending' AND e.manager_id = ? ORDER BY r.created_at ASC LIMIT 200`)
+      .bind(actor.employeeId).all()).results;
+  }
+  return json({ approvals, count: approvals.length });
+}
+
+async function handleLeaveDecide(actor: Actor, env: Env, id: string, action: "approve" | "reject", request: Request): Promise<Response> {
+  const r = await env.DB.prepare("SELECT employee_id, leave_type_id, days, status FROM leave_requests WHERE id = ?")
+    .bind(id).first<{ employee_id: string; leave_type_id: string; days: number; status: string }>();
+  if (!r) return json({ error: "not found" }, 404);
+  if (r.status !== "pending") return json({ error: `already ${r.status}` }, 409);
+  const target = await loadEmployee(env, r.employee_id);
+  if (!target || !canApproveLeaveFor(actor, target)) {
+    await audit(env, actor.userId, "DENY", "leave", id, "approve denied by policy");
+    return json({ error: "forbidden" }, 403);
+  }
+  const body = await request.json().catch(() => ({})) as { comment?: string };
+
+  if (action === "approve") {
+    const year = currentYear();
+    await ensureBalances(env, r.employee_id, year);
+    const bal = await env.DB.prepare("SELECT entitled, used FROM leave_balances WHERE employee_id = ? AND leave_type_id = ? AND year = ?")
+      .bind(r.employee_id, r.leave_type_id, year).first<{ entitled: number; used: number }>();
+    const entitled = bal?.entitled ?? 0, used = bal?.used ?? 0;
+    if (entitled - used < r.days) return json({ error: "insufficient balance at approval", available: entitled - used, requested: r.days }, 409);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE leave_requests SET status = 'approved', approver_id = ?, decision_comment = ?, decided_at = datetime('now') WHERE id = ?")
+        .bind(actor.userId, body.comment ?? null, id),
+      env.DB.prepare("UPDATE leave_balances SET used = used + ? WHERE employee_id = ? AND leave_type_id = ? AND year = ?")
+        .bind(r.days, r.employee_id, r.leave_type_id, year),
+    ]);
+    await audit(env, actor.userId, "LEAVE_APPROVE", "leave", id, `${r.days}d for ${r.employee_id}`);
+    return json({ ok: true, approved: true });
+  }
+  await env.DB.prepare("UPDATE leave_requests SET status = 'rejected', approver_id = ?, decision_comment = ?, decided_at = datetime('now') WHERE id = ?")
+    .bind(actor.userId, body.comment ?? null, id).run();
+  await audit(env, actor.userId, "LEAVE_REJECT", "leave", id, `for ${r.employee_id}`);
+  return json({ ok: true, rejected: true });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -318,6 +463,17 @@ export default {
       if (path === "/api/policy/matrix" && method === "GET") return await handleMatrix(actor, env);
       const rev = path.match(/^\/api\/admin\/users\/([^/]+)\/revoke$/);
       if (rev && method === "POST") return await handleRevoke(actor, env, decodeURIComponent(rev[1]), request);
+
+      // FR-03 Leave
+      if (path === "/api/leave/types" && method === "GET") return await handleLeaveTypes(env);
+      if (path === "/api/leave/balances" && method === "GET") return await handleLeaveBalances(actor, env);
+      if (path === "/api/leave/requests" && method === "GET") return await handleLeaveRequests(actor, env);
+      if (path === "/api/leave/requests" && method === "POST") return await handleLeaveSubmit(actor, env, request);
+      const lcancel = path.match(/^\/api\/leave\/requests\/([^/]+)\/cancel$/);
+      if (lcancel && method === "POST") return await handleLeaveCancel(actor, env, decodeURIComponent(lcancel[1]));
+      if (path === "/api/leave/approvals" && method === "GET") return await handleLeaveApprovals(actor, env);
+      const ldecide = path.match(/^\/api\/leave\/requests\/([^/]+)\/(approve|reject)$/);
+      if (ldecide && method === "POST") return await handleLeaveDecide(actor, env, decodeURIComponent(ldecide[1]), ldecide[2] as "approve" | "reject", request);
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {

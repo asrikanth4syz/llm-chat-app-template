@@ -85,23 +85,25 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (FR-01 Profile)
+## UI (FR-01 Profile + FR-03 Leave)
 
-The Worker now serves a mobile-first SPA from `public/` (static-assets binding in
-`wrangler.jsonc`; `/api/*` still falls through to the Worker). Open the Worker URL in
-a browser:
+The Worker serves a mobile-first SPA from `public/` (static-assets binding in
+`wrangler.jsonc`; `/api/*` still falls through to the Worker), with **Profile** and
+**Leave** tabs. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
-- **My profile** — employment details (read-only), contact fields you can edit inline
+- **Profile** — employment details (read-only), contact fields you can edit inline
   (phone, personal email, address, emergency contact → apply immediately), and the
   identity/financial block **masked by default** with per-field **Reveal** (logged)
-  and **Request change** (bank/PAN/Aadhaar → encrypted pending request).
-- **My change requests** shows their status; **HR / super_admin** also get a
-  **Verification queue** to approve/reject pending identity changes.
+  and **Request change** (bank/PAN/Aadhaar → encrypted pending request). HR/super_admin
+  get a **Verification queue** for pending identity changes.
+- **Leave** — balances per type (entitled / used / pending / available), an apply form
+  (type, dates, half-day, reason), your request history with **Cancel**, and — for
+  managers (team) and HR/super_admin (all) — a **Leave approvals** queue.
 - Language switcher: **English / ಕನ್ನಡ / हिन्दी** (kn/hi strings are initial — have a
   native speaker review before go-live).
 
-## Endpoints (R0 + R1 FR-01)
+## Endpoints (R0 + R1: FR-01, FR-03)
 
 | Method | Path | Who | Returns |
 | --- | --- | --- | --- |
@@ -115,6 +117,21 @@ a browser:
 | GET | `/api/audit` | auditor, super_admin | recent audit entries |
 | GET | `/api/policy/matrix` | it_admin, auditor, super_admin | role → permission matrix (G1 artefact) |
 | POST | `/api/admin/users/:id/revoke` | it_admin, super_admin | kill a user's sessions (`{"deactivate":true}` also disables login) |
+| GET | `/api/leave/types` · `/api/leave/balances` | any login | FR-03: leave types; own balances (entitled/used/pending, current year) |
+| GET·POST | `/api/leave/requests` | any login | own requests; submit `{leaveTypeId,startDate,endDate,halfDay?,reason?}` (409 if over balance) |
+| POST | `/api/leave/requests/:id/cancel` | owner | cancel own pending/approved request (approved restores balance) |
+| GET | `/api/leave/approvals` | manager, hr_admin, super_admin | pending requests to decide — team for a manager, all for HR |
+| POST | `/api/leave/requests/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide `{comment?}`; self-approval blocked; approve adds to `used` |
+
+## FR-03 Leave
+
+- **Balances change only after approval** — a pending request is checked against
+  `entitled − used − pending`; approval moves days into `used`; cancelling an approved
+  request restores them. Leave types + quotas seed in migration `0004` (CL 12, SL 12, EL 15).
+- **Approval scope** — a manager decides only for direct reports (`leave.approve_team`),
+  HR/super_admin for anyone (`leave.approve_all`); **self-approval is blocked** (FR-04).
+- Days are inclusive calendar days (half-day for a single day). Working-day /
+  per-location-holiday-calendar counting is a follow-up.
 
 ## FR-01 Profile & NFR-03 field encryption
 

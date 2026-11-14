@@ -79,6 +79,35 @@ const DICT = {
   },
 };
 
+// FR-03 Leave strings (merged in; kn/hi initial, review before go-live).
+Object.assign(DICT.en, {
+  navProfile: "Profile", navLeave: "Leave", leaveBalances: "Leave balances",
+  entitled: "Entitled", used: "Used", available: "Available", pendingDays: "Pending",
+  applyLeave: "Apply for leave", leaveType: "Leave type", startDate: "Start date",
+  endDate: "End date", halfDayLabel: "Half day (single day)", apply: "Apply",
+  myLeave: "My leave requests", noLeave: "No leave requests.", daysUnit: "days",
+  leaveApprovals: "Leave approvals", comment: "Comment (optional)", cancelled: "cancelled",
+  leaveSubmitted: "Leave request submitted.", cancelRequest: "Cancel", to: "to",
+});
+Object.assign(DICT.kn, {
+  navProfile: "ಪ್ರೊಫೈಲ್", navLeave: "ರಜೆ", leaveBalances: "ರಜೆ ಬಾಕಿ",
+  entitled: "ಅರ್ಹತೆ", used: "ಬಳಸಿದ", available: "ಲಭ್ಯ", pendingDays: "ಬಾಕಿ",
+  applyLeave: "ರಜೆಗೆ ಅರ್ಜಿ", leaveType: "ರಜೆ ಪ್ರಕಾರ", startDate: "ಪ್ರಾರಂಭ ದಿನಾಂಕ",
+  endDate: "ಅಂತಿಮ ದಿನಾಂಕ", halfDayLabel: "ಅರ್ಧ ದಿನ (ಒಂದು ದಿನ)", apply: "ಅರ್ಜಿ ಸಲ್ಲಿಸಿ",
+  myLeave: "ನನ್ನ ರಜೆ ಅರ್ಜಿಗಳು", noLeave: "ಯಾವುದೇ ರಜೆ ಅರ್ಜಿಗಳಿಲ್ಲ.", daysUnit: "ದಿನಗಳು",
+  leaveApprovals: "ರಜೆ ಅನುಮೋದನೆಗಳು", comment: "ಟಿಪ್ಪಣಿ (ಐಚ್ಛಿಕ)", cancelled: "ರದ್ದಾಗಿದೆ",
+  leaveSubmitted: "ರಜೆ ಅರ್ಜಿ ಸಲ್ಲಿಸಲಾಗಿದೆ.", cancelRequest: "ರದ್ದುಮಾಡಿ", to: "ರಿಂದ",
+});
+Object.assign(DICT.hi, {
+  navProfile: "प्रोफ़ाइल", navLeave: "अवकाश", leaveBalances: "अवकाश शेष",
+  entitled: "हकदार", used: "उपयोग", available: "उपलब्ध", pendingDays: "लंबित",
+  applyLeave: "अवकाश के लिए आवेदन", leaveType: "अवकाश प्रकार", startDate: "प्रारंभ तिथि",
+  endDate: "समाप्ति तिथि", halfDayLabel: "आधा दिन (एक दिन)", apply: "आवेदन करें",
+  myLeave: "मेरे अवकाश अनुरोध", noLeave: "कोई अवकाश अनुरोध नहीं।", daysUnit: "दिन",
+  leaveApprovals: "अवकाश अनुमोदन", comment: "टिप्पणी (वैकल्पिक)", cancelled: "रद्द",
+  leaveSubmitted: "अवकाश अनुरोध सबमिट किया गया।", cancelRequest: "रद्द करें", to: "से",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -89,8 +118,10 @@ const state = {
   token: ss.get("ep_token"),
   role: ss.get("ep_role"),
   lang: ss.get("ep_lang") || "en",
+  view: "profile",
   emp: null,
   revealed: {}, // field -> full value
+  leaveBalances: [],
 };
 const DIRECT = ["phone", "personalEmail", "address", "emergencyContact"];
 const SENSITIVE = ["pan", "bankAccount", "aadhaarLast4"];
@@ -98,6 +129,7 @@ const SENS_LABEL = { pan: "pan", bankAccount: "bankAccount", aadhaarLast4: "aadh
 
 function t(k) { return (DICT[state.lang] && DICT[state.lang][k]) || DICT.en[k] || k; }
 function canVerify() { return state.role === "hr_admin" || state.role === "super_admin"; }
+function canApproveLeave() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
 
 // ---- tiny DOM helper -----------------------------------------------------------
 function el(tag, attrs = {}, children = []) {
@@ -193,12 +225,24 @@ async function renderApp() {
     ]),
   ]);
   document.body.insertBefore(bar, app());
-  // move header out of .wrap so it spans full width
-  const flashHost = el("div", { id: "flash" });
-  app().appendChild(flashHost);
-  const body = el("div", { id: "body" });
-  app().appendChild(body);
-  await loadProfile();
+  app().appendChild(nav());
+  app().appendChild(el("div", { id: "flash" }));
+  app().appendChild(el("div", { id: "body" }));
+  await switchView(state.view || "profile");
+}
+
+function nav() {
+  const mk = (view, label) => el("button", { class: `sm${state.view === view ? " primary" : ""}`, text: label, onclick: () => switchView(view) });
+  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave"))]);
+}
+
+async function switchView(view) {
+  state.view = view;
+  const navEl = document.getElementById("nav");
+  if (navEl && navEl.parentNode) navEl.parentNode.replaceChild(nav(), navEl);
+  flash("", "");
+  if (view === "leave") await loadLeaveView();
+  else await loadProfile();
 }
 
 function removeBar() { const b = document.querySelector("header.bar"); if (b) b.remove(); }
@@ -369,6 +413,133 @@ async function loadQueue() {
           el("button", { class: "primary sm", text: t("approve"), onclick: () => act("approve") }),
           el("button", { class: "sm", text: t("reject"), onclick: () => act("reject") }),
         ]) ]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-03 Leave ---------------------------------------------------------------
+async function loadLeaveView() {
+  const body = document.getElementById("body");
+  clear(body);
+  body.appendChild(el("div", { class: "card", id: "lv_bal" }, [el("h2", { text: t("leaveBalances") }), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "lv_apply" }, [el("h2", { text: t("applyLeave") }), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "lv_mine" }, [el("h2", { text: t("myLeave") }), el("div", { class: "muted", text: "…" })]));
+  if (canApproveLeave()) body.appendChild(el("div", { class: "card", id: "lv_queue" }, [el("h2", { text: t("leaveApprovals") }), el("div", { class: "muted", text: "…" })]));
+  await loadBalances();
+  loadMyLeave();
+  if (canApproveLeave()) loadLeaveQueue();
+}
+
+async function loadBalances() {
+  try {
+    const { balances } = await api("/api/leave/balances");
+    state.leaveBalances = balances || [];
+    renderBalances(); renderApplyForm();
+  } catch (ex) { flash("err", ex.message); }
+}
+
+function renderBalances() {
+  const card = document.getElementById("lv_bal");
+  if (!card) return;
+  clear(card); card.appendChild(el("h2", { text: t("leaveBalances") }));
+  if (!state.leaveBalances.length) { card.appendChild(el("div", { class: "muted", text: t("none") })); return; }
+  for (const b of state.leaveBalances) {
+    const avail = b.entitled - b.used - (b.pending || 0);
+    card.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "k", text: `${b.code} — ${b.name}` }),
+      el("div", { class: "v" }, [
+        el("span", { text: `${t("available")}: ${avail} / ${b.entitled} ${t("daysUnit")}` }),
+        el("div", { class: "muted", style: "font-size:12px", text: `${t("used")}: ${b.used} · ${t("pendingDays")}: ${b.pending || 0}` }),
+      ]),
+    ]));
+  }
+}
+
+function renderApplyForm() {
+  const card = document.getElementById("lv_apply");
+  if (!card) return;
+  clear(card); card.appendChild(el("h2", { text: t("applyLeave") }));
+  const sel = el("select", { "aria-label": t("leaveType") });
+  for (const b of state.leaveBalances) sel.appendChild(el("option", { value: b.leave_type_id, text: `${b.code} — ${b.name}` }));
+  const start = el("input", { type: "date", "aria-label": t("startDate") });
+  const end = el("input", { type: "date", "aria-label": t("endDate") });
+  const half = el("input", { type: "checkbox" });
+  const halfWrap = el("label", { style: "display:flex;gap:8px;align-items:center;margin:8px 0 0" }, [half, " " + t("halfDayLabel")]);
+  const reason = el("input", { placeholder: t("reasonOptional"), "aria-label": t("reasonOptional") });
+  const btn = el("button", { class: "primary", text: t("apply") });
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api("/api/leave/requests", { method: "POST", body: {
+        leaveTypeId: sel.value, startDate: start.value, endDate: end.value || start.value,
+        halfDay: half.checked, reason: reason.value || undefined,
+      } });
+      flash("ok", t("leaveSubmitted"));
+      start.value = ""; end.value = ""; half.checked = false; reason.value = "";
+      loadBalances(); loadMyLeave();
+    } catch (ex) { flash("err", ex.message); }
+    finally { btn.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "stack" }, [
+    el("label", { text: t("leaveType") }), sel,
+    el("label", { text: t("startDate") }), start,
+    el("label", { text: t("endDate") }), end,
+    halfWrap,
+    el("label", { text: t("reasonOptional") }), reason,
+    el("div", { class: "actions", style: "margin-top:10px" }, [btn]),
+  ]));
+}
+
+async function loadMyLeave() {
+  const card = document.getElementById("lv_mine");
+  if (!card) return;
+  try {
+    const { requests } = await api("/api/leave/requests");
+    clear(card); card.appendChild(el("h2", { text: t("myLeave") }));
+    if (!requests.length) { card.appendChild(el("div", { class: "muted", text: t("noLeave") })); return; }
+    for (const r of requests) {
+      const actions = el("div", { class: "actions" }, [statusPill(r.status)]);
+      if (r.status === "pending" || r.status === "approved") {
+        const cbtn = el("button", { class: "sm", text: t("cancelRequest") });
+        cbtn.addEventListener("click", async () => {
+          cbtn.disabled = true;
+          try { await api(`/api/leave/requests/${encodeURIComponent(r.id)}/cancel`, { method: "POST" }); loadBalances(); loadMyLeave(); }
+          catch (ex) { flash("err", ex.message); cbtn.disabled = false; }
+        });
+        actions.appendChild(cbtn);
+      }
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: r.type_code }), el("div", { class: "muted", style: "font-size:12px", text: `${r.start_date} ${t("to")} ${r.end_date}` })]),
+        el("div", { class: "v" }, [el("div", { text: `${r.days} ${t("daysUnit")}` }), actions]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadLeaveQueue() {
+  const card = document.getElementById("lv_queue");
+  if (!card) return;
+  try {
+    const { approvals } = await api("/api/leave/approvals");
+    clear(card); card.appendChild(el("h2", { text: t("leaveApprovals") }));
+    if (!approvals.length) { card.appendChild(el("div", { class: "muted", text: t("noPending") })); return; }
+    for (const a of approvals) {
+      const comment = el("input", { placeholder: t("comment"), "aria-label": t("comment") });
+      const decide = async (verb) => {
+        try { await api(`/api/leave/requests/${encodeURIComponent(a.id)}/${verb}`, { method: "POST", body: { comment: comment.value || undefined } }); loadLeaveQueue(); }
+        catch (ex) { flash("err", ex.message); }
+      };
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: a.employee_name || a.employee_id }), el("div", { class: "muted", style: "font-size:12px", text: `${a.type_code} · ${a.days} ${t("daysUnit")}` })]),
+        el("div", { class: "v stack" }, [
+          el("div", { class: "muted", style: "font-size:12px", text: `${a.start_date} ${t("to")} ${a.end_date}${a.reason ? " · " + a.reason : ""}` }),
+          comment,
+          el("div", { class: "actions" }, [
+            el("button", { class: "primary sm", text: t("approve"), onclick: () => decide("approve") }),
+            el("button", { class: "sm", text: t("reject"), onclick: () => decide("reject") }),
+          ]),
+        ]),
       ]));
     }
   } catch (ex) { flash("err", ex.message); }

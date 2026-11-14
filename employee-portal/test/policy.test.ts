@@ -13,6 +13,7 @@ import {
   redactEmployee,
   maskEmployee,
   maskValue,
+  canApproveLeaveFor,
   hasPermission,
   requiresMfa,
   permissionMatrix,
@@ -131,4 +132,13 @@ test("session is valid only while token version matches (revocation)", () => {
   assert.equal(isSessionCurrent(2, 3), false); // user's version bumped → old token dead
   assert.equal(isSessionCurrent(undefined, 0), false); // legacy token without a version
   assert.equal(isSessionCurrent("3", 3), false); // wrong type never passes
+});
+
+test("leave approval: manager approves direct reports only, HR anyone, never self (FR-03/FR-04)", () => {
+  assert.equal(canApproveLeaveFor(actorMeera, asha), true);  // direct report
+  assert.equal(canApproveLeaveFor(actorMeera, bala), true);  // direct report
+  assert.equal(canApproveLeaveFor(actorMeera, meera), false); // self-approval blocked
+  assert.equal(canApproveLeaveFor(actorAsha, bala), false);  // a plain employee approves no one
+  assert.equal(canApproveLeaveFor(actorHr, asha), true);     // HR covers anyone (their function)
+  assert.equal(canApproveLeaveFor(actorSuper, meera), true); // super_admin covers anyone
 });

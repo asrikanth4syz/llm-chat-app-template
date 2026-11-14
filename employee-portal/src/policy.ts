@@ -28,15 +28,17 @@ export type Permission =
   | "employee.sensitive.read_all"
   | "audit.read"
   | "user.manage"
-  | "profile.verify"; // approve controlled bank/identity profile changes (FR-01)
+  | "profile.verify" // approve controlled bank/identity profile changes (FR-01)
+  | "leave.approve_team" // approve leave for direct reports (FR-03/FR-04)
+  | "leave.approve_all"; // approve leave for anyone (HR function)
 
 // Role → permissions. Default deny: a role holds only what is listed here.
 // super_admin is handled as an allow-all in `hasPermission`, so it never has to
 // be enumerated and can never accidentally be under-provisioned.
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
-  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify"],
+  manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all"],
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
@@ -127,6 +129,16 @@ export function canReadEmployee(actor: Actor, target: EmployeeRecord): boolean {
 export function canReadSensitive(actor: Actor, target: EmployeeRecord): boolean {
   if (isSelf(actor, target) && hasPermission(actor.role, "employee.sensitive.read_own")) return true;
   if (hasPermission(actor.role, "employee.sensitive.read_all")) return true;
+  return false;
+}
+
+/** Can this actor approve/reject a leave request for this employee? Self-approval is
+ *  always blocked (FR-04). HR (leave.approve_all) covers anyone; a manager
+ *  (leave.approve_team) covers only direct reports. */
+export function canApproveLeaveFor(actor: Actor, target: EmployeeRecord): boolean {
+  if (actor.employeeId != null && actor.employeeId === target.id) return false; // no self-approval
+  if (hasPermission(actor.role, "leave.approve_all")) return true;
+  if (hasPermission(actor.role, "leave.approve_team") && managesTarget(actor, target)) return true;
   return false;
 }
 
