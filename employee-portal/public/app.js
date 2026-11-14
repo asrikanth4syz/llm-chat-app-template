@@ -189,6 +189,11 @@ Object.assign(DICT.hi, {
   delegation_help: "आपकी अनुपस्थिति में सहकर्मी आपकी टीम के अनुरोध अनुमोदित कर सकते हैं।",
 });
 
+// Profile greeting + photo strings.
+Object.assign(DICT.en, { greetMorning: "Good morning", greetAfternoon: "Good afternoon", greetEvening: "Good evening", changePhoto: "Change photo", removePhoto: "Remove photo", saved: "Saved" });
+Object.assign(DICT.kn, { greetMorning: "ಶುಭೋದಯ", greetAfternoon: "ಶುಭ ಮಧ್ಯಾಹ್ನ", greetEvening: "ಶುಭ ಸಂಜೆ", changePhoto: "ಫೋಟೋ ಬದಲಿಸಿ", removePhoto: "ಫೋಟೋ ತೆಗೆದುಹಾಕಿ", saved: "ಉಳಿಸಲಾಗಿದೆ" });
+Object.assign(DICT.hi, { greetMorning: "शुभ प्रभात", greetAfternoon: "नमस्कार", greetEvening: "शुभ संध्या", changePhoto: "फ़ोटो बदलें", removePhoto: "फ़ोटो हटाएँ", saved: "सहेजा गया" });
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -315,9 +320,51 @@ function icon(name) {
   try { svg.innerHTML = ICONS[name] || ""; } catch { /* older engines: label still shows */ }
   return svg;
 }
-function help(tip) { return el("span", { class: "help", title: tip, "data-tip": tip, tabindex: "0", "aria-label": tip }, ["?"]); }
+// One styled tooltip only — no native `title` (that showed a second, plain tooltip).
+function help(tip) { return el("span", { class: "help", "data-tip": tip, tabindex: "0", role: "img", "aria-label": tip }, ["?"]); }
 function h2help(text, tip) { return el("h2", {}, [text, help(tip)]); }
 function initials(s) { return (s || "?").trim().split(/\s+/).map((w) => w[0] || "").slice(0, 2).join("").toUpperCase(); }
+
+function avatarNode(emp) { return emp && emp.photo ? el("img", { class: "avatar", src: emp.photo, alt: "" }) : el("div", { class: "avatar", text: initials((emp && emp.name) || state.role) }); }
+function avatarBig(emp) { return emp && emp.photo ? el("img", { class: "avatar avatar-lg", src: emp.photo, alt: "" }) : el("div", { class: "avatar avatar-lg", text: initials((emp && emp.name) || state.role) }); }
+function userChip() { return [el("span", { text: (state.emp && state.emp.name) || state.role || "" }), avatarNode(state.emp)]; }
+function updateChip() { const c = document.getElementById("userchip"); if (c) { clear(c); for (const n of userChip()) c.appendChild(n); } }
+function greeting() { const h = new Date().getHours(); return h < 12 ? t("greetMorning") : h < 17 ? t("greetAfternoon") : t("greetEvening"); }
+
+function resizeImage(file, max) {
+  max = max || 256;
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d"); if (ctx) ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      try { res(c.toDataURL("image/jpeg", 0.85)); } catch (e) { rej(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("invalid image")); };
+    img.src = url;
+  });
+}
+function photoControls() {
+  const file = el("input", { type: "file", accept: "image/*", style: "display:none" });
+  const pick = el("button", { class: "sm", text: t("changePhoto"), onclick: () => file.click() });
+  file.addEventListener("change", async () => {
+    if (!file.files || !file.files[0]) return;
+    try {
+      const dataUrl = await resizeImage(file.files[0]);
+      await api("/api/profile/photo", { method: "POST", body: { photo: dataUrl } });
+      state.emp = (await api("/api/me")).employee;
+      flash("ok", t("saved")); renderProfile(); updateChip();
+    } catch (ex) { flash("err", ex.message || t("errorGeneric")); }
+  });
+  const rm = el("button", { class: "sm", text: t("removePhoto"), onclick: async () => {
+    try { await api("/api/profile/photo", { method: "POST", body: { photo: null } }); state.emp = (await api("/api/me")).employee; flash("ok", t("saved")); renderProfile(); updateChip(); }
+    catch (ex) { flash("err", ex.message); }
+  } });
+  return el("div", { class: "actions", style: "margin-top:12px" }, [pick, rm, file]);
+}
 
 function sidebar() {
   const items = VIEWS.map((v) => el("button", { class: `navitem${state.view === v.id ? " active" : ""}`, onclick: () => switchView(v.id) }, [icon(v.icon), el("span", { text: t(v.titleKey) })]));
@@ -331,11 +378,12 @@ function sidebar() {
 
 async function renderApp() {
   clear(app());
+  if (state.token && state.emp == null) { try { state.emp = (await api("/api/me")).employee; } catch { /* pure admin (no employee record) or transient */ } }
   const content = el("div", { class: "content", id: "body" });
   const main = el("div", { class: "main" }, [
     el("div", { class: "topbar" }, [
       el("h1", { id: "pagetitle", text: "" }),
-      el("div", { class: "userchip" }, [el("span", { text: state.role || "" }), el("div", { class: "avatar", text: initials(state.role) })]),
+      el("div", { class: "userchip", id: "userchip" }, userChip()),
     ]),
     el("div", { id: "flash" }),
     content,
@@ -384,6 +432,18 @@ function renderProfile() {
   const body = document.getElementById("body");
   clear(body);
   const e = state.emp;
+
+  // welcome header: greeting + name + photo
+  body.appendChild(el("div", { class: "card" }, [
+    el("div", { style: "display:flex;align-items:center;gap:14px" }, [
+      avatarBig(e),
+      el("div", {}, [
+        el("div", { style: "font-size:18px;font-weight:700", text: `${greeting()}, ${e.name} 👋` }),
+        el("div", { class: "muted", style: "font-size:13px", text: [e.designation, e.location].filter(Boolean).join(" · ") }),
+      ]),
+    ]),
+    photoControls(),
+  ]));
 
   // employment (read-only)
   const emp = el("div", { class: "card" }, [ el("h2", { text: t("employment") }) ]);

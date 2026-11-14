@@ -155,7 +155,8 @@ test("attendance correction approval mirrors leave scoping (team/all, never self
 
 test("directory entry exposes only public fields — no salary/bank/identity (FR-08)", () => {
   const entry = toDirectoryEntry({ id: "e_asha", name: "Asha", designation: "Analyst", location: "HSR", segment: "office", workEmail: "asha@4syz.com", managerName: "Meera" });
-  assert.deepEqual(Object.keys(entry).sort(), ["designation", "id", "location", "managerName", "name", "segment", "workEmail"]);
+  assert.deepEqual(Object.keys(entry).sort(), ["designation", "id", "location", "managerName", "name", "photo", "segment", "workEmail"]);
+  assert.equal(entry.photo, null);
   for (const k of ["pan", "bankAccount", "aadhaarLast4", "ctc", "phone", "personalEmail", "address"]) {
     assert.equal(k in entry, false);
   }

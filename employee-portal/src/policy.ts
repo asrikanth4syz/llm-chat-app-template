@@ -70,6 +70,7 @@ export interface EmployeeRecord {
   workEmail: string;
   designation: string | null;
   location: string | null;
+  photo?: string | null; // profile photo data URL; non-confidential, never masked
   // Sensitive — field-level encrypted at rest (NFR-03, R1); masked on read here.
   pan?: string | null;
   bankAccount?: string | null;
@@ -196,15 +197,16 @@ export function isSessionCurrent(tokenTokenVersion: unknown, userTokenVersion: n
 // personal email, address) are excluded BY CONSTRUCTION here, not by redaction.
 export interface DirectoryEntry {
   id: string; name: string; designation: string | null; location: string | null;
-  segment: string; workEmail: string | null; managerName: string | null;
+  segment: string; workEmail: string | null; managerName: string | null; photo: string | null;
 }
 export function toDirectoryEntry(e: {
   id: string; name: string; designation?: string | null; location?: string | null;
-  segment?: string | null; workEmail?: string | null; managerName?: string | null;
+  segment?: string | null; workEmail?: string | null; managerName?: string | null; photo?: string | null;
 }): DirectoryEntry {
   return {
     id: e.id, name: e.name, designation: e.designation ?? null, location: e.location ?? null,
     segment: e.segment ?? "office", workEmail: e.workEmail ?? null, managerName: e.managerName ?? null,
+    photo: e.photo ?? null,
   };
 }
 

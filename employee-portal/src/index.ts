@@ -45,14 +45,14 @@ function uid(): string {
 
 interface EmpRow {
   id: string; user_id: string; manager_id: string | null; segment: string; name: string;
-  work_email: string; designation: string | null; location: string | null;
+  work_email: string; designation: string | null; location: string | null; photo: string | null;
   pan: string | null; bank_account: string | null; aadhaar_last4: string | null; ctc: number | null;
 }
 function rowToEmployee(r: EmpRow): EmployeeRecord {
   return {
     id: r.id, userId: r.user_id, managerId: r.manager_id,
     segment: r.segment === "client_site" ? "client_site" : "office",
-    name: r.name, workEmail: r.work_email, designation: r.designation, location: r.location,
+    name: r.name, workEmail: r.work_email, designation: r.designation, location: r.location, photo: r.photo,
     pan: r.pan, bankAccount: r.bank_account, aadhaarLast4: r.aadhaar_last4, ctc: r.ctc,
   };
 }
@@ -136,7 +136,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
 async function loadEmployee(env: Env, id: string): Promise<EmployeeRecord | null> {
   const r = await env.DB.prepare(
-    "SELECT id,user_id,manager_id,segment,name,work_email,designation,location,pan,bank_account,aadhaar_last4,ctc FROM employees WHERE id = ?"
+    "SELECT id,user_id,manager_id,segment,name,work_email,designation,location,photo,pan,bank_account,aadhaar_last4,ctc FROM employees WHERE id = ?"
   ).bind(id).first<EmpRow>();
   return r ? await decryptEmployee(env, rowToEmployee(r)) : null;
 }
@@ -155,7 +155,7 @@ async function handleMe(actor: Actor, env: Env, reveal: string[]): Promise<Respo
 async function handleList(actor: Actor, env: Env): Promise<Response> {
   // Load the candidate set by role, THEN filter through the policy engine (never
   // trust the query alone). A plain employee only ever loads their own row.
-  const cols = "id,user_id,manager_id,segment,name,work_email,designation,location,pan,bank_account,aadhaar_last4,ctc";
+  const cols = "id,user_id,manager_id,segment,name,work_email,designation,location,photo,pan,bank_account,aadhaar_last4,ctc";
   let rows: EmpRow[] = [];
   if (hasPermission(actor.role, "employee.read_all")) {
     rows = (await env.DB.prepare(`SELECT ${cols} FROM employees`).all<EmpRow>()).results;
@@ -187,13 +187,13 @@ async function handleGetOne(actor: Actor, env: Env, id: string, reveal: string[]
   return json({ employee: redactEmployee(actor, rec, { reveal }) });
 }
 
-interface DirRow { id: string; name: string; designation: string | null; location: string | null; segment: string; work_email: string | null; manager_name: string | null; }
+interface DirRow { id: string; name: string; designation: string | null; location: string | null; segment: string; work_email: string | null; manager_name: string | null; photo: string | null; }
 
 // FR-08 Directory — any login may search non-confidential contact/org fields of all
 // employees. Sensitive columns (pan/bank/aadhaar/ctc) and personal contact are never
 // selected, so there is nothing to redact.
 async function handleDirectory(env: Env, q: string): Promise<Response> {
-  const base = "SELECT e.id, e.name, e.designation, e.location, e.segment, e.work_email, m.name AS manager_name FROM employees e LEFT JOIN employees m ON m.id = e.manager_id";
+  const base = "SELECT e.id, e.name, e.designation, e.location, e.segment, e.work_email, e.photo, m.name AS manager_name FROM employees e LEFT JOIN employees m ON m.id = e.manager_id";
   const term = q.trim().toLowerCase();
   let rows: DirRow[];
   if (term) {
@@ -202,7 +202,7 @@ async function handleDirectory(env: Env, q: string): Promise<Response> {
   } else {
     rows = (await env.DB.prepare(base + " ORDER BY e.name LIMIT 500").all<DirRow>()).results;
   }
-  const entries = rows.map((r) => toDirectoryEntry({ id: r.id, name: r.name, designation: r.designation, location: r.location, segment: r.segment, workEmail: r.work_email, managerName: r.manager_name }));
+  const entries = rows.map((r) => toDirectoryEntry({ id: r.id, name: r.name, designation: r.designation, location: r.location, segment: r.segment, workEmail: r.work_email, managerName: r.manager_name, photo: r.photo }));
   return json({ entries, count: entries.length });
 }
 
@@ -461,6 +461,24 @@ async function handleLeaveDecide(actor: Actor, env: Env, id: string, action: "ap
   return json({ ok: true, rejected: true });
 }
 
+// FR-01 profile photo — a self-service, non-confidential field. The client downscales
+// to ~256px; we cap the stored data URL and accept null to remove it.
+async function handleProfilePhoto(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { photo?: string | null };
+  const photo = b.photo;
+  if (photo == null || photo === "") {
+    await env.DB.prepare("UPDATE employees SET photo = NULL WHERE id = ?").bind(actor.employeeId).run();
+    await audit(env, actor.userId, "PROFILE_PHOTO", "employee", actor.employeeId, "removed");
+    return json({ ok: true, removed: true });
+  }
+  if (typeof photo !== "string" || !/^data:image\/(png|jpeg|jpg|webp);base64,/.test(photo)) return json({ error: "expected a data:image/* base64 URL" }, 400);
+  if (photo.length > 400000) return json({ error: "image too large (max ~300KB after resize)" }, 413);
+  await env.DB.prepare("UPDATE employees SET photo = ? WHERE id = ?").bind(photo, actor.employeeId).run();
+  await audit(env, actor.userId, "PROFILE_PHOTO", "employee", actor.employeeId, "updated");
+  return json({ ok: true });
+}
+
 // ---- FR-02 Attendance ----------------------------------------------------------
 const todayISO = (): string => new Date().toISOString().slice(0, 10);
 const ATT_CORRECTION_TYPES = new Set(["regularisation", "on_duty", "client_visit", "wfh"]);
@@ -701,6 +719,7 @@ export default {
       if (path === "/api/directory" && method === "GET") return await handleDirectory(env, url.searchParams.get("q") || "");
       if (path === "/api/profile/change" && method === "POST") return await handleProfileChange(actor, env, request);
       if (path === "/api/profile/changes" && method === "GET") return await handleProfileChanges(actor, env);
+      if (path === "/api/profile/photo" && method === "POST") return await handleProfilePhoto(actor, env, request);
       if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);
       const pcr = path.match(/^\/api\/admin\/profile\/changes\/([^/]+)\/(approve|reject)$/);
       if (pcr && method === "POST") return await handleProfileChangeReview(actor, env, decodeURIComponent(pcr[1]), pcr[2] as "approve" | "reject");

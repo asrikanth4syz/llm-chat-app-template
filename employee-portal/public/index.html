@@ -46,7 +46,9 @@
     .topbar h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 650; }
     .content { padding: 20px; max-width: 880px; width: 100%; }
     .userchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-    .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+    .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; overflow: hidden; flex: none; }
+    img.avatar { object-fit: cover; }
+    .avatar-lg { width: 60px; height: 60px; font-size: 22px; }
 
     @media (max-width: 860px) {
       .shell { grid-template-columns: 1fr; }
@@ -116,6 +118,6 @@
 </head>
 <body>
   <div id="app"></div>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

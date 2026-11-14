@@ -94,11 +94,13 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `?` help** tooltips on the key section headers. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
-- **Profile** — employment details (read-only), contact fields you can edit inline
-  (phone, personal email, address, emergency contact → apply immediately), and the
-  identity/financial block **masked by default** with per-field **Reveal** (logged)
-  and **Request change** (bank/PAN/Aadhaar → encrypted pending request). HR/super_admin
-  get a **Verification queue** for pending identity changes.
+- **Profile** — a welcome header (time-based greeting + name + **profile photo**,
+  uploaded and auto-downscaled client-side); employment details (read-only); contact
+  fields you can edit inline (phone, personal email, address, emergency contact →
+  apply immediately); and the identity/financial block **masked by default** with
+  per-field **Reveal** (logged) and **Request change** (bank/PAN/Aadhaar → encrypted
+  pending request). HR/super_admin get a **Verification queue** for pending changes.
+  The signed-in user's name + photo show in the top bar.
 - **Leave** — balances per type (entitled / used / pending / available), an apply form
   (type, dates, half-day, reason), your request history with **Cancel**, and — for
   managers (team) and HR/super_admin (all) — a **Leave approvals** queue.
