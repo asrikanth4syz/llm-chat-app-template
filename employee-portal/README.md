@@ -85,11 +85,11 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (FR-01 Profile + FR-03 Leave + FR-02 Attendance)
+## UI (FR-01 Profile + FR-03 Leave + FR-02 Attendance + FR-08 Directory)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `wrangler.jsonc`; `/api/*` still falls through to the Worker), with **Profile**,
-**Leave** and **Attendance** tabs. Open the Worker URL in a browser:
+**Leave**, **Attendance** and **Directory** tabs. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — employment details (read-only), contact fields you can edit inline
@@ -104,6 +104,9 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
   biometric system, with **exception flags** (missing punch, absence, short hours);
   a **Request correction** form (regularisation / on-duty / client visit / WFH);
   your corrections; and, for managers/HR, a **Correction approvals** queue.
+- **Directory** — search all colleagues by name / role / location; shows name,
+  designation, location, segment, work email and manager only. No salary, bank,
+  identity or personal contact.
 - Language switcher: **English / ಕನ್ನಡ / हिन्दी** (kn/hi strings are initial — have a
   native speaker review before go-live).
 
@@ -115,6 +118,7 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 | GET | `/api/me` | any login | own profile; sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
 | GET | `/api/employees` | any login | scoped list — self / team / all by role, sensitive fields masked |
 | GET | `/api/employees/:id` | any login | one record if policy allows (masked; `?reveal=…`), else 403 (+ DENY audit) |
+| GET | `/api/directory?q=` | any login | FR-08: all colleagues' public fields (name, designation, location, segment, work email, manager); salary/bank/identity/personal contact never selected |
 | POST | `/api/profile/change` | any login | FR-01: `{field,value}`. Direct fields (phone, personalEmail, address, emergencyContact) apply now; bank/PAN/Aadhaar → encrypted **pending** request |
 | GET | `/api/profile/changes` | any login | own change requests (status; encrypted value never returned) |
 | POST | `/api/admin/profile/changes/:id/approve`·`/reject` | hr_admin, super_admin | verify a pending bank/identity change (`profile.verify`) |

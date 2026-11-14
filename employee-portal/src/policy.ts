@@ -191,6 +191,23 @@ export function isSessionCurrent(tokenTokenVersion: unknown, userTokenVersion: n
   return typeof tokenTokenVersion === "number" && tokenTokenVersion === userTokenVersion;
 }
 
+// FR-08 Directory — the public, non-confidential view of an employee, visible to any
+// authenticated login. Salary, bank, PAN, Aadhaar and personal contact (phone,
+// personal email, address) are excluded BY CONSTRUCTION here, not by redaction.
+export interface DirectoryEntry {
+  id: string; name: string; designation: string | null; location: string | null;
+  segment: string; workEmail: string | null; managerName: string | null;
+}
+export function toDirectoryEntry(e: {
+  id: string; name: string; designation?: string | null; location?: string | null;
+  segment?: string | null; workEmail?: string | null; managerName?: string | null;
+}): DirectoryEntry {
+  return {
+    id: e.id, name: e.name, designation: e.designation ?? null, location: e.location ?? null,
+    segment: e.segment ?? "office", workEmail: e.workEmail ?? null, managerName: e.managerName ?? null,
+  };
+}
+
 export class ForbiddenError extends Error {
   action: string;
   constructor(action: string) {

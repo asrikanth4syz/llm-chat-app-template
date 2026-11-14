@@ -146,6 +146,11 @@ Object.assign(DICT.hi, {
   ex_missing_in: "इन नहीं", ex_absent: "अनुपस्थित", ex_short_hours: "कम घंटे",
 });
 
+// FR-08 Directory strings.
+Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
+Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
+Object.assign(DICT.hi, { navDirectory: "निर्देशिका", search: "नाम, भूमिका, स्थान खोजें", noResults: "कोई मेल नहीं।", manager: "प्रबंधक" });
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -272,7 +277,7 @@ async function renderApp() {
 
 function nav() {
   const mk = (view, label) => el("button", { class: `sm${state.view === view ? " primary" : ""}`, text: label, onclick: () => switchView(view) });
-  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave")), mk("attendance", t("navAttendance"))]);
+  return el("div", { class: "actions", id: "nav", style: "margin-bottom:14px" }, [mk("profile", t("navProfile")), mk("leave", t("navLeave")), mk("attendance", t("navAttendance")), mk("directory", t("navDirectory"))]);
 }
 
 async function switchView(view) {
@@ -282,6 +287,7 @@ async function switchView(view) {
   flash("", "");
   if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
+  else if (view === "directory") await loadDirectoryView();
   else await loadProfile();
 }
 
@@ -711,6 +717,36 @@ async function loadAttCorrQueue() {
             el("button", { class: "primary sm", text: t("approve"), onclick: () => decide("approve") }),
             el("button", { class: "sm", text: t("reject"), onclick: () => decide("reject") }),
           ]),
+        ]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-08 Directory -----------------------------------------------------------
+async function loadDirectoryView() {
+  const body = document.getElementById("body"); clear(body);
+  const box = el("input", { type: "search", placeholder: t("search"), id: "dir_q" });
+  let timer;
+  box.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => loadDirectory(box.value), 250); });
+  body.appendChild(el("div", { class: "card" }, [el("h2", { text: t("navDirectory") }), box]));
+  body.appendChild(el("div", { class: "card", id: "dir_list" }, [el("div", { class: "muted", text: "…" })]));
+  await loadDirectory("");
+}
+
+async function loadDirectory(q) {
+  const card = document.getElementById("dir_list"); if (!card) return;
+  try {
+    const { entries } = await api(`/api/directory?q=${encodeURIComponent(q || "")}`);
+    clear(card);
+    if (!entries.length) { card.appendChild(el("div", { class: "muted", text: t("noResults") })); return; }
+    for (const e of entries) {
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: e.name, style: "font-weight:600" }), el("div", { class: "muted", style: "font-size:12px", text: e.designation || "" })]),
+        el("div", { class: "v" }, [
+          el("div", { class: "muted", style: "font-size:13px", text: [e.location, t(e.segment)].filter(Boolean).join(" · ") }),
+          e.workEmail ? el("div", { style: "font-size:13px", text: e.workEmail }) : null,
+          e.managerName ? el("div", { class: "muted", style: "font-size:12px", text: `${t("manager")}: ${e.managerName}` }) : null,
         ]),
       ]));
     }

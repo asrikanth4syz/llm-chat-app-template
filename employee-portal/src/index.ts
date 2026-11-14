@@ -22,6 +22,7 @@ import {
   isSessionCurrent,
   canApproveLeaveFor,
   canApproveAttendanceFor,
+  toDirectoryEntry,
 } from "./policy.ts";
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
 import { encryptField, decryptField } from "./fieldcrypto.ts";
@@ -183,6 +184,25 @@ async function handleGetOne(actor: Actor, env: Env, id: string, reveal: string[]
     await audit(env, actor.userId, "READ", "employee", id, "non-sensitive");
   }
   return json({ employee: redactEmployee(actor, rec, { reveal }) });
+}
+
+interface DirRow { id: string; name: string; designation: string | null; location: string | null; segment: string; work_email: string | null; manager_name: string | null; }
+
+// FR-08 Directory — any login may search non-confidential contact/org fields of all
+// employees. Sensitive columns (pan/bank/aadhaar/ctc) and personal contact are never
+// selected, so there is nothing to redact.
+async function handleDirectory(env: Env, q: string): Promise<Response> {
+  const base = "SELECT e.id, e.name, e.designation, e.location, e.segment, e.work_email, m.name AS manager_name FROM employees e LEFT JOIN employees m ON m.id = e.manager_id";
+  const term = q.trim().toLowerCase();
+  let rows: DirRow[];
+  if (term) {
+    const like = `%${term}%`;
+    rows = (await env.DB.prepare(base + " WHERE lower(e.name) LIKE ?1 OR lower(e.designation) LIKE ?1 OR lower(e.location) LIKE ?1 ORDER BY e.name LIMIT 500").bind(like).all<DirRow>()).results;
+  } else {
+    rows = (await env.DB.prepare(base + " ORDER BY e.name LIMIT 500").all<DirRow>()).results;
+  }
+  const entries = rows.map((r) => toDirectoryEntry({ id: r.id, name: r.name, designation: r.designation, location: r.location, segment: r.segment, workEmail: r.work_email, managerName: r.manager_name }));
+  return json({ entries, count: entries.length });
 }
 
 async function handleAudit(actor: Actor, env: Env): Promise<Response> {
@@ -579,6 +599,7 @@ export default {
       if (path === "/api/employees" && method === "GET") return await handleList(actor, env);
       const one = path.match(/^\/api\/employees\/([^/]+)$/);
       if (one && method === "GET") return await handleGetOne(actor, env, decodeURIComponent(one[1]), parseReveal(url));
+      if (path === "/api/directory" && method === "GET") return await handleDirectory(env, url.searchParams.get("q") || "");
       if (path === "/api/profile/change" && method === "POST") return await handleProfileChange(actor, env, request);
       if (path === "/api/profile/changes" && method === "GET") return await handleProfileChanges(actor, env);
       if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);

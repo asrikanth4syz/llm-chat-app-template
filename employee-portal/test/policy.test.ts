@@ -15,6 +15,7 @@ import {
   maskValue,
   canApproveLeaveFor,
   canApproveAttendanceFor,
+  toDirectoryEntry,
   hasPermission,
   requiresMfa,
   permissionMatrix,
@@ -150,4 +151,12 @@ test("attendance correction approval mirrors leave scoping (team/all, never self
   assert.equal(canApproveAttendanceFor(actorAsha, bala), false);  // plain employee approves no one
   assert.equal(canApproveAttendanceFor(actorHr, bala), true);     // HR covers anyone
   assert.equal(canApproveAttendanceFor(actorSuper, asha), true);  // super_admin covers anyone
+});
+
+test("directory entry exposes only public fields — no salary/bank/identity (FR-08)", () => {
+  const entry = toDirectoryEntry({ id: "e_asha", name: "Asha", designation: "Analyst", location: "HSR", segment: "office", workEmail: "asha@4syz.com", managerName: "Meera" });
+  assert.deepEqual(Object.keys(entry).sort(), ["designation", "id", "location", "managerName", "name", "segment", "workEmail"]);
+  for (const k of ["pan", "bankAccount", "aadhaarLast4", "ctc", "phone", "personalEmail", "address"]) {
+    assert.equal(k in entry, false);
+  }
 });
