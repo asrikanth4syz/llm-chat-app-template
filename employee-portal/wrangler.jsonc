@@ -12,5 +12,7 @@
       "migrations_dir": "migrations"
     }
   ]
-  // JWT_SECRET is a secret, not a var: set with `wrangler secret put JWT_SECRET`.
+  // Secrets (not vars) — set with `wrangler secret put <NAME>`:
+  //   JWT_SECRET     — signs session JWTs (separate realm from SmartPantry).
+  //   FIELD_ENC_KEY  — NFR-03 AES-GCM key (base64 of 32 bytes) for bank/PAN/Aadhaar.
 }

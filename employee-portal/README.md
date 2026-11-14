@@ -69,8 +69,14 @@ left before logins work is the portal's **own** app secret:
 
 ```bash
 cd employee-portal
-npx wrangler secret put JWT_SECRET      # a long random string — separate realm from SmartPantry
+npx wrangler secret put JWT_SECRET            # a long random string — separate realm from SmartPantry
+openssl rand -base64 32 | npx wrangler secret put FIELD_ENC_KEY   # NFR-03 field-encryption key
 ```
+
+`FIELD_ENC_KEY` (base64 of 32 bytes) encrypts bank/PAN/Aadhaar at rest. Reads of the
+plaintext scaffold seed work without it; **submitting an encrypted change (bank/PAN/
+Aadhaar) requires it** (returns 501 until set). Never rotate it without re-encrypting
+existing values, or they become unreadable.
 
 Then push a change under `employee-portal/` to `main` (or run the workflow
 manually). CI applies the migrations and deploys. Check the first login with the
@@ -79,17 +85,33 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## Endpoints (R0)
+## Endpoints (R0 + R1 FR-01)
 
 | Method | Path | Who | Returns |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | anyone | JWT; **all** roles must also send `otp` (dev `000000`) — 2FA for all, DEC-02 |
-| GET | `/api/me` | any login | own employee record (full detail) |
-| GET | `/api/employees` | any login | scoped list — self / team / all by role |
-| GET | `/api/employees/:id` | any login | one record if policy allows, else 403 (+ DENY audit) |
+| GET | `/api/me` | any login | own profile; sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
+| GET | `/api/employees` | any login | scoped list — self / team / all by role, sensitive fields masked |
+| GET | `/api/employees/:id` | any login | one record if policy allows (masked; `?reveal=…`), else 403 (+ DENY audit) |
+| POST | `/api/profile/change` | any login | FR-01: `{field,value}`. Direct fields (phone, personalEmail, address, emergencyContact) apply now; bank/PAN/Aadhaar → encrypted **pending** request |
+| GET | `/api/profile/changes` | any login | own change requests (status; encrypted value never returned) |
+| POST | `/api/admin/profile/changes/:id/approve`·`/reject` | hr_admin, super_admin | verify a pending bank/identity change (`profile.verify`) |
 | GET | `/api/audit` | auditor, super_admin | recent audit entries |
 | GET | `/api/policy/matrix` | it_admin, auditor, super_admin | role → permission matrix (G1 artefact) |
 | POST | `/api/admin/users/:id/revoke` | it_admin, super_admin | kill a user's sessions (`{"deactivate":true}` also disables login) |
+
+## FR-01 Profile & NFR-03 field encryption
+
+- **Masked by default (NFR-03):** bank account, PAN and Aadhaar are returned masked
+  (`••••••234F`) to everyone, including the owner and super_admin. A per-field
+  `?reveal=` shows the full value and writes a `REVEAL` audit row (reveal-on-click).
+  CTC is sensitive but not masked (a number), still gated by the policy engine.
+- **Encrypted at rest:** those three fields are stored AES-256-GCM encrypted
+  (`src/fieldcrypto.ts`); legacy plaintext (scaffold seed) still reads. Decryption
+  happens in-Worker before the policy engine masks.
+- **Controlled changes (FR-01):** an employee edits direct fields themselves; a
+  bank/PAN/Aadhaar change is stored **encrypted** as a *pending* request and only
+  applies after HR/super_admin approval. Step-up auth on these is R2 (FR-26).
 
 ## 2FA & access revocation
 

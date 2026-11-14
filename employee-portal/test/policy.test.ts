@@ -11,6 +11,8 @@ import {
   canReadSensitive,
   visibleEmployees,
   redactEmployee,
+  maskEmployee,
+  maskValue,
   hasPermission,
   requiresMfa,
   permissionMatrix,
@@ -47,9 +49,13 @@ test("super_admin sees every record and every sensitive field", () => {
     assert.equal(canReadSensitive(actorSuper, e), true);
   }
   assert.deepEqual(visibleEmployees(actorSuper, everyone).map((e) => e.id).sort(), ["e_asha", "e_bala", "e_meera"]);
+  // NFR-03: sensitive PII is masked by default, even for super_admin...
   const view = redactEmployee(actorSuper, asha) as EmployeeRecord;
-  assert.equal(view.pan, "ABCDE1234F");
-  assert.equal(view.ctc, 950000);
+  assert.equal(view.pan, "••••••234F");
+  assert.equal(view.ctc, 950000); // ctc is sensitive but not masked (a number)
+  // ...and returned in full only when explicitly revealed (reveal-on-click).
+  const revealed = redactEmployee(actorSuper, asha, { reveal: ["pan"] }) as EmployeeRecord;
+  assert.equal(revealed.pan, "ABCDE1234F");
 });
 
 test("a manager sees the team but not the team's sensitive fields", () => {
@@ -61,18 +67,33 @@ test("a manager sees the team but not the team's sensitive fields", () => {
   assert.equal("pan" in reportView, false);
   assert.equal("ctc" in reportView, false);
   assert.equal("bankAccount" in reportView, false);
-  // Manager still sees their OWN sensitive fields.
+  // Manager still sees their OWN sensitive fields — masked by default (NFR-03).
   const selfView = redactEmployee(actorMeera, meera) as EmployeeRecord;
-  assert.equal(selfView.pan, "LMNOP5555Q");
+  assert.equal(selfView.pan, "••••••555Q");
+  assert.equal((redactEmployee(actorMeera, meera, { reveal: ["pan"] }) as EmployeeRecord).pan, "LMNOP5555Q");
 });
 
-test("own sensitive fields are always visible to the owner; redaction never mutates input", () => {
+test("own sensitive fields are masked by default, revealed on request; redaction never mutates (NFR-03)", () => {
   const selfView = redactEmployee(actorAsha, asha) as EmployeeRecord;
-  assert.equal(selfView.pan, "ABCDE1234F");
+  assert.equal(selfView.pan, "••••••234F"); // own PAN masked by default too
+  const selfReveal = redactEmployee(actorAsha, asha, { reveal: ["pan"] }) as EmployeeRecord;
+  assert.equal(selfReveal.pan, "ABCDE1234F"); // owner can reveal their own
   const peerView = redactEmployee(actorAsha, bala) as Record<string, unknown> | null;
   // (not reachable in a handler — canRead denies first — but redaction is still safe)
   assert.equal("pan" in (peerView as object), false);
   assert.equal(asha.pan, "ABCDE1234F"); // original untouched
+});
+
+test("masking keeps only the last 4, fully masks short values, and never mutates (NFR-03)", () => {
+  assert.equal(maskValue("ABCDE1234F"), "••••••234F"); // 10 chars → last 4 kept
+  assert.equal(maskValue("1111"), "••••"); // <= 4 → fully masked, nothing leaks
+  assert.equal(maskValue("123456789012"), "••••••••9012"); // long bank account
+  const masked = maskEmployee(asha);
+  assert.equal(masked.pan, "••••••234F");
+  assert.equal(masked.bankAccount, "••••");
+  assert.equal(masked.aadhaarLast4, "••••");
+  assert.equal(masked.ctc, 950000); // ctc not masked
+  assert.equal(asha.pan, "ABCDE1234F"); // input untouched
 });
 
 test("HR/Finance read all records including sensitive, by function", () => {

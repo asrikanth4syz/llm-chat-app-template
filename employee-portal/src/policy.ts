@@ -27,7 +27,8 @@ export type Permission =
   | "employee.sensitive.read_own"
   | "employee.sensitive.read_all"
   | "audit.read"
-  | "user.manage";
+  | "user.manage"
+  | "profile.verify"; // approve controlled bank/identity profile changes (FR-01)
 
 // Role → permissions. Default deny: a role holds only what is listed here.
 // super_admin is handled as an allow-all in `hasPermission`, so it never has to
@@ -35,7 +36,7 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
   manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify"],
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
@@ -73,6 +74,29 @@ export interface EmployeeRecord {
 
 const SENSITIVE_FIELDS = ["pan", "bankAccount", "aadhaarLast4", "ctc"] as const;
 export type PublicEmployee = Omit<EmployeeRecord, (typeof SENSITIVE_FIELDS)[number]>;
+
+// NFR-03: the identity/financial fields that are masked-by-default on display
+// (ctc is sensitive but not masked — it is a number shown to those who may see it).
+const MASKED_FIELDS = ["pan", "bankAccount", "aadhaarLast4"] as const;
+
+/** Mask a value keeping only the last `keep` characters; a short value (<= keep)
+ *  is fully masked so nothing leaks. "ABCDE1234F" → "••••••234F"; "1111" → "••••". */
+export function maskValue(v: string, keep = 4): string {
+  return v.length > keep ? "•".repeat(v.length - keep) + v.slice(-keep) : "•".repeat(v.length);
+}
+
+/** Mask the NFR-03 fields of a record, except any explicitly revealed (reveal-on-
+ *  click). Caller must already have confirmed the actor may see the fields. Never
+ *  mutates the input. */
+export function maskEmployee(rec: EmployeeRecord, reveal: readonly string[] = []): EmployeeRecord {
+  const show = new Set(reveal);
+  const out: EmployeeRecord = { ...rec };
+  for (const f of MASKED_FIELDS) {
+    const v = out[f];
+    if (!show.has(f) && typeof v === "string" && v.length > 0) out[f] = maskValue(v);
+  }
+  return out;
+}
 
 export function hasPermission(role: Role, perm: Permission): boolean {
   if (role === "super_admin") return true; // sees all details, by rule
@@ -112,9 +136,16 @@ export function visibleEmployees(actor: Actor, all: EmployeeRecord[]): EmployeeR
   return all.filter((e) => canReadEmployee(actor, e));
 }
 
-/** Strip sensitive fields unless the actor may see them. Never mutates the input. */
-export function redactEmployee(actor: Actor, rec: EmployeeRecord): PublicEmployee | EmployeeRecord {
-  if (canReadSensitive(actor, rec)) return { ...rec };
+/** Shape a record for display. An actor who may NOT see sensitive fields gets them
+ *  stripped. An actor who MAY see them gets them masked by default (NFR-03); fields
+ *  named in `opts.reveal` are returned in full (reveal-on-click — logged by the
+ *  caller). Never mutates the input. */
+export function redactEmployee(
+  actor: Actor,
+  rec: EmployeeRecord,
+  opts: { reveal?: readonly string[] } = {},
+): PublicEmployee | EmployeeRecord {
+  if (canReadSensitive(actor, rec)) return maskEmployee(rec, opts.reveal ?? []);
   const out: Record<string, unknown> = { ...rec };
   for (const f of SENSITIVE_FIELDS) delete out[f];
   return out as PublicEmployee;
