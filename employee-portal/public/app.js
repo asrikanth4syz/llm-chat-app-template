@@ -147,6 +147,46 @@ Object.assign(DICT.hi, {
 });
 
 // FR-08 Directory strings.
+// Payroll-ready attendance strings (kn/hi initial, review before go-live).
+Object.assign(DICT.en, {
+  otWord: "OT", payableDays: "Payable days", lopWord: "LOP", lockedWord: "Locked", openWord: "Open",
+  previewWord: "Preview", pendingWord: "pending", workingDays: "Working days", notMapped: "no biometric code",
+  payrollLock: "Payroll cutoff & lock", lockMonth: "Lock month", unlockMonth: "Unlock month",
+  lockedMonths: "Locked", confirmLock: "Lock this month for payroll? Imports and corrections will be frozen.",
+  confirmUnlock: "Reopen this month? It will accept imports and corrections again.",
+  payrollInput: "Payroll input", exportCsv: "Export CSV", holidayCalendar: "Holiday calendar",
+  addHoliday: "Add holiday", holidayName: "Holiday name", locationAll: "Location (blank = all)",
+  noHolidays: "No holidays this year.", remove: "Remove", confirmRemove: "Remove this holiday?",
+  payroll_lock_help: "Lock a month once attendance is final. A locked month is frozen — no imports, no new corrections, no write-backs — so payroll reads stable data. Unlocking is audited.",
+  payroll_input_help: "The per-employee figures payroll consumes: payable days (calendar − loss-of-pay), present/leave/LOP, and overtime, counted against each person's holiday calendar. Export when the month is locked.",
+  holiday_help: "Holidays (plus Sundays) are excluded from working days. Leave the location blank for a company-wide holiday, or name a location for a site-specific one.",
+});
+Object.assign(DICT.kn, {
+  otWord: "ಓಟಿ", payableDays: "ಪಾವತಿ ದಿನಗಳು", lopWord: "ಎಲ್‌ಒಪಿ", lockedWord: "ಲಾಕ್", openWord: "ತೆರೆದಿದೆ",
+  previewWord: "ಮುನ್ನೋಟ", pendingWord: "ಬಾಕಿ", workingDays: "ಕೆಲಸದ ದಿನಗಳು", notMapped: "ಬಯೋಮೆಟ್ರಿಕ್ ಕೋಡ್ ಇಲ್ಲ",
+  payrollLock: "ವೇತನ ಕಟ್‌ಆಫ್ ಮತ್ತು ಲಾಕ್", lockMonth: "ತಿಂಗಳು ಲಾಕ್ ಮಾಡಿ", unlockMonth: "ತಿಂಗಳು ಅನ್‌ಲಾಕ್ ಮಾಡಿ",
+  lockedMonths: "ಲಾಕ್ ಆಗಿದೆ", confirmLock: "ಈ ತಿಂಗಳನ್ನು ವೇತನಕ್ಕಾಗಿ ಲಾಕ್ ಮಾಡುವುದೇ? ಆಮದು ಮತ್ತು ತಿದ್ದುಪಡಿಗಳು ಸ್ಥಗಿತಗೊಳ್ಳುತ್ತವೆ.",
+  confirmUnlock: "ಈ ತಿಂಗಳನ್ನು ಮತ್ತೆ ತೆರೆಯುವುದೇ?",
+  payrollInput: "ವೇತನ ಇನ್‌ಪುಟ್", exportCsv: "CSV ರಫ್ತು", holidayCalendar: "ರಜಾದಿನ ಕ್ಯಾಲೆಂಡರ್",
+  addHoliday: "ರಜಾದಿನ ಸೇರಿಸಿ", holidayName: "ರಜಾದಿನ ಹೆಸರು", locationAll: "ಸ್ಥಳ (ಖಾಲಿ = ಎಲ್ಲಾ)",
+  noHolidays: "ಈ ವರ್ಷ ರಜಾದಿನಗಳಿಲ್ಲ.", remove: "ತೆಗೆದುಹಾಕಿ", confirmRemove: "ಈ ರಜಾದಿನ ತೆಗೆದುಹಾಕುವುದೇ?",
+  payroll_lock_help: "ಹಾಜರಾತಿ ಅಂತಿಮವಾದ ಮೇಲೆ ತಿಂಗಳನ್ನು ಲಾಕ್ ಮಾಡಿ. ಲಾಕ್ ಆದ ತಿಂಗಳು ಸ್ಥಗಿತ — ಆಮದು, ತಿದ್ದುಪಡಿ ಇಲ್ಲ.",
+  payroll_input_help: "ವೇತನ ಬಳಸುವ ಅಂಕಿಅಂಶಗಳು: ಪಾವತಿ ದಿನಗಳು, ಹಾಜರ್/ರಜೆ/ಎಲ್‌ಒಪಿ, ಓವರ್‌ಟೈಮ್.",
+  holiday_help: "ರಜಾದಿನಗಳು (ಮತ್ತು ಭಾನುವಾರ) ಕೆಲಸದ ದಿನಗಳಿಂದ ಹೊರಗಿಡಲಾಗುತ್ತದೆ.",
+});
+Object.assign(DICT.hi, {
+  otWord: "ओटी", payableDays: "देय दिन", lopWord: "एलओपी", lockedWord: "लॉक", openWord: "खुला",
+  previewWord: "पूर्वावलोकन", pendingWord: "लंबित", workingDays: "कार्य दिवस", notMapped: "बायोमेट्रिक कोड नहीं",
+  payrollLock: "पेरोल कटऑफ और लॉक", lockMonth: "माह लॉक करें", unlockMonth: "माह अनलॉक करें",
+  lockedMonths: "लॉक", confirmLock: "इस माह को पेरोल के लिए लॉक करें? आयात और सुधार फ़्रीज़ हो जाएँगे.",
+  confirmUnlock: "इस माह को फिर से खोलें?",
+  payrollInput: "पेरोल इनपुट", exportCsv: "CSV निर्यात", holidayCalendar: "अवकाश कैलेंडर",
+  addHoliday: "अवकाश जोड़ें", holidayName: "अवकाश नाम", locationAll: "स्थान (खाली = सभी)",
+  noHolidays: "इस वर्ष कोई अवकाश नहीं।", remove: "हटाएँ", confirmRemove: "यह अवकाश हटाएँ?",
+  payroll_lock_help: "उपस्थिति अंतिम होने पर माह लॉक करें। लॉक माह फ़्रीज़ — कोई आयात, सुधार या राइट-बैक नहीं।",
+  payroll_input_help: "पेरोल द्वारा उपयोग किए जाने वाले आँकड़े: देय दिन, उपस्थित/अवकाश/एलओपी, ओवरटाइम।",
+  holiday_help: "अवकाश (और रविवार) कार्य दिवसों से बाहर रखे जाते हैं।",
+});
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
 Object.assign(DICT.hi, { navDirectory: "निर्देशिका", search: "नाम, भूमिका, स्थान खोजें", noResults: "कोई मेल नहीं।", manager: "प्रबंधक" });
@@ -336,6 +376,7 @@ const SENS_LABEL = { pan: "pan", bankAccount: "bankAccount", aadhaarLast4: "aadh
 function t(k) { return (DICT[state.lang] && DICT[state.lang][k]) || DICT.en[k] || k; }
 function canVerify() { return state.role === "hr_admin" || state.role === "super_admin"; }
 function canApproveLeave() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
+function canLockAttendance() { return ["hr_admin", "finance", "super_admin"].includes(state.role); }
 function canPublish() { return ["hr_admin", "super_admin"].includes(state.role); }
 
 // ---- tiny DOM helper -----------------------------------------------------------
@@ -894,10 +935,120 @@ async function loadAttendanceView() {
   body.appendChild(el("div", { class: "card", id: "att_corr_form" }, [el("h2", { text: t("requestCorrection") })]));
   body.appendChild(el("div", { class: "card", id: "att_mycorr" }, [el("h2", { text: t("myCorrections") }), el("div", { class: "muted", text: "…" })]));
   if (canApproveLeave()) body.appendChild(el("div", { class: "card", id: "att_queue" }, [el("h2", { text: t("correctionApprovals") }), el("div", { class: "muted", text: "…" })]));
+  if (canLockAttendance()) {
+    body.appendChild(el("div", { class: "card", id: "att_lock" }, [h2help(t("payrollLock"), t("payroll_lock_help")), el("div", { class: "muted", text: "…" })]));
+    body.appendChild(el("div", { class: "card", id: "att_payroll" }, [h2help(t("payrollInput"), t("payroll_input_help")), el("div", { class: "muted", text: "…" })]));
+    body.appendChild(el("div", { class: "card", id: "att_holidays" }, [h2help(t("holidayCalendar"), t("holiday_help")), el("div", { class: "muted", text: "…" })]));
+  }
   await loadAttendanceMonth();
   renderCorrectionForm();
   loadMyCorrections();
   if (canApproveLeave()) loadAttCorrQueue();
+  if (canLockAttendance()) { loadPayrollLock(); loadPayrollInput(); loadHolidays(); }
+}
+
+// Payroll-ready attendance admin (HR/finance): month lock, payroll input, holidays.
+async function loadPayrollLock() {
+  const card = document.getElementById("att_lock");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("payrollLock"), t("payroll_lock_help")));
+  try {
+    const month = state.attMonth;
+    const { periods } = await api("/api/admin/attendance/periods");
+    const cur = (periods || []).find((p) => p.ym === month);
+    const locked = cur && cur.status === "locked";
+    card.appendChild(el("div", { class: "actions" }, [
+      el("span", { text: `${t("month")}: ${month}` }),
+      el("span", { class: "pill " + (locked ? "approved" : "pending"), text: locked ? t("lockedWord") : t("openWord") }),
+      el("button", {
+        class: locked ? "sm" : "primary sm", text: locked ? t("unlockMonth") : t("lockMonth"),
+        onclick: async () => {
+          if (!confirm(locked ? t("confirmUnlock") : t("confirmLock"))) return;
+          try { await api(`/api/admin/attendance/periods/${month}/${locked ? "unlock" : "lock"}`, { method: "POST", body: {} }); flash("ok", t("saved")); loadPayrollLock(); loadAttendanceMonth(); loadPayrollInput(); }
+          catch (ex) { flash("err", ex.message); }
+        },
+      }),
+    ]));
+    const recent = (periods || []).filter((p) => p.status === "locked").slice(0, 6);
+    if (recent.length) card.appendChild(el("div", { class: "muted", style: "margin-top:8px;font-size:12px", text: `${t("lockedMonths")}: ${recent.map((p) => p.ym).join(", ")}` }));
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+
+async function loadPayrollInput() {
+  const card = document.getElementById("att_payroll");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("payrollInput"), t("payroll_input_help")));
+  try {
+    const month = state.attMonth;
+    const data = await api(`/api/admin/attendance/payroll-input?month=${encodeURIComponent(month)}`);
+    card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [
+      el("span", { text: `${t("month")}: ${month} · ${t("workingDays")}: ${data.workingDaysBaseline}` }),
+      data.locked ? el("span", { class: "pill approved", text: t("lockedWord") }) : el("span", { class: "pill pending", text: t("previewWord") }),
+      el("button", { class: "sm", text: t("exportCsv"), onclick: () => exportPayrollCsv(month, data.employees) }),
+    ]));
+    const head = el("div", { class: "row", style: "font-weight:600;font-size:12px" }, [
+      el("div", { class: "k", text: t("employee") }),
+      el("div", { class: "v", text: `${t("payableDays")} · ${t("present")}/${t("leaveWord")}/${t("lopWord")} · ${t("otWord")}` }),
+    ]);
+    card.appendChild(head);
+    for (const e of data.employees) {
+      const p = e.input;
+      const warn = (!e.mapped || p.lop || p.exceptionDays);
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: e.name }), e.mapped ? null : el("div", { class: "muted", style: "font-size:11px", text: t("notMapped") })]),
+        el("div", { class: "v" }, [
+          el("span", { text: `${p.payableDays}/${p.calendarDays} · ${p.present}/${p.paidLeave}/${p.lop} · ${minToHHMM(p.otMinutes)}` }),
+          p.pending ? el("span", { class: "muted", style: "margin-left:6px;font-size:11px", text: `${p.pending} ${t("pendingWord")}` }) : null,
+          warn && p.exceptionDays ? el("span", { class: "pill pending", style: "margin-left:6px", text: `${p.exceptionDays} ${t("exceptionsWord")}` }) : null,
+        ]),
+      ]));
+    }
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+
+function exportPayrollCsv(month, employees) {
+  const cols = ["employee", "location", "mapped", "calendarDays", "workingDays", "present", "paidLeave", "lop", "pending", "weekoff", "holiday", "payableDays", "otMinutes", "exceptionDays"];
+  const lines = [cols.join(",")];
+  for (const e of employees) {
+    const p = e.input;
+    const row = [csv(e.name), csv(e.location || ""), e.mapped ? 1 : 0, p.calendarDays, p.workingDays, p.present, p.paidLeave, p.lop, p.pending, p.weekoff, p.holiday, p.payableDays, p.otMinutes, p.exceptionDays];
+    lines.push(row.join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = el("a", { href: URL.createObjectURL(blob), download: `payroll-input-${month}.csv` });
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function csv(s) { return /[",\n]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : String(s); }
+
+async function loadHolidays() {
+  const card = document.getElementById("att_holidays");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("holidayCalendar"), t("holiday_help")));
+  const year = (state.attMonth || "").slice(0, 4) || new Date().toISOString().slice(0, 4);
+  const date = el("input", { type: "date", style: "width:auto" });
+  const name = el("input", { placeholder: t("holidayName") });
+  const loc = el("input", { placeholder: t("locationAll"), style: "max-width:120px" });
+  const add = el("button", { class: "primary sm", text: t("addHoliday") });
+  add.addEventListener("click", async () => {
+    add.disabled = true;
+    try { await api("/api/admin/holidays", { method: "POST", body: { date: date.value, name: name.value, location: loc.value || "*" } }); flash("ok", t("saved")); date.value = ""; name.value = ""; loc.value = ""; loadHolidays(); loadPayrollInput(); }
+    catch (ex) { flash("err", ex.message); }
+    finally { add.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [date, name, loc, add]));
+  try {
+    const { holidays } = await api(`/api/admin/holidays?year=${year}`);
+    if (!holidays || !holidays.length) { card.appendChild(el("div", { class: "muted", text: t("noHolidays") })); return; }
+    for (const h of holidays) {
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k", text: h.holiday_date }),
+        el("div", { class: "v" }, [
+          el("span", { text: `${h.name}${h.location && h.location !== "*" ? ` · ${h.location}` : ""}` }),
+          el("button", { class: "sm", style: "margin-left:8px", text: t("remove"), onclick: async () => { if (!confirm(t("confirmRemove"))) return; try { await api(`/api/admin/holidays/${encodeURIComponent(h.id)}/delete`, { method: "POST", body: {} }); loadHolidays(); loadPayrollInput(); } catch (ex) { flash("err", ex.message); } } }),
+        ]),
+      ]));
+    }
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 async function loadAttendanceMonth() {
@@ -907,7 +1058,12 @@ async function loadAttendanceMonth() {
   try {
     const data = await api(`/api/attendance?month=${encodeURIComponent(state.attMonth)}`);
     const s = data.summary;
-    if (sumEl && s) sumEl.textContent = `${t("present")}: ${s.present} · ${t("absent")}: ${s.absent} · ${t("leaveWord")}: ${s.leave} · ${t("weekoff")}: ${s.weekoff} · ${t("holiday")}: ${s.holiday} · ${t("workHours")}: ${minToHHMM(s.workMinutes)} · ${t("exceptionsWord")}: ${s.exceptionDays}`;
+    if (sumEl && s) {
+      clear(sumEl);
+      sumEl.appendChild(el("span", { text: `${t("present")}: ${s.present} · ${t("absent")}: ${s.absent} · ${t("leaveWord")}: ${s.leave} · ${t("weekoff")}: ${s.weekoff} · ${t("holiday")}: ${s.holiday} · ${t("workHours")}: ${minToHHMM(s.workMinutes)} · ${t("otWord")}: ${minToHHMM(s.otMinutes)} · ${t("exceptionsWord")}: ${s.exceptionDays}` }));
+      if (data.payroll) sumEl.appendChild(el("div", { style: "margin-top:4px" }, [el("b", { text: `${t("payableDays")}: ${data.payroll.payableDays}/${data.payroll.calendarDays}` }), data.payroll.lop ? el("span", { class: "pill pending", style: "margin-left:6px", text: `${t("lopWord")}: ${data.payroll.lop}` }) : null]));
+      if (data.locked) sumEl.appendChild(el("span", { class: "pill approved", style: "margin-left:6px", text: t("lockedWord") }));
+    }
     clear(tableEl);
     if (!data.days || !data.days.length) { tableEl.appendChild(el("div", { class: "muted", text: t("noAttendance") })); return; }
     for (const d of data.days) {
@@ -915,7 +1071,7 @@ async function loadAttendanceMonth() {
       tableEl.appendChild(el("div", { class: "row" }, [
         el("div", { class: "k" }, [el("div", { text: d.date.slice(8) }), el("div", { class: "muted", style: "font-size:11px", text: d.date })]),
         el("div", { class: "v" }, [
-          el("div", { text: `${d.in || "--:--"} → ${d.out || "--:--"} · ${minToHHMM(d.workMinutes)} · ${statusWord(d.status)}` }),
+          el("div", { text: `${d.in || "--:--"} → ${d.out || "--:--"} · ${minToHHMM(d.workMinutes)}${d.otMinutes ? ` · ${t("otWord")} ${minToHHMM(d.otMinutes)}` : ""} · ${statusWord(d.status)}` }),
           flags.length ? el("div", { style: "margin-top:4px" }, flags) : null,
           el("div", { style: "margin-top:4px" }, [el("button", { class: "sm", text: t("requestCorrection"), onclick: () => prefillCorrection(d.date, d.in, d.out) })]),
         ]),

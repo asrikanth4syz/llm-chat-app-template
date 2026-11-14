@@ -28,7 +28,7 @@ import {
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
 import { encryptField, decryptField } from "./fieldcrypto.ts";
 import { countLeaveDays, canTakeLeave } from "./leave.ts";
-import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./attendance.ts";
+import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize, payrollInput, workingDaysInMonth } from "./attendance.ts";
 import { isDelegationActive } from "./approvals.ts";
 import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, canHandleTicket } from "./helpdesk.ts";
 import { isValidAudience, audienceMatches } from "./announcements.ts";
@@ -486,7 +486,34 @@ async function handleProfilePhoto(actor: Actor, env: Env, request: Request): Pro
 
 // ---- FR-02 Attendance ----------------------------------------------------------
 const todayISO = (): string => new Date().toISOString().slice(0, 10);
+const ymOf = (date: string): string => String(date).slice(0, 7);
 const ATT_CORRECTION_TYPES = new Set(["regularisation", "on_duty", "client_visit", "wfh"]);
+
+// Payroll-ready attendance helpers (month cutoff + holiday-calendar counting).
+// A month is "locked" once an attendance_periods row for it has status='locked';
+// imports, new corrections and correction write-backs into a locked month are refused.
+async function isMonthLocked(env: Env, ym: string): Promise<boolean> {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  const row = await env.DB.prepare("SELECT status FROM attendance_periods WHERE ym = ?").bind(ym).first<{ status: string }>();
+  return !!row && row.status === "locked";
+}
+
+// Weekly-off days (0=Sun … 6=Sat) from the single org policy row; defaults to Sunday.
+async function loadWeekOffDays(env: Env): Promise<number[]> {
+  const row = await env.DB.prepare("SELECT weekly_off_days FROM attendance_policy WHERE id = 'default'").first<{ weekly_off_days: string }>();
+  const csv = row?.weekly_off_days ?? "0";
+  const days = csv.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+  return days.length ? days : [0];
+}
+
+// Holiday dates (Set of YYYY-MM-DD) that apply to a location for a given month:
+// global ('*') holidays plus any for that specific location.
+async function loadHolidaySet(env: Env, location: string | null, ym: string): Promise<Set<string>> {
+  const rows = (await env.DB.prepare(
+    "SELECT holiday_date FROM holidays WHERE (location = '*' OR location = ?) AND holiday_date LIKE ?"
+  ).bind(location ?? "", `${ym}-%`).all<{ holiday_date: string }>()).results;
+  return new Set(rows.map((r) => r.holiday_date));
+}
 
 interface AttRow {
   id: string; employee_id: string; date: string; in_time: string | null; out_time: string | null;
@@ -506,13 +533,19 @@ async function handleAttendanceImport(actor: Actor, env: Env, request: Request):
   const emps = (await env.DB.prepare("SELECT id, attendance_code FROM employees WHERE attendance_code IS NOT NULL AND attendance_code != ''")
     .all<{ id: string; attendance_code: string }>()).results;
   const byCode = new Map(emps.map((e) => [String(e.attendance_code), e.id]));
+  // Refuse to write into a month that has been locked for payroll.
+  const yms = [...new Set(rows.map((r) => ymOf(String(r.date ?? ""))).filter((y) => /^\d{4}-\d{2}$/.test(y)))];
+  const lockedYms = new Set<string>();
+  for (const ym of yms) if (await isMonthLocked(env, ym)) lockedYms.add(ym);
   const ops: D1PreparedStatement[] = [];
   const unmatched = new Set<string>();
   const matched = new Set<string>();
+  let lockedSkipped = 0;
   for (const r of rows) {
     const code = String(r.code ?? "").trim();
     const date = String(r.date ?? "").trim();
     if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (lockedYms.has(ymOf(date))) { lockedSkipped++; continue; }
     const empId = byCode.get(code);
     if (!empId) { unmatched.add(code); continue; }
     matched.add(empId);
@@ -523,8 +556,8 @@ async function handleAttendanceImport(actor: Actor, env: Env, request: Request):
     ).bind(uid(), empId, date, r.in ?? null, r.out ?? null, Math.max(0, Math.round(Number(r.workMinutes) || 0)), Math.max(0, Math.round(Number(r.otMinutes) || 0)), String(r.status ?? "")));
   }
   for (let i = 0; i < ops.length; i += 50) await env.DB.batch(ops.slice(i, i + 50)); // chunk under the batch cap
-  await audit(env, actor.userId, "ATTENDANCE_IMPORT", "attendance", null, `month ${body.month ?? "?"}: ${ops.length} days, ${matched.size} employees, ${unmatched.size} unmatched`);
-  return json({ ok: true, imported: ops.length, employees: matched.size, unmatchedCodes: [...unmatched] });
+  await audit(env, actor.userId, "ATTENDANCE_IMPORT", "attendance", null, `month ${body.month ?? "?"}: ${ops.length} days, ${matched.size} employees, ${unmatched.size} unmatched, ${lockedSkipped} skipped (locked)`);
+  return json({ ok: true, imported: ops.length, employees: matched.size, unmatchedCodes: [...unmatched], lockedSkipped, lockedMonths: [...lockedYms] });
 }
 
 async function handleAttendanceMonth(actor: Actor, env: Env, monthParam: string): Promise<Response> {
@@ -534,12 +567,21 @@ async function handleAttendanceMonth(actor: Actor, env: Env, monthParam: string)
     "SELECT id, employee_id, date, in_time, out_time, work_minutes, ot_minutes, status, source FROM attendance_days WHERE employee_id = ? AND date LIKE ? ORDER BY date"
   ).bind(actor.employeeId, `${month}-%`).all<AttRow>()).results;
   const today = todayISO();
-  const toDay = (r: AttRow): AttendanceDay => ({ date: r.date, inTime: r.in_time, outTime: r.out_time, workMinutes: r.work_minutes, status: r.status });
+  const toDay = (r: AttRow): AttendanceDay => ({ date: r.date, inTime: r.in_time, outTime: r.out_time, workMinutes: r.work_minutes, status: r.status, otMinutes: r.ot_minutes });
   const days = rows.map((r) => ({
     date: r.date, in: r.in_time, out: r.out_time, workMinutes: r.work_minutes, otMinutes: r.ot_minutes,
     status: r.status, source: r.source, exceptions: dayExceptions(toDay(r), today),
   }));
-  return json({ month, days, summary: summarize(rows.map(toDay), today) });
+  // Payroll-ready view: derive payable days against the employee's holiday calendar,
+  // and show whether the month is locked.
+  const emp = await env.DB.prepare("SELECT location FROM employees WHERE id = ?").bind(actor.employeeId).first<{ location: string | null }>();
+  const [weekOffDays, holidays, locked] = await Promise.all([
+    loadWeekOffDays(env),
+    loadHolidaySet(env, emp?.location ?? null, month),
+    isMonthLocked(env, month),
+  ]);
+  const payroll = payrollInput(month, rows.map(toDay), holidays, weekOffDays, today);
+  return json({ month, locked, days, summary: summarize(rows.map(toDay), today), payroll });
 }
 
 async function handleAttCorrectionSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
@@ -549,6 +591,7 @@ async function handleAttCorrectionSubmit(actor: Actor, env: Env, request: Reques
   const type = String(b.type ?? "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "valid date required" }, 400);
   if (!ATT_CORRECTION_TYPES.has(type)) return json({ error: "invalid correction type" }, 400);
+  if (await isMonthLocked(env, ymOf(date))) return json({ error: "month locked for payroll — corrections are closed" }, 409);
   const id = uid();
   await env.DB.prepare("INSERT INTO attendance_corrections (id, employee_id, date, type, requested_in, requested_out, reason) VALUES (?,?,?,?,?,?,?)")
     .bind(id, actor.employeeId, date, type, b.requestedIn ?? null, b.requestedOut ?? null, b.reason ?? null).run();
@@ -588,6 +631,7 @@ async function handleAttCorrectionDecide(actor: Actor, env: Env, id: string, act
   }
   const body = await request.json().catch(() => ({})) as { comment?: string };
   if (action === "approve") {
+    if (await isMonthLocked(env, ymOf(c.date))) return json({ error: "month locked for payroll — cannot write back a correction" }, 409);
     const inM = hhmmToMinutes(c.requested_in), outM = hhmmToMinutes(c.requested_out);
     const work = inM != null && outM != null ? Math.max(0, outM - inM) : 0;
     await env.DB.batch([
@@ -605,6 +649,99 @@ async function handleAttCorrectionDecide(actor: Actor, env: Env, id: string, act
     .bind(actor.userId, body.comment ?? null, id).run();
   await audit(env, actor.userId, "ATTENDANCE_CORRECTION_REJECT", "attendance", id, `${c.date} for ${c.employee_id}`);
   return json({ ok: true, rejected: true });
+}
+
+// ---- Payroll-ready attendance: month lock, holiday calendar, payroll input -----
+
+// List month locks + the current/recent months so the UI can show lock state.
+async function handleAttPeriods(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock")) return json({ error: "forbidden" }, 403);
+  const periods = (await env.DB.prepare(
+    "SELECT ym, status, locked_by, locked_at, note FROM attendance_periods ORDER BY ym DESC LIMIT 36"
+  ).all()).results;
+  return json({ periods });
+}
+
+// Lock or unlock a month for payroll. Locking freezes imports/corrections for that
+// month; unlocking (reopening) is audited. Only attendance.lock holders (HR/finance).
+async function handleAttPeriodSetLock(actor: Actor, env: Env, ym: string, lock: boolean, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock")) return json({ error: "forbidden" }, 403);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return json({ error: "valid month (YYYY-MM) required" }, 400);
+  const body = await request.json().catch(() => ({})) as { note?: string };
+  const status = lock ? "locked" : "open";
+  await env.DB.prepare(
+    "INSERT INTO attendance_periods (ym, status, locked_by, locked_at, updated_at, note) VALUES (?,?,?,?,datetime('now'),?) " +
+    "ON CONFLICT(ym) DO UPDATE SET status=excluded.status, locked_by=excluded.locked_by, locked_at=excluded.locked_at, updated_at=datetime('now'), note=excluded.note"
+  ).bind(ym, status, actor.userId, lock ? todayISO() : null, body.note ?? null).run();
+  await audit(env, actor.userId, lock ? "ATTENDANCE_MONTH_LOCK" : "ATTENDANCE_MONTH_UNLOCK", "attendance", ym, body.note ?? "");
+  return json({ ok: true, ym, status });
+}
+
+async function handleHolidaysList(actor: Actor, env: Env, yearParam: string): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock") && !hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
+  const year = /^\d{4}$/.test(yearParam) ? yearParam : todayISO().slice(0, 4);
+  const holidays = (await env.DB.prepare(
+    "SELECT id, location, holiday_date, name FROM holidays WHERE holiday_date LIKE ? ORDER BY holiday_date"
+  ).bind(`${year}-%`).all()).results;
+  return json({ year, holidays });
+}
+
+async function handleHolidayCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock") && !hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { date?: string; name?: string; location?: string };
+  const date = String(b.date ?? "").trim();
+  const name = String(b.name ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "valid date (YYYY-MM-DD) required" }, 400);
+  if (!name) return json({ error: "name required" }, 400);
+  const location = String(b.location ?? "*").trim() || "*";
+  if (await isMonthLocked(env, ymOf(date))) return json({ error: "month locked — reopen it to change its calendar" }, 409);
+  const id = uid();
+  try {
+    await env.DB.prepare("INSERT INTO holidays (id, location, holiday_date, name) VALUES (?,?,?,?)").bind(id, location, date, name).run();
+  } catch { return json({ error: "a holiday for that location and date already exists" }, 409); }
+  await audit(env, actor.userId, "HOLIDAY_ADD", "attendance", id, `${location} ${date} ${name}`);
+  return json({ ok: true, id });
+}
+
+async function handleHolidayDelete(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock") && !hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
+  const h = await env.DB.prepare("SELECT holiday_date FROM holidays WHERE id = ?").bind(id).first<{ holiday_date: string }>();
+  if (!h) return json({ error: "not found" }, 404);
+  if (await isMonthLocked(env, ymOf(h.holiday_date))) return json({ error: "month locked — reopen it to change its calendar" }, 409);
+  await env.DB.prepare("DELETE FROM holidays WHERE id = ?").bind(id).run();
+  await audit(env, actor.userId, "HOLIDAY_REMOVE", "attendance", id, h.holiday_date);
+  return json({ ok: true });
+}
+
+// The deliverable: a locked, reproducible per-employee payroll input for a month —
+// payable days (calendar − LOP), paid leave, LOP, OT minutes, exceptions. This is
+// exactly what the payroll engine will consume. Restricted to attendance.lock holders.
+async function handleAttPayrollInput(actor: Actor, env: Env, monthParam: string): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock")) return json({ error: "forbidden" }, 403);
+  const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : todayISO().slice(0, 7);
+  const today = todayISO();
+  const [weekOffDays, locked] = await Promise.all([loadWeekOffDays(env), isMonthLocked(env, month)]);
+  const emps = (await env.DB.prepare(
+    "SELECT id, name, location, attendance_code FROM employees ORDER BY name"
+  ).all<{ id: string; name: string; location: string | null; attendance_code: string | null }>()).results;
+  const rows = (await env.DB.prepare(
+    "SELECT employee_id, date, in_time, out_time, work_minutes, ot_minutes, status FROM attendance_days WHERE date LIKE ?"
+  ).bind(`${month}-%`).all<AttRow>()).results;
+  const byEmp = new Map<string, AttendanceDay[]>();
+  for (const r of rows) {
+    const list = byEmp.get(r.employee_id) ?? [];
+    list.push({ date: r.date, inTime: r.in_time, outTime: r.out_time, workMinutes: r.work_minutes, status: r.status, otMinutes: r.ot_minutes });
+    byEmp.set(r.employee_id, list);
+  }
+  // Holidays per distinct location (so each employee counts against their own calendar).
+  const locations = [...new Set(emps.map((e) => e.location ?? ""))];
+  const holByLoc = new Map<string, Set<string>>();
+  for (const loc of locations) holByLoc.set(loc, await loadHolidaySet(env, loc || null, month));
+  const employees = emps.map((e) => ({
+    employeeId: e.id, name: e.name, location: e.location, mapped: !!e.attendance_code,
+    input: payrollInput(month, byEmp.get(e.id) ?? [], holByLoc.get(e.location ?? "") ?? new Set(), weekOffDays, today),
+  }));
+  return json({ month, locked, workingDaysBaseline: workingDaysInMonth(month, holByLoc.get("") ?? new Set(), weekOffDays), employees });
 }
 
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
@@ -1114,6 +1251,15 @@ export default {
       if (path === "/api/attendance/corrections/approvals" && method === "GET") return await handleAttCorrectionQueue(actor, env);
       const acd = path.match(/^\/api\/attendance\/corrections\/([^/]+)\/(approve|reject)$/);
       if (acd && method === "POST") return await handleAttCorrectionDecide(actor, env, decodeURIComponent(acd[1]), acd[2] as "approve" | "reject", request);
+      // Payroll-ready attendance: month lock, holiday calendar, payroll input
+      if (path === "/api/admin/attendance/periods" && method === "GET") return await handleAttPeriods(actor, env);
+      const aplk = path.match(/^\/api\/admin\/attendance\/periods\/(\d{4}-\d{2})\/(lock|unlock)$/);
+      if (aplk && method === "POST") return await handleAttPeriodSetLock(actor, env, aplk[1], aplk[2] === "lock", request);
+      if (path === "/api/admin/attendance/payroll-input" && method === "GET") return await handleAttPayrollInput(actor, env, url.searchParams.get("month") || "");
+      if (path === "/api/admin/holidays" && method === "GET") return await handleHolidaysList(actor, env, url.searchParams.get("year") || "");
+      if (path === "/api/admin/holidays" && method === "POST") return await handleHolidayCreate(actor, env, request);
+      const hdel = path.match(/^\/api\/admin\/holidays\/([^/]+)\/delete$/);
+      if (hdel && method === "POST") return await handleHolidayDelete(actor, env, decodeURIComponent(hdel[1]));
 
       // FR-04 Approvals (unified inbox + delegation)
       if (path === "/api/approvals" && method === "GET") return await handleApprovals(actor, env);

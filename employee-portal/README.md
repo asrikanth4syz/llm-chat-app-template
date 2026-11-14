@@ -105,10 +105,13 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 - **Leave** — balances per type (entitled / used / pending / available), an apply form
   (type, dates, half-day, reason), your request history with **Cancel**, and — for
   managers (team) and HR/super_admin (all) — a **Leave approvals** queue.
-- **Attendance** — pick a month: per-day IN/OUT, worked hours and status from the
-  biometric system, with **exception flags** (missing punch, absence, short hours);
-  a **Request correction** form (regularisation / on-duty / client visit / WFH);
-  your corrections; and, for managers/HR, a **Correction approvals** queue.
+- **Attendance** — pick a month: per-day IN/OUT, worked hours, **overtime** and status
+  from the biometric system, with **exception flags** (missing punch, absence, short
+  hours) and your month's **payable days** (calendar − loss-of-pay) against the holiday
+  calendar; a **Request correction** form (regularisation / on-duty / client visit /
+  WFH); your corrections; and, for managers/HR, a **Correction approvals** queue. HR /
+  Finance additionally get **payroll cutoff & lock**, a **holiday calendar** editor, and
+  the **payroll-input register** (per-employee payable days / LOP / OT, CSV export).
 - **Tasks** — your assigned tasks (status, priority, due date, overdue flag); update
   status and add evidence. Managers/HR assign tasks within their scope; employees can
   self-assign. An "assigned by me" list shows what you've delegated.
@@ -159,7 +162,12 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/attendance?month=YYYY-MM` | any login | own days (IN/OUT/work/status) + per-day exceptions + monthly summary |
 | GET·POST | `/api/attendance/corrections` | any login | own corrections; submit `{date,type,requestedIn?,requestedOut?,reason?}` |
 | GET | `/api/attendance/corrections/approvals` | manager, hr_admin, super_admin | pending corrections — team for a manager, all for HR |
-| POST | `/api/attendance/corrections/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide; approve writes the day back (status P, source manual) |
+| POST | `/api/attendance/corrections/:id/approve`·`/reject` | manager (team), hr_admin, super_admin | decide; approve writes the day back (status P, source manual) — **refused if the month is locked** |
+| GET | `/api/admin/attendance/periods` | attendance.lock (hr_admin, finance, super_admin) | M1: month lock states (last 36) |
+| POST | `/api/admin/attendance/periods/:ym/lock`·`/unlock` | attendance.lock | lock/unlock a month for payroll (audited); locking freezes import/corrections |
+| GET | `/api/admin/attendance/payroll-input?month=YYYY-MM` | attendance.lock | per-employee payroll input (payable days, present/leave/LOP, OT) + locked flag |
+| GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
+| POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
 | GET·POST | `/api/approvals/delegations` | approvers | list my delegations (out/to-me); create `{delegateEmployeeId,startsOn?,endsOn?}` |
 | POST | `/api/approvals/delegations/:id/revoke` | delegator, it_admin, super_admin | deactivate a delegation |
@@ -235,6 +243,36 @@ tooltips on the key section headers. Open the Worker URL in a browser:
   includes the delegator's team's requests and they may decide them — the leave and
   attendance decide endpoints honour delegated authority, not just the base role
   scope. Revoking (or the window lapsing) withdraws it immediately.
+
+## Payroll-ready attendance (M1 — first "extend the live portal" milestone)
+
+The first step toward payroll: turn attendance into a clean, frozen monthly input.
+
+- **Month cutoff & lock** (`attendance_periods`, migration `0012`) — HR/Finance
+  (`attendance.lock`) lock a month once attendance is final. A locked month is **frozen**:
+  biometric import skips its rows, new corrections are refused (409), and correction
+  write-backs are refused (409). Unlocking (reopening) is audited. This is the
+  "payroll reads stable data" guarantee.
+- **Holiday calendar** (`holidays`) — per-location (`*` = company-wide) holidays. Together
+  with the weekly-off policy (`attendance_policy`, default Mon–Sat / Sunday off, 48h/wk),
+  they define **working days = calendar − weekly-off − holiday** — the reproducible
+  denominator for day counting.
+- **OT capture** — `attendance_days.ot_minutes` (already imported from the biometric OT
+  row) now rolls up into the summary and the payroll input.
+- **Payroll input** (derived, reproducible) — per employee per month: **payable days =
+  calendar − LOP**, where a working day that is absent or (in the past) unrecorded is
+  loss-of-pay, approved leave (`LV`) is paid, and future working days in an open month are
+  `pending` (not LOP). Present/leave/LOP counts, OT minutes and exception days come with
+  it. HR/Finance read the whole register and export CSV — **this is the payload the
+  payroll engine will consume.**
+- All day-math is **pure and unit-tested** (`src/attendance.ts`: `payrollInput`,
+  `workingDaysInMonth`, `dayOfWeekUTC`, `daysInMonth`), computed in UTC so it is
+  deterministic regardless of host timezone.
+
+> Aligns with the **blueprint** (`docs/hrms-prd-review.md`, `docs/hrms-gap-analysis.md`):
+> ledger/derived-record discipline, effective-dated rules, and "payroll consumes approved,
+> locked data." Next: payroll core → India statutory (CA-validated) → payslips via
+> Documents → JV to Zoho Books.
 
 ## FR-02 Attendance (biometric)
 

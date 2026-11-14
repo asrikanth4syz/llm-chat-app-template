@@ -34,6 +34,7 @@ export type Permission =
   | "attendance.manage" // import biometric data, administer attendance (FR-02)
   | "attendance.approve_team" // approve attendance corrections for direct reports
   | "attendance.approve_all" // approve attendance corrections for anyone
+  | "attendance.lock" // lock/unlock a month for payroll; manage holiday calendar, read payroll input
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
   | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
   | "announcement.publish" // publish announcements and see acknowledgements (FR-07)
@@ -47,8 +48,8 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
   manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team", "task.assign_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
-  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "attendance.lock", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
+  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage", "attendance.manage", "helpdesk.agent"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
   super_admin: [], // allow-all via hasPermission
