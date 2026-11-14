@@ -33,6 +33,7 @@ import { isDelegationActive } from "./approvals.ts";
 import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, canHandleTicket } from "./helpdesk.ts";
 import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
+import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
 
 export interface Env {
   DB: D1Database;
@@ -1001,6 +1002,71 @@ async function handleNotifications(actor: Actor, env: Env): Promise<Response> {
   return json({ items, total: items.reduce((s, i) => s + (i.count as number), 0) });
 }
 
+// ---- FR-06 Documents ------------------------------------------------------------
+async function handleMyDocuments(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ documents: [] });
+  const documents = (await env.DB.prepare("SELECT id, title, category, published_at FROM documents WHERE employee_id = ? AND status = 'published' ORDER BY published_at DESC LIMIT 200").bind(actor.employeeId).all()).results;
+  return json({ documents });
+}
+
+async function handleDocumentGet(actor: Actor, env: Env, id: string): Promise<Response> {
+  const d = await env.DB.prepare("SELECT id, employee_id, title, category, file, body, status, published_at FROM documents WHERE id = ?").bind(id).first<any>();
+  if (!d) return json({ error: "not found" }, 404);
+  const isManager = hasPermission(actor.role, "document.manage");
+  if (!canViewDocument(actor.employeeId, { employeeId: d.employee_id, status: d.status }, isManager)) {
+    await audit(env, actor.userId, "DENY", "document", id, "view denied by policy");
+    return json({ error: "forbidden" }, 403);
+  }
+  await audit(env, actor.userId, "DOCUMENT_VIEW", "document", id, String(d.category));
+  return json({ document: d });
+}
+
+async function handleDocAdminList(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "document.manage")) return json({ error: "forbidden" }, 403);
+  const documents = (await env.DB.prepare("SELECT d.id, d.title, d.category, d.status, d.employee_id, e.name AS employee_name, d.published_at, d.created_at FROM documents d LEFT JOIN employees e ON e.id = d.employee_id ORDER BY d.created_at DESC LIMIT 300").all()).results;
+  return json({ documents });
+}
+
+async function handleDocCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "document.manage")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { employeeId?: string; title?: string; category?: string; file?: string | null; body?: string; status?: string };
+  const employeeId = String(b.employeeId ?? "").trim();
+  const title = String(b.title ?? "").trim();
+  const category = String(b.category ?? "other").trim();
+  const status = String(b.status ?? "draft").trim();
+  if (!employeeId) return json({ error: "employeeId required" }, 400);
+  if (!title) return json({ error: "title required" }, 400);
+  if (!isValidDocCategory(category)) return json({ error: "invalid category" }, 400);
+  if (!isValidDocStatus(status)) return json({ error: "invalid status" }, 400);
+  if (!(await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(employeeId).first())) return json({ error: "unknown employee" }, 404);
+  const file = b.file;
+  if (file != null && file !== "") {
+    if (typeof file !== "string" || !/^data:(application\/pdf|image\/(png|jpeg|jpg|webp));base64,/.test(file)) return json({ error: "file must be a PDF or image data URL" }, 400);
+    if (file.length > 2_000_000) return json({ error: "file too large (max ~1.5MB)" }, 413);
+  }
+  const id = uid();
+  const pub = status === "published" ? "datetime('now')" : "NULL";
+  await env.DB.prepare(`INSERT INTO documents (id, employee_id, title, category, file, body, status, created_by, published_at) VALUES (?,?,?,?,?,?,?,?, ${pub})`)
+    .bind(id, employeeId, title, category, file || null, String(b.body ?? "") || null, status, actor.userId).run();
+  await audit(env, actor.userId, "DOCUMENT_CREATE", "document", id, `${category} → ${employeeId} (${status})`);
+  return json({ ok: true, id });
+}
+
+async function handleDocPublish(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "document.manage")) return json({ error: "forbidden" }, 403);
+  const res = await env.DB.prepare("UPDATE documents SET status='published', published_at=datetime('now') WHERE id = ?").bind(id).run();
+  if (!(((res.meta?.changes as number) ?? 0))) return json({ error: "not found" }, 404);
+  await audit(env, actor.userId, "DOCUMENT_PUBLISH", "document", id, "");
+  return json({ ok: true });
+}
+
+async function handleDocDelete(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "document.manage")) return json({ error: "forbidden" }, 403);
+  await env.DB.prepare("DELETE FROM documents WHERE id = ?").bind(id).run();
+  await audit(env, actor.userId, "DOCUMENT_DELETE", "document", id, "");
+  return json({ ok: true });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -1093,6 +1159,17 @@ export default {
 
       // FR-13 Notifications
       if (path === "/api/notifications" && method === "GET") return await handleNotifications(actor, env);
+
+      // FR-06 Documents
+      if (path === "/api/documents" && method === "GET") return await handleMyDocuments(actor, env);
+      const dget = path.match(/^\/api\/documents\/([^/]+)$/);
+      if (dget && method === "GET") return await handleDocumentGet(actor, env, decodeURIComponent(dget[1]));
+      if (path === "/api/admin/documents" && method === "GET") return await handleDocAdminList(actor, env);
+      if (path === "/api/admin/documents" && method === "POST") return await handleDocCreate(actor, env, request);
+      const dpub = path.match(/^\/api\/admin\/documents\/([^/]+)\/publish$/);
+      if (dpub && method === "POST") return await handleDocPublish(actor, env, decodeURIComponent(dpub[1]));
+      const ddel = path.match(/^\/api\/admin\/documents\/([^/]+)\/delete$/);
+      if (ddel && method === "POST") return await handleDocDelete(actor, env, decodeURIComponent(ddel[1]));
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {

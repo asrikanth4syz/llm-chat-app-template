@@ -290,6 +290,29 @@ Object.assign(DICT.hi, {
   notif_approvals: "अनुमोदन लंबित", notif_announcements: "स्वीकृति हेतु", notif_tasks: "खुले कार्य", notif_helpdesk: "टिकट",
 });
 
+// FR-06 Documents strings.
+Object.assign(DICT.en, {
+  navDocuments: "Documents", documents_help: "Your published documents — payslips, letters and policies. Drafts are not shown.",
+  noDocuments: "No documents.", openDoc: "Open", publishDocument: "Publish a document", allDocuments: "All documents",
+  forEmployee: "For employee", docBodyOptional: "Text content (optional)", attachFile: "Attach file (PDF/image, optional)", publishNow: "Publish now",
+  doc_payslip: "Payslip", doc_letter: "Letter", doc_policy: "Policy", doc_other: "Other",
+  dstatus_draft: "draft", dstatus_published: "published", fileTooLarge: "File too large (max ~1.5MB).",
+});
+Object.assign(DICT.kn, {
+  navDocuments: "ದಾಖಲೆಗಳು", documents_help: "ನಿಮ್ಮ ಪ್ರಕಟಿತ ದಾಖಲೆಗಳು — ವೇತನಚೀಟಿ, ಪತ್ರಗಳು, ನೀತಿಗಳು. ಕರಡುಗಳು ತೋರಿಸುವುದಿಲ್ಲ.",
+  noDocuments: "ದಾಖಲೆಗಳಿಲ್ಲ.", openDoc: "ತೆರೆ", publishDocument: "ದಾಖಲೆ ಪ್ರಕಟಿಸಿ", allDocuments: "ಎಲ್ಲಾ ದಾಖಲೆಗಳು",
+  forEmployee: "ಉದ್ಯೋಗಿಗಾಗಿ", docBodyOptional: "ಪಠ್ಯ (ಐಚ್ಛಿಕ)", attachFile: "ಫೈಲ್ ಲಗತ್ತಿಸಿ (PDF/ಚಿತ್ರ, ಐಚ್ಛಿಕ)", publishNow: "ಈಗ ಪ್ರಕಟಿಸಿ",
+  doc_payslip: "ವೇತನಚೀಟಿ", doc_letter: "ಪತ್ರ", doc_policy: "ನೀತಿ", doc_other: "ಇತರೆ",
+  dstatus_draft: "ಕರಡು", dstatus_published: "ಪ್ರಕಟಿತ", fileTooLarge: "ಫೈಲ್ ತುಂಬಾ ದೊಡ್ಡದು (ಗರಿಷ್ಠ ~1.5MB).",
+});
+Object.assign(DICT.hi, {
+  navDocuments: "दस्तावेज़", documents_help: "आपके प्रकाशित दस्तावेज़ — वेतनपर्ची, पत्र, नीतियाँ। ड्राफ़्ट नहीं दिखते।",
+  noDocuments: "कोई दस्तावेज़ नहीं।", openDoc: "खोलें", publishDocument: "दस्तावेज़ प्रकाशित करें", allDocuments: "सभी दस्तावेज़",
+  forEmployee: "कर्मचारी के लिए", docBodyOptional: "पाठ सामग्री (वैकल्पिक)", attachFile: "फ़ाइल संलग्न करें (PDF/छवि, वैकल्पिक)", publishNow: "अभी प्रकाशित करें",
+  doc_payslip: "वेतनपर्ची", doc_letter: "पत्र", doc_policy: "नीति", doc_other: "अन्य",
+  dstatus_draft: "ड्राफ़्ट", dstatus_published: "प्रकाशित", fileTooLarge: "फ़ाइल बहुत बड़ी (अधिकतम ~1.5MB)।",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -404,6 +427,7 @@ const VIEWS = [
   { id: "tasks", icon: "task", titleKey: "navTasks" },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
   { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
+  { id: "documents", icon: "file", titleKey: "navDocuments" },
   { id: "helpdesk", icon: "help", titleKey: "navHelpdesk" },
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
@@ -416,6 +440,7 @@ const ICONS = {
   help: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   task: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -510,6 +535,7 @@ async function switchView(view) {
   else if (view === "tasks") await loadTasksView();
   else if (view === "directory") await loadDirectoryView();
   else if (view === "announcements") await loadAnnouncementsView();
+  else if (view === "documents") await loadDocumentsView();
   else if (view === "helpdesk") await loadHelpdeskView();
   else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
@@ -1389,6 +1415,96 @@ async function loadAssignedTasks() {
       if (tk.overdue) meta.push(el("span", { class: "pill rejected", text: t("overdue") }));
       if (tk.dueDate) meta.push(el("span", { class: "muted", style: "font-size:12px", text: tk.dueDate }));
       card.appendChild(el("div", { class: "row" }, [el("div", { class: "k" }, [el("div", { style: "font-weight:600", text: tk.title }), el("div", { class: "muted", style: "font-size:12px", text: tk.assigneeName || "" })]), el("div", { class: "v" }, [el("div", { class: "actions" }, meta)])]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-06 Documents -----------------------------------------------------------
+function canManageDocs() { return ["hr_admin", "super_admin"].includes(state.role); }
+function docCatLabel(c) { return t("doc_" + c); }
+function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(file); }); }
+
+async function loadDocumentsView() {
+  const body = document.getElementById("body"); clear(body);
+  body.appendChild(el("div", { class: "card", id: "doc_mine" }, [h2help(t("navDocuments"), t("documents_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "doc_detail", style: "display:none" }));
+  if (canManageDocs()) {
+    body.appendChild(el("div", { class: "card", id: "doc_new" }, [el("h2", { text: t("publishDocument") })]));
+    body.appendChild(el("div", { class: "card", id: "doc_admin" }, [el("h2", { text: t("allDocuments") }), el("div", { class: "muted", text: "…" })]));
+  }
+  loadMyDocuments();
+  if (canManageDocs()) { renderDocForm(); loadDocAdmin(); }
+}
+
+async function loadMyDocuments() {
+  const card = document.getElementById("doc_mine"); if (!card) return;
+  try {
+    const { documents } = await api("/api/documents");
+    clear(card); card.appendChild(h2help(t("navDocuments"), t("documents_help")));
+    if (!documents.length) { card.appendChild(el("div", { class: "muted", text: t("noDocuments") })); return; }
+    for (const d of documents) {
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { style: "font-weight:600", text: d.title }), el("div", { class: "muted", style: "font-size:12px", text: `${docCatLabel(d.category)} · ${d.published_at || ""}` })]),
+        el("div", { class: "v" }, [el("div", { class: "actions" }, [el("button", { class: "sm", text: t("openDoc"), onclick: () => openDoc(d.id) })])]),
+      ]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function openDoc(id) {
+  try {
+    const { document: d } = await api(`/api/documents/${encodeURIComponent(id)}`);
+    if (d.file) {
+      const a = document.createElement("a"); a.href = d.file; a.download = d.title || "document"; a.target = "_blank";
+      document.body.appendChild(a); a.click(); a.remove();
+    } else {
+      const card = document.getElementById("doc_detail");
+      if (card) { card.style.display = "block"; clear(card); card.appendChild(el("h2", { text: d.title })); card.appendChild(el("div", { style: "white-space:pre-wrap", text: d.body || "" })); card.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function renderDocForm() {
+  const card = document.getElementById("doc_new"); if (!card) return;
+  clear(card); card.appendChild(el("h2", { text: t("publishDocument") }));
+  const emp = el("select", {});
+  try { const dir = await api("/api/directory"); for (const e of dir.entries) emp.appendChild(el("option", { value: e.id, text: e.name })); } catch { /* none */ }
+  const title = el("input", { placeholder: t("title") });
+  const cat = el("select", {}); for (const c of ["payslip", "letter", "policy", "other"]) cat.appendChild(el("option", { value: c, text: t("doc_" + c) }));
+  const bodyi = el("input", { placeholder: t("docBodyOptional") });
+  const file = el("input", { type: "file", accept: "application/pdf,image/*" });
+  const pub = el("input", { type: "checkbox" });
+  const pubWrap = el("label", { style: "display:flex;gap:8px;align-items:center;margin:8px 0 0" }, [pub, " " + t("publishNow")]);
+  const btn = el("button", { class: "primary", text: t("save") });
+  btn.addEventListener("click", async () => {
+    if (!emp.value || !title.value.trim()) return; btn.disabled = true;
+    try {
+      let fileData;
+      if (file.files && file.files[0]) {
+        if (file.files[0].size > 1500000) { flash("err", t("fileTooLarge")); btn.disabled = false; return; }
+        fileData = await readFileDataURL(file.files[0]);
+      }
+      await api("/api/admin/documents", { method: "POST", body: { employeeId: emp.value, title: title.value, category: cat.value, body: bodyi.value || undefined, file: fileData, status: pub.checked ? "published" : "draft" } });
+      flash("ok", t("saved")); title.value = ""; bodyi.value = ""; file.value = ""; pub.checked = false; loadDocAdmin();
+    } catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "stack" }, [el("label", { text: t("forEmployee") }), emp, el("label", { text: t("title") }), title, el("label", { text: t("category") }), cat, el("label", { text: t("docBodyOptional") }), bodyi, el("label", { text: t("attachFile") }), file, pubWrap, el("div", { class: "actions", style: "margin-top:10px" }, [btn])]));
+}
+
+async function loadDocAdmin() {
+  const card = document.getElementById("doc_admin"); if (!card) return;
+  try {
+    const { documents } = await api("/api/admin/documents");
+    clear(card); card.appendChild(el("h2", { text: t("allDocuments") }));
+    if (!documents.length) { card.appendChild(el("div", { class: "muted", text: t("noDocuments") })); return; }
+    for (const d of documents) {
+      const acts = el("div", { class: "actions" }, [
+        el("span", { class: "pill " + (d.status === "published" ? "approved" : "pending"), text: t("dstatus_" + d.status) }),
+        el("span", { class: "muted", style: "font-size:12px", text: `${docCatLabel(d.category)} · ${d.employee_name || d.employee_id}` }),
+      ]);
+      if (d.status !== "published") acts.appendChild(el("button", { class: "sm", text: t("publish"), onclick: async () => { try { await api(`/api/admin/documents/${encodeURIComponent(d.id)}/publish`, { method: "POST" }); loadDocAdmin(); } catch (ex) { flash("err", ex.message); } } }));
+      acts.appendChild(el("button", { class: "sm", text: t("remove"), onclick: async () => { try { await api(`/api/admin/documents/${encodeURIComponent(d.id)}/delete`, { method: "POST" }); loadDocAdmin(); } catch (ex) { flash("err", ex.message); } } }));
+      card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: d.title }), el("div", { class: "v" }, [acts])]));
     }
   } catch (ex) { flash("err", ex.message); }
 }

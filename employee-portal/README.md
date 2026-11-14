@@ -85,7 +85,7 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (Profile, Leave, Attendance, Tasks, Directory, Announcements, Helpdesk, Approvals)
+## UI (Profile, Leave, Attendance, Tasks, Directory, Announcements, Documents, Helpdesk, Approvals)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `wrangler.jsonc`; `/api/*` still falls through to the Worker). It uses an HRMS-style
@@ -122,6 +122,9 @@ tooltips on the key section headers. Open the Worker URL in a browser:
   Acknowledge button. Publishers (HR/super_admin) create posts for an audience, mark
   policy items must-acknowledge, re-publish (bumps the version → people re-acknowledge),
   retire/reactivate, and see **who acknowledged** the current version.
+- **Documents** — your **published** documents (payslips, letters, policies) to open or
+  download; draft payslips are never shown. HR/super_admin publish documents to an
+  employee (file upload or text), and can keep them as drafts until ready.
 - **Helpdesk** — raise HR / IT / general requests or a **confidential POSH complaint**;
   track status, SLA and the comment thread. Agents (HR/IT) handle ordinary tickets; a
   **queue** shows what's assigned to you. super_admin configures the **POSH Internal
@@ -175,6 +178,17 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/tasks/assigned` | any login | tasks I assigned to others |
 | POST | `/api/tasks/:id` | assignee or assigner | update `{status?,evidence?}` (done sets completed_at) |
 | GET | `/api/notifications` | any login | FR-13: computed counts (approvals, must-ack announcements, open tasks, helpdesk queue) |
+| GET | `/api/documents` · `/api/documents/:id` | any login | FR-06: my published documents; open one (own+published, or document.manage) |
+| GET·POST | `/api/admin/documents` | document.manage | list all (incl. drafts); publish `{employeeId,title,category,file?,body?,status?}` |
+| POST | `/api/admin/documents/:id/publish` · `/:id/delete` | document.manage | publish a draft; delete |
+
+## FR-06 Documents
+
+- HR/super_admin (`document.manage`) publish documents to a specific employee — a file
+  (PDF/image data URL, ~1.5 MB cap) and/or text, as a **draft** or **published**
+  (migration `0011`). The employee sees **only their own published** documents;
+  `canViewDocument` keeps draft payslips invisible to the employee. Opening a document
+  is audited.
 
 ## FR-05 Tasks & FR-13 Notifications
 
