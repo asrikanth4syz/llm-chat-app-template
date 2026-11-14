@@ -35,7 +35,8 @@ export type Permission =
   | "attendance.approve_team" // approve attendance corrections for direct reports
   | "attendance.approve_all" // approve attendance corrections for anyone
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
-  | "posh.manage"; // configure the POSH Internal Committee (FR-21) — super_admin only
+  | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
+  | "announcement.publish"; // publish announcements and see acknowledgements (FR-07)
 
 // Role → permissions. Default deny: a role holds only what is listed here.
 // super_admin is handled as an allow-all in `hasPermission`, so it never has to
@@ -43,7 +44,7 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
   manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish"],
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage", "attendance.manage", "helpdesk.agent"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],

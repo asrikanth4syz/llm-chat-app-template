@@ -30,6 +30,7 @@ import { countLeaveDays, canTakeLeave } from "./leave.ts";
 import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./attendance.ts";
 import { isDelegationActive } from "./approvals.ts";
 import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, canHandleTicket } from "./helpdesk.ts";
+import { isValidAudience, audienceMatches } from "./announcements.ts";
 
 export interface Env {
   DB: D1Database;
@@ -816,6 +817,87 @@ async function handlePoshCommitteeRemove(actor: Actor, env: Env, eid: string): P
   return json({ ok: true });
 }
 
+// ---- FR-07 Announcements -------------------------------------------------------
+async function employeeSegment(env: Env, actor: Actor): Promise<string | null> {
+  if (!actor.employeeId) return null;
+  const r = await env.DB.prepare("SELECT segment FROM employees WHERE id = ?").bind(actor.employeeId).first<{ segment: string }>();
+  return r ? r.segment : null;
+}
+
+async function handleAnnouncementsFeed(actor: Actor, env: Env): Promise<Response> {
+  const segment = await employeeSegment(env, actor);
+  const rows = (await env.DB.prepare(
+    "SELECT a.id, a.title, a.body, a.audience, a.requires_ack, a.version, a.published_at, " +
+    "EXISTS(SELECT 1 FROM announcement_acks k WHERE k.announcement_id = a.id AND k.employee_id = ? AND k.version = a.version) AS acked " +
+    "FROM announcements a WHERE a.active = 1 AND (a.audience = 'all' OR a.audience = ?) ORDER BY a.published_at DESC LIMIT 100"
+  ).bind(actor.employeeId ?? "", segment ?? "").all()).results as any[];
+  const announcements = rows.map((r) => ({ id: r.id, title: r.title, body: r.body, audience: r.audience, requiresAck: !!r.requires_ack, version: r.version, publishedAt: r.published_at, acked: !!r.acked }));
+  return json({ announcements });
+}
+
+async function handleAnnouncementAck(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const a = await env.DB.prepare("SELECT audience, version, active FROM announcements WHERE id = ?").bind(id).first<{ audience: string; version: number; active: number }>();
+  if (!a || !a.active) return json({ error: "not found" }, 404);
+  const segment = await employeeSegment(env, actor);
+  if (!audienceMatches(a.audience, segment)) return json({ error: "not targeted to you" }, 403);
+  await env.DB.prepare("INSERT OR IGNORE INTO announcement_acks (id, announcement_id, employee_id, version) VALUES (?,?,?,?)").bind(uid(), id, actor.employeeId, a.version).run();
+  await audit(env, actor.userId, "ANNOUNCEMENT_ACK", "announcement", id, `v${a.version}`);
+  return json({ ok: true });
+}
+
+async function handleAnnouncementCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "announcement.publish")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { title?: string; body?: string; audience?: string; requiresAck?: boolean };
+  const title = String(b.title ?? "").trim();
+  const audience = String(b.audience ?? "all").trim();
+  if (!title) return json({ error: "title required" }, 400);
+  if (!isValidAudience(audience)) return json({ error: "invalid audience" }, 400);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO announcements (id, title, body, audience, requires_ack, published_by) VALUES (?,?,?,?,?,?)")
+    .bind(id, title, String(b.body ?? ""), audience, b.requiresAck ? 1 : 0, actor.userId).run();
+  await audit(env, actor.userId, "ANNOUNCEMENT_CREATE", "announcement", id, `${audience}${b.requiresAck ? " (ack)" : ""}`);
+  return json({ ok: true, id });
+}
+
+async function handleAnnouncementAdminList(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "announcement.publish")) return json({ error: "forbidden" }, 403);
+  const rows = (await env.DB.prepare("SELECT a.id, a.title, a.audience, a.requires_ack, a.version, a.active, a.published_at, (SELECT COUNT(*) FROM announcement_acks k WHERE k.announcement_id = a.id AND k.version = a.version) AS ack_count FROM announcements a ORDER BY a.published_at DESC LIMIT 200").all()).results as any[];
+  const announcements = rows.map((r) => ({ id: r.id, title: r.title, audience: r.audience, requiresAck: !!r.requires_ack, version: r.version, active: !!r.active, publishedAt: r.published_at, ackCount: r.ack_count }));
+  return json({ announcements });
+}
+
+async function handleAnnouncementUpdate(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "announcement.publish")) return json({ error: "forbidden" }, 403);
+  if (!(await env.DB.prepare("SELECT id FROM announcements WHERE id = ?").bind(id).first())) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { title?: string; body?: string; audience?: string; requiresAck?: boolean };
+  const title = String(b.title ?? "").trim();
+  const audience = String(b.audience ?? "all").trim();
+  if (!title) return json({ error: "title required" }, 400);
+  if (!isValidAudience(audience)) return json({ error: "invalid audience" }, 400);
+  // Bump the version — prior acknowledgements no longer count, so people re-ack.
+  await env.DB.prepare("UPDATE announcements SET title=?, body=?, audience=?, requires_ack=?, version=version+1, updated_at=datetime('now') WHERE id=?")
+    .bind(title, String(b.body ?? ""), audience, b.requiresAck ? 1 : 0, id).run();
+  await audit(env, actor.userId, "ANNOUNCEMENT_UPDATE", "announcement", id, "re-published (version bumped)");
+  return json({ ok: true });
+}
+
+async function handleAnnouncementActive(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "announcement.publish")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { active?: boolean };
+  await env.DB.prepare("UPDATE announcements SET active=?, updated_at=datetime('now') WHERE id=?").bind(b.active ? 1 : 0, id).run();
+  await audit(env, actor.userId, "ANNOUNCEMENT_ACTIVE", "announcement", id, b.active ? "activated" : "retired");
+  return json({ ok: true });
+}
+
+async function handleAnnouncementAcks(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "announcement.publish")) return json({ error: "forbidden" }, 403);
+  const a = await env.DB.prepare("SELECT version FROM announcements WHERE id = ?").bind(id).first<{ version: number }>();
+  if (!a) return json({ error: "not found" }, 404);
+  const acks = (await env.DB.prepare("SELECT k.employee_id, e.name, k.acked_at FROM announcement_acks k LEFT JOIN employees e ON e.id = k.employee_id WHERE k.announcement_id = ? AND k.version = ? ORDER BY k.acked_at DESC").bind(id, a.version).all()).results;
+  return json({ version: a.version, acks });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -885,6 +967,19 @@ export default {
       if (path === "/api/admin/posh/committee" && method === "POST") return await handlePoshCommitteeAdd(actor, env, request);
       const prem = path.match(/^\/api\/admin\/posh\/committee\/([^/]+)\/remove$/);
       if (prem && method === "POST") return await handlePoshCommitteeRemove(actor, env, decodeURIComponent(prem[1]));
+
+      // FR-07 Announcements
+      if (path === "/api/announcements" && method === "GET") return await handleAnnouncementsFeed(actor, env);
+      const aack = path.match(/^\/api\/announcements\/([^/]+)\/ack$/);
+      if (aack && method === "POST") return await handleAnnouncementAck(actor, env, decodeURIComponent(aack[1]));
+      if (path === "/api/admin/announcements" && method === "GET") return await handleAnnouncementAdminList(actor, env);
+      if (path === "/api/admin/announcements" && method === "POST") return await handleAnnouncementCreate(actor, env, request);
+      const aacks = path.match(/^\/api\/admin\/announcements\/([^/]+)\/acks$/);
+      if (aacks && method === "GET") return await handleAnnouncementAcks(actor, env, decodeURIComponent(aacks[1]));
+      const aact = path.match(/^\/api\/admin\/announcements\/([^/]+)\/active$/);
+      if (aact && method === "POST") return await handleAnnouncementActive(actor, env, decodeURIComponent(aact[1]), request);
+      const aupd = path.match(/^\/api\/admin\/announcements\/([^/]+)$/);
+      if (aupd && method === "POST") return await handleAnnouncementUpdate(actor, env, decodeURIComponent(aupd[1]), request);
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {

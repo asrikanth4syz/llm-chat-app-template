@@ -226,6 +226,38 @@ Object.assign(DICT.hi, {
   addMember: "जोड़ें", remove: "हटाएँ", noCommittee: "कोई समिति सदस्य नहीं।",
 });
 
+// FR-07 Announcements strings.
+Object.assign(DICT.en, {
+  navAnnouncements: "Announcements", announcements_help: "Company announcements for you. Ones marked must-acknowledge need your confirmation.",
+  newAnnouncement: "New announcement", editAnnouncement: "Edit announcement",
+  announcements_publish_help: "Publish to everyone or a segment. Mark policy items must-acknowledge; editing bumps the version so people re-acknowledge.",
+  title: "Title", body: "Message", audience: "Audience", aud_all: "Everyone", aud_office: "Office", aud_client_site: "Client site",
+  requiresAck: "Requires acknowledgement", publish: "Publish", saveChanges: "Save changes", announcementPublished: "Published.",
+  acknowledge: "Acknowledge", acknowledged: "Acknowledged", mustAck: "Action needed", published_label: "Published",
+  ackCount: "acks", viewAcks: "Acknowledgements", acksTitle: "Acknowledged by", noAcks: "No acknowledgements yet.",
+  retire: "Retire", reactivate: "Reactivate", edit: "Edit", noAnnouncements: "No announcements.",
+});
+Object.assign(DICT.kn, {
+  navAnnouncements: "ಪ್ರಕಟಣೆಗಳು", announcements_help: "ನಿಮಗಾಗಿ ಕಂಪನಿ ಪ್ರಕಟಣೆಗಳು. ಒಪ್ಪಿಗೆ ಅಗತ್ಯವಿರುವವು ದೃಢೀಕರಣ ಬೇಕು.",
+  newAnnouncement: "ಹೊಸ ಪ್ರಕಟಣೆ", editAnnouncement: "ಪ್ರಕಟಣೆ ಸಂಪಾದಿಸಿ",
+  announcements_publish_help: "ಎಲ್ಲರಿಗೂ ಅಥವಾ ವಿಭಾಗಕ್ಕೆ ಪ್ರಕಟಿಸಿ. ಸಂಪಾದಿಸಿದರೆ ಆವೃತ್ತಿ ಹೆಚ್ಚುತ್ತದೆ, ಮತ್ತೆ ಒಪ್ಪಿಗೆ ಬೇಕು.",
+  title: "ಶೀರ್ಷಿಕೆ", body: "ಸಂದೇಶ", audience: "ಪ್ರೇಕ್ಷಕರು", aud_all: "ಎಲ್ಲರೂ", aud_office: "ಕಚೇರಿ", aud_client_site: "ಕ್ಲೈಂಟ್ ಸೈಟ್",
+  requiresAck: "ಒಪ್ಪಿಗೆ ಅಗತ್ಯ", publish: "ಪ್ರಕಟಿಸಿ", saveChanges: "ಬದಲಾವಣೆ ಉಳಿಸಿ", announcementPublished: "ಪ್ರಕಟಿಸಲಾಗಿದೆ.",
+  acknowledge: "ಒಪ್ಪಿಕೊಳ್ಳಿ", acknowledged: "ಒಪ್ಪಿಕೊಳ್ಳಲಾಗಿದೆ", mustAck: "ಕ್ರಮ ಅಗತ್ಯ", published_label: "ಪ್ರಕಟಿತ",
+  ackCount: "ಒಪ್ಪಿಗೆಗಳು", viewAcks: "ಒಪ್ಪಿಗೆಗಳು", acksTitle: "ಒಪ್ಪಿಕೊಂಡವರು", noAcks: "ಇನ್ನೂ ಒಪ್ಪಿಗೆಗಳಿಲ್ಲ.",
+  retire: "ಹಿಂಪಡೆ", reactivate: "ಮರುಸಕ್ರಿಯಗೊಳಿಸಿ", edit: "ಸಂಪಾದಿಸಿ", noAnnouncements: "ಪ್ರಕಟಣೆಗಳಿಲ್ಲ.",
+});
+Object.assign(DICT.hi, {
+  navAnnouncements: "घोषणाएँ", announcements_help: "आपके लिए कंपनी घोषणाएँ। स्वीकृति-आवश्यक वाली पुष्टि माँगती हैं।",
+  newAnnouncement: "नई घोषणा", editAnnouncement: "घोषणा संपादित करें",
+  announcements_publish_help: "सभी या किसी वर्ग को प्रकाशित करें। संपादन संस्करण बढ़ाता है, पुनः स्वीकृति आवश्यक।",
+  title: "शीर्षक", body: "संदेश", audience: "दर्शक", aud_all: "सभी", aud_office: "कार्यालय", aud_client_site: "क्लाइंट साइट",
+  requiresAck: "स्वीकृति आवश्यक", publish: "प्रकाशित करें", saveChanges: "परिवर्तन सहेजें", announcementPublished: "प्रकाशित।",
+  acknowledge: "स्वीकार करें", acknowledged: "स्वीकृत", mustAck: "कार्रवाई आवश्यक", published_label: "प्रकाशित",
+  ackCount: "स्वीकृतियाँ", viewAcks: "स्वीकृतियाँ", acksTitle: "स्वीकार करने वाले", noAcks: "अभी तक कोई स्वीकृति नहीं।",
+  retire: "वापस लें", reactivate: "पुनः सक्रिय", edit: "संपादित करें", noAnnouncements: "कोई घोषणा नहीं।",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -249,6 +281,7 @@ const SENS_LABEL = { pan: "pan", bankAccount: "bankAccount", aadhaarLast4: "aadh
 function t(k) { return (DICT[state.lang] && DICT[state.lang][k]) || DICT.en[k] || k; }
 function canVerify() { return state.role === "hr_admin" || state.role === "super_admin"; }
 function canApproveLeave() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
+function canPublish() { return ["hr_admin", "super_admin"].includes(state.role); }
 
 // ---- tiny DOM helper -----------------------------------------------------------
 function el(tag, attrs = {}, children = []) {
@@ -337,6 +370,7 @@ const VIEWS = [
   { id: "leave", icon: "calendar", titleKey: "navLeave" },
   { id: "attendance", icon: "clock", titleKey: "navAttendance" },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
+  { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
   { id: "helpdesk", icon: "help", titleKey: "navHelpdesk" },
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
@@ -347,6 +381,7 @@ const ICONS = {
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   check: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   help: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -437,6 +472,7 @@ async function switchView(view) {
   if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
   else if (view === "directory") await loadDirectoryView();
+  else if (view === "announcements") await loadAnnouncementsView();
   else if (view === "helpdesk") await loadHelpdeskView();
   else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
@@ -1115,6 +1151,95 @@ async function loadPoshConfig() {
       rm.addEventListener("click", async () => { try { await api(`/api/admin/posh/committee/${encodeURIComponent(m.employee_id)}/remove`, { method: "POST" }); loadPoshConfig(); } catch (ex) { flash("err", ex.message); } });
       card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: m.name || m.employee_id }), el("div", { class: "v" }, [el("div", { class: "actions" }, [rm])])]));
     }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-07 Announcements -------------------------------------------------------
+async function loadAnnouncementsView() {
+  const body = document.getElementById("body"); clear(body);
+  body.appendChild(el("div", { class: "card", id: "ann_feed" }, [h2help(t("navAnnouncements"), t("announcements_help")), el("div", { class: "muted", text: "…" })]));
+  if (canPublish()) {
+    body.appendChild(el("div", { class: "card", id: "ann_new" }, [h2help(t("newAnnouncement"), t("announcements_publish_help"))]));
+    body.appendChild(el("div", { class: "card", id: "ann_admin" }, [el("h2", { text: t("published_label") }), el("div", { class: "muted", text: "…" })]));
+    body.appendChild(el("div", { class: "card", id: "ann_acks", style: "display:none" }));
+  }
+  loadAnnFeed();
+  if (canPublish()) { renderAnnForm(null); loadAnnAdmin(); }
+}
+
+async function loadAnnFeed() {
+  const card = document.getElementById("ann_feed"); if (!card) return;
+  try {
+    const { announcements } = await api("/api/announcements");
+    clear(card); card.appendChild(h2help(t("navAnnouncements"), t("announcements_help")));
+    if (!announcements.length) { card.appendChild(el("div", { class: "muted", text: t("noAnnouncements") })); return; }
+    for (const a of announcements) {
+      const head = el("div", { style: "display:flex;align-items:baseline;gap:8px;flex-wrap:wrap" }, [
+        el("div", { style: "font-weight:650;font-size:15px", text: a.title }),
+        a.requiresAck ? (a.acked ? el("span", { class: "pill approved", text: t("acknowledged") }) : el("span", { class: "pill pending", text: t("mustAck") })) : null,
+      ]);
+      const kids = [head, el("div", { class: "muted", style: "font-size:12px", text: a.publishedAt }), a.body ? el("div", { style: "margin-top:6px;white-space:pre-wrap", text: a.body }) : null];
+      if (a.requiresAck && !a.acked) {
+        const b = el("button", { class: "primary sm", style: "margin-top:10px", text: t("acknowledge") });
+        b.addEventListener("click", async () => { b.disabled = true; try { await api(`/api/announcements/${encodeURIComponent(a.id)}/ack`, { method: "POST" }); flash("ok", t("acknowledged")); loadAnnFeed(); } catch (ex) { flash("err", ex.message); b.disabled = false; } });
+        kids.push(b);
+      }
+      card.appendChild(el("div", { class: "row" }, [el("div", { style: "flex:1" }, kids)]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+function renderAnnForm(editing) {
+  const card = document.getElementById("ann_new"); if (!card) return;
+  clear(card); card.appendChild(h2help(editing ? t("editAnnouncement") : t("newAnnouncement"), t("announcements_publish_help")));
+  const title = el("input", { placeholder: t("title"), value: editing ? editing.title : "" });
+  const bodyi = el("input", { placeholder: t("body") });
+  const aud = el("select", {});
+  for (const a of ["all", "office", "client_site"]) aud.appendChild(el("option", { value: a, text: t("aud_" + a), ...(editing && editing.audience === a ? { selected: "" } : {}) }));
+  const ack = el("input", { type: "checkbox" }); if (editing && editing.requiresAck) ack.checked = true;
+  const ackWrap = el("label", { style: "display:flex;gap:8px;align-items:center;margin:8px 0 0" }, [ack, " " + t("requiresAck")]);
+  const btn = el("button", { class: "primary", text: editing ? t("saveChanges") : t("publish") });
+  btn.addEventListener("click", async () => {
+    if (!title.value.trim()) return; btn.disabled = true;
+    try {
+      const b = { title: title.value, body: bodyi.value, audience: aud.value, requiresAck: ack.checked };
+      if (editing) await api(`/api/admin/announcements/${encodeURIComponent(editing.id)}`, { method: "POST", body: b });
+      else await api("/api/admin/announcements", { method: "POST", body: b });
+      flash("ok", editing ? t("saved") : t("announcementPublished")); renderAnnForm(null); loadAnnAdmin(); loadAnnFeed();
+    } catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; }
+  });
+  const actions = el("div", { class: "actions", style: "margin-top:10px" }, [btn]);
+  if (editing) actions.appendChild(el("button", { class: "sm", text: t("cancel"), onclick: () => renderAnnForm(null) }));
+  card.appendChild(el("div", { class: "stack" }, [el("label", { text: t("title") }), title, el("label", { text: t("body") }), bodyi, el("label", { text: t("audience") }), aud, ackWrap, actions]));
+}
+
+async function loadAnnAdmin() {
+  const card = document.getElementById("ann_admin"); if (!card) return;
+  try {
+    const { announcements } = await api("/api/admin/announcements");
+    clear(card); card.appendChild(el("h2", { text: t("published_label") }));
+    if (!announcements.length) { card.appendChild(el("div", { class: "muted", text: t("noAnnouncements") })); return; }
+    for (const a of announcements) {
+      const acts = el("div", { class: "actions" }, [
+        el("span", { class: "pill " + (a.active ? "active" : "inactive"), text: a.active ? t("active") : t("inactive") }),
+        el("span", { class: "muted", style: "font-size:12px", text: `v${a.version} · ${t("aud_" + a.audience)}${a.requiresAck ? ` · ${t("ackCount")}: ${a.ackCount}` : ""}` }),
+        el("button", { class: "sm", text: t("edit"), onclick: () => renderAnnForm({ id: a.id, title: a.title, audience: a.audience, requiresAck: a.requiresAck }) }),
+      ]);
+      if (a.requiresAck) acts.appendChild(el("button", { class: "sm", text: t("viewAcks"), onclick: () => loadAnnAcks(a.id, a.title) }));
+      acts.appendChild(el("button", { class: "sm", text: a.active ? t("retire") : t("reactivate"), onclick: async () => { try { await api(`/api/admin/announcements/${encodeURIComponent(a.id)}/active`, { method: "POST", body: { active: !a.active } }); loadAnnAdmin(); loadAnnFeed(); } catch (ex) { flash("err", ex.message); } } }));
+      card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: a.title }), el("div", { class: "v" }, [acts])]));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadAnnAcks(id, title) {
+  const card = document.getElementById("ann_acks"); if (!card) return;
+  card.style.display = "block"; clear(card); card.appendChild(el("div", { class: "muted", text: "…" }));
+  try {
+    const { version, acks } = await api(`/api/admin/announcements/${encodeURIComponent(id)}/acks`);
+    clear(card); card.appendChild(el("h2", { text: `${t("acksTitle")}: ${title} (v${version})` }));
+    if (!acks.length) { card.appendChild(el("div", { class: "muted", text: t("noAcks") })); return; }
+    for (const k of acks) card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: k.name || k.employee_id }), el("div", { class: "v muted", style: "font-size:12px", text: k.acked_at })]));
   } catch (ex) { flash("err", ex.message); }
 }
 

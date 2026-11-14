@@ -85,13 +85,14 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (Profile, Leave, Attendance, Directory, Helpdesk, Approvals)
+## UI (Profile, Leave, Attendance, Directory, Announcements, Helpdesk, Approvals)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `wrangler.jsonc`; `/api/*` still falls through to the Worker). It uses an HRMS-style
 **sidebar + topbar** layout (a scrollable tab bar on phones) with **Profile**,
-**Leave**, **Attendance**, **Directory**, **Helpdesk** and **Approvals** sections, and
-**inline `?` help** tooltips on the key section headers. Open the Worker URL in a browser:
+**Leave**, **Attendance**, **Directory**, **Announcements**, **Helpdesk** and
+**Approvals** sections, and **inline `?` help** tooltips on the key section headers.
+Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — a welcome header (time-based greeting + name + **profile photo**,
@@ -111,6 +112,10 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 - **Directory** — search all colleagues by name / role / location; shows name,
   designation, location, segment, work email and manager only. No salary, bank,
   identity or personal contact.
+- **Announcements** — a feed of posts targeted to you; **must-acknowledge** ones show an
+  Acknowledge button. Publishers (HR/super_admin) create posts for an audience, mark
+  policy items must-acknowledge, re-publish (bumps the version → people re-acknowledge),
+  retire/reactivate, and see **who acknowledged** the current version.
 - **Helpdesk** — raise HR / IT / general requests or a **confidential POSH complaint**;
   track status, SLA and the comment thread. Agents (HR/IT) handle ordinary tickets; a
   **queue** shows what's assigned to you. super_admin configures the **POSH Internal
@@ -155,6 +160,20 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 | POST | `/api/helpdesk/tickets/:id/comment` · `/status` | viewers / handlers | add a comment; set status + assignee |
 | GET·POST | `/api/admin/posh/committee` | super_admin | list / add committee members (FR-21) |
 | POST | `/api/admin/posh/committee/:employeeId/remove` | super_admin | remove a committee member |
+| GET | `/api/announcements` | any login | FR-07: feed targeted to me (audience all/segment), each with `acked` for the current version |
+| POST | `/api/announcements/:id/ack` | any login | acknowledge the current version |
+| GET·POST | `/api/admin/announcements` | announcement.publish | list all (with ack counts); create `{title,body,audience,requiresAck}` |
+| POST | `/api/admin/announcements/:id` · `/:id/active` | announcement.publish | re-publish (bumps version → re-ack); activate/retire |
+| GET | `/api/admin/announcements/:id/acks` | announcement.publish | who acknowledged the current version |
+
+## FR-07 Announcements
+
+- **Audience targeting** — `all`, `office` or `client_site` (by employee segment); the
+  feed shows only posts that reach you.
+- **Versioned acknowledgement** — a post can require acknowledgement; editing it bumps
+  `version`, so prior acks no longer count and people must acknowledge again. The
+  publisher sees the ack count and the list of who acknowledged the current version
+  (migration `0009`). `announcement.publish` is granted to HR and super_admin.
 
 ## FR-09 Helpdesk & FR-21 POSH
 
