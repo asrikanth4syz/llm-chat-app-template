@@ -2202,15 +2202,26 @@ function zohoDcYm(d: unknown): string {
 function zohoDcInvoiceNumbers(detail: Record<string, unknown> | null, header: Record<string, unknown>): string[] {
   const out: string[] = [];
   const push = (v: unknown) => { const s = String(v ?? "").trim(); if (s && !out.includes(s)) out.push(s); };
+  const pushInv = (iv: unknown) => push((iv as { invoice_number?: unknown; number?: unknown })?.invoice_number ?? (iv as { number?: unknown })?.number);
   const scan = (src: Record<string, unknown> | null | undefined) => {
     if (!src) return;
     const invs = (src as { invoices?: unknown }).invoices;
-    if (Array.isArray(invs)) invs.forEach((iv) => push((iv as { invoice_number?: unknown; number?: unknown })?.invoice_number ?? (iv as { number?: unknown })?.number));
+    if (Array.isArray(invs)) invs.forEach(pushInv);
     const invNos = (src as { invoice_numbers?: unknown }).invoice_numbers;
     if (Array.isArray(invNos)) invNos.forEach(push);
+    else if (typeof invNos === "string") invNos.split(/[,;]/).forEach(push); // some orgs return a delimited string
     push((src as { invoice_number?: unknown }).invoice_number);
+    const inv = (src as { invoice?: unknown }).invoice; // a single nested linked invoice
+    if (inv && typeof inv === "object") pushInv(inv);
   };
   scan(detail); scan(header);
+  // Zoho can also carry invoice references at the line-item level (per-line invoicing).
+  const lis = detail && Array.isArray((detail as { line_items?: unknown }).line_items) ? (detail as { line_items: unknown[] }).line_items : [];
+  for (const li of lis) {
+    push((li as { invoice_number?: unknown })?.invoice_number);
+    const liInvs = (li as { invoices?: unknown })?.invoices;
+    if (Array.isArray(liInvs)) liInvs.forEach(pushInv);
+  }
   return out;
 }
 

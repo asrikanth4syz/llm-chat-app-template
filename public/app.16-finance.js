@@ -1530,10 +1530,11 @@ function _zdcRenderTable() {
     <thead><tr>${_ZDC_COLS.map(thh).join('')}</tr></thead><tbody>${body}</tbody></table>`;
   const sumEl = document.getElementById('zdc-summary');
   if (sumEl) {
+    const lns = list.reduce((s, r) => s + Number(r.line_count || 0), 0);
     const qty = list.reduce((s, r) => s + Number(r.qty_count || 0), 0);
     const val = list.reduce((s, r) => s + Number(r.total || 0), 0);
     const invN = list.filter(r => _zdcInvKey(r.invoiced_status) === 'inv').length;
-    sumEl.innerHTML = `<b>${list.length}</b> challans · <b>${qty.toLocaleString('en-IN')}</b> qty · <b>${_zdcINR(val)}</b> · <b>${invN}</b> invoiced`;
+    sumEl.innerHTML = `<b>${list.length}</b> challans · <b>${lns.toLocaleString('en-IN')}</b> lines · <b>${qty.toLocaleString('en-IN')}</b> qty · <b>${_zdcINR(val)}</b> · <b>${invN}</b> invoiced`;
   }
 }
 
