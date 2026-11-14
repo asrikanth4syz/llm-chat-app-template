@@ -253,6 +253,18 @@ async function handleProfileChanges(actor: Actor, env: Env): Promise<Response> {
   return json({ changes: rows, count: rows.length });
 }
 
+// The HR/super_admin verify queue: pending identity/financial changes across all
+// employees (with the employee's name; the encrypted new value is never returned).
+async function handlePendingChanges(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "profile.verify")) return json({ error: "forbidden" }, 403);
+  const rows = (await env.DB.prepare(
+    "SELECT p.id, p.employee_id, p.field, p.status, p.reason, p.requested_at, e.name AS employee_name " +
+    "FROM profile_change_requests p LEFT JOIN employees e ON e.id = p.employee_id " +
+    "WHERE p.status = 'pending' ORDER BY p.requested_at ASC LIMIT 200"
+  ).all()).results;
+  return json({ pending: rows, count: rows.length });
+}
+
 // Verify (approve/reject) a pending identity/financial change — HR or super_admin.
 // On approve the already-encrypted new value is copied into the employee record (the
 // employee column and the request hold the same NFR-03 envelope), so no key is
@@ -299,6 +311,7 @@ export default {
       if (one && method === "GET") return await handleGetOne(actor, env, decodeURIComponent(one[1]), parseReveal(url));
       if (path === "/api/profile/change" && method === "POST") return await handleProfileChange(actor, env, request);
       if (path === "/api/profile/changes" && method === "GET") return await handleProfileChanges(actor, env);
+      if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);
       const pcr = path.match(/^\/api\/admin\/profile\/changes\/([^/]+)\/(approve|reject)$/);
       if (pcr && method === "POST") return await handleProfileChangeReview(actor, env, decodeURIComponent(pcr[1]), pcr[2] as "approve" | "reject");
       if (path === "/api/audit" && method === "GET") return await handleAudit(actor, env);

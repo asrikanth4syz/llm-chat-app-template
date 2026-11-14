@@ -85,6 +85,22 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
+## UI (FR-01 Profile)
+
+The Worker now serves a mobile-first SPA from `public/` (static-assets binding in
+`wrangler.jsonc`; `/api/*` still falls through to the Worker). Open the Worker URL in
+a browser:
+
+- **Sign in** with email + password + the 2FA code (dev `000000`).
+- **My profile** — employment details (read-only), contact fields you can edit inline
+  (phone, personal email, address, emergency contact → apply immediately), and the
+  identity/financial block **masked by default** with per-field **Reveal** (logged)
+  and **Request change** (bank/PAN/Aadhaar → encrypted pending request).
+- **My change requests** shows their status; **HR / super_admin** also get a
+  **Verification queue** to approve/reject pending identity changes.
+- Language switcher: **English / ಕನ್ನಡ / हिन्दी** (kn/hi strings are initial — have a
+  native speaker review before go-live).
+
 ## Endpoints (R0 + R1 FR-01)
 
 | Method | Path | Who | Returns |

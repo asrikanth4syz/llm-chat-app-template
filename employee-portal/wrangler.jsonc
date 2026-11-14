@@ -4,6 +4,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },
+  // Static assets (the FR-01 Profile UI) are served from ./public. A request that
+  // matches a file is served directly; everything else (the /api/* routes) falls
+  // through to the Worker. No SPA fallback, so /api paths always reach the Worker.
+  "assets": { "directory": "./public" },
   "d1_databases": [
     {
       "binding": "DB",
