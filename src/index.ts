@@ -2604,10 +2604,37 @@ async function handleZohoDCList(request: Request, env: Env): Promise<Response> {
                FROM zoho_delivery_challans ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY dc_date DESC, dc_number DESC LIMIT 1000`;
   const { results } = await env.DB.prepare(sql).bind(...binds).all();
-  const rows = (results as Record<string, unknown>[]).map((rw) => ({
+  const rows: Record<string, unknown>[] = (results as Record<string, unknown>[]).map((rw) => ({
     ...rw,
     invoice_numbers: (() => { try { return JSON.parse(String(rw.invoice_numbers || "[]")); } catch { return []; } })(),
   }));
+  // Cross-reference Zoho Books: Inventory's DC detail often omits the linked invoice,
+  // so fill each DC's invoice number(s) from ar_invoices (the finance system of record)
+  // where an invoice is linked to this DC (ar_invoices.dc_id = dc_number, set during the
+  // Books AR sync by matching reference_number). Merge with any detail-derived numbers.
+  try {
+    const dcNums = [...new Set(rows.map((r) => String(r.dc_number || "")).filter(Boolean))];
+    if (dcNums.length) {
+      const byDc = new Map<string, Set<string>>();
+      for (let i = 0; i < dcNums.length; i += D1_IN_CHUNK) {
+        const part = dcNums.slice(i, i + D1_IN_CHUNK);
+        const q2 = await env.DB.prepare(
+          `SELECT dc_id, number FROM ar_invoices WHERE dc_id IN (${part.map(() => "?").join(",")}) AND COALESCE(number,'') <> ''`
+        ).bind(...part).all();
+        for (const inv of (q2.results || []) as Array<{ dc_id: unknown; number: unknown }>) {
+          const key = String(inv.dc_id); const num = String(inv.number);
+          if (!byDc.has(key)) byDc.set(key, new Set());
+          byDc.get(key)!.add(num);
+        }
+      }
+      for (const r of rows) {
+        const fromBooks = byDc.get(String(r.dc_number || ""));
+        if (!fromBooks || !fromBooks.size) continue;
+        const merged = new Set<string>([...(r.invoice_numbers as string[]).map(String), ...fromBooks]);
+        r.invoice_numbers = [...merged];
+      }
+    }
+  } catch { /* enrichment is best-effort; the Inventory-derived numbers still stand */ }
   const custRows = await env.DB.prepare(
     "SELECT customer_id AS id, customer_name AS name FROM zoho_delivery_challans WHERE COALESCE(customer_name,'') <> '' GROUP BY customer_id, customer_name ORDER BY customer_name"
   ).all();
@@ -4518,11 +4545,17 @@ async function runBooksSync(env: Env, opts: { full?: boolean } = {}, fetchImpl: 
       try {
         const refs = [...new Set(invoiceRefs.map(x => x.reference))];
         const ordSet = await _existingKeys(env, "orders", "id", refs);
-        const dcSet = await _existingKeys(env, "delivery_challans", "id", refs.filter(r2 => !ordSet.has(r2)));
+        const unordered = refs.filter(r2 => !ordSet.has(r2));
+        const dcSet = await _existingKeys(env, "delivery_challans", "id", unordered);
+        // Also match the Books reference_number against the Zoho Inventory DC register
+        // (zoho_delivery_challans.dc_number) so invoices raised against an Inventory DC
+        // link back to it — that is how the DC register surfaces its invoice numbers
+        // when Inventory's own DC detail doesn't carry them.
+        const zdcSet = await _existingKeys(env, "zoho_delivery_challans", "dc_number", unordered.filter(r2 => !dcSet.has(r2)));
         const stmts: D1PreparedStatement[] = [];
         for (const x of invoiceRefs) {
           if (ordSet.has(x.reference)) stmts.push(env.DB.prepare("UPDATE ar_invoices SET order_id=? WHERE id=?").bind(x.reference, x.id));
-          else if (dcSet.has(x.reference)) stmts.push(env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(x.reference, x.id));
+          else if (dcSet.has(x.reference) || zdcSet.has(x.reference)) stmts.push(env.DB.prepare("UPDATE ar_invoices SET dc_id=? WHERE id=?").bind(x.reference, x.id));
         }
         await _d1Batch(env, stmts);
       } catch { /* orders/DC table shape varies — linkage is best-effort */ }
