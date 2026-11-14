@@ -85,13 +85,13 @@ seed users, then rotate/disable them.
 Deploy from your machine instead (from `employee-portal/`):
 `npm install && npm run migrate:remote && npm run deploy`.
 
-## UI (Profile, Leave, Attendance, Directory, Approvals)
+## UI (Profile, Leave, Attendance, Directory, Helpdesk, Approvals)
 
 The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 `wrangler.jsonc`; `/api/*` still falls through to the Worker). It uses an HRMS-style
 **sidebar + topbar** layout (a scrollable tab bar on phones) with **Profile**,
-**Leave**, **Attendance**, **Directory** and **Approvals** sections, and **inline
-`?` help** tooltips on the key section headers. Open the Worker URL in a browser:
+**Leave**, **Attendance**, **Directory**, **Helpdesk** and **Approvals** sections, and
+**inline `?` help** tooltips on the key section headers. Open the Worker URL in a browser:
 
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — a welcome header (time-based greeting + name + **profile photo**,
@@ -111,6 +111,10 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 - **Directory** — search all colleagues by name / role / location; shows name,
   designation, location, segment, work email and manager only. No salary, bank,
   identity or personal contact.
+- **Helpdesk** — raise HR / IT / general requests or a **confidential POSH complaint**;
+  track status, SLA and the comment thread. Agents (HR/IT) handle ordinary tickets; a
+  **queue** shows what's assigned to you. super_admin configures the **POSH Internal
+  Committee** — only its members (and the complainant) can see POSH tickets.
 - **Approvals** — one inbox of everything awaiting your decision (leave, attendance
   corrections, and — for HR — profile changes), approve/reject with a comment; plus
   **delegation** (hand your approval authority to a colleague for a date range).
@@ -145,6 +149,26 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
 | GET·POST | `/api/approvals/delegations` | approvers | list my delegations (out/to-me); create `{delegateEmployeeId,startsOn?,endsOn?}` |
 | POST | `/api/approvals/delegations/:id/revoke` | delegator, it_admin, super_admin | deactivate a delegation |
+| GET·POST | `/api/helpdesk/tickets` | any login | FR-09: my tickets; raise `{category,subject,description}` (category hr/it/general/posh) |
+| GET | `/api/helpdesk/queue` | helpdesk.agent, POSH committee | tickets to handle — non-POSH for agents, POSH for committee |
+| GET | `/api/helpdesk/tickets/:id` | creator, agent, POSH committee | ticket + comments (+ `canHandle`); POSH view audited |
+| POST | `/api/helpdesk/tickets/:id/comment` · `/status` | viewers / handlers | add a comment; set status + assignee |
+| GET·POST | `/api/admin/posh/committee` | super_admin | list / add committee members (FR-21) |
+| POST | `/api/admin/posh/committee/:employeeId/remove` | super_admin | remove a committee member |
+
+## FR-09 Helpdesk & FR-21 POSH
+
+- **Tickets** carry a category (hr / it / general / posh), subject, description, status
+  (open → in_progress → resolved → closed), optional assignee and a comment thread;
+  an **SLA** target per category drives an *overdue* flag (migration `0008`).
+- **Agents** (`helpdesk.agent`: HR, IT, super_admin) see and handle ordinary tickets.
+- **POSH is confidential (FR-21):** a POSH ticket is visible **only** to the
+  complainant and the **Internal Committee** — never to ordinary agents, and *not to
+  super_admin by role*. `canViewTicket`/`canHandleTicket` gate on committee membership
+  (the `posh_committee` table), not on `hasPermission`'s allow-all. Committee access to
+  a POSH complaint is audited.
+- **Committee is configurable** by super_admin (`posh.manage`) — add/remove specific
+  employees in the Helpdesk tab's POSH section.
 
 ## FR-04 Approvals
 

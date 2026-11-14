@@ -194,6 +194,38 @@ Object.assign(DICT.en, { greetMorning: "Good morning", greetAfternoon: "Good aft
 Object.assign(DICT.kn, { greetMorning: "ಶುಭೋದಯ", greetAfternoon: "ಶುಭ ಮಧ್ಯಾಹ್ನ", greetEvening: "ಶುಭ ಸಂಜೆ", changePhoto: "ಫೋಟೋ ಬದಲಿಸಿ", removePhoto: "ಫೋಟೋ ತೆಗೆದುಹಾಕಿ", saved: "ಉಳಿಸಲಾಗಿದೆ" });
 Object.assign(DICT.hi, { greetMorning: "शुभ प्रभात", greetAfternoon: "नमस्कार", greetEvening: "शुभ संध्या", changePhoto: "फ़ोटो बदलें", removePhoto: "फ़ोटो हटाएँ", saved: "सहेजा गया" });
 
+// FR-09 Helpdesk + FR-21 POSH strings.
+Object.assign(DICT.en, {
+  navHelpdesk: "Helpdesk", helpdesk_help: "Raise an HR, IT or general request, or a confidential POSH complaint. Track status, SLA and the conversation.",
+  category: "Category", subject: "Subject", description: "Description", submitTicket: "Raise ticket", ticketCreated: "Ticket raised.",
+  myTickets: "My tickets", queueTitle: "Assigned to me", noTickets: "No tickets.", open: "Open", overdue: "overdue", send: "Send",
+  cat_hr: "HR", cat_it: "IT", cat_general: "General", cat_posh: "POSH (confidential)",
+  st_open: "open", st_in_progress: "in progress", st_resolved: "resolved", st_closed: "closed",
+  posh_note: "POSH complaints are confidential — only you and the Internal Committee can see them.",
+  poshConfig: "POSH Internal Committee", posh_config_help: "Members listed here are the only people who can see and handle POSH complaints.",
+  addMember: "Add", remove: "Remove", noCommittee: "No committee members yet.",
+});
+Object.assign(DICT.kn, {
+  navHelpdesk: "ಸಹಾಯಕೇಂದ್ರ", helpdesk_help: "HR, IT ಅಥವಾ ಸಾಮಾನ್ಯ ವಿನಂತಿ, ಅಥವಾ ಗೌಪ್ಯ POSH ದೂರು ಸಲ್ಲಿಸಿ.",
+  category: "ವರ್ಗ", subject: "ವಿಷಯ", description: "ವಿವರಣೆ", submitTicket: "ಟಿಕೆಟ್ ಸಲ್ಲಿಸಿ", ticketCreated: "ಟಿಕೆಟ್ ಸಲ್ಲಿಸಲಾಗಿದೆ.",
+  myTickets: "ನನ್ನ ಟಿಕೆಟ್‌ಗಳು", queueTitle: "ನನಗೆ ನಿಯೋಜಿಸಲಾಗಿದೆ", noTickets: "ಟಿಕೆಟ್‌ಗಳಿಲ್ಲ.", open: "ತೆರೆ", overdue: "ಮೀರಿದೆ", send: "ಕಳುಹಿಸಿ",
+  cat_hr: "HR", cat_it: "IT", cat_general: "ಸಾಮಾನ್ಯ", cat_posh: "POSH (ಗೌಪ್ಯ)",
+  st_open: "ತೆರೆದಿದೆ", st_in_progress: "ಪ್ರಗತಿಯಲ್ಲಿ", st_resolved: "ಪರಿಹರಿಸಲಾಗಿದೆ", st_closed: "ಮುಚ್ಚಲಾಗಿದೆ",
+  posh_note: "POSH ದೂರುಗಳು ಗೌಪ್ಯ — ನೀವು ಮತ್ತು ಆಂತರಿಕ ಸಮಿತಿ ಮಾತ್ರ ನೋಡಬಹುದು.",
+  poshConfig: "POSH ಆಂತರಿಕ ಸಮಿತಿ", posh_config_help: "ಇಲ್ಲಿರುವ ಸದಸ್ಯರು ಮಾತ್ರ POSH ದೂರುಗಳನ್ನು ನೋಡಬಹುದು.",
+  addMember: "ಸೇರಿಸಿ", remove: "ತೆಗೆದುಹಾಕಿ", noCommittee: "ಸಮಿತಿ ಸದಸ್ಯರಿಲ್ಲ.",
+});
+Object.assign(DICT.hi, {
+  navHelpdesk: "हेल्पडेस्क", helpdesk_help: "HR, IT या सामान्य अनुरोध, या गोपनीय POSH शिकायत दर्ज करें।",
+  category: "श्रेणी", subject: "विषय", description: "विवरण", submitTicket: "टिकट बनाएँ", ticketCreated: "टिकट बनाया गया।",
+  myTickets: "मेरे टिकट", queueTitle: "मुझे सौंपे गए", noTickets: "कोई टिकट नहीं।", open: "खोलें", overdue: "विलंबित", send: "भेजें",
+  cat_hr: "HR", cat_it: "IT", cat_general: "सामान्य", cat_posh: "POSH (गोपनीय)",
+  st_open: "खुला", st_in_progress: "प्रगति में", st_resolved: "हल", st_closed: "बंद",
+  posh_note: "POSH शिकायतें गोपनीय हैं — केवल आप और आंतरिक समिति देख सकते हैं।",
+  poshConfig: "POSH आंतरिक समिति", posh_config_help: "यहाँ सूचीबद्ध सदस्य ही POSH शिकायतें देख सकते हैं।",
+  addMember: "जोड़ें", remove: "हटाएँ", noCommittee: "कोई समिति सदस्य नहीं।",
+});
+
 // ---- state (token in sessionStorage; cleared when the tab closes) --------------
 const ss = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -305,6 +337,7 @@ const VIEWS = [
   { id: "leave", icon: "calendar", titleKey: "navLeave" },
   { id: "attendance", icon: "clock", titleKey: "navAttendance" },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
+  { id: "helpdesk", icon: "help", titleKey: "navHelpdesk" },
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
 const ICONS = {
@@ -313,6 +346,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   check: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  help: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -403,6 +437,7 @@ async function switchView(view) {
   if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
   else if (view === "directory") await loadDirectoryView();
+  else if (view === "helpdesk") await loadHelpdeskView();
   else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
 }
@@ -969,6 +1004,116 @@ async function loadDelegations() {
     list(data.delegatedToMe, "in");
     if (!(data.delegatedOut || []).length && !(data.delegatedToMe || []).length && !canApproveLeave()) {
       card.appendChild(el("div", { class: "muted", text: t("none") }));
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- FR-09 Helpdesk + FR-21 POSH -----------------------------------------------
+function catLabel(c) { return t("cat_" + c); }
+function statusPillT(s) { return el("span", { class: "pill " + (s === "resolved" || s === "closed" ? "approved" : (s === "open" ? "pending" : "")), text: t("st_" + s) }); }
+
+async function loadHelpdeskView() {
+  const body = document.getElementById("body"); clear(body);
+  const cat = el("select", { id: "hd_cat" });
+  for (const c of ["hr", "it", "general", "posh"]) cat.appendChild(el("option", { value: c, text: catLabel(c) }));
+  const poshNote = el("div", { class: "muted", style: "font-size:12px;display:none", text: t("posh_note") });
+  cat.addEventListener("change", () => { poshNote.style.display = cat.value === "posh" ? "block" : "none"; });
+  const subj = el("input", { id: "hd_subj", placeholder: t("subject") });
+  const desc = el("input", { id: "hd_desc", placeholder: t("description") });
+  const btn = el("button", { class: "primary", text: t("submitTicket") });
+  btn.addEventListener("click", async () => {
+    if (!subj.value.trim()) return;
+    btn.disabled = true;
+    try { await api("/api/helpdesk/tickets", { method: "POST", body: { category: cat.value, subject: subj.value, description: desc.value } }); flash("ok", t("ticketCreated")); subj.value = ""; desc.value = ""; loadMyTickets(); }
+    catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; }
+  });
+  body.appendChild(el("div", { class: "card" }, [
+    h2help(t("navHelpdesk"), t("helpdesk_help")),
+    el("div", { class: "stack" }, [el("label", { text: t("category") }), cat, poshNote, el("label", { text: t("subject") }), subj, el("label", { text: t("description") }), desc, el("div", { class: "actions", style: "margin-top:8px" }, [btn])]),
+  ]));
+  body.appendChild(el("div", { class: "card", id: "hd_mine" }, [el("h2", { text: t("myTickets") }), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "hd_queue" }, [el("h2", { text: t("queueTitle") }), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "hd_detail", style: "display:none" }));
+  if (state.role === "super_admin") body.appendChild(el("div", { class: "card", id: "hd_posh" }, [h2help(t("poshConfig"), t("posh_config_help")), el("div", { class: "muted", text: "…" })]));
+  loadMyTickets();
+  loadTicketQueue();
+  if (state.role === "super_admin") loadPoshConfig();
+}
+
+function ticketRow(tk, who) {
+  const flags = [statusPillT(tk.status)];
+  if (tk.overdue) flags.push(el("span", { class: "pill rejected", text: t("overdue") }));
+  flags.push(el("button", { class: "sm", text: t("open"), onclick: () => openTicket(tk.id) }));
+  return el("div", { class: "row" }, [
+    el("div", { class: "k" }, [el("div", { class: "actions" }, [el("span", { class: "pill", text: catLabel(tk.category) }), who ? el("span", { style: "font-weight:600", text: who }) : null]), el("div", { style: "font-size:14px;margin-top:2px", text: tk.subject })]),
+    el("div", { class: "v" }, [el("div", { class: "actions" }, flags)]),
+  ]);
+}
+
+async function loadMyTickets() {
+  const card = document.getElementById("hd_mine"); if (!card) return;
+  try {
+    const { tickets } = await api("/api/helpdesk/tickets");
+    clear(card); card.appendChild(el("h2", { text: t("myTickets") }));
+    if (!tickets.length) { card.appendChild(el("div", { class: "muted", text: t("noTickets") })); return; }
+    for (const tk of tickets) card.appendChild(ticketRow(tk, null));
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadTicketQueue() {
+  const card = document.getElementById("hd_queue"); if (!card) return;
+  try {
+    const { tickets } = await api("/api/helpdesk/queue");
+    clear(card); card.appendChild(el("h2", { text: t("queueTitle") }));
+    if (!tickets.length) { card.appendChild(el("div", { class: "muted", text: t("noPending") })); return; }
+    for (const tk of tickets) card.appendChild(ticketRow(tk, tk.employee_name));
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function openTicket(id) {
+  const card = document.getElementById("hd_detail"); if (!card) return;
+  card.style.display = "block"; clear(card); card.appendChild(el("div", { class: "muted", text: "…" }));
+  try {
+    const { ticket, comments, canHandle } = await api(`/api/helpdesk/tickets/${encodeURIComponent(id)}`);
+    clear(card);
+    card.appendChild(el("h2", { text: `${catLabel(ticket.category)} · ${ticket.subject}` }));
+    card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: t("status") }), el("div", { class: "v" }, [el("div", { class: "actions" }, [statusPillT(ticket.status), ticket.overdue ? el("span", { class: "pill rejected", text: t("overdue") }) : null])])]));
+    if (ticket.description) card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: t("description") }), el("div", { class: "v", text: ticket.description })]));
+    const clist = el("div", { class: "stack", style: "margin-top:8px" });
+    for (const c of comments) clist.appendChild(el("div", { style: "border-top:1px solid var(--line);padding-top:8px" }, [el("div", { class: "muted", style: "font-size:12px", text: `${c.author_name || c.author_role || ""} · ${c.created_at}` }), el("div", { text: c.body })]));
+    card.appendChild(clist);
+    const cbox = el("input", { placeholder: t("comment") });
+    const cbtn = el("button", { class: "sm", text: t("send") });
+    cbtn.addEventListener("click", async () => { if (!cbox.value.trim()) return; cbtn.disabled = true; try { await api(`/api/helpdesk/tickets/${encodeURIComponent(id)}/comment`, { method: "POST", body: { body: cbox.value } }); openTicket(id); } catch (ex) { flash("err", ex.message); cbtn.disabled = false; } });
+    card.appendChild(el("div", { class: "actions", style: "margin-top:10px" }, [el("div", { class: "grow" }, [cbox]), cbtn]));
+    if (canHandle) {
+      const st = el("select", {});
+      for (const s of ["open", "in_progress", "resolved", "closed"]) st.appendChild(el("option", { value: s, text: t("st_" + s), ...(s === ticket.status ? { selected: "" } : {}) }));
+      const sbtn = el("button", { class: "primary sm", text: t("save") });
+      sbtn.addEventListener("click", async () => { sbtn.disabled = true; try { await api(`/api/helpdesk/tickets/${encodeURIComponent(id)}/status`, { method: "POST", body: { status: st.value } }); flash("ok", t("saved")); openTicket(id); loadTicketQueue(); loadMyTickets(); } catch (ex) { flash("err", ex.message); sbtn.disabled = false; } });
+      card.appendChild(el("div", { style: "border-top:1px solid var(--line);margin-top:10px;padding-top:10px" }, [el("label", { text: t("status") }), el("div", { class: "actions" }, [el("div", { class: "grow" }, [st]), sbtn])]));
+    }
+  } catch (ex) { flash("err", ex.message); card.style.display = "none"; }
+}
+
+async function loadPoshConfig() {
+  const card = document.getElementById("hd_posh"); if (!card) return;
+  try {
+    const { members } = await api("/api/admin/posh/committee");
+    let dir = { entries: [] };
+    try { dir = await api("/api/directory"); } catch { /* keep empty */ }
+    clear(card); card.appendChild(h2help(t("poshConfig"), t("posh_config_help")));
+    const sel = el("select", {});
+    sel.appendChild(el("option", { value: "", text: "—" }));
+    for (const e of dir.entries) sel.appendChild(el("option", { value: e.id, text: e.name }));
+    const btn = el("button", { class: "primary sm", text: t("addMember") });
+    btn.addEventListener("click", async () => { if (!sel.value) return; btn.disabled = true; try { await api("/api/admin/posh/committee", { method: "POST", body: { employeeId: sel.value } }); loadPoshConfig(); } catch (ex) { flash("err", ex.message); } finally { btn.disabled = false; } });
+    card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [el("div", { class: "grow" }, [sel]), btn]));
+    if (!members.length) card.appendChild(el("div", { class: "muted", text: t("noCommittee") }));
+    for (const m of members) {
+      const rm = el("button", { class: "sm", text: t("remove") });
+      rm.addEventListener("click", async () => { try { await api(`/api/admin/posh/committee/${encodeURIComponent(m.employee_id)}/remove`, { method: "POST" }); loadPoshConfig(); } catch (ex) { flash("err", ex.message); } });
+      card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: m.name || m.employee_id }), el("div", { class: "v" }, [el("div", { class: "actions" }, [rm])])]));
     }
   } catch (ex) { flash("err", ex.message); }
 }

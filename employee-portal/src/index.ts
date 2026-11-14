@@ -29,6 +29,7 @@ import { encryptField, decryptField } from "./fieldcrypto.ts";
 import { countLeaveDays, canTakeLeave } from "./leave.ts";
 import { type AttendanceDay, hhmmToMinutes, dayExceptions, summarize } from "./attendance.ts";
 import { isDelegationActive } from "./approvals.ts";
+import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, canHandleTicket } from "./helpdesk.ts";
 
 export interface Env {
   DB: D1Database;
@@ -700,6 +701,121 @@ async function handleDelegationRevoke(actor: Actor, env: Env, id: string): Promi
   return json({ ok: true, revoked: true });
 }
 
+// ---- FR-09 Helpdesk + FR-21 POSH -----------------------------------------------
+async function isPoshCommittee(env: Env, actor: Actor): Promise<boolean> {
+  if (!actor.employeeId) return false;
+  return !!(await env.DB.prepare("SELECT 1 FROM posh_committee WHERE employee_id = ?").bind(actor.employeeId).first());
+}
+function ticketFlags(actor: Actor, committee: boolean) {
+  return { isAgent: hasPermission(actor.role, "helpdesk.agent"), isCommittee: committee };
+}
+
+async function handleTicketCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { category?: string; subject?: string; description?: string };
+  const category = String(b.category ?? "").trim();
+  const subject = String(b.subject ?? "").trim();
+  if (!isValidCategory(category)) return json({ error: "invalid category" }, 400);
+  if (!subject) return json({ error: "subject required" }, 400);
+  const id = uid();
+  await env.DB.prepare("INSERT INTO tickets (id, employee_id, category, subject, description) VALUES (?,?,?,?,?)")
+    .bind(id, actor.employeeId, category, subject, String(b.description ?? "")).run();
+  // POSH subjects are confidential — keep them out of the audit detail.
+  await audit(env, actor.userId, "TICKET_CREATE", "ticket", id, category === "posh" ? "posh complaint filed" : `${category}: ${subject.slice(0, 40)}`);
+  return json({ ok: true, id, status: "open" });
+}
+
+async function handleMyTickets(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ tickets: [] });
+  const now = new Date().toISOString();
+  const rows = (await env.DB.prepare("SELECT id, category, subject, status, created_at, updated_at FROM tickets WHERE employee_id = ? ORDER BY updated_at DESC LIMIT 100").bind(actor.employeeId).all()).results as any[];
+  const tickets = rows.map((r) => ({ ...r, slaDue: slaDueISO(r.created_at, r.category), overdue: isOverdue(r.created_at, r.category, r.status, now) }));
+  return json({ tickets });
+}
+
+async function handleTicketQueue(actor: Actor, env: Env): Promise<Response> {
+  const isAgent = hasPermission(actor.role, "helpdesk.agent");
+  const committee = await isPoshCommittee(env, actor);
+  if (!isAgent && !committee) return json({ tickets: [], count: 0 });
+  const conds: string[] = [];
+  if (isAgent) conds.push("t.category != 'posh'");
+  if (committee) conds.push("t.category = 'posh'");
+  const now = new Date().toISOString();
+  const rows = (await env.DB.prepare(
+    `SELECT t.id, t.employee_id, e.name AS employee_name, t.category, t.subject, t.status, t.created_at FROM tickets t JOIN employees e ON e.id = t.employee_id WHERE (${conds.join(" OR ")}) AND t.status IN ('open','in_progress') AND t.employee_id != ? ORDER BY t.created_at ASC LIMIT 200`
+  ).bind(actor.employeeId ?? "").all()).results as any[];
+  const tickets = rows.map((r) => ({ ...r, slaDue: slaDueISO(r.created_at, r.category), overdue: isOverdue(r.created_at, r.category, r.status, now) }));
+  return json({ tickets, count: tickets.length });
+}
+
+async function handleTicketDetail(actor: Actor, env: Env, id: string): Promise<Response> {
+  const t = await env.DB.prepare("SELECT id, employee_id, category, subject, description, status, assignee_user_id, created_at, updated_at, resolved_at FROM tickets WHERE id = ?").bind(id).first<any>();
+  if (!t) return json({ error: "not found" }, 404);
+  const flags = ticketFlags(actor, await isPoshCommittee(env, actor));
+  if (!canViewTicket(actor.employeeId, { employeeId: t.employee_id, category: t.category }, flags)) {
+    await audit(env, actor.userId, "DENY", "ticket", id, "view denied by policy");
+    return json({ error: "forbidden" }, 403);
+  }
+  if (t.category === "posh" && actor.employeeId !== t.employee_id) await audit(env, actor.userId, "POSH_VIEW", "ticket", id, "committee viewed POSH complaint");
+  const comments = (await env.DB.prepare("SELECT c.id, c.body, c.created_at, e.name AS author_name, u.role AS author_role FROM ticket_comments c LEFT JOIN users u ON u.id = c.author_user_id LEFT JOIN employees e ON e.id = u.employee_id WHERE c.ticket_id = ? ORDER BY c.created_at ASC").bind(id).all()).results;
+  const now = new Date().toISOString();
+  return json({ ticket: { ...t, slaDue: slaDueISO(t.created_at, t.category), overdue: isOverdue(t.created_at, t.category, t.status, now) }, comments, canHandle: canHandleTicket({ employeeId: t.employee_id, category: t.category }, flags) });
+}
+
+async function handleTicketComment(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  const t = await env.DB.prepare("SELECT employee_id, category FROM tickets WHERE id = ?").bind(id).first<{ employee_id: string; category: string }>();
+  if (!t) return json({ error: "not found" }, 404);
+  const flags = ticketFlags(actor, await isPoshCommittee(env, actor));
+  if (!canViewTicket(actor.employeeId, { employeeId: t.employee_id, category: t.category }, flags)) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { body?: string };
+  const body = String(b.body ?? "").trim();
+  if (!body) return json({ error: "comment body required" }, 400);
+  const cid = uid();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO ticket_comments (id, ticket_id, author_user_id, body) VALUES (?,?,?,?)").bind(cid, id, actor.userId, body),
+    env.DB.prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").bind(id),
+  ]);
+  await audit(env, actor.userId, "TICKET_COMMENT", "ticket", id, "");
+  return json({ ok: true, id: cid });
+}
+
+async function handleTicketStatus(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  const t = await env.DB.prepare("SELECT employee_id, category FROM tickets WHERE id = ?").bind(id).first<{ employee_id: string; category: string }>();
+  if (!t) return json({ error: "not found" }, 404);
+  const flags = ticketFlags(actor, await isPoshCommittee(env, actor));
+  if (!canHandleTicket({ employeeId: t.employee_id, category: t.category }, flags)) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { status?: string; assigneeUserId?: string };
+  const status = String(b.status ?? "").trim();
+  if (!isValidStatus(status)) return json({ error: "invalid status" }, 400);
+  const resolvedExpr = status === "resolved" || status === "closed" ? "datetime('now')" : "resolved_at";
+  await env.DB.prepare(`UPDATE tickets SET status = ?, assignee_user_id = COALESCE(?, assignee_user_id), updated_at = datetime('now'), resolved_at = ${resolvedExpr} WHERE id = ?`)
+    .bind(status, b.assigneeUserId ?? null, id).run();
+  await audit(env, actor.userId, "TICKET_STATUS", "ticket", id, status);
+  return json({ ok: true, status });
+}
+
+async function handlePoshCommitteeList(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "posh.manage")) return json({ error: "forbidden" }, 403);
+  const members = (await env.DB.prepare("SELECT p.employee_id, e.name FROM posh_committee p LEFT JOIN employees e ON e.id = p.employee_id ORDER BY e.name").all()).results;
+  return json({ members });
+}
+async function handlePoshCommitteeAdd(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "posh.manage")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { employeeId?: string };
+  const eid = String(b.employeeId ?? "").trim();
+  if (!eid) return json({ error: "employeeId required" }, 400);
+  if (!(await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(eid).first())) return json({ error: "unknown employee" }, 404);
+  await env.DB.prepare("INSERT OR IGNORE INTO posh_committee (employee_id, added_by) VALUES (?,?)").bind(eid, actor.userId).run();
+  await audit(env, actor.userId, "POSH_COMMITTEE_ADD", "posh", eid, "");
+  return json({ ok: true });
+}
+async function handlePoshCommitteeRemove(actor: Actor, env: Env, eid: string): Promise<Response> {
+  if (!hasPermission(actor.role, "posh.manage")) return json({ error: "forbidden" }, 403);
+  await env.DB.prepare("DELETE FROM posh_committee WHERE employee_id = ?").bind(eid).run();
+  await audit(env, actor.userId, "POSH_COMMITTEE_REMOVE", "posh", eid, "");
+  return json({ ok: true });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -754,6 +870,21 @@ export default {
       if (path === "/api/approvals/delegations" && method === "POST") return await handleDelegationCreate(actor, env, request);
       const drev = path.match(/^\/api\/approvals\/delegations\/([^/]+)\/revoke$/);
       if (drev && method === "POST") return await handleDelegationRevoke(actor, env, decodeURIComponent(drev[1]));
+
+      // FR-09 Helpdesk + FR-21 POSH
+      if (path === "/api/helpdesk/tickets" && method === "POST") return await handleTicketCreate(actor, env, request);
+      if (path === "/api/helpdesk/tickets" && method === "GET") return await handleMyTickets(actor, env);
+      if (path === "/api/helpdesk/queue" && method === "GET") return await handleTicketQueue(actor, env);
+      const tcom = path.match(/^\/api\/helpdesk\/tickets\/([^/]+)\/comment$/);
+      if (tcom && method === "POST") return await handleTicketComment(actor, env, decodeURIComponent(tcom[1]), request);
+      const tst = path.match(/^\/api\/helpdesk\/tickets\/([^/]+)\/status$/);
+      if (tst && method === "POST") return await handleTicketStatus(actor, env, decodeURIComponent(tst[1]), request);
+      const tdet = path.match(/^\/api\/helpdesk\/tickets\/([^/]+)$/);
+      if (tdet && method === "GET") return await handleTicketDetail(actor, env, decodeURIComponent(tdet[1]));
+      if (path === "/api/admin/posh/committee" && method === "GET") return await handlePoshCommitteeList(actor, env);
+      if (path === "/api/admin/posh/committee" && method === "POST") return await handlePoshCommitteeAdd(actor, env, request);
+      const prem = path.match(/^\/api\/admin\/posh\/committee\/([^/]+)\/remove$/);
+      if (prem && method === "POST") return await handlePoshCommitteeRemove(actor, env, decodeURIComponent(prem[1]));
 
       return json({ error: "not found" }, 404); // default deny: unknown route
     } catch (e) {
