@@ -1,0 +1,16 @@
+{
+  // 4SYZ Employee Portal — R0 foundation. Separate Worker + D1 from SmartPantry.
+  "name": "employee-portal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "employee-portal-db",
+      "database_id": "7aad493c-17bc-48b2-b86c-a3dd7f604512",
+      "migrations_dir": "migrations"
+    }
+  ]
+  // JWT_SECRET is a secret, not a var: set with `wrangler secret put JWT_SECRET`.
+}

@@ -1,0 +1,77 @@
+name: Employee Portal
+
+# Separate pipeline for the 4SYZ Employee Portal (Option B: same repo as
+# SmartPantry, but its OWN Worker + OWN D1 + OWN identity realm). Path-filtered to
+# employee-portal/** so a SmartPantry-only change never redeploys the portal and
+# vice versa — the two ship on independent cadences.
+#
+# Gates on every push/PR that touches the portal: typecheck + access-control tests.
+# The Cloudflare steps (migrate + deploy) run only on push to main AND only once
+# CLOUDFLARE_API_TOKEN is present, so the build is green before secrets are set.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "employee-portal/**"
+      - ".github/workflows/employee-portal.yml"
+  pull_request:
+    paths:
+      - "employee-portal/**"
+      - ".github/workflows/employee-portal.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: employee-portal-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+jobs:
+  employee-portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: employee-portal
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: employee-portal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Access-control tests (isolation / IDOR / redaction)
+        run: npm test
+
+      # The portal's schema IS migration-managed (0001 init + seed, 0002 revocation),
+      # unlike SmartPantry's runtime-bootstrapped D1. Safe to re-run — applied
+      # migrations are skipped. Runs only after the gates above pass.
+      - name: Apply D1 migrations (employee-portal-db)
+        if: github.ref == 'refs/heads/main' && env.CF_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: employee-portal
+          command: d1 migrations apply employee-portal-db --remote
+
+      - name: Deploy portal Worker
+        if: github.ref == 'refs/heads/main' && env.CF_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: employee-portal
+
+      - name: Deploy skipped (secrets not configured)
+        if: github.ref == 'refs/heads/main' && env.CF_TOKEN == ''
+        run: echo "::notice::Portal built & tested green. Set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID repo secrets to enable auto-deploy, and 'wrangler secret put JWT_SECRET' on the employee-portal Worker before logins work."

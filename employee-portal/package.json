@@ -1,0 +1,19 @@
+{
+  "name": "employee-portal",
+  "version": "0.0.0-r0",
+  "private": true,
+  "type": "module",
+  "description": "4SYZ Employee Portal — R0 foundation (identity realm, RBAC/policy engine, record scoping, audit).",
+  "scripts": {
+    "test": "node --test --experimental-strip-types",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "wrangler dev",
+    "migrate:local": "wrangler d1 migrations apply employee-portal-db --local",
+    "migrate:remote": "wrangler d1 migrations apply employee-portal-db --remote",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "wrangler": "^3.90.0"
+  }
+}

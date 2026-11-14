@@ -2,6 +2,11 @@ import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
 export default defineWorkersConfig({
   test: {
+    // Only SmartPantry's own suites run in the Workers pool. Scope to test/** so
+    // the Employee Portal's node:test file (employee-portal/test/*.test.ts, run by
+    // its own `node --test` pipeline) is never swept into this Worker runtime,
+    // where its TS-strip imports would fail. Keep all SmartPantry tests under test/.
+    include: ["test/**/*.{test,spec}.ts"],
     // Integration suites make many sequential HTTP round-trips per test against a
     // single shared worker runtime; deep into a full run the default 5s ceiling is
     // too tight (a timeout mid-test also corrupts the pool's isolated-storage stack).
