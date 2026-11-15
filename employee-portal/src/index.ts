@@ -35,7 +35,7 @@ import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, ca
 import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
-import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, ptForState, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision, type PTConfig } from "./payroll.ts";
+import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, ptForState, tdsMonthly, fyOf, fyMonthsRemaining, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision, type PTConfig, type TDSConfig } from "./payroll.ts";
 
 export interface Env {
   DB: D1Database;
@@ -875,7 +875,7 @@ async function handleEmployeeSalarySet(actor: Actor, env: Env, employeeId: strin
 
 // Statutory config (S7a: Professional Tax). Parameterised + effective-dated; no hardcoded
 // rates. Shipped disabled until a CA confirms the slabs and the vectors pass.
-const STATUTES = new Set(["pt"]); // epf | esi | tds added in later phases
+const STATUTES = new Set(["pt", "tds"]); // epf | esi added when applicable
 async function handleStatutoryConfigGet(actor: Actor, env: Env, statute: string): Promise<Response> {
   if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
   const where = STATUTES.has(statute) ? "WHERE statute = ?" : "";
@@ -889,13 +889,18 @@ async function handleStatutoryConfigSet(actor: Actor, env: Env, request: Request
   if (!hasPermission(actor.role, "statutory.config")) return json({ error: "forbidden" }, 403);
   const b = await request.json().catch(() => ({})) as { statute?: string; state?: string; fy?: string; effectiveFrom?: string; params?: unknown; enabled?: boolean };
   const statute = String(b.statute ?? "").trim().toLowerCase();
-  if (!STATUTES.has(statute)) return json({ error: "unsupported statute (S7a: pt only)" }, 400);
-  const state = String(b.state ?? "").trim().toUpperCase();
-  if (!/^[A-Z]{2,3}$/.test(state)) return json({ error: "valid state code required" }, 400);
+  if (!STATUTES.has(statute)) return json({ error: "unsupported statute" }, 400);
+  // PT is per-state; TDS is national ('*').
+  const state = statute === "tds" ? "*" : String(b.state ?? "").trim().toUpperCase();
+  if (statute !== "tds" && !/^[A-Z]{2,3}$/.test(state)) return json({ error: "valid state code required" }, 400);
   if (!b.params || typeof b.params !== "object") return json({ error: "params object required" }, 400);
   if (statute === "pt") {
     const slabs = (b.params as { slabs?: unknown }).slabs;
     if (!Array.isArray(slabs) || !slabs.length) return json({ error: "pt params need a non-empty slabs array" }, 400);
+  }
+  if (statute === "tds") {
+    const rg = (b.params as { regimes?: { old?: unknown; new?: unknown } }).regimes;
+    if (!rg || !rg.old || !rg.new) return json({ error: "tds params need regimes.old and regimes.new" }, 400);
   }
   const id = `${statute}_${state}`;
   await env.DB.prepare(
@@ -904,6 +909,65 @@ async function handleStatutoryConfigSet(actor: Actor, env: Env, request: Request
   ).bind(id, statute, state, String(b.fy ?? ""), String(b.effectiveFrom ?? ""), JSON.stringify(b.params), b.enabled ? 1 : 0, actor.userId).run();
   await audit(env, actor.userId, "STATUTORY_CONFIG_SET", "payroll", id, `${statute}/${state} enabled=${b.enabled ? 1 : 0}`);
   return json({ ok: true, id, enabled: !!b.enabled });
+}
+
+// TDS self-service (S7b): an employee elects their regime for the FY and declares
+// investments; only VERIFIED declarations reduce TDS (unless the config honours provisional).
+const TAX_SECTIONS = new Set(["80C", "80D", "HRA", "HOME_LOAN", "OTHER"]);
+async function handleTaxMe(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const fy = fyOf(todayISO().slice(0, 7));
+  const prof = await env.DB.prepare("SELECT tax_regime FROM employee_statutory WHERE employee_id = ?").bind(actor.employeeId).first<{ tax_regime: string | null }>();
+  const declarations = (await env.DB.prepare(
+    "SELECT id, fy, section, amount_paise, status, note, created_at FROM tax_declarations WHERE employee_id = ? AND fy = ? ORDER BY created_at DESC"
+  ).bind(actor.employeeId, fy).all()).results;
+  return json({ fy, regime: prof?.tax_regime ?? "new", declarations });
+}
+
+async function handleTaxRegime(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { regime?: string };
+  const regime = b.regime === "old" ? "old" : b.regime === "new" ? "new" : null;
+  if (!regime) return json({ error: "regime must be 'old' or 'new'" }, 400);
+  await env.DB.prepare(
+    "INSERT INTO employee_statutory (employee_id, tax_regime, updated_at) VALUES (?,?, datetime('now')) ON CONFLICT(employee_id) DO UPDATE SET tax_regime=excluded.tax_regime, updated_at=datetime('now')"
+  ).bind(actor.employeeId, regime).run();
+  await audit(env, actor.userId, "TAX_REGIME_SET", "payroll", actor.employeeId, regime);
+  return json({ ok: true, regime });
+}
+
+async function handleTaxDeclare(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as { section?: string; amountRupees?: number; fy?: string };
+  const section = String(b.section ?? "").trim().toUpperCase();
+  if (!TAX_SECTIONS.has(section)) return json({ error: "invalid section" }, 400);
+  const amount = Math.max(0, Math.round(Number(b.amountRupees) * 100 || 0));
+  if (amount <= 0) return json({ error: "amount required" }, 400);
+  const fy = /^\d{4}-\d{2}$/.test(String(b.fy ?? "")) ? String(b.fy) : fyOf(todayISO().slice(0, 7));
+  const id = uid();
+  await env.DB.prepare("INSERT INTO tax_declarations (id, employee_id, fy, section, amount_paise, status) VALUES (?,?,?,?,?, 'declared')")
+    .bind(id, actor.employeeId, fy, section, amount).run();
+  await audit(env, actor.userId, "TAX_DECLARE", "payroll", id, `${section} ${amount} ${fy}`);
+  return json({ ok: true, id });
+}
+
+async function handleTaxDeclQueue(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "tax.verify")) return json({ error: "forbidden" }, 403);
+  const rows = (await env.DB.prepare(
+    "SELECT d.id, d.employee_id, e.name AS employee_name, d.fy, d.section, d.amount_paise, d.status, d.created_at FROM tax_declarations d JOIN employees e ON e.id = d.employee_id ORDER BY (d.status='declared') DESC, d.created_at DESC LIMIT 200"
+  ).all()).results;
+  return json({ declarations: rows });
+}
+
+async function handleTaxDeclDecide(actor: Actor, env: Env, id: string, action: "verify" | "reject", request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "tax.verify")) return json({ error: "forbidden" }, 403);
+  const d = await env.DB.prepare("SELECT status FROM tax_declarations WHERE id = ?").bind(id).first<{ status: string }>();
+  if (!d) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { note?: string };
+  const status = action === "verify" ? "verified" : "rejected";
+  await env.DB.prepare("UPDATE tax_declarations SET status = ?, verified_by = ?, note = ? WHERE id = ?").bind(status, actor.userId, b.note ?? null, id).run();
+  await audit(env, actor.userId, action === "verify" ? "TAX_DECL_VERIFY" : "TAX_DECL_REJECT", "payroll", id, b.note ?? "");
+  return json({ ok: true, status });
 }
 
 // Loss-of-pay working days in [fromISO, toISO]: a working day (not a weekly-off, not a
@@ -948,8 +1012,8 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
   const weekOff = new Set(await loadWeekOffDays(env));
 
   const emps = (await env.DB.prepare(
-    "SELECT id, name, location, date_of_joining, date_of_exit, (bank_account IS NOT NULL AND bank_account != '') AS has_bank FROM employees"
-  ).all<{ id: string; name: string; location: string | null; date_of_joining: string | null; date_of_exit: string | null; has_bank: number }>()).results;
+    "SELECT id, name, location, date_of_joining, date_of_exit, (bank_account IS NOT NULL AND bank_account != '') AS has_bank, (pan IS NOT NULL AND pan != '') AS has_pan FROM employees"
+  ).all<{ id: string; name: string; location: string | null; date_of_joining: string | null; date_of_exit: string | null; has_bank: number; has_pan: number }>()).results;
 
   const attRows = (await env.DB.prepare("SELECT employee_id, date, status, ot_minutes FROM attendance_days WHERE date LIKE ?").bind(`${ym}-%`).all<{ employee_id: string; date: string; status: string; ot_minutes: number }>()).results;
   const attByEmp = new Map<string, { status: Map<string, string>; ot: number }>();
@@ -990,7 +1054,33 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
     try { ptConfigByState.set(r.state, { ...(JSON.parse(r.params) as PTConfig), enabled: !!r.enabled }); } catch { /* skip malformed config */ }
   }
   const empPtState = new Map<string, string>();
-  for (const r of (await env.DB.prepare("SELECT employee_id, pt_state FROM employee_statutory").all<{ employee_id: string; pt_state: string | null }>()).results) if (r.pt_state) empPtState.set(r.employee_id, r.pt_state);
+  const empRegime = new Map<string, string>();
+  for (const r of (await env.DB.prepare("SELECT employee_id, pt_state, tax_regime FROM employee_statutory").all<{ employee_id: string; pt_state: string | null; tax_regime: string | null }>()).results) {
+    if (r.pt_state) empPtState.set(r.employee_id, r.pt_state);
+    if (r.tax_regime) empRegime.set(r.employee_id, r.tax_regime);
+  }
+
+  // TDS (S7b): national config, FY projection, verified declarations and YTD true-up —
+  // all inert unless the TDS config is enabled.
+  const fy = fyOf(ym);
+  const monthsRemaining = fyMonthsRemaining(ym);
+  let tdsConfig: TDSConfig | null = null;
+  const tdsRow = await env.DB.prepare("SELECT params, enabled FROM statutory_config WHERE statute = 'tds' AND state = '*'").first<{ params: string; enabled: number }>();
+  if (tdsRow) { try { tdsConfig = { ...(JSON.parse(tdsRow.params) as TDSConfig), enabled: !!tdsRow.enabled }; } catch { /* malformed */ } }
+  const declByEmp = new Map<string, number>(), ytdGross = new Map<string, number>(), ytdTds = new Map<string, number>();
+  if (tdsConfig?.enabled) {
+    const statusClause = tdsConfig.honourProvisional ? "status IN ('declared','verified')" : "status = 'verified'";
+    for (const r of (await env.DB.prepare(`SELECT employee_id, SUM(amount_paise) AS total FROM tax_declarations WHERE fy = ? AND ${statusClause} GROUP BY employee_id`).bind(fy).all<{ employee_id: string; total: number }>()).results) declByEmp.set(r.employee_id, Number(r.total) || 0);
+    const locked = (await env.DB.prepare("SELECT l.id AS line_id, l.employee_id, l.gross_paise, r.ym FROM payroll_lines l JOIN payroll_runs r ON r.id = l.run_id WHERE r.status = 'locked'").all<{ line_id: string; employee_id: string; gross_paise: number; ym: string }>()).results;
+    const lineEmp = new Map<string, string>(); const priorIds: string[] = [];
+    for (const row of locked) if (fyOf(row.ym) === fy && row.ym < ym) { ytdGross.set(row.employee_id, (ytdGross.get(row.employee_id) || 0) + Number(row.gross_paise || 0)); lineEmp.set(row.line_id, row.employee_id); priorIds.push(row.line_id); }
+    for (let i = 0; i < priorIds.length; i += 50) {
+      const part = priorIds.slice(i, i + 50);
+      for (const c of (await env.DB.prepare(`SELECT line_id, amount_paise FROM payroll_line_components WHERE code = 'TDS' AND line_id IN (${part.map(() => "?").join(",")})`).bind(...part).all<{ line_id: string; amount_paise: number }>()).results) {
+        const emp = lineEmp.get(c.line_id); if (emp) ytdTds.set(emp, (ytdTds.get(emp) || 0) + Number(c.amount_paise || 0));
+      }
+    }
+  }
 
   const stmts: D1PreparedStatement[] = [
     env.DB.prepare("DELETE FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?)").bind(runId),
@@ -1017,8 +1107,20 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
         line.components.push({ code: "PT", name: "Professional Tax", kind: "deduction", amount: pt });
         line.deductions += pt;
         line.net = line.grossPaid - line.deductions;
-        if (line.net < 0) line.exception = "negative_net";
       }
+      // Statutory deduction: TDS (inert unless the TDS config is enabled).
+      if (tdsConfig?.enabled) {
+        const regime = empRegime.get(e.id) === "old" ? "old" : "new";
+        const projected = (ytdGross.get(e.id) || 0) + line.grossPaid * monthsRemaining;
+        const decls = regime === "old" ? (declByEmp.get(e.id) || 0) : 0;
+        const tds = tdsMonthly({ projectedAnnualGross: projected, regime, declarations: decls, ytdTds: ytdTds.get(e.id) || 0, monthsRemaining, hasPan: !!e.has_pan }, tdsConfig).monthlyTds;
+        if (tds > 0) {
+          line.components.push({ code: "TDS", name: "TDS", kind: "deduction", amount: tds });
+          line.deductions += tds;
+          line.net = line.grossPaid - line.deductions;
+        }
+      }
+      if (line.net < 0) line.exception = "negative_net";
     }
     const exception = !line ? "no_salary" : (line.exception || (!e.has_bank ? "missing_bank" : null));
     const gross = line?.grossPaid ?? 0, ded = line?.deductions ?? 0, lop = line?.lopReduction ?? 0, net = line?.net ?? 0;
@@ -1707,9 +1809,16 @@ export default {
       const esg = path.match(/^\/api\/admin\/employees\/([^/]+)\/salary$/);
       if (esg && method === "GET") return await handleEmployeeSalaryGet(actor, env, decodeURIComponent(esg[1]));
       if (esg && method === "POST") return await handleEmployeeSalarySet(actor, env, decodeURIComponent(esg[1]), request);
-      // Statutory config (S7a: Professional Tax)
+      // Statutory config (S7a PT, S7b TDS)
       if (path === "/api/admin/statutory/config" && method === "GET") return await handleStatutoryConfigGet(actor, env, url.searchParams.get("statute") || "pt");
       if (path === "/api/admin/statutory/config" && method === "POST") return await handleStatutoryConfigSet(actor, env, request);
+      // TDS self-service (S7b): regime election + investment declarations
+      if (path === "/api/tax/me" && method === "GET") return await handleTaxMe(actor, env);
+      if (path === "/api/tax/regime" && method === "POST") return await handleTaxRegime(actor, env, request);
+      if (path === "/api/tax/declarations" && method === "POST") return await handleTaxDeclare(actor, env, request);
+      if (path === "/api/admin/tax/declarations" && method === "GET") return await handleTaxDeclQueue(actor, env);
+      const txd = path.match(/^\/api\/admin\/tax\/declarations\/([^/]+)\/(verify|reject)$/);
+      if (txd && method === "POST") return await handleTaxDeclDecide(actor, env, decodeURIComponent(txd[1]), txd[2] as "verify" | "reject", request);
       // Payroll run (P6b)
       if (path === "/api/admin/payroll/runs" && method === "GET") return await handlePayrollRuns(actor, env, url.searchParams.get("month") || "");
       if (path === "/api/admin/payroll/runs" && method === "POST") return await handlePayrollRunPrepare(actor, env, request);

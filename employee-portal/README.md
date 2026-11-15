@@ -181,7 +181,12 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/payroll/runs/:id/reopen` | payroll.approve | locked → a new draft version (locked kept) |
 | GET | `/api/admin/payroll/runs/:id/bank` | payroll.read_all | bank/NEFT advice CSV (decrypts bank; audited) |
 | GET | `/api/admin/statutory/config?statute=pt` | payroll.read_all | S7a: statutory config (PT slabs per state) |
-| POST | `/api/admin/statutory/config` | statutory.config | upsert a PT state config `{statute:"pt",state,params,enabled}` |
+| POST | `/api/admin/statutory/config` | statutory.config | upsert a PT state config `{statute:"pt",state,params,enabled}` or TDS config `{statute:"tds",…}` |
+| GET | `/api/tax/me` | any login | S7b: own FY regime + investment declarations |
+| POST | `/api/tax/regime` | any login | elect `{regime:"old"\|"new"}` for the FY |
+| POST | `/api/tax/declarations` | any login | declare `{section,amountRupees,fy?}` (80C/80D/HRA/HOME_LOAN/OTHER) |
+| GET | `/api/admin/tax/declarations` | tax.verify | declaration queue to verify |
+| POST | `/api/admin/tax/declarations/:id/verify`·`/reject` | tax.verify | verify/reject a declaration `{note?}` |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -348,8 +353,30 @@ S7b**. Statutory math is **parameterised and CA-validated** — no rate is hardc
 - **Shipped DISABLED.** The seeded Karnataka slabs (nil ≤ ₹24,999, ₹200 above) are
   illustrative; **CA confirms the current-FY slabs**, Finance enters them and flips Enabled,
   and a **1–2 month parallel run reconciles to zero** before PT drives real payslips.
-- **Next:** S7b TDS (CA-heavy) → S7c filings (ECR/ESIC/PT challan/24Q/Form 16 — ECR/ESIC not
-  needed while EPF/ESI are inapplicable), then **payroll JV → Zoho Books**.
+## Statutory — S7b: TDS on salary (migration `0019`)
+
+Full spec: `docs/payroll-statutory-spec.md`. Parameterised + CA-validated; **no rate is
+hardcoded**, and TDS is **inert until Finance enables the config**.
+
+- **Pure engine** (`src/payroll.ts`, unit-tested): `slabTax` (progressive bands),
+  `tdsMonthly` (projection method — annual tax on projected FY income, less **YTD already
+  deducted**, over the **remaining months**, so it trues up), with **rebate 87A**, **cess**,
+  **surcharge bands**, and **206AA** (no-PAN floor). `fyOf` / `fyMonthsRemaining` for the
+  Indian Apr–Mar year. Returns 0 unless the config exists AND is enabled.
+- **Self-service** (`tax_declarations`): an employee **elects a regime** for the FY and,
+  under the **old** regime, **declares investments** (80C/80D/HRA/home-loan/other). Only
+  **verified** declarations reduce TDS (unless the config honours provisional). HR/Finance
+  **verify/reject** via a queue (`tax.verify`). New regime applies the standard deduction only.
+- **Run integration** — the run projects each employee's annual gross (prior **locked** FY
+  runs' gross + current month annualised), reads verified declarations + regime + PAN
+  presence, computes monthly TDS via `tdsMonthly`, and adds a **TDS** deduction line →
+  net/register/payslip/bank advice. YTD TDS comes from prior locked runs in the same FY.
+- **UI** — employee **Tax (TDS)** card in Profile (regime + declarations); finance **TDS
+  config** (advanced JSON params + enable) and **declaration-verify queue** in the Payroll tab.
+- **Shipped DISABLED** with illustrative FY slabs. The CA confirms current-FY parameters,
+  Finance enters them + enables, a **parallel run reconciles to zero**, then TDS goes live.
+- **Next — S7c filings:** PT challan, TDS **24Q**, **Form 16 Part B** (PF ECR / ESIC not
+  needed while EPF/ESI are inapplicable). Then **payroll JV → Zoho Books**.
 
 ## Quick wins (from the Master Prompt review)
 

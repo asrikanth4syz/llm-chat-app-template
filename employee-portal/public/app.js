@@ -223,6 +223,16 @@ Object.assign(DICT.en, {
   enabledWord: "Enabled", addState: "Add a state:", stateRequired: "Enter a valid state code (e.g. KA).",
   statutory_help: "Per-state Professional Tax slabs. PT is applied in the payroll run only when a state's config is enabled. EPF/ESI are not applicable at current headcount; TDS is a later phase.",
   statutory_ca_note: "⚠ Seeded slabs are ILLUSTRATIVE. Enter the CA-confirmed current-FY slabs and only then tick Enabled — PT does not affect any payslip while disabled.",
+  taxTitle: "Tax (TDS)", regimeNew: "New regime", regimeOld: "Old regime", fyWord: "FY", regimeWord: "Regime",
+  addDeclaration: "Add declaration", amountRequired: "Enter an amount.", noDeclarations: "No declarations.",
+  newRegimeNote: "New regime: declarations don't reduce TDS (only the standard deduction applies).",
+  decl_declared: "pending", decl_verified: "verified", decl_rejected: "rejected",
+  tax_help: "Choose your tax regime for the year and (old regime) declare investments. Only verified declarations reduce TDS. TDS is computed in payroll once Finance enables it.",
+  tax_disabled_note: "TDS is applied in payroll only after Finance enables it (CA-confirmed).",
+  tdsTitle: "TDS config & declarations", tdsParams: "TDS parameters (JSON)", invalidJson: "Invalid JSON.",
+  declQueue: "Declarations to verify", verifyWord: "Verify",
+  tds_help: "National TDS config (regime slabs, standard deduction, rebate 87A, cess, 206AA) and the declaration-verification queue. TDS is inert in payroll until enabled.",
+  tds_ca_note: "⚠ Seeded TDS parameters are ILLUSTRATIVE. Replace with CA-confirmed current-FY values and only then enable. Verify declarations before enabling for a month.",
 });
 Object.assign(DICT.kn, {
   navPayroll: "ವೇತನ", employeeSalary: "ಉದ್ಯೋಗಿ ವೇತನ", componentsCatalog: "ವೇತನ ಘಟಕಗಳು",
@@ -247,6 +257,16 @@ Object.assign(DICT.kn, {
   enabledWord: "ಸಕ್ರಿಯ", addState: "ರಾಜ್ಯ ಸೇರಿಸಿ:", stateRequired: "ಸರಿಯಾದ ರಾಜ್ಯ ಕೋಡ್ ನಮೂದಿಸಿ (ಉದಾ KA).",
   statutory_help: "ರಾಜ್ಯವಾರು ವೃತ್ತಿ ತೆರಿಗೆ ಸ್ಲ್ಯಾಬ್‌ಗಳು. ಸಕ್ರಿಯಗೊಳಿಸಿದಾಗ ಮಾತ್ರ ಅನ್ವಯ. ಇಪಿಎಫ್/ಇಎಸ್‌ಐ ಅನ್ವಯಿಸುವುದಿಲ್ಲ; ಟಿಡಿಎಸ್ ಮುಂದಿನ ಹಂತ.",
   statutory_ca_note: "⚠ ಸೀಡ್ ಸ್ಲ್ಯಾಬ್‌ಗಳು ಉದಾಹರಣೆ ಮಾತ್ರ. CA ದೃಢೀಕರಿಸಿದ ಸ್ಲ್ಯಾಬ್ ನಮೂದಿಸಿ ನಂತರ ಸಕ್ರಿಯಗೊಳಿಸಿ.",
+  taxTitle: "ತೆರಿಗೆ (TDS)", regimeNew: "ಹೊಸ ಪದ್ಧತಿ", regimeOld: "ಹಳೆ ಪದ್ಧತಿ", fyWord: "ಆ.ವ.", regimeWord: "ಪದ್ಧತಿ",
+  addDeclaration: "ಘೋಷಣೆ ಸೇರಿಸಿ", amountRequired: "ಮೊತ್ತ ನಮೂದಿಸಿ.", noDeclarations: "ಘೋಷಣೆಗಳಿಲ್ಲ.",
+  newRegimeNote: "ಹೊಸ ಪದ್ಧತಿ: ಘೋಷಣೆಗಳು TDS ಕಡಿಮೆ ಮಾಡುವುದಿಲ್ಲ (ಪ್ರಮಾಣಿತ ಕಡಿತ ಮಾತ್ರ).",
+  decl_declared: "ಬಾಕಿ", decl_verified: "ಪರಿಶೀಲಿತ", decl_rejected: "ತಿರಸ್ಕೃತ",
+  tax_help: "ವರ್ಷದ ತೆರಿಗೆ ಪದ್ಧತಿ ಆರಿಸಿ ಮತ್ತು (ಹಳೆ ಪದ್ಧತಿ) ಹೂಡಿಕೆ ಘೋಷಿಸಿ. ಪರಿಶೀಲಿತ ಘೋಷಣೆಗಳು ಮಾತ್ರ TDS ಕಡಿಮೆ ಮಾಡುತ್ತವೆ.",
+  tax_disabled_note: "ಹಣಕಾಸು ಸಕ್ರಿಯಗೊಳಿಸಿದ ನಂತರವೇ TDS ಅನ್ವಯ.",
+  tdsTitle: "TDS ಕಾನ್ಫಿಗ್ ಮತ್ತು ಘೋಷಣೆಗಳು", tdsParams: "TDS ನಿಯತಾಂಕಗಳು (JSON)", invalidJson: "ಅಮಾನ್ಯ JSON.",
+  declQueue: "ಪರಿಶೀಲಿಸಬೇಕಾದ ಘೋಷಣೆಗಳು", verifyWord: "ಪರಿಶೀಲಿಸಿ",
+  tds_help: "ರಾಷ್ಟ್ರೀಯ TDS ಕಾನ್ಫಿಗ್ ಮತ್ತು ಘೋಷಣೆ ಪರಿಶೀಲನೆ. ಸಕ್ರಿಯಗೊಳಿಸುವವರೆಗೆ TDS ಜಡ.",
+  tds_ca_note: "⚠ ಸೀಡ್ TDS ನಿಯತಾಂಕಗಳು ಉದಾಹರಣೆ ಮಾತ್ರ. CA ದೃಢೀಕರಿಸಿದ ಮೌಲ್ಯ ನಮೂದಿಸಿ ನಂತರ ಸಕ್ರಿಯಗೊಳಿಸಿ.",
 });
 Object.assign(DICT.hi, {
   navPayroll: "पेरोल", employeeSalary: "कर्मचारी वेतन", componentsCatalog: "वेतन घटक",
@@ -271,6 +291,16 @@ Object.assign(DICT.hi, {
   enabledWord: "सक्रिय", addState: "राज्य जोड़ें:", stateRequired: "मान्य राज्य कोड दर्ज करें (जैसे KA).",
   statutory_help: "राज्यवार व्यवसाय कर स्लैब। सक्रिय होने पर ही पेरोल में लागू। ईपीएफ/ईएसआई लागू नहीं; टीडीएस अगला चरण।",
   statutory_ca_note: "⚠ सीड स्लैब केवल उदाहरण हैं। CA द्वारा पुष्ट स्लैब दर्ज करें, तभी सक्रिय करें — अक्षम रहते PT किसी पे-स्लिप को प्रभावित नहीं करता।",
+  taxTitle: "कर (TDS)", regimeNew: "नई व्यवस्था", regimeOld: "पुरानी व्यवस्था", fyWord: "वि.व.", regimeWord: "व्यवस्था",
+  addDeclaration: "घोषणा जोड़ें", amountRequired: "राशि दर्ज करें।", noDeclarations: "कोई घोषणा नहीं।",
+  newRegimeNote: "नई व्यवस्था: घोषणाएँ TDS कम नहीं करतीं (केवल मानक कटौती लागू)।",
+  decl_declared: "लंबित", decl_verified: "सत्यापित", decl_rejected: "अस्वीकृत",
+  tax_help: "वर्ष की कर व्यवस्था चुनें और (पुरानी व्यवस्था) निवेश घोषित करें। केवल सत्यापित घोषणाएँ TDS कम करती हैं।",
+  tax_disabled_note: "वित्त द्वारा सक्षम करने के बाद ही TDS पेरोल में लागू होता है।",
+  tdsTitle: "TDS कॉन्फ़िग और घोषणाएँ", tdsParams: "TDS पैरामीटर (JSON)", invalidJson: "अमान्य JSON।",
+  declQueue: "सत्यापन हेतु घोषणाएँ", verifyWord: "सत्यापित करें",
+  tds_help: "राष्ट्रीय TDS कॉन्फ़िग और घोषणा सत्यापन। सक्षम होने तक TDS निष्क्रिय।",
+  tds_ca_note: "⚠ सीड TDS पैरामीटर केवल उदाहरण हैं। CA द्वारा पुष्ट मान दर्ज करें, तभी सक्षम करें।",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -780,8 +810,56 @@ function renderProfile() {
   // my change requests
   body.appendChild(el("div", { class: "card", id: "myreq" }, [ el("h2", { text: t("myRequests") }), el("div", { class: "muted", text: "…" }) ]));
 
+  // tax (TDS): regime election + investment declarations (S7b)
+  body.appendChild(el("div", { class: "card", id: "profile_tax" }, [ h2help(t("taxTitle"), t("tax_help")), el("div", { class: "muted", text: "…" }) ]));
+
   // HR verify queue
   if (canVerify()) body.appendChild(el("div", { class: "card", id: "queue" }, [ el("h2", { text: t("verifyQueue") }), el("div", { class: "muted", text: "…" }) ]));
+  loadTaxCard();
+}
+
+// Employee TDS self-service: FY regime election + investment declarations.
+async function loadTaxCard() {
+  const card = document.getElementById("profile_tax");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("taxTitle"), t("tax_help")));
+  try {
+    const data = await api("/api/tax/me");
+    const regime = el("select", {});
+    for (const [v, k] of [["new", "regimeNew"], ["old", "regimeOld"]]) regime.appendChild(el("option", { value: v, text: t(k), ...(data.regime === v ? { selected: "" } : {}) }));
+    regime.addEventListener("change", async () => {
+      try { await api("/api/tax/regime", { method: "POST", body: { regime: regime.value } }); flash("ok", t("saved")); loadTaxCard(); }
+      catch (ex) { flash("err", ex.message); }
+    });
+    card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [el("span", { text: `${t("fyWord")} ${data.fy} · ${t("regimeWord")}:` }), regime]));
+    // declarations only matter under the old regime
+    if (data.regime === "old") {
+      const section = el("select", {});
+      for (const s of ["80C", "80D", "HRA", "HOME_LOAN", "OTHER"]) section.appendChild(el("option", { value: s, text: s }));
+      const amt = el("input", { type: "number", min: "0", placeholder: "₹", style: "max-width:120px" });
+      const add = el("button", { class: "sm", text: t("addDeclaration") });
+      add.addEventListener("click", async () => {
+        if (!(Number(amt.value) > 0)) { flash("err", t("amountRequired")); return; }
+        add.disabled = true;
+        try { await api("/api/tax/declarations", { method: "POST", body: { section: section.value, amountRupees: Number(amt.value), fy: data.fy } }); flash("ok", t("saved")); amt.value = ""; loadTaxCard(); }
+        catch (ex) { flash("err", ex.message); }
+        finally { add.disabled = false; }
+      });
+      card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [section, amt, add]));
+    } else {
+      card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:8px", text: t("newRegimeNote") }));
+    }
+    const decls = data.declarations || [];
+    if (!decls.length) card.appendChild(el("div", { class: "muted", text: t("noDeclarations") }));
+    for (const d of decls) {
+      const pillCls = d.status === "verified" ? "approved" : d.status === "rejected" ? "rejected" : "pending";
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k", text: d.section }),
+        el("div", { class: "v" }, [el("span", { text: fmtINR((d.amount_paise || 0) / 100) }), el("span", { class: "pill " + pillCls, style: "margin-left:8px", text: t("decl_" + d.status) || d.status })]),
+      ]));
+    }
+    card.appendChild(el("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: t("tax_disabled_note") }));
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 function editableRow(field) {
@@ -1824,11 +1902,66 @@ async function loadPayrollView() {
   body.appendChild(el("div", { class: "card", id: "pay_run" }, [h2help(t("payrollRun"), t("payroll_run_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_emp" }, [h2help(t("employeeSalary"), t("emp_salary_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_stat" }, [h2help(t("statutoryPT"), t("statutory_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "pay_tds" }, [h2help(t("tdsTitle"), t("tds_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_cat" }, [h2help(t("componentsCatalog"), t("catalog_help")), el("div", { class: "muted", text: "…" })]));
   loadPayrollRunCard();
   await loadEmployeeSalaryCard();
   loadStatutoryCard();
+  loadTdsAdminCard();
   loadComponentCatalog();
+}
+
+// S7b finance: TDS config (advanced JSON; set rarely by finance/CA) + declaration verify queue.
+async function loadTdsAdminCard() {
+  const card = document.getElementById("pay_tds");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("tdsTitle"), t("tds_help")));
+  card.appendChild(el("div", { class: "msg", style: "background:color-mix(in srgb,var(--warn) 12%,var(--card));color:var(--warn);font-size:12px", text: t("tds_ca_note") }));
+  try {
+    const { configs } = await api("/api/admin/statutory/config?statute=tds");
+    const cfg = (configs || [])[0];
+    const enabled = el("input", { type: "checkbox", ...(cfg && cfg.enabled ? { checked: "" } : {}) });
+    const ta = el("textarea", { rows: "8", style: "width:100%;font-family:ui-monospace,monospace;font-size:12px", ...(canEditStatutory() ? {} : { disabled: "" }) });
+    ta.value = JSON.stringify(cfg ? cfg.params : {}, null, 2);
+    const save = el("button", { class: "primary sm", text: t("save"), ...(canEditStatutory() ? {} : { disabled: "" }) });
+    save.addEventListener("click", async () => {
+      let params; try { params = JSON.parse(ta.value); } catch { flash("err", t("invalidJson")); return; }
+      save.disabled = true;
+      try { await api("/api/admin/statutory/config", { method: "POST", body: { statute: "tds", state: "*", fy: (cfg && cfg.fy) || "", effectiveFrom: (cfg && cfg.effective_from) || "", params, enabled: enabled.checked } }); flash("ok", t("saved")); loadTdsAdminCard(); }
+      catch (ex) { flash("err", ex.message); }
+      finally { save.disabled = false; }
+    });
+    if (canEditStatutory()) {
+      card.appendChild(el("label", { style: "margin:0;font-size:12px", text: t("tdsParams") }));
+      card.appendChild(ta);
+      card.appendChild(el("div", { class: "actions", style: "margin:6px 0" }, [el("label", { style: "margin:0;display:flex;align-items:center;gap:4px;font-size:13px;color:var(--ink)" }, [enabled, el("span", { text: t("enabledWord") })]), save]));
+    } else {
+      card.appendChild(el("div", { class: "muted", style: "font-size:12px", text: `${t("enabledWord")}: ${cfg && cfg.enabled ? "✓" : "✗"}` }));
+    }
+    // declaration verify queue
+    const q = el("div", { style: "margin-top:10px" });
+    card.appendChild(q);
+    const { declarations } = await api("/api/admin/tax/declarations");
+    q.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("declQueue") }));
+    if (!declarations || !declarations.length) { q.appendChild(el("div", { class: "muted", text: t("noDeclarations") })); return; }
+    for (const d of declarations) {
+      const acts = el("div", { class: "actions" });
+      if (d.status === "declared") {
+        acts.appendChild(el("button", { class: "primary sm", text: t("verifyWord"), onclick: () => declDecide(d.id, "verify") }));
+        acts.appendChild(el("button", { class: "sm", text: t("reject"), onclick: () => declDecide(d.id, "reject") }));
+      } else {
+        acts.appendChild(el("span", { class: "pill " + (d.status === "verified" ? "approved" : "rejected"), text: t("decl_" + d.status) || d.status }));
+      }
+      q.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: d.employee_name }), el("div", { class: "muted", style: "font-size:11px", text: `${d.section} · ${d.fy}` })]),
+        el("div", { class: "v" }, [el("span", { text: fmtINR((d.amount_paise || 0) / 100) + "  " }), acts]),
+      ]));
+    }
+    async function declDecide(id, action) {
+      try { await api(`/api/admin/tax/declarations/${encodeURIComponent(id)}/${action}`, { method: "POST", body: {} }); flash("ok", t("saved")); loadTdsAdminCard(); }
+      catch (ex) { flash("err", ex.message); }
+    }
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 // S7a: Professional Tax config editor. Parameterised; disabled until CA confirms the slabs.

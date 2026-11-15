@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   roundPaise, divisorDays, expandComponents, monthlyGross, computeLine, aggregatePayLines,
-  resolveSalarySegments, daysInclusive, ptForState, type SalaryComponent, type PTConfig,
+  resolveSalarySegments, daysInclusive, ptForState, fyOf, fyMonthsRemaining, slabTax, tdsMonthly,
+  type SalaryComponent, type PTConfig, type TDSConfig,
 } from "../src/payroll.ts";
 
 // A sample CTC: BASIC ₹20,000; HRA 40% of BASIC; SPECIAL ₹12,000; CONVEY ₹1,600 (non-prorating).
@@ -133,6 +134,69 @@ test("ptForState: February special overrides the slab amount only in February", 
   const mh: PTConfig = { slabs: [{ upTo: null, amount: 20000 }], februarySpecial: 30000, rounding: "rupee", enabled: true };
   assert.equal(ptForState(5000000, mh, 1), 20000);   // Jan → ₹200
   assert.equal(ptForState(5000000, mh, 2), 30000);   // Feb → ₹300 special
+});
+
+test("fyOf / fyMonthsRemaining: Indian financial year (Apr–Mar)", () => {
+  assert.equal(fyOf("2026-05"), "2026-27");
+  assert.equal(fyOf("2026-03"), "2025-26");
+  assert.equal(fyOf("2027-01"), "2026-27");
+  assert.equal(fyMonthsRemaining("2026-04"), 12); // April → 12 months left incl. current
+  assert.equal(fyMonthsRemaining("2027-03"), 1);  // March → last month
+  assert.equal(fyMonthsRemaining("2026-11"), 5);  // Nov → Nov..Mar
+});
+
+test("slabTax: progressive bands (paise, bps rates)", () => {
+  // new-regime-style slabs (illustrative): nil ≤3L, 5% 3–7L, 10% 7–10L, 15% 10–12L …
+  const slabs = [
+    { upTo: 30000000, rate: 0 }, { upTo: 70000000, rate: 500 }, { upTo: 100000000, rate: 1000 },
+    { upTo: 120000000, rate: 1500 }, { upTo: 150000000, rate: 2000 }, { upTo: null, rate: 3000 },
+  ];
+  assert.equal(slabTax(0, slabs), 0);
+  assert.equal(slabTax(30000000, slabs), 0);        // ₹3L → nil
+  // ₹11,25,000: 4L@5% + 3L@10% + 1.25L@15% = 20,000 + 30,000 + 18,750 = ₹68,750
+  assert.equal(slabTax(112500000, slabs), 6875000);
+});
+
+test("tdsMonthly: projection method, rebate 87A, cess, YTD true-up, 206AA, disabled→0", () => {
+  const cfg: TDSConfig = {
+    enabled: true, cessRate: 400, noPanMinRate: 2000,
+    regimes: {
+      new: { stdDeduction: 7500000, rebate87A: { limit: 70000000, maxRebate: 2500000 }, slabs: [
+        { upTo: 30000000, rate: 0 }, { upTo: 70000000, rate: 500 }, { upTo: 100000000, rate: 1000 },
+        { upTo: 120000000, rate: 1500 }, { upTo: 150000000, rate: 2000 }, { upTo: null, rate: 3000 } ] },
+      old: { stdDeduction: 5000000, deductionCap: 15000000, slabs: [
+        { upTo: 25000000, rate: 0 }, { upTo: 50000000, rate: 500 }, { upTo: 100000000, rate: 2000 }, { upTo: null, rate: 3000 } ] },
+    },
+  };
+  // ₹12,00,000 gross, new regime, no declarations, PAN present → taxable ₹11,25,000
+  // tax ₹68,750 + 4% cess ₹2,750 = ₹71,500 annual; /12 = ₹5,958.33
+  const a = tdsMonthly({ projectedAnnualGross: 120000000, regime: "new", declarations: 0, ytdTds: 0, monthsRemaining: 12, hasPan: true }, cfg);
+  assert.equal(a.annualTax, 7150000);
+  assert.equal(a.monthlyTds, 595833);
+  // rebate 87A: taxable ≤ ₹7L → zero tax (gross ₹6,75,000 → taxable ₹6,00,000)
+  assert.equal(tdsMonthly({ projectedAnnualGross: 67500000, regime: "new", declarations: 0, ytdTds: 0, monthsRemaining: 12, hasPan: true }, cfg).annualTax, 0);
+  // YTD true-up: ₹10,000 already deducted, 6 months left → (71,500−10,000)/6 = ₹10,250
+  assert.equal(tdsMonthly({ projectedAnnualGross: 120000000, regime: "new", declarations: 0, ytdTds: 1000000, monthsRemaining: 6, hasPan: true }, cfg).monthlyTds, 1025000);
+  // 206AA (no PAN): annual tax floored at 20% of gross = ₹2,40,000
+  assert.equal(tdsMonthly({ projectedAnnualGross: 120000000, regime: "new", declarations: 0, ytdTds: 0, monthsRemaining: 12, hasPan: false }, cfg).annualTax, 24000000);
+  // disabled / absent config → nothing
+  assert.equal(tdsMonthly({ projectedAnnualGross: 120000000, regime: "new", declarations: 0, ytdTds: 0, monthsRemaining: 12, hasPan: true }, { ...cfg, enabled: false }).monthlyTds, 0);
+  assert.equal(tdsMonthly({ projectedAnnualGross: 120000000, regime: "new", declarations: 0, ytdTds: 0, monthsRemaining: 12, hasPan: true }, null).monthlyTds, 0);
+});
+
+test("tdsMonthly: old regime subtracts verified declarations up to the cap", () => {
+  const cfg: TDSConfig = {
+    enabled: true, cessRate: 400,
+    regimes: {
+      new: { stdDeduction: 7500000, slabs: [{ upTo: null, rate: 0 }] },
+      old: { stdDeduction: 5000000, deductionCap: 15000000, rebate87A: { limit: 50000000, maxRebate: 1250000 }, slabs: [
+        { upTo: 25000000, rate: 0 }, { upTo: 50000000, rate: 500 }, { upTo: 100000000, rate: 2000 }, { upTo: null, rate: 3000 } ] },
+    },
+  };
+  // ₹10,00,000 gross, old regime, ₹2,00,000 declared but cap ₹1,50,000 applies, std ₹50,000
+  // taxable = 10,00,000 − 50,000 − 1,50,000 = ₹8,00,000
+  const r = tdsMonthly({ projectedAnnualGross: 100000000, regime: "old", declarations: 20000000, ytdTds: 0, monthsRemaining: 12, hasPan: true }, cfg);
+  assert.equal(r.taxableIncome, 80000000); // cap enforced (not 9,50,000 − 2,00,000)
 });
 
 test("resolveSalarySegments: joiner and exit windows clip the segment", () => {

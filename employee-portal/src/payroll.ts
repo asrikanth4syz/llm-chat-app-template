@@ -163,6 +163,88 @@ export function ptForState(grossPaise: number, cfg: PTConfig | null | undefined,
   return Math.max(0, amount);
 }
 
+// ---- Statutory: TDS on salary (S7b) ------------------------------------------------
+// Parameterised and CA-validated; NO hardcoded rates. All money in paise; rates in basis
+// points (bps). Returns 0 unless the config is present AND enabled, so TDS is inert until
+// a CA confirms the current-FY slabs and Finance turns it on.
+
+/** Indian financial year label for a YYYY-MM month (Apr–Mar). e.g. 2026-05 → "2026-27". */
+export function fyOf(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  const start = m >= 4 ? y : y - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+/** Months remaining in the FY including this one (Apr=12 … Mar=1). */
+export function fyMonthsRemaining(ym: string): number {
+  const m = Number(ym.slice(5, 7));
+  const idx = m >= 4 ? m - 3 : m + 9; // Apr=1 … Mar=12
+  return 13 - idx;
+}
+
+export interface TaxSlab { upTo: number | null; rate: number; } // upTo paise (null = top), rate in bps
+
+/** Progressive slab tax (paise). Each slab taxes the band above the previous ceiling. Pure. */
+export function slabTax(taxable: number, slabs: TaxSlab[]): number {
+  if (taxable <= 0) return 0;
+  const ordered = [...slabs].sort((a, b) => (a.upTo === null ? Infinity : a.upTo) - (b.upTo === null ? Infinity : b.upTo));
+  let tax = 0, prev = 0;
+  for (const s of ordered) {
+    const cap = s.upTo === null ? taxable : Math.min(taxable, s.upTo);
+    if (cap > prev) { tax += (cap - prev) * s.rate / 10000; prev = cap; }
+    if (s.upTo !== null && taxable <= s.upTo) break;
+  }
+  return roundPaise(tax);
+}
+
+export interface TDSRegimeConfig {
+  slabs: TaxSlab[];
+  stdDeduction: number;                               // paise
+  rebate87A?: { limit: number; maxRebate: number } | null; // taxable ≤ limit → reduce tax up to maxRebate
+  deductionCap?: number | null;                       // old regime: cap on verified declarations (paise)
+}
+export interface TDSConfig {
+  regimes: { old: TDSRegimeConfig; new: TDSRegimeConfig };
+  cessRate: number;                                   // bps on (tax + surcharge), e.g. 400 = 4%
+  surcharge?: { over: number; rate: number }[];       // taxable over X → rate bps of tax
+  noPanMinRate?: number | null;                       // 206AA (simplified): bps floor on gross when no PAN
+  honourProvisional?: boolean;                        // count declared-but-unverified declarations?
+  enabled?: boolean;
+}
+
+export interface TDSInput {
+  projectedAnnualGross: number; // paise — annualised taxable earnings for the FY
+  regime: "old" | "new";
+  declarations: number;         // paise — verified (or provisional, per config) declarations total
+  ytdTds: number;               // paise — TDS already deducted earlier this FY
+  monthsRemaining: number;      // incl. the current month
+  hasPan: boolean;
+}
+export interface TDSResult { taxableIncome: number; annualTax: number; monthlyTds: number; }
+
+/** Monthly TDS by the projection method: annual tax on projected income, less YTD already
+ *  deducted, spread over the remaining months — so it trues up as income/declarations change.
+ *  Pure; exhaustively unit-tested against CA vectors before enablement. */
+export function tdsMonthly(inp: TDSInput, cfg: TDSConfig | null | undefined): TDSResult {
+  if (!cfg || !cfg.enabled || !cfg.regimes) return { taxableIncome: 0, annualTax: 0, monthlyTds: 0 };
+  const r = cfg.regimes[inp.regime];
+  let taxable = inp.projectedAnnualGross - (r.stdDeduction || 0);
+  if (inp.regime === "old") {
+    const ded = r.deductionCap != null ? Math.min(inp.declarations, r.deductionCap) : inp.declarations;
+    taxable -= Math.max(0, ded);
+  }
+  taxable = Math.max(0, taxable);
+  let tax = slabTax(taxable, r.slabs);
+  if (r.rebate87A && taxable <= r.rebate87A.limit) tax = Math.max(0, tax - r.rebate87A.maxRebate);
+  let sur = 0;
+  if (cfg.surcharge) for (const band of [...cfg.surcharge].sort((a, b) => b.over - a.over)) { if (taxable > band.over) { sur = roundPaise(tax * band.rate / 10000); break; } }
+  const cess = roundPaise((tax + sur) * (cfg.cessRate || 0) / 10000);
+  let annualTax = tax + sur + cess;
+  if (!inp.hasPan && cfg.noPanMinRate) annualTax = Math.max(annualTax, roundPaise(inp.projectedAnnualGross * cfg.noPanMinRate / 10000));
+  annualTax = Math.round(annualTax / 100) * 100; // to the rupee
+  const monthlyTds = Math.max(0, Math.round((annualTax - inp.ytdTds) / Math.max(1, inp.monthsRemaining)));
+  return { taxableIncome: taxable, annualTax, monthlyTds };
+}
+
 export interface SalaryRevision { id: string; effectiveFrom: string; effectiveTo: string | null; }
 
 /** YYYY-MM-DD → UTC epoch day number (timezone-independent). */
