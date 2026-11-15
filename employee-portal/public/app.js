@@ -210,6 +210,10 @@ Object.assign(DICT.en, {
   payrollRun: "Payroll run", prepareRun: "Prepare run", prepared: "Prepared", noRun: "No run for this month yet.",
   netWord: "Net", noExceptions: "no exceptions", divisorWord: "Divisor",
   exc_negative_net: "negative net", exc_zero_pay: "no paid days", exc_no_salary: "no salary set", exc_missing_bank: "missing bank",
+  submitReview: "Submit for review", approveLock: "Approve & lock", reject: "Reject", reopen: "Reopen", bankAdvice: "Bank advice",
+  payslipsPublished: "Locked. Payslips published to employees (in Documents).",
+  confirmApprove: "Approve and lock this payroll? Payslips will be published and the run becomes immutable.",
+  confirmReopen: "Reopen as a new version for correction? The locked version and its payslips are kept.",
   payroll_run_help: "Prepare a run for a month whose attendance is locked. It computes each employee's pay from their effective-dated salary and the locked attendance (payable days, LOP, OT). Re-preparing recomputes in place. Maker-checker approval + payslips come in the next slice.",
   payroll_help: "Set up salary structures and run payroll here. Payroll consumes the locked monthly attendance.",
   payroll_setup_note: "Run a month, then review the register and exceptions. Approval/lock + payslips are the next slice (P6c).",
@@ -226,6 +230,10 @@ Object.assign(DICT.kn, {
   payrollRun: "ವೇತನ ರನ್", prepareRun: "ರನ್ ಸಿದ್ಧಪಡಿಸಿ", prepared: "ಸಿದ್ಧವಾಗಿದೆ", noRun: "ಈ ತಿಂಗಳ ರನ್ ಇಲ್ಲ.",
   netWord: "ನಿವ್ವಳ", noExceptions: "ಸಮಸ್ಯೆ ಇಲ್ಲ", divisorWord: "ಭಾಜಕ",
   exc_negative_net: "ಋಣ ನಿವ್ವಳ", exc_zero_pay: "ಪಾವತಿ ದಿನ ಇಲ್ಲ", exc_no_salary: "ವೇತನ ಇಲ್ಲ", exc_missing_bank: "ಬ್ಯಾಂಕ್ ಇಲ್ಲ",
+  submitReview: "ಪರಿಶೀಲನೆಗೆ ಸಲ್ಲಿಸಿ", approveLock: "ಅನುಮೋದಿಸಿ ಮತ್ತು ಲಾಕ್", reject: "ತಿರಸ್ಕರಿಸಿ", reopen: "ಮತ್ತೆ ತೆರೆಯಿರಿ", bankAdvice: "ಬ್ಯಾಂಕ್ ಸಲಹೆ",
+  payslipsPublished: "ಲಾಕ್ ಆಗಿದೆ. ಪೇಸ್ಲಿಪ್‌ಗಳು ಉದ್ಯೋಗಿಗಳಿಗೆ ಪ್ರಕಟಿಸಲಾಗಿದೆ (ಡಾಕ್ಯುಮೆಂಟ್ಸ್).",
+  confirmApprove: "ಈ ವೇತನವನ್ನು ಅನುಮೋದಿಸಿ ಲಾಕ್ ಮಾಡುವುದೇ? ಪೇಸ್ಲಿಪ್ ಪ್ರಕಟವಾಗುತ್ತದೆ ಮತ್ತು ಬದಲಾಯಿಸಲಾಗದು.",
+  confirmReopen: "ತಿದ್ದುಪಡಿಗಾಗಿ ಹೊಸ ಆವೃತ್ತಿಯಾಗಿ ತೆರೆಯುವುದೇ? ಲಾಕ್ ಆವೃತ್ತಿ ಉಳಿಯುತ್ತದೆ.",
   payroll_run_help: "ಹಾಜರಾತಿ ಲಾಕ್ ಆದ ತಿಂಗಳಿಗೆ ರನ್ ಸಿದ್ಧಪಡಿಸಿ. ಪ್ರತಿ ಉದ್ಯೋಗಿಯ ವೇತನವನ್ನು ಲೆಕ್ಕ ಹಾಕುತ್ತದೆ. ಅನುಮೋದನೆ + ಪೇಸ್ಲಿಪ್ ಮುಂದೆ.",
   payroll_help: "ವೇತನ ರಚನೆ ಮತ್ತು ರನ್ ಇಲ್ಲಿ. ವೇತನ ಲಾಕ್ ಆದ ಹಾಜರಾತಿಯನ್ನು ಬಳಸುತ್ತದೆ.",
   payroll_setup_note: "ತಿಂಗಳನ್ನು ರನ್ ಮಾಡಿ, ನಂತರ ರಿಜಿಸ್ಟರ್ ಪರಿಶೀಲಿಸಿ. ಅನುಮೋದನೆ/ಲಾಕ್ + ಪೇಸ್ಲಿಪ್ ಮುಂದಿನ ಹಂತ.",
@@ -242,6 +250,10 @@ Object.assign(DICT.hi, {
   payrollRun: "पेरोल रन", prepareRun: "रन तैयार करें", prepared: "तैयार", noRun: "इस माह का कोई रन नहीं।",
   netWord: "शुद्ध", noExceptions: "कोई समस्या नहीं", divisorWord: "भाजक",
   exc_negative_net: "ऋणात्मक शुद्ध", exc_zero_pay: "कोई देय दिन नहीं", exc_no_salary: "वेतन नहीं", exc_missing_bank: "बैंक नहीं",
+  submitReview: "समीक्षा हेतु भेजें", approveLock: "अनुमोदित करें और लॉक करें", reject: "अस्वीकार करें", reopen: "पुनः खोलें", bankAdvice: "बैंक सलाह",
+  payslipsPublished: "लॉक। पे-स्लिप कर्मचारियों को प्रकाशित (दस्तावेज़ में)।",
+  confirmApprove: "इस पेरोल को अनुमोदित और लॉक करें? पे-स्लिप प्रकाशित होंगी और यह अपरिवर्तनीय हो जाएगा.",
+  confirmReopen: "सुधार हेतु नए संस्करण के रूप में खोलें? लॉक संस्करण और उसकी पे-स्लिप रहेंगी.",
   payroll_run_help: "लॉक किए गए माह के लिए रन तैयार करें। प्रत्येक कर्मचारी का वेतन गणना करता है। अनुमोदन + पे-स्लिप अगले चरण में।",
   payroll_help: "वेतन संरचना और रन यहाँ। पेरोल लॉक की गई उपस्थिति का उपयोग करता है।",
   payroll_setup_note: "माह चलाएँ, फिर रजिस्टर और समस्याएँ देखें। अनुमोदन/लॉक + पे-स्लिप अगला चरण।",
@@ -556,6 +568,8 @@ const VIEWS = [
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
 function canViewPayroll() { return ["hr_admin", "finance", "finance_admin", "finance_approver", "super_admin"].includes(state.role); }
+function canPreparePay() { return ["hr_admin", "finance", "finance_admin", "super_admin"].includes(state.role); }
+function canApprovePay() { return ["finance_approver", "super_admin"].includes(state.role); }
 const ICONS = {
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
@@ -1830,6 +1844,13 @@ async function loadPayrollRunCard() {
   card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [el("label", { style: "margin:0", text: t("month") }), month, prep]));
   card.appendChild(detail);
 
+  async function runAct(id, verb) {
+    if (verb === "approve" && !confirm(t("confirmApprove"))) return;
+    if (verb === "reopen" && !confirm(t("confirmReopen"))) return;
+    try { await api(`/api/admin/payroll/runs/${encodeURIComponent(id)}/${verb}`, { method: "POST", body: {} }); flash("ok", t("saved")); refreshRun(); }
+    catch (ex) { flash("err", ex.message); }
+  }
+
   async function refreshRun() {
     clear(detail);
     try {
@@ -1846,6 +1867,19 @@ async function loadPayrollRunCard() {
         el("button", { class: "sm", text: t("exportCsv"), onclick: () => downloadAuthed(`/api/admin/payroll/runs/${encodeURIComponent(run.id)}/register`, `payroll-${r.ym}.csv`) }),
       ]));
       detail.appendChild(el("div", { class: "muted", style: "font-size:12px", text: `${t("divisorWord")}: ${r.divisor}` }));
+      // Maker-checker controls by status (server enforces permissions + separation of duties).
+      const controls = [];
+      if (r.status === "draft" && canPreparePay()) controls.push(el("button", { class: "sm", text: t("submitReview"), onclick: () => runAct(run.id, "submit-review") }));
+      if (r.status === "in_review" && canApprovePay()) {
+        controls.push(el("button", { class: "primary sm", text: t("approveLock"), onclick: () => runAct(run.id, "approve") }));
+        controls.push(el("button", { class: "sm", text: t("reject"), onclick: () => runAct(run.id, "reject") }));
+      }
+      if (r.status === "locked") {
+        if (canApprovePay()) controls.push(el("button", { class: "sm", text: t("reopen"), onclick: () => runAct(run.id, "reopen") }));
+        controls.push(el("button", { class: "sm", text: t("bankAdvice"), onclick: () => downloadAuthed(`/api/admin/payroll/runs/${encodeURIComponent(run.id)}/bank`, `bank-advice-${r.ym}.csv`) }));
+      }
+      if (controls.length) detail.appendChild(el("div", { class: "actions", style: "margin:8px 0" }, controls));
+      if (r.status === "locked") detail.appendChild(el("div", { class: "msg ok", style: "font-size:12px", text: t("payslipsPublished") }));
       for (const l of full.lines) {
         const exc = l.exception ? el("span", { class: "pill pending", style: "margin-left:6px", text: t("exc_" + l.exception) || l.exception }) : null;
         detail.appendChild(el("div", { class: "row" }, [

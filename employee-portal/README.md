@@ -175,6 +175,11 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/payroll/runs` | payroll.prepare | prepare/recompute a run `{ym}` — month must be attendance-locked |
 | GET | `/api/admin/payroll/runs/:id` | payroll.read_all | run + per-employee lines + component breakdown |
 | GET | `/api/admin/payroll/runs/:id/register` | payroll.read_all | CSV register (audited) |
+| POST | `/api/admin/payroll/runs/:id/submit-review` | payroll.prepare | P6c: draft → in_review |
+| POST | `/api/admin/payroll/runs/:id/approve` | payroll.approve (SoD) | in_review → locked; generates payslips |
+| POST | `/api/admin/payroll/runs/:id/reject` | payroll.approve/review | in_review → draft `{comment?}` |
+| POST | `/api/admin/payroll/runs/:id/reopen` | payroll.approve | locked → a new draft version (locked kept) |
+| GET | `/api/admin/payroll/runs/:id/bank` | payroll.read_all | bank/NEFT advice CSV (decrypts bank; audited) |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -294,8 +299,33 @@ points**. Migration `0014`.
   register (per-employee net in ₹, exceptions highlighted) and **export CSV**.
 - **Pure engine** stays fully unit-tested (`computeLine`, `aggregatePayLines`,
   `resolveSalarySegments`); the Worker only orchestrates DB + persistence.
-- **Next — P6c:** maker-checker (submit → approve, SoD) + lock + versioned revisions +
-  **payslips via Documents** + bank/NEFT advice. Then the CA-validated **statutory** phase.
+### P6c — maker-checker, lock, payslips, bank advice (migrations `0016`, `0017`)
+
+Closes **payroll core**. The run becomes a controlled, auditable, maker-checker artefact.
+
+- **State machine:** `draft → in_review → locked`, with **reject** (→ draft) and **reopen**
+  (locked → a new draft **version**; the locked version and its payslips are retained).
+  Every transition is audited.
+- **Separation of duties:** approve requires `payroll.approve` **and** the approver ≠ the
+  preparer (`canApprovePayroll`, super_admin not exempt). Approve is **blocked** while any
+  line has a blocking exception (`negative_net` / `no_salary` / `zero_pay`); `missing_bank`
+  only warns.
+- **Payslips:** on approve+lock, each line generates a **payslip published through the
+  Documents module** (category `payslip`) — employees see it in their **Documents** tab
+  (own + published only). Re-approving a month supersedes the prior payslips. Net is shown
+  rounded to the rupee (exact paise retained).
+- **Bank/NEFT advice:** an audited CSV that **decrypts bank accounts** (finance only),
+  excluding lines with no bank or non-positive net.
+- **Dev seed (`0017`):** `finmaker@4syz.com` (Finance Admin / maker) and
+  `fincheck@4syz.com` (Finance Approver / checker), both `pw123` + OTP `000000`, so the
+  flow is demonstrable. Rotate before go-live.
+
+**End-to-end:** assign salaries → lock the attendance month → **Prepare** (maker) →
+**Submit for review** → **Approve & lock** (checker, different user) → payslips land in
+employees' Documents; export register + bank advice.
+
+**Payroll core is now feature-complete.** Next: the CA-validated **India statutory** phase
+(PF/ESI/PT/TDS + filings), then **payroll JV → Zoho Books**.
 
 ## Quick wins (from the Master Prompt review)
 

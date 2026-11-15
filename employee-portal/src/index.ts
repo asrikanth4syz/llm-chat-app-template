@@ -23,6 +23,7 @@ import {
   canApproveLeaveFor,
   canApproveAttendanceFor,
   canAssignTaskTo,
+  canApprovePayroll,
   toDirectoryEntry,
 } from "./policy.ts";
 import { signJwt, verifyJwt, checkPassword, verifyOtp } from "./auth.ts";
@@ -1020,6 +1021,119 @@ async function handlePayrollRegister(actor: Actor, env: Env, runId: string): Pro
   return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="payroll-register-${run.ym}.csv"` } });
 }
 
+// ---- Payroll core — P6c: maker-checker controls, payslips, bank advice ----------
+const PAYROLL_BLOCKING = ["negative_net", "no_salary", "zero_pay"]; // block lock; missing_bank only warns
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function payslipMonth(ym: string): string { const [y, m] = ym.split("-").map(Number); return `${MONTH_ABBR[m - 1]} ${y}`; }
+const inrPaise = (p: unknown): string => "₹" + (Number(p) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function buildPayslipText(ym: string, l: Record<string, unknown>, comps: Array<{ name: string; kind: string; amount_paise: number }>): string {
+  const paid = Number(l.employed_days) - Number(l.lop_days);
+  const L: string[] = [`Payslip — ${payslipMonth(ym)}`, String(l.employee_name ?? ""), ""];
+  L.push(`Paid days: ${paid} of ${l.calendar_days} · LOP: ${l.lop_days}${Number(l.ot_minutes) ? ` · OT: ${Math.round(Number(l.ot_minutes) / 6) / 10}h` : ""}`, "");
+  L.push("Earnings:");
+  for (const c of comps.filter((c) => c.kind === "earning")) L.push(`  ${c.name}: ${inrPaise(c.amount_paise)}`);
+  const ded = comps.filter((c) => c.kind === "deduction");
+  if (ded.length) { L.push("Deductions:"); for (const c of ded) L.push(`  ${c.name}: ${inrPaise(c.amount_paise)}`); }
+  for (const c of comps.filter((c) => c.kind === "info")) L.push(`  (${c.name}: ${inrPaise(c.amount_paise)})`);
+  L.push("", `Gross: ${inrPaise(l.gross_paise)}`, `Deductions: ${inrPaise(l.deductions_paise)}`);
+  L.push(`Net pay: ₹${Math.round(Number(l.net_paise) / 100).toLocaleString("en-IN")} (exact ${inrPaise(l.net_paise)})`, "");
+  L.push("4SYZ Infotech Solutions Pvt. Ltd. — computer-generated payslip.");
+  return L.join("\n");
+}
+
+async function handlePayrollSubmitReview(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT status FROM payroll_runs WHERE id = ?").bind(runId).first<{ status: string }>();
+  if (!run) return json({ error: "not found" }, 404);
+  if (run.status !== "draft") return json({ error: `run is ${run.status}, not draft` }, 409);
+  await env.DB.prepare("UPDATE payroll_runs SET status = 'in_review', reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").bind(actor.userId, runId).run();
+  await audit(env, actor.userId, "PAYROLL_SUBMIT_REVIEW", "payroll", runId, "");
+  return json({ ok: true, status: "in_review" });
+}
+
+async function handlePayrollReject(actor: Actor, env: Env, runId: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.approve") && !hasPermission(actor.role, "payroll.review")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT status FROM payroll_runs WHERE id = ?").bind(runId).first<{ status: string }>();
+  if (!run) return json({ error: "not found" }, 404);
+  if (run.status !== "in_review") return json({ error: `run is ${run.status}, not in_review` }, 409);
+  const b = await request.json().catch(() => ({})) as { comment?: string };
+  await env.DB.prepare("UPDATE payroll_runs SET status = 'draft', note = ? WHERE id = ?").bind(b.comment ?? null, runId).run();
+  await audit(env, actor.userId, "PAYROLL_REJECT", "payroll", runId, b.comment ?? "");
+  return json({ ok: true, status: "draft" });
+}
+
+// Approve + lock + generate payslips. Enforces separation of duties (approver ≠ preparer)
+// and blocks on unresolved blocking exceptions. Payslips for the month are regenerated
+// (any prior month's payslips are superseded) and published to employees via Documents.
+async function handlePayrollApprove(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.approve")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT ym, version, status, prepared_by FROM payroll_runs WHERE id = ?").bind(runId).first<{ ym: string; version: number; status: string; prepared_by: string | null }>();
+  if (!run) return json({ error: "not found" }, 404);
+  if (run.status !== "in_review") return json({ error: `run is ${run.status}, not in_review` }, 409);
+  if (!canApprovePayroll(actor, run.prepared_by)) return json({ error: "separation of duties: the approver cannot be the person who prepared this run" }, 403);
+  const blk = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM payroll_lines WHERE run_id = ? AND exception IN (${PAYROLL_BLOCKING.map(() => "?").join(",")})`).bind(runId, ...PAYROLL_BLOCKING).first<{ n: number }>())?.n ?? 0;
+  if (blk > 0) return json({ error: `${blk} line(s) have blocking exceptions (negative net / no salary / no paid days); resolve them before approving` }, 409);
+  const lines = (await env.DB.prepare("SELECT id, employee_id, employee_name, calendar_days, employed_days, lop_days, ot_minutes, gross_paise, deductions_paise, lop_paise, net_paise FROM payroll_lines WHERE run_id = ?").bind(runId).all<Record<string, unknown>>()).results;
+  const compRows = (await env.DB.prepare("SELECT line_id, name, kind, amount_paise FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?) ORDER BY sequence").bind(runId).all<{ line_id: string; name: string; kind: string; amount_paise: number }>()).results;
+  const byLine = new Map<string, Array<{ name: string; kind: string; amount_paise: number }>>();
+  for (const c of compRows) { const a = byLine.get(c.line_id) ?? []; a.push(c); byLine.set(c.line_id, a); }
+  const title = `Payslip ${payslipMonth(run.ym)}`;
+  const stmts: D1PreparedStatement[] = [
+    env.DB.prepare("UPDATE payroll_runs SET status = 'locked', approved_by = ?, approved_at = datetime('now'), locked_at = datetime('now') WHERE id = ?").bind(actor.userId, runId),
+    // supersede any existing payslips for this month (and their documents), then regenerate
+    env.DB.prepare("DELETE FROM documents WHERE id IN (SELECT document_id FROM payslips WHERE ym = ?)").bind(run.ym),
+    env.DB.prepare("DELETE FROM payslips WHERE ym = ?").bind(run.ym),
+  ];
+  for (const l of lines) {
+    const body = buildPayslipText(run.ym, l, byLine.get(String(l.id)) ?? []);
+    const docId = uid();
+    stmts.push(env.DB.prepare("INSERT INTO documents (id, employee_id, title, category, file, body, status, created_by, published_at) VALUES (?,?,?,?,NULL,?, 'published', ?, datetime('now'))").bind(docId, l.employee_id, title, "payslip", body, actor.userId));
+    stmts.push(env.DB.prepare("INSERT INTO payslips (id, run_id, line_id, employee_id, ym, document_id) VALUES (?,?,?,?,?,?)").bind(uid(), runId, l.id, l.employee_id, run.ym, docId));
+  }
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  await audit(env, actor.userId, "PAYROLL_APPROVE_LOCK", "payroll", runId, `${run.ym} v${run.version}: locked, ${lines.length} payslips`);
+  return json({ ok: true, status: "locked", payslips: lines.length });
+}
+
+// Reopen a locked run for correction: creates a NEW draft version (locked version + its
+// payslips are retained). The next Prepare recomputes the new version.
+async function handlePayrollReopen(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.approve")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT ym, version, status FROM payroll_runs WHERE id = ?").bind(runId).first<{ ym: string; version: number; status: string }>();
+  if (!run) return json({ error: "not found" }, 404);
+  if (run.status !== "locked" && run.status !== "approved") return json({ error: `only a locked run can be reopened (this is ${run.status})` }, 409);
+  const nextV = ((await env.DB.prepare("SELECT MAX(version) AS v FROM payroll_runs WHERE ym = ?").bind(run.ym).first<{ v: number }>())?.v ?? run.version) + 1;
+  const newId = uid();
+  await env.DB.prepare("INSERT INTO payroll_runs (id, ym, version, status, note) VALUES (?,?,?, 'draft', ?)").bind(newId, run.ym, nextV, `reopened from v${run.version}`).run();
+  await audit(env, actor.userId, "PAYROLL_REOPEN", "payroll", newId, `${run.ym} v${run.version} → v${nextV}`);
+  return json({ ok: true, runId: newId, version: nextV, status: "draft" });
+}
+
+// Bank/NEFT advice CSV (audited): decrypts bank accounts (finance only). Excludes lines
+// with no bank or non-positive net, listed at the end.
+async function handlePayrollBank(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT ym, version FROM payroll_runs WHERE id = ?").bind(runId).first<{ ym: string; version: number }>();
+  if (!run) return json({ error: "not found" }, 404);
+  const lines = (await env.DB.prepare("SELECT employee_id, employee_name, net_paise, exception FROM payroll_lines WHERE run_id = ? ORDER BY employee_name").bind(runId).all<{ employee_id: string; employee_name: string; net_paise: number; exception: string | null }>()).results;
+  const bankById = new Map<string, string | null>();
+  for (const r of (await env.DB.prepare("SELECT id, bank_account FROM employees").all<{ id: string; bank_account: string | null }>()).results) {
+    bankById.set(r.id, await decryptField(r.bank_account, env.FIELD_ENC_KEY));
+  }
+  const esc = (s: unknown) => { const v = String(s ?? ""); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const rupee = (p: unknown) => (Number(p) / 100).toFixed(2);
+  const rows = ["employee,bank_account,net"]; const skipped: string[] = [];
+  for (const l of lines) {
+    const bank = bankById.get(l.employee_id);
+    if (!bank || Number(l.net_paise) <= 0) { skipped.push(l.employee_name); continue; }
+    rows.push([esc(l.employee_name), esc(bank), rupee(l.net_paise)].join(","));
+  }
+  if (skipped.length) rows.push(`# excluded (no bank / non-positive net): ${skipped.join("; ")}`);
+  await audit(env, actor.userId, "PAYROLL_BANK_EXPORT", "payroll", runId, `${run.ym} v${run.version}, ${skipped.length} excluded`);
+  return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="bank-advice-${run.ym}.csv"` } });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -1549,6 +1663,16 @@ export default {
       if (prun && method === "GET") return await handlePayrollRunGet(actor, env, decodeURIComponent(prun[1]));
       const preg = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/register$/);
       if (preg && method === "GET") return await handlePayrollRegister(actor, env, decodeURIComponent(preg[1]));
+      const pbank = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/bank$/);
+      if (pbank && method === "GET") return await handlePayrollBank(actor, env, decodeURIComponent(pbank[1]));
+      const psub = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/submit-review$/);
+      if (psub && method === "POST") return await handlePayrollSubmitReview(actor, env, decodeURIComponent(psub[1]));
+      const prej = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/reject$/);
+      if (prej && method === "POST") return await handlePayrollReject(actor, env, decodeURIComponent(prej[1]), request);
+      const papp = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/approve$/);
+      if (papp && method === "POST") return await handlePayrollApprove(actor, env, decodeURIComponent(papp[1]));
+      const prop = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/reopen$/);
+      if (prop && method === "POST") return await handlePayrollReopen(actor, env, decodeURIComponent(prop[1]));
       if (path === "/api/admin/holidays" && method === "GET") return await handleHolidaysList(actor, env, url.searchParams.get("year") || "");
       if (path === "/api/admin/holidays" && method === "POST") return await handleHolidayCreate(actor, env, request);
       const hdel = path.match(/^\/api\/admin\/holidays\/([^/]+)\/delete$/);
