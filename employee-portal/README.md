@@ -143,7 +143,8 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | Method | Path | Who | Returns |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | anyone | JWT; **all** roles must also send `otp` (dev `000000`) — 2FA for all, DEC-02 |
-| GET | `/api/me` | any login | own profile; sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
+| GET | `/api/me` | any login | own profile (+ `lang`); sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
+| POST | `/api/me/lang` | any login | set preferred UI language (`en`/`hi`/`kn`), persisted to the user profile (migration `0013`) |
 | GET | `/api/employees` | any login | scoped list — self / team / all by role, sensitive fields masked |
 | GET | `/api/employees/:id` | any login | one record if policy allows (masked; `?reveal=…`), else 403 (+ DENY audit) |
 | GET | `/api/directory?q=` | any login | FR-08: all colleagues' public fields (name, designation, location, segment, work email, manager); salary/bank/identity/personal contact never selected |
@@ -166,6 +167,7 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/admin/attendance/periods` | attendance.lock (hr_admin, finance, super_admin) | M1: month lock states (last 36) |
 | POST | `/api/admin/attendance/periods/:ym/lock`·`/unlock` | attendance.lock | lock/unlock a month for payroll (audited); locking freezes import/corrections |
 | GET | `/api/admin/attendance/payroll-input?month=YYYY-MM` | attendance.lock | per-employee payroll input (payable days, present/leave/LOP, OT) + locked flag |
+| GET·POST | `/api/admin/attendance/policy` | attendance.lock (GET also attendance.manage) | read/update the attendance policy (weekly-off days, weekly target, full-day hours) |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -243,6 +245,28 @@ tooltips on the key section headers. Open the Worker URL in a browser:
   includes the delegator's team's requests and they may decide them — the leave and
   attendance decide endpoints honour delegated authority, not just the base role
   scope. Revoking (or the window lapsing) withdraws it immediately.
+
+## Quick wins (from the Master Prompt review)
+
+- **Role model → 8 roles + separation of duties.** The policy engine now carries
+  **HR Executive** (HR ops without sensitive-read-all / payroll / month-lock),
+  **Finance Admin** (payroll *maker*) and **Finance Approver** (payroll *checker*), and
+  **Management Viewer** (aggregate read + reports, no PII) — alongside the existing
+  employee / manager / hr_admin / it_admin / auditor / super_admin. New permissions
+  `payroll.prepare | review | approve | read_all` and `report.read` scaffold the payroll
+  module. **Separation of duties** is enforced by the pure `canApprovePayroll(actor,
+  preparedByUserId)` — the approver can never be the preparer, *and super_admin is not
+  exempt*. (`finance` is kept as a legacy alias of Finance Admin.)
+- **Language follows the user.** Preferred UI language (`en`/`hi`/`kn`) is stored on the
+  user profile (migration `0013`), returned at login and from `/api/me`, and set via
+  `POST /api/me/lang` — so it persists across devices and logins, not just the browser.
+  An org-level `default_lang` (`portal_config`) seeds the choice. EN remains the fallback.
+- **Locale-aware formatting.** Dates render in the Indian locale per language
+  (`Intl.DateTimeFormat`, UTC), and money uses **INR** (`Intl.NumberFormat`, e.g. CTC);
+  business data stays language-independent.
+- **Attendance policy editor.** HR/Finance can edit the weekly-off days, weekly target
+  hours and full-day threshold from the Attendance tab (`/api/admin/attendance/policy`),
+  so working-day counting is configurable, not hardcoded.
 
 ## Payroll-ready attendance (M1 — first "extend the live portal" milestone)
 

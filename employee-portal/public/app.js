@@ -160,6 +160,10 @@ Object.assign(DICT.en, {
   payroll_lock_help: "Lock a month once attendance is final. A locked month is frozen — no imports, no new corrections, no write-backs — so payroll reads stable data. Unlocking is audited.",
   payroll_input_help: "The per-employee figures payroll consumes: payable days (calendar − loss-of-pay), present/leave/LOP, and overtime, counted against each person's holiday calendar. Export when the month is locked.",
   holiday_help: "Holidays (plus Sundays) are excluded from working days. Leave the location blank for a company-wide holiday, or name a location for a site-specific one.",
+  attPolicy: "Attendance policy", weeklyOff: "Weekly off", weeklyTargetHours: "Weekly target (hours)", fullDayHours: "Full day (hours)",
+  save: "Save", needWorkingDay: "Keep at least one working day.",
+  sun: "Sun", mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat",
+  att_policy_help: "Working days = calendar − weekly-off − holiday. Set which weekdays are off and the weekly hours target used for exception flags. Default: Sunday off, 48h/week.",
 });
 Object.assign(DICT.kn, {
   otWord: "ಓಟಿ", payableDays: "ಪಾವತಿ ದಿನಗಳು", lopWord: "ಎಲ್‌ಒಪಿ", lockedWord: "ಲಾಕ್", openWord: "ತೆರೆದಿದೆ",
@@ -173,6 +177,10 @@ Object.assign(DICT.kn, {
   payroll_lock_help: "ಹಾಜರಾತಿ ಅಂತಿಮವಾದ ಮೇಲೆ ತಿಂಗಳನ್ನು ಲಾಕ್ ಮಾಡಿ. ಲಾಕ್ ಆದ ತಿಂಗಳು ಸ್ಥಗಿತ — ಆಮದು, ತಿದ್ದುಪಡಿ ಇಲ್ಲ.",
   payroll_input_help: "ವೇತನ ಬಳಸುವ ಅಂಕಿಅಂಶಗಳು: ಪಾವತಿ ದಿನಗಳು, ಹಾಜರ್/ರಜೆ/ಎಲ್‌ಒಪಿ, ಓವರ್‌ಟೈಮ್.",
   holiday_help: "ರಜಾದಿನಗಳು (ಮತ್ತು ಭಾನುವಾರ) ಕೆಲಸದ ದಿನಗಳಿಂದ ಹೊರಗಿಡಲಾಗುತ್ತದೆ.",
+  attPolicy: "ಹಾಜರಾತಿ ನೀತಿ", weeklyOff: "ವಾರದ ರಜೆ", weeklyTargetHours: "ವಾರದ ಗುರಿ (ಗಂಟೆ)", fullDayHours: "ಪೂರ್ಣ ದಿನ (ಗಂಟೆ)",
+  save: "ಉಳಿಸಿ", needWorkingDay: "ಕನಿಷ್ಠ ಒಂದು ಕೆಲಸದ ದಿನ ಇರಲಿ.",
+  sun: "ಭಾನು", mon: "ಸೋಮ", tue: "ಮಂಗಳ", wed: "ಬುಧ", thu: "ಗುರು", fri: "ಶುಕ್ರ", sat: "ಶನಿ",
+  att_policy_help: "ಕೆಲಸದ ದಿನಗಳು = ಕ್ಯಾಲೆಂಡರ್ − ವಾರದ ರಜೆ − ರಜಾದಿನ. ಡೀಫಾಲ್ಟ್: ಭಾನುವಾರ ರಜೆ, ವಾರಕ್ಕೆ 48 ಗಂಟೆ.",
 });
 Object.assign(DICT.hi, {
   otWord: "ओटी", payableDays: "देय दिन", lopWord: "एलओपी", lockedWord: "लॉक", openWord: "खुला",
@@ -186,6 +194,10 @@ Object.assign(DICT.hi, {
   payroll_lock_help: "उपस्थिति अंतिम होने पर माह लॉक करें। लॉक माह फ़्रीज़ — कोई आयात, सुधार या राइट-बैक नहीं।",
   payroll_input_help: "पेरोल द्वारा उपयोग किए जाने वाले आँकड़े: देय दिन, उपस्थित/अवकाश/एलओपी, ओवरटाइम।",
   holiday_help: "अवकाश (और रविवार) कार्य दिवसों से बाहर रखे जाते हैं।",
+  attPolicy: "उपस्थिति नीति", weeklyOff: "साप्ताहिक अवकाश", weeklyTargetHours: "साप्ताहिक लक्ष्य (घंटे)", fullDayHours: "पूर्ण दिवस (घंटे)",
+  save: "सहेजें", needWorkingDay: "कम से कम एक कार्य दिवस रखें।",
+  sun: "रवि", mon: "सोम", tue: "मंगल", wed: "बुध", thu: "गुरु", fri: "शुक्र", sat: "शनि",
+  att_policy_help: "कार्य दिवस = कैलेंडर − साप्ताहिक अवकाश − छुट्टी। डिफ़ॉल्ट: रविवार अवकाश, 48 घंटे/सप्ताह।",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -374,10 +386,10 @@ const SENSITIVE = ["pan", "bankAccount", "aadhaarLast4"];
 const SENS_LABEL = { pan: "pan", bankAccount: "bankAccount", aadhaarLast4: "aadhaar" };
 
 function t(k) { return (DICT[state.lang] && DICT[state.lang][k]) || DICT.en[k] || k; }
-function canVerify() { return state.role === "hr_admin" || state.role === "super_admin"; }
-function canApproveLeave() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
-function canLockAttendance() { return ["hr_admin", "finance", "super_admin"].includes(state.role); }
-function canPublish() { return ["hr_admin", "super_admin"].includes(state.role); }
+function canVerify() { return ["hr_admin", "hr_executive", "super_admin"].includes(state.role); }
+function canApproveLeave() { return ["manager", "hr_admin", "hr_executive", "super_admin"].includes(state.role); }
+function canLockAttendance() { return ["hr_admin", "finance", "finance_admin", "finance_approver", "super_admin"].includes(state.role); }
+function canPublish() { return ["hr_admin", "hr_executive", "super_admin"].includes(state.role); }
 
 // ---- tiny DOM helper -----------------------------------------------------------
 function el(tag, attrs = {}, children = []) {
@@ -433,6 +445,8 @@ function renderLogin() {
       const data = await api("/api/auth/login", { method: "POST", body: { email: email.value.trim(), password: pw.value, otp: otp.value.trim() } });
       state.token = data.token; state.role = data.role;
       ss.set("ep_token", data.token); ss.set("ep_role", data.role);
+      // Language follows the user's profile (server-persisted); cache it locally too.
+      if (data.lang) { state.lang = data.lang; ss.set("ep_lang", data.lang); }
       await renderApp();
     } catch (ex) {
       err.appendChild(el("div", { class: "msg err", text: ex.message || t("errorGeneric") }));
@@ -452,12 +466,31 @@ function renderLogin() {
 function langSelect() {
   const sel = el("select", { class: "lang", "aria-label": "Language", onchange: (e) => {
     state.lang = e.target.value; ss.set("ep_lang", state.lang);
+    // Persist to the profile when signed in, so it follows across devices/logins.
+    if (state.token) { api("/api/me/lang", { method: "POST", body: { lang: state.lang } }).catch(() => {}); }
     state.token ? renderApp() : renderLogin();
   } });
   for (const [code, name] of [["en", "English"], ["kn", "ಕನ್ನಡ"], ["hi", "हिन्दी"]]) {
     sel.appendChild(el("option", { value: code, text: name, ...(code === state.lang ? { selected: "" } : {}) }));
   }
   return sel;
+}
+
+// Locale-aware formatting (quick win). India locale per language; INR currency.
+const LOCALE = { en: "en-IN", hi: "hi-IN", kn: "kn-IN" };
+function curLocale() { return LOCALE[state.lang] || "en-IN"; }
+function fmtINR(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return "—";
+  try { return new Intl.NumberFormat(curLocale(), { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(v); }
+  catch { return "₹" + v.toLocaleString("en-IN"); }
+}
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + "T00:00:00Z" : iso);
+  if (isNaN(d)) return iso;
+  try { return new Intl.DateTimeFormat(curLocale(), { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(d); }
+  catch { return iso; }
 }
 
 // ---- app shell (HRMS-style: sidebar + topbar) ----------------------------------
@@ -547,7 +580,7 @@ function sidebar() {
 
 async function renderApp() {
   clear(app());
-  if (state.token && state.emp == null) { try { state.emp = (await api("/api/me")).employee; } catch { /* pure admin (no employee record) or transient */ } }
+  if (state.token && state.emp == null) { try { const me = await api("/api/me"); state.emp = me.employee; if (me.lang && me.lang !== state.lang) { state.lang = me.lang; ss.set("ep_lang", me.lang); } } catch { /* pure admin (no employee record) or transient */ } }
   const content = el("div", { class: "content", id: "body" });
   const main = el("div", { class: "main" }, [
     el("div", { class: "topbar" }, [
@@ -651,7 +684,7 @@ function renderProfile() {
   emp.appendChild(row(t("workEmail"), el("span", { text: e.workEmail || t("none") })));
   emp.appendChild(row(t("segment"), el("span", { text: t(e.segment) || e.segment })));
   emp.appendChild(row(t("location"), el("span", { text: e.location || t("none") })));
-  if (e.ctc != null) emp.appendChild(row(t("ctc"), el("span", { text: String(e.ctc) })));
+  if (e.ctc != null) emp.appendChild(row(t("ctc"), el("span", { text: fmtINR(e.ctc) })));
   body.appendChild(emp);
 
   // contact (editable)
@@ -936,6 +969,7 @@ async function loadAttendanceView() {
   body.appendChild(el("div", { class: "card", id: "att_mycorr" }, [el("h2", { text: t("myCorrections") }), el("div", { class: "muted", text: "…" })]));
   if (canApproveLeave()) body.appendChild(el("div", { class: "card", id: "att_queue" }, [el("h2", { text: t("correctionApprovals") }), el("div", { class: "muted", text: "…" })]));
   if (canLockAttendance()) {
+    body.appendChild(el("div", { class: "card", id: "att_policy" }, [h2help(t("attPolicy"), t("att_policy_help")), el("div", { class: "muted", text: "…" })]));
     body.appendChild(el("div", { class: "card", id: "att_lock" }, [h2help(t("payrollLock"), t("payroll_lock_help")), el("div", { class: "muted", text: "…" })]));
     body.appendChild(el("div", { class: "card", id: "att_payroll" }, [h2help(t("payrollInput"), t("payroll_input_help")), el("div", { class: "muted", text: "…" })]));
     body.appendChild(el("div", { class: "card", id: "att_holidays" }, [h2help(t("holidayCalendar"), t("holiday_help")), el("div", { class: "muted", text: "…" })]));
@@ -944,7 +978,40 @@ async function loadAttendanceView() {
   renderCorrectionForm();
   loadMyCorrections();
   if (canApproveLeave()) loadAttCorrQueue();
-  if (canLockAttendance()) { loadPayrollLock(); loadPayrollInput(); loadHolidays(); }
+  if (canLockAttendance()) { loadAttPolicy(); loadPayrollLock(); loadPayrollInput(); loadHolidays(); }
+}
+
+// Attendance policy editor (quick win): weekly-off days + weekly target hours.
+async function loadAttPolicy() {
+  const card = document.getElementById("att_policy");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("attPolicy"), t("att_policy_help")));
+  try {
+    const { policy } = await api("/api/admin/attendance/policy");
+    const off = new Set(String(policy.weekly_off_days || "0").split(",").map((s) => parseInt(s, 10)));
+    const dayNames = [t("sun"), t("mon"), t("tue"), t("wed"), t("thu"), t("fri"), t("sat")];
+    const boxes = dayNames.map((nm, i) => {
+      const cb = el("input", { type: "checkbox", id: `wo_${i}`, ...(off.has(i) ? { checked: "" } : {}) });
+      return el("label", { style: "display:inline-flex;align-items:center;gap:4px;margin:0 10px 0 0;font-size:13px;color:var(--ink)" }, [cb, el("span", { text: nm })]);
+    });
+    const targetH = el("input", { type: "number", min: "0", step: "0.5", value: String((Number(policy.weekly_target_minutes) || 0) / 60), style: "max-width:90px" });
+    const fullH = el("input", { type: "number", min: "0", step: "0.5", value: String((Number(policy.full_day_minutes) || 0) / 60), style: "max-width:90px" });
+    const save = el("button", { class: "primary sm", text: t("save") });
+    save.addEventListener("click", async () => {
+      const weeklyOffDays = dayNames.map((_, i) => i).filter((i) => document.getElementById(`wo_${i}`).checked);
+      if (weeklyOffDays.length > 6) { flash("err", t("needWorkingDay")); return; }
+      save.disabled = true;
+      try { await api("/api/admin/attendance/policy", { method: "POST", body: { weeklyOffDays, weeklyTargetMinutes: Math.round(Number(targetH.value) * 60), fullDayMinutes: Math.round(Number(fullH.value) * 60) } }); flash("ok", t("saved")); loadAttPolicy(); loadPayrollInput(); }
+      catch (ex) { flash("err", ex.message); }
+      finally { save.disabled = false; }
+    });
+    card.appendChild(el("div", { style: "margin-bottom:8px" }, [el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("weeklyOff") }), el("div", {}, boxes)]));
+    card.appendChild(el("div", { class: "actions" }, [
+      el("label", { style: "margin:0", text: t("weeklyTargetHours") }), targetH,
+      el("label", { style: "margin:0 0 0 8px", text: t("fullDayHours") }), fullH,
+      save,
+    ]));
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 // Payroll-ready attendance admin (HR/finance): month lock, payroll input, holidays.
@@ -1069,7 +1136,7 @@ async function loadAttendanceMonth() {
     for (const d of data.days) {
       const flags = (d.exceptions || []).map((x) => el("span", { class: "pill pending", style: "margin-right:4px", text: t("ex_" + x) }));
       tableEl.appendChild(el("div", { class: "row" }, [
-        el("div", { class: "k" }, [el("div", { text: d.date.slice(8) }), el("div", { class: "muted", style: "font-size:11px", text: d.date })]),
+        el("div", { class: "k" }, [el("div", { text: d.date.slice(8) }), el("div", { class: "muted", style: "font-size:11px", text: fmtDate(d.date) })]),
         el("div", { class: "v" }, [
           el("div", { text: `${d.in || "--:--"} → ${d.out || "--:--"} · ${minToHHMM(d.workMinutes)}${d.otMinutes ? ` · ${t("otWord")} ${minToHHMM(d.otMinutes)}` : ""} · ${statusWord(d.status)}` }),
           flags.length ? el("div", { style: "margin-top:4px" }, flags) : null,
@@ -1487,7 +1554,7 @@ async function loadAnnAcks(id, title) {
 }
 
 // ---- FR-05 Tasks ---------------------------------------------------------------
-function canAssignTasks() { return ["manager", "hr_admin", "super_admin"].includes(state.role); }
+function canAssignTasks() { return ["manager", "hr_admin", "hr_executive", "super_admin"].includes(state.role); }
 
 async function loadTasksView() {
   const body = document.getElementById("body"); clear(body);
@@ -1576,7 +1643,7 @@ async function loadAssignedTasks() {
 }
 
 // ---- FR-06 Documents -----------------------------------------------------------
-function canManageDocs() { return ["hr_admin", "super_admin"].includes(state.role); }
+function canManageDocs() { return ["hr_admin", "hr_executive", "super_admin"].includes(state.role); }
 function docCatLabel(c) { return t("doc_" + c); }
 function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(file); }); }
 

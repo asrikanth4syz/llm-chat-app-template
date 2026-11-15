@@ -11,11 +11,22 @@
 // safety net the PRD requires (D1 has no row-level security) lives here and is
 // exercised directly.
 
+// Roles. The Master Development Prompt's 8-role model maps here (plus the portal's
+// existing it_admin/auditor, kept for user/audit administration):
+//   Super Admin → super_admin · HR Admin → hr_admin · HR Executive → hr_executive
+//   Reporting Manager → manager · Finance Admin (maker) → finance_admin
+//   Finance Approver (checker) → finance_approver · Employee → employee
+//   Management Viewer → management_viewer.
+// `finance` is kept as a legacy alias (no seeded users use it) = finance_admin-equivalent.
 export type Role =
   | "employee"
   | "manager"
   | "hr_admin"
+  | "hr_executive"
   | "finance"
+  | "finance_admin"
+  | "finance_approver"
+  | "management_viewer"
   | "it_admin"
   | "auditor"
   | "super_admin";
@@ -35,6 +46,11 @@ export type Permission =
   | "attendance.approve_team" // approve attendance corrections for direct reports
   | "attendance.approve_all" // approve attendance corrections for anyone
   | "attendance.lock" // lock/unlock a month for payroll; manage holiday calendar, read payroll input
+  | "payroll.prepare" // run/prepare a payroll (the MAKER in maker-checker) — scaffolding for the payroll module
+  | "payroll.review" // finance check of a prepared payroll (the CHECKER)
+  | "payroll.approve" // final authorise + lock a payroll (separation of duties: approver ≠ preparer)
+  | "payroll.read_all" // view salary structures / payroll register / payslips of others
+  | "report.read" // run and export permission-scoped reports (management + HR/finance)
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
   | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
   | "announcement.publish" // publish announcements and see acknowledgements (FR-07)
@@ -48,12 +64,31 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
   manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team", "task.assign_team"],
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "attendance.lock", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
-  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock"],
+  // HR Admin — full HR, incl. sensitive fields, payroll preparation (maker) and the month lock.
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "attendance.lock", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage", "payroll.prepare", "payroll.read_all", "report.read"],
+  // HR Executive — day-to-day HR ops, but NOT sensitive-read-all, NOT payroll, NOT the month lock.
+  hr_executive: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
+  // Legacy finance alias (no seeded users) — treat as Finance Admin.
+  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read"],
+  // Finance Admin — the payroll MAKER: prepare/run payroll, read the register, lock the month.
+  finance_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read"],
+  // Finance Approver — the payroll CHECKER/approver: review + approve/lock, never prepare.
+  finance_approver: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.review", "payroll.approve", "payroll.read_all", "report.read"],
+  // Management Viewer — aggregate read + reports, no sensitive fields, no mutations.
+  management_viewer: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "report.read"],
   it_admin: ["employee.read_own", "employee.sensitive.read_own", "user.manage", "attendance.manage", "helpdesk.agent"],
   auditor: ["employee.read_own", "employee.read_all", "audit.read"],
   super_admin: [], // allow-all via hasPermission
 };
+
+// Separation of duties for payroll (maker-checker): the person who approves/locks a
+// payroll must NOT be the person who prepared it. Pure — scaffolding the payroll module
+// will call when wiring the prepare → review → approve → lock flow. super_admin is NOT
+// exempt here: even allow-all must not let one person both make and check the same run.
+export function canApprovePayroll(actor: Actor, preparedByUserId: string | null): boolean {
+  if (!hasPermission(actor.role, "payroll.approve")) return false;
+  return actor.userId !== preparedByUserId; // approver ≠ preparer
+}
 
 // DEC-02 (extended to all users): two-factor auth is mandatory for EVERY role —
 // employee and manager included, no exemptions. The second factor is still the dev

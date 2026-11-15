@@ -123,8 +123,8 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const email = (body.email || "").trim().toLowerCase();
   if (!email || !body.password) return json({ error: "email and password required" }, 400);
   const row = await env.DB.prepare(
-    "SELECT id, password_hash, role, employee_id, active, token_version FROM users WHERE lower(email) = ? AND realm = 'employee-portal'"
-  ).bind(email).first<{ id: string; password_hash: string; role: string; employee_id: string | null; active: number; token_version: number }>();
+    "SELECT id, password_hash, role, employee_id, active, token_version, lang FROM users WHERE lower(email) = ? AND realm = 'employee-portal'"
+  ).bind(email).first<{ id: string; password_hash: string; role: string; employee_id: string | null; active: number; token_version: number; lang: string | null }>();
   if (!row || !row.active || !checkPassword(row.password_hash, body.password)) {
     return json({ error: "invalid credentials" }, 401);
   }
@@ -136,7 +136,19 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const amr = requiresMfa(row.role as Role) ? ["pwd", "otp"] : ["pwd"];
   const token = await signJwt({ sub: row.id, role: row.role, tv: row.token_version, amr }, env.JWT_SECRET, 8 * 3600);
   await audit(env, row.id, "LOGIN", "session", null, `role ${row.role} amr ${amr.join("+")}`);
-  return json({ token, role: row.role });
+  return json({ token, role: row.role, lang: VALID_LANGS.has(row.lang ?? "") ? row.lang : "en" });
+}
+
+const VALID_LANGS = new Set(["en", "hi", "kn"]);
+
+// Persist the signed-in user's preferred UI language on their profile (quick win:
+// language follows the user across devices/logins, not just the browser).
+async function handleSetLang(actor: Actor, env: Env, request: Request): Promise<Response> {
+  const b = await request.json().catch(() => ({})) as { lang?: string };
+  const lang = String(b.lang ?? "").trim();
+  if (!VALID_LANGS.has(lang)) return json({ error: "unsupported language" }, 400);
+  await env.DB.prepare("UPDATE users SET lang = ? WHERE id = ?").bind(lang, actor.userId).run();
+  return json({ ok: true, lang });
 }
 
 async function loadEmployee(env: Env, id: string): Promise<EmployeeRecord | null> {
@@ -154,7 +166,8 @@ async function handleMe(actor: Actor, env: Env, reveal: string[]): Promise<Respo
     await audit(env, actor.userId, "REVEAL", "employee", rec.id, `revealed ${reveal.join(",")} (own)`);
   }
   // own record: sensitive fields masked by default (NFR-03), revealed on request.
-  return json({ employee: redactEmployee(actor, rec, { reveal }) });
+  const lr = await env.DB.prepare("SELECT lang FROM users WHERE id = ?").bind(actor.userId).first<{ lang: string | null }>();
+  return json({ employee: redactEmployee(actor, rec, { reveal }), lang: VALID_LANGS.has(lr?.lang ?? "") ? lr!.lang : "en" });
 }
 
 async function handleList(actor: Actor, env: Env): Promise<Response> {
@@ -744,6 +757,30 @@ async function handleAttPayrollInput(actor: Actor, env: Env, monthParam: string)
   return json({ month, locked, workingDaysBaseline: workingDaysInMonth(month, holByLoc.get("") ?? new Set(), weekOffDays), employees });
 }
 
+// Attendance policy editor (quick win): read/update the single org policy row that
+// drives working-day counting (weekly-off days, weekly target, full-day threshold).
+async function handleAttPolicyGet(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock") && !hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
+  const row = await env.DB.prepare("SELECT weekly_off_days, weekly_target_minutes, full_day_minutes FROM attendance_policy WHERE id = 'default'").first<{ weekly_off_days: string; weekly_target_minutes: number; full_day_minutes: number }>();
+  return json({ policy: row ?? { weekly_off_days: "0", weekly_target_minutes: 2880, full_day_minutes: 240 } });
+}
+
+async function handleAttPolicySet(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "attendance.lock")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { weeklyOffDays?: number[]; weeklyTargetMinutes?: number; fullDayMinutes?: number };
+  const offDays = Array.isArray(b.weeklyOffDays)
+    ? [...new Set(b.weeklyOffDays.map((n) => Math.trunc(Number(n))).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort()
+    : null;
+  if (!offDays || offDays.length > 6) return json({ error: "weeklyOffDays must be 0–6 (0=Sun), at least one working day" }, 400);
+  const target = Math.max(0, Math.round(Number(b.weeklyTargetMinutes) || 0));
+  const fullDay = Math.max(0, Math.round(Number(b.fullDayMinutes) || 0));
+  await env.DB.prepare(
+    "UPDATE attendance_policy SET weekly_off_days = ?, weekly_target_minutes = ?, full_day_minutes = ?, updated_at = datetime('now') WHERE id = 'default'"
+  ).bind(offDays.join(","), target, fullDay).run();
+  await audit(env, actor.userId, "ATTENDANCE_POLICY_UPDATE", "attendance", "default", `off=${offDays.join("|")} target=${target} fullDay=${fullDay}`);
+  return json({ ok: true });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -1217,6 +1254,7 @@ export default {
       if (!actor) return json({ error: "unauthenticated" }, 401);
 
       if (path === "/api/me" && method === "GET") return await handleMe(actor, env, parseReveal(url));
+      if (path === "/api/me/lang" && method === "POST") return await handleSetLang(actor, env, request);
       if (path === "/api/employees" && method === "GET") return await handleList(actor, env);
       const one = path.match(/^\/api\/employees\/([^/]+)$/);
       if (one && method === "GET") return await handleGetOne(actor, env, decodeURIComponent(one[1]), parseReveal(url));
@@ -1256,6 +1294,8 @@ export default {
       const aplk = path.match(/^\/api\/admin\/attendance\/periods\/(\d{4}-\d{2})\/(lock|unlock)$/);
       if (aplk && method === "POST") return await handleAttPeriodSetLock(actor, env, aplk[1], aplk[2] === "lock", request);
       if (path === "/api/admin/attendance/payroll-input" && method === "GET") return await handleAttPayrollInput(actor, env, url.searchParams.get("month") || "");
+      if (path === "/api/admin/attendance/policy" && method === "GET") return await handleAttPolicyGet(actor, env);
+      if (path === "/api/admin/attendance/policy" && method === "POST") return await handleAttPolicySet(actor, env, request);
       if (path === "/api/admin/holidays" && method === "GET") return await handleHolidaysList(actor, env, url.searchParams.get("year") || "");
       if (path === "/api/admin/holidays" && method === "POST") return await handleHolidayCreate(actor, env, request);
       const hdel = path.match(/^\/api\/admin\/holidays\/([^/]+)\/delete$/);

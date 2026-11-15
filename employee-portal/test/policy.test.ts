@@ -20,6 +20,7 @@ import {
   requiresMfa,
   permissionMatrix,
   isSessionCurrent,
+  canApprovePayroll,
 } from "../src/policy.ts";
 
 // --- fixtures: Asha (employee), Bala (employee), Meera (Asha+Bala's manager), admin ---
@@ -33,6 +34,41 @@ const actorBala: Actor = { userId: "u_bala", employeeId: "e_bala", role: "employ
 const actorMeera: Actor = { userId: "u_meera", employeeId: "e_meera", role: "manager" };
 const actorSuper: Actor = { userId: "u_root", employeeId: null, role: "super_admin" };
 const actorHr: Actor = { userId: "u_hr", employeeId: "e_hr", role: "hr_admin" };
+
+test("role split: HR Executive does HR ops but not sensitive-read-all, payroll or the month lock", () => {
+  const hrExec = "hr_executive" as const;
+  assert.equal(hasPermission(hrExec, "employee.read_all"), true);
+  assert.equal(hasPermission(hrExec, "document.manage"), true);
+  assert.equal(hasPermission(hrExec, "leave.approve_all"), true);
+  assert.equal(hasPermission(hrExec, "employee.sensitive.read_all"), false);
+  assert.equal(hasPermission(hrExec, "attendance.lock"), false);
+  assert.equal(hasPermission(hrExec, "payroll.prepare"), false);
+});
+
+test("maker-checker: finance admin prepares, finance approver approves; neither does both", () => {
+  assert.equal(hasPermission("finance_admin", "payroll.prepare"), true);
+  assert.equal(hasPermission("finance_admin", "payroll.approve"), false);
+  assert.equal(hasPermission("finance_approver", "payroll.approve"), true);
+  assert.equal(hasPermission("finance_approver", "payroll.prepare"), false);
+});
+
+test("management viewer gets aggregate read + reports, never sensitive fields", () => {
+  assert.equal(hasPermission("management_viewer", "employee.read_all"), true);
+  assert.equal(hasPermission("management_viewer", "report.read"), true);
+  assert.equal(hasPermission("management_viewer", "employee.sensitive.read_all"), false);
+  assert.equal(hasPermission("management_viewer", "payroll.read_all"), false);
+});
+
+test("separation of duties: the approver of a payroll must not be its preparer (even super_admin)", () => {
+  const approver: Actor = { userId: "u_fa", employeeId: null, role: "finance_approver" };
+  assert.equal(canApprovePayroll(approver, "u_fm"), true);   // approver ≠ preparer → ok
+  assert.equal(canApprovePayroll(approver, "u_fa"), false);  // same person made it → blocked
+  const maker: Actor = { userId: "u_fm", employeeId: null, role: "finance_admin" };
+  assert.equal(canApprovePayroll(maker, "u_someone"), false); // maker lacks payroll.approve
+  const root: Actor = { userId: "u_root", employeeId: null, role: "super_admin" };
+  assert.equal(canApprovePayroll(root, "u_root"), false);     // allow-all is NOT exempt from SoD
+  assert.equal(canApprovePayroll(root, "u_fm"), true);
+});
 
 test("an employee sees strictly their own record", () => {
   assert.equal(canReadEmployee(actorAsha, asha), true);
@@ -119,7 +155,7 @@ test("2FA is mandatory for EVERY role — employee and manager included (DEC-02 
 
 test("permission matrix lists every role with its permissions and MFA flag", () => {
   const m = permissionMatrix();
-  assert.equal(m.length, 7);
+  assert.equal(m.length, 11); // employee, manager, hr_admin, hr_executive, finance, finance_admin, finance_approver, management_viewer, it_admin, auditor, super_admin
   const su = m.find((x) => x.role === "super_admin");
   assert.deepEqual(su?.permissions, ["*"]);
   assert.equal(su?.mfa, true);
