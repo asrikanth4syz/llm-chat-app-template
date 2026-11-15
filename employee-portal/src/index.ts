@@ -34,7 +34,7 @@ import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, ca
 import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
-import { monthlyGross, type SalaryComponent } from "./payroll.ts";
+import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision } from "./payroll.ts";
 
 export interface Env {
   DB: D1Database;
@@ -872,6 +872,154 @@ async function handleEmployeeSalarySet(actor: Actor, env: Env, employeeId: strin
   return json({ ok: true, id: salId, revisionNo: nextNo, monthlyGrossPaise: gross });
 }
 
+// Loss-of-pay working days in [fromISO, toISO]: a working day (not a weekly-off, not a
+// holiday) whose attendance status is neither present (P) nor approved leave (LV).
+function lopDaysInRange(statusByDate: Map<string, string>, holidays: Set<string>, weekOff: Set<number>, fromISO: string, toISO: string): number {
+  const [fy, fm, fd] = fromISO.split("-").map(Number);
+  const [ty, tm, td] = toISO.split("-").map(Number);
+  const end = Date.UTC(ty, tm - 1, td);
+  let lop = 0;
+  for (let cur = Date.UTC(fy, fm - 1, fd); cur <= end; cur += 86400000) {
+    const dt = new Date(cur);
+    if (weekOff.has(dt.getUTCDay())) continue;
+    const iso = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+    if (holidays.has(iso)) continue;
+    const st = statusByDate.get(iso) || "";
+    if (st !== "P" && st !== "LV") lop++;
+  }
+  return lop;
+}
+
+// P6b: prepare (or recompute) a payroll run for a LOCKED attendance month. Computes one line
+// per employee from their effective-dated salary (day-weighted across mid-month revisions) +
+// the locked attendance. Idempotent: re-preparing a draft/in_review run recomputes in place.
+async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { ym?: string };
+  const ym = String(b.ym ?? "").trim();
+  if (!/^\d{4}-\d{2}$/.test(ym)) return json({ error: "valid month (YYYY-MM) required" }, 400);
+  if (!(await isMonthLocked(env, ym))) return json({ error: "attendance for this month must be locked before payroll" }, 409);
+  const existing = await env.DB.prepare("SELECT id, version, status FROM payroll_runs WHERE ym = ? AND status != 'cancelled' ORDER BY version DESC LIMIT 1").bind(ym).first<{ id: string; version: number; status: string }>();
+  if (existing && (existing.status === "approved" || existing.status === "locked")) {
+    return json({ error: `run v${existing.version} is ${existing.status}; reopen it for a new version` }, 409);
+  }
+  const runId = existing ? existing.id : uid();
+  const version = existing ? existing.version : 1;
+
+  const calDays = divisorDays(ym, "calendar");
+  const monthStart = `${ym}-01`, monthEnd = `${ym}-${String(calDays).padStart(2, "0")}`;
+  const modeRow = await env.DB.prepare("SELECT value FROM portal_config WHERE key = 'payroll_divisor'").first<{ value: string }>();
+  const mode: DivisorMode = modeRow?.value === "fixed_30" ? "fixed_30" : modeRow?.value === "fixed_26" ? "fixed_26" : "calendar";
+  const divisor = divisorDays(ym, mode);
+  const weekOff = new Set(await loadWeekOffDays(env));
+
+  const emps = (await env.DB.prepare(
+    "SELECT id, name, location, date_of_joining, date_of_exit, (bank_account IS NOT NULL AND bank_account != '') AS has_bank FROM employees"
+  ).all<{ id: string; name: string; location: string | null; date_of_joining: string | null; date_of_exit: string | null; has_bank: number }>()).results;
+
+  const attRows = (await env.DB.prepare("SELECT employee_id, date, status, ot_minutes FROM attendance_days WHERE date LIKE ?").bind(`${ym}-%`).all<{ employee_id: string; date: string; status: string; ot_minutes: number }>()).results;
+  const attByEmp = new Map<string, { status: Map<string, string>; ot: number }>();
+  for (const r of attRows) {
+    const e = attByEmp.get(r.employee_id) ?? { status: new Map<string, string>(), ot: 0 };
+    e.status.set(r.date, r.status); e.ot += r.ot_minutes || 0; attByEmp.set(r.employee_id, e);
+  }
+
+  const salRows = (await env.DB.prepare(
+    "SELECT id, employee_id, effective_from, effective_to FROM employee_salaries WHERE effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)"
+  ).bind(monthEnd, monthStart).all<{ id: string; employee_id: string; effective_from: string; effective_to: string | null }>()).results;
+  const salByEmp = new Map<string, SalaryRevision[]>();
+  for (const s of salRows) {
+    const a = salByEmp.get(s.employee_id) ?? []; a.push({ id: s.id, effectiveFrom: s.effective_from, effectiveTo: s.effective_to }); salByEmp.set(s.employee_id, a);
+  }
+  const compBySal = new Map<string, SalaryComponent[]>();
+  const salIds = salRows.map((s) => s.id);
+  for (let i = 0; i < salIds.length; i += 50) {
+    const part = salIds.slice(i, i + 50);
+    const cr = (await env.DB.prepare(
+      `SELECT employee_salary_id, component_code, name, kind, calc_method, value, base_code, prorates, sequence FROM employee_salary_components WHERE employee_salary_id IN (${part.map(() => "?").join(",")})`
+    ).bind(...part).all<{ employee_salary_id: string; component_code: string; name: string; kind: string; calc_method: string; value: number; base_code: string | null; prorates: number; sequence: number }>()).results;
+    for (const c of cr) {
+      const a = compBySal.get(c.employee_salary_id) ?? [];
+      a.push({ code: c.component_code, name: c.name, kind: c.kind as "earning" | "deduction", calcMethod: c.calc_method as "fixed" | "percent_of_base", value: c.value, baseCode: c.base_code, prorates: !!c.prorates, sequence: c.sequence });
+      compBySal.set(c.employee_salary_id, a);
+    }
+  }
+
+  const holByLoc = new Map<string, Set<string>>();
+  for (const loc of [...new Set(emps.map((e) => e.location ?? ""))]) holByLoc.set(loc, await loadHolidaySet(env, loc || null, ym));
+
+  const stmts: D1PreparedStatement[] = [
+    env.DB.prepare("DELETE FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?)").bind(runId),
+    env.DB.prepare("DELETE FROM payroll_lines WHERE run_id = ?").bind(runId),
+  ];
+  let totGross = 0, totNet = 0, totExc = 0;
+  for (const e of emps) {
+    const att = attByEmp.get(e.id) ?? { status: new Map<string, string>(), ot: 0 };
+    const hol = holByLoc.get(e.location ?? "") ?? new Set<string>();
+    const segments = resolveSalarySegments(salByEmp.get(e.id) ?? [], monthStart, monthEnd, e.date_of_joining, e.date_of_exit);
+    const lineId = uid();
+    let line: PayLine | null = null; let employedDays = 0, lopDays = 0; const usedSal: string[] = [];
+    if (segments.length) {
+      const parts: PayLine[] = [];
+      for (const seg of segments) {
+        const segLop = lopDaysInRange(att.status, hol, weekOff, seg.fromISO, seg.toISO);
+        employedDays += seg.days; lopDays += segLop; usedSal.push(seg.id);
+        parts.push(computeLine(compBySal.get(seg.id) ?? [], { employedDays: seg.days, lopDays: segLop, divisor }));
+      }
+      line = aggregatePayLines(parts);
+    }
+    const exception = !line ? "no_salary" : (line.exception || (!e.has_bank ? "missing_bank" : null));
+    const gross = line?.grossPaid ?? 0, ded = line?.deductions ?? 0, lop = line?.lopReduction ?? 0, net = line?.net ?? 0;
+    totGross += gross; totNet += net; if (exception) totExc++;
+    stmts.push(env.DB.prepare(
+      "INSERT INTO payroll_lines (id,run_id,employee_id,employee_name,salary_ids,calendar_days,employed_days,lop_days,ot_minutes,gross_paise,deductions_paise,lop_paise,net_paise,exception) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(lineId, runId, e.id, e.name, JSON.stringify(usedSal), calDays, employedDays, lopDays, att.ot, gross, ded, lop, net, exception));
+    if (line) line.components.forEach((c, i) => stmts.push(env.DB.prepare(
+      "INSERT INTO payroll_line_components (id,line_id,code,name,kind,amount_paise,sequence) VALUES (?,?,?,?,?,?,?)"
+    ).bind(uid(), lineId, c.code, c.name, c.kind, c.amount, i)));
+  }
+  stmts.unshift(env.DB.prepare(
+    "INSERT INTO payroll_runs (id,ym,version,status,divisor,employees,gross_paise,net_paise,exceptions,prepared_by,prepared_at) VALUES (?,?,?,'draft',?,?,?,?,?,?,datetime('now')) " +
+    "ON CONFLICT(id) DO UPDATE SET status='draft', divisor=excluded.divisor, employees=excluded.employees, gross_paise=excluded.gross_paise, net_paise=excluded.net_paise, exceptions=excluded.exceptions, prepared_by=excluded.prepared_by, prepared_at=datetime('now')"
+  ).bind(runId, ym, version, mode, emps.length, totGross, totNet, totExc, actor.userId));
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  await audit(env, actor.userId, "PAYROLL_RUN_PREPARE", "payroll", runId, `${ym} v${version}: ${emps.length} emp, net ${totNet}, ${totExc} exc, divisor ${mode}`);
+  return json({ ok: true, runId, ym, version, employees: emps.length, grossPaise: totGross, netPaise: totNet, exceptions: totExc });
+}
+
+async function handlePayrollRuns(actor: Actor, env: Env, ym: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const where = /^\d{4}-\d{2}$/.test(ym) ? "WHERE ym = ?" : "";
+  const q = env.DB.prepare(`SELECT id,ym,version,status,divisor,employees,gross_paise,net_paise,exceptions,prepared_at,approved_at,locked_at FROM payroll_runs ${where} ORDER BY ym DESC, version DESC LIMIT 60`);
+  const runs = (await (where ? q.bind(ym) : q).all()).results;
+  return json({ runs });
+}
+
+async function handlePayrollRunGet(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT id,ym,version,status,divisor,employees,gross_paise,net_paise,exceptions,prepared_by,prepared_at,approved_by,approved_at,locked_at,note FROM payroll_runs WHERE id = ?").bind(runId).first();
+  if (!run) return json({ error: "not found" }, 404);
+  const lines = (await env.DB.prepare("SELECT id,employee_id,employee_name,employed_days,lop_days,ot_minutes,gross_paise,deductions_paise,lop_paise,net_paise,exception FROM payroll_lines WHERE run_id = ? ORDER BY employee_name").bind(runId).all<{ id: string }>()).results;
+  const comps = (await env.DB.prepare("SELECT line_id,code,name,kind,amount_paise FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?) ORDER BY sequence").bind(runId).all<{ line_id: string }>()).results;
+  const byLine = new Map<string, unknown[]>();
+  for (const c of comps) { const a = byLine.get(c.line_id) ?? []; a.push(c); byLine.set(c.line_id, a); }
+  return json({ run, lines: lines.map((l) => ({ ...l, components: byLine.get(l.id) ?? [] })) });
+}
+
+async function handlePayrollRegister(actor: Actor, env: Env, runId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const run = await env.DB.prepare("SELECT ym,version FROM payroll_runs WHERE id = ?").bind(runId).first<{ ym: string; version: number }>();
+  if (!run) return json({ error: "not found" }, 404);
+  const lines = (await env.DB.prepare("SELECT employee_name,employed_days,lop_days,ot_minutes,gross_paise,deductions_paise,lop_paise,net_paise,exception FROM payroll_lines WHERE run_id = ? ORDER BY employee_name").bind(runId).all<Record<string, unknown>>()).results;
+  const esc = (s: unknown) => { const v = String(s ?? ""); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const rupee = (p: unknown) => (Number(p) / 100).toFixed(2);
+  const head = ["employee", "employed_days", "lop_days", "ot_minutes", "gross", "deductions", "lop", "net", "exception"];
+  const rows = [head.join(",")];
+  for (const l of lines) rows.push([esc(l.employee_name), l.employed_days, l.lop_days, l.ot_minutes, rupee(l.gross_paise), rupee(l.deductions_paise), rupee(l.lop_paise), rupee(l.net_paise), esc(l.exception)].join(","));
+  await audit(env, actor.userId, "PAYROLL_REGISTER_EXPORT", "payroll", runId, `${run.ym} v${run.version}`);
+  return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="payroll-register-${run.ym}.csv"` } });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -1394,6 +1542,13 @@ export default {
       const esg = path.match(/^\/api\/admin\/employees\/([^/]+)\/salary$/);
       if (esg && method === "GET") return await handleEmployeeSalaryGet(actor, env, decodeURIComponent(esg[1]));
       if (esg && method === "POST") return await handleEmployeeSalarySet(actor, env, decodeURIComponent(esg[1]), request);
+      // Payroll run (P6b)
+      if (path === "/api/admin/payroll/runs" && method === "GET") return await handlePayrollRuns(actor, env, url.searchParams.get("month") || "");
+      if (path === "/api/admin/payroll/runs" && method === "POST") return await handlePayrollRunPrepare(actor, env, request);
+      const prun = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)$/);
+      if (prun && method === "GET") return await handlePayrollRunGet(actor, env, decodeURIComponent(prun[1]));
+      const preg = path.match(/^\/api\/admin\/payroll\/runs\/([^/]+)\/register$/);
+      if (preg && method === "GET") return await handlePayrollRegister(actor, env, decodeURIComponent(preg[1]));
       if (path === "/api/admin/holidays" && method === "GET") return await handleHolidaysList(actor, env, url.searchParams.get("year") || "");
       if (path === "/api/admin/holidays" && method === "POST") return await handleHolidayCreate(actor, env, request);
       const hdel = path.match(/^\/api\/admin\/holidays\/([^/]+)\/delete$/);

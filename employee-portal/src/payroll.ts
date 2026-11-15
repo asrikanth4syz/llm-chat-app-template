@@ -66,15 +66,17 @@ export function monthlyGross(comps: SalaryComponent[]): number {
   return expandComponents(comps).filter((c) => c.kind === "earning").reduce((s, c) => s + c.full, 0);
 }
 
-export interface LineComponent { code: string; name: string; kind: "earning" | "deduction"; amount: number; }
+export interface LineComponent { code: string; name: string; kind: "earning" | "deduction" | "info"; amount: number; }
+export type PayException = "negative_net" | "zero_pay" | null;
 
 export interface PayLine {
-  grossFull: number;      // Σ full earnings
-  lopReduction: number;   // reduction for loss-of-pay + unworked (pre-join/post-exit) days
-  deductions: number;     // Σ deduction components (excl. the LOP line)
-  net: number;            // grossFull − deductions − lopReduction
-  components: LineComponent[];
-  exception: "negative_net" | "zero_pay" | null;
+  grossFull: number;      // Σ full earnings (nominal, before proration)
+  grossPaid: number;      // Σ earnings actually earned after proration
+  lopReduction: number;   // grossFull − grossPaid (loss-of-pay + unworked days)
+  deductions: number;     // Σ deduction components (excl. the informational LOP line)
+  net: number;            // grossPaid − deductions
+  components: LineComponent[]; // earnings at PAID, deductions, + an informational LOP line
+  exception: PayException;
 }
 
 export interface ProrationInput {
@@ -92,25 +94,48 @@ export function computeLine(comps: SalaryComponent[], p: ProrationInput): PayLin
   const paidDays = Math.max(0, p.employedDays - p.lopDays);
   const div = p.divisor > 0 ? p.divisor : 1;
   const components: LineComponent[] = [];
-  let grossFull = 0, paidEarnings = 0, deductions = 0;
+  let grossFull = 0, grossPaid = 0, deductions = 0;
   for (const c of exp) {
     if (c.kind === "earning") {
       grossFull += c.full;
       // prorating earnings reduce for LOP + unworked; others only for unworked (employedDays).
       const num = c.prorates ? paidDays : p.employedDays;
       const paid = Math.min(c.full, roundPaise((c.full * num) / div));
-      paidEarnings += paid;
-      components.push({ code: c.code, name: c.name, kind: "earning", amount: c.full });
+      grossPaid += paid;
+      components.push({ code: c.code, name: c.name, kind: "earning", amount: paid });
     } else {
       deductions += c.full;
       if (c.full !== 0) components.push({ code: c.code, name: c.name, kind: "deduction", amount: c.full });
     }
   }
-  const lopReduction = Math.max(0, grossFull - paidEarnings);
-  if (lopReduction > 0) components.push({ code: "LOP", name: "Loss of pay", kind: "deduction", amount: lopReduction });
-  const net = grossFull - deductions - lopReduction;
-  const exception = net < 0 ? "negative_net" : (paidDays <= 0 ? "zero_pay" : null);
-  return { grossFull, lopReduction, deductions, net, components, exception };
+  const lopReduction = Math.max(0, grossFull - grossPaid);
+  if (lopReduction > 0) components.push({ code: "LOP", name: "Loss of pay", kind: "info", amount: lopReduction });
+  const net = grossPaid - deductions;
+  const exception: PayException = net < 0 ? "negative_net" : (paidDays <= 0 ? "zero_pay" : null);
+  return { grossFull, grossPaid, lopReduction, deductions, net, components, exception };
+}
+
+/** Combine the per-segment pay lines of one employee-month (day-weighted mid-month
+ *  revisions) into a single line. Earnings/deductions aggregate by code; totals sum; the
+ *  exception is re-derived from the combined totals. Pure. */
+export function aggregatePayLines(parts: PayLine[]): PayLine {
+  const byCode = new Map<string, LineComponent>();
+  let grossFull = 0, grossPaid = 0, deductions = 0;
+  for (const pl of parts) {
+    grossFull += pl.grossFull; grossPaid += pl.grossPaid; deductions += pl.deductions;
+    for (const c of pl.components) {
+      const prev = byCode.get(c.code);
+      if (prev) prev.amount += c.amount;
+      else byCode.set(c.code, { ...c });
+    }
+  }
+  const lopReduction = Math.max(0, grossFull - grossPaid);
+  const net = grossPaid - deductions;
+  const exception: PayException = net < 0 ? "negative_net" : (grossPaid <= 0 ? "zero_pay" : null);
+  // keep a stable order: earnings, deductions, then the info LOP line
+  const order = { earning: 0, deduction: 1, info: 2 } as const;
+  const components = [...byCode.values()].sort((a, b) => order[a.kind] - order[b.kind]);
+  return { grossFull, grossPaid, lopReduction, deductions, net, components, exception };
 }
 
 // ---- Effective-dated salary resolution (incl. day-weighted mid-month revision) ---------

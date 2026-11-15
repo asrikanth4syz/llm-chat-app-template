@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  roundPaise, divisorDays, expandComponents, monthlyGross, computeLine,
+  roundPaise, divisorDays, expandComponents, monthlyGross, computeLine, aggregatePayLines,
   resolveSalarySegments, daysInclusive, type SalaryComponent,
 } from "../src/payroll.ts";
 
@@ -39,9 +39,25 @@ test("expandComponents resolves percent_of_base and respects sequence", () => {
 test("computeLine: full month pays full gross, no LOP", () => {
   const line = computeLine(comps, { employedDays: 30, lopDays: 0, divisor: divisorDays("2026-11", "calendar") });
   assert.equal(line.grossFull, GROSS);
+  assert.equal(line.grossPaid, GROSS);
   assert.equal(line.lopReduction, 0);
   assert.equal(line.net, GROSS);
   assert.equal(line.exception, null);
+});
+
+test("aggregatePayLines: day-weighted mid-month revision sums to the parts", () => {
+  // Nov (30d), calendar divisor. Old salary for 14 days, a raised salary for 16 days, no LOP.
+  const raised = comps.map((c) => c.code === "BASIC" ? { ...c, value: 2200000 } : c);
+  const seg1 = computeLine(comps, { employedDays: 14, lopDays: 0, divisor: 30 });
+  const seg2 = computeLine(raised, { employedDays: 16, lopDays: 0, divisor: 30 });
+  const agg = aggregatePayLines([seg1, seg2]);
+  assert.equal(agg.net, seg1.net + seg2.net);
+  assert.equal(agg.grossPaid, seg1.grossPaid + seg2.grossPaid);
+  assert.equal(agg.exception, null);
+  const basic = agg.components.find((c) => c.code === "BASIC");
+  const b1 = seg1.components.find((c) => c.code === "BASIC").amount;
+  const b2 = seg2.components.find((c) => c.code === "BASIC").amount;
+  assert.equal(basic.amount, b1 + b2); // earnings aggregate by code (paid amounts)
 });
 
 test("computeLine: LOP reduces prorating earnings but not fixed reimbursements (calendar divisor)", () => {

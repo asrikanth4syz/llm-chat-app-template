@@ -171,6 +171,10 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET·POST | `/api/admin/salary/components` | payroll.prepare | P6a: salary component catalog; upsert `{code,name,kind,calcMethod,baseCode?,prorates?,…}` |
 | GET | `/api/admin/employees/:id/salary` | payroll.read_all | effective-dated salary history + component breakdown |
 | POST | `/api/admin/employees/:id/salary` | payroll.prepare | add a salary revision `{effectiveFrom,components[]}` (supersedes the open one; forward-only) |
+| GET | `/api/admin/payroll/runs?month=YYYY-MM` | payroll.read_all | P6b: payroll runs (latest versions) for a month |
+| POST | `/api/admin/payroll/runs` | payroll.prepare | prepare/recompute a run `{ym}` — month must be attendance-locked |
+| GET | `/api/admin/payroll/runs/:id` | payroll.read_all | run + per-employee lines + component breakdown |
+| GET | `/api/admin/payroll/runs/:id/register` | payroll.read_all | CSV register (audited) |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -274,8 +278,24 @@ points**. Migration `0014`.
   capture-only, day-weighted revisions.
 - **UI** — a **Payroll** tab (payroll roles only) to assign/revise employee salary (live
   gross in ₹) and manage the component catalog.
-- **Next:** P6b (payroll run from the locked input + exceptions + register) → P6c
-  (maker-checker + lock + versioned revisions + payslips via Documents + bank advice).
+### P6b — the payroll run (migration `0015`)
+
+- **Prepare a run** for a month whose **attendance is locked (M1)** — refused otherwise.
+  It computes **one line per employee** from their effective-dated salary and the locked
+  attendance: `computeLine` per salary segment (LOP from working-day absences within the
+  employment window), `aggregatePayLines` to combine **day-weighted mid-month revisions**,
+  with the configured divisor. **Idempotent** — re-preparing a `draft` run recomputes in
+  place (same version); an `approved`/`locked` run is refused (reopen → new version, P6c).
+- **Lines** carry employed/LOP days, OT minutes, earned gross, deductions, LOP and net (all
+  paise), each with its **component breakdown**, plus an **exception** flag
+  (`no_salary` / `missing_bank` / `negative_net` / `zero_pay`). A run stores totals +
+  exception count; nothing is approved yet (status `draft`).
+- **UI** — the Payroll tab's **Run** card: pick a locked month, **Prepare**, review the
+  register (per-employee net in ₹, exceptions highlighted) and **export CSV**.
+- **Pure engine** stays fully unit-tested (`computeLine`, `aggregatePayLines`,
+  `resolveSalarySegments`); the Worker only orchestrates DB + persistence.
+- **Next — P6c:** maker-checker (submit → approve, SoD) + lock + versioned revisions +
+  **payslips via Documents** + bank/NEFT advice. Then the CA-validated **statutory** phase.
 
 ## Quick wins (from the Master Prompt review)
 

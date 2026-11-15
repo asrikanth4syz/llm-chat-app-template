@@ -207,8 +207,12 @@ Object.assign(DICT.en, {
   revision: "Rev", noSalary: "No salary set yet.", earning: "earning", deduction: "deduction",
   addComponent: "Add component", statutoryWord: "statutory", noProrate: "no LOP proration",
   selectEmployeeDate: "Pick an employee and an effective date.", needEarning: "Add at least one earning amount.",
-  payroll_help: "Set up salary structures here. Payroll runs (which consume the locked monthly attendance) and payslips come next.",
-  payroll_setup_note: "P6a: salary components + effective-dated employee salary. The run engine, maker-checker and payslips are the next slices.",
+  payrollRun: "Payroll run", prepareRun: "Prepare run", prepared: "Prepared", noRun: "No run for this month yet.",
+  netWord: "Net", noExceptions: "no exceptions", divisorWord: "Divisor",
+  exc_negative_net: "negative net", exc_zero_pay: "no paid days", exc_no_salary: "no salary set", exc_missing_bank: "missing bank",
+  payroll_run_help: "Prepare a run for a month whose attendance is locked. It computes each employee's pay from their effective-dated salary and the locked attendance (payable days, LOP, OT). Re-preparing recomputes in place. Maker-checker approval + payslips come in the next slice.",
+  payroll_help: "Set up salary structures and run payroll here. Payroll consumes the locked monthly attendance.",
+  payroll_setup_note: "Run a month, then review the register and exceptions. Approval/lock + payslips are the next slice (P6c).",
   emp_salary_help: "Assign or revise an employee's salary, effective-dated. A new revision supersedes the previous one from its start date; history is kept. Amounts in ₹; % components are of their base.",
   catalog_help: "Reusable component definitions. Statutory components (PF/ESI/PT/TDS) are placeholders — their rules arrive in the CA-validated statutory phase.",
 });
@@ -219,8 +223,12 @@ Object.assign(DICT.kn, {
   revision: "ಪರಿಷ್ಕ.", noSalary: "ಇನ್ನೂ ವೇತನ ಇಲ್ಲ.", earning: "ಗಳಿಕೆ", deduction: "ಕಡಿತ",
   addComponent: "ಘಟಕ ಸೇರಿಸಿ", statutoryWord: "ಶಾಸನಬದ್ಧ", noProrate: "ಎಲ್‌ಒಪಿ ಇಲ್ಲ",
   selectEmployeeDate: "ಉದ್ಯೋಗಿ ಮತ್ತು ದಿನಾಂಕ ಆಯ್ಕೆಮಾಡಿ.", needEarning: "ಕನಿಷ್ಠ ಒಂದು ಗಳಿಕೆ ಸೇರಿಸಿ.",
-  payroll_help: "ವೇತನ ರಚನೆಗಳನ್ನು ಇಲ್ಲಿ ಹೊಂದಿಸಿ. ವೇತನ ರನ್ ಮತ್ತು ಪೇಸ್ಲಿಪ್‌ಗಳು ಮುಂದೆ.",
-  payroll_setup_note: "P6a: ವೇತನ ಘಟಕಗಳು + ದಿನಾಂಕಾಧಾರಿತ ಉದ್ಯೋಗಿ ವೇತನ.",
+  payrollRun: "ವೇತನ ರನ್", prepareRun: "ರನ್ ಸಿದ್ಧಪಡಿಸಿ", prepared: "ಸಿದ್ಧವಾಗಿದೆ", noRun: "ಈ ತಿಂಗಳ ರನ್ ಇಲ್ಲ.",
+  netWord: "ನಿವ್ವಳ", noExceptions: "ಸಮಸ್ಯೆ ಇಲ್ಲ", divisorWord: "ಭಾಜಕ",
+  exc_negative_net: "ಋಣ ನಿವ್ವಳ", exc_zero_pay: "ಪಾವತಿ ದಿನ ಇಲ್ಲ", exc_no_salary: "ವೇತನ ಇಲ್ಲ", exc_missing_bank: "ಬ್ಯಾಂಕ್ ಇಲ್ಲ",
+  payroll_run_help: "ಹಾಜರಾತಿ ಲಾಕ್ ಆದ ತಿಂಗಳಿಗೆ ರನ್ ಸಿದ್ಧಪಡಿಸಿ. ಪ್ರತಿ ಉದ್ಯೋಗಿಯ ವೇತನವನ್ನು ಲೆಕ್ಕ ಹಾಕುತ್ತದೆ. ಅನುಮೋದನೆ + ಪೇಸ್ಲಿಪ್ ಮುಂದೆ.",
+  payroll_help: "ವೇತನ ರಚನೆ ಮತ್ತು ರನ್ ಇಲ್ಲಿ. ವೇತನ ಲಾಕ್ ಆದ ಹಾಜರಾತಿಯನ್ನು ಬಳಸುತ್ತದೆ.",
+  payroll_setup_note: "ತಿಂಗಳನ್ನು ರನ್ ಮಾಡಿ, ನಂತರ ರಿಜಿಸ್ಟರ್ ಪರಿಶೀಲಿಸಿ. ಅನುಮೋದನೆ/ಲಾಕ್ + ಪೇಸ್ಲಿಪ್ ಮುಂದಿನ ಹಂತ.",
   emp_salary_help: "ಉದ್ಯೋಗಿ ವೇತನವನ್ನು ದಿನಾಂಕಾಧಾರಿತವಾಗಿ ನಿಗದಿಪಡಿಸಿ. ಹೊಸ ಪರಿಷ್ಕರಣೆ ಹಿಂದಿನದನ್ನು ಬದಲಿಸುತ್ತದೆ.",
   catalog_help: "ಮರುಬಳಕೆಯ ಘಟಕ ವ್ಯಾಖ್ಯಾನಗಳು. ಶಾಸನಬದ್ಧ ಘಟಕಗಳ ನಿಯಮಗಳು ಮುಂದಿನ ಹಂತದಲ್ಲಿ.",
 });
@@ -231,8 +239,12 @@ Object.assign(DICT.hi, {
   revision: "संशो.", noSalary: "अभी कोई वेतन नहीं।", earning: "आय", deduction: "कटौती",
   addComponent: "घटक जोड़ें", statutoryWord: "सांविधिक", noProrate: "एलओपी नहीं",
   selectEmployeeDate: "कर्मचारी और तिथि चुनें।", needEarning: "कम से कम एक आय जोड़ें।",
-  payroll_help: "यहाँ वेतन संरचना सेट करें। पेरोल रन और पे-स्लिप आगे।",
-  payroll_setup_note: "P6a: वेतन घटक + तिथि-आधारित कर्मचारी वेतन।",
+  payrollRun: "पेरोल रन", prepareRun: "रन तैयार करें", prepared: "तैयार", noRun: "इस माह का कोई रन नहीं।",
+  netWord: "शुद्ध", noExceptions: "कोई समस्या नहीं", divisorWord: "भाजक",
+  exc_negative_net: "ऋणात्मक शुद्ध", exc_zero_pay: "कोई देय दिन नहीं", exc_no_salary: "वेतन नहीं", exc_missing_bank: "बैंक नहीं",
+  payroll_run_help: "लॉक किए गए माह के लिए रन तैयार करें। प्रत्येक कर्मचारी का वेतन गणना करता है। अनुमोदन + पे-स्लिप अगले चरण में।",
+  payroll_help: "वेतन संरचना और रन यहाँ। पेरोल लॉक की गई उपस्थिति का उपयोग करता है।",
+  payroll_setup_note: "माह चलाएँ, फिर रजिस्टर और समस्याएँ देखें। अनुमोदन/लॉक + पे-स्लिप अगला चरण।",
   emp_salary_help: "कर्मचारी वेतन को तिथि-आधारित रूप से निर्धारित करें। नया संशोधन पिछले को प्रतिस्थापित करता है।",
   catalog_help: "पुन: प्रयोज्य घटक परिभाषाएँ। सांविधिक घटकों के नियम अगले चरण में।",
 });
@@ -1782,10 +1794,68 @@ async function loadPayrollView() {
     h2help(t("navPayroll"), t("payroll_help")),
     el("div", { class: "muted", style: "font-size:13px", text: t("payroll_setup_note") }),
   ]));
+  body.appendChild(el("div", { class: "card", id: "pay_run" }, [h2help(t("payrollRun"), t("payroll_run_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_emp" }, [h2help(t("employeeSalary"), t("emp_salary_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_cat" }, [h2help(t("componentsCatalog"), t("catalog_help")), el("div", { class: "muted", text: "…" })]));
+  loadPayrollRunCard();
   await loadEmployeeSalaryCard();
   loadComponentCatalog();
+}
+
+async function downloadAuthed(path, filename) {
+  try {
+    const res = await fetch(path, { headers: state.token ? { Authorization: `Bearer ${state.token}` } : {} });
+    if (!res.ok) { flash("err", t("errorGeneric")); return; }
+    const blob = await res.blob();
+    const a = el("a", { href: URL.createObjectURL(blob), download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (ex) { flash("err", ex.message); }
+}
+
+async function loadPayrollRunCard() {
+  const card = document.getElementById("pay_run");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("payrollRun"), t("payroll_run_help")));
+  const month = el("input", { type: "month", value: state.payMonth || new Date().toISOString().slice(0, 7), style: "width:auto" });
+  state.payMonth = month.value;
+  const prep = el("button", { class: "primary sm", text: t("prepareRun") });
+  const detail = el("div", { id: "pay_run_detail", style: "margin-top:10px" });
+  month.addEventListener("change", () => { state.payMonth = month.value; refreshRun(); });
+  prep.addEventListener("click", async () => {
+    prep.disabled = true;
+    try { const r = await api("/api/admin/payroll/runs", { method: "POST", body: { ym: state.payMonth } }); flash("ok", `${t("prepared")} · ${r.employees} · ${t("exceptionsWord")}: ${r.exceptions}`); refreshRun(); }
+    catch (ex) { flash("err", ex.message); }
+    finally { prep.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [el("label", { style: "margin:0", text: t("month") }), month, prep]));
+  card.appendChild(detail);
+
+  async function refreshRun() {
+    clear(detail);
+    try {
+      const { runs } = await api(`/api/admin/payroll/runs?month=${encodeURIComponent(state.payMonth)}`);
+      if (!runs || !runs.length) { detail.appendChild(el("div", { class: "muted", text: t("noRun") })); return; }
+      const run = runs[0];
+      const full = await api(`/api/admin/payroll/runs/${encodeURIComponent(run.id)}`);
+      const r = full.run;
+      detail.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [
+        el("span", { text: `v${r.version}` }),
+        el("span", { class: "pill " + (r.status === "locked" || r.status === "approved" ? "approved" : "pending"), text: r.status }),
+        el("span", { text: `${r.employees} · ${t("monthlyGross")}: ${fmtINR((r.gross_paise || 0) / 100)} · ${t("netWord")}: ${fmtINR((r.net_paise || 0) / 100)}` }),
+        r.exceptions ? el("span", { class: "pill pending", text: `${r.exceptions} ${t("exceptionsWord")}` }) : el("span", { class: "pill approved", text: t("noExceptions") }),
+        el("button", { class: "sm", text: t("exportCsv"), onclick: () => downloadAuthed(`/api/admin/payroll/runs/${encodeURIComponent(run.id)}/register`, `payroll-${r.ym}.csv`) }),
+      ]));
+      detail.appendChild(el("div", { class: "muted", style: "font-size:12px", text: `${t("divisorWord")}: ${r.divisor}` }));
+      for (const l of full.lines) {
+        const exc = l.exception ? el("span", { class: "pill pending", style: "margin-left:6px", text: t("exc_" + l.exception) || l.exception }) : null;
+        detail.appendChild(el("div", { class: "row" }, [
+          el("div", { class: "k" }, [el("div", { text: l.employee_name }), el("div", { class: "muted", style: "font-size:11px", text: `${l.employed_days}d · LOP ${l.lop_days}${l.ot_minutes ? " · OT " + minToHHMM(l.ot_minutes) : ""}` })]),
+          el("div", { class: "v" }, [el("span", { text: `${fmtINR((l.gross_paise || 0) / 100)} − ${fmtINR((l.deductions_paise || 0) / 100)} = ` }), el("b", { text: fmtINR((l.net_paise || 0) / 100) }), exc]),
+        ]));
+      }
+    } catch (ex) { detail.appendChild(el("div", { class: "msg err", text: ex.message })); }
+  }
+  refreshRun();
 }
 
 async function loadEmployeeSalaryCard() {
