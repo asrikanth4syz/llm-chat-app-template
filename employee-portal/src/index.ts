@@ -34,6 +34,7 @@ import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, ca
 import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
+import { monthlyGross, type SalaryComponent } from "./payroll.ts";
 
 export interface Env {
   DB: D1Database;
@@ -781,6 +782,96 @@ async function handleAttPolicySet(actor: Actor, env: Env, request: Request): Pro
   return json({ ok: true });
 }
 
+// ---- Payroll core — P6a: salary component catalog + effective-dated employee salary ----
+function dayBefore(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d) - 86400000);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function handleSalaryComponents(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const components = (await env.DB.prepare(
+    "SELECT code, name, kind, calc_method, base_code, taxable, statutory, prorates, sequence, active FROM salary_components WHERE active = 1 ORDER BY sequence"
+  ).all()).results;
+  return json({ components });
+}
+
+async function handleSalaryComponentUpsert(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { code?: string; name?: string; kind?: string; calcMethod?: string; baseCode?: string; taxable?: boolean; statutory?: boolean; prorates?: boolean; sequence?: number };
+  const code = String(b.code ?? "").trim().toUpperCase();
+  if (!/^[A-Z0-9_]{2,20}$/.test(code)) return json({ error: "code must be 2–20 chars A–Z/0–9/_" }, 400);
+  const kind = b.kind === "deduction" ? "deduction" : "earning";
+  const calc = b.calcMethod === "percent_of_base" ? "percent_of_base" : "fixed";
+  await env.DB.prepare(
+    "INSERT INTO salary_components (code,name,kind,calc_method,base_code,taxable,statutory,prorates,sequence,active) VALUES (?,?,?,?,?,?,?,?,?,1) " +
+    "ON CONFLICT(code) DO UPDATE SET name=excluded.name, kind=excluded.kind, calc_method=excluded.calc_method, base_code=excluded.base_code, taxable=excluded.taxable, statutory=excluded.statutory, prorates=excluded.prorates, sequence=excluded.sequence, active=1"
+  ).bind(code, String(b.name ?? code), kind, calc, b.baseCode ? String(b.baseCode).toUpperCase() : null, b.taxable === false ? 0 : 1, b.statutory ? 1 : 0, b.prorates === false ? 0 : 1, Math.round(Number(b.sequence) || 0)).run();
+  await audit(env, actor.userId, "SALARY_COMPONENT_UPSERT", "payroll", code, kind);
+  return json({ ok: true, code });
+}
+
+async function handleEmployeeSalaryGet(actor: Actor, env: Env, employeeId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const salaries = (await env.DB.prepare(
+    "SELECT id, effective_from, effective_to, revision_no, monthly_gross_paise, status, created_at FROM employee_salaries WHERE employee_id = ? ORDER BY effective_from DESC"
+  ).bind(employeeId).all<{ id: string }>()).results;
+  const out = [];
+  for (const s of salaries) {
+    const components = (await env.DB.prepare(
+      "SELECT component_code, name, kind, calc_method, value, base_code, prorates, taxable, statutory, sequence FROM employee_salary_components WHERE employee_salary_id = ? ORDER BY sequence"
+    ).bind(s.id).all()).results;
+    out.push({ ...s, components });
+  }
+  return json({ employeeId, salaries: out });
+}
+
+async function handleEmployeeSalarySet(actor: Actor, env: Env, employeeId: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const emp = await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(employeeId).first();
+  if (!emp) return json({ error: "employee not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { effectiveFrom?: string; components?: Array<Record<string, unknown>> };
+  const effectiveFrom = String(b.effectiveFrom ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) return json({ error: "valid effectiveFrom (YYYY-MM-DD) required" }, 400);
+  // No overlap / forward-only: a new revision must start after the current open one.
+  const open = await env.DB.prepare("SELECT effective_from FROM employee_salaries WHERE employee_id = ? AND effective_to IS NULL").bind(employeeId).first<{ effective_from: string }>();
+  if (open && open.effective_from >= effectiveFrom) return json({ error: "effectiveFrom must be after the current salary's start date" }, 400);
+  const raw = Array.isArray(b.components) ? b.components : [];
+  const comps: SalaryComponent[] = [];
+  const dbRows: Array<SalaryComponent & { taxable: number; statutory: number }> = [];
+  for (const c of raw) {
+    const code = String(c.code ?? "").trim().toUpperCase();
+    if (!code) continue;
+    const kind = c.kind === "deduction" ? "deduction" : "earning";
+    const calcMethod = c.calcMethod === "percent_of_base" ? "percent_of_base" : "fixed";
+    const sc: SalaryComponent = {
+      code, name: String(c.name ?? code), kind, calcMethod,
+      value: Math.max(0, Math.round(Number(c.value) || 0)),
+      baseCode: c.baseCode ? String(c.baseCode).toUpperCase() : null,
+      prorates: c.prorates !== false, sequence: Math.round(Number(c.sequence) || 0),
+    };
+    comps.push(sc);
+    dbRows.push({ ...sc, taxable: c.taxable === false ? 0 : 1, statutory: c.statutory ? 1 : 0 });
+  }
+  if (!comps.length) return json({ error: "at least one valid component required" }, 400);
+  const gross = monthlyGross(comps);
+  const salId = uid();
+  const nextNo = ((await env.DB.prepare("SELECT MAX(revision_no) AS n FROM employee_salaries WHERE employee_id = ?").bind(employeeId).first<{ n: number | null }>())?.n ?? 0) + 1;
+  const stmts: D1PreparedStatement[] = [
+    env.DB.prepare("UPDATE employee_salaries SET effective_to = ?, status = 'superseded' WHERE employee_id = ? AND effective_to IS NULL").bind(dayBefore(effectiveFrom), employeeId),
+    env.DB.prepare("INSERT INTO employee_salaries (id, employee_id, effective_from, effective_to, revision_no, monthly_gross_paise, status, created_by) VALUES (?,?,?,NULL,?,?,'active',?)").bind(salId, employeeId, effectiveFrom, nextNo, gross, actor.userId),
+  ];
+  for (const c of dbRows) {
+    stmts.push(env.DB.prepare(
+      "INSERT INTO employee_salary_components (id, employee_salary_id, component_code, name, kind, calc_method, value, base_code, prorates, taxable, statutory, sequence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(uid(), salId, c.code, c.name, c.kind, c.calcMethod, c.value, c.baseCode ?? null, c.prorates ? 1 : 0, c.taxable, c.statutory, c.sequence));
+  }
+  await env.DB.batch(stmts);
+  await audit(env, actor.userId, "EMPLOYEE_SALARY_SET", "payroll", employeeId, `rev ${nextNo} from ${effectiveFrom} gross ${gross}`);
+  return json({ ok: true, id: salId, revisionNo: nextNo, monthlyGrossPaise: gross });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -1296,6 +1387,13 @@ export default {
       if (path === "/api/admin/attendance/payroll-input" && method === "GET") return await handleAttPayrollInput(actor, env, url.searchParams.get("month") || "");
       if (path === "/api/admin/attendance/policy" && method === "GET") return await handleAttPolicyGet(actor, env);
       if (path === "/api/admin/attendance/policy" && method === "POST") return await handleAttPolicySet(actor, env, request);
+
+      // Payroll core — P6a: salary setup
+      if (path === "/api/admin/salary/components" && method === "GET") return await handleSalaryComponents(actor, env);
+      if (path === "/api/admin/salary/components" && method === "POST") return await handleSalaryComponentUpsert(actor, env, request);
+      const esg = path.match(/^\/api\/admin\/employees\/([^/]+)\/salary$/);
+      if (esg && method === "GET") return await handleEmployeeSalaryGet(actor, env, decodeURIComponent(esg[1]));
+      if (esg && method === "POST") return await handleEmployeeSalarySet(actor, env, decodeURIComponent(esg[1]), request);
       if (path === "/api/admin/holidays" && method === "GET") return await handleHolidaysList(actor, env, url.searchParams.get("year") || "");
       if (path === "/api/admin/holidays" && method === "POST") return await handleHolidayCreate(actor, env, request);
       const hdel = path.match(/^\/api\/admin\/holidays\/([^/]+)\/delete$/);

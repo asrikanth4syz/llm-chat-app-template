@@ -133,11 +133,17 @@ statutory math can be added and tested in isolation later.
 2. **Expand components** in `sequence`: `fixed` → value; `percent_of_base` → `round(base ×
    bps / 10000)`; `attendance_prorated` → see step 4; `formula` → reserved (statutory phase).
 3. **Gross (full-month)** = Σ earnings.
-4. **Proration (attendance link)** from the **M1 payroll input** for the employee-month:
-   `paid_ratio = payable_days / divisor` (divisor per §12). Prorated earnings ×= `paid_ratio`;
-   non-prorating components (e.g. fixed reimbursements) stay whole. **LOP** is the reduction,
-   recorded as its own line component for transparency.
-5. **OT pay** (if enabled, §12): `ot_minutes × ot_rate` as an earning component.
+4. **Proration (attendance link)** from the **M1 payroll input** for the employee-month, as a
+   **loss-of-pay deduction** (never a payable/divisor *multiply*, so a 31-day fully-present
+   month can never overpay): for each prorating earning,
+   `lop_amount = round(full_component × unpaid_days / divisor)`, and the component pays
+   `full − lop_amount`. `unpaid_days` = LOP days (absent working days **within employment**)
+   + working days **outside** the `[date_of_joining, date_of_exit]` window (§2). The LOP
+   amount is recorded as its own line component for transparency.
+   **Divisor is configurable** (`portal_config.payroll_divisor`): `calendar` (actual days in
+   the month — **default**, reconciles with M1), `fixed_30`, or `fixed_26`.
+5. *(Overtime pay is not computed in this phase — OT stays capture-only. The engine leaves an
+   OT earning hook for later.)*
 6. **Deductions** = Σ deduction components (statutory deductions are zero-valued until the
    statutory phase supplies their rules).
 7. **Net** = round(Σ earnings) − round(Σ deductions), in paise.
@@ -282,28 +288,23 @@ hardcodes a statutory rate.
 
 ---
 
-## 12. Decisions required before build (HR / Finance)
+## 12. Decisions — CONFIRMED (2026-11-15)
 
-Defaults are my recommendation; confirm or override.
+1. **Proration basis** → **Calendar-day default**, implemented as a **configurable divisor**
+   (`portal_config.payroll_divisor` = `calendar` | `fixed_30` | `fixed_26`) via the LOP-deduction
+   model (§4). Finance can switch to **fixed_30** at any time. ✅
+2. **Statutory (PF/ESI/PT/TDS)** → **next phase (CA-validated)**; payroll-core ships with
+   configurable-but-empty statutory components. ✅
+3. **Mid-month salary revision** → **day-weighted proration** across the two revisions. ✅
+4. **Overtime** → **not paid in this phase** (capture-only remains; OT earning hook left for
+   later). ✅
 
-1. **Proration basis (divisor).** How LOP reduces pay:
-   - **(recommended) Calendar-day basis** — `pay = full × payable_days / calendar_days`.
-     Matches M1's `payable_days = calendar − LOP` exactly; simplest to reconcile.
-   - Fixed **26-day** basis (common in some India setups).
-   - **Working-day** basis (`/ working_days`).
-2. **Statutory this phase or next.** Recommended: **next phase (CA-validated)**; payroll-core
-   ships with configurable-but-empty statutory components. Confirm.
-3. **Mid-month salary revision.** Recommended: **day-weighted proration** across the two
-   revisions (correct); simpler fallback = the revision effective on the **last day** applies
-   to the whole month. Confirm which for v1.
-4. **Overtime pay.** Is OT *paid* in payroll now (needs an OT rate policy), or captured-only
-   for reporting (recommended for v1, pay OT later)?
-5. **Salary component breakup.** 4SYZ's actual CTC structure (BASIC %, HRA %, special
-   allowance, fixed reimbursements, deductions) — needed to seed the component catalog.
-   Can start with a sensible template (BASIC 50%, HRA 40% of basic, special = balance) and
-   refine.
-6. **Payslip fields & rounding.** Confirm the payslip layout fields and that net rounds to
-   the rupee (paise dropped on the payslip, retained internally).
+Still to supply (not blocking P6a — a sensible template is used and refined):
+5. **Salary component breakup** — 4SYZ's actual CTC structure. P6a seeds a template
+   (BASIC 50% of gross, HRA 40% of basic, special allowance = balance); refine per real
+   structure when provided.
+6. **Payslip fields & rounding** — confirmed default: net rounds to the **rupee** on the
+   payslip (paise retained internally); payslip field layout finalised in P6c.
 
 ---
 

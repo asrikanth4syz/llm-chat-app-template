@@ -199,6 +199,43 @@ Object.assign(DICT.hi, {
   sun: "रवि", mon: "सोम", tue: "मंगल", wed: "बुध", thu: "गुरु", fri: "शुक्र", sat: "शनि",
   att_policy_help: "कार्य दिवस = कैलेंडर − साप्ताहिक अवकाश − छुट्टी। डिफ़ॉल्ट: रविवार अवकाश, 48 घंटे/सप्ताह।",
 });
+// Payroll core (P6a) strings (kn/hi initial, review before go-live).
+Object.assign(DICT.en, {
+  navPayroll: "Payroll", employeeSalary: "Employee salary", componentsCatalog: "Salary components",
+  selectEmployee: "Employee", effectiveFrom: "Effective from", component: "Component", amount: "Amount",
+  monthlyGross: "Monthly gross", saveSalary: "Save salary revision", salaryHistory: "Salary history",
+  revision: "Rev", noSalary: "No salary set yet.", earning: "earning", deduction: "deduction",
+  addComponent: "Add component", statutoryWord: "statutory", noProrate: "no LOP proration",
+  selectEmployeeDate: "Pick an employee and an effective date.", needEarning: "Add at least one earning amount.",
+  payroll_help: "Set up salary structures here. Payroll runs (which consume the locked monthly attendance) and payslips come next.",
+  payroll_setup_note: "P6a: salary components + effective-dated employee salary. The run engine, maker-checker and payslips are the next slices.",
+  emp_salary_help: "Assign or revise an employee's salary, effective-dated. A new revision supersedes the previous one from its start date; history is kept. Amounts in ₹; % components are of their base.",
+  catalog_help: "Reusable component definitions. Statutory components (PF/ESI/PT/TDS) are placeholders — their rules arrive in the CA-validated statutory phase.",
+});
+Object.assign(DICT.kn, {
+  navPayroll: "ವೇತನ", employeeSalary: "ಉದ್ಯೋಗಿ ವೇತನ", componentsCatalog: "ವೇತನ ಘಟಕಗಳು",
+  selectEmployee: "ಉದ್ಯೋಗಿ", effectiveFrom: "ಇಂದಿನಿಂದ", component: "ಘಟಕ", amount: "ಮೊತ್ತ",
+  monthlyGross: "ಮಾಸಿಕ ಒಟ್ಟು", saveSalary: "ವೇತನ ಪರಿಷ್ಕರಣೆ ಉಳಿಸಿ", salaryHistory: "ವೇತನ ಇತಿಹಾಸ",
+  revision: "ಪರಿಷ್ಕ.", noSalary: "ಇನ್ನೂ ವೇತನ ಇಲ್ಲ.", earning: "ಗಳಿಕೆ", deduction: "ಕಡಿತ",
+  addComponent: "ಘಟಕ ಸೇರಿಸಿ", statutoryWord: "ಶಾಸನಬದ್ಧ", noProrate: "ಎಲ್‌ಒಪಿ ಇಲ್ಲ",
+  selectEmployeeDate: "ಉದ್ಯೋಗಿ ಮತ್ತು ದಿನಾಂಕ ಆಯ್ಕೆಮಾಡಿ.", needEarning: "ಕನಿಷ್ಠ ಒಂದು ಗಳಿಕೆ ಸೇರಿಸಿ.",
+  payroll_help: "ವೇತನ ರಚನೆಗಳನ್ನು ಇಲ್ಲಿ ಹೊಂದಿಸಿ. ವೇತನ ರನ್ ಮತ್ತು ಪೇಸ್ಲಿಪ್‌ಗಳು ಮುಂದೆ.",
+  payroll_setup_note: "P6a: ವೇತನ ಘಟಕಗಳು + ದಿನಾಂಕಾಧಾರಿತ ಉದ್ಯೋಗಿ ವೇತನ.",
+  emp_salary_help: "ಉದ್ಯೋಗಿ ವೇತನವನ್ನು ದಿನಾಂಕಾಧಾರಿತವಾಗಿ ನಿಗದಿಪಡಿಸಿ. ಹೊಸ ಪರಿಷ್ಕರಣೆ ಹಿಂದಿನದನ್ನು ಬದಲಿಸುತ್ತದೆ.",
+  catalog_help: "ಮರುಬಳಕೆಯ ಘಟಕ ವ್ಯಾಖ್ಯಾನಗಳು. ಶಾಸನಬದ್ಧ ಘಟಕಗಳ ನಿಯಮಗಳು ಮುಂದಿನ ಹಂತದಲ್ಲಿ.",
+});
+Object.assign(DICT.hi, {
+  navPayroll: "पेरोल", employeeSalary: "कर्मचारी वेतन", componentsCatalog: "वेतन घटक",
+  selectEmployee: "कर्मचारी", effectiveFrom: "प्रभावी तिथि", component: "घटक", amount: "राशि",
+  monthlyGross: "मासिक सकल", saveSalary: "वेतन संशोधन सहेजें", salaryHistory: "वेतन इतिहास",
+  revision: "संशो.", noSalary: "अभी कोई वेतन नहीं।", earning: "आय", deduction: "कटौती",
+  addComponent: "घटक जोड़ें", statutoryWord: "सांविधिक", noProrate: "एलओपी नहीं",
+  selectEmployeeDate: "कर्मचारी और तिथि चुनें।", needEarning: "कम से कम एक आय जोड़ें।",
+  payroll_help: "यहाँ वेतन संरचना सेट करें। पेरोल रन और पे-स्लिप आगे।",
+  payroll_setup_note: "P6a: वेतन घटक + तिथि-आधारित कर्मचारी वेतन।",
+  emp_salary_help: "कर्मचारी वेतन को तिथि-आधारित रूप से निर्धारित करें। नया संशोधन पिछले को प्रतिस्थापित करता है।",
+  catalog_help: "पुन: प्रयोज्य घटक परिभाषाएँ। सांविधिक घटकों के नियम अगले चरण में।",
+});
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
 Object.assign(DICT.hi, { navDirectory: "निर्देशिका", search: "नाम, भूमिका, स्थान खोजें", noResults: "कोई मेल नहीं।", manager: "प्रबंधक" });
@@ -502,9 +539,11 @@ const VIEWS = [
   { id: "directory", icon: "users", titleKey: "navDirectory" },
   { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
   { id: "documents", icon: "file", titleKey: "navDocuments" },
+  { id: "payroll", icon: "money", titleKey: "navPayroll", when: () => canViewPayroll() },
   { id: "helpdesk", icon: "help", titleKey: "navHelpdesk" },
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
+function canViewPayroll() { return ["hr_admin", "finance", "finance_admin", "finance_approver", "super_admin"].includes(state.role); }
 const ICONS = {
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
@@ -515,6 +554,7 @@ const ICONS = {
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   task: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  money: '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="2" y1="10" x2="2" y2="10"/><line x1="22" y1="14" x2="22" y2="14"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -569,7 +609,7 @@ function photoControls() {
 }
 
 function sidebar() {
-  const items = VIEWS.map((v) => el("button", { class: `navitem${state.view === v.id ? " active" : ""}`, onclick: () => switchView(v.id) }, [icon(v.icon), el("span", { text: t(v.titleKey) })]));
+  const items = VIEWS.filter((v) => !v.when || v.when()).map((v) => el("button", { class: `navitem${state.view === v.id ? " active" : ""}`, onclick: () => switchView(v.id) }, [icon(v.icon), el("span", { text: t(v.titleKey) })]));
   return el("nav", { class: "sidebar", id: "sidebar" }, [
     el("div", { class: "brand" }, [el("div", { class: "logo", text: "4S" }), el("div", {}, [document.createTextNode("4SYZ"), el("small", { text: t("appTitle") })])]),
     ...items,
@@ -610,6 +650,7 @@ async function switchView(view) {
   else if (view === "directory") await loadDirectoryView();
   else if (view === "announcements") await loadAnnouncementsView();
   else if (view === "documents") await loadDocumentsView();
+  else if (view === "payroll") await loadPayrollView();
   else if (view === "helpdesk") await loadHelpdeskView();
   else if (view === "approvals") await loadApprovalsView();
   else await loadProfile();
@@ -1730,6 +1771,133 @@ async function loadDocAdmin() {
       card.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: d.title }), el("div", { class: "v" }, [acts])]));
     }
   } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- Payroll core — P6a: salary setup (component catalog + employee salary) -----
+// Money shown in ₹; stored as paise. Percent shown as %, stored as basis points.
+async function loadPayrollView() {
+  const body = document.getElementById("body");
+  clear(body);
+  body.appendChild(el("div", { class: "card" }, [
+    h2help(t("navPayroll"), t("payroll_help")),
+    el("div", { class: "muted", style: "font-size:13px", text: t("payroll_setup_note") }),
+  ]));
+  body.appendChild(el("div", { class: "card", id: "pay_emp" }, [h2help(t("employeeSalary"), t("emp_salary_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "pay_cat" }, [h2help(t("componentsCatalog"), t("catalog_help")), el("div", { class: "muted", text: "…" })]));
+  await loadEmployeeSalaryCard();
+  loadComponentCatalog();
+}
+
+async function loadEmployeeSalaryCard() {
+  const card = document.getElementById("pay_emp");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("employeeSalary"), t("emp_salary_help")));
+  try {
+    const [emps, cat] = await Promise.all([api("/api/employees"), api("/api/admin/salary/components")]);
+    const list = emps.employees || emps || [];
+    const sel = el("select", { style: "max-width:260px" });
+    sel.appendChild(el("option", { value: "", text: t("selectEmployee") }));
+    for (const e of list) sel.appendChild(el("option", { value: e.id, text: `${e.name}${e.designation ? " · " + e.designation : ""}` }));
+    const eff = el("input", { type: "date" });
+    const grid = el("div", { id: "pay_comp_grid" });
+    const gross = el("div", { class: "muted", style: "margin-top:6px;font-weight:600" });
+    const save = el("button", { class: "primary sm", text: t("saveSalary"), disabled: "" });
+    const history = el("div", { id: "pay_hist", style: "margin-top:10px" });
+
+    function renderGrid() {
+      clear(grid);
+      grid.appendChild(el("div", { class: "row", style: "font-weight:600;font-size:12px" }, [el("div", { class: "k", text: t("component") }), el("div", { class: "v", text: t("amount") })]));
+      for (const c of (cat.components || [])) {
+        const isPct = c.calc_method === "percent_of_base";
+        const inp = el("input", { type: "number", min: "0", step: isPct ? "0.1" : "1", "data-code": c.code, style: "max-width:140px" });
+        grid.appendChild(el("div", { class: "row" }, [
+          el("div", { class: "k" }, [el("div", { text: c.name }), el("div", { class: "muted", style: "font-size:11px", text: `${c.code} · ${t(c.kind)}${isPct ? " · % " + (c.base_code || "") : ""}` })]),
+          el("div", { class: "v", style: "display:flex;align-items:center;gap:6px" }, [inp, el("span", { class: "muted", text: isPct ? "%" : "₹" })]),
+        ]));
+      }
+      recalcGross();
+    }
+    function recalcGross() {
+      // live gross estimate: sum earnings (fixed ₹ + percent% of its base ₹)
+      const vals = {}; grid.querySelectorAll("input[data-code]").forEach((i) => { vals[i.getAttribute("data-code")] = Number(i.value) || 0; });
+      let g = 0;
+      for (const c of (cat.components || [])) {
+        if (c.kind !== "earning") continue;
+        if (c.calc_method === "percent_of_base") g += Math.round((vals[c.base_code] || 0) * 100 * (vals[c.code] || 0)) / 100;
+        else g += (vals[c.code] || 0);
+      }
+      gross.textContent = `${t("monthlyGross")}: ${fmtINR(g)}`;
+    }
+    grid.addEventListener("input", recalcGross);
+
+    async function loadHistory(empId) {
+      clear(history);
+      if (!empId) return;
+      try {
+        const { salaries } = await api(`/api/admin/employees/${encodeURIComponent(empId)}/salary`);
+        if (!salaries || !salaries.length) { history.appendChild(el("div", { class: "muted", text: t("noSalary") })); return; }
+        history.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("salaryHistory") }));
+        for (const s of salaries) {
+          const tag = s.status === "active" ? el("span", { class: "pill approved", text: t("active") }) : el("span", { class: "pill", text: s.status });
+          history.appendChild(el("div", { class: "row" }, [
+            el("div", { class: "k" }, [el("div", { text: `${t("revision")} ${s.revision_no}` }), el("div", { class: "muted", style: "font-size:11px", text: `${fmtDate(s.effective_from)} → ${s.effective_to ? fmtDate(s.effective_to) : "…"}` })]),
+            el("div", { class: "v" }, [el("span", { text: fmtINR((s.monthly_gross_paise || 0) / 100) }), el("span", { style: "margin-left:8px" }, [tag])]),
+          ]));
+        }
+      } catch (ex) { history.appendChild(el("div", { class: "msg err", text: ex.message })); }
+    }
+
+    sel.addEventListener("change", () => { save.disabled = !sel.value; loadHistory(sel.value); });
+    save.addEventListener("click", async () => {
+      if (!sel.value || !eff.value) { flash("err", t("selectEmployeeDate")); return; }
+      const components = [];
+      for (const c of (cat.components || [])) {
+        const inp = grid.querySelector(`input[data-code="${c.code}"]`);
+        const raw = inp && inp.value !== "" ? Number(inp.value) : null;
+        if (raw == null || raw < 0) continue;
+        const value = c.calc_method === "percent_of_base" ? Math.round(raw * 100) : Math.round(raw * 100); // %→bps, ₹→paise (both ×100)
+        components.push({ code: c.code, name: c.name, kind: c.kind, calcMethod: c.calc_method, value, baseCode: c.base_code, prorates: !!c.prorates, taxable: !!c.taxable, statutory: !!c.statutory, sequence: c.sequence });
+      }
+      if (!components.some((c) => c.kind === "earning" && c.value > 0)) { flash("err", t("needEarning")); return; }
+      save.disabled = true;
+      try { await api(`/api/admin/employees/${encodeURIComponent(sel.value)}/salary`, { method: "POST", body: { effectiveFrom: eff.value, components } }); flash("ok", t("saved")); loadHistory(sel.value); }
+      catch (ex) { flash("err", ex.message); }
+      finally { save.disabled = false; }
+    });
+
+    card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [el("label", { style: "margin:0", text: t("selectEmployee") }), sel, el("label", { style: "margin:0 0 0 8px", text: t("effectiveFrom") }), eff]));
+    card.appendChild(grid);
+    card.appendChild(el("div", { class: "actions", style: "margin-top:8px" }, [gross, save]));
+    card.appendChild(history);
+    renderGrid();
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+
+async function loadComponentCatalog() {
+  const card = document.getElementById("pay_cat");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("componentsCatalog"), t("catalog_help")));
+  const code = el("input", { placeholder: "CODE", style: "max-width:110px;text-transform:uppercase" });
+  const name = el("input", { placeholder: t("component"), style: "max-width:160px" });
+  const kind = el("select", {}); for (const [v, k] of [["earning", "earning"], ["deduction", "deduction"]]) kind.appendChild(el("option", { value: v, text: t(k) }));
+  const add = el("button", { class: "sm", text: t("addComponent") });
+  add.addEventListener("click", async () => {
+    if (!code.value.trim()) { flash("err", "code"); return; }
+    add.disabled = true;
+    try { await api("/api/admin/salary/components", { method: "POST", body: { code: code.value.trim().toUpperCase(), name: name.value.trim() || code.value.trim(), kind: kind.value, calcMethod: "fixed", prorates: kind.value === "earning", sequence: 50 } }); flash("ok", t("saved")); code.value = ""; name.value = ""; loadComponentCatalog(); loadEmployeeSalaryCard(); }
+    catch (ex) { flash("err", ex.message); }
+    finally { add.disabled = false; }
+  });
+  card.appendChild(el("div", { class: "actions", style: "margin-bottom:8px" }, [code, name, kind, add]));
+  try {
+    const { components } = await api("/api/admin/salary/components");
+    for (const c of (components || [])) {
+      card.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k", text: c.code }),
+        el("div", { class: "v" }, [el("span", { text: `${c.name} · ${t(c.kind)}${c.calc_method === "percent_of_base" ? " · % of " + (c.base_code || "") : ""}${c.statutory ? " · " + t("statutoryWord") : ""}${c.prorates ? "" : " · " + t("noProrate")}` })]),
+      ]));
+    }
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 // ---- boot ----------------------------------------------------------------------

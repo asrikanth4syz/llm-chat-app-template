@@ -168,6 +168,9 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/attendance/periods/:ym/lock`·`/unlock` | attendance.lock | lock/unlock a month for payroll (audited); locking freezes import/corrections |
 | GET | `/api/admin/attendance/payroll-input?month=YYYY-MM` | attendance.lock | per-employee payroll input (payable days, present/leave/LOP, OT) + locked flag |
 | GET·POST | `/api/admin/attendance/policy` | attendance.lock (GET also attendance.manage) | read/update the attendance policy (weekly-off days, weekly target, full-day hours) |
+| GET·POST | `/api/admin/salary/components` | payroll.prepare | P6a: salary component catalog; upsert `{code,name,kind,calcMethod,baseCode?,prorates?,…}` |
+| GET | `/api/admin/employees/:id/salary` | payroll.read_all | effective-dated salary history + component breakdown |
+| POST | `/api/admin/employees/:id/salary` | payroll.prepare | add a salary revision `{effectiveFrom,components[]}` (supersedes the open one; forward-only) |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -245,6 +248,34 @@ tooltips on the key section headers. Open the Worker URL in a browser:
   includes the delegator's team's requests and they may decide them — the leave and
   attendance decide endpoints honour delegated authority, not just the base role
   scope. Revoking (or the window lapsing) withdraws it immediately.
+
+## Payroll core — P6a (salary setup)
+
+First slice of payroll (full spec: `docs/payroll-core-spec.md`). **No run engine yet** —
+this lays the salary foundation. Money is **integer paise**; percent values are **basis
+points**. Migration `0014`.
+
+- **Employee master dates** — `employees.date_of_joining` / `date_of_exit` (needed so
+  proration bounds pay to the employment window, not counting pre-joining days as LOP).
+- **Salary component catalog** (`salary_components`) — reusable earning/deduction
+  definitions (`fixed` or `percent_of_base`, taxable/statutory/prorates flags). Seeded with
+  BASIC, HRA (40% of basic), SPECIAL, CONVEY, and **statutory placeholders** PF/PT/TDS
+  (zero-valued — rules land in the CA-validated statutory phase).
+- **Effective-dated employee salary** (`employee_salaries` + `employee_salary_components`) —
+  a new revision supersedes the open one from its start date (forward-only, no overlap);
+  history is retained; `monthly_gross_paise` is stored for traceability. Component rows are
+  denormalised onto the revision so historical salaries stay immutable.
+- **Pure engine** (`src/payroll.ts`, unit-tested): `expandComponents` (percent-of-base,
+  sequence), `computeLine` (LOP as its own line; **configurable divisor** calendar/fixed_30/
+  fixed_26 via the deduction model — a 31-day fully-present month never overpays;
+  negative-net / zero-pay exceptions), `resolveSalarySegments` (effective-dated incl.
+  **day-weighted mid-month revisions**, joiner/exit windows). Decisions confirmed
+  2026-11-15: calendar-day default (fixed_30 selectable), statutory next phase, OT
+  capture-only, day-weighted revisions.
+- **UI** — a **Payroll** tab (payroll roles only) to assign/revise employee salary (live
+  gross in ₹) and manage the component catalog.
+- **Next:** P6b (payroll run from the locked input + exceptions + register) → P6c
+  (maker-checker + lock + versioned revisions + payslips via Documents + bank advice).
 
 ## Quick wins (from the Master Prompt review)
 
