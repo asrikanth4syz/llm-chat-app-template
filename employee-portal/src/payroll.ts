@@ -140,6 +140,29 @@ export function aggregatePayLines(parts: PayLine[]): PayLine {
 
 // ---- Effective-dated salary resolution (incl. day-weighted mid-month revision) ---------
 
+// ---- Statutory: Professional Tax (S7a) ---------------------------------------------
+// Parameterised, NOT a free-form formula. Slabs/amounts come from an effective-dated,
+// CA-validated config; nothing is hardcoded. All money in paise.
+export interface PTConfig {
+  slabs: { upTo: number | null; amount: number }[]; // upTo in paise (null = top slab); amount in paise
+  februarySpecial?: number | null; // paise; overrides the slab amount in February if set (e.g. Maharashtra)
+  annualCap?: number | null;       // paise; informational in S7a (Karnataka doesn't need YTD capping)
+  rounding?: "none" | "rupee";
+  enabled?: boolean;               // PT only applies once Finance enables it after CA sign-off
+}
+
+/** Monthly Professional Tax for a gross wage, from a state's slab config. Returns 0 when the
+ *  config is absent or disabled, so PT never reaches a payslip until it is enabled. Pure. */
+export function ptForState(grossPaise: number, cfg: PTConfig | null | undefined, month: number): number {
+  if (!cfg || !cfg.enabled || !Array.isArray(cfg.slabs)) return 0;
+  const ordered = [...cfg.slabs].sort((a, b) => (a.upTo === null ? Infinity : a.upTo) - (b.upTo === null ? Infinity : b.upTo));
+  let amount = 0;
+  for (const s of ordered) { if (s.upTo === null || grossPaise <= s.upTo) { amount = s.amount; break; } }
+  if (month === 2 && cfg.februarySpecial != null) amount = cfg.februarySpecial;
+  if (cfg.rounding === "rupee") amount = Math.round(amount / 100) * 100;
+  return Math.max(0, amount);
+}
+
 export interface SalaryRevision { id: string; effectiveFrom: string; effectiveTo: string | null; }
 
 /** YYYY-MM-DD → UTC epoch day number (timezone-independent). */

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   roundPaise, divisorDays, expandComponents, monthlyGross, computeLine, aggregatePayLines,
-  resolveSalarySegments, daysInclusive, type SalaryComponent,
+  resolveSalarySegments, daysInclusive, ptForState, type SalaryComponent, type PTConfig,
 } from "../src/payroll.ts";
 
 // A sample CTC: BASIC ₹20,000; HRA 40% of BASIC; SPECIAL ₹12,000; CONVEY ₹1,600 (non-prorating).
@@ -115,6 +115,24 @@ test("resolveSalarySegments: mid-month revision splits into two day-weighted seg
   assert.equal(segs[0].id, "s1"); assert.equal(segs[0].days, 14);
   assert.equal(segs[1].id, "s2"); assert.equal(segs[1].days, 16);
   assert.equal(segs[0].days + segs[1].days, 30);
+});
+
+test("ptForState (S7a): Karnataka-style slabs; disabled/absent config pays nothing", () => {
+  // Illustrative KA slabs (CA to confirm): nil up to ₹24,999, ₹200/month above.
+  const ka: PTConfig = { slabs: [{ upTo: 2499900, amount: 0 }, { upTo: null, amount: 20000 }], rounding: "rupee", enabled: true };
+  assert.equal(ptForState(2000000, ka, 11), 0);      // ₹20,000 → nil
+  assert.equal(ptForState(2499900, ka, 11), 0);      // exactly ₹24,999 → nil
+  assert.equal(ptForState(2500000, ka, 11), 20000);  // ₹25,000 → ₹200
+  assert.equal(ptForState(5000000, ka, 11), 20000);  // ₹50,000 → ₹200
+  // nothing applies until Finance enables it after CA sign-off
+  assert.equal(ptForState(5000000, { ...ka, enabled: false }, 11), 0);
+  assert.equal(ptForState(5000000, null, 11), 0);
+});
+
+test("ptForState: February special overrides the slab amount only in February", () => {
+  const mh: PTConfig = { slabs: [{ upTo: null, amount: 20000 }], februarySpecial: 30000, rounding: "rupee", enabled: true };
+  assert.equal(ptForState(5000000, mh, 1), 20000);   // Jan → ₹200
+  assert.equal(ptForState(5000000, mh, 2), 30000);   // Feb → ₹300 special
 });
 
 test("resolveSalarySegments: joiner and exit windows clip the segment", () => {

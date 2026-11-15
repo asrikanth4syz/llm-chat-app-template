@@ -180,6 +180,8 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/payroll/runs/:id/reject` | payroll.approve/review | in_review → draft `{comment?}` |
 | POST | `/api/admin/payroll/runs/:id/reopen` | payroll.approve | locked → a new draft version (locked kept) |
 | GET | `/api/admin/payroll/runs/:id/bank` | payroll.read_all | bank/NEFT advice CSV (decrypts bank; audited) |
+| GET | `/api/admin/statutory/config?statute=pt` | payroll.read_all | S7a: statutory config (PT slabs per state) |
+| POST | `/api/admin/statutory/config` | statutory.config | upsert a PT state config `{statute:"pt",state,params,enabled}` |
 | GET·POST | `/api/admin/holidays?year=YYYY` | attendance.lock / attendance.manage | holiday calendar; add `{date,name,location?}` (`*`=all locations) |
 | POST | `/api/admin/holidays/:id/delete` | attendance.lock / attendance.manage | remove a holiday (refused if its month is locked) |
 | GET | `/api/approvals` | manager, hr_admin, super_admin, delegates | FR-04: unified pending inbox (leave + attendance + profile) within scope, incl. delegated; each item carries its `decideBase` |
@@ -324,8 +326,30 @@ Closes **payroll core**. The run becomes a controlled, auditable, maker-checker 
 **Submit for review** → **Approve & lock** (checker, different user) → payslips land in
 employees' Documents; export register + bank advice.
 
-**Payroll core is now feature-complete.** Next: the CA-validated **India statutory** phase
-(PF/ESI/PT/TDS + filings), then **payroll JV → Zoho Books**.
+**Payroll core is now feature-complete.**
+
+## Statutory — S7a: Professional Tax (migration `0018`)
+
+Full spec: `docs/payroll-statutory-spec.md`. At 4SYZ's current headcount **EPF and ESI are
+not applicable** (confirmed 2026-11-15); **only Professional Tax** applies now, and **TDS is
+S7b**. Statutory math is **parameterised and CA-validated** — no rate is hardcoded.
+
+- **Config model** (`statutory_config`) — per-state, effective-dated params + an **`enabled`
+  flag**. `employee_statutory` holds each employee's PT state (seeded `KA`).
+- **Pure `ptForState`** (unit-tested) — slab lookup on the earned gross, optional February
+  special, rupee rounding. Returns **0 unless a config exists and is enabled**, so PT is
+  **inert until Finance turns it on**.
+- **Run integration** — the payroll run adds a **Professional Tax** deduction line only for
+  employees whose state has an enabled config; it flows into net, the register, the payslip
+  and the bank advice automatically.
+- **UI** — a **Professional Tax** card in the Payroll tab (finance): per-state slabs editor
+  (nil threshold, ₹/month above, Feb special) + Enabled toggle, with a prominent **"seeded
+  slabs are illustrative — enter CA-confirmed slabs, then enable"** warning.
+- **Shipped DISABLED.** The seeded Karnataka slabs (nil ≤ ₹24,999, ₹200 above) are
+  illustrative; **CA confirms the current-FY slabs**, Finance enters them and flips Enabled,
+  and a **1–2 month parallel run reconciles to zero** before PT drives real payslips.
+- **Next:** S7b TDS (CA-heavy) → S7c filings (ECR/ESIC/PT challan/24Q/Form 16 — ECR/ESIC not
+  needed while EPF/ESI are inapplicable), then **payroll JV → Zoho Books**.
 
 ## Quick wins (from the Master Prompt review)
 

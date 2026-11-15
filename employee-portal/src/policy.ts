@@ -51,6 +51,7 @@ export type Permission =
   | "payroll.approve" // final authorise + lock a payroll (separation of duties: approver ≠ preparer)
   | "payroll.read_all" // view salary structures / payroll register / payslips of others
   | "report.read" // run and export permission-scoped reports (management + HR/finance)
+  | "statutory.config" // edit statutory config (PT slabs, later EPF/ESI/TDS) — finance (S7a)
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
   | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
   | "announcement.publish" // publish announcements and see acknowledgements (FR-07)
@@ -69,9 +70,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // HR Executive — day-to-day HR ops, but NOT sensitive-read-all, NOT payroll, NOT the month lock.
   hr_executive: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
   // Legacy finance alias (no seeded users) — treat as Finance Admin.
-  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read"],
+  finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read", "statutory.config"],
   // Finance Admin — the payroll MAKER: prepare/run payroll, read the register, lock the month.
-  finance_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read"],
+  finance_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read", "statutory.config"],
   // Finance Approver — the payroll CHECKER/approver: review + approve/lock, never prepare.
   finance_approver: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.review", "payroll.approve", "payroll.read_all", "report.read"],
   // Management Viewer — aggregate read + reports, no sensitive fields, no mutations.

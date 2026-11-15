@@ -270,16 +270,25 @@ Each statute passes this independently — PF/ESI/PT first (deterministic), TDS 
 
 ---
 
-## 15. Decisions required (user + CA) before S7a
+## 15. Decisions — CONFIRMED (2026-11-15)
 
-1. **Which statutes apply** to 4SYZ now — PF? ESI? PT (which state/s)? (CA confirms; §3.)
-2. **PF wage ceiling** — apply the ₹15,000 ceiling, or PF on actual basic?
-3. **Default tax regime** and whether **TDS is in this phase** or deferred until PF/ESI/PT
-   are live and reconciled (recommended: PF/ESI/PT first, TDS in S7b).
-4. **Who is the CA/payroll reviewer** and can they supply current-FY parameters + test
-   vectors? (This is the critical dependency — the build waits on it.)
-5. **Provisional vs. verified declarations** for TDS (honour declared-but-unproven until the
-   proof window closes, or only verified?).
+1. **Applicability** → at 4SYZ's current headcount, **EPF and ESI are NOT applicable**; only
+   **Professional Tax (PT)** applies now. So **S7a scope = PT only**. (EPF/ESI can be added
+   later via the same config model once thresholds are crossed; their designs in §5.1–5.2
+   stand ready.) ✅
+2. **TDS** → **deferred to S7b** (after PT is live and reconciled). ✅
+3. **CA reviewer** → **available now**; will supply current-FY PT slabs + test vectors and
+   reconcile the parallel run. ✅
+4. **Build posture** → S7a ships the PT config model + pure `ptForState` + run integration +
+   UI, with **illustrative Karnataka slabs seeded but PT DISABLED** until the CA confirms the
+   numbers and the vectors pass; Finance then enters the CA's exact slabs and flips `enabled`.
+
+### S7a (Professional Tax) — concrete build
+- Per-state effective-dated PT config (slabs, optional February special, annual cap, rounding,
+  **`enabled` flag**). Employee **PT state** on the statutory profile (seed `KA`).
+- Pure `ptForState(grossPaise, config, month)` + CA vectors. Run integration adds a **PT
+  deduction** line only when PT is enabled and a config exists for the employee's state.
+- Nothing reaches a payslip until `enabled` is set after CA sign-off.
 
 ---
 

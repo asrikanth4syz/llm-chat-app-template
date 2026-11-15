@@ -219,6 +219,10 @@ Object.assign(DICT.en, {
   payroll_setup_note: "Run a month, then review the register and exceptions. Approval/lock + payslips are the next slice (P6c).",
   emp_salary_help: "Assign or revise an employee's salary, effective-dated. A new revision supersedes the previous one from its start date; history is kept. Amounts in ₹; % components are of their base.",
   catalog_help: "Reusable component definitions. Statutory components (PF/ESI/PT/TDS) are placeholders — their rules arrive in the CA-validated statutory phase.",
+  statutoryPT: "Professional Tax", stateCode: "State", nilUpTo: "Nil up to (₹)", amtAbove: "₹/month above", febSpecial: "Feb special (₹)",
+  enabledWord: "Enabled", addState: "Add a state:", stateRequired: "Enter a valid state code (e.g. KA).",
+  statutory_help: "Per-state Professional Tax slabs. PT is applied in the payroll run only when a state's config is enabled. EPF/ESI are not applicable at current headcount; TDS is a later phase.",
+  statutory_ca_note: "⚠ Seeded slabs are ILLUSTRATIVE. Enter the CA-confirmed current-FY slabs and only then tick Enabled — PT does not affect any payslip while disabled.",
 });
 Object.assign(DICT.kn, {
   navPayroll: "ವೇತನ", employeeSalary: "ಉದ್ಯೋಗಿ ವೇತನ", componentsCatalog: "ವೇತನ ಘಟಕಗಳು",
@@ -239,6 +243,10 @@ Object.assign(DICT.kn, {
   payroll_setup_note: "ತಿಂಗಳನ್ನು ರನ್ ಮಾಡಿ, ನಂತರ ರಿಜಿಸ್ಟರ್ ಪರಿಶೀಲಿಸಿ. ಅನುಮೋದನೆ/ಲಾಕ್ + ಪೇಸ್ಲಿಪ್ ಮುಂದಿನ ಹಂತ.",
   emp_salary_help: "ಉದ್ಯೋಗಿ ವೇತನವನ್ನು ದಿನಾಂಕಾಧಾರಿತವಾಗಿ ನಿಗದಿಪಡಿಸಿ. ಹೊಸ ಪರಿಷ್ಕರಣೆ ಹಿಂದಿನದನ್ನು ಬದಲಿಸುತ್ತದೆ.",
   catalog_help: "ಮರುಬಳಕೆಯ ಘಟಕ ವ್ಯಾಖ್ಯಾನಗಳು. ಶಾಸನಬದ್ಧ ಘಟಕಗಳ ನಿಯಮಗಳು ಮುಂದಿನ ಹಂತದಲ್ಲಿ.",
+  statutoryPT: "ವೃತ್ತಿ ತೆರಿಗೆ", stateCode: "ರಾಜ್ಯ", nilUpTo: "ಶೂನ್ಯ ಗರಿಷ್ಠ (₹)", amtAbove: "ಮೇಲೆ ₹/ತಿಂಗಳು", febSpecial: "ಫೆಬ್ ವಿಶೇಷ (₹)",
+  enabledWord: "ಸಕ್ರಿಯ", addState: "ರಾಜ್ಯ ಸೇರಿಸಿ:", stateRequired: "ಸರಿಯಾದ ರಾಜ್ಯ ಕೋಡ್ ನಮೂದಿಸಿ (ಉದಾ KA).",
+  statutory_help: "ರಾಜ್ಯವಾರು ವೃತ್ತಿ ತೆರಿಗೆ ಸ್ಲ್ಯಾಬ್‌ಗಳು. ಸಕ್ರಿಯಗೊಳಿಸಿದಾಗ ಮಾತ್ರ ಅನ್ವಯ. ಇಪಿಎಫ್/ಇಎಸ್‌ಐ ಅನ್ವಯಿಸುವುದಿಲ್ಲ; ಟಿಡಿಎಸ್ ಮುಂದಿನ ಹಂತ.",
+  statutory_ca_note: "⚠ ಸೀಡ್ ಸ್ಲ್ಯಾಬ್‌ಗಳು ಉದಾಹರಣೆ ಮಾತ್ರ. CA ದೃಢೀಕರಿಸಿದ ಸ್ಲ್ಯಾಬ್ ನಮೂದಿಸಿ ನಂತರ ಸಕ್ರಿಯಗೊಳಿಸಿ.",
 });
 Object.assign(DICT.hi, {
   navPayroll: "पेरोल", employeeSalary: "कर्मचारी वेतन", componentsCatalog: "वेतन घटक",
@@ -259,6 +267,10 @@ Object.assign(DICT.hi, {
   payroll_setup_note: "माह चलाएँ, फिर रजिस्टर और समस्याएँ देखें। अनुमोदन/लॉक + पे-स्लिप अगला चरण।",
   emp_salary_help: "कर्मचारी वेतन को तिथि-आधारित रूप से निर्धारित करें। नया संशोधन पिछले को प्रतिस्थापित करता है।",
   catalog_help: "पुन: प्रयोज्य घटक परिभाषाएँ। सांविधिक घटकों के नियम अगले चरण में।",
+  statutoryPT: "व्यवसाय कर", stateCode: "राज्य", nilUpTo: "शून्य तक (₹)", amtAbove: "ऊपर ₹/माह", febSpecial: "फ़र. विशेष (₹)",
+  enabledWord: "सक्रिय", addState: "राज्य जोड़ें:", stateRequired: "मान्य राज्य कोड दर्ज करें (जैसे KA).",
+  statutory_help: "राज्यवार व्यवसाय कर स्लैब। सक्रिय होने पर ही पेरोल में लागू। ईपीएफ/ईएसआई लागू नहीं; टीडीएस अगला चरण।",
+  statutory_ca_note: "⚠ सीड स्लैब केवल उदाहरण हैं। CA द्वारा पुष्ट स्लैब दर्ज करें, तभी सक्रिय करें — अक्षम रहते PT किसी पे-स्लिप को प्रभावित नहीं करता।",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -570,6 +582,7 @@ const VIEWS = [
 function canViewPayroll() { return ["hr_admin", "finance", "finance_admin", "finance_approver", "super_admin"].includes(state.role); }
 function canPreparePay() { return ["hr_admin", "finance", "finance_admin", "super_admin"].includes(state.role); }
 function canApprovePay() { return ["finance_approver", "super_admin"].includes(state.role); }
+function canEditStatutory() { return ["finance", "finance_admin", "super_admin"].includes(state.role); }
 const ICONS = {
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
@@ -1810,10 +1823,56 @@ async function loadPayrollView() {
   ]));
   body.appendChild(el("div", { class: "card", id: "pay_run" }, [h2help(t("payrollRun"), t("payroll_run_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_emp" }, [h2help(t("employeeSalary"), t("emp_salary_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "pay_stat" }, [h2help(t("statutoryPT"), t("statutory_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_cat" }, [h2help(t("componentsCatalog"), t("catalog_help")), el("div", { class: "muted", text: "…" })]));
   loadPayrollRunCard();
   await loadEmployeeSalaryCard();
+  loadStatutoryCard();
   loadComponentCatalog();
+}
+
+// S7a: Professional Tax config editor. Parameterised; disabled until CA confirms the slabs.
+async function loadStatutoryCard() {
+  const card = document.getElementById("pay_stat");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("statutoryPT"), t("statutory_help")));
+  const rupee = (p) => (Number(p) / 100);
+  function ptBlock(cfg) {
+    const state = el("input", { value: cfg ? cfg.state : "", placeholder: "KA", style: "max-width:70px;text-transform:uppercase", ...(cfg ? { disabled: "" } : {}) });
+    const slabs = (cfg && cfg.params && cfg.params.slabs) || [];
+    const nilSlab = slabs.find((s) => Number(s.amount) === 0);
+    const topSlab = slabs.find((s) => s.upTo == null) || slabs[slabs.length - 1];
+    const nilUpTo = el("input", { type: "number", min: "0", value: nilSlab ? rupee(nilSlab.upTo) : "", style: "max-width:120px" });
+    const above = el("input", { type: "number", min: "0", value: topSlab ? rupee(topSlab.amount) : "", style: "max-width:110px" });
+    const feb = el("input", { type: "number", min: "0", value: cfg && cfg.params && cfg.params.februarySpecial != null ? rupee(cfg.params.februarySpecial) : "", placeholder: "—", style: "max-width:90px" });
+    const enabled = el("input", { type: "checkbox", ...(cfg && cfg.enabled ? { checked: "" } : {}) });
+    const save = el("button", { class: "primary sm", text: t("save"), ...(canEditStatutory() ? {} : { disabled: "" }) });
+    save.addEventListener("click", async () => {
+      const st = (cfg ? cfg.state : state.value).trim().toUpperCase();
+      if (!/^[A-Z]{2,3}$/.test(st)) { flash("err", t("stateRequired")); return; }
+      const params = {
+        slabs: [{ upTo: Math.round(Number(nilUpTo.value || 0) * 100), amount: 0 }, { upTo: null, amount: Math.round(Number(above.value || 0) * 100) }],
+        februarySpecial: feb.value !== "" ? Math.round(Number(feb.value) * 100) : null,
+        annualCap: cfg && cfg.params ? cfg.params.annualCap ?? null : null, rounding: "rupee",
+      };
+      save.disabled = true;
+      try { await api("/api/admin/statutory/config", { method: "POST", body: { statute: "pt", state: st, fy: (cfg && cfg.fy) || "", effectiveFrom: (cfg && cfg.effective_from) || "", params, enabled: enabled.checked } }); flash("ok", t("saved")); loadStatutoryCard(); }
+      catch (ex) { flash("err", ex.message); }
+      finally { save.disabled = false; }
+    });
+    const lbl = (txt, node) => el("label", { style: "margin:0;display:flex;flex-direction:column;font-size:12px;gap:2px" }, [el("span", { text: txt }), node]);
+    return el("div", { class: "row", style: "flex-wrap:wrap;gap:12px;align-items:flex-end" }, [
+      lbl(t("stateCode"), state), lbl(t("nilUpTo"), nilUpTo), lbl(t("amtAbove"), above), lbl(t("febSpecial"), feb),
+      el("label", { style: "margin:0;display:flex;align-items:center;gap:4px;font-size:13px;color:var(--ink)" }, [enabled, el("span", { text: t("enabledWord") })]),
+      save,
+    ]);
+  }
+  try {
+    card.appendChild(el("div", { class: "msg", style: "background:color-mix(in srgb,var(--warn) 12%,var(--card));color:var(--warn);font-size:12px", text: t("statutory_ca_note") }));
+    const { configs } = await api("/api/admin/statutory/config?statute=pt");
+    for (const c of (configs || [])) card.appendChild(ptBlock(c));
+    if (canEditStatutory()) { card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-top:8px", text: t("addState") })); card.appendChild(ptBlock(null)); }
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 async function downloadAuthed(path, filename) {

@@ -35,7 +35,7 @@ import { isValidCategory, isValidStatus, slaDueISO, isOverdue, canViewTicket, ca
 import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
-import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision } from "./payroll.ts";
+import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, ptForState, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision, type PTConfig } from "./payroll.ts";
 
 export interface Env {
   DB: D1Database;
@@ -873,6 +873,39 @@ async function handleEmployeeSalarySet(actor: Actor, env: Env, employeeId: strin
   return json({ ok: true, id: salId, revisionNo: nextNo, monthlyGrossPaise: gross });
 }
 
+// Statutory config (S7a: Professional Tax). Parameterised + effective-dated; no hardcoded
+// rates. Shipped disabled until a CA confirms the slabs and the vectors pass.
+const STATUTES = new Set(["pt"]); // epf | esi | tds added in later phases
+async function handleStatutoryConfigGet(actor: Actor, env: Env, statute: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const where = STATUTES.has(statute) ? "WHERE statute = ?" : "";
+  const q = env.DB.prepare(`SELECT id, statute, state, fy, effective_from, effective_to, params, enabled FROM statutory_config ${where} ORDER BY statute, state`);
+  const rows = (await (where ? q.bind(statute) : q).all<Record<string, unknown>>()).results;
+  const configs = rows.map((r) => ({ ...r, enabled: !!r.enabled, params: (() => { try { return JSON.parse(String(r.params || "{}")); } catch { return {}; } })() }));
+  return json({ configs });
+}
+
+async function handleStatutoryConfigSet(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "statutory.config")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { statute?: string; state?: string; fy?: string; effectiveFrom?: string; params?: unknown; enabled?: boolean };
+  const statute = String(b.statute ?? "").trim().toLowerCase();
+  if (!STATUTES.has(statute)) return json({ error: "unsupported statute (S7a: pt only)" }, 400);
+  const state = String(b.state ?? "").trim().toUpperCase();
+  if (!/^[A-Z]{2,3}$/.test(state)) return json({ error: "valid state code required" }, 400);
+  if (!b.params || typeof b.params !== "object") return json({ error: "params object required" }, 400);
+  if (statute === "pt") {
+    const slabs = (b.params as { slabs?: unknown }).slabs;
+    if (!Array.isArray(slabs) || !slabs.length) return json({ error: "pt params need a non-empty slabs array" }, 400);
+  }
+  const id = `${statute}_${state}`;
+  await env.DB.prepare(
+    "INSERT INTO statutory_config (id, statute, state, fy, effective_from, params, enabled, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?, datetime('now')) " +
+    "ON CONFLICT(id) DO UPDATE SET fy=excluded.fy, effective_from=excluded.effective_from, params=excluded.params, enabled=excluded.enabled, updated_by=excluded.updated_by, updated_at=datetime('now')"
+  ).bind(id, statute, state, String(b.fy ?? ""), String(b.effectiveFrom ?? ""), JSON.stringify(b.params), b.enabled ? 1 : 0, actor.userId).run();
+  await audit(env, actor.userId, "STATUTORY_CONFIG_SET", "payroll", id, `${statute}/${state} enabled=${b.enabled ? 1 : 0}`);
+  return json({ ok: true, id, enabled: !!b.enabled });
+}
+
 // Loss-of-pay working days in [fromISO, toISO]: a working day (not a weekly-off, not a
 // holiday) whose attendance status is neither present (P) nor approved leave (LV).
 function lopDaysInRange(statusByDate: Map<string, string>, holidays: Set<string>, weekOff: Set<number>, fromISO: string, toISO: string): number {
@@ -949,6 +982,16 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
   const holByLoc = new Map<string, Set<string>>();
   for (const loc of [...new Set(emps.map((e) => e.location ?? ""))]) holByLoc.set(loc, await loadHolidaySet(env, loc || null, ym));
 
+  // Statutory (S7a): Professional Tax config per state + each employee's PT state. PT only
+  // applies where a config exists AND is enabled (0 otherwise), so it is inert until CA sign-off.
+  const month = parseInt(ym.slice(5, 7), 10);
+  const ptConfigByState = new Map<string, PTConfig>();
+  for (const r of (await env.DB.prepare("SELECT state, params, enabled FROM statutory_config WHERE statute = 'pt'").all<{ state: string; params: string; enabled: number }>()).results) {
+    try { ptConfigByState.set(r.state, { ...(JSON.parse(r.params) as PTConfig), enabled: !!r.enabled }); } catch { /* skip malformed config */ }
+  }
+  const empPtState = new Map<string, string>();
+  for (const r of (await env.DB.prepare("SELECT employee_id, pt_state FROM employee_statutory").all<{ employee_id: string; pt_state: string | null }>()).results) if (r.pt_state) empPtState.set(r.employee_id, r.pt_state);
+
   const stmts: D1PreparedStatement[] = [
     env.DB.prepare("DELETE FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?)").bind(runId),
     env.DB.prepare("DELETE FROM payroll_lines WHERE run_id = ?").bind(runId),
@@ -968,6 +1011,14 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
         parts.push(computeLine(compBySal.get(seg.id) ?? [], { employedDays: seg.days, lopDays: segLop, divisor }));
       }
       line = aggregatePayLines(parts);
+      // Statutory deduction: Professional Tax on the earned gross (inert unless enabled).
+      const pt = ptForState(line.grossPaid, ptConfigByState.get(empPtState.get(e.id) ?? ""), month);
+      if (pt > 0) {
+        line.components.push({ code: "PT", name: "Professional Tax", kind: "deduction", amount: pt });
+        line.deductions += pt;
+        line.net = line.grossPaid - line.deductions;
+        if (line.net < 0) line.exception = "negative_net";
+      }
     }
     const exception = !line ? "no_salary" : (line.exception || (!e.has_bank ? "missing_bank" : null));
     const gross = line?.grossPaid ?? 0, ded = line?.deductions ?? 0, lop = line?.lopReduction ?? 0, net = line?.net ?? 0;
@@ -1656,6 +1707,9 @@ export default {
       const esg = path.match(/^\/api\/admin\/employees\/([^/]+)\/salary$/);
       if (esg && method === "GET") return await handleEmployeeSalaryGet(actor, env, decodeURIComponent(esg[1]));
       if (esg && method === "POST") return await handleEmployeeSalarySet(actor, env, decodeURIComponent(esg[1]), request);
+      // Statutory config (S7a: Professional Tax)
+      if (path === "/api/admin/statutory/config" && method === "GET") return await handleStatutoryConfigGet(actor, env, url.searchParams.get("statute") || "pt");
+      if (path === "/api/admin/statutory/config" && method === "POST") return await handleStatutoryConfigSet(actor, env, request);
       // Payroll run (P6b)
       if (path === "/api/admin/payroll/runs" && method === "GET") return await handlePayrollRuns(actor, env, url.searchParams.get("month") || "");
       if (path === "/api/admin/payroll/runs" && method === "POST") return await handlePayrollRunPrepare(actor, env, request);
