@@ -55,7 +55,8 @@ const EMP_COLS = "id,user_id,manager_id,segment,name,work_email,designation,loca
   "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
   "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
   "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
-  "emergency_contact_2,notice_period_days,pan,bank_account,aadhaar_last4,ctc";
+  "emergency_contact_2,notice_period_days,bank_payee_name,bank_ifsc,bank_account_type,bank_name,bank_verified," +
+  "(bank_proof IS NOT NULL AND bank_proof != '') AS has_bank_proof,pan,bank_account,aadhaar_last4,ctc";
 interface EmpRow {
   id: string; user_id: string; manager_id: string | null; segment: string; name: string;
   work_email: string; designation: string | null; location: string | null; photo: string | null;
@@ -66,6 +67,8 @@ interface EmpRow {
   probation_start: string | null; probation_end: string | null; confirmed_on: string | null;
   contract_start: string | null; contract_end: string | null; exit_reason: string | null; exit_status: string | null;
   emergency_contact_2: string | null; notice_period_days: number | null;
+  bank_payee_name: string | null; bank_ifsc: string | null; bank_account_type: string | null; bank_name: string | null;
+  bank_verified: number | null; has_bank_proof: number | null;
   pan: string | null; bank_account: string | null; aadhaar_last4: string | null; ctc: number | null;
 }
 function rowToEmployee(r: EmpRow): EmployeeRecord {
@@ -80,6 +83,8 @@ function rowToEmployee(r: EmpRow): EmployeeRecord {
     probationStart: r.probation_start, probationEnd: r.probation_end, confirmedOn: r.confirmed_on,
     contractStart: r.contract_start, contractEnd: r.contract_end, exitReason: r.exit_reason, exitStatus: r.exit_status,
     emergencyContact2: r.emergency_contact_2, noticePeriodDays: r.notice_period_days,
+    bankPayeeName: r.bank_payee_name, bankIfsc: r.bank_ifsc, bankAccountType: r.bank_account_type, bankName: r.bank_name,
+    bankVerified: !!r.bank_verified, hasBankProof: !!r.has_bank_proof,
     pan: r.pan, bankAccount: r.bank_account, aadhaarLast4: r.aadhaar_last4, ctc: r.ctc,
   };
 }
@@ -519,6 +524,46 @@ async function handleProfilePhoto(actor: Actor, env: Env, request: Request): Pro
   return json({ ok: true });
 }
 
+// FR-01 Self-service bank details. The employee submits their own payout account; it is
+// stored UNVERIFIED (bank_verified=0) and must be KYC-checked by HR before payroll uses it.
+// The account number is field-encrypted like any other sensitive datum.
+async function handleProfileBank(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const payee = _s(b.bankPayeeName), ifsc = _ifsc(b.bankIfsc), acct = String(b.bankAccount ?? "").trim();
+  const acctType = _acctType(b.bankAccountType), bankName = _s(b.bankName);
+  const proof = String(b.bankProof ?? "").trim();
+  if (!payee || !ifsc || !acct || !bankName) return json({ error: "payee name, account number, IFSC and bank name are required" }, 400);
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return json({ error: "IFSC must be 11 characters (e.g. HDFC0001234)" }, 400);
+  if (!/^\d{6,18}$/.test(acct)) return json({ error: "account number must be 6–18 digits" }, 400);
+  if (proof && !validBankProof(proof)) return json({ error: "bank proof must be a PDF/image data URL (max ~1.5MB)" }, 400);
+  await env.DB.prepare(
+    "UPDATE employees SET bank_payee_name=?, bank_ifsc=?, bank_account_type=?, bank_name=?, bank_account=?, bank_verified=0 WHERE id=?"
+  ).bind(payee, ifsc, acctType, bankName, await encIfSet(env, acct), actor.employeeId).run();
+  if (proof) await env.DB.prepare("UPDATE employees SET bank_proof=? WHERE id=?").bind(proof, actor.employeeId).run();
+  await audit(env, actor.userId, "PROFILE_BANK", "employee", actor.employeeId, "submitted bank details (pending HR verification)");
+  return json({ ok: true, verified: false });
+}
+
+// Fetch the stored cancelled-cheque / passbook image. Kept out of EMP_COLS so it never
+// rides along in list/profile payloads; pulled on demand by the owner or an authorised viewer.
+async function fetchBankProof(env: Env, empId: string): Promise<Response> {
+  const r = await env.DB.prepare("SELECT bank_proof FROM employees WHERE id = ?").bind(empId).first<{ bank_proof: string | null }>();
+  if (!r?.bank_proof) return json({ error: "no bank proof on file" }, 404);
+  return json({ proof: r.bank_proof });
+}
+async function handleMyBankProof(actor: Actor, env: Env): Promise<Response> {
+  if (!actor.employeeId) return json({ error: "no employee record linked to this login" }, 404);
+  return await fetchBankProof(env, actor.employeeId);
+}
+async function handleAdminBankProof(actor: Actor, env: Env, id: string): Promise<Response> {
+  const rec = await loadEmployee(env, id);
+  if (!rec) return json({ error: "not found" }, 404);
+  if (!canReadSensitive(actor, rec)) return json({ error: "forbidden" }, 403);
+  await audit(env, actor.userId, "BANK_PROOF_VIEW", "employee", id, "viewed bank proof");
+  return await fetchBankProof(env, id);
+}
+
 // ---- Employee master (full data collection) ------------------------------------
 function fullName(first: unknown, last: unknown): string {
   return [String(first ?? "").trim(), String(last ?? "").trim()].filter(Boolean).join(" ");
@@ -529,6 +574,9 @@ async function encIfSet(env: Env, v: unknown): Promise<string | null> {
   try { return env.FIELD_ENC_KEY ? await encryptField(s, env.FIELD_ENC_KEY) : s; } catch { return s; }
 }
 const _s = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s || null; };
+const _ifsc = (v: unknown): string | null => { const s = String(v ?? "").trim().toUpperCase(); return s || null; };
+const _acctType = (v: unknown): string | null => { const s = String(v ?? "").trim().toLowerCase(); return s === "current" ? "current" : s === "savings" ? "savings" : null; };
+function validBankProof(s: string): boolean { return /^data:(application\/pdf|image\/(png|jpeg|jpg|webp));base64,/.test(s) && s.length <= 2_000_000; }
 
 async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
   if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
@@ -536,6 +584,8 @@ async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): P
   const first = String(b.firstName ?? "").trim(), last = String(b.lastName ?? "").trim();
   const name = fullName(first, last);
   if (!name) return json({ error: "first and/or last name required" }, 400);
+  const proof = String(b.bankProof ?? "").trim();
+  if (proof && !validBankProof(proof)) return json({ error: "bank proof must be a PDF/image data URL (max ~1.5MB)" }, 400);
   const id = "e_" + uid().replace(/-/g, "").slice(0, 12);
   const seg = b.segment === "client_site" ? "client_site" : "office";
   const [panE, bankE, aadE] = await Promise.all([encIfSet(env, b.pan), encIfSet(env, b.bankAccount), encIfSet(env, b.aadhaarLast4)]);
@@ -544,12 +594,14 @@ async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): P
     "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
     "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
     "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
-    "emergency_contact_2,notice_period_days,pan,bank_account,aadhaar_last4,ctc) VALUES (" + "?,".repeat(34) + "?)"
+    "emergency_contact_2,notice_period_days,bank_payee_name,bank_ifsc,bank_account_type,bank_name,bank_proof,bank_verified," +
+    "pan,bank_account,aadhaar_last4,ctc) VALUES (" + "?,".repeat(40) + "?)"
   ).bind(id, null, _s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
     _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
     _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
     _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
     _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : null,
+    _s(b.bankPayeeName), _ifsc(b.bankIfsc), _acctType(b.bankAccountType), _s(b.bankName), proof || null, b.bankVerified ? 1 : 0,
     panE, bankE, aadE, b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null).run();
   await audit(env, actor.userId, "EMPLOYEE_CREATE", "employee", id, `${name} ${_s(b.employeeCode) ?? ""}`);
   return json({ ok: true, id });
@@ -562,18 +614,23 @@ async function handleEmployeeUpdate(actor: Actor, env: Env, id: string, request:
   const first = String(b.firstName ?? "").trim(), last = String(b.lastName ?? "").trim();
   const name = fullName(first, last);
   const seg = b.segment === "client_site" ? "client_site" : "office";
+  const proof = String(b.bankProof ?? "").trim();
+  if (proof && !validBankProof(proof)) return json({ error: "bank proof must be a PDF/image data URL (max ~1.5MB)" }, 400);
   await env.DB.prepare(
     "UPDATE employees SET manager_id=?, segment=?, name=COALESCE(NULLIF(?,''),name), work_email=?, designation=?, location=?," +
     "employee_code=?, first_name=?, last_name=?, dob=?, gender=?, department=?, employment_type=?, employment_status=?," +
     "phone=?, personal_email=?, address=?, emergency_contact=?, date_of_joining=?, date_of_exit=?," +
     "probation_start=?, probation_end=?, confirmed_on=?, contract_start=?, contract_end=?, exit_reason=?, exit_status=?," +
-    "emergency_contact_2=?, notice_period_days=?, ctc=? WHERE id=?"
+    "emergency_contact_2=?, notice_period_days=?, bank_payee_name=?, bank_ifsc=?, bank_account_type=?, bank_name=?, bank_verified=?, ctc=? WHERE id=?"
   ).bind(_s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
     _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
     _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
     _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
     _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : null,
+    _s(b.bankPayeeName), _ifsc(b.bankIfsc), _acctType(b.bankAccountType), _s(b.bankName), b.bankVerified ? 1 : 0,
     b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null, id).run();
+  // bank_proof is kept out of EMP_COLS; replace only when a new one is supplied (blank keeps the existing image).
+  if (proof) await env.DB.prepare("UPDATE employees SET bank_proof=? WHERE id=?").bind(proof, id).run();
   for (const [k, col] of [["pan", "pan"], ["bankAccount", "bank_account"], ["aadhaarLast4", "aadhaar_last4"]] as const) {
     const v = String(b[k] ?? "").trim();
     if (v) await env.DB.prepare(`UPDATE employees SET ${col}=? WHERE id=?`).bind(await encIfSet(env, v), id).run();
@@ -1436,20 +1493,24 @@ async function handlePayrollBank(actor: Actor, env: Env, runId: string): Promise
   const run = await env.DB.prepare("SELECT ym, version FROM payroll_runs WHERE id = ?").bind(runId).first<{ ym: string; version: number }>();
   if (!run) return json({ error: "not found" }, 404);
   const lines = (await env.DB.prepare("SELECT employee_id, employee_name, net_paise, exception FROM payroll_lines WHERE run_id = ? ORDER BY employee_name").bind(runId).all<{ employee_id: string; employee_name: string; net_paise: number; exception: string | null }>()).results;
-  const bankById = new Map<string, string | null>();
-  for (const r of (await env.DB.prepare("SELECT id, bank_account FROM employees").all<{ id: string; bank_account: string | null }>()).results) {
-    bankById.set(r.id, await decryptField(r.bank_account, env.FIELD_ENC_KEY));
+  type BankInfo = { account: string | null; payee: string | null; ifsc: string | null; type: string | null; bankName: string | null; verified: number | null };
+  const bankById = new Map<string, BankInfo>();
+  for (const r of (await env.DB.prepare("SELECT id, bank_account, bank_payee_name, bank_ifsc, bank_account_type, bank_name, bank_verified FROM employees").all<{ id: string; bank_account: string | null; bank_payee_name: string | null; bank_ifsc: string | null; bank_account_type: string | null; bank_name: string | null; bank_verified: number | null }>()).results) {
+    bankById.set(r.id, { account: await decryptField(r.bank_account, env.FIELD_ENC_KEY), payee: r.bank_payee_name, ifsc: r.bank_ifsc, type: r.bank_account_type, bankName: r.bank_name, verified: r.bank_verified });
   }
   const esc = (s: unknown) => { const v = String(s ?? ""); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
   const rupee = (p: unknown) => (Number(p) / 100).toFixed(2);
-  const rows = ["employee,bank_account,net"]; const skipped: string[] = [];
+  const rows = ["employee,payee_name,account_number,ifsc,account_type,bank_name,net,kyc_verified"];
+  const skipped: string[] = []; const unverified: string[] = [];
   for (const l of lines) {
-    const bank = bankById.get(l.employee_id);
-    if (!bank || Number(l.net_paise) <= 0) { skipped.push(l.employee_name); continue; }
-    rows.push([esc(l.employee_name), esc(bank), rupee(l.net_paise)].join(","));
+    const b = bankById.get(l.employee_id);
+    if (!b?.account || Number(l.net_paise) <= 0) { skipped.push(l.employee_name); continue; }
+    if (!b.verified) unverified.push(l.employee_name);
+    rows.push([esc(l.employee_name), esc(b.payee), esc(b.account), esc(b.ifsc), esc(b.type), esc(b.bankName), rupee(l.net_paise), b.verified ? "yes" : "no"].join(","));
   }
-  if (skipped.length) rows.push(`# excluded (no bank / non-positive net): ${skipped.join("; ")}`);
-  await audit(env, actor.userId, "PAYROLL_BANK_EXPORT", "payroll", runId, `${run.ym} v${run.version}, ${skipped.length} excluded`);
+  if (skipped.length) rows.push(`# excluded (no account / non-positive net): ${skipped.join("; ")}`);
+  if (unverified.length) rows.push(`# WARNING — KYC not verified (verify before release): ${unverified.join("; ")}`);
+  await audit(env, actor.userId, "PAYROLL_BANK_EXPORT", "payroll", runId, `${run.ym} v${run.version}, ${skipped.length} excluded, ${unverified.length} unverified`);
   return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="bank-advice-${run.ym}.csv"` } });
 }
 
@@ -1938,6 +1999,10 @@ export default {
       if (path === "/api/profile/change" && method === "POST") return await handleProfileChange(actor, env, request);
       if (path === "/api/profile/changes" && method === "GET") return await handleProfileChanges(actor, env);
       if (path === "/api/profile/photo" && method === "POST") return await handleProfilePhoto(actor, env, request);
+      if (path === "/api/profile/bank" && method === "POST") return await handleProfileBank(actor, env, request);
+      if (path === "/api/me/bank-proof" && method === "GET") return await handleMyBankProof(actor, env);
+      const bankp = path.match(/^\/api\/admin\/employees\/([^/]+)\/bank-proof$/);
+      if (bankp && method === "GET") return await handleAdminBankProof(actor, env, decodeURIComponent(bankp[1]));
       if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);
       const pcr = path.match(/^\/api\/admin\/profile\/changes\/([^/]+)\/(approve|reject)$/);
       if (pcr && method === "POST") return await handleProfileChangeReview(actor, env, decodeURIComponent(pcr[1]), pcr[2] as "approve" | "reject");

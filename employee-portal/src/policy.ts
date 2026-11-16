@@ -140,6 +140,13 @@ export interface EmployeeRecord {
   contractEnd?: string | null;
   exitReason?: string | null;
   exitStatus?: string | null;
+  // Bank details (sensitive; account number masked, the rest shown to authorised like CTC).
+  bankPayeeName?: string | null;
+  bankIfsc?: string | null;
+  bankAccountType?: string | null;
+  bankName?: string | null;
+  bankVerified?: boolean;   // KYC verified by HR (status; not sensitive on its own)
+  hasBankProof?: boolean;   // whether a cancelled-cheque/passbook image is on file
   // Sensitive — field-level encrypted at rest (NFR-03, R1); masked on read here.
   pan?: string | null;
   bankAccount?: string | null;
@@ -147,7 +154,7 @@ export interface EmployeeRecord {
   ctc?: number | null;
 }
 
-const SENSITIVE_FIELDS = ["pan", "bankAccount", "aadhaarLast4", "ctc"] as const;
+const SENSITIVE_FIELDS = ["pan", "bankAccount", "aadhaarLast4", "ctc", "bankPayeeName", "bankIfsc", "bankAccountType", "bankName"] as const;
 export type PublicEmployee = Omit<EmployeeRecord, (typeof SENSITIVE_FIELDS)[number]>;
 
 // NFR-03: the identity/financial fields that are masked-by-default on display

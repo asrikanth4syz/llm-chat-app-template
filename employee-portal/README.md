@@ -155,6 +155,9 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/directory?q=` | any login | FR-08: all colleagues' public fields (name, designation, location, segment, work email, manager); salary/bank/identity/personal contact never selected |
 | POST | `/api/profile/change` | any login | FR-01: `{field,value}`. Direct fields (phone, personalEmail, address, emergencyContact) apply now; bank/PAN/Aadhaar → encrypted **pending** request |
 | GET | `/api/profile/changes` | any login | own change requests (status; encrypted value never returned) |
+| POST | `/api/profile/bank` | any login | FR-01: self-service bank details `{bankPayeeName,bankAccount,bankIfsc,bankAccountType,bankName,bankProof?}` — account # encrypted, stored **unverified** (`bank_verified=0`) pending HR KYC |
+| GET | `/api/me/bank-proof` | owner | own stored cancelled-cheque / passbook data URL (kept out of list/profile payloads) |
+| GET | `/api/admin/employees/:id/bank-proof` | sensitive-read-all | an employee's cancelled-cheque / passbook (audited `BANK_PROOF_VIEW`) |
 | POST | `/api/admin/profile/changes/:id/approve`·`/reject` | hr_admin, super_admin | verify a pending bank/identity change (`profile.verify`) |
 | GET | `/api/audit` | auditor, super_admin | recent audit entries |
 | GET | `/api/policy/matrix` | it_admin, auditor, super_admin | role → permission matrix (G1 artefact) |
@@ -326,8 +329,10 @@ Closes **payroll core**. The run becomes a controlled, auditable, maker-checker 
   Documents module** (category `payslip`) — employees see it in their **Documents** tab
   (own + published only). Re-approving a month supersedes the prior payslips. Net is shown
   rounded to the rupee (exact paise retained).
-- **Bank/NEFT advice:** an audited CSV that **decrypts bank accounts** (finance only),
-  excluding lines with no bank or non-positive net.
+- **Bank/NEFT advice:** an audited CSV that **decrypts bank accounts** (finance only), with
+  payee name, account number, IFSC, account type and bank name per line, excluding lines with
+  no account or non-positive net. A `kyc_verified` column plus a trailing **WARNING** line
+  flag any accounts not yet HR-verified, so finance verifies KYC before releasing payment.
 - **Dev seed (`0017`):** `finmaker@4syz.com` (Finance Admin / maker) and
   `fincheck@4syz.com` (Finance Approver / checker), both `pw123` + OTP `000000`, so the
   flow is demonstrable. Rotate before go-live.
@@ -418,9 +423,21 @@ From the mock/Section-17 design review (`docs/design-review-mock-and-section17.m
   search; HR can **Add** / **Edit** a complete record across: Personal (name, code, DOB,
   gender), Contact (work/personal email, phone, address, emergency contact), Employment
   (department, designation, type, segment, location, reporting manager, status, joining date),
-  Lifecycle (probation, confirmation, contract start/end, exit date/reason/status), and
-  Compensation & statutory (CTC, bank, PAN, Aadhaar — **encrypted at rest**, blank keeps
-  current). The **Directory** stays public-fields-only for everyone.
+  Lifecycle (probation, confirmation, contract start/end, exit date/reason/status),
+  Compensation & statutory (CTC, PAN, Aadhaar — **encrypted at rest**, blank keeps
+  current), and a dedicated **Bank details** card. The **Directory** stays
+  public-fields-only for everyone.
+- **Bank details (KYC)** (migration `0022`). Each employee carries payee (account-holder)
+  name, account number, IFSC, account type (savings/current), bank name, a KYC `bank_verified`
+  flag, and an uploaded **cancelled cheque / passbook** image (PDF or image). The account
+  number reuses the encrypted+masked `bank_account` column; payee/IFSC/type/name are
+  sensitive-but-shown to authorised viewers (stripped for everyone else, like CTC). The proof
+  image is held in its own `bank_proof` column, **excluded from every list/profile payload**
+  (only a `hasBankProof` boolean rides along) and fetched on demand by the owner or a
+  sensitive-read-all role (audited). Employees self-submit their account on **My profile →
+  Bank details**: a submission is always stored **unverified** (`bank_verified=0`), and HR
+  must KYC-verify it against the cheque/passbook before payroll pays into it — the P6c bank
+  advice already excludes lines with no account.
 - Deliberately **not** adopted (per the review): the mock's demo actions and its
   mobile-overflowing tables; Section-17's full bitemporal/event-outbox (D1 can't do the
   gist-exclude; over-build at this scale) — the ownership-rule and effective-dated principles

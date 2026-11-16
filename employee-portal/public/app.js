@@ -325,6 +325,12 @@ Object.assign(DICT.en, {
   additionalPay: "Additional pay (bonus / variable)", addpay_help: "One-off pay for a month — variable, retention or performance bonus, incentive or ad-hoc. Added to that month's payroll run (taxable gross); not part of the recurring structure. The recurring kind goes in the salary components instead.",
   ap_VARIABLE: "Variable pay", ap_RETENTION: "Retention bonus", ap_PERF_BONUS: "Performance bonus", ap_INCENTIVE: "Incentive", ap_ADHOC: "Ad-hoc",
   noteOptional: "Note (optional)", addWord: "Add", noAddPay: "No additional pay for this month.",
+  sectBank: "Bank details", bank_help: "Your salary payout account. New or changed details are saved as UNVERIFIED and HR must KYC-verify them (against the cancelled cheque / passbook) before payroll pays into the account.",
+  bankPayee: "Account holder (payee) name", bankIfsc: "IFSC code", acctType: "Account type", acctSavings: "Savings", acctCurrent: "Current",
+  bankNameLbl: "Bank name", bankProofLbl: "Cancelled cheque / passbook", bankVerifiedLbl: "KYC verified", bankVerifiedHelp: "Tick only after the account is checked against the cancelled cheque / passbook. Leave unticked for new or changed details.",
+  uploadProof: "Upload", viewProof: "View", proofOnFile: "On file", noProof: "Not uploaded", proofTooLarge: "File too large (max ~1.5MB).",
+  verifiedYes: "Verified", verifiedNo: "Pending verification", submitBank: "Submit bank details", updateBank: "Add / update bank details",
+  bankResetNote: "Submitting resets verification — HR will re-check before the next payout. Account number is stored encrypted and shown masked.", bankSubmitted: "Bank details submitted — pending HR verification.",
 });
 Object.assign(DICT.kn, {
   navDashboard: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", dashboard_sub: "ಉದ್ಯೋಗಿ ಚಟುವಟಿಕೆ ಮತ್ತು ನಿಮಗೆ ಬೇಕಾದವುಗಳ ತ್ವರಿತ ನೋಟ.",
@@ -338,6 +344,12 @@ Object.assign(DICT.kn, {
   emergencyContact2: "ತುರ್ತು ಸಂಪರ್ಕ 2", noticePeriod: "ನೋಟಿಸ್ ಅವಧಿ (ದಿನಗಳು)", daysWord: "ದಿನಗಳು",
   additionalPay: "ಹೆಚ್ಚುವರಿ ವೇತನ (ಬೋನಸ್ / ವೇರಿಯಬಲ್)", ap_VARIABLE: "ವೇರಿಯಬಲ್ ವೇತನ", ap_RETENTION: "ರಿಟೆನ್ಷನ್ ಬೋನಸ್", ap_PERF_BONUS: "ಕಾರ್ಯಕ್ಷಮತೆ ಬೋನಸ್", ap_INCENTIVE: "ಪ್ರೋತ್ಸಾಹ", ap_ADHOC: "ತಾತ್ಕಾಲಿಕ",
   noteOptional: "ಟಿಪ್ಪಣಿ (ಐಚ್ಛಿಕ)", addWord: "ಸೇರಿಸಿ", noAddPay: "ಈ ತಿಂಗಳ ಹೆಚ್ಚುವರಿ ವೇತನ ಇಲ್ಲ.",
+  sectBank: "ಬ್ಯಾಂಕ್ ವಿವರಗಳು", bank_help: "ನಿಮ್ಮ ಸಂಬಳ ಪಾವತಿ ಖಾತೆ. ಹೊಸ ಅಥವಾ ಬದಲಾದ ವಿವರಗಳನ್ನು ಪರಿಶೀಲಿಸದ ರೂಪದಲ್ಲಿ ಉಳಿಸಲಾಗುತ್ತದೆ; ವೇತನ ಪಾವತಿಗೆ ಮೊದಲು HR ಅದನ್ನು (ರದ್ದುಪಡಿಸಿದ ಚೆಕ್ / ಪಾಸ್‌ಬುಕ್‌ಗೆ ಹೋಲಿಸಿ) KYC ಪರಿಶೀಲಿಸಬೇಕು.",
+  bankPayee: "ಖಾತೆದಾರ (ಪಾವತಿದಾರ) ಹೆಸರು", bankIfsc: "IFSC ಕೋಡ್", acctType: "ಖಾತೆ ಪ್ರಕಾರ", acctSavings: "ಉಳಿತಾಯ", acctCurrent: "ಚಾಲ್ತಿ",
+  bankNameLbl: "ಬ್ಯಾಂಕ್ ಹೆಸರು", bankProofLbl: "ರದ್ದುಪಡಿಸಿದ ಚೆಕ್ / ಪಾಸ್‌ಬುಕ್", bankVerifiedLbl: "KYC ಪರಿಶೀಲಿಸಲಾಗಿದೆ", bankVerifiedHelp: "ಖಾತೆಯನ್ನು ರದ್ದುಪಡಿಸಿದ ಚೆಕ್ / ಪಾಸ್‌ಬುಕ್‌ಗೆ ಹೋಲಿಸಿ ಪರಿಶೀಲಿಸಿದ ನಂತರ ಮಾತ್ರ ಗುರುತಿಸಿ.",
+  uploadProof: "ಅಪ್‌ಲೋಡ್", viewProof: "ನೋಡಿ", proofOnFile: "ಫೈಲ್‌ನಲ್ಲಿದೆ", noProof: "ಅಪ್‌ಲೋಡ್ ಆಗಿಲ್ಲ", proofTooLarge: "ಫೈಲ್ ತುಂಬಾ ದೊಡ್ಡದು (ಗರಿಷ್ಠ ~1.5MB).",
+  verifiedYes: "ಪರಿಶೀಲಿಸಲಾಗಿದೆ", verifiedNo: "ಪರಿಶೀಲನೆ ಬಾಕಿ", submitBank: "ಬ್ಯಾಂಕ್ ವಿವರ ಸಲ್ಲಿಸಿ", updateBank: "ಬ್ಯಾಂಕ್ ವಿವರ ಸೇರಿಸಿ / ನವೀಕರಿಸಿ",
+  bankResetNote: "ಸಲ್ಲಿಸಿದರೆ ಪರಿಶೀಲನೆ ಮರುಹೊಂದಿಸಲಾಗುತ್ತದೆ — ಮುಂದಿನ ಪಾವತಿಗೆ ಮೊದಲು HR ಮರುಪರಿಶೀಲಿಸುತ್ತದೆ. ಖಾತೆ ಸಂಖ್ಯೆ ಎನ್‌ಕ್ರಿಪ್ಟ್ ಆಗಿ ಸಂಗ್ರಹಿಸಲಾಗುತ್ತದೆ ಮತ್ತು ಮರೆಮಾಡಿ ತೋರಿಸಲಾಗುತ್ತದೆ.", bankSubmitted: "ಬ್ಯಾಂಕ್ ವಿವರ ಸಲ್ಲಿಸಲಾಗಿದೆ — HR ಪರಿಶೀಲನೆ ಬಾಕಿ.",
 });
 Object.assign(DICT.hi, {
   navDashboard: "डैशबोर्ड", dashboard_sub: "कार्यबल गतिविधि और आपके लिए लंबित कार्यों का त्वरित दृश्य।",
@@ -351,6 +363,12 @@ Object.assign(DICT.hi, {
   emergencyContact2: "आपातकालीन संपर्क 2", noticePeriod: "नोटिस अवधि (दिन)", daysWord: "दिन",
   additionalPay: "अतिरिक्त भुगतान (बोनस / वेरिएबल)", ap_VARIABLE: "वेरिएबल वेतन", ap_RETENTION: "रिटेंशन बोनस", ap_PERF_BONUS: "प्रदर्शन बोनस", ap_INCENTIVE: "प्रोत्साहन", ap_ADHOC: "तदर्थ",
   noteOptional: "टिप्पणी (वैकल्पिक)", addWord: "जोड़ें", noAddPay: "इस माह कोई अतिरिक्त भुगतान नहीं।",
+  sectBank: "बैंक विवरण", bank_help: "आपका वेतन भुगतान खाता। नए या बदले हुए विवरण अपुष्ट रूप में सहेजे जाते हैं; वेतन भुगतान से पहले HR को इन्हें (रद्द चेक / पासबुक से मिलान कर) KYC सत्यापित करना होगा।",
+  bankPayee: "खाताधारक (भुगतान-प्राप्तकर्ता) नाम", bankIfsc: "IFSC कोड", acctType: "खाता प्रकार", acctSavings: "बचत", acctCurrent: "चालू",
+  bankNameLbl: "बैंक का नाम", bankProofLbl: "रद्द चेक / पासबुक", bankVerifiedLbl: "KYC सत्यापित", bankVerifiedHelp: "खाते का रद्द चेक / पासबुक से मिलान करने के बाद ही चिह्नित करें। नए या बदले विवरण के लिए अचिह्नित छोड़ें।",
+  uploadProof: "अपलोड", viewProof: "देखें", proofOnFile: "फ़ाइल में", noProof: "अपलोड नहीं", proofTooLarge: "फ़ाइल बहुत बड़ी (अधिकतम ~1.5MB)।",
+  verifiedYes: "सत्यापित", verifiedNo: "सत्यापन लंबित", submitBank: "बैंक विवरण जमा करें", updateBank: "बैंक विवरण जोड़ें / अद्यतन करें",
+  bankResetNote: "जमा करने पर सत्यापन रीसेट हो जाता है — अगले भुगतान से पहले HR पुनः जाँच करेगा। खाता संख्या एन्क्रिप्टेड रूप में संग्रहीत और मास्क कर दिखाई जाती है।", bankSubmitted: "बैंक विवरण जमा — HR सत्यापन लंबित।",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -713,6 +731,19 @@ function resizeImage(file, max) {
     img.src = url;
   });
 }
+// Cancelled cheque / passbook: images are downscaled to a legible JPEG; PDFs are read as-is.
+// Capped at ~1.5MB to match the server's validBankProof limit.
+function fileToProofDataURL(file) {
+  if (file.type === "application/pdf") {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result));
+      r.onerror = () => rej(new Error("could not read file"));
+      r.readAsDataURL(file);
+    });
+  }
+  return resizeImage(file, 1400);
+}
 function photoControls() {
   const file = el("input", { type: "file", accept: "image/*", style: "display:none" });
   const pick = el("button", { class: "sm", text: t("changePhoto"), onclick: () => file.click() });
@@ -864,6 +895,9 @@ function renderProfile() {
   for (const f of SENSITIVE) sens.appendChild(sensitiveRow(f));
   body.appendChild(sens);
 
+  // bank details (self-service KYC)
+  body.appendChild(bankCard(e));
+
   // my change requests
   body.appendChild(el("div", { class: "card", id: "myreq" }, [ el("h2", { text: t("myRequests") }), el("div", { class: "muted", text: "…" }) ]));
 
@@ -873,6 +907,56 @@ function renderProfile() {
   // HR verify queue
   if (canVerify()) body.appendChild(el("div", { class: "card", id: "queue" }, [ el("h2", { text: t("verifyQueue") }), el("div", { class: "muted", text: "…" }) ]));
   loadTaxCard();
+}
+
+// Self-service bank details (FR-01). Employee submits their payout account; it is stored
+// UNVERIFIED and HR must KYC-check it before payroll pays into it.
+function bankCard(e) {
+  const card = el("div", { class: "card" }, [h2help(t("sectBank"), t("bank_help"))]);
+  const statusPill = el("span", { class: "pill " + (e.bankVerified ? "approved" : "pending"), text: e.bankVerified ? t("verifiedYes") : t("verifiedNo") });
+  card.appendChild(row(t("bankVerifiedLbl"), statusPill));
+  card.appendChild(row(t("bankPayee"), el("span", { text: e.bankPayeeName || t("none") })));
+  card.appendChild(row(t("bankAccount"), el("span", { text: e.bankAccount || t("none") })));
+  card.appendChild(row(t("bankIfsc"), el("span", { text: e.bankIfsc || t("none") })));
+  card.appendChild(row(t("acctType"), el("span", { text: e.bankAccountType ? t(e.bankAccountType === "current" ? "acctCurrent" : "acctSavings") : t("none") })));
+  card.appendChild(row(t("bankNameLbl"), el("span", { text: e.bankName || t("none") })));
+  card.appendChild(row(t("bankProofLbl"), e.hasBankProof ? el("button", { class: "sm", text: t("viewProof"), onclick: () => openBankProof("/api/me/bank-proof") }) : el("span", { class: "muted", text: t("noProof") })));
+
+  const payee = el("input", { value: e.bankPayeeName || "", placeholder: t("bankPayee") });
+  const acct = el("input", { placeholder: t("bankAccount"), inputmode: "numeric" });
+  const ifsc = el("input", { value: e.bankIfsc || "", placeholder: "HDFC0001234", style: "text-transform:uppercase" });
+  const acctType = el("select", {});
+  for (const [v, k] of [["", "—"], ["savings", "acctSavings"], ["current", "acctCurrent"]]) acctType.appendChild(el("option", { value: v, text: v ? t(k) : "—", ...(e.bankAccountType === v ? { selected: "" } : {}) }));
+  const bankName = el("input", { value: e.bankName || "", placeholder: t("bankNameLbl") });
+  let proofDataUrl = null;
+  const proofFile = el("input", { type: "file", accept: "image/*,application/pdf", style: "display:none" });
+  const proofName = el("span", { class: "muted", style: "font-size:12px", text: t("noProof") });
+  const pickProof = el("button", { class: "sm", type: "button", text: t("uploadProof"), onclick: () => proofFile.click() });
+  proofFile.addEventListener("change", async () => {
+    if (!proofFile.files || !proofFile.files[0]) return;
+    const f = proofFile.files[0];
+    try { const d = await fileToProofDataURL(f); if (d.length > 2_000_000) { flash("err", t("proofTooLarge")); return; } proofDataUrl = d; proofName.textContent = f.name; }
+    catch (ex) { flash("err", ex.message || t("errorGeneric")); }
+  });
+  const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
+  const save = el("button", { class: "primary sm", text: t("submitBank") });
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      await api("/api/profile/bank", { method: "POST", body: { bankPayeeName: payee.value, bankAccount: acct.value, bankIfsc: ifsc.value, bankAccountType: acctType.value, bankName: bankName.value, bankProof: proofDataUrl } });
+      state.emp = (await api("/api/me")).employee;
+      flash("ok", t("bankSubmitted")); renderProfile();
+    } catch (ex) { flash("err", ex.message); save.disabled = false; }
+  });
+  const details = el("details", { style: "margin-top:10px" }, [
+    el("summary", { style: "cursor:pointer;font-weight:600", text: t("updateBank") }),
+    el("div", { class: "muted", style: "font-size:12px;margin:8px 0", text: t("bankResetNote") }),
+    fr(t("bankPayee"), payee), fr(t("bankAccount"), acct), fr(t("bankIfsc"), ifsc), fr(t("acctType"), acctType), fr(t("bankNameLbl"), bankName),
+    el("div", {}, [el("label", { text: t("bankProofLbl") }), el("div", { class: "actions", style: "gap:8px;align-items:center" }, [pickProof, proofName, proofFile])]),
+    el("div", { class: "actions", style: "margin-top:10px" }, [save]),
+  ]);
+  card.appendChild(details);
+  return card;
 }
 
 // Employee TDS self-service: FY regime election + investment declarations.
@@ -2401,6 +2485,31 @@ function openEmployeeDetail(e) {
   card(t("sectContact"), [[t("workEmail"), e.workEmail], [t("personalEmail"), e.personalEmail], [t("phone"), e.phone], [t("address"), e.address], [t("emergencyContact"), e.emergencyContact], [t("emergencyContact2"), e.emergencyContact2]]);
   card(t("sectEmployment"), [[t("department"), e.department], [t("designation"), e.designation], [t("employmentTypeLbl"), e.employmentType], [t("segment"), t(e.segment) || e.segment], [t("location"), e.location], [t("statusLbl"), statusLabel(e.employmentStatus)], [t("dojLbl"), fmtd(e.dateOfJoining)]]);
   card(t("sectLifecycle"), [[t("noticePeriod"), e.noticePeriodDays != null ? e.noticePeriodDays + " " + t("daysWord") : ""], [t("probEnd"), fmtd(e.probationEnd)], [t("confirmedOn"), fmtd(e.confirmedOn)], [t("contractEnd"), fmtd(e.contractEnd)], [t("doeLbl"), fmtd(e.dateOfExit)], [t("exitReason"), e.exitReason]]);
+  // Bank card (only when the viewer is cleared to see sensitive fields — the API omits them otherwise).
+  if (e.bankPayeeName != null || e.bankName != null || e.bankAccount != null) {
+    const bc = el("div", { class: "card" }, [el("h2", { text: t("sectBank") })]);
+    bc.appendChild(row(t("bankPayee"), el("span", { text: e.bankPayeeName || t("none") })));
+    bc.appendChild(row(t("bankAccount"), el("span", { text: e.bankAccount || t("none") })));
+    bc.appendChild(row(t("bankIfsc"), el("span", { text: e.bankIfsc || t("none") })));
+    bc.appendChild(row(t("acctType"), el("span", { text: e.bankAccountType ? t(e.bankAccountType === "current" ? "acctCurrent" : "acctSavings") : t("none") })));
+    bc.appendChild(row(t("bankNameLbl"), el("span", { text: e.bankName || t("none") })));
+    bc.appendChild(row(t("bankVerifiedLbl"), el("span", { class: "pill " + (e.bankVerified ? "approved" : "pending"), text: e.bankVerified ? t("verifiedYes") : t("verifiedNo") })));
+    bc.appendChild(row(t("bankProofLbl"), e.hasBankProof ? el("button", { class: "sm", text: t("viewProof"), onclick: () => openBankProof(`/api/admin/employees/${encodeURIComponent(e.id)}/bank-proof`) }) : el("span", { class: "muted", text: t("noProof") })));
+    body.appendChild(bc);
+  }
+}
+// Fetch a stored cheque/passbook data URL and open it (image or PDF) in a new tab.
+async function openBankProof(url) {
+  try {
+    const d = (await api(url)).proof;
+    const [meta, b64] = d.split(",");
+    const mime = (meta.match(/data:([^;]+)/) || [])[1] || "application/octet-stream";
+    const bin = atob(b64); const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const blobUrl = URL.createObjectURL(new Blob([arr], { type: mime }));
+    window.open(blobUrl, "_blank");
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch (e) { flash("err", e.message || t("errorGeneric")); }
 }
 function openEmployeeForm(ex) {
   const body = document.getElementById("body"); clear(body);
@@ -2423,6 +2532,9 @@ function openEmployeeForm(ex) {
     contractStart: ip(ex && ex.contractStart, { type: "date" }), contractEnd: ip(ex && ex.contractEnd, { type: "date" }), dateOfExit: ip(ex && ex.dateOfExit, { type: "date" }),
     exitReason: ip(ex && ex.exitReason), exitStatus: ip(ex && ex.exitStatus), ctc: ip(ex && ex.ctc, { type: "number", min: "0" }),
     bankAccount: ip("", { placeholder: t("leaveBlankKeep") }), pan: ip("", { placeholder: t("leaveBlankKeep") }), aadhaarLast4: ip("", { placeholder: t("leaveBlankKeep") }),
+    bankPayeeName: ip(ex && ex.bankPayeeName), bankIfsc: ip(ex && ex.bankIfsc, { style: "text-transform:uppercase" }),
+    bankAccountType: sel([["", "—"], ["savings", t("acctSavings")], ["current", t("acctCurrent")]], ex && ex.bankAccountType),
+    bankName: ip(ex && ex.bankName),
   };
   const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
   const sect = (title, fields) => body.appendChild(el("div", { class: "card" }, [el("h2", { text: title })].concat(fields.map(([l, k]) => fr(l, F[k])))));
@@ -2431,10 +2543,39 @@ function openEmployeeForm(ex) {
   sect(t("sectContact"), [[t("workEmail"), "workEmail"], [t("personalEmail"), "personalEmail"], [t("phone"), "phone"], [t("address"), "address"], [t("emergencyContact"), "emergencyContact"], [t("emergencyContact2"), "emergencyContact2"]]);
   sect(t("sectEmployment"), [[t("department"), "department"], [t("designation"), "designation"], [t("employmentTypeLbl"), "employmentType"], [t("segment"), "segment"], [t("location"), "location"], [t("managerLbl"), "managerId"], [t("statusLbl"), "employmentStatus"], [t("dojLbl"), "dateOfJoining"]]);
   sect(t("sectLifecycle"), [[t("noticePeriod"), "noticePeriodDays"], [t("probStart"), "probationStart"], [t("probEnd"), "probationEnd"], [t("confirmedOn"), "confirmedOn"], [t("contractStart"), "contractStart"], [t("contractEnd"), "contractEnd"], [t("doeLbl"), "dateOfExit"], [t("exitReason"), "exitReason"], [t("exitStatus"), "exitStatus"]]);
-  sect(t("sectComp") + (ex ? " · " + t("compNote") : ""), [[t("ctc"), "ctc"], [t("bankAccount"), "bankAccount"], [t("pan"), "pan"], [t("aadhaar"), "aadhaarLast4"]]);
+  sect(t("sectComp") + (ex ? " · " + t("compNote") : ""), [[t("ctc"), "ctc"], [t("pan"), "pan"], [t("aadhaar"), "aadhaarLast4"]]);
+  // Bank details (KYC). Account number stays encrypted + masked; leave blank to keep the stored one.
+  let proofDataUrl = null;
+  const verified = el("input", { type: "checkbox", ...(ex && ex.bankVerified ? { checked: "" } : {}) });
+  const proofFile = el("input", { type: "file", accept: "image/*,application/pdf", style: "display:none" });
+  const proofName = el("span", { class: "muted", style: "font-size:12px", text: ex && ex.hasBankProof ? t("proofOnFile") : t("noProof") });
+  const pickProof = el("button", { class: "sm", type: "button", text: t("uploadProof"), onclick: () => proofFile.click() });
+  proofFile.addEventListener("change", async () => {
+    if (!proofFile.files || !proofFile.files[0]) return;
+    const f = proofFile.files[0];
+    try {
+      const d = await fileToProofDataURL(f);
+      if (d.length > 2_000_000) { flash("err", t("proofTooLarge")); return; }
+      proofDataUrl = d; proofName.textContent = f.name;
+    } catch (e) { flash("err", e.message || t("errorGeneric")); }
+  });
+  const viewProof = ex && ex.hasBankProof ? el("button", { class: "sm", type: "button", text: t("viewProof"), onclick: () => openBankProof(`/api/admin/employees/${encodeURIComponent(ex.id)}/bank-proof`) }) : null;
+  body.appendChild(el("div", { class: "card" }, [
+    el("h2", { text: t("sectBank") }),
+    fr(t("bankPayee"), F.bankPayeeName),
+    fr(t("bankAccount") + (ex ? " · " + t("leaveBlankKeep") : ""), F.bankAccount),
+    fr(t("bankIfsc"), F.bankIfsc),
+    fr(t("acctType"), F.bankAccountType),
+    fr(t("bankNameLbl"), F.bankName),
+    el("div", {}, [el("label", { text: t("bankProofLbl") }), el("div", { class: "actions", style: "gap:8px;align-items:center" }, [pickProof, proofName, viewProof, proofFile].filter(Boolean))]),
+    el("label", { class: "row", style: "display:flex;gap:8px;align-items:center;margin-top:10px;cursor:pointer" }, [verified, el("span", { text: t("bankVerifiedLbl") })]),
+    el("div", { class: "muted", style: "font-size:12px;margin-top:4px", text: t("bankVerifiedHelp") }),
+  ]));
   const save = el("button", { class: "primary", text: t("save") });
   save.addEventListener("click", async () => {
     const payload = {}; for (const k in F) payload[k] = F[k].value;
+    payload.bankVerified = verified.checked;
+    if (proofDataUrl) payload.bankProof = proofDataUrl;
     if (!payload.firstName && !payload.lastName) { flash("err", t("nameRequired")); return; }
     save.disabled = true;
     try {
