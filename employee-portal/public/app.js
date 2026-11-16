@@ -302,6 +302,46 @@ Object.assign(DICT.hi, {
   tds_help: "राष्ट्रीय TDS कॉन्फ़िग और घोषणा सत्यापन। सक्षम होने तक TDS निष्क्रिय।",
   tds_ca_note: "⚠ सीड TDS पैरामीटर केवल उदाहरण हैं। CA द्वारा पुष्ट मान दर्ज करें, तभी सक्षम करें।",
 });
+// Dashboard + Employee master + attendance-weekly strings.
+Object.assign(DICT.en, {
+  navDashboard: "Dashboard", dashboard_sub: "A quick view of workforce activity and what needs you.",
+  actionCentre: "Action centre", action_help: "Items waiting for you across approvals, announcements, tasks and the helpdesk.",
+  workforce: "Workforce", totalEmployees: "Total employees", activeWord: "Active", pendingApprovals: "Pending approvals",
+  payrollStatus: "Payroll status", openTasks: "Open tasks", latestPayslip: "Latest payslip", allClear: "All clear — nothing pending.",
+  notif_approvals: "Approvals waiting for your decision", notif_announcements: "Announcements to acknowledge", notif_tasks: "Open tasks assigned to you", notif_helpdesk: "Helpdesk tickets to handle",
+  overdueWord: "overdue", byDept: "By department", alertsWord: "Alerts", contractEnds: "Contract ending", probationDue: "Probation due", view: "View",
+  navEmployees: "Employees", employees_help: "The employee master — full records HR maintains. Directory (for everyone) shows only public fields.",
+  addEmployee: "Add employee", searchEmp: "Search name, code, department…", edit: "Edit", back: "Back", editEmployee: "Edit employee",
+  leaveBlankKeep: "leave blank to keep", cancel: "Cancel", compNote: "blank keeps current", nameRequired: "Enter a first and/or last name.",
+  sectPersonal: "Personal", sectContact: "Contact", sectEmployment: "Employment", sectLifecycle: "Lifecycle & contract", sectComp: "Compensation & statutory",
+  firstName: "First name", lastName: "Last name", employeeCodeLbl: "Employee code", dobLbl: "Date of birth", genderLbl: "Gender",
+  employmentTypeLbl: "Employment type", managerLbl: "Reporting manager", statusLbl: "Employment status", dojLbl: "Date of joining", department: "Department",
+  probStart: "Probation start", probEnd: "Probation end", confirmedOn: "Confirmed on", contractStart: "Contract start", contractEnd: "Contract end",
+  doeLbl: "Date of exit", exitReason: "Exit reason", exitStatus: "Exit status",
+  status_active: "Active", status_probation: "Probation", status_notice: "Notice", status_suspended: "Suspended", status_exited: "Exited",
+  weeklyHours: "Weekly working hours", weekly_help: "Hours worked per week (Mon–Sat) against the target. Below-target weeks are flagged.",
+  belowTarget: "Below target", onTrack: "On track", reportingTime: "Reporting", graceMins: "grace", weeklyTarget: "Target", policyPrefix: "Policy:",
+});
+Object.assign(DICT.kn, {
+  navDashboard: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", dashboard_sub: "ಉದ್ಯೋಗಿ ಚಟುವಟಿಕೆ ಮತ್ತು ನಿಮಗೆ ಬೇಕಾದವುಗಳ ತ್ವರಿತ ನೋಟ.",
+  actionCentre: "ಕ್ರಿಯಾ ಕೇಂದ್ರ", workforce: "ಉದ್ಯೋಗಿಬಲ", totalEmployees: "ಒಟ್ಟು ಉದ್ಯೋಗಿಗಳು", activeWord: "ಸಕ್ರಿಯ",
+  pendingApprovals: "ಬಾಕಿ ಅನುಮೋದನೆಗಳು", payrollStatus: "ವೇತನ ಸ್ಥಿತಿ", openTasks: "ತೆರೆದ ಕಾರ್ಯಗಳು", latestPayslip: "ಇತ್ತೀಚಿನ ಪೇಸ್ಲಿಪ್",
+  allClear: "ಎಲ್ಲವೂ ಸರಿ — ಬಾಕಿ ಇಲ್ಲ.", byDept: "ವಿಭಾಗವಾರು", alertsWord: "ಎಚ್ಚರಿಕೆಗಳು", view: "ನೋಡಿ",
+  navEmployees: "ಉದ್ಯೋಗಿಗಳು", addEmployee: "ಉದ್ಯೋಗಿ ಸೇರಿಸಿ", searchEmp: "ಹೆಸರು, ಕೋಡ್, ವಿಭಾಗ ಹುಡುಕಿ…", edit: "ಸಂಪಾದಿಸಿ", back: "ಹಿಂದೆ", editEmployee: "ಉದ್ಯೋಗಿ ಸಂಪಾದಿಸಿ", cancel: "ರದ್ದು",
+  sectPersonal: "ವೈಯಕ್ತಿಕ", sectContact: "ಸಂಪರ್ಕ", sectEmployment: "ಉದ್ಯೋಗ", sectLifecycle: "ಜೀವನಚಕ್ರ ಮತ್ತು ಒಪ್ಪಂದ", sectComp: "ವೇತನ ಮತ್ತು ಶಾಸನಬದ್ಧ", department: "ವಿಭಾಗ",
+  status_active: "ಸಕ್ರಿಯ", status_probation: "ಪ್ರೊಬೇಶನ್", status_notice: "ನೋಟಿಸ್", status_suspended: "ಅಮಾನತು", status_exited: "ನಿರ್ಗಮಿಸಿದೆ",
+  weeklyHours: "ವಾರದ ಕೆಲಸದ ಗಂಟೆಗಳು", belowTarget: "ಗುರಿಗಿಂತ ಕಡಿಮೆ", onTrack: "ಸರಿದಾರಿಯಲ್ಲಿ", policyPrefix: "ನೀತಿ:",
+});
+Object.assign(DICT.hi, {
+  navDashboard: "डैशबोर्ड", dashboard_sub: "कार्यबल गतिविधि और आपके लिए लंबित कार्यों का त्वरित दृश्य।",
+  actionCentre: "कार्य केंद्र", workforce: "कार्यबल", totalEmployees: "कुल कर्मचारी", activeWord: "सक्रिय",
+  pendingApprovals: "लंबित अनुमोदन", payrollStatus: "पेरोल स्थिति", openTasks: "खुले कार्य", latestPayslip: "नवीनतम पे-स्लिप",
+  allClear: "सब ठीक — कुछ लंबित नहीं।", byDept: "विभागवार", alertsWord: "अलर्ट", view: "देखें",
+  navEmployees: "कर्मचारी", addEmployee: "कर्मचारी जोड़ें", searchEmp: "नाम, कोड, विभाग खोजें…", edit: "संपादित करें", back: "वापस", editEmployee: "कर्मचारी संपादित करें", cancel: "रद्द करें",
+  sectPersonal: "व्यक्तिगत", sectContact: "संपर्क", sectEmployment: "रोज़गार", sectLifecycle: "जीवनचक्र और अनुबंध", sectComp: "वेतन और सांविधिक", department: "विभाग",
+  status_active: "सक्रिय", status_probation: "परिवीक्षा", status_notice: "नोटिस", status_suspended: "निलंबित", status_exited: "निर्गत",
+  weeklyHours: "साप्ताहिक कार्य घंटे", belowTarget: "लक्ष्य से कम", onTrack: "सही राह पर", policyPrefix: "नीति:",
+});
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
 Object.assign(DICT.hi, { navDirectory: "निर्देशिका", search: "नाम, भूमिका, स्थान खोजें", noResults: "कोई मेल नहीं।", manager: "प्रबंधक" });
@@ -598,10 +638,12 @@ function fmtDate(iso) {
 
 // ---- app shell (HRMS-style: sidebar + topbar) ----------------------------------
 const VIEWS = [
+  { id: "dashboard", icon: "grid", titleKey: "navDashboard" },
   { id: "profile", icon: "user", titleKey: "myProfile" },
   { id: "leave", icon: "calendar", titleKey: "navLeave" },
   { id: "attendance", icon: "clock", titleKey: "navAttendance" },
   { id: "tasks", icon: "task", titleKey: "navTasks" },
+  { id: "employees", icon: "users", titleKey: "navEmployees", when: () => canSeeEmployees() },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
   { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
   { id: "documents", icon: "file", titleKey: "navDocuments" },
@@ -610,6 +652,8 @@ const VIEWS = [
   { id: "approvals", icon: "check", titleKey: "navApprovals" },
 ];
 function canViewPayroll() { return ["hr_admin", "finance", "finance_admin", "finance_approver", "super_admin"].includes(state.role); }
+function canSeeEmployees() { return ["hr_admin", "hr_executive", "finance", "finance_admin", "finance_approver", "management_viewer", "auditor", "super_admin"].includes(state.role); }
+function canManageEmployees() { return ["hr_admin", "hr_executive", "super_admin"].includes(state.role); }
 function canPreparePay() { return ["hr_admin", "finance", "finance_admin", "super_admin"].includes(state.role); }
 function canApprovePay() { return ["finance_approver", "super_admin"].includes(state.role); }
 function canEditStatutory() { return ["finance", "finance_admin", "super_admin"].includes(state.role); }
@@ -624,6 +668,7 @@ const ICONS = {
   task: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
   money: '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="2" y1="10" x2="2" y2="10"/><line x1="22" y1="14" x2="22" y2="14"/>',
+  grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -702,7 +747,7 @@ async function renderApp() {
     content,
   ]);
   app().appendChild(el("div", { class: "shell" }, [sidebar(), main]));
-  await switchView(state.view || "profile");
+  await switchView(state.view || "dashboard");
 }
 
 async function switchView(view) {
@@ -713,7 +758,9 @@ async function switchView(view) {
   const titleEl = document.getElementById("pagetitle");
   if (titleEl && v) titleEl.textContent = t(v.titleKey);
   flash("", "");
-  if (view === "leave") await loadLeaveView();
+  if (view === "dashboard") await loadDashboardView();
+  else if (view === "employees") await loadEmployeesView();
+  else if (view === "leave") await loadLeaveView();
   else if (view === "attendance") await loadAttendanceView();
   else if (view === "tasks") await loadTasksView();
   else if (view === "directory") await loadDirectoryView();
@@ -1119,9 +1166,11 @@ async function loadAttendanceView() {
   state.attMonth = monthInput.value;
   body.appendChild(el("div", { class: "card" }, [
     h2help(t("navAttendance"), t("attendance_help")),
+    el("div", { id: "att_banner" }),
     el("div", { class: "actions" }, [el("label", { text: t("month"), style: "margin:0" }), monthInput]),
     el("div", { id: "att_summary", class: "muted", style: "margin-top:8px;font-size:13px" }),
   ]));
+  body.appendChild(el("div", { class: "card", id: "att_weekly" }, [el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "att_table" }, [el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "att_corr_form" }, [el("h2", { text: t("requestCorrection") })]));
   body.appendChild(el("div", { class: "card", id: "att_mycorr" }, [el("h2", { text: t("myCorrections") }), el("div", { class: "muted", text: "…" })]));
@@ -1282,6 +1331,8 @@ async function loadAttendanceMonth() {
   if (!tableEl) return;
   try {
     const data = await api(`/api/attendance?month=${encodeURIComponent(state.attMonth)}`);
+    renderAttBanner(data.policy);
+    renderAttWeekly(data.days || [], data.policy);
     const s = data.summary;
     if (sumEl && s) {
       clear(sumEl);
@@ -2194,6 +2245,178 @@ async function loadComponentCatalog() {
       ]));
     }
   } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+
+// ---- Dashboard (role-aware) -----------------------------------------------------
+function statTile(label, value, hint) {
+  return el("div", { class: "stat" }, [el("div", { class: "n", text: String(value) }), el("div", { class: "l", text: label }), hint ? el("div", { class: "muted", style: "font-size:11px;margin-top:2px", text: hint }) : null]);
+}
+function barNode(pct, color) {
+  return el("div", { style: "height:8px;background:var(--line);border-radius:20px;overflow:hidden;margin-top:6px;max-width:240px" }, [el("div", { style: `height:100%;width:${Math.min(100, Math.max(0, pct))}%;background:${color};border-radius:20px` })]);
+}
+async function loadDashboardView() {
+  const body = document.getElementById("body"); clear(body);
+  const nm = (state.emp && state.emp.name) || "";
+  body.appendChild(el("div", { class: "card" }, [
+    el("div", { style: "font-size:18px;font-weight:700", text: `${greeting()}${nm ? ", " + nm : ""} 👋` }),
+    el("div", { class: "muted", style: "font-size:13px", text: t("dashboard_sub") }),
+  ]));
+  const tiles = el("div", { class: "stats", style: "margin-bottom:16px" }); body.appendChild(tiles);
+  body.appendChild(el("div", { class: "card", id: "dash_actions" }, [h2help(t("actionCentre"), t("action_help")), el("div", { class: "muted", text: "…" })]));
+  if (canSeeEmployees()) body.appendChild(el("div", { class: "card", id: "dash_org" }, [el("h2", { text: t("workforce") }), el("div", { class: "muted", text: "…" })]));
+  try {
+    const [d, notif] = await Promise.all([api("/api/dashboard"), api("/api/notifications")]);
+    const apc = (notif.items.find((i) => i.kind === "approvals") || {}).count || 0;
+    if (d.org) {
+      tiles.appendChild(statTile(t("totalEmployees"), d.org.totalEmployees));
+      tiles.appendChild(statTile(t("activeWord"), d.org.activeEmployees));
+      tiles.appendChild(statTile(t("pendingApprovals"), apc));
+      tiles.appendChild(statTile(t("payrollStatus"), d.org.payroll ? d.org.payroll.status : "—", d.org.payroll ? d.org.payroll.ym : ""));
+    } else if (d.me) {
+      tiles.appendChild(statTile(t("present"), d.me.presentThisMonth, d.me.month));
+      tiles.appendChild(statTile(t("openTasks"), d.me.openTasks));
+      tiles.appendChild(statTile(t("notifications"), notif.total));
+      tiles.appendChild(statTile(t("latestPayslip"), d.me.latestPayslip ? "✓" : "—", d.me.latestPayslip || ""));
+    }
+    const ac = document.getElementById("dash_actions"); clear(ac); ac.appendChild(h2help(t("actionCentre"), t("action_help")));
+    if (!notif.items.length) ac.appendChild(el("div", { class: "muted", text: t("allClear") }));
+    for (const it of notif.items) {
+      ac.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("span", { class: "pill pending", text: String(it.count) })]),
+        el("div", { class: "v" }, [el("span", { text: t("notif_" + it.kind) || it.kind }), it.overdue ? el("span", { class: "muted", style: "margin-left:6px;font-size:12px", text: `${it.overdue} ${t("overdueWord")}` }) : null, el("button", { class: "sm", style: "margin-left:8px", text: t("view"), onclick: () => switchView(it.view) })]),
+      ]));
+    }
+    if (d.org) {
+      const org = document.getElementById("dash_org"); clear(org); org.appendChild(el("h2", { text: t("workforce") }));
+      org.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("byDept") }));
+      for (const r of (d.org.byDept || [])) org.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: r.department }), el("div", { class: "v", text: String(r.n) })]));
+      const alerts = [...(d.org.contractAlerts || []).map((a) => [t("contractEnds"), a.name, a.contract_end]), ...(d.org.probationAlerts || []).map((a) => [t("probationDue"), a.name, a.probation_end])];
+      if (alerts.length) {
+        org.appendChild(el("div", { class: "muted", style: "font-size:12px;margin:10px 0 4px", text: t("alertsWord") }));
+        for (const [kind, name, date] of alerts) org.appendChild(el("div", { class: "row" }, [el("div", { class: "k" }, [el("span", { class: "pill pending", text: kind })]), el("div", { class: "v", text: `${name} · ${fmtDate(date)}` })]));
+      }
+    }
+  } catch (ex) { flash("err", ex.message); }
+}
+
+// ---- Employee master (full record) ----------------------------------------------
+let _empCache = [];
+function statusLabel(s) { return t("status_" + (s || "active")) || s || ""; }
+async function loadEmployeesView() {
+  const body = document.getElementById("body"); clear(body);
+  const search = el("input", { type: "search", placeholder: t("searchEmp"), oninput: () => filterEmp(search.value) });
+  body.appendChild(el("div", { class: "card" }, [
+    el("div", { class: "actions" }, [el("div", { class: "grow" }, [h2help(t("navEmployees"), t("employees_help"))]), canManageEmployees() ? el("button", { class: "primary sm", text: t("addEmployee"), onclick: () => openEmployeeForm(null) }) : null]),
+    el("div", { style: "margin-top:8px" }, [search]),
+  ]));
+  body.appendChild(el("div", { class: "card", id: "emp_list" }, [el("div", { class: "muted", text: "…" })]));
+  try { const { employees } = await api("/api/employees"); _empCache = employees || []; renderEmpList(_empCache); }
+  catch (ex) { flash("err", ex.message); }
+}
+function filterEmp(q) { q = (q || "").toLowerCase(); renderEmpList(_empCache.filter((e) => [e.name, e.employeeCode, e.department, e.designation, e.workEmail].filter(Boolean).join(" ").toLowerCase().includes(q))); }
+function renderEmpList(list) {
+  const c = document.getElementById("emp_list"); if (!c) return; clear(c);
+  if (!list.length) { c.appendChild(el("div", { class: "muted", text: t("noResults") })); return; }
+  for (const e of list) {
+    const acts = el("div", {}, [el("button", { class: "sm", text: t("view"), onclick: () => openEmployeeDetail(e) })]);
+    if (canManageEmployees()) acts.appendChild(el("button", { class: "sm", style: "margin-left:6px", text: t("edit"), onclick: () => openEmployeeForm(e) }));
+    c.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "k", style: "width:auto" }, [avatarNode(e)]),
+      el("div", { class: "v" }, [
+        el("div", { text: `${e.name}${e.employeeCode ? " · " + e.employeeCode : ""}` }),
+        el("div", { class: "muted", style: "font-size:12px", text: [e.designation, e.department, e.employmentType, statusLabel(e.employmentStatus)].filter(Boolean).join(" · ") }),
+      ]),
+      acts,
+    ]));
+  }
+}
+function openEmployeeDetail(e) {
+  const body = document.getElementById("body"); clear(body);
+  body.appendChild(el("div", { class: "actions", style: "margin-bottom:10px" }, [el("button", { class: "sm", text: "← " + t("back"), onclick: () => switchView("employees") }), canManageEmployees() ? el("button", { class: "sm", text: t("edit"), onclick: () => openEmployeeForm(e) }) : null]));
+  body.appendChild(el("div", { class: "card" }, [el("div", { style: "display:flex;gap:14px;align-items:center" }, [avatarBig(e), el("div", {}, [el("div", { style: "font-size:18px;font-weight:700", text: e.name }), el("div", { class: "muted", style: "font-size:13px", text: [e.designation, e.department, e.employmentType].filter(Boolean).join(" · ") })])])]));
+  const fmtd = (v) => v ? fmtDate(v) : "";
+  const card = (title, rows) => { const c = el("div", { class: "card" }, [el("h2", { text: title })]); rows.forEach(([l, v]) => c.appendChild(row(l, el("span", { text: v || t("none") })))); body.appendChild(c); };
+  card(t("sectPersonal"), [[t("employeeCodeLbl"), e.employeeCode], [t("dobLbl"), fmtd(e.dob)], [t("genderLbl"), e.gender]]);
+  card(t("sectContact"), [[t("workEmail"), e.workEmail], [t("personalEmail"), e.personalEmail], [t("phone"), e.phone], [t("address"), e.address], [t("emergencyContact"), e.emergencyContact]]);
+  card(t("sectEmployment"), [[t("department"), e.department], [t("designation"), e.designation], [t("employmentTypeLbl"), e.employmentType], [t("segment"), t(e.segment) || e.segment], [t("location"), e.location], [t("statusLbl"), statusLabel(e.employmentStatus)], [t("dojLbl"), fmtd(e.dateOfJoining)]]);
+  card(t("sectLifecycle"), [[t("probEnd"), fmtd(e.probationEnd)], [t("confirmedOn"), fmtd(e.confirmedOn)], [t("contractEnd"), fmtd(e.contractEnd)], [t("doeLbl"), fmtd(e.dateOfExit)], [t("exitReason"), e.exitReason]]);
+}
+function openEmployeeForm(ex) {
+  const body = document.getElementById("body"); clear(body);
+  const ip = (v, a) => el("input", Object.assign({ value: v == null ? "" : String(v) }, a || {}));
+  const sel = (opts, v) => { const s = el("select", {}); for (const [val, lab] of opts) s.appendChild(el("option", { value: val, text: lab, ...(String(v || "") === val ? { selected: "" } : {}) })); return s; };
+  const F = {
+    firstName: ip(ex && ex.firstName), lastName: ip(ex && ex.lastName), employeeCode: ip(ex && ex.employeeCode),
+    dob: ip(ex && ex.dob, { type: "date" }), gender: sel([["", "—"], ["Male", "Male"], ["Female", "Female"], ["Other", "Other"]], ex && ex.gender),
+    workEmail: ip(ex && ex.workEmail, { type: "email" }), personalEmail: ip(ex && ex.personalEmail, { type: "email" }), phone: ip(ex && ex.phone),
+    address: ip(ex && ex.address), emergencyContact: ip(ex && ex.emergencyContact),
+    department: ip(ex && ex.department), designation: ip(ex && ex.designation),
+    employmentType: sel([["", "—"], ["Permanent", "Permanent"], ["Contract", "Contract"], ["Outsourced", "Outsourced"], ["Intern", "Intern"], ["Fixed-term", "Fixed-term"]], ex && ex.employmentType),
+    segment: sel([["office", t("office")], ["client_site", t("client_site")]], (ex && ex.segment) || "office"),
+    location: ip(ex && ex.location),
+    managerId: sel([["", t("none")]].concat(_empCache.filter((e) => !ex || e.id !== ex.id).map((e) => [e.id, e.name])), ex && ex.managerId),
+    employmentStatus: sel([["active", statusLabel("active")], ["probation", statusLabel("probation")], ["notice", statusLabel("notice")], ["suspended", statusLabel("suspended")], ["exited", statusLabel("exited")]], (ex && ex.employmentStatus) || "active"),
+    dateOfJoining: ip(ex && ex.dateOfJoining, { type: "date" }),
+    probationStart: ip(ex && ex.probationStart, { type: "date" }), probationEnd: ip(ex && ex.probationEnd, { type: "date" }), confirmedOn: ip(ex && ex.confirmedOn, { type: "date" }),
+    contractStart: ip(ex && ex.contractStart, { type: "date" }), contractEnd: ip(ex && ex.contractEnd, { type: "date" }), dateOfExit: ip(ex && ex.dateOfExit, { type: "date" }),
+    exitReason: ip(ex && ex.exitReason), exitStatus: ip(ex && ex.exitStatus), ctc: ip(ex && ex.ctc, { type: "number", min: "0" }),
+    bankAccount: ip("", { placeholder: t("leaveBlankKeep") }), pan: ip("", { placeholder: t("leaveBlankKeep") }), aadhaarLast4: ip("", { placeholder: t("leaveBlankKeep") }),
+  };
+  const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
+  const sect = (title, fields) => body.appendChild(el("div", { class: "card" }, [el("h2", { text: title })].concat(fields.map(([l, k]) => fr(l, F[k])))));
+  body.appendChild(el("div", { class: "actions", style: "margin-bottom:10px" }, [el("button", { class: "sm", text: "← " + t("back"), onclick: () => switchView("employees") }), el("h1", { style: "font-size:20px;margin:0", text: ex ? t("editEmployee") : t("addEmployee") })]));
+  sect(t("sectPersonal"), [[t("firstName"), "firstName"], [t("lastName"), "lastName"], [t("employeeCodeLbl"), "employeeCode"], [t("dobLbl"), "dob"], [t("genderLbl"), "gender"]]);
+  sect(t("sectContact"), [[t("workEmail"), "workEmail"], [t("personalEmail"), "personalEmail"], [t("phone"), "phone"], [t("address"), "address"], [t("emergencyContact"), "emergencyContact"]]);
+  sect(t("sectEmployment"), [[t("department"), "department"], [t("designation"), "designation"], [t("employmentTypeLbl"), "employmentType"], [t("segment"), "segment"], [t("location"), "location"], [t("managerLbl"), "managerId"], [t("statusLbl"), "employmentStatus"], [t("dojLbl"), "dateOfJoining"]]);
+  sect(t("sectLifecycle"), [[t("probStart"), "probationStart"], [t("probEnd"), "probationEnd"], [t("confirmedOn"), "confirmedOn"], [t("contractStart"), "contractStart"], [t("contractEnd"), "contractEnd"], [t("doeLbl"), "dateOfExit"], [t("exitReason"), "exitReason"], [t("exitStatus"), "exitStatus"]]);
+  sect(t("sectComp") + (ex ? " · " + t("compNote") : ""), [[t("ctc"), "ctc"], [t("bankAccount"), "bankAccount"], [t("pan"), "pan"], [t("aadhaar"), "aadhaarLast4"]]);
+  const save = el("button", { class: "primary", text: t("save") });
+  save.addEventListener("click", async () => {
+    const payload = {}; for (const k in F) payload[k] = F[k].value;
+    if (!payload.firstName && !payload.lastName) { flash("err", t("nameRequired")); return; }
+    save.disabled = true;
+    try {
+      if (ex) await api(`/api/admin/employees/${encodeURIComponent(ex.id)}/update`, { method: "POST", body: payload });
+      else await api("/api/admin/employees", { method: "POST", body: payload });
+      flash("ok", t("saved")); switchView("employees");
+    } catch (ex2) { flash("err", ex2.message); save.disabled = false; }
+  });
+  body.appendChild(el("div", { class: "actions", style: "margin:12px 0 40px" }, [save, el("button", { class: "sm", text: t("cancel"), onclick: () => switchView("employees") })]));
+}
+
+// ---- Attendance: policy banner + weekly-hours bars ------------------------------
+function _dow(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); }
+function _addD(iso, n) { const [y, m, d] = iso.split("-").map(Number); const t2 = new Date(Date.UTC(y, m - 1, d) + n * 86400000); return `${t2.getUTCFullYear()}-${String(t2.getUTCMonth() + 1).padStart(2, "0")}-${String(t2.getUTCDate()).padStart(2, "0")}`; }
+function _weekStart(iso) { const dw = _dow(iso); return _addD(iso, -(dw === 0 ? 6 : dw - 1)); }
+function renderAttBanner(p) {
+  const c = document.getElementById("att_banner"); if (!c) return; clear(c); if (!p) return;
+  const names = [t("sun"), t("mon"), t("tue"), t("wed"), t("thu"), t("fri"), t("sat")];
+  const off = (p.weeklyOffDays || []).map((i) => names[i]).filter(Boolean).join(", ");
+  const txt = `${t("policyPrefix")} ${t("reportingTime")} ${p.reportingTime} · ${t("graceMins")} ${p.graceMinutes}m · ${t("weeklyTarget")} ${minToHHMM(p.weeklyTargetMinutes)} · ${t("weeklyOff")}: ${off || "—"}`;
+  c.appendChild(el("div", { class: "msg", style: "background:color-mix(in srgb,var(--warn) 10%,var(--card));color:var(--warn);font-size:12px;margin:0 0 4px", text: txt }));
+}
+function renderAttWeekly(days, policy) {
+  const c = document.getElementById("att_weekly"); if (!c) return; clear(c);
+  c.appendChild(h2help(t("weeklyHours"), t("weekly_help")));
+  const target = (policy && policy.weeklyTargetMinutes) || 2880;
+  const byWeek = new Map();
+  for (const d of days) { if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) continue; const ws = _weekStart(d.date); byWeek.set(ws, (byWeek.get(ws) || 0) + Number(d.workMinutes || 0)); }
+  const weeks = [...byWeek.keys()].sort();
+  if (!weeks.length) { c.appendChild(el("div", { class: "muted", text: t("noAttendance") })); return; }
+  for (const ws of weeks) {
+    const mins = byWeek.get(ws), below = mins < target, varMin = mins - target;
+    c.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "k" }, [el("div", { text: `${fmtDate(ws)} – ${fmtDate(_addD(ws, 5))}` })]),
+      el("div", { class: "v" }, [
+        el("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" }, [
+          el("span", { text: `${minToHHMM(mins)} / ${minToHHMM(target)}` }),
+          el("span", { class: "pill " + (below ? "pending" : "approved"), text: below ? t("belowTarget") : t("onTrack") }),
+          el("span", { class: below ? "" : "", style: "font-size:12px;color:" + (below ? "var(--bad)" : "var(--ok)"), text: `${varMin >= 0 ? "+" : "−"}${minToHHMM(Math.abs(varMin))}` }),
+        ]),
+        barNode(target ? mins / target * 100 : 0, below ? "var(--bad)" : "var(--ok)"),
+      ]),
+    ]));
+  }
 }
 
 // ---- boot ----------------------------------------------------------------------

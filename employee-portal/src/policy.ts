@@ -53,6 +53,7 @@ export type Permission =
   | "report.read" // run and export permission-scoped reports (management + HR/finance)
   | "statutory.config" // edit statutory config (PT slabs, later EPF/ESI/TDS) — finance (S7a)
   | "tax.verify" // verify employees' TDS investment declarations + proofs (S7b)
+  | "employee.manage" // create/edit the employee master record (HR onboarding)
   | "helpdesk.agent" // view/handle non-POSH helpdesk tickets (FR-09)
   | "posh.manage" // configure the POSH Internal Committee (FR-21) — super_admin only
   | "announcement.publish" // publish announcements and see acknowledgements (FR-07)
@@ -67,9 +68,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   employee: ["employee.read_own", "employee.sensitive.read_own"],
   manager: ["employee.read_own", "employee.sensitive.read_own", "employee.read_team", "leave.approve_team", "attendance.approve_team", "task.assign_team"],
   // HR Admin — full HR, incl. sensitive fields, payroll preparation (maker) and the month lock.
-  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "attendance.lock", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage", "payroll.prepare", "payroll.read_all", "report.read", "tax.verify"],
+  hr_admin: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "employee.manage", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "attendance.lock", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage", "payroll.prepare", "payroll.read_all", "report.read", "tax.verify"],
   // HR Executive — day-to-day HR ops, but NOT sensitive-read-all, NOT payroll, NOT the month lock.
-  hr_executive: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
+  hr_executive: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.manage", "profile.verify", "leave.approve_all", "attendance.manage", "attendance.approve_all", "helpdesk.agent", "announcement.publish", "task.assign_all", "document.manage"],
   // Legacy finance alias (no seeded users) — treat as Finance Admin.
   finance: ["employee.read_own", "employee.sensitive.read_own", "employee.read_all", "employee.sensitive.read_all", "attendance.lock", "payroll.prepare", "payroll.read_all", "report.read", "statutory.config", "tax.verify"],
   // Finance Admin — the payroll MAKER: prepare/run payroll, read the register, lock the month.
@@ -115,6 +116,28 @@ export interface EmployeeRecord {
   designation: string | null;
   location: string | null;
   photo?: string | null; // profile photo data URL; non-confidential, never masked
+  // Employee master (full record). Non-sensitive; shown per scope.
+  employeeCode?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  dob?: string | null;
+  gender?: string | null;
+  department?: string | null;
+  employmentType?: string | null;
+  employmentStatus?: string | null;
+  phone?: string | null;
+  personalEmail?: string | null;
+  address?: string | null;
+  emergencyContact?: string | null;
+  dateOfJoining?: string | null;
+  dateOfExit?: string | null;
+  probationStart?: string | null;
+  probationEnd?: string | null;
+  confirmedOn?: string | null;
+  contractStart?: string | null;
+  contractEnd?: string | null;
+  exitReason?: string | null;
+  exitStatus?: string | null;
   // Sensitive — field-level encrypted at rest (NFR-03, R1); masked on read here.
   pan?: string | null;
   bankAccount?: string | null;

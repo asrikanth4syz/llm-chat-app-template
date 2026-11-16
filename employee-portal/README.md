@@ -143,6 +143,9 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | Method | Path | Who | Returns |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | anyone | JWT; **all** roles must also send `otp` (dev `000000`) — 2FA for all, DEC-02 |
+| GET | `/api/dashboard` | any login | role-aware aggregates (me: present/tasks/latest payslip; org: headcount, dept breakdown, contract/probation alerts, payroll status) |
+| POST | `/api/admin/employees` | employee.manage | create a full employee master record |
+| POST | `/api/admin/employees/:id/update` | employee.manage | edit the employee master (sensitive fields encrypted; blank keeps current) |
 | GET | `/api/me` | any login | own profile (+ `lang`); sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
 | POST | `/api/me/lang` | any login | set preferred UI language (`en`/`hi`/`kn`), persisted to the user profile (migration `0013`) |
 | GET | `/api/employees` | any login | scoped list — self / team / all by role, sensitive fields masked |
@@ -377,6 +380,32 @@ hardcoded**, and TDS is **inert until Finance enables the config**.
   Finance enters them + enables, a **parallel run reconciles to zero**, then TDS goes live.
 - **Next — S7c filings:** PT challan, TDS **24Q**, **Form 16 Part B** (PF ECR / ESIC not
   needed while EPF/ESI are inapplicable). Then **payroll JV → Zoho Books**.
+
+## UI uplift + employee master (migration `0020`)
+
+From the mock/Section-17 design review (`docs/design-review-mock-and-section17.md`):
+
+- **Dashboard** (new landing tab, role-aware) — stat tiles (headcount/active/pending
+  approvals/payroll status for HR+finance+management; present-days/open-tasks/notifications/
+  latest-payslip for employees), an **Action centre** (pending items from `/api/notifications`
+  with deep links), and (HR) a **department breakdown** + **contract-expiry / probation-due
+  alerts**. All from real data (`/api/dashboard`).
+- **Attendance: policy banner + weekly-hours bars** — every employee's Attendance tab shows
+  the configured policy (reporting time, grace, weekly target, weekly-off) and **weekly
+  working-hours bars with variance + on-track/below-target pills** (computed Mon–Sat vs the
+  target). Policy now includes `reporting_time` + `grace_minutes` (editable in the policy card).
+- **Employee master — full data collection** (`employee.manage`: hr_admin, hr_executive,
+  super_admin). A new **Employees** tab (for read_all roles) lists the full master with
+  search; HR can **Add** / **Edit** a complete record across: Personal (name, code, DOB,
+  gender), Contact (work/personal email, phone, address, emergency contact), Employment
+  (department, designation, type, segment, location, reporting manager, status, joining date),
+  Lifecycle (probation, confirmation, contract start/end, exit date/reason/status), and
+  Compensation & statutory (CTC, bank, PAN, Aadhaar — **encrypted at rest**, blank keeps
+  current). The **Directory** stays public-fields-only for everyone.
+- Deliberately **not** adopted (per the review): the mock's demo actions and its
+  mobile-overflowing tables; Section-17's full bitemporal/event-outbox (D1 can't do the
+  gist-exclude; over-build at this scale) — the ownership-rule and effective-dated principles
+  are followed where cheap.
 
 ## Quick wins (from the Master Prompt review)
 

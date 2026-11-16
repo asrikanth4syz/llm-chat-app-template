@@ -50,9 +50,21 @@ function uid(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
+// Full employee-master column list (shared by loadEmployee + handleList to avoid drift).
+const EMP_COLS = "id,user_id,manager_id,segment,name,work_email,designation,location,photo," +
+  "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
+  "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
+  "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
+  "pan,bank_account,aadhaar_last4,ctc";
 interface EmpRow {
   id: string; user_id: string; manager_id: string | null; segment: string; name: string;
   work_email: string; designation: string | null; location: string | null; photo: string | null;
+  employee_code: string | null; first_name: string | null; last_name: string | null; dob: string | null;
+  gender: string | null; department: string | null; employment_type: string | null; employment_status: string | null;
+  phone: string | null; personal_email: string | null; address: string | null; emergency_contact: string | null;
+  date_of_joining: string | null; date_of_exit: string | null;
+  probation_start: string | null; probation_end: string | null; confirmed_on: string | null;
+  contract_start: string | null; contract_end: string | null; exit_reason: string | null; exit_status: string | null;
   pan: string | null; bank_account: string | null; aadhaar_last4: string | null; ctc: number | null;
 }
 function rowToEmployee(r: EmpRow): EmployeeRecord {
@@ -60,6 +72,12 @@ function rowToEmployee(r: EmpRow): EmployeeRecord {
     id: r.id, userId: r.user_id, managerId: r.manager_id,
     segment: r.segment === "client_site" ? "client_site" : "office",
     name: r.name, workEmail: r.work_email, designation: r.designation, location: r.location, photo: r.photo,
+    employeeCode: r.employee_code, firstName: r.first_name, lastName: r.last_name, dob: r.dob, gender: r.gender,
+    department: r.department, employmentType: r.employment_type, employmentStatus: r.employment_status,
+    phone: r.phone, personalEmail: r.personal_email, address: r.address, emergencyContact: r.emergency_contact,
+    dateOfJoining: r.date_of_joining, dateOfExit: r.date_of_exit,
+    probationStart: r.probation_start, probationEnd: r.probation_end, confirmedOn: r.confirmed_on,
+    contractStart: r.contract_start, contractEnd: r.contract_end, exitReason: r.exit_reason, exitStatus: r.exit_status,
     pan: r.pan, bankAccount: r.bank_account, aadhaarLast4: r.aadhaar_last4, ctc: r.ctc,
   };
 }
@@ -155,7 +173,7 @@ async function handleSetLang(actor: Actor, env: Env, request: Request): Promise<
 
 async function loadEmployee(env: Env, id: string): Promise<EmployeeRecord | null> {
   const r = await env.DB.prepare(
-    "SELECT id,user_id,manager_id,segment,name,work_email,designation,location,photo,pan,bank_account,aadhaar_last4,ctc FROM employees WHERE id = ?"
+    `SELECT ${EMP_COLS} FROM employees WHERE id = ?`
   ).bind(id).first<EmpRow>();
   return r ? await decryptEmployee(env, rowToEmployee(r)) : null;
 }
@@ -175,7 +193,7 @@ async function handleMe(actor: Actor, env: Env, reveal: string[]): Promise<Respo
 async function handleList(actor: Actor, env: Env): Promise<Response> {
   // Load the candidate set by role, THEN filter through the policy engine (never
   // trust the query alone). A plain employee only ever loads their own row.
-  const cols = "id,user_id,manager_id,segment,name,work_email,designation,location,photo,pan,bank_account,aadhaar_last4,ctc";
+  const cols = EMP_COLS;
   let rows: EmpRow[] = [];
   if (hasPermission(actor.role, "employee.read_all")) {
     rows = (await env.DB.prepare(`SELECT ${cols} FROM employees`).all<EmpRow>()).results;
@@ -499,6 +517,94 @@ async function handleProfilePhoto(actor: Actor, env: Env, request: Request): Pro
   return json({ ok: true });
 }
 
+// ---- Employee master (full data collection) ------------------------------------
+function fullName(first: unknown, last: unknown): string {
+  return [String(first ?? "").trim(), String(last ?? "").trim()].filter(Boolean).join(" ");
+}
+async function encIfSet(env: Env, v: unknown): Promise<string | null> {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  try { return env.FIELD_ENC_KEY ? await encryptField(s, env.FIELD_ENC_KEY) : s; } catch { return s; }
+}
+const _s = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s || null; };
+
+async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const first = String(b.firstName ?? "").trim(), last = String(b.lastName ?? "").trim();
+  const name = fullName(first, last);
+  if (!name) return json({ error: "first and/or last name required" }, 400);
+  const id = "e_" + uid().replace(/-/g, "").slice(0, 12);
+  const seg = b.segment === "client_site" ? "client_site" : "office";
+  const [panE, bankE, aadE] = await Promise.all([encIfSet(env, b.pan), encIfSet(env, b.bankAccount), encIfSet(env, b.aadhaarLast4)]);
+  await env.DB.prepare(
+    "INSERT INTO employees (id,user_id,manager_id,segment,name,work_email,designation,location," +
+    "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
+    "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
+    "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
+    "pan,bank_account,aadhaar_last4,ctc) VALUES (" + "?,".repeat(32) + "?)"
+  ).bind(id, null, _s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
+    _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
+    _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
+    _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
+    panE, bankE, aadE, b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null).run();
+  await audit(env, actor.userId, "EMPLOYEE_CREATE", "employee", id, `${name} ${_s(b.employeeCode) ?? ""}`);
+  return json({ ok: true, id });
+}
+
+async function handleEmployeeUpdate(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  if (!(await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(id).first())) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const first = String(b.firstName ?? "").trim(), last = String(b.lastName ?? "").trim();
+  const name = fullName(first, last);
+  const seg = b.segment === "client_site" ? "client_site" : "office";
+  await env.DB.prepare(
+    "UPDATE employees SET manager_id=?, segment=?, name=COALESCE(NULLIF(?,''),name), work_email=?, designation=?, location=?," +
+    "employee_code=?, first_name=?, last_name=?, dob=?, gender=?, department=?, employment_type=?, employment_status=?," +
+    "phone=?, personal_email=?, address=?, emergency_contact=?, date_of_joining=?, date_of_exit=?," +
+    "probation_start=?, probation_end=?, confirmed_on=?, contract_start=?, contract_end=?, exit_reason=?, exit_status=?, ctc=? WHERE id=?"
+  ).bind(_s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
+    _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
+    _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
+    _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
+    b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null, id).run();
+  for (const [k, col] of [["pan", "pan"], ["bankAccount", "bank_account"], ["aadhaarLast4", "aadhaar_last4"]] as const) {
+    const v = String(b[k] ?? "").trim();
+    if (v) await env.DB.prepare(`UPDATE employees SET ${col}=? WHERE id=?`).bind(await encIfSet(env, v), id).run();
+  }
+  await audit(env, actor.userId, "EMPLOYEE_UPDATE", "employee", id, name || "");
+  return json({ ok: true });
+}
+
+// Role-aware dashboard aggregates (real data). The client merges this with /api/notifications
+// for the action centre.
+function addDaysISO(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + n * 86400000);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+}
+async function handleDashboard(actor: Actor, env: Env): Promise<Response> {
+  const out: Record<string, unknown> = {};
+  if (actor.employeeId) {
+    const month = todayISO().slice(0, 7);
+    const att = await env.DB.prepare("SELECT COUNT(*) AS present FROM attendance_days WHERE employee_id = ? AND date LIKE ? AND status = 'P'").bind(actor.employeeId, `${month}-%`).first<{ present: number }>();
+    const pay = await env.DB.prepare("SELECT title FROM documents WHERE employee_id = ? AND category = 'payslip' AND status = 'published' ORDER BY published_at DESC LIMIT 1").bind(actor.employeeId).first<{ title: string }>();
+    const tasks = await env.DB.prepare("SELECT COUNT(*) AS n FROM tasks WHERE assignee_employee_id = ? AND status IN ('open','in_progress')").bind(actor.employeeId).first<{ n: number }>();
+    out.me = { presentThisMonth: att?.present ?? 0, latestPayslip: pay?.title ?? null, openTasks: tasks?.n ?? 0, month };
+  }
+  if (hasPermission(actor.role, "employee.read_all")) {
+    const emp = await env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN employment_status='active' THEN 1 ELSE 0 END) AS active FROM employees").first<{ total: number; active: number }>();
+    const byDept = (await env.DB.prepare("SELECT COALESCE(NULLIF(department,''),'—') AS department, COUNT(*) AS n FROM employees GROUP BY COALESCE(NULLIF(department,''),'—') ORDER BY n DESC").all()).results;
+    const today = todayISO();
+    const contractAlerts = (await env.DB.prepare("SELECT name, contract_end FROM employees WHERE COALESCE(contract_end,'') <> '' AND contract_end <= ? AND COALESCE(date_of_exit,'')='' ORDER BY contract_end LIMIT 20").bind(addDaysISO(today, 60)).all()).results;
+    const probationAlerts = (await env.DB.prepare("SELECT name, probation_end FROM employees WHERE COALESCE(probation_end,'') <> '' AND probation_end <= ? AND COALESCE(confirmed_on,'')='' ORDER BY probation_end LIMIT 20").bind(addDaysISO(today, 30)).all()).results;
+    const run = await env.DB.prepare("SELECT ym, status, version FROM payroll_runs WHERE status != 'cancelled' ORDER BY ym DESC, version DESC LIMIT 1").first<{ ym: string; status: string; version: number }>();
+    out.org = { totalEmployees: emp?.total ?? 0, activeEmployees: emp?.active ?? 0, byDept, contractAlerts, probationAlerts, payroll: run ?? null };
+  }
+  return json(out);
+}
+
 // ---- FR-02 Attendance ----------------------------------------------------------
 const todayISO = (): string => new Date().toISOString().slice(0, 10);
 const ymOf = (date: string): string => String(date).slice(0, 7);
@@ -596,7 +702,9 @@ async function handleAttendanceMonth(actor: Actor, env: Env, monthParam: string)
     isMonthLocked(env, month),
   ]);
   const payroll = payrollInput(month, rows.map(toDay), holidays, weekOffDays, today);
-  return json({ month, locked, days, summary: summarize(rows.map(toDay), today), payroll });
+  const pol = await env.DB.prepare("SELECT weekly_off_days, weekly_target_minutes, reporting_time, grace_minutes FROM attendance_policy WHERE id = 'default'").first<{ weekly_off_days: string; weekly_target_minutes: number; reporting_time: string; grace_minutes: number }>();
+  const policy = { weeklyOffDays: weekOffDays, weeklyTargetMinutes: pol?.weekly_target_minutes ?? 2880, reportingTime: pol?.reporting_time ?? "09:30", graceMinutes: pol?.grace_minutes ?? 10 };
+  return json({ month, locked, days, summary: summarize(rows.map(toDay), today), payroll, policy });
 }
 
 async function handleAttCorrectionSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
@@ -763,23 +871,25 @@ async function handleAttPayrollInput(actor: Actor, env: Env, monthParam: string)
 // drives working-day counting (weekly-off days, weekly target, full-day threshold).
 async function handleAttPolicyGet(actor: Actor, env: Env): Promise<Response> {
   if (!hasPermission(actor.role, "attendance.lock") && !hasPermission(actor.role, "attendance.manage")) return json({ error: "forbidden" }, 403);
-  const row = await env.DB.prepare("SELECT weekly_off_days, weekly_target_minutes, full_day_minutes FROM attendance_policy WHERE id = 'default'").first<{ weekly_off_days: string; weekly_target_minutes: number; full_day_minutes: number }>();
-  return json({ policy: row ?? { weekly_off_days: "0", weekly_target_minutes: 2880, full_day_minutes: 240 } });
+  const row = await env.DB.prepare("SELECT weekly_off_days, weekly_target_minutes, full_day_minutes, reporting_time, grace_minutes FROM attendance_policy WHERE id = 'default'").first<{ weekly_off_days: string; weekly_target_minutes: number; full_day_minutes: number; reporting_time: string; grace_minutes: number }>();
+  return json({ policy: row ?? { weekly_off_days: "0", weekly_target_minutes: 2880, full_day_minutes: 240, reporting_time: "09:30", grace_minutes: 10 } });
 }
 
 async function handleAttPolicySet(actor: Actor, env: Env, request: Request): Promise<Response> {
   if (!hasPermission(actor.role, "attendance.lock")) return json({ error: "forbidden" }, 403);
-  const b = await request.json().catch(() => ({})) as { weeklyOffDays?: number[]; weeklyTargetMinutes?: number; fullDayMinutes?: number };
+  const b = await request.json().catch(() => ({})) as { weeklyOffDays?: number[]; weeklyTargetMinutes?: number; fullDayMinutes?: number; reportingTime?: string; graceMinutes?: number };
   const offDays = Array.isArray(b.weeklyOffDays)
     ? [...new Set(b.weeklyOffDays.map((n) => Math.trunc(Number(n))).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort()
     : null;
   if (!offDays || offDays.length > 6) return json({ error: "weeklyOffDays must be 0–6 (0=Sun), at least one working day" }, 400);
   const target = Math.max(0, Math.round(Number(b.weeklyTargetMinutes) || 0));
   const fullDay = Math.max(0, Math.round(Number(b.fullDayMinutes) || 0));
+  const reportingTime = /^\d{2}:\d{2}$/.test(String(b.reportingTime ?? "")) ? String(b.reportingTime) : "09:30";
+  const grace = Math.max(0, Math.round(Number(b.graceMinutes) || 0));
   await env.DB.prepare(
-    "UPDATE attendance_policy SET weekly_off_days = ?, weekly_target_minutes = ?, full_day_minutes = ?, updated_at = datetime('now') WHERE id = 'default'"
-  ).bind(offDays.join(","), target, fullDay).run();
-  await audit(env, actor.userId, "ATTENDANCE_POLICY_UPDATE", "attendance", "default", `off=${offDays.join("|")} target=${target} fullDay=${fullDay}`);
+    "UPDATE attendance_policy SET weekly_off_days = ?, weekly_target_minutes = ?, full_day_minutes = ?, reporting_time = ?, grace_minutes = ?, updated_at = datetime('now') WHERE id = 'default'"
+  ).bind(offDays.join(","), target, fullDay, reportingTime, grace).run();
+  await audit(env, actor.userId, "ATTENDANCE_POLICY_UPDATE", "attendance", "default", `off=${offDays.join("|")} target=${target} fullDay=${fullDay} report=${reportingTime} grace=${grace}`);
   return json({ ok: true });
 }
 
@@ -1761,7 +1871,11 @@ export default {
 
       if (path === "/api/me" && method === "GET") return await handleMe(actor, env, parseReveal(url));
       if (path === "/api/me/lang" && method === "POST") return await handleSetLang(actor, env, request);
+      if (path === "/api/dashboard" && method === "GET") return await handleDashboard(actor, env);
       if (path === "/api/employees" && method === "GET") return await handleList(actor, env);
+      if (path === "/api/admin/employees" && method === "POST") return await handleEmployeeCreate(actor, env, request);
+      const empu = path.match(/^\/api\/admin\/employees\/([^/]+)\/update$/);
+      if (empu && method === "POST") return await handleEmployeeUpdate(actor, env, decodeURIComponent(empu[1]), request);
       const one = path.match(/^\/api\/employees\/([^/]+)$/);
       if (one && method === "GET") return await handleGetOne(actor, env, decodeURIComponent(one[1]), parseReveal(url));
       if (path === "/api/directory" && method === "GET") return await handleDirectory(env, url.searchParams.get("q") || "");
