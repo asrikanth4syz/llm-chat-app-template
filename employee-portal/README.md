@@ -159,6 +159,13 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/me/bank-proof` | owner | own stored cancelled-cheque / passbook data URL (kept out of list/profile payloads) |
 | GET | `/api/admin/employees/:id/bank-proof` | sensitive-read-all | an employee's cancelled-cheque / passbook (audited `BANK_PROOF_VIEW`) |
 | POST | `/api/admin/profile/changes/:id/approve`·`/reject` | hr_admin, super_admin | verify a pending bank/identity change (`profile.verify`) |
+| POST | `/api/lifecycle/resign` | any login (self); employee.manage (on behalf) | tender a resignation `{resignationDate?,reason?,requestedLwd?,employeeId?}` — snapshots the notice term; 409 if one is already open |
+| GET | `/api/lifecycle/resignations` | any login | own resignations; employee.manage sees all (with names) |
+| POST | `/api/lifecycle/resignations/:id/withdraw` | owner | withdraw own resignation while still `submitted` |
+| POST | `/api/admin/lifecycle/resignations/:id/decide` | employee.manage | `{action: accept\|reject\|complete, acceptedLwd?, hrNotes?}` — accept→notice, complete→exited (+date_of_exit) |
+| GET | `/api/admin/lifecycle/employees/:id/fnf` | payroll.read_all | Full & Final **estimate** (review-only; `?recover=0` drops notice recovery) |
+| GET·POST | `/api/lifecycle/employees/:id/checklist?kind=` | GET own/read_all; POST (init) employee.manage | onboarding/offboarding checklist (seed + read) |
+| POST | `/api/admin/lifecycle/checklist/:itemId` | employee.manage | tick a checklist item `{status: pending\|done\|na, note?}` |
 | GET | `/api/audit` | auditor, super_admin | recent audit entries |
 | GET | `/api/policy/matrix` | it_admin, auditor, super_admin | role → permission matrix (G1 artefact) |
 | POST | `/api/admin/users/:id/revoke` | it_admin, super_admin | kill a user's sessions (`{"deactivate":true}` also disables login) |
@@ -442,6 +449,31 @@ From the mock/Section-17 design review (`docs/design-review-mock-and-section17.m
   mobile-overflowing tables; Section-17's full bitemporal/event-outbox (D1 can't do the
   gist-exclude; over-build at this scale) — the ownership-rule and effective-dated principles
   are followed where cheap.
+
+## Lifecycle / tenure (resignation → notice → LWD → F&F + checklists)
+
+Migration `0023`; pure engine `src/lifecycle.ts` (9 unit tests).
+
+- **Resignation flow.** An employee tenders their own resignation from **My profile →
+  Resignation / exit** (date + reason); HR can also record one on an employee's behalf. The
+  **notice term** (`employees.notice_period_days`) is snapshotted at tender and drives the
+  suggested **last working day** (`suggestLWD` = tender + notice). HR works the queue in the
+  new **Lifecycle** tab: **accept** (sets the LWD, moves the employee to `notice`), **reject**,
+  or **complete** (sets `exited` + `date_of_exit` + exit reason). The employee can **withdraw**
+  while still `submitted`. One open resignation per employee.
+- **Full & Final — estimate, review-only.** `GET …/fnf` runs the pure engine over the
+  employee's current salary, tenure and leave balance to produce a settlement **estimate**:
+  earned salary to LWD (pro-rated on the payroll divisor), **leave encashment** (configured
+  leave type × per-day basis), **gratuity** (eligibility at 5 yrs + the 15/26 × years estimate,
+  with the >6-month rounding of the Payment of Gratuity Act), and **notice-shortfall recovery**
+  when the LWD is earlier than the full notice. It is **never posted to payroll** — the bases
+  (basic/DA split, encashment policy, gratuity wage base) are CA/HR calls, so the output is
+  explicitly flagged an estimate (same posture as PT/TDS shipping disabled). Gated on
+  `payroll.read_all`; `?recover=0` drops the notice recovery line.
+- **Onboarding / offboarding checklists.** HR seeds a default checklist per employee (document
+  collection, IT setup, probation for joiners; asset return, access revoke, clearances, F&F,
+  relieving letter for leavers) from the **employee detail** page and ticks items
+  `pending/done/na`. Employees can view their own; item codes are stable, labels seeded.
 
 ## Quick wins (from the Master Prompt review)
 

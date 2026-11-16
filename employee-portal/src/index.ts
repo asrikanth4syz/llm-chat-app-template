@@ -36,6 +36,7 @@ import { isValidAudience, audienceMatches } from "./announcements.ts";
 import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
 import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, ptForState, tdsMonthly, fyOf, fyMonthsRemaining, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision, type PTConfig, type TDSConfig } from "./payroll.ts";
+import { suggestLWD, computeFnF, ONBOARDING_ITEMS, OFFBOARDING_ITEMS, type FnFInput } from "./lifecycle.ts";
 
 export interface Env {
   DB: D1Database;
@@ -1536,6 +1537,186 @@ async function handlePayrollBank(actor: Actor, env: Env, runId: string): Promise
   return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="bank-advice-${run.ym}.csv"` } });
 }
 
+// ---- Lifecycle / tenure: resignation → notice → LWD → F&F + checklists ----------
+
+// Submit a resignation. An employee tenders their own; HR (employee.manage) may record one
+// on an employee's behalf by passing employeeId. The notice term is snapshotted at tender.
+async function handleResignSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const onBehalf = _s(b.employeeId);
+  const empId = onBehalf && onBehalf !== actor.employeeId ? onBehalf : actor.employeeId;
+  if (!empId) return json({ error: "no employee record linked to this login" }, 404);
+  if (empId !== actor.employeeId && !hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const emp = await env.DB.prepare("SELECT notice_period_days FROM employees WHERE id = ?").bind(empId).first<{ notice_period_days: number | null }>();
+  if (!emp) return json({ error: "employee not found" }, 404);
+  const resignationDate = _s(b.resignationDate) || todayISO();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(resignationDate)) return json({ error: "valid resignationDate (YYYY-MM-DD) required" }, 400);
+  const active = await env.DB.prepare("SELECT id FROM resignations WHERE employee_id = ? AND status IN ('submitted','accepted')").bind(empId).first();
+  if (active) return json({ error: "an open resignation already exists for this employee" }, 409);
+  const noticeDays = emp.notice_period_days ?? 30;
+  const requestedLwd = _s(b.requestedLwd) || suggestLWD(resignationDate, noticeDays);
+  const id = "rsg_" + uid().replace(/-/g, "").slice(0, 12);
+  await env.DB.prepare(
+    "INSERT INTO resignations (id, employee_id, submitted_by, resignation_date, reason, notice_days, requested_lwd, status) VALUES (?,?,?,?,?,?,?,'submitted')"
+  ).bind(id, empId, actor.userId, resignationDate, _s(b.reason), noticeDays, requestedLwd).run();
+  await audit(env, actor.userId, "RESIGNATION_SUBMIT", "employee", empId, `resignation tendered ${resignationDate}, suggested LWD ${requestedLwd}`);
+  return json({ ok: true, id, suggestedLwd: requestedLwd, noticeDays });
+}
+
+// Resignations list: an employee sees their own; employee.manage sees all with names.
+async function handleResignList(actor: Actor, env: Env): Promise<Response> {
+  if (hasPermission(actor.role, "employee.manage")) {
+    const rows = (await env.DB.prepare(
+      "SELECT r.*, e.name AS employee_name FROM resignations r LEFT JOIN employees e ON e.id = r.employee_id ORDER BY r.created_at DESC LIMIT 300"
+    ).all()).results;
+    return json({ resignations: rows, manage: true });
+  }
+  if (!actor.employeeId) return json({ resignations: [] });
+  const rows = (await env.DB.prepare("SELECT * FROM resignations WHERE employee_id = ? ORDER BY created_at DESC").bind(actor.employeeId).all()).results;
+  return json({ resignations: rows, manage: false });
+}
+
+// Employee withdraws their own resignation while it is still only submitted (not yet accepted).
+async function handleResignWithdraw(actor: Actor, env: Env, id: string): Promise<Response> {
+  const r = await env.DB.prepare("SELECT employee_id, status FROM resignations WHERE id = ?").bind(id).first<{ employee_id: string; status: string }>();
+  if (!r) return json({ error: "not found" }, 404);
+  if (r.employee_id !== actor.employeeId) return json({ error: "forbidden" }, 403);
+  if (r.status !== "submitted") return json({ error: `cannot withdraw a ${r.status} resignation` }, 409);
+  await env.DB.prepare("UPDATE resignations SET status='withdrawn', decided_by=?, decided_at=datetime('now') WHERE id=?").bind(actor.userId, id).run();
+  await audit(env, actor.userId, "RESIGNATION_WITHDRAW", "employee", r.employee_id, `withdrew resignation ${id}`);
+  return json({ ok: true });
+}
+
+// HR decides a resignation: accept (set LWD, move to notice), reject, or complete (exit).
+async function handleResignDecide(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await env.DB.prepare("SELECT employee_id, status, resignation_date, notice_days FROM resignations WHERE id = ?").bind(id).first<{ employee_id: string; status: string; resignation_date: string; notice_days: number | null }>();
+  if (!r) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const action = _s(b.action);
+  const hrNotes = _s(b.hrNotes);
+  if (action === "accept") {
+    if (r.status !== "submitted" && r.status !== "accepted") return json({ error: `cannot accept a ${r.status} resignation` }, 409);
+    const lwd = _s(b.acceptedLwd) || suggestLWD(r.resignation_date, r.notice_days ?? 30);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lwd)) return json({ error: "valid acceptedLwd (YYYY-MM-DD) required" }, 400);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE resignations SET status='accepted', accepted_lwd=?, hr_notes=?, decided_by=?, decided_at=datetime('now') WHERE id=?").bind(lwd, hrNotes, actor.userId, id),
+      env.DB.prepare("UPDATE employees SET employment_status='notice' WHERE id=?").bind(r.employee_id),
+    ]);
+    await audit(env, actor.userId, "RESIGNATION_ACCEPT", "employee", r.employee_id, `accepted; LWD ${lwd}`);
+    return json({ ok: true, acceptedLwd: lwd });
+  }
+  if (action === "reject") {
+    await env.DB.prepare("UPDATE resignations SET status='rejected', hr_notes=?, decided_by=?, decided_at=datetime('now') WHERE id=?").bind(hrNotes, actor.userId, id).run();
+    await audit(env, actor.userId, "RESIGNATION_REJECT", "employee", r.employee_id, "rejected");
+    return json({ ok: true });
+  }
+  if (action === "complete") {
+    if (r.status !== "accepted") return json({ error: "accept and set the LWD before completing exit" }, 409);
+    const row = await env.DB.prepare("SELECT accepted_lwd FROM resignations WHERE id=?").bind(id).first<{ accepted_lwd: string | null }>();
+    const lwd = row?.accepted_lwd;
+    if (!lwd) return json({ error: "no accepted LWD on file" }, 409);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE resignations SET status='completed', hr_notes=COALESCE(?,hr_notes), decided_by=?, decided_at=datetime('now') WHERE id=?").bind(hrNotes, actor.userId, id),
+      env.DB.prepare("UPDATE employees SET employment_status='exited', date_of_exit=?, exit_reason=COALESCE(NULLIF(exit_reason,''),'Resignation'), exit_status='relieved' WHERE id=?").bind(lwd, r.employee_id),
+    ]);
+    await audit(env, actor.userId, "RESIGNATION_COMPLETE", "employee", r.employee_id, `exit completed; date of exit ${lwd}`);
+    return json({ ok: true, dateOfExit: lwd });
+  }
+  return json({ error: "action must be accept, reject or complete" }, 400);
+}
+
+// Full & Final settlement ESTIMATE (review-only; never posted). Gated on payroll.read_all
+// since it exposes compensation. Resolves salary, tenure and leave balance, then runs the
+// pure engine. The caller can disable notice recovery with ?recover=0.
+async function handleFnF(actor: Actor, env: Env, employeeId: string, url: URL): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const emp = await env.DB.prepare("SELECT name, date_of_joining FROM employees WHERE id = ?").bind(employeeId).first<{ name: string; date_of_joining: string | null }>();
+  if (!emp) return json({ error: "employee not found" }, 404);
+  const rsg = await env.DB.prepare(
+    "SELECT resignation_date, accepted_lwd, notice_days, status FROM resignations WHERE employee_id = ? AND status IN ('accepted','completed') ORDER BY created_at DESC LIMIT 1"
+  ).bind(employeeId).first<{ resignation_date: string; accepted_lwd: string | null; notice_days: number | null; status: string }>();
+  if (!rsg || !rsg.accepted_lwd) return json({ error: "no accepted resignation with a last working day for this employee" }, 409);
+  const lwd = rsg.accepted_lwd;
+
+  // Current (open) salary; basic+DA basis from its fixed components, else fall back to gross.
+  const sal = await env.DB.prepare("SELECT id, monthly_gross_paise FROM employee_salaries WHERE employee_id = ? AND effective_to IS NULL ORDER BY effective_from DESC LIMIT 1").bind(employeeId).first<{ id: string; monthly_gross_paise: number }>();
+  const monthlyGrossPaise = sal?.monthly_gross_paise ?? 0;
+  let basicDaPaise = 0;
+  if (sal) {
+    const comps = (await env.DB.prepare("SELECT value FROM employee_salary_components WHERE employee_salary_id = ? AND calc_method = 'fixed' AND component_code IN ('BASIC','DA')").bind(sal.id).all<{ value: number }>()).results;
+    basicDaPaise = comps.reduce((s, c) => s + (Number(c.value) || 0), 0);
+  }
+  const basisLabel = basicDaPaise > 0 ? "basic+DA" : "gross (no basic split on file)";
+  const basis = basicDaPaise > 0 ? basicDaPaise : monthlyGrossPaise;
+
+  const modeRow = await env.DB.prepare("SELECT value FROM portal_config WHERE key = 'payroll_divisor'").first<{ value: string }>();
+  const mode: DivisorMode = modeRow?.value === "fixed_30" ? "fixed_30" : modeRow?.value === "fixed_26" ? "fixed_26" : "calendar";
+  const salaryDivisor = divisorDays(lwd.slice(0, 7), mode);
+  const encDivRow = await env.DB.prepare("SELECT value FROM portal_config WHERE key = 'fnf_encash_divisor'").first<{ value: string }>();
+  const encashDivisor = Number(encDivRow?.value) > 0 ? Number(encDivRow!.value) : 30;
+  const encCodeRow = await env.DB.prepare("SELECT value FROM portal_config WHERE key = 'fnf_encash_leave_code'").first<{ value: string }>();
+  const encashCode = encCodeRow?.value || "EL";
+
+  // Encashable leave = available balance of the configured leave type, current year.
+  const year = new Date().getUTCFullYear();
+  const lt = await env.DB.prepare("SELECT id FROM leave_types WHERE code = ?").bind(encashCode).first<{ id: string }>();
+  let encashableLeaveDays = 0;
+  if (lt) {
+    const bal = await env.DB.prepare("SELECT entitled, used FROM leave_balances WHERE employee_id = ? AND leave_type_id = ? AND year = ?").bind(employeeId, lt.id, year).first<{ entitled: number; used: number }>();
+    if (bal) encashableLeaveDays = Math.max(0, (bal.entitled || 0) - (bal.used || 0));
+  }
+
+  const recoverNoticeShortfall = url.searchParams.get("recover") !== "0";
+  const input: FnFInput = {
+    doj: emp.date_of_joining, lwd, resignationDate: rsg.resignation_date, requiredNoticeDays: rsg.notice_days ?? 30,
+    monthlyGrossPaise, encashBasisPaise: basis, gratuityBasisPaise: basis,
+    salaryDivisor, encashDivisor, finalMonthPayableDays: Number(lwd.slice(8, 10)),
+    encashableLeaveDays, recoverNoticeShortfall,
+  };
+  const worksheet = computeFnF(input);
+  await audit(env, actor.userId, "FNF_VIEW", "employee", employeeId, `viewed F&F estimate (LWD ${lwd})`);
+  return json({
+    employee: { id: employeeId, name: emp.name, dateOfJoining: emp.date_of_joining },
+    lwd, resignationDate: rsg.resignation_date, status: rsg.status,
+    monthlyGrossPaise, basisPaise: basis, basisLabel, encashCode, salaryDivisor, encashDivisor,
+    worksheet,
+  });
+}
+
+// Checklists: seed a default onboarding/offboarding list, read it, and tick items off.
+async function handleChecklistInit(actor: Actor, env: Env, employeeId: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  if (!(await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(employeeId).first())) return json({ error: "employee not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { kind?: string };
+  const kind = b.kind === "offboarding" ? "offboarding" : "onboarding";
+  const items = kind === "offboarding" ? OFFBOARDING_ITEMS : ONBOARDING_ITEMS;
+  await env.DB.batch(items.map((it, i) =>
+    env.DB.prepare("INSERT OR IGNORE INTO lifecycle_tasks (id, employee_id, kind, item_code, label, sort_order) VALUES (?,?,?,?,?,?)")
+      .bind("lct_" + uid().replace(/-/g, "").slice(0, 12), employeeId, kind, it.code, it.label, i)));
+  await audit(env, actor.userId, "CHECKLIST_INIT", "employee", employeeId, `seeded ${kind} checklist`);
+  return json({ ok: true, kind, seeded: items.length });
+}
+async function handleChecklistGet(actor: Actor, env: Env, employeeId: string, url: URL): Promise<Response> {
+  const own = actor.employeeId === employeeId;
+  if (!own && !hasPermission(actor.role, "employee.read_all") && !hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const kind = url.searchParams.get("kind") === "offboarding" ? "offboarding" : "onboarding";
+  const items = (await env.DB.prepare("SELECT id, kind, item_code, label, status, note, done_at FROM lifecycle_tasks WHERE employee_id = ? AND kind = ? ORDER BY sort_order").bind(employeeId, kind).all()).results;
+  const done = items.filter((i) => (i as { status: string }).status === "done").length;
+  return json({ kind, items, done, total: items.length });
+}
+async function handleChecklistUpdate(actor: Actor, env: Env, itemId: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const it = await env.DB.prepare("SELECT employee_id FROM lifecycle_tasks WHERE id = ?").bind(itemId).first<{ employee_id: string }>();
+  if (!it) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { status?: string; note?: string };
+  const status = ["pending", "done", "na"].includes(String(b.status)) ? String(b.status) : "pending";
+  await env.DB.prepare("UPDATE lifecycle_tasks SET status=?, note=?, done_by=CASE WHEN ?='done' THEN ? ELSE done_by END, done_at=CASE WHEN ?='done' THEN datetime('now') ELSE NULL END WHERE id=?")
+    .bind(status, _s(b.note), status, actor.userId, status, itemId).run();
+  await audit(env, actor.userId, "CHECKLIST_UPDATE", "employee", it.employee_id, `${itemId} → ${status}`);
+  return json({ ok: true, status });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -2028,6 +2209,22 @@ export default {
       if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);
       const pcr = path.match(/^\/api\/admin\/profile\/changes\/([^/]+)\/(approve|reject)$/);
       if (pcr && method === "POST") return await handleProfileChangeReview(actor, env, decodeURIComponent(pcr[1]), pcr[2] as "approve" | "reject");
+      // Lifecycle / tenure: resignation → notice → LWD → F&F + checklists
+      if (path === "/api/lifecycle/resign" && method === "POST") return await handleResignSubmit(actor, env, request);
+      if (path === "/api/lifecycle/resignations" && method === "GET") return await handleResignList(actor, env);
+      const rwd = path.match(/^\/api\/lifecycle\/resignations\/([^/]+)\/withdraw$/);
+      if (rwd && method === "POST") return await handleResignWithdraw(actor, env, decodeURIComponent(rwd[1]));
+      const rdec = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/decide$/);
+      if (rdec && method === "POST") return await handleResignDecide(actor, env, decodeURIComponent(rdec[1]), request);
+      const fnf = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/fnf$/);
+      if (fnf && method === "GET") return await handleFnF(actor, env, decodeURIComponent(fnf[1]), url);
+      const ckinit = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/checklist$/);
+      if (ckinit && method === "POST") return await handleChecklistInit(actor, env, decodeURIComponent(ckinit[1]), request);
+      const ckget = path.match(/^\/api\/lifecycle\/employees\/([^/]+)\/checklist$/);
+      if (ckget && method === "GET") return await handleChecklistGet(actor, env, decodeURIComponent(ckget[1]), url);
+      const ckupd = path.match(/^\/api\/admin\/lifecycle\/checklist\/([^/]+)$/);
+      if (ckupd && method === "POST") return await handleChecklistUpdate(actor, env, decodeURIComponent(ckupd[1]), request);
+
       if (path === "/api/audit" && method === "GET") return await handleAudit(actor, env);
       if (path === "/api/policy/matrix" && method === "GET") return await handleMatrix(actor, env);
       const rev = path.match(/^\/api\/admin\/users\/([^/]+)\/revoke$/);
