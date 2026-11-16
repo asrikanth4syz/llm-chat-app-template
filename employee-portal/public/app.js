@@ -331,6 +331,8 @@ Object.assign(DICT.en, {
   uploadProof: "Upload", viewProof: "View", proofOnFile: "On file", noProof: "Not uploaded", proofTooLarge: "File too large (max ~1.5MB).",
   verifiedYes: "Verified", verifiedNo: "Pending verification", submitBank: "Submit bank details", updateBank: "Add / update bank details",
   bankResetNote: "Submitting resets verification — HR will re-check before the next payout. Account number is stored encrypted and shown masked.", bankSubmitted: "Bank details submitted — pending HR verification.",
+  enterOnceNote: "You can fill a blank field once. After it holds a value, any change needs admin approval.",
+  needsApprovalHint: "This field is set — your change will need admin approval.", valueHidden: "value hidden (encrypted)",
 });
 Object.assign(DICT.kn, {
   navDashboard: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", dashboard_sub: "ಉದ್ಯೋಗಿ ಚಟುವಟಿಕೆ ಮತ್ತು ನಿಮಗೆ ಬೇಕಾದವುಗಳ ತ್ವರಿತ ನೋಟ.",
@@ -350,6 +352,8 @@ Object.assign(DICT.kn, {
   uploadProof: "ಅಪ್‌ಲೋಡ್", viewProof: "ನೋಡಿ", proofOnFile: "ಫೈಲ್‌ನಲ್ಲಿದೆ", noProof: "ಅಪ್‌ಲೋಡ್ ಆಗಿಲ್ಲ", proofTooLarge: "ಫೈಲ್ ತುಂಬಾ ದೊಡ್ಡದು (ಗರಿಷ್ಠ ~1.5MB).",
   verifiedYes: "ಪರಿಶೀಲಿಸಲಾಗಿದೆ", verifiedNo: "ಪರಿಶೀಲನೆ ಬಾಕಿ", submitBank: "ಬ್ಯಾಂಕ್ ವಿವರ ಸಲ್ಲಿಸಿ", updateBank: "ಬ್ಯಾಂಕ್ ವಿವರ ಸೇರಿಸಿ / ನವೀಕರಿಸಿ",
   bankResetNote: "ಸಲ್ಲಿಸಿದರೆ ಪರಿಶೀಲನೆ ಮರುಹೊಂದಿಸಲಾಗುತ್ತದೆ — ಮುಂದಿನ ಪಾವತಿಗೆ ಮೊದಲು HR ಮರುಪರಿಶೀಲಿಸುತ್ತದೆ. ಖಾತೆ ಸಂಖ್ಯೆ ಎನ್‌ಕ್ರಿಪ್ಟ್ ಆಗಿ ಸಂಗ್ರಹಿಸಲಾಗುತ್ತದೆ ಮತ್ತು ಮರೆಮಾಡಿ ತೋರಿಸಲಾಗುತ್ತದೆ.", bankSubmitted: "ಬ್ಯಾಂಕ್ ವಿವರ ಸಲ್ಲಿಸಲಾಗಿದೆ — HR ಪರಿಶೀಲನೆ ಬಾಕಿ.",
+  enterOnceNote: "ಖಾಲಿ ಕ್ಷೇತ್ರವನ್ನು ಒಮ್ಮೆ ಭರ್ತಿ ಮಾಡಬಹುದು. ಅದರಲ್ಲಿ ಮೌಲ್ಯ ಇದ್ದ ಮೇಲೆ, ಯಾವುದೇ ಬದಲಾವಣೆಗೆ ಆಡಳಿತ ಅನುಮೋದನೆ ಬೇಕು.",
+  needsApprovalHint: "ಈ ಕ್ಷೇತ್ರ ಈಗಾಗಲೇ ತುಂಬಿದೆ — ನಿಮ್ಮ ಬದಲಾವಣೆಗೆ ಆಡಳಿತ ಅನುಮೋದನೆ ಬೇಕು.", valueHidden: "ಮೌಲ್ಯ ಮರೆಮಾಡಲಾಗಿದೆ (ಎನ್‌ಕ್ರಿಪ್ಟ್)",
 });
 Object.assign(DICT.hi, {
   navDashboard: "डैशबोर्ड", dashboard_sub: "कार्यबल गतिविधि और आपके लिए लंबित कार्यों का त्वरित दृश्य।",
@@ -369,6 +373,8 @@ Object.assign(DICT.hi, {
   uploadProof: "अपलोड", viewProof: "देखें", proofOnFile: "फ़ाइल में", noProof: "अपलोड नहीं", proofTooLarge: "फ़ाइल बहुत बड़ी (अधिकतम ~1.5MB)।",
   verifiedYes: "सत्यापित", verifiedNo: "सत्यापन लंबित", submitBank: "बैंक विवरण जमा करें", updateBank: "बैंक विवरण जोड़ें / अद्यतन करें",
   bankResetNote: "जमा करने पर सत्यापन रीसेट हो जाता है — अगले भुगतान से पहले HR पुनः जाँच करेगा। खाता संख्या एन्क्रिप्टेड रूप में संग्रहीत और मास्क कर दिखाई जाती है।", bankSubmitted: "बैंक विवरण जमा — HR सत्यापन लंबित।",
+  enterOnceNote: "खाली फ़ील्ड एक बार भरी जा सकती है। मान आने के बाद, किसी भी बदलाव के लिए एडमिन अनुमोदन आवश्यक है।",
+  needsApprovalHint: "यह फ़ील्ड भरी है — आपके बदलाव के लिए एडमिन अनुमोदन आवश्यक होगा।", valueHidden: "मान छिपा (एन्क्रिप्टेड)",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -546,7 +552,7 @@ const state = {
   token: ss.get("ep_token"),
   role: ss.get("ep_role"),
   lang: ss.get("ep_lang") || "en",
-  view: "profile",
+  view: ss.get("ep_view") || "dashboard",
   emp: null,
   revealed: {}, // field -> full value
   leaveBalances: [],
@@ -788,11 +794,15 @@ async function renderApp() {
     content,
   ]);
   app().appendChild(el("div", { class: "shell" }, [sidebar(), main]));
-  await switchView(state.view || "dashboard");
+  // Restore the last view across refreshes, but only if the role may still see it.
+  const want = state.view || "dashboard";
+  const allowed = VIEWS.find((x) => x.id === want && (!x.when || x.when()));
+  await switchView(allowed ? want : "dashboard");
 }
 
 async function switchView(view) {
   state.view = view;
+  ss.set("ep_view", view);
   const sb = document.getElementById("sidebar");
   if (sb && sb.parentNode) sb.parentNode.replaceChild(sidebar(), sb);
   const v = VIEWS.find((x) => x.id === view);
@@ -839,7 +849,8 @@ async function loadNotifications() {
 
 function doLogout() {
   state.token = null; state.role = null; state.emp = null; state.revealed = {};
-  ss.del("ep_token"); ss.del("ep_role");
+  state.view = "dashboard";
+  ss.del("ep_token"); ss.del("ep_role"); ss.del("ep_view");
   renderLogin();
 }
 
@@ -885,8 +896,9 @@ function renderProfile() {
   if (e.ctc != null) emp.appendChild(row(t("ctc"), el("span", { text: fmtINR(e.ctc) })));
   body.appendChild(emp);
 
-  // contact (editable)
+  // contact (editable — enter once, then changes need admin approval)
   const contact = el("div", { class: "card" }, [ el("h2", { text: t("contactInfo") }) ]);
+  contact.appendChild(el("div", { class: "muted", style: "font-size:12px;margin:-2px 0 8px", text: t("enterOnceNote") }));
   for (const f of DIRECT) contact.appendChild(editableRow(f));
   body.appendChild(contact);
 
@@ -1010,12 +1022,14 @@ function editableRow(field) {
   btn.addEventListener("click", async () => {
     btn.disabled = true; btn.textContent = t("saving");
     try {
-      await api("/api/profile/change", { method: "POST", body: { field, value: input.value } });
-      state.emp[field] = input.value;
-      flash("ok", t("directSaved"));
+      const r = await api("/api/profile/change", { method: "POST", body: { field, value: input.value } });
+      if (r && r.applied) { state.emp[field] = input.value; flash("ok", t("directSaved")); }
+      else { flash("ok", t("changeSubmitted")); input.value = state.emp[field] || ""; loadMyRequests(); }
     } catch (ex) { flash("err", ex.message); }
     finally { btn.disabled = false; btn.textContent = t("save"); }
   });
+  // A filled field is locked: edits go through admin approval (enter-once, FR-01).
+  if (state.emp[field]) btn.title = t("needsApprovalHint");
   return el("div", { class: "row" }, [
     el("div", { class: "k", text: t(labelKey) }),
     el("div", { class: "v" }, [ el("div", { class: "actions" }, [ el("div", { class: "grow" }, [input]), btn ]) ]),
@@ -1110,6 +1124,8 @@ async function loadQueue() {
         el("div", { class: "k" }, [
           el("div", { text: p.employee_name || p.employee_id }),
           el("div", { class: "muted", style: "font-size:12px", text: t(SENS_LABEL[p.field] || p.field) || p.field }),
+          p.newValue != null ? el("div", { style: "font-size:13px", text: "→ " + (p.newValue || t("none")) }) : el("div", { class: "muted", style: "font-size:11px", text: t("valueHidden") }),
+          p.reason ? el("div", { class: "muted", style: "font-size:11px;font-style:italic", text: p.reason }) : null,
         ]),
         el("div", { class: "v" }, [ el("div", { class: "actions" }, [
           el("button", { class: "primary sm", text: t("approve"), onclick: () => act("approve") }),

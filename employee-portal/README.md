@@ -540,6 +540,16 @@ of 10-row blocks per employee). Flow:
 - **Controlled changes (FR-01):** an employee edits direct fields themselves; a
   bank/PAN/Aadhaar change is stored **encrypted** as a *pending* request and only
   applies after HR/super_admin approval. Step-up auth on these is R2 (FR-26).
+- **Enter once, then approve:** a direct contact field (phone, personal email, address,
+  emergency contact) can be **self-filled once while it is blank** (onboarding). Once it
+  holds a value, every later change is queued as a **pending request** for admin approval
+  instead of applying silently — the HR verify queue shows the proposed new value (direct
+  fields are plaintext; bank/PAN/Aadhaar stay ciphertext-hidden with a *value hidden* note).
+  Bank details keep their own stricter KYC flow (every submit lands unverified). Admin edits
+  via the employee master always apply directly (the admin is the approver).
+- **View persistence:** the open view is remembered (per-tab `sessionStorage`) and restored
+  on refresh, so a reload no longer drops you back to the landing page. A restored view the
+  current role may no longer see falls back to the dashboard; logout clears it.
 
 ## 2FA & access revocation
 

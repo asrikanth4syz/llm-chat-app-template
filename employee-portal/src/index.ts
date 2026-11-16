@@ -294,10 +294,23 @@ async function handleProfileChange(actor: Actor, env: Env, request: Request): Pr
   if (!field) return json({ error: "field required" }, 400);
 
   if (field in DIRECT_PROFILE_FIELDS) {
-    await env.DB.prepare(`UPDATE employees SET ${DIRECT_PROFILE_FIELDS[field]} = ? WHERE id = ?`)
-      .bind(value, actor.employeeId).run();
-    await audit(env, actor.userId, "PROFILE_UPDATE", "employee", actor.employeeId, `updated ${field}`);
-    return json({ ok: true, applied: true, field });
+    const col = DIRECT_PROFILE_FIELDS[field];
+    // "Enter once" (FR-01): if the field is still blank the employee may fill it directly
+    // (onboarding). Once it holds a value, every later change needs admin approval — it is
+    // queued as a pending request (plaintext value; these fields are not sensitive).
+    const cur = await env.DB.prepare(`SELECT ${col} AS v FROM employees WHERE id = ?`).bind(actor.employeeId).first<{ v: string | null }>();
+    const alreadySet = !!(cur && cur.v != null && String(cur.v).trim() !== "");
+    if (!alreadySet) {
+      await env.DB.prepare(`UPDATE employees SET ${col} = ? WHERE id = ?`).bind(value, actor.employeeId).run();
+      await audit(env, actor.userId, "PROFILE_UPDATE", "employee", actor.employeeId, `set ${field} (first entry)`);
+      return json({ ok: true, applied: true, field });
+    }
+    const reqId = uid();
+    await env.DB.prepare(
+      "INSERT INTO profile_change_requests (id, employee_id, user_id, field, new_value_enc, reason) VALUES (?,?,?,?,?,?)"
+    ).bind(reqId, actor.employeeId, actor.userId, field, value, body.reason ?? null).run();
+    await audit(env, actor.userId, "PROFILE_CHANGE_REQUEST", "employee", actor.employeeId, `requested ${field} change (pending approval)`);
+    return json({ ok: true, applied: false, pending: true, requestId: reqId, field });
   }
 
   if (field in VERIFIED_PROFILE_FIELDS) {
@@ -328,11 +341,18 @@ async function handleProfileChanges(actor: Actor, env: Env): Promise<Response> {
 async function handlePendingChanges(actor: Actor, env: Env): Promise<Response> {
   if (!hasPermission(actor.role, "profile.verify")) return json({ error: "forbidden" }, 403);
   const rows = (await env.DB.prepare(
-    "SELECT p.id, p.employee_id, p.field, p.status, p.reason, p.requested_at, e.name AS employee_name " +
+    "SELECT p.id, p.employee_id, p.field, p.new_value_enc, p.status, p.reason, p.requested_at, e.name AS employee_name " +
     "FROM profile_change_requests p LEFT JOIN employees e ON e.id = p.employee_id " +
     "WHERE p.status = 'pending' ORDER BY p.requested_at ASC LIMIT 200"
-  ).all()).results;
-  return json({ pending: rows, count: rows.length });
+  ).all<Record<string, unknown>>()).results;
+  // Reveal the proposed value only for non-sensitive direct fields; verified fields
+  // (bank/PAN/Aadhaar) keep their ciphertext hidden.
+  const pending = rows.map((r) => {
+    const newValue = (r.field as string) in DIRECT_PROFILE_FIELDS ? r.new_value_enc : null;
+    const { new_value_enc, ...rest } = r;
+    return { ...rest, newValue };
+  });
+  return json({ pending, count: pending.length });
 }
 
 // Verify (approve/reject) a pending identity/financial change — HR or super_admin.
@@ -348,7 +368,9 @@ async function handleProfileChangeReview(actor: Actor, env: Env, id: string, act
   if (req.status !== "pending") return json({ error: `already ${req.status}` }, 409);
 
   if (action === "approve") {
-    const col = VERIFIED_PROFILE_FIELDS[req.field];
+    // Verified fields hold a ciphertext envelope; direct fields hold plaintext — either way
+    // the stored value is written straight into the column.
+    const col = VERIFIED_PROFILE_FIELDS[req.field] || DIRECT_PROFILE_FIELDS[req.field];
     if (!col) return json({ error: `unknown field ${req.field}` }, 400);
     await env.DB.batch([
       env.DB.prepare(`UPDATE employees SET ${col} = ? WHERE id = ?`).bind(req.new_value_enc, req.employee_id),
