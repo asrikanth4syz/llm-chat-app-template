@@ -55,7 +55,7 @@ const EMP_COLS = "id,user_id,manager_id,segment,name,work_email,designation,loca
   "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
   "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
   "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
-  "pan,bank_account,aadhaar_last4,ctc";
+  "emergency_contact_2,notice_period_days,pan,bank_account,aadhaar_last4,ctc";
 interface EmpRow {
   id: string; user_id: string; manager_id: string | null; segment: string; name: string;
   work_email: string; designation: string | null; location: string | null; photo: string | null;
@@ -65,6 +65,7 @@ interface EmpRow {
   date_of_joining: string | null; date_of_exit: string | null;
   probation_start: string | null; probation_end: string | null; confirmed_on: string | null;
   contract_start: string | null; contract_end: string | null; exit_reason: string | null; exit_status: string | null;
+  emergency_contact_2: string | null; notice_period_days: number | null;
   pan: string | null; bank_account: string | null; aadhaar_last4: string | null; ctc: number | null;
 }
 function rowToEmployee(r: EmpRow): EmployeeRecord {
@@ -78,6 +79,7 @@ function rowToEmployee(r: EmpRow): EmployeeRecord {
     dateOfJoining: r.date_of_joining, dateOfExit: r.date_of_exit,
     probationStart: r.probation_start, probationEnd: r.probation_end, confirmedOn: r.confirmed_on,
     contractStart: r.contract_start, contractEnd: r.contract_end, exitReason: r.exit_reason, exitStatus: r.exit_status,
+    emergencyContact2: r.emergency_contact_2, noticePeriodDays: r.notice_period_days,
     pan: r.pan, bankAccount: r.bank_account, aadhaarLast4: r.aadhaar_last4, ctc: r.ctc,
   };
 }
@@ -542,11 +544,12 @@ async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): P
     "employee_code,first_name,last_name,dob,gender,department,employment_type,employment_status," +
     "phone,personal_email,address,emergency_contact,date_of_joining,date_of_exit," +
     "probation_start,probation_end,confirmed_on,contract_start,contract_end,exit_reason,exit_status," +
-    "pan,bank_account,aadhaar_last4,ctc) VALUES (" + "?,".repeat(32) + "?)"
+    "emergency_contact_2,notice_period_days,pan,bank_account,aadhaar_last4,ctc) VALUES (" + "?,".repeat(34) + "?)"
   ).bind(id, null, _s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
     _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
     _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
     _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
+    _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : null,
     panE, bankE, aadE, b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null).run();
   await audit(env, actor.userId, "EMPLOYEE_CREATE", "employee", id, `${name} ${_s(b.employeeCode) ?? ""}`);
   return json({ ok: true, id });
@@ -563,11 +566,13 @@ async function handleEmployeeUpdate(actor: Actor, env: Env, id: string, request:
     "UPDATE employees SET manager_id=?, segment=?, name=COALESCE(NULLIF(?,''),name), work_email=?, designation=?, location=?," +
     "employee_code=?, first_name=?, last_name=?, dob=?, gender=?, department=?, employment_type=?, employment_status=?," +
     "phone=?, personal_email=?, address=?, emergency_contact=?, date_of_joining=?, date_of_exit=?," +
-    "probation_start=?, probation_end=?, confirmed_on=?, contract_start=?, contract_end=?, exit_reason=?, exit_status=?, ctc=? WHERE id=?"
+    "probation_start=?, probation_end=?, confirmed_on=?, contract_start=?, contract_end=?, exit_reason=?, exit_status=?," +
+    "emergency_contact_2=?, notice_period_days=?, ctc=? WHERE id=?"
   ).bind(_s(b.managerId), seg, name, _s(b.workEmail), _s(b.designation), _s(b.location),
     _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
     _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
     _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
+    _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : null,
     b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null, id).run();
   for (const [k, col] of [["pan", "pan"], ["bankAccount", "bank_account"], ["aadhaarLast4", "aadhaar_last4"]] as const) {
     const v = String(b[k] ?? "").trim();
@@ -983,6 +988,44 @@ async function handleEmployeeSalarySet(actor: Actor, env: Env, employeeId: strin
   return json({ ok: true, id: salId, revisionNo: nextNo, monthlyGrossPaise: gross });
 }
 
+// Per-employee additional pay (variable / retention / performance bonus, incentive, ad-hoc)
+// applied to a specific month — not baked into the recurring structure.
+const ADDPAY_CODES = new Set(["RETENTION", "PERF_BONUS", "VARIABLE", "INCENTIVE", "ADHOC"]);
+async function handleAdditionalPayGet(actor: Actor, env: Env, employeeId: string, month: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.read_all")) return json({ error: "forbidden" }, 403);
+  const where = /^\d{4}-\d{2}$/.test(month) ? "AND ym = ?" : "";
+  const q = env.DB.prepare(`SELECT id, ym, code, name, kind, amount_paise, taxable, note, created_at FROM employee_additional_pay WHERE employee_id = ? ${where} ORDER BY ym DESC, created_at DESC LIMIT 200`);
+  const items = (await (where ? q.bind(employeeId, month) : q.bind(employeeId)).all()).results;
+  return json({ items });
+}
+async function handleAdditionalPayCreate(actor: Actor, env: Env, employeeId: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  if (!(await env.DB.prepare("SELECT id FROM employees WHERE id = ?").bind(employeeId).first())) return json({ error: "employee not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { ym?: string; code?: string; name?: string; kind?: string; amountRupees?: number; taxable?: boolean; note?: string };
+  const ym = String(b.ym ?? "").trim();
+  if (!/^\d{4}-\d{2}$/.test(ym)) return json({ error: "valid month (YYYY-MM) required" }, 400);
+  const code = String(b.code ?? "ADHOC").trim().toUpperCase();
+  if (!ADDPAY_CODES.has(code)) return json({ error: "invalid code" }, 400);
+  if (await isMonthLocked(env, ym)) return json({ error: "month is locked for payroll" }, 409);
+  const amount = Math.round(Number(b.amountRupees) * 100 || 0);
+  if (!amount) return json({ error: "amount required" }, 400);
+  const kind = b.kind === "deduction" ? "deduction" : "earning";
+  const id = uid();
+  await env.DB.prepare("INSERT INTO employee_additional_pay (id, employee_id, ym, code, name, kind, amount_paise, taxable, note, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .bind(id, employeeId, ym, code, String(b.name ?? code), kind, Math.abs(amount), b.taxable === false ? 0 : 1, _s(b.note), actor.userId).run();
+  await audit(env, actor.userId, "ADDITIONAL_PAY_ADD", "payroll", id, `${code} ${kind} ${amount} ${ym} → ${employeeId}`);
+  return json({ ok: true, id });
+}
+async function handleAdditionalPayDelete(actor: Actor, env: Env, payId: string): Promise<Response> {
+  if (!hasPermission(actor.role, "payroll.prepare")) return json({ error: "forbidden" }, 403);
+  const row = await env.DB.prepare("SELECT ym FROM employee_additional_pay WHERE id = ?").bind(payId).first<{ ym: string }>();
+  if (!row) return json({ error: "not found" }, 404);
+  if (await isMonthLocked(env, row.ym)) return json({ error: "month is locked for payroll" }, 409);
+  await env.DB.prepare("DELETE FROM employee_additional_pay WHERE id = ?").bind(payId).run();
+  await audit(env, actor.userId, "ADDITIONAL_PAY_DELETE", "payroll", payId, row.ym);
+  return json({ ok: true });
+}
+
 // Statutory config (S7a: Professional Tax). Parameterised + effective-dated; no hardcoded
 // rates. Shipped disabled until a CA confirms the slabs and the vectors pass.
 const STATUTES = new Set(["pt", "tds"]); // epf | esi added when applicable
@@ -1192,6 +1235,12 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
     }
   }
 
+  // Additional pay (bonuses/incentives/ad-hoc) for this month, grouped by employee.
+  const addPayByEmp = new Map<string, Array<{ code: string; name: string; kind: string; amount: number }>>();
+  for (const r of (await env.DB.prepare("SELECT employee_id, code, name, kind, amount_paise FROM employee_additional_pay WHERE ym = ?").bind(ym).all<{ employee_id: string; code: string; name: string; kind: string; amount_paise: number }>()).results) {
+    const a = addPayByEmp.get(r.employee_id) ?? []; a.push({ code: r.code, name: r.name, kind: r.kind, amount: Number(r.amount_paise) || 0 }); addPayByEmp.set(r.employee_id, a);
+  }
+
   const stmts: D1PreparedStatement[] = [
     env.DB.prepare("DELETE FROM payroll_line_components WHERE line_id IN (SELECT id FROM payroll_lines WHERE run_id = ?)").bind(runId),
     env.DB.prepare("DELETE FROM payroll_lines WHERE run_id = ?").bind(runId),
@@ -1211,6 +1260,13 @@ async function handlePayrollRunPrepare(actor: Actor, env: Env, request: Request)
         parts.push(computeLine(compBySal.get(seg.id) ?? [], { employedDays: seg.days, lopDays: segLop, divisor }));
       }
       line = aggregatePayLines(parts);
+      // Additional pay (variable / retention / performance bonus, incentive, ad-hoc) for the
+      // month — applied BEFORE statutory so PT/TDS see the bonus in gross.
+      for (const ap of (addPayByEmp.get(e.id) ?? [])) {
+        line.components.push({ code: ap.code, name: ap.name, kind: ap.kind === "deduction" ? "deduction" : "earning", amount: ap.amount });
+        if (ap.kind === "deduction") line.deductions += ap.amount; else line.grossPaid += ap.amount;
+      }
+      line.net = line.grossPaid - line.deductions;
       // Statutory deduction: Professional Tax on the earned gross (inert unless enabled).
       const pt = ptForState(line.grossPaid, ptConfigByState.get(empPtState.get(e.id) ?? ""), month);
       if (pt > 0) {
@@ -1923,6 +1979,11 @@ export default {
       const esg = path.match(/^\/api\/admin\/employees\/([^/]+)\/salary$/);
       if (esg && method === "GET") return await handleEmployeeSalaryGet(actor, env, decodeURIComponent(esg[1]));
       if (esg && method === "POST") return await handleEmployeeSalarySet(actor, env, decodeURIComponent(esg[1]), request);
+      const eap = path.match(/^\/api\/admin\/employees\/([^/]+)\/additional-pay$/);
+      if (eap && method === "GET") return await handleAdditionalPayGet(actor, env, decodeURIComponent(eap[1]), url.searchParams.get("month") || "");
+      if (eap && method === "POST") return await handleAdditionalPayCreate(actor, env, decodeURIComponent(eap[1]), request);
+      const eapd = path.match(/^\/api\/admin\/additional-pay\/([^/]+)\/delete$/);
+      if (eapd && method === "POST") return await handleAdditionalPayDelete(actor, env, decodeURIComponent(eapd[1]));
       // Statutory config (S7a PT, S7b TDS)
       if (path === "/api/admin/statutory/config" && method === "GET") return await handleStatutoryConfigGet(actor, env, url.searchParams.get("statute") || "pt");
       if (path === "/api/admin/statutory/config" && method === "POST") return await handleStatutoryConfigSet(actor, env, request);

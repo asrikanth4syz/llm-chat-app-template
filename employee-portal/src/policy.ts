@@ -129,6 +129,8 @@ export interface EmployeeRecord {
   personalEmail?: string | null;
   address?: string | null;
   emergencyContact?: string | null;
+  emergencyContact2?: string | null;
+  noticePeriodDays?: number | null;
   dateOfJoining?: string | null;
   dateOfExit?: string | null;
   probationStart?: string | null;

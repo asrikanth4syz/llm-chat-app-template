@@ -321,6 +321,10 @@ Object.assign(DICT.en, {
   status_active: "Active", status_probation: "Probation", status_notice: "Notice", status_suspended: "Suspended", status_exited: "Exited",
   weeklyHours: "Weekly working hours", weekly_help: "Hours worked per week (Mon–Sat) against the target. Below-target weeks are flagged.",
   belowTarget: "Below target", onTrack: "On track", reportingTime: "Reporting", graceMins: "grace", weeklyTarget: "Target", policyPrefix: "Policy:",
+  emergencyContact2: "Emergency contact 2", noticePeriod: "Notice period (days)", daysWord: "days",
+  additionalPay: "Additional pay (bonus / variable)", addpay_help: "One-off pay for a month — variable, retention or performance bonus, incentive or ad-hoc. Added to that month's payroll run (taxable gross); not part of the recurring structure. The recurring kind goes in the salary components instead.",
+  ap_VARIABLE: "Variable pay", ap_RETENTION: "Retention bonus", ap_PERF_BONUS: "Performance bonus", ap_INCENTIVE: "Incentive", ap_ADHOC: "Ad-hoc",
+  noteOptional: "Note (optional)", addWord: "Add", noAddPay: "No additional pay for this month.",
 });
 Object.assign(DICT.kn, {
   navDashboard: "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", dashboard_sub: "ಉದ್ಯೋಗಿ ಚಟುವಟಿಕೆ ಮತ್ತು ನಿಮಗೆ ಬೇಕಾದವುಗಳ ತ್ವರಿತ ನೋಟ.",
@@ -331,6 +335,9 @@ Object.assign(DICT.kn, {
   sectPersonal: "ವೈಯಕ್ತಿಕ", sectContact: "ಸಂಪರ್ಕ", sectEmployment: "ಉದ್ಯೋಗ", sectLifecycle: "ಜೀವನಚಕ್ರ ಮತ್ತು ಒಪ್ಪಂದ", sectComp: "ವೇತನ ಮತ್ತು ಶಾಸನಬದ್ಧ", department: "ವಿಭಾಗ",
   status_active: "ಸಕ್ರಿಯ", status_probation: "ಪ್ರೊಬೇಶನ್", status_notice: "ನೋಟಿಸ್", status_suspended: "ಅಮಾನತು", status_exited: "ನಿರ್ಗಮಿಸಿದೆ",
   weeklyHours: "ವಾರದ ಕೆಲಸದ ಗಂಟೆಗಳು", belowTarget: "ಗುರಿಗಿಂತ ಕಡಿಮೆ", onTrack: "ಸರಿದಾರಿಯಲ್ಲಿ", policyPrefix: "ನೀತಿ:",
+  emergencyContact2: "ತುರ್ತು ಸಂಪರ್ಕ 2", noticePeriod: "ನೋಟಿಸ್ ಅವಧಿ (ದಿನಗಳು)", daysWord: "ದಿನಗಳು",
+  additionalPay: "ಹೆಚ್ಚುವರಿ ವೇತನ (ಬೋನಸ್ / ವೇರಿಯಬಲ್)", ap_VARIABLE: "ವೇರಿಯಬಲ್ ವೇತನ", ap_RETENTION: "ರಿಟೆನ್ಷನ್ ಬೋನಸ್", ap_PERF_BONUS: "ಕಾರ್ಯಕ್ಷಮತೆ ಬೋನಸ್", ap_INCENTIVE: "ಪ್ರೋತ್ಸಾಹ", ap_ADHOC: "ತಾತ್ಕಾಲಿಕ",
+  noteOptional: "ಟಿಪ್ಪಣಿ (ಐಚ್ಛಿಕ)", addWord: "ಸೇರಿಸಿ", noAddPay: "ಈ ತಿಂಗಳ ಹೆಚ್ಚುವರಿ ವೇತನ ಇಲ್ಲ.",
 });
 Object.assign(DICT.hi, {
   navDashboard: "डैशबोर्ड", dashboard_sub: "कार्यबल गतिविधि और आपके लिए लंबित कार्यों का त्वरित दृश्य।",
@@ -341,6 +348,9 @@ Object.assign(DICT.hi, {
   sectPersonal: "व्यक्तिगत", sectContact: "संपर्क", sectEmployment: "रोज़गार", sectLifecycle: "जीवनचक्र और अनुबंध", sectComp: "वेतन और सांविधिक", department: "विभाग",
   status_active: "सक्रिय", status_probation: "परिवीक्षा", status_notice: "नोटिस", status_suspended: "निलंबित", status_exited: "निर्गत",
   weeklyHours: "साप्ताहिक कार्य घंटे", belowTarget: "लक्ष्य से कम", onTrack: "सही राह पर", policyPrefix: "नीति:",
+  emergencyContact2: "आपातकालीन संपर्क 2", noticePeriod: "नोटिस अवधि (दिन)", daysWord: "दिन",
+  additionalPay: "अतिरिक्त भुगतान (बोनस / वेरिएबल)", ap_VARIABLE: "वेरिएबल वेतन", ap_RETENTION: "रिटेंशन बोनस", ap_PERF_BONUS: "प्रदर्शन बोनस", ap_INCENTIVE: "प्रोत्साहन", ap_ADHOC: "तदर्थ",
+  noteOptional: "टिप्पणी (वैकल्पिक)", addWord: "जोड़ें", noAddPay: "इस माह कोई अतिरिक्त भुगतान नहीं।",
 });
 Object.assign(DICT.en, { navDirectory: "Directory", search: "Search name, role, location", noResults: "No matches.", manager: "Manager" });
 Object.assign(DICT.kn, { navDirectory: "ಡೈರೆಕ್ಟರಿ", search: "ಹೆಸರು, ಪಾತ್ರ, ಸ್ಥಳ ಹುಡುಕಿ", noResults: "ಯಾವುದೇ ಹೊಂದಾಣಿಕೆ ಇಲ್ಲ.", manager: "ಮೇಲಧಿಕಾರಿ" });
@@ -1952,14 +1962,65 @@ async function loadPayrollView() {
   ]));
   body.appendChild(el("div", { class: "card", id: "pay_run" }, [h2help(t("payrollRun"), t("payroll_run_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_emp" }, [h2help(t("employeeSalary"), t("emp_salary_help")), el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { class: "card", id: "pay_addpay" }, [h2help(t("additionalPay"), t("addpay_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_stat" }, [h2help(t("statutoryPT"), t("statutory_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_tds" }, [h2help(t("tdsTitle"), t("tds_help")), el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { class: "card", id: "pay_cat" }, [h2help(t("componentsCatalog"), t("catalog_help")), el("div", { class: "muted", text: "…" })]));
   loadPayrollRunCard();
   await loadEmployeeSalaryCard();
+  loadAdditionalPayCard();
   loadStatutoryCard();
   loadTdsAdminCard();
   loadComponentCatalog();
+}
+
+// Additional pay (variable / retention / performance bonus, incentive, ad-hoc) per employee per month.
+async function loadAdditionalPayCard() {
+  const card = document.getElementById("pay_addpay");
+  if (!card) return;
+  clear(card); card.appendChild(h2help(t("additionalPay"), t("addpay_help")));
+  try {
+    const { employees } = await api("/api/employees"); const list = employees || [];
+    const emp = el("select", { style: "max-width:220px" });
+    emp.appendChild(el("option", { value: "", text: t("selectEmployee") }));
+    for (const e of list) emp.appendChild(el("option", { value: e.id, text: e.name }));
+    const month = el("input", { type: "month", value: state.payMonth || new Date().toISOString().slice(0, 7), style: "width:auto" });
+    const code = el("select", {});
+    for (const [v, k] of [["VARIABLE", "ap_VARIABLE"], ["RETENTION", "ap_RETENTION"], ["PERF_BONUS", "ap_PERF_BONUS"], ["INCENTIVE", "ap_INCENTIVE"], ["ADHOC", "ap_ADHOC"]]) code.appendChild(el("option", { value: v, text: t(k) }));
+    const kind = el("select", {}); for (const [v, k] of [["earning", t("earning")], ["deduction", t("deduction")]]) kind.appendChild(el("option", { value: v, text: k }));
+    const amt = el("input", { type: "number", min: "0", placeholder: "₹", style: "max-width:120px" });
+    const note = el("input", { placeholder: t("noteOptional"), style: "max-width:160px" });
+    const add = el("button", { class: "primary sm", text: t("addWord") });
+    const listEl = el("div", { style: "margin-top:10px" });
+    async function refresh() {
+      clear(listEl);
+      if (!emp.value) { listEl.appendChild(el("div", { class: "muted", text: t("selectEmployee") })); return; }
+      const { items } = await api(`/api/admin/employees/${encodeURIComponent(emp.value)}/additional-pay?month=${encodeURIComponent(month.value)}`);
+      if (!items || !items.length) { listEl.appendChild(el("div", { class: "muted", text: t("noAddPay") })); return; }
+      for (const it of items) {
+        listEl.appendChild(el("div", { class: "row" }, [
+          el("div", { class: "k", text: it.ym }),
+          el("div", { class: "v" }, [
+            el("span", { text: `${t("ap_" + it.code) || it.name} · ${it.kind === "deduction" ? "−" : "+"}${fmtINR((it.amount_paise || 0) / 100)}${it.note ? " · " + it.note : ""}` }),
+            el("button", { class: "sm", style: "margin-left:8px", text: t("remove"), onclick: async () => { try { await api(`/api/admin/additional-pay/${encodeURIComponent(it.id)}/delete`, { method: "POST", body: {} }); refresh(); } catch (ex) { flash("err", ex.message); } } }),
+          ]),
+        ]));
+      }
+    }
+    emp.addEventListener("change", refresh); month.addEventListener("change", refresh);
+    add.addEventListener("click", async () => {
+      if (!emp.value) { flash("err", t("selectEmployee")); return; }
+      if (!(Number(amt.value) > 0)) { flash("err", t("amountRequired")); return; }
+      add.disabled = true;
+      try {
+        await api(`/api/admin/employees/${encodeURIComponent(emp.value)}/additional-pay`, { method: "POST", body: { ym: month.value, code: code.value, name: t("ap_" + code.value), kind: kind.value, amountRupees: Number(amt.value), note: note.value || undefined } });
+        flash("ok", t("saved")); amt.value = ""; note.value = ""; refresh();
+      } catch (ex) { flash("err", ex.message); } finally { add.disabled = false; }
+    });
+    card.appendChild(el("div", { class: "actions", style: "flex-wrap:wrap;gap:8px;margin-bottom:6px" }, [emp, month, code, kind, amt, note, add]));
+    card.appendChild(listEl);
+    refresh();
+  } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
 // S7b finance: TDS config (advanced JSON; set rarely by finance/CA) + declaration verify queue.
@@ -2337,9 +2398,9 @@ function openEmployeeDetail(e) {
   const fmtd = (v) => v ? fmtDate(v) : "";
   const card = (title, rows) => { const c = el("div", { class: "card" }, [el("h2", { text: title })]); rows.forEach(([l, v]) => c.appendChild(row(l, el("span", { text: v || t("none") })))); body.appendChild(c); };
   card(t("sectPersonal"), [[t("employeeCodeLbl"), e.employeeCode], [t("dobLbl"), fmtd(e.dob)], [t("genderLbl"), e.gender]]);
-  card(t("sectContact"), [[t("workEmail"), e.workEmail], [t("personalEmail"), e.personalEmail], [t("phone"), e.phone], [t("address"), e.address], [t("emergencyContact"), e.emergencyContact]]);
+  card(t("sectContact"), [[t("workEmail"), e.workEmail], [t("personalEmail"), e.personalEmail], [t("phone"), e.phone], [t("address"), e.address], [t("emergencyContact"), e.emergencyContact], [t("emergencyContact2"), e.emergencyContact2]]);
   card(t("sectEmployment"), [[t("department"), e.department], [t("designation"), e.designation], [t("employmentTypeLbl"), e.employmentType], [t("segment"), t(e.segment) || e.segment], [t("location"), e.location], [t("statusLbl"), statusLabel(e.employmentStatus)], [t("dojLbl"), fmtd(e.dateOfJoining)]]);
-  card(t("sectLifecycle"), [[t("probEnd"), fmtd(e.probationEnd)], [t("confirmedOn"), fmtd(e.confirmedOn)], [t("contractEnd"), fmtd(e.contractEnd)], [t("doeLbl"), fmtd(e.dateOfExit)], [t("exitReason"), e.exitReason]]);
+  card(t("sectLifecycle"), [[t("noticePeriod"), e.noticePeriodDays != null ? e.noticePeriodDays + " " + t("daysWord") : ""], [t("probEnd"), fmtd(e.probationEnd)], [t("confirmedOn"), fmtd(e.confirmedOn)], [t("contractEnd"), fmtd(e.contractEnd)], [t("doeLbl"), fmtd(e.dateOfExit)], [t("exitReason"), e.exitReason]]);
 }
 function openEmployeeForm(ex) {
   const body = document.getElementById("body"); clear(body);
@@ -2349,7 +2410,8 @@ function openEmployeeForm(ex) {
     firstName: ip(ex && ex.firstName), lastName: ip(ex && ex.lastName), employeeCode: ip(ex && ex.employeeCode),
     dob: ip(ex && ex.dob, { type: "date" }), gender: sel([["", "—"], ["Male", "Male"], ["Female", "Female"], ["Other", "Other"]], ex && ex.gender),
     workEmail: ip(ex && ex.workEmail, { type: "email" }), personalEmail: ip(ex && ex.personalEmail, { type: "email" }), phone: ip(ex && ex.phone),
-    address: ip(ex && ex.address), emergencyContact: ip(ex && ex.emergencyContact),
+    address: ip(ex && ex.address), emergencyContact: ip(ex && ex.emergencyContact), emergencyContact2: ip(ex && ex.emergencyContact2),
+    noticePeriodDays: ip(ex && ex.noticePeriodDays, { type: "number", min: "0" }),
     department: ip(ex && ex.department), designation: ip(ex && ex.designation),
     employmentType: sel([["", "—"], ["Permanent", "Permanent"], ["Contract", "Contract"], ["Outsourced", "Outsourced"], ["Intern", "Intern"], ["Fixed-term", "Fixed-term"]], ex && ex.employmentType),
     segment: sel([["office", t("office")], ["client_site", t("client_site")]], (ex && ex.segment) || "office"),
@@ -2366,9 +2428,9 @@ function openEmployeeForm(ex) {
   const sect = (title, fields) => body.appendChild(el("div", { class: "card" }, [el("h2", { text: title })].concat(fields.map(([l, k]) => fr(l, F[k])))));
   body.appendChild(el("div", { class: "actions", style: "margin-bottom:10px" }, [el("button", { class: "sm", text: "← " + t("back"), onclick: () => switchView("employees") }), el("h1", { style: "font-size:20px;margin:0", text: ex ? t("editEmployee") : t("addEmployee") })]));
   sect(t("sectPersonal"), [[t("firstName"), "firstName"], [t("lastName"), "lastName"], [t("employeeCodeLbl"), "employeeCode"], [t("dobLbl"), "dob"], [t("genderLbl"), "gender"]]);
-  sect(t("sectContact"), [[t("workEmail"), "workEmail"], [t("personalEmail"), "personalEmail"], [t("phone"), "phone"], [t("address"), "address"], [t("emergencyContact"), "emergencyContact"]]);
+  sect(t("sectContact"), [[t("workEmail"), "workEmail"], [t("personalEmail"), "personalEmail"], [t("phone"), "phone"], [t("address"), "address"], [t("emergencyContact"), "emergencyContact"], [t("emergencyContact2"), "emergencyContact2"]]);
   sect(t("sectEmployment"), [[t("department"), "department"], [t("designation"), "designation"], [t("employmentTypeLbl"), "employmentType"], [t("segment"), "segment"], [t("location"), "location"], [t("managerLbl"), "managerId"], [t("statusLbl"), "employmentStatus"], [t("dojLbl"), "dateOfJoining"]]);
-  sect(t("sectLifecycle"), [[t("probStart"), "probationStart"], [t("probEnd"), "probationEnd"], [t("confirmedOn"), "confirmedOn"], [t("contractStart"), "contractStart"], [t("contractEnd"), "contractEnd"], [t("doeLbl"), "dateOfExit"], [t("exitReason"), "exitReason"], [t("exitStatus"), "exitStatus"]]);
+  sect(t("sectLifecycle"), [[t("noticePeriod"), "noticePeriodDays"], [t("probStart"), "probationStart"], [t("probEnd"), "probationEnd"], [t("confirmedOn"), "confirmedOn"], [t("contractStart"), "contractStart"], [t("contractEnd"), "contractEnd"], [t("doeLbl"), "dateOfExit"], [t("exitReason"), "exitReason"], [t("exitStatus"), "exitStatus"]]);
   sect(t("sectComp") + (ex ? " · " + t("compNote") : ""), [[t("ctc"), "ctc"], [t("bankAccount"), "bankAccount"], [t("pan"), "pan"], [t("aadhaar"), "aadhaarLast4"]]);
   const save = el("button", { class: "primary", text: t("save") });
   save.addEventListener("click", async () => {

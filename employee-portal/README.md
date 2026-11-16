@@ -146,6 +146,8 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/dashboard` | any login | role-aware aggregates (me: present/tasks/latest payslip; org: headcount, dept breakdown, contract/probation alerts, payroll status) |
 | POST | `/api/admin/employees` | employee.manage | create a full employee master record |
 | POST | `/api/admin/employees/:id/update` | employee.manage | edit the employee master (sensitive fields encrypted; blank keeps current) |
+| GET·POST | `/api/admin/employees/:id/additional-pay?month=YYYY-MM` | GET payroll.read_all, POST payroll.prepare | list / add a month's bonus/variable/incentive/ad-hoc pay for an employee |
+| POST | `/api/admin/additional-pay/:id/delete` | payroll.prepare | remove an additional-pay item (if its month isn't locked) |
 | GET | `/api/me` | any login | own profile (+ `lang`); sensitive fields **masked** — `?reveal=pan,bankAccount,aadhaarLast4` returns full + logs REVEAL |
 | POST | `/api/me/lang` | any login | set preferred UI language (`en`/`hi`/`kn`), persisted to the user profile (migration `0013`) |
 | GET | `/api/employees` | any login | scoped list — self / team / all by role, sensitive fields masked |
@@ -380,6 +382,23 @@ hardcoded**, and TDS is **inert until Finance enables the config**.
   Finance enters them + enables, a **parallel run reconciles to zero**, then TDS goes live.
 - **Next — S7c filings:** PT challan, TDS **24Q**, **Form 16 Part B** (PF ECR / ESIC not
   needed while EPF/ESI are inapplicable). Then **payroll JV → Zoho Books**.
+
+## Additional pay, 2nd emergency contact, notice period (migration `0021`)
+
+- **Additional pay (variable / retention / performance bonus, incentive, ad-hoc)** —
+  `employee_additional_pay`, a **per-employee, per-month** amount (earning or deduction) that
+  the payroll run picks up for that month and adds **before statutory** (so PT/TDS see the
+  bonus in taxable gross). It is **not** baked into the recurring structure — recurring
+  variable pay instead goes in the salary components. Managed in the Payroll tab
+  (`payroll.prepare`); refused for a locked month.
+- **Additional emergency contact** — `employees.emergency_contact_2` (optional second
+  contact), in the employee form + detail.
+- **Notice period** — `employees.notice_period_days`, in the **Lifecycle & contract** section
+  of the employee master. This is where it belongs: it's an **employment term** on the
+  employee/employment record (per Section 17, lifecycle config owned by Employee Profile),
+  and it drives the **last-working-day** calculation at resignation. Indian norms vary by
+  grade and by state Shops & Establishments Acts (commonly 30/60/90 days), so it is a
+  **configurable per-employee field**, defaulted to 30, not a hardcoded constant.
 
 ## UI uplift + employee master (migration `0020`)
 
