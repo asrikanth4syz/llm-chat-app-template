@@ -94,6 +94,15 @@ The Worker serves a mobile-first SPA from `public/` (static-assets binding in
 **Approvals** sections, a **notifications bell** in the top bar, and **inline `?` help**
 tooltips on the key section headers. Open the Worker URL in a browser:
 
+- **Navigation is route-driven** (`location.hash`): the active item is derived from the current
+  route, so back/forward, refresh and direct links (e.g. `…/#leave`) all land on the right page
+  with the right item highlighted — never a surprise Dashboard redirect. Dashboard opens only at
+  login or via Home. On **phones (≤480px)** the desktop sidebar is replaced by a **fixed bottom
+  bar** — Home, Attendance, Leave, Requests, Profile — plus **More** (a sheet for the secondary
+  modules); resignation lives under **Profile** for employees and the **Lifecycle** tab (under
+  More) for HR, so it is never duplicated. Account controls (**photo → language + logout**) sit
+  in the top-right on every width. Desktop layout is unchanged.
+
 - **Sign in** with email + password + the 2FA code (dev `000000`).
 - **Profile** — a welcome header (time-based greeting + name + **profile photo**,
   uploaded and auto-downscaled client-side); employment details (read-only); contact

@@ -439,7 +439,8 @@ Object.assign(DICT.en, {
   markRelieved: "Mark relieved", relieveConfirm: "Mark this employee relieved?", relieveException: "Relieve (exception)", exceptionReasonPrompt: "Authorised exception — reason:",
   editTerms: "Edit notice/LWD", noticeDaysPrompt: "Notice period (days):", approveWithdraw: "Approve withdrawal", rejectWithdraw: "Reject withdrawal",
   requestWithdraw: "Request withdrawal", withdrawPending: "Withdrawal request pending HR decision.",
-  language: "Language", account: "Account", dateNotPast: "Resignation date cannot be before today — pick today or a later date.",
+  language: "Language", account: "Account", dateYestOrEarlier: "Resignation date must be yesterday or an earlier date.",
+  m_dashboard: "Home", m_attendance: "Attendance", m_leave: "Leave", m_approvals: "Requests", m_profile: "Profile", moreNav: "More", close: "Close", navigation: "Navigation",
 });
 Object.assign(DICT.kn, {
   rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
@@ -458,7 +459,8 @@ Object.assign(DICT.kn, {
   markRelieved: "ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸಿ", relieveConfirm: "ಈ ಉದ್ಯೋಗಿಯನ್ನು ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸುವುದೇ?", relieveException: "ಬಿಡುಗಡೆ (ವಿನಾಯಿತಿ)", exceptionReasonPrompt: "ಅಧಿಕೃತ ವಿನಾಯಿತಿ — ಕಾರಣ:",
   editTerms: "ನೋಟಿಸ್/LWD ಸಂಪಾದಿಸಿ", noticeDaysPrompt: "ನೋಟಿಸ್ ಅವಧಿ (ದಿನಗಳು):", approveWithdraw: "ಹಿಂಪಡೆ ಅನುಮೋದಿಸಿ", rejectWithdraw: "ಹಿಂಪಡೆ ತಿರಸ್ಕರಿಸಿ",
   requestWithdraw: "ಹಿಂಪಡೆ ಕೋರಿ", withdrawPending: "ಹಿಂಪಡೆ ಕೋರಿಕೆ HR ನಿರ್ಧಾರ ಬಾಕಿ.",
-  language: "ಭಾಷೆ", account: "ಖಾತೆ", dateNotPast: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿಗಿಂತ ಹಿಂದಿನದಾಗಿರಬಾರದು — ಇಂದು ಅಥವಾ ನಂತರದ ದಿನಾಂಕ ಆರಿಸಿ.",
+  language: "ಭಾಷೆ", account: "ಖಾತೆ", dateYestOrEarlier: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ನಿನ್ನೆ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹಿಂದಿನ ದಿನಾಂಕ ಆಗಿರಬೇಕು.",
+  m_dashboard: "ಮುಖಪುಟ", m_attendance: "ಹಾಜರಾತಿ", m_leave: "ರಜೆ", m_approvals: "ವಿನಂತಿಗಳು", m_profile: "ಪ್ರೊಫೈಲ್", moreNav: "ಇನ್ನಷ್ಟು", close: "ಮುಚ್ಚಿ", navigation: "ನ್ಯಾವಿಗೇಶನ್",
 });
 Object.assign(DICT.hi, {
   rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
@@ -477,7 +479,8 @@ Object.assign(DICT.hi, {
   markRelieved: "कार्यमुक्त करें", relieveConfirm: "इस कर्मचारी को कार्यमुक्त करें?", relieveException: "कार्यमुक्त (अपवाद)", exceptionReasonPrompt: "अधिकृत अपवाद — कारण:",
   editTerms: "नोटिस/LWD संपादित करें", noticeDaysPrompt: "नोटिस अवधि (दिन):", approveWithdraw: "वापसी स्वीकारें", rejectWithdraw: "वापसी अस्वीकारें",
   requestWithdraw: "वापसी का अनुरोध करें", withdrawPending: "वापसी अनुरोध HR निर्णय हेतु लंबित।",
-  language: "भाषा", account: "खाता", dateNotPast: "इस्तीफ़ा तिथि आज से पहले नहीं हो सकती — आज या बाद की तिथि चुनें।",
+  language: "भाषा", account: "खाता", dateYestOrEarlier: "इस्तीफ़ा तिथि कल या उससे पहले की होनी चाहिए।",
+  m_dashboard: "होम", m_attendance: "उपस्थिति", m_leave: "छुट्टी", m_approvals: "अनुरोध", m_profile: "प्रोफ़ाइल", moreNav: "और", close: "बंद करें", navigation: "नेविगेशन",
 });
 
 // FR-04 Approvals + inline-help strings.
@@ -808,6 +811,7 @@ const ICONS = {
   money: '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="2" y1="10" x2="2" y2="10"/><line x1="22" y1="14" x2="22" y2="14"/>',
   grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
   cycle: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -896,6 +900,28 @@ function sidebar() {
     el("div", { class: "spacer" }),
   ]);
 }
+// Mobile bottom navigation (<=480px): 5 primary items + More (secondary modules in a sheet).
+// Active state is derived from state.view (which is derived from the route), so it never drifts.
+const MOBILE_PRIMARY = ["dashboard", "attendance", "leave", "approvals", "profile"];
+function bottomNav() {
+  const inPrimary = MOBILE_PRIMARY.includes(state.view);
+  const items = MOBILE_PRIMARY.filter((id) => viewAllowed(id)).map((id) => {
+    const v = VIEWS.find((x) => x.id === id), active = state.view === id;
+    return el("button", { class: "bnav-item" + (active ? " active" : ""), ...(active ? { "aria-current": "page" } : {}), onclick: () => switchView(id) }, [icon(v.icon), el("span", { text: t("m_" + id) || t(v.titleKey) })]);
+  });
+  items.push(el("button", { class: "bnav-item" + (!inPrimary ? " active" : ""), ...(!inPrimary ? { "aria-current": "page" } : {}), "aria-haspopup": "menu", onclick: toggleMoreSheet }, [icon("more"), el("span", { text: t("moreNav") })]));
+  return el("nav", { class: "bottomnav", id: "bottomnav", "aria-label": t("navigation") || "Navigation" }, items);
+}
+function moreSheet() {
+  const secondary = VIEWS.filter((v) => !MOBILE_PRIMARY.includes(v.id) && (!v.when || v.when()));
+  return el("div", { class: "moresheet", id: "moresheet", style: "display:none", onclick: (e) => { if (e.target.id === "moresheet") toggleMoreSheet(); } }, [
+    el("div", { class: "moresheet-panel" }, [
+      el("div", { class: "moresheet-head" }, [el("strong", { text: t("moreNav") }), el("button", { class: "sm", "aria-label": t("close") || "Close", text: "✕", onclick: toggleMoreSheet })]),
+      ...secondary.map((v) => el("button", { class: "moresheet-item" + (state.view === v.id ? " active" : ""), onclick: () => { toggleMoreSheet(); switchView(v.id); } }, [icon(v.icon), el("span", { text: t(v.titleKey) })])),
+    ]),
+  ]);
+}
+function toggleMoreSheet() { const s = document.getElementById("moresheet"); if (!s) return; s.style.display = s.style.display === "block" ? "none" : "block"; }
 // Close the account / notification popovers on an outside click (registered once).
 function ensureMenuAutoClose() {
   if (window.__epMenuClose) return;
@@ -925,19 +951,48 @@ async function renderApp() {
     el("div", { id: "flash" }),
     content,
   ]);
-  app().appendChild(el("div", { class: "shell" }, [sidebar(), main]));
+  app().appendChild(el("div", { class: "shell" }, [sidebar(), main, bottomNav(), moreSheet()]));
   ensureMenuAutoClose();
-  // Restore the last view across refreshes, but only if the role may still see it.
-  const want = state.view || "dashboard";
-  const allowed = VIEWS.find((x) => x.id === want && (!x.when || x.when()));
-  await switchView(allowed ? want : "dashboard");
+  if (!window.__epHashNav) { window.__epHashNav = true; window.addEventListener("hashchange", onHashChange); window.addEventListener("popstate", onPopState); }
+  // Initial view: the URL hash (deep link / refresh) wins, then the last-used view, then dashboard.
+  const want = viewAllowed(viewFromHash()) || viewAllowed(ss.get("ep_view")) || "dashboard";
+  await switchView(want);
 }
 
+// ---- Hash routing: the active view is derived from location.hash, so back/forward,
+// refresh and direct links all work and the highlight can never drift from the route. ----
+function viewFromHash() { return decodeURIComponent((location.hash || "").replace(/^#\/?/, "")).split("/")[0]; }
+function viewAllowed(view) { const v = VIEWS.find((x) => x.id === view); return v && (!v.when || v.when()) ? view : null; }
+// Public entry used across the app: update the URL (creating a history entry); the hashchange
+// handler then renders. When the hash is already correct (no event will fire) we render directly.
 async function switchView(view) {
+  view = viewAllowed(view) || "dashboard";
+  if (viewFromHash() === view) { await renderView(view); }
+  else { location.hash = view; } // fires hashchange → renderView
+}
+async function onHashChange() {
+  if (!state.token || !document.getElementById("body")) return; // ignore while logged out / no shell
+  const v = viewAllowed(viewFromHash()) || "dashboard";
+  if (v !== state.view) await renderView(v);
+}
+// Full-page detail views (e.g. an employee record) push a history entry so device/browser Back
+// returns to the parent list with the parent section still highlighted — without a route change.
+let _detailDepth = 0;
+function pushDetailHistory() { try { _detailDepth++; history.pushState({ ep_detail: _detailDepth }, ""); } catch { /* ignore */ } }
+async function onPopState() {
+  if (!state.token || !document.getElementById("body")) return;
+  if (_detailDepth > 0) { _detailDepth = Math.max(0, _detailDepth - 1); await renderView(state.view); } // back out of a detail → reload its parent list
+}
+// Actually render a view and sync every nav's highlight from the (route-derived) state.view.
+async function renderView(view) {
   state.view = view;
   ss.set("ep_view", view);
   const sb = document.getElementById("sidebar");
   if (sb && sb.parentNode) sb.parentNode.replaceChild(sidebar(), sb);
+  const bn = document.getElementById("bottomnav");
+  if (bn && bn.parentNode) bn.parentNode.replaceChild(bottomNav(), bn);
+  const ms = document.getElementById("moresheet");
+  if (ms && ms.parentNode) { const open = ms.style.display === "block"; const nms = moreSheet(); if (open) nms.style.display = "block"; ms.parentNode.replaceChild(nms, ms); }
   const v = VIEWS.find((x) => x.id === view);
   const titleEl = document.getElementById("pagetitle");
   if (titleEl && v) titleEl.textContent = t(v.titleKey);
@@ -985,6 +1040,7 @@ function doLogout() {
   state.token = null; state.role = null; state.emp = null; state.revealed = {};
   state.view = "dashboard";
   ss.del("ep_token"); ss.del("ep_role"); ss.del("ep_view");
+  try { if (location.hash) history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
   renderLogin();
 }
 
@@ -2636,6 +2692,7 @@ function renderEmpList(list) {
   }
 }
 function openEmployeeDetail(e) {
+  pushDetailHistory(); // so device/browser Back returns to the Employees list (parent stays active)
   const body = document.getElementById("body"); clear(body);
   body.appendChild(el("div", { class: "actions", style: "margin-bottom:10px" }, [el("button", { class: "sm", text: "← " + t("back"), onclick: () => switchView("employees") }), canManageEmployees() ? el("button", { class: "sm", text: t("edit"), onclick: () => openEmployeeForm(e) }) : null]));
   body.appendChild(el("div", { class: "card" }, [el("div", { style: "display:flex;gap:14px;align-items:center" }, [avatarBig(e), el("div", {}, [el("div", { style: "font-size:18px;font-weight:700", text: e.name }), el("div", { class: "muted", style: "font-size:13px", text: [e.designation, e.department, e.employmentType].filter(Boolean).join(" · ") })])])]));
@@ -2930,9 +2987,10 @@ async function loadResignCard() {
       card.appendChild(hist);
       return;
     }
-    // tender form — resignation date is today or later (never before submission day)
+    // tender form — resignation date defaults to yesterday; today & future are blocked (IST).
     const today = istToday();
-    const date = el("input", { type: "date", value: today, min: today });
+    const yesterday = new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+    const date = el("input", { type: "date", value: yesterday, max: yesterday });
     const reasonSel = el("select", {});
     reasonSel.appendChild(el("option", { value: "", text: "—" }));
     for (const rc of RESIGN_REASONS) reasonSel.appendChild(el("option", { value: rc, text: t("rreason_" + rc) }));
@@ -2944,7 +3002,7 @@ async function loadResignCard() {
     const submit = el("button", { class: "primary sm", text: t("tenderResign") });
     submit.addEventListener("click", async () => {
       if (!reasonSel.value) { flash("err", t("reasonRequired")); return; }
-      if (date.value && date.value < today) { flash("err", t("dateNotPast")); return; }
+      if (!date.value || date.value >= today) { flash("err", t("dateYestOrEarlier")); return; }
       if (!confirm(t("tenderConfirm"))) return;
       submit.disabled = true;
       try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
