@@ -37,6 +37,7 @@ import { isValidTaskStatus, isValidPriority, taskOverdue } from "./tasks.ts";
 import { isValidDocCategory, isValidDocStatus, canViewDocument } from "./documents.ts";
 import { monthlyGross, computeLine, aggregatePayLines, resolveSalarySegments, divisorDays, ptForState, tdsMonthly, fyOf, fyMonthsRemaining, type SalaryComponent, type DivisorMode, type PayLine, type SalaryRevision, type PTConfig, type TDSConfig } from "./payroll.ts";
 import { suggestLWD, computeFnF, ONBOARDING_ITEMS, OFFBOARDING_ITEMS, type FnFInput } from "./lifecycle.ts";
+import { validateTransition, isActiveState, stageIndex, STAGE_ORDER, type RState, type RAction } from "./resignation.ts";
 
 export interface Env {
   DB: D1Database;
@@ -685,7 +686,9 @@ async function handleDashboard(actor: Actor, env: Env): Promise<Response> {
     const contractAlerts = (await env.DB.prepare("SELECT name, contract_end FROM employees WHERE COALESCE(contract_end,'') <> '' AND contract_end <= ? AND COALESCE(date_of_exit,'')='' ORDER BY contract_end LIMIT 20").bind(addDaysISO(today, 60)).all()).results;
     const probationAlerts = (await env.DB.prepare("SELECT name, probation_end FROM employees WHERE COALESCE(probation_end,'') <> '' AND probation_end <= ? AND COALESCE(confirmed_on,'')='' ORDER BY probation_end LIMIT 20").bind(addDaysISO(today, 30)).all()).results;
     const run = await env.DB.prepare("SELECT ym, status, version FROM payroll_runs WHERE status != 'cancelled' ORDER BY ym DESC, version DESC LIMIT 1").first<{ ym: string; status: string; version: number }>();
-    out.org = { totalEmployees: emp?.total ?? 0, activeEmployees: emp?.active ?? 0, byDept, contractAlerts, probationAlerts, payroll: run ?? null };
+    // Upcoming last-working-days (resignations in notice/clearance/F&F) within 30 days — LWD reminders.
+    const lwdAlerts = (await env.DB.prepare("SELECT e.name, r.accepted_lwd FROM resignations r JOIN employees e ON e.id=r.employee_id WHERE r.accepted_lwd IS NOT NULL AND r.accepted_lwd <= ? AND r.status IN ('notice_period','clearance_pending','clearance_in_progress','clearance_completed','fnf_pending','fnf_completed') ORDER BY r.accepted_lwd LIMIT 20").bind(addDaysISO(today, 30)).all()).results;
+    out.org = { totalEmployees: emp?.total ?? 0, activeEmployees: emp?.active ?? 0, byDept, contractAlerts, probationAlerts, lwdAlerts, payroll: run ?? null };
   }
   return json(out);
 }
@@ -1537,93 +1540,367 @@ async function handlePayrollBank(actor: Actor, env: Env, runId: string): Promise
   return new Response(rows.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="bank-advice-${run.ym}.csv"` } });
 }
 
-// ---- Lifecycle / tenure: resignation → notice → LWD → F&F + checklists ----------
+// ---- Lifecycle / tenure: resignation & exit workflow + checklists ----------------
+// State machine lives in src/resignation.ts (pure). Here we resolve DB context, apply the
+// transition, persist milestone columns, write an immutable event, and sync employment_status.
 
-// Submit a resignation. An employee tenders their own; HR (employee.manage) may record one
-// on an employee's behalf by passing employeeId. The notice term is snapshotted at tender.
+// IST "today" — org time zone for all resignation date logic (UTC+05:30).
+function istTodayISO(): string { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
+async function cfg(env: Env, key: string, def: string): Promise<string> {
+  const r = await env.DB.prepare("SELECT value FROM portal_config WHERE key = ?").bind(key).first<{ value: string }>();
+  return (r?.value ?? def);
+}
+async function recordREvent(env: Env, rid: string, empId: string, prev: string | null, next: string | null, action: string, userId: string, remarks: string | null): Promise<void> {
+  try {
+    await env.DB.prepare("INSERT INTO resignation_events (id, resignation_id, employee_id, prev_status, new_status, action, actor_user_id, remarks) VALUES (?,?,?,?,?,?,?,?)")
+      .bind("rev_" + uid().replace(/-/g, "").slice(0, 12), rid, empId, prev, next, action, userId, remarks).run();
+  } catch { /* audit must never break the request path */ }
+}
+// Is the actor the reporting manager of this employee (directly or via active delegation)?
+async function isManagerOfEmployee(env: Env, actor: Actor, employeeId: string): Promise<boolean> {
+  if (!actor.employeeId) return false;
+  const e = await env.DB.prepare("SELECT manager_id FROM employees WHERE id = ?").bind(employeeId).first<{ manager_id: string | null }>();
+  if (!e || !e.manager_id) return false;
+  if (e.manager_id === actor.employeeId) return true;
+  return (await activeDelegatorIds(env, actor.employeeId)).includes(e.manager_id);
+}
+// Which clearance departments a role may see/action ("ALL" for HR/super).
+function clearanceDeptsForRole(role: Role): "ALL" | string[] {
+  if (role === "super_admin" || role === "hr_admin" || role === "hr_executive") return "ALL";
+  if (role === "finance" || role === "finance_admin" || role === "finance_approver") return ["Finance"];
+  if (role === "it_admin") return ["IT"];
+  return [];
+}
+function clearanceOwnerRole(dept: string): string {
+  if (dept === "Finance") return "finance_admin";
+  if (dept === "IT") return "it_admin";
+  return "hr_admin"; // HR, Admin and any other department are coordinated by HR
+}
+type RResignRow = {
+  id: string; employee_id: string; status: string; resignation_date: string; notice_days: number | null;
+  accepted_lwd: string | null; requested_lwd: string | null; withdraw_requested: number | null;
+};
+async function loadResign(env: Env, id: string): Promise<RResignRow | null> {
+  return await env.DB.prepare("SELECT id, employee_id, status, resignation_date, notice_days, accepted_lwd, requested_lwd, withdraw_requested FROM resignations WHERE id = ?").bind(id).first<RResignRow>();
+}
+// Derive clearance: are any tasks started / all required done?
+async function clearanceState(env: Env, rid: string): Promise<{ any: boolean; allDone: boolean; total: number }> {
+  const rows = (await env.DB.prepare("SELECT status, required FROM resignation_clearance_tasks WHERE resignation_id = ?").bind(rid).all<{ status: string; required: number }>()).results;
+  const required = rows.filter((r) => r.required);
+  const any = rows.some((r) => r.status === "in_progress" || r.status === "completed");
+  const allDone = required.length > 0 && required.every((r) => r.status === "completed");
+  return { any, allDone, total: rows.length };
+}
+
+// Submit a resignation (employee self, or HR on behalf). Reason (dropdown) is mandatory;
+// resignation date defaults to yesterday (IST) and must be yesterday-or-earlier.
 async function handleResignSubmit(actor: Actor, env: Env, request: Request): Promise<Response> {
   const b = await request.json().catch(() => ({})) as Record<string, unknown>;
   const onBehalf = _s(b.employeeId);
+  const byHr = hasPermission(actor.role, "employee.manage");
   const empId = onBehalf && onBehalf !== actor.employeeId ? onBehalf : actor.employeeId;
   if (!empId) return json({ error: "no employee record linked to this login" }, 404);
-  if (empId !== actor.employeeId && !hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
-  const emp = await env.DB.prepare("SELECT notice_period_days FROM employees WHERE id = ?").bind(empId).first<{ notice_period_days: number | null }>();
+  if (empId !== actor.employeeId && !byHr) return json({ error: "forbidden" }, 403);
+  const emp = await env.DB.prepare("SELECT notice_period_days, manager_id FROM employees WHERE id = ?").bind(empId).first<{ notice_period_days: number | null; manager_id: string | null }>();
   if (!emp) return json({ error: "employee not found" }, 404);
-  const resignationDate = _s(b.resignationDate) || todayISO();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(resignationDate)) return json({ error: "valid resignationDate (YYYY-MM-DD) required" }, 400);
-  const active = await env.DB.prepare("SELECT id FROM resignations WHERE employee_id = ? AND status IN ('submitted','accepted')").bind(empId).first();
+  const reasonCode = _s(b.reasonCode);
+  if (!reasonCode) return json({ error: "resignation reason is required" }, 400);
+  const yest = istTodayISO();
+  const resignationDate = _s(b.resignationDate) || new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(resignationDate)) return json({ error: "valid resignation date (YYYY-MM-DD) required" }, 400);
+  if (resignationDate >= yest) return json({ error: "resignation date must be yesterday or earlier (today and future dates are not allowed)" }, 400);
+  const active = await env.DB.prepare("SELECT id FROM resignations WHERE employee_id = ? AND status NOT IN ('rejected','withdrawn','relieved')").bind(empId).first();
   if (active) return json({ error: "an open resignation already exists for this employee" }, 409);
-  const noticeDays = emp.notice_period_days ?? 30;
-  const requestedLwd = _s(b.requestedLwd) || suggestLWD(resignationDate, noticeDays);
+  const defNotice = Number(await cfg(env, "resign_notice_default_days", "60")) || 60;
+  // Notice period is read-only for the employee; HR may set it when recording on behalf.
+  const noticeDays = byHr && b.noticeDays != null && b.noticeDays !== "" ? Math.max(0, Math.round(Number(b.noticeDays))) : (emp.notice_period_days ?? defNotice);
+  const expectedLwd = suggestLWD(resignationDate, noticeDays);
+  const status: RState = emp.manager_id ? "pending_manager" : "pending_hr";
   const id = "rsg_" + uid().replace(/-/g, "").slice(0, 12);
   await env.DB.prepare(
-    "INSERT INTO resignations (id, employee_id, submitted_by, resignation_date, reason, notice_days, requested_lwd, status) VALUES (?,?,?,?,?,?,?,'submitted')"
-  ).bind(id, empId, actor.userId, resignationDate, _s(b.reason), noticeDays, requestedLwd).run();
-  await audit(env, actor.userId, "RESIGNATION_SUBMIT", "employee", empId, `resignation tendered ${resignationDate}, suggested LWD ${requestedLwd}`);
-  return json({ ok: true, id, suggestedLwd: requestedLwd, noticeDays });
+    "INSERT INTO resignations (id, employee_id, submitted_by, resignation_date, reason_code, reason, notice_days, requested_lwd, status) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).bind(id, empId, actor.userId, resignationDate, reasonCode, _s(b.reason), noticeDays, expectedLwd, status).run();
+  await recordREvent(env, id, empId, null, "submitted", "submit", actor.userId, _s(b.reason));
+  await recordREvent(env, id, empId, "submitted", status, "route", actor.userId, emp.manager_id ? "routed to manager" : "no manager — routed to HR");
+  await audit(env, actor.userId, "RESIGNATION_SUBMIT", "employee", empId, `tendered ${resignationDate}, expected LWD ${expectedLwd}`);
+  return json({ ok: true, id, expectedLwd, noticeDays, status });
 }
 
-// Resignations list: an employee sees their own; employee.manage sees all with names.
-async function handleResignList(actor: Actor, env: Env): Promise<Response> {
+// HR dashboard list (filters) / manager team list / employee own list.
+async function handleResignList(actor: Actor, env: Env, url: URL): Promise<Response> {
+  const q = url.searchParams;
   if (hasPermission(actor.role, "employee.manage")) {
-    const rows = (await env.DB.prepare(
-      "SELECT r.*, e.name AS employee_name FROM resignations r LEFT JOIN employees e ON e.id = r.employee_id ORDER BY r.created_at DESC LIMIT 300"
-    ).all()).results;
+    const where: string[] = []; const binds: unknown[] = [];
+    if (q.get("status")) { where.push("r.status = ?"); binds.push(q.get("status")); }
+    if (q.get("department")) { where.push("e.department = ?"); binds.push(q.get("department")); }
+    if (q.get("location")) { where.push("e.location = ?"); binds.push(q.get("location")); }
+    if (q.get("q")) { where.push("(e.name LIKE ? OR e.employee_code LIKE ?)"); binds.push(`%${q.get("q")}%`, `%${q.get("q")}%`); }
+    if (q.get("lwdWithin")) { const d = addDaysISO(istTodayISO(), Math.max(0, Number(q.get("lwdWithin")) || 0)); where.push("r.accepted_lwd IS NOT NULL AND r.accepted_lwd <= ? AND r.status NOT IN ('relieved','withdrawn','rejected')"); binds.push(d); }
+    if (q.get("pending")) where.push("r.status IN ('pending_manager','pending_hr')");
+    if (q.get("waivers")) where.push("r.waived = 1");
+    const sql = "SELECT r.*, e.name AS employee_name, e.department, e.location FROM resignations r LEFT JOIN employees e ON e.id = r.employee_id" +
+      (where.length ? " WHERE " + where.join(" AND ") : "") + " ORDER BY r.created_at DESC LIMIT 400";
+    const rows = (await env.DB.prepare(sql).bind(...binds).all()).results;
     return json({ resignations: rows, manage: true });
+  }
+  // Manager: direct reports' resignations (status-level fields only).
+  if (actor.employeeId && (hasPermission(actor.role, "employee.read_team"))) {
+    const rows = (await env.DB.prepare(
+      "SELECT r.id, r.employee_id, e.name AS employee_name, r.status, r.resignation_date, r.accepted_lwd, r.created_at FROM resignations r JOIN employees e ON e.id=r.employee_id WHERE e.manager_id = ? ORDER BY r.created_at DESC LIMIT 200"
+    ).bind(actor.employeeId).all()).results;
+    return json({ resignations: rows, manage: false, team: true });
   }
   if (!actor.employeeId) return json({ resignations: [] });
   const rows = (await env.DB.prepare("SELECT * FROM resignations WHERE employee_id = ? ORDER BY created_at DESC").bind(actor.employeeId).all()).results;
   return json({ resignations: rows, manage: false });
 }
 
-// Employee withdraws their own resignation while it is still only submitted (not yet accepted).
-async function handleResignWithdraw(actor: Actor, env: Env, id: string): Promise<Response> {
-  const r = await env.DB.prepare("SELECT employee_id, status FROM resignations WHERE id = ?").bind(id).first<{ employee_id: string; status: string }>();
+// Full detail + immutable history for the tracker. Owner / their manager / HR may read.
+async function handleResignGet(actor: Actor, env: Env, id: string): Promise<Response> {
+  const r = await env.DB.prepare("SELECT r.*, e.name AS employee_name, e.department, e.location FROM resignations r LEFT JOIN employees e ON e.id=r.employee_id WHERE r.id = ?").bind(id).first<Record<string, unknown>>();
   if (!r) return json({ error: "not found" }, 404);
-  if (r.employee_id !== actor.employeeId) return json({ error: "forbidden" }, 403);
-  if (r.status !== "submitted") return json({ error: `cannot withdraw a ${r.status} resignation` }, 409);
-  await env.DB.prepare("UPDATE resignations SET status='withdrawn', decided_by=?, decided_at=datetime('now') WHERE id=?").bind(actor.userId, id).run();
-  await audit(env, actor.userId, "RESIGNATION_WITHDRAW", "employee", r.employee_id, `withdrew resignation ${id}`);
-  return json({ ok: true });
+  const empId = String(r.employee_id);
+  const isOwner = actor.employeeId === empId;
+  const isHr = hasPermission(actor.role, "employee.manage");
+  const isMgr = await isManagerOfEmployee(env, actor, empId);
+  if (!isOwner && !isHr && !isMgr) return json({ error: "forbidden" }, 403);
+  const events = (await env.DB.prepare("SELECT prev_status, new_status, action, remarks, at FROM resignation_events WHERE resignation_id = ? ORDER BY at ASC, id ASC").bind(id).all()).results;
+  const tasks = (await env.DB.prepare("SELECT department, status, due_date, completed_at FROM resignation_clearance_tasks WHERE resignation_id = ? ORDER BY department").bind(id).all()).results;
+  // Managers see status but not the F&F amount.
+  if (!isOwner && !isHr) { delete r.fnf_amount_paise; delete r.fnf_remarks; }
+  return json({ resignation: r, events, clearance: tasks, stageOrder: STAGE_ORDER, stageIndex: stageIndex(String(r.status)) });
 }
 
-// HR decides a resignation: accept (set LWD, move to notice), reject, or complete (exit).
-async function handleResignDecide(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
-  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
-  const r = await env.DB.prepare("SELECT employee_id, status, resignation_date, notice_days FROM resignations WHERE id = ?").bind(id).first<{ employee_id: string; status: string; resignation_date: string; notice_days: number | null }>();
+// Immutable event history (also available via detail).
+async function handleResignHistory(actor: Actor, env: Env, id: string): Promise<Response> {
+  const r = await env.DB.prepare("SELECT employee_id FROM resignations WHERE id = ?").bind(id).first<{ employee_id: string }>();
   if (!r) return json({ error: "not found" }, 404);
-  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const action = _s(b.action);
-  const hrNotes = _s(b.hrNotes);
-  if (action === "accept") {
-    if (r.status !== "submitted" && r.status !== "accepted") return json({ error: `cannot accept a ${r.status} resignation` }, 409);
-    const lwd = _s(b.acceptedLwd) || suggestLWD(r.resignation_date, r.notice_days ?? 30);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(lwd)) return json({ error: "valid acceptedLwd (YYYY-MM-DD) required" }, 400);
+  if (actor.employeeId !== r.employee_id && !hasPermission(actor.role, "employee.manage") && !(await isManagerOfEmployee(env, actor, r.employee_id))) return json({ error: "forbidden" }, 403);
+  const events = (await env.DB.prepare("SELECT prev_status, new_status, action, actor_user_id, remarks, at FROM resignation_events WHERE resignation_id = ? ORDER BY at ASC, id ASC").bind(id).all()).results;
+  return json({ events });
+}
+
+// Manager decision (approve → HR review, or reject). Remarks mandatory either way.
+async function handleManagerDecide(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { decision?: string; remarks?: string };
+  const isMgr = await isManagerOfEmployee(env, actor, r.employee_id);
+  const isHr = hasPermission(actor.role, "employee.manage");
+  const action: RAction = b.decision === "reject" ? "manager_reject" : "manager_approve";
+  const v = validateTransition(r.status as RState, action, { isManager: isMgr, isHr, remarks: b.remarks });
+  if (!v.ok) return json({ error: v.error }, 409);
+  await env.DB.prepare("UPDATE resignations SET status=?, manager_decision=?, manager_decided_by=?, manager_decided_at=datetime('now'), manager_remarks=? WHERE id=?")
+    .bind(v.next, b.decision === "reject" ? "reject" : "approve", actor.userId, _s(b.remarks), id).run();
+  await recordREvent(env, id, r.employee_id, r.status, v.next!, action, actor.userId, _s(b.remarks));
+  await audit(env, actor.userId, "RESIGNATION_MANAGER", "employee", r.employee_id, `${action} → ${v.next}`);
+  return json({ ok: true, status: v.next });
+}
+
+// HR review (approve → notice period, or reject). HR may adjust notice/LWD here (with reason).
+async function handleHrDecide(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { decision?: string; remarks?: string; acceptedLwd?: string; noticeDays?: unknown };
+  const action: RAction = b.decision === "reject" ? "hr_reject" : "hr_approve";
+  const v = validateTransition(r.status as RState, action, { isHr: true, remarks: b.remarks });
+  if (!v.ok) return json({ error: v.error }, 409);
+  if (action === "hr_reject") {
+    await env.DB.prepare("UPDATE resignations SET status='rejected', hr_decision='reject', hr_decided_by=?, hr_decided_at=datetime('now'), hr_remarks=? WHERE id=?").bind(actor.userId, _s(b.remarks), id).run();
+    await recordREvent(env, id, r.employee_id, r.status, "rejected", action, actor.userId, _s(b.remarks));
+    await audit(env, actor.userId, "RESIGNATION_HR", "employee", r.employee_id, "rejected");
+    return json({ ok: true, status: "rejected" });
+  }
+  const noticeDays = b.noticeDays != null && b.noticeDays !== "" ? Math.max(0, Math.round(Number(b.noticeDays))) : (r.notice_days ?? 60);
+  const lwd = _s(b.acceptedLwd) || suggestLWD(r.resignation_date, noticeDays);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(lwd)) return json({ error: "valid last working day required" }, 400);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE resignations SET status='notice_period', hr_decision='approve', hr_decided_by=?, hr_decided_at=datetime('now'), hr_remarks=?, notice_days=?, accepted_lwd=? WHERE id=?").bind(actor.userId, _s(b.remarks), noticeDays, lwd, id),
+    env.DB.prepare("UPDATE employees SET employment_status='notice' WHERE id=?").bind(r.employee_id),
+  ]);
+  await recordREvent(env, id, r.employee_id, r.status, "notice_period", action, actor.userId, `LWD ${lwd}` + (b.remarks ? ` · ${_s(b.remarks)}` : ""));
+  await audit(env, actor.userId, "RESIGNATION_HR", "employee", r.employee_id, `approved; LWD ${lwd}`);
+  return json({ ok: true, status: "notice_period", acceptedLwd: lwd });
+}
+
+// HR initiates clearance → seeds department tasks and moves to clearance_pending.
+async function handleStartClearance(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const v = validateTransition(r.status as RState, "start_clearance", { isHr: true });
+  if (!v.ok) return json({ error: v.error }, 409);
+  const depList = (await cfg(env, "resign_clearance_departments", "Finance,IT,Admin,HR")).split(",").map((s) => s.trim()).filter(Boolean);
+  const empDept = (await env.DB.prepare("SELECT department FROM employees WHERE id=?").bind(r.employee_id).first<{ department: string | null }>())?.department;
+  const depts = [...new Set([...depList, ...(empDept ? [empDept] : [])])];
+  const due = r.accepted_lwd;
+  await env.DB.batch([
+    env.DB.prepare("UPDATE resignations SET status='clearance_pending', clearance_started_at=datetime('now') WHERE id=?").bind(id),
+    ...depts.map((d) => env.DB.prepare("INSERT INTO resignation_clearance_tasks (id, resignation_id, employee_id, department, owner_role, due_date) VALUES (?,?,?,?,?,?)")
+      .bind("rct_" + uid().replace(/-/g, "").slice(0, 12), id, r.employee_id, d, clearanceOwnerRole(d), due)),
+  ]);
+  await recordREvent(env, id, r.employee_id, r.status, "clearance_pending", "start_clearance", actor.userId, `${depts.length} departments`);
+  await audit(env, actor.userId, "RESIGNATION_CLEARANCE_START", "employee", r.employee_id, depts.join(","));
+  return json({ ok: true, status: "clearance_pending", departments: depts });
+}
+
+// Clearance-owner view: ONLY the tasks for the actor's department(s); no reason/approval remarks.
+async function handleClearanceList(actor: Actor, env: Env): Promise<Response> {
+  const scope = clearanceDeptsForRole(actor.role);
+  if (scope !== "ALL" && scope.length === 0) return json({ tasks: [] });
+  const base = "SELECT t.id, t.resignation_id, t.employee_id, e.name AS employee_name, t.department, t.status, t.remarks, t.due_date, t.completed_at, r.accepted_lwd FROM resignation_clearance_tasks t LEFT JOIN employees e ON e.id=t.employee_id LEFT JOIN resignations r ON r.id=t.resignation_id WHERE r.status IN ('clearance_pending','clearance_in_progress')";
+  let rows;
+  if (scope === "ALL") rows = (await env.DB.prepare(base + " ORDER BY t.due_date, e.name").all()).results;
+  else { const ph = scope.map(() => "?").join(","); rows = (await env.DB.prepare(base + ` AND t.department IN (${ph}) ORDER BY t.due_date, e.name`).bind(...scope).all()).results; }
+  return json({ tasks: rows });
+}
+
+// Clearance-owner updates their task; the overall resignation clearance status is recomputed.
+async function handleClearanceUpdate(actor: Actor, env: Env, taskId: string, request: Request): Promise<Response> {
+  const t = await env.DB.prepare("SELECT id, resignation_id, employee_id, department FROM resignation_clearance_tasks WHERE id = ?").bind(taskId).first<{ id: string; resignation_id: string; employee_id: string; department: string }>();
+  if (!t) return json({ error: "not found" }, 404);
+  const scope = clearanceDeptsForRole(actor.role);
+  if (scope !== "ALL" && !scope.includes(t.department)) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { status?: string; remarks?: string; completionDate?: string; dueDate?: string };
+  const status = ["pending", "in_progress", "completed"].includes(String(b.status)) ? String(b.status) : "pending";
+  const completedAt = status === "completed" ? (_s(b.completionDate) || istTodayISO()) : null;
+  await env.DB.prepare("UPDATE resignation_clearance_tasks SET status=?, remarks=?, completed_at=?, due_date=COALESCE(?,due_date), updated_by=? WHERE id=?")
+    .bind(status, _s(b.remarks), completedAt, _s(b.dueDate), actor.userId, taskId).run();
+  await audit(env, actor.userId, "CLEARANCE_TASK", "employee", t.employee_id, `${t.department} → ${status}`);
+  // Recompute overall clearance status.
+  const r = await loadResign(env, t.resignation_id);
+  if (r && (r.status === "clearance_pending" || r.status === "clearance_in_progress" || r.status === "clearance_completed")) {
+    const cs = await clearanceState(env, t.resignation_id);
+    const v = validateTransition(r.status as RState, "clearance_recompute", { allClearanceDone: cs.allDone, anyClearanceStarted: cs.any });
+    if (v.ok && v.next !== r.status) {
+      await env.DB.prepare("UPDATE resignations SET status=? WHERE id=?").bind(v.next, t.resignation_id).run();
+      await recordREvent(env, t.resignation_id, t.employee_id, r.status, v.next!, "clearance_recompute", actor.userId, `${t.department} ${status}`);
+    }
+  }
+  return json({ ok: true, status });
+}
+
+// F&F: start (clearance done → pending) and complete (record settlement).
+async function handleFnfStart(actor: Actor, env: Env, id: string): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const v = validateTransition(r.status as RState, "fnf_start", { isHr: true });
+  if (!v.ok) return json({ error: v.error }, 409);
+  await env.DB.prepare("UPDATE resignations SET status='fnf_pending' WHERE id=?").bind(id).run();
+  await recordREvent(env, id, r.employee_id, r.status, "fnf_pending", "fnf_start", actor.userId, null);
+  return json({ ok: true, status: "fnf_pending" });
+}
+async function handleFnfComplete(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const v = validateTransition(r.status as RState, "fnf_complete", { isHr: true });
+  if (!v.ok) return json({ error: v.error }, 409);
+  const b = await request.json().catch(() => ({})) as { amountRupees?: unknown; date?: string; remarks?: string };
+  const amountPaise = b.amountRupees != null && b.amountRupees !== "" ? Math.round(Number(b.amountRupees) * 100) : null;
+  const date = _s(b.date) || istTodayISO();
+  await env.DB.prepare("UPDATE resignations SET status='fnf_completed', fnf_amount_paise=?, fnf_date=?, fnf_remarks=?, fnf_at=datetime('now') WHERE id=?")
+    .bind(amountPaise, date, _s(b.remarks), id).run();
+  await recordREvent(env, id, r.employee_id, r.status, "fnf_completed", "fnf_complete", actor.userId, amountPaise != null ? `₹${(amountPaise / 100).toFixed(2)} on ${date}` : date);
+  await audit(env, actor.userId, "RESIGNATION_FNF", "employee", r.employee_id, `settled ${date}`);
+  return json({ ok: true, status: "fnf_completed" });
+}
+
+// Relieve — normally from fnf_completed; an authorised exception may relieve earlier with reason.
+async function handleRelieve(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { exception?: boolean; reason?: string };
+  const v = validateTransition(r.status as RState, "relieve", { isHr: true, exception: !!b.exception, remarks: b.reason });
+  if (!v.ok) return json({ error: v.error }, 409);
+  const lwd = r.accepted_lwd || istTodayISO();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE resignations SET status='relieved', relieved_at=datetime('now'), relieve_exception=?, relieve_reason=? WHERE id=?").bind(b.exception ? 1 : 0, _s(b.reason), id),
+    env.DB.prepare("UPDATE employees SET employment_status='exited', date_of_exit=?, exit_reason=COALESCE(NULLIF(exit_reason,''),'Resignation'), exit_status='relieved' WHERE id=?").bind(lwd, r.employee_id),
+  ]);
+  await recordREvent(env, id, r.employee_id, r.status, "relieved", "relieve", actor.userId, b.exception ? `EXCEPTION: ${_s(b.reason)}` : null);
+  await audit(env, actor.userId, "RESIGNATION_RELIEVE", "employee", r.employee_id, `relieved ${lwd}${b.exception ? " (exception)" : ""}`);
+  return json({ ok: true, status: "relieved", dateOfExit: lwd });
+}
+
+// Notice-period waiver — records a reason and a new (earlier) LWD, recalculates, stays in notice.
+async function handleWaive(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  const b = await request.json().catch(() => ({})) as { newLwd?: string; reason?: string };
+  const v = validateTransition(r.status as RState, "waive", { isHr: true, remarks: b.reason });
+  if (!v.ok) return json({ error: v.error }, 409);
+  const newLwd = _s(b.newLwd);
+  if (!newLwd || !/^\d{4}-\d{2}-\d{2}$/.test(newLwd)) return json({ error: "a new last working day (YYYY-MM-DD) is required" }, 400);
+  await env.DB.prepare("UPDATE resignations SET waived=1, waive_reason=?, waived_at=datetime('now'), accepted_lwd=?, lwd_change_reason=? WHERE id=?").bind(_s(b.reason), newLwd, _s(b.reason), id).run();
+  await recordREvent(env, id, r.employee_id, r.status, r.status, "waive", actor.userId, `new LWD ${newLwd} · ${_s(b.reason)}`);
+  await audit(env, actor.userId, "RESIGNATION_WAIVE", "employee", r.employee_id, `new LWD ${newLwd}`);
+  return json({ ok: true, acceptedLwd: newLwd });
+}
+
+// Authorised change to notice period / LWD (any active state); recalculates LWD; reason required.
+async function handleEditTerms(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  if (!isActiveState(r.status)) return json({ error: "request is closed" }, 409);
+  const b = await request.json().catch(() => ({})) as { noticeDays?: unknown; lwd?: string; reason?: string };
+  if (!_s(b.reason)) return json({ error: "a reason is required for any notice/LWD change" }, 400);
+  const noticeDays = b.noticeDays != null && b.noticeDays !== "" ? Math.max(0, Math.round(Number(b.noticeDays))) : (r.notice_days ?? 60);
+  const lwd = _s(b.lwd) || suggestLWD(r.resignation_date, noticeDays);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(lwd)) return json({ error: "valid LWD required" }, 400);
+  await env.DB.prepare("UPDATE resignations SET notice_days=?, accepted_lwd=?, lwd_change_reason=? WHERE id=?").bind(noticeDays, lwd, _s(b.reason), id).run();
+  await recordREvent(env, id, r.employee_id, r.status, r.status, "edit_terms", actor.userId, `notice ${noticeDays}d, LWD ${lwd} · ${_s(b.reason)}`);
+  await audit(env, actor.userId, "RESIGNATION_EDIT_TERMS", "employee", r.employee_id, `notice ${noticeDays}, LWD ${lwd}`);
+  return json({ ok: true, noticeDays, acceptedLwd: lwd });
+}
+
+// Employee withdrawal: direct before HR approval; a request (HR-approved) afterwards.
+async function handleResignWithdraw(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  if (r.employee_id !== actor.employeeId) return json({ error: "forbidden" }, 403);
+  const b = await request.json().catch(() => ({})) as { remarks?: string };
+  if (!_s(b.remarks)) return json({ error: "remarks are required" }, 400);
+  if (r.status === "pending_manager" || r.status === "pending_hr") {
+    const v = validateTransition(r.status as RState, "withdraw", { isOwner: true, remarks: b.remarks });
+    if (!v.ok) return json({ error: v.error }, 409);
+    await env.DB.prepare("UPDATE resignations SET status='withdrawn', withdraw_reason=? WHERE id=?").bind(_s(b.remarks), id).run();
+    await recordREvent(env, id, r.employee_id, r.status, "withdrawn", "withdraw", actor.userId, _s(b.remarks));
+    await audit(env, actor.userId, "RESIGNATION_WITHDRAW", "employee", r.employee_id, "withdrawn (pre-HR)");
+    return json({ ok: true, status: "withdrawn" });
+  }
+  if (!isActiveState(r.status)) return json({ error: "request is already closed" }, 409);
+  // Post-HR-approval: raise a withdrawal request for HR to approve (manager notified).
+  await env.DB.prepare("UPDATE resignations SET withdraw_requested=1, withdraw_reason=?, withdraw_requested_at=datetime('now') WHERE id=?").bind(_s(b.remarks), id).run();
+  await recordREvent(env, id, r.employee_id, r.status, r.status, "withdraw_request", actor.userId, _s(b.remarks));
+  await audit(env, actor.userId, "RESIGNATION_WITHDRAW_REQUEST", "employee", r.employee_id, "withdrawal requested");
+  return json({ ok: true, requested: true });
+}
+async function handleWithdrawDecide(actor: Actor, env: Env, id: string, request: Request): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const r = await loadResign(env, id);
+  if (!r) return json({ error: "not found" }, 404);
+  if (!r.withdraw_requested) return json({ error: "no withdrawal request pending" }, 409);
+  const b = await request.json().catch(() => ({})) as { decision?: string; remarks?: string };
+  if (b.decision === "approve") {
+    const v = validateTransition(r.status as RState, "withdraw_approve", { isHr: true });
+    if (!v.ok) return json({ error: v.error }, 409);
     await env.DB.batch([
-      env.DB.prepare("UPDATE resignations SET status='accepted', accepted_lwd=?, hr_notes=?, decided_by=?, decided_at=datetime('now') WHERE id=?").bind(lwd, hrNotes, actor.userId, id),
-      env.DB.prepare("UPDATE employees SET employment_status='notice' WHERE id=?").bind(r.employee_id),
+      env.DB.prepare("UPDATE resignations SET status='withdrawn', withdraw_requested=0 WHERE id=?").bind(id),
+      env.DB.prepare("UPDATE employees SET employment_status='active' WHERE id=? AND employment_status='notice'").bind(r.employee_id),
     ]);
-    await audit(env, actor.userId, "RESIGNATION_ACCEPT", "employee", r.employee_id, `accepted; LWD ${lwd}`);
-    return json({ ok: true, acceptedLwd: lwd });
+    await recordREvent(env, id, r.employee_id, r.status, "withdrawn", "withdraw_approve", actor.userId, _s(b.remarks));
+    await audit(env, actor.userId, "RESIGNATION_WITHDRAW_APPROVE", "employee", r.employee_id, "withdrawal approved");
+    return json({ ok: true, status: "withdrawn" });
   }
-  if (action === "reject") {
-    await env.DB.prepare("UPDATE resignations SET status='rejected', hr_notes=?, decided_by=?, decided_at=datetime('now') WHERE id=?").bind(hrNotes, actor.userId, id).run();
-    await audit(env, actor.userId, "RESIGNATION_REJECT", "employee", r.employee_id, "rejected");
-    return json({ ok: true });
-  }
-  if (action === "complete") {
-    if (r.status !== "accepted") return json({ error: "accept and set the LWD before completing exit" }, 409);
-    const row = await env.DB.prepare("SELECT accepted_lwd FROM resignations WHERE id=?").bind(id).first<{ accepted_lwd: string | null }>();
-    const lwd = row?.accepted_lwd;
-    if (!lwd) return json({ error: "no accepted LWD on file" }, 409);
-    await env.DB.batch([
-      env.DB.prepare("UPDATE resignations SET status='completed', hr_notes=COALESCE(?,hr_notes), decided_by=?, decided_at=datetime('now') WHERE id=?").bind(hrNotes, actor.userId, id),
-      env.DB.prepare("UPDATE employees SET employment_status='exited', date_of_exit=?, exit_reason=COALESCE(NULLIF(exit_reason,''),'Resignation'), exit_status='relieved' WHERE id=?").bind(lwd, r.employee_id),
-    ]);
-    await audit(env, actor.userId, "RESIGNATION_COMPLETE", "employee", r.employee_id, `exit completed; date of exit ${lwd}`);
-    return json({ ok: true, dateOfExit: lwd });
-  }
-  return json({ error: "action must be accept, reject or complete" }, 400);
+  await env.DB.prepare("UPDATE resignations SET withdraw_requested=0 WHERE id=?").bind(id).run();
+  await recordREvent(env, id, r.employee_id, r.status, r.status, "withdraw_reject", actor.userId, _s(b.remarks));
+  return json({ ok: true, status: r.status, withdrawalRejected: true });
 }
 
 // Full & Final settlement ESTIMATE (review-only; never posted). Gated on payroll.read_all
@@ -1634,9 +1911,9 @@ async function handleFnF(actor: Actor, env: Env, employeeId: string, url: URL): 
   const emp = await env.DB.prepare("SELECT name, date_of_joining FROM employees WHERE id = ?").bind(employeeId).first<{ name: string; date_of_joining: string | null }>();
   if (!emp) return json({ error: "employee not found" }, 404);
   const rsg = await env.DB.prepare(
-    "SELECT resignation_date, accepted_lwd, notice_days, status FROM resignations WHERE employee_id = ? AND status IN ('accepted','completed') ORDER BY created_at DESC LIMIT 1"
+    "SELECT resignation_date, accepted_lwd, notice_days, status FROM resignations WHERE employee_id = ? AND status IN ('notice_period','clearance_pending','clearance_in_progress','clearance_completed','fnf_pending','fnf_completed','relieved') ORDER BY created_at DESC LIMIT 1"
   ).bind(employeeId).first<{ resignation_date: string; accepted_lwd: string | null; notice_days: number | null; status: string }>();
-  if (!rsg || !rsg.accepted_lwd) return json({ error: "no accepted resignation with a last working day for this employee" }, 409);
+  if (!rsg || !rsg.accepted_lwd) return json({ error: "no HR-approved resignation with a last working day for this employee" }, 409);
   const lwd = rsg.accepted_lwd;
 
   // Current (open) salary; basic+DA basis from its fixed components, else fall back to gross.
@@ -2091,6 +2368,23 @@ async function handleNotifications(actor: Actor, env: Env): Promise<Response> {
   if (hasPermission(actor.role, "profile.verify")) ap += await cnt("SELECT COUNT(*) AS n FROM profile_change_requests WHERE status='pending'", []);
   if (ap) items.push({ kind: "approvals", view: "approvals", count: ap });
 
+  // Resignation workflow: HR review queue + withdrawal requests; manager's pending approvals.
+  let rp = 0;
+  if (hasPermission(actor.role, "employee.manage")) {
+    rp += await cnt("SELECT COUNT(*) AS n FROM resignations WHERE status='pending_hr'", []);
+    rp += await cnt("SELECT COUNT(*) AS n FROM resignations WHERE withdraw_requested=1 AND status NOT IN ('withdrawn','rejected','relieved')", []);
+  }
+  if (actor.employeeId) rp += await cnt("SELECT COUNT(*) AS n FROM resignations r JOIN employees e ON e.id=r.employee_id WHERE r.status='pending_manager' AND e.manager_id=?", [actor.employeeId]);
+  if (rp) items.push({ kind: "resignations", view: "lifecycle", count: rp });
+  // Clearance tasks assigned to the actor's department(s).
+  const cdepts = clearanceDeptsForRole(actor.role);
+  if (cdepts === "ALL" || cdepts.length) {
+    let cc = 0;
+    if (cdepts === "ALL") cc = await cnt("SELECT COUNT(*) AS n FROM resignation_clearance_tasks t JOIN resignations r ON r.id=t.resignation_id WHERE t.status!='completed' AND r.status IN ('clearance_pending','clearance_in_progress')", []);
+    else { const ph = cdepts.map(() => "?").join(","); cc = await cnt(`SELECT COUNT(*) AS n FROM resignation_clearance_tasks t JOIN resignations r ON r.id=t.resignation_id WHERE t.status!='completed' AND t.department IN (${ph}) AND r.status IN ('clearance_pending','clearance_in_progress')`, cdepts); }
+    if (cc) items.push({ kind: "clearance", view: "lifecycle", count: cc });
+  }
+
   if (actor.employeeId) {
     const seg = await employeeSegment(env, actor);
     const unack = await cnt("SELECT COUNT(*) AS n FROM announcements a WHERE a.active=1 AND a.requires_ack=1 AND (a.audience='all' OR a.audience=?) AND NOT EXISTS (SELECT 1 FROM announcement_acks k WHERE k.announcement_id=a.id AND k.employee_id=? AND k.version=a.version)", [seg ?? "", actor.employeeId]);
@@ -2209,13 +2503,36 @@ export default {
       if (path === "/api/admin/profile/changes" && method === "GET") return await handlePendingChanges(actor, env);
       const pcr = path.match(/^\/api\/admin\/profile\/changes\/([^/]+)\/(approve|reject)$/);
       if (pcr && method === "POST") return await handleProfileChangeReview(actor, env, decodeURIComponent(pcr[1]), pcr[2] as "approve" | "reject");
-      // Lifecycle / tenure: resignation → notice → LWD → F&F + checklists
+      // Lifecycle / tenure: resignation & exit workflow + checklists
       if (path === "/api/lifecycle/resign" && method === "POST") return await handleResignSubmit(actor, env, request);
-      if (path === "/api/lifecycle/resignations" && method === "GET") return await handleResignList(actor, env);
+      if (path === "/api/lifecycle/resignations" && method === "GET") return await handleResignList(actor, env, url);
+      if (path === "/api/lifecycle/clearance" && method === "GET") return await handleClearanceList(actor, env);
+      const rget = path.match(/^\/api\/lifecycle\/resignations\/([^/]+)$/);
+      if (rget && method === "GET") return await handleResignGet(actor, env, decodeURIComponent(rget[1]));
+      const rhist = path.match(/^\/api\/lifecycle\/resignations\/([^/]+)\/history$/);
+      if (rhist && method === "GET") return await handleResignHistory(actor, env, decodeURIComponent(rhist[1]));
       const rwd = path.match(/^\/api\/lifecycle\/resignations\/([^/]+)\/withdraw$/);
-      if (rwd && method === "POST") return await handleResignWithdraw(actor, env, decodeURIComponent(rwd[1]));
-      const rdec = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/decide$/);
-      if (rdec && method === "POST") return await handleResignDecide(actor, env, decodeURIComponent(rdec[1]), request);
+      if (rwd && method === "POST") return await handleResignWithdraw(actor, env, decodeURIComponent(rwd[1]), request);
+      const rmgr = path.match(/^\/api\/lifecycle\/resignations\/([^/]+)\/manager-decide$/);
+      if (rmgr && method === "POST") return await handleManagerDecide(actor, env, decodeURIComponent(rmgr[1]), request);
+      const rhr = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/hr-decide$/);
+      if (rhr && method === "POST") return await handleHrDecide(actor, env, decodeURIComponent(rhr[1]), request);
+      const rclr = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/start-clearance$/);
+      if (rclr && method === "POST") return await handleStartClearance(actor, env, decodeURIComponent(rclr[1]));
+      const rfs = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/fnf-start$/);
+      if (rfs && method === "POST") return await handleFnfStart(actor, env, decodeURIComponent(rfs[1]));
+      const rfc = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/fnf-complete$/);
+      if (rfc && method === "POST") return await handleFnfComplete(actor, env, decodeURIComponent(rfc[1]), request);
+      const rrel = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/relieve$/);
+      if (rrel && method === "POST") return await handleRelieve(actor, env, decodeURIComponent(rrel[1]), request);
+      const rwv = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/waive$/);
+      if (rwv && method === "POST") return await handleWaive(actor, env, decodeURIComponent(rwv[1]), request);
+      const ret = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/edit-terms$/);
+      if (ret && method === "POST") return await handleEditTerms(actor, env, decodeURIComponent(ret[1]), request);
+      const rwdd = path.match(/^\/api\/admin\/lifecycle\/resignations\/([^/]+)\/withdraw-decide$/);
+      if (rwdd && method === "POST") return await handleWithdrawDecide(actor, env, decodeURIComponent(rwdd[1]), request);
+      const rctu = path.match(/^\/api\/admin\/lifecycle\/clearance\/([^/]+)$/);
+      if (rctu && method === "POST") return await handleClearanceUpdate(actor, env, decodeURIComponent(rctu[1]), request);
       const fnf = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/fnf$/);
       if (fnf && method === "GET") return await handleFnF(actor, env, decodeURIComponent(fnf[1]), url);
       const ckinit = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/checklist$/);

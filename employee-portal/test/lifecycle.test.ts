@@ -18,6 +18,15 @@ test("suggestLWD = tender + notice days", () => {
   assert.equal(suggestLWD("2026-11-01", 0), "2026-11-01");
 });
 
+test("LWD = resignation date + 60 calendar days (month-end & leap-year cases)", () => {
+  // leap year: Jan 1 + 60 = Mar 1 (Jan 31 + Feb 29 = 60)
+  assert.equal(suggestLWD("2024-01-01", 60), "2024-03-01");
+  // non-leap year: Jan 1 + 60 = Mar 2 (Jan 31 + Feb 28 = 59, +1)
+  assert.equal(suggestLWD("2023-01-01", 60), "2023-03-02");
+  // crossing a month end from the 31st
+  assert.equal(suggestLWD("2026-01-31", 60), "2026-04-01");
+});
+
 test("served notice and shortfall", () => {
   // full notice served → no shortfall
   assert.equal(servedNoticeDays("2026-11-01", "2026-12-01"), 30);

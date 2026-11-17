@@ -421,6 +421,62 @@ Object.assign(DICT.hi, {
   ck_pending: "लंबित", ck_done: "पूर्ण", ck_na: "लागू नहीं",
 });
 
+// Resignation & exit workflow — states, stages, reasons, actions, validation (EN/KN/HI).
+Object.assign(DICT.en, {
+  rstat_pending_manager: "Pending manager", rstat_pending_hr: "Pending HR", rstat_notice_period: "Notice period",
+  rstat_clearance_pending: "Clearance pending", rstat_clearance_in_progress: "Clearance in progress", rstat_clearance_completed: "Clearance completed",
+  rstat_fnf_pending: "F&F pending", rstat_fnf_completed: "F&F completed", rstat_relieved: "Relieved", rstat_rejected: "Rejected", rstat_withdrawn: "Withdrawn", rstat_notice_waived: "Notice waived",
+  rstage_pending_manager: "Manager", rstage_pending_hr: "HR", rstage_notice_period: "Notice", rstage_clearance_pending: "Clearance", rstage_clearance_completed: "Cleared", rstage_fnf_pending: "F&F", rstage_fnf_completed: "Settled", rstage_relieved: "Relieved",
+  rreason_better_opportunity: "Better opportunity", rreason_higher_studies: "Higher studies", rreason_relocation: "Relocation", rreason_personal: "Personal reasons", rreason_health: "Health", rreason_compensation: "Compensation", rreason_work_environment: "Work environment", rreason_career_change: "Career change", rreason_retirement: "Retirement", rreason_other: "Other",
+  resignReasonLbl: "Reason for resignation", submittedAt: "Submitted on", managerDecision: "Manager", hrDecision: "HR", dec_approve: "Approved", dec_reject: "Rejected",
+  fnfSettled: "F&F settled", clearanceProgress: "Clearance progress", history: "History", filters: "Filters", exportCsv: "Export CSV", applyFilters: "Apply", clearFilters: "Clear",
+  allStatuses: "All statuses", lwdAny: "LWD: any", lwdWithinN: "LWD ≤ {n}d", waivers: "Waivers only", dShort: "d left", daysRemaining: "days left", expectedLwd: "Expected LWD", withdrawReqPill: "Withdrawal requested",
+  clearanceTasks: "My clearance tasks", clearance_help: "Exit clearance assigned to your department. Update status and remarks; you do not see the resignation reason or approval notes.", noClearance: "No clearance tasks for you.", dueBy: "due", remarks: "Remarks",
+  clr_pending: "Pending", clr_in_progress: "In progress", clr_completed: "Completed", clr_inprogress: "In progress",
+  remarksRequired: "Remarks (required):", remarksOptional: "Remarks (optional):", reasonRequired: "Reason (required):",
+  hrApprove: "Approve (start notice)", startClearance: "Start clearance", waiveNotice: "Waive notice", newLwdPrompt: "New last working day (YYYY-MM-DD):",
+  fnfStart: "Start F&F", fnfRecord: "Record settlement", fnfAmountPrompt: "Settlement amount (₹):", fnfDatePrompt: "Settlement date (YYYY-MM-DD):",
+  markRelieved: "Mark relieved", relieveConfirm: "Mark this employee relieved?", relieveException: "Relieve (exception)", exceptionReasonPrompt: "Authorised exception — reason:",
+  editTerms: "Edit notice/LWD", noticeDaysPrompt: "Notice period (days):", approveWithdraw: "Approve withdrawal", rejectWithdraw: "Reject withdrawal",
+  requestWithdraw: "Request withdrawal", withdrawPending: "Withdrawal request pending HR decision.",
+});
+Object.assign(DICT.kn, {
+  rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
+  rstat_clearance_pending: "ಕ್ಲಿಯರೆನ್ಸ್ ಬಾಕಿ", rstat_clearance_in_progress: "ಕ್ಲಿಯರೆನ್ಸ್ ಪ್ರಗತಿಯಲ್ಲಿ", rstat_clearance_completed: "ಕ್ಲಿಯರೆನ್ಸ್ ಪೂರ್ಣ",
+  rstat_fnf_pending: "F&F ಬಾಕಿ", rstat_fnf_completed: "F&F ಪೂರ್ಣ", rstat_relieved: "ಬಿಡುಗಡೆ", rstat_rejected: "ತಿರಸ್ಕೃತ", rstat_withdrawn: "ಹಿಂಪಡೆದಿದೆ", rstat_notice_waived: "ನೋಟಿಸ್ ಮನ್ನಾ",
+  rstage_pending_manager: "ಮೇಲಧಿಕಾರಿ", rstage_pending_hr: "HR", rstage_notice_period: "ನೋಟಿಸ್", rstage_clearance_pending: "ಕ್ಲಿಯರೆನ್ಸ್", rstage_clearance_completed: "ಕ್ಲಿಯರ್", rstage_fnf_pending: "F&F", rstage_fnf_completed: "ಇತ್ಯರ್ಥ", rstage_relieved: "ಬಿಡುಗಡೆ",
+  rreason_better_opportunity: "ಉತ್ತಮ ಅವಕಾಶ", rreason_higher_studies: "ಉನ್ನತ ವ್ಯಾಸಂಗ", rreason_relocation: "ಸ್ಥಳಾಂತರ", rreason_personal: "ವೈಯಕ್ತಿಕ ಕಾರಣ", rreason_health: "ಆರೋಗ್ಯ", rreason_compensation: "ವೇತನ", rreason_work_environment: "ಕೆಲಸದ ವಾತಾವರಣ", rreason_career_change: "ವೃತ್ತಿ ಬದಲಾವಣೆ", rreason_retirement: "ನಿವೃತ್ತಿ", rreason_other: "ಇತರೆ",
+  resignReasonLbl: "ರಾಜೀನಾಮೆ ಕಾರಣ", submittedAt: "ಸಲ್ಲಿಸಿದ ದಿನ", managerDecision: "ಮೇಲಧಿಕಾರಿ", hrDecision: "HR", dec_approve: "ಅನುಮೋದಿಸಲಾಗಿದೆ", dec_reject: "ತಿರಸ್ಕೃತ",
+  fnfSettled: "F&F ಇತ್ಯರ್ಥ", clearanceProgress: "ಕ್ಲಿಯರೆನ್ಸ್ ಪ್ರಗತಿ", history: "ಇತಿಹಾಸ", filters: "ಫಿಲ್ಟರ್‌ಗಳು", exportCsv: "CSV ರಫ್ತು", applyFilters: "ಅನ್ವಯಿಸಿ", clearFilters: "ತೆರವು",
+  allStatuses: "ಎಲ್ಲಾ ಸ್ಥಿತಿಗಳು", lwdAny: "LWD: ಯಾವುದೇ", lwdWithinN: "LWD ≤ {n}ದಿ", waivers: "ಮನ್ನಾ ಮಾತ್ರ", dShort: "ದಿ ಬಾಕಿ", daysRemaining: "ದಿನ ಬಾಕಿ", expectedLwd: "ನಿರೀಕ್ಷಿತ LWD", withdrawReqPill: "ಹಿಂಪಡೆ ಕೋರಿಕೆ",
+  clearanceTasks: "ನನ್ನ ಕ್ಲಿಯರೆನ್ಸ್ ಕಾರ್ಯಗಳು", clearance_help: "ನಿಮ್ಮ ವಿಭಾಗಕ್ಕೆ ನಿಗದಿತ ನಿರ್ಗಮನ ಕ್ಲಿಯರೆನ್ಸ್. ಸ್ಥಿತಿ ಮತ್ತು ಟಿಪ್ಪಣಿ ನವೀಕರಿಸಿ; ರಾಜೀನಾಮೆ ಕಾರಣ ಅಥವಾ ಅನುಮೋದನೆ ಟಿಪ್ಪಣಿ ನಿಮಗೆ ಕಾಣಿಸದು.", noClearance: "ನಿಮಗೆ ಕ್ಲಿಯರೆನ್ಸ್ ಕಾರ್ಯಗಳಿಲ್ಲ.", dueBy: "ಗಡುವು", remarks: "ಟಿಪ್ಪಣಿ",
+  clr_pending: "ಬಾಕಿ", clr_in_progress: "ಪ್ರಗತಿಯಲ್ಲಿ", clr_completed: "ಪೂರ್ಣ", clr_inprogress: "ಪ್ರಗತಿಯಲ್ಲಿ",
+  remarksRequired: "ಟಿಪ್ಪಣಿ (ಅಗತ್ಯ):", remarksOptional: "ಟಿಪ್ಪಣಿ (ಐಚ್ಛಿಕ):", reasonRequired: "ಕಾರಣ (ಅಗತ್ಯ):",
+  hrApprove: "ಅನುಮೋದಿಸಿ (ನೋಟಿಸ್ ಆರಂಭ)", startClearance: "ಕ್ಲಿಯರೆನ್ಸ್ ಆರಂಭಿಸಿ", waiveNotice: "ನೋಟಿಸ್ ಮನ್ನಾ", newLwdPrompt: "ಹೊಸ ಕೊನೆಯ ಕೆಲಸದ ದಿನ (YYYY-MM-DD):",
+  fnfStart: "F&F ಆರಂಭಿಸಿ", fnfRecord: "ಇತ್ಯರ್ಥ ದಾಖಲಿಸಿ", fnfAmountPrompt: "ಇತ್ಯರ್ಥ ಮೊತ್ತ (₹):", fnfDatePrompt: "ಇತ್ಯರ್ಥ ದಿನಾಂಕ (YYYY-MM-DD):",
+  markRelieved: "ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸಿ", relieveConfirm: "ಈ ಉದ್ಯೋಗಿಯನ್ನು ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸುವುದೇ?", relieveException: "ಬಿಡುಗಡೆ (ವಿನಾಯಿತಿ)", exceptionReasonPrompt: "ಅಧಿಕೃತ ವಿನಾಯಿತಿ — ಕಾರಣ:",
+  editTerms: "ನೋಟಿಸ್/LWD ಸಂಪಾದಿಸಿ", noticeDaysPrompt: "ನೋಟಿಸ್ ಅವಧಿ (ದಿನಗಳು):", approveWithdraw: "ಹಿಂಪಡೆ ಅನುಮೋದಿಸಿ", rejectWithdraw: "ಹಿಂಪಡೆ ತಿರಸ್ಕರಿಸಿ",
+  requestWithdraw: "ಹಿಂಪಡೆ ಕೋರಿ", withdrawPending: "ಹಿಂಪಡೆ ಕೋರಿಕೆ HR ನಿರ್ಧಾರ ಬಾಕಿ.",
+});
+Object.assign(DICT.hi, {
+  rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
+  rstat_clearance_pending: "क्लीयरेंस लंबित", rstat_clearance_in_progress: "क्लीयरेंस प्रगति पर", rstat_clearance_completed: "क्लीयरेंस पूर्ण",
+  rstat_fnf_pending: "F&F लंबित", rstat_fnf_completed: "F&F पूर्ण", rstat_relieved: "कार्यमुक्त", rstat_rejected: "अस्वीकृत", rstat_withdrawn: "वापस लिया", rstat_notice_waived: "नोटिस माफ़",
+  rstage_pending_manager: "प्रबंधक", rstage_pending_hr: "HR", rstage_notice_period: "नोटिस", rstage_clearance_pending: "क्लीयरेंस", rstage_clearance_completed: "क्लीयर", rstage_fnf_pending: "F&F", rstage_fnf_completed: "निपटान", rstage_relieved: "कार्यमुक्त",
+  rreason_better_opportunity: "बेहतर अवसर", rreason_higher_studies: "उच्च शिक्षा", rreason_relocation: "स्थानांतरण", rreason_personal: "व्यक्तिगत कारण", rreason_health: "स्वास्थ्य", rreason_compensation: "वेतन", rreason_work_environment: "कार्य वातावरण", rreason_career_change: "करियर बदलाव", rreason_retirement: "सेवानिवृत्ति", rreason_other: "अन्य",
+  resignReasonLbl: "इस्तीफ़े का कारण", submittedAt: "प्रस्तुत तिथि", managerDecision: "प्रबंधक", hrDecision: "HR", dec_approve: "स्वीकृत", dec_reject: "अस्वीकृत",
+  fnfSettled: "F&F निपटान", clearanceProgress: "क्लीयरेंस प्रगति", history: "इतिहास", filters: "फ़िल्टर", exportCsv: "CSV निर्यात", applyFilters: "लागू करें", clearFilters: "साफ़ करें",
+  allStatuses: "सभी स्थितियाँ", lwdAny: "LWD: कोई भी", lwdWithinN: "LWD ≤ {n}द", waivers: "केवल माफ़ी", dShort: "दि शेष", daysRemaining: "दिन शेष", expectedLwd: "अपेक्षित LWD", withdrawReqPill: "वापसी अनुरोध",
+  clearanceTasks: "मेरे क्लीयरेंस कार्य", clearance_help: "आपके विभाग को सौंपी गई निकास क्लीयरेंस। स्थिति व टिप्पणी अपडेट करें; इस्तीफ़े का कारण या अनुमोदन टिप्पणी आपको नहीं दिखती।", noClearance: "आपके लिए कोई क्लीयरेंस कार्य नहीं।", dueBy: "नियत", remarks: "टिप्पणी",
+  clr_pending: "लंबित", clr_in_progress: "प्रगति पर", clr_completed: "पूर्ण", clr_inprogress: "प्रगति पर",
+  remarksRequired: "टिप्पणी (आवश्यक):", remarksOptional: "टिप्पणी (वैकल्पिक):", reasonRequired: "कारण (आवश्यक):",
+  hrApprove: "स्वीकारें (नोटिस शुरू)", startClearance: "क्लीयरेंस शुरू करें", waiveNotice: "नोटिस माफ़ करें", newLwdPrompt: "नया अंतिम कार्यदिवस (YYYY-MM-DD):",
+  fnfStart: "F&F शुरू करें", fnfRecord: "निपटान दर्ज करें", fnfAmountPrompt: "निपटान राशि (₹):", fnfDatePrompt: "निपटान तिथि (YYYY-MM-DD):",
+  markRelieved: "कार्यमुक्त करें", relieveConfirm: "इस कर्मचारी को कार्यमुक्त करें?", relieveException: "कार्यमुक्त (अपवाद)", exceptionReasonPrompt: "अधिकृत अपवाद — कारण:",
+  editTerms: "नोटिस/LWD संपादित करें", noticeDaysPrompt: "नोटिस अवधि (दिन):", approveWithdraw: "वापसी स्वीकारें", rejectWithdraw: "वापसी अस्वीकारें",
+  requestWithdraw: "वापसी का अनुरोध करें", withdrawPending: "वापसी अनुरोध HR निर्णय हेतु लंबित।",
+});
+
 // FR-04 Approvals + inline-help strings.
 Object.assign(DICT.en, {
   navApprovals: "Approvals", delegation: "Delegation", delegateTo: "Delegate to",
@@ -538,6 +594,7 @@ Object.assign(DICT.en, {
   tstatus_open: "open", tstatus_in_progress: "in progress", tstatus_done: "done", tstatus_cancelled: "cancelled",
   notifications: "Notifications", notifEmpty: "You're all caught up.",
   notif_approvals: "Approvals pending", notif_announcements: "To acknowledge", notif_tasks: "Open tasks", notif_helpdesk: "Tickets to handle",
+  notif_resignations: "Resignations to action", notif_clearance: "Clearance tasks assigned", upcomingLwd: "Last working day",
 });
 Object.assign(DICT.kn, {
   navTasks: "ಕಾರ್ಯಗಳು", tasks_help: "ನಿಮ್ಮ ಕಾರ್ಯಗಳು — ಸ್ಥಿತಿ ನವೀಕರಿಸಿ, ಸಾಕ್ಷ್ಯ ಸೇರಿಸಿ. ವ್ಯವಸ್ಥಾಪಕರು/HR ತಂಡಕ್ಕೆ ನಿಯೋಜಿಸಬಹುದು.",
@@ -548,6 +605,7 @@ Object.assign(DICT.kn, {
   tstatus_open: "ತೆರೆದಿದೆ", tstatus_in_progress: "ಪ್ರಗತಿಯಲ್ಲಿ", tstatus_done: "ಮುಗಿದಿದೆ", tstatus_cancelled: "ರದ್ದಾಗಿದೆ",
   notifications: "ಅಧಿಸೂಚನೆಗಳು", notifEmpty: "ಎಲ್ಲವೂ ಮುಗಿದಿದೆ.",
   notif_approvals: "ಅನುಮೋದನೆ ಬಾಕಿ", notif_announcements: "ಒಪ್ಪಿಗೆ ಬೇಕು", notif_tasks: "ತೆರೆದ ಕಾರ್ಯಗಳು", notif_helpdesk: "ಟಿಕೆಟ್‌ಗಳು",
+  notif_resignations: "ಕ್ರಮ ಬೇಕಾದ ರಾಜೀನಾಮೆಗಳು", notif_clearance: "ನಿಯೋಜಿತ ಕ್ಲಿಯರೆನ್ಸ್ ಕಾರ್ಯಗಳು", upcomingLwd: "ಕೊನೆಯ ಕೆಲಸದ ದಿನ",
 });
 Object.assign(DICT.hi, {
   navTasks: "कार्य", tasks_help: "आपके कार्य — स्थिति अपडेट करें, साक्ष्य जोड़ें। प्रबंधक/HR टीम को सौंप सकते हैं।",
@@ -558,6 +616,7 @@ Object.assign(DICT.hi, {
   tstatus_open: "खुला", tstatus_in_progress: "प्रगति में", tstatus_done: "पूर्ण", tstatus_cancelled: "रद्द",
   notifications: "सूचनाएँ", notifEmpty: "सब पूरा हो गया।",
   notif_approvals: "अनुमोदन लंबित", notif_announcements: "स्वीकृति हेतु", notif_tasks: "खुले कार्य", notif_helpdesk: "टिकट",
+  notif_resignations: "कार्रवाई हेतु इस्तीफ़े", notif_clearance: "सौंपे गए क्लीयरेंस कार्य", upcomingLwd: "अंतिम कार्यदिवस",
 });
 
 // FR-06 Documents strings.
@@ -719,7 +778,7 @@ const VIEWS = [
   { id: "attendance", icon: "clock", titleKey: "navAttendance" },
   { id: "tasks", icon: "task", titleKey: "navTasks" },
   { id: "employees", icon: "users", titleKey: "navEmployees", when: () => canSeeEmployees() },
-  { id: "lifecycle", icon: "cycle", titleKey: "navLifecycle", when: () => canSeeEmployees() },
+  { id: "lifecycle", icon: "cycle", titleKey: "navLifecycle", when: () => canSeeLifecycle() },
   { id: "directory", icon: "users", titleKey: "navDirectory" },
   { id: "announcements", icon: "bell", titleKey: "navAnnouncements" },
   { id: "documents", icon: "file", titleKey: "navDocuments" },
@@ -2505,7 +2564,7 @@ async function loadDashboardView() {
       const org = document.getElementById("dash_org"); clear(org); org.appendChild(el("h2", { text: t("workforce") }));
       org.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("byDept") }));
       for (const r of (d.org.byDept || [])) org.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: r.department }), el("div", { class: "v", text: String(r.n) })]));
-      const alerts = [...(d.org.contractAlerts || []).map((a) => [t("contractEnds"), a.name, a.contract_end]), ...(d.org.probationAlerts || []).map((a) => [t("probationDue"), a.name, a.probation_end])];
+      const alerts = [...(d.org.contractAlerts || []).map((a) => [t("contractEnds"), a.name, a.contract_end]), ...(d.org.probationAlerts || []).map((a) => [t("probationDue"), a.name, a.probation_end]), ...(d.org.lwdAlerts || []).map((a) => [t("upcomingLwd"), a.name, a.accepted_lwd])];
       if (alerts.length) {
         org.appendChild(el("div", { class: "muted", style: "font-size:12px;margin:10px 0 4px", text: t("alertsWord") }));
         for (const [kind, name, date] of alerts) org.appendChild(el("div", { class: "row" }, [el("div", { class: "k" }, [el("span", { class: "pill pending", text: kind })]), el("div", { class: "v", text: `${name} · ${fmtDate(date)}` })]));
@@ -2601,105 +2660,275 @@ async function loadChecklistCard(employeeId, kind) {
   } catch (ex) { clear(card); card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 
-// ---- Lifecycle view: resignation management + F&F worksheet ---------------------
-function statusPillClass(s) { return (s === "accepted" || s === "completed") ? "approved" : (s === "rejected" || s === "withdrawn") ? "rejected" : "pending"; }
+// ---- Lifecycle view: resignation & exit workflow --------------------------------
+const RESIGN_REASONS = ["better_opportunity", "higher_studies", "relocation", "personal", "health", "compensation", "work_environment", "career_change", "retirement", "other"];
+function canSeeLifecycle() { return canSeeEmployees() || ["manager", "finance", "finance_admin", "finance_approver", "it_admin"].includes(state.role); }
+function isClearanceOwner() { return ["finance", "finance_admin", "finance_approver", "it_admin"].includes(state.role); }
+function rPill(s) { return s === "relieved" ? "approved" : (s === "rejected" || s === "withdrawn") ? "rejected" : "pending"; }
+function rStatusText(s) { return t("rstat_" + s) || s; }
+function istToday() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
+function daysBetween(aIso, bIso) { return Math.round((Date.parse(bIso) - Date.parse(aIso)) / 86400000); }
+
+let _lcFilters = {};
 async function loadLifecycleView() {
   const body = document.getElementById("body"); clear(body);
   body.appendChild(el("div", { class: "actions" }, [el("div", { class: "grow" }, [h2help(t("navLifecycle"), t("lifecycle_help"))])]));
-  const wrap = el("div", { id: "lc_wrap" }, [el("div", { class: "muted", text: "…" })]);
-  body.appendChild(wrap);
+  if (isClearanceOwner() && !canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
+  if (canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
+  body.appendChild(el("div", { class: "card", id: "lc_filters" }));
+  body.appendChild(el("div", { class: "card", id: "lc_list" }, [el("div", { class: "muted", text: "…" })]));
+  body.appendChild(el("div", { id: "lc_detail" }));
+  if (canManageEmployees()) renderLcFilters();
+  loadResignList();
+}
+function renderLcFilters() {
+  const c = document.getElementById("lc_filters"); if (!c) return; clear(c);
+  const mk = (ph, key, type) => { const i = el("input", { type: type || "text", placeholder: ph, value: _lcFilters[key] || "", oninput: () => { _lcFilters[key] = i.value; } }); return i; };
+  const statusSel = el("select", {});
+  statusSel.appendChild(el("option", { value: "", text: t("allStatuses") }));
+  for (const s of ["pending_manager", "pending_hr", "notice_period", "clearance_pending", "clearance_in_progress", "clearance_completed", "fnf_pending", "fnf_completed", "relieved", "rejected", "withdrawn"]) statusSel.appendChild(el("option", { value: s, text: rStatusText(s), ...(_lcFilters.status === s ? { selected: "" } : {}) }));
+  statusSel.addEventListener("change", () => { _lcFilters.status = statusSel.value; });
+  const lwdSel = el("select", {});
+  lwdSel.appendChild(el("option", { value: "", text: t("lwdAny") }));
+  for (const d of [7, 15, 30]) lwdSel.appendChild(el("option", { value: String(d), text: t("lwdWithinN").replace("{n}", d), ...(_lcFilters.lwdWithin === String(d) ? { selected: "" } : {}) }));
+  lwdSel.addEventListener("change", () => { _lcFilters.lwdWithin = lwdSel.value; });
+  const q = mk(t("searchEmp"), "q");
+  const dept = mk(t("department"), "department");
+  const loc = mk(t("location"), "location");
+  const pending = el("label", { style: "display:flex;gap:6px;align-items:center;font-size:13px" }, [el("input", { type: "checkbox", ...(_lcFilters.pending ? { checked: "" } : {}), onchange: (e) => { _lcFilters.pending = e.target.checked ? "1" : ""; } }), el("span", { text: t("pendingApprovals") })]);
+  const waivers = el("label", { style: "display:flex;gap:6px;align-items:center;font-size:13px" }, [el("input", { type: "checkbox", ...(_lcFilters.waivers ? { checked: "" } : {}), onchange: (e) => { _lcFilters.waivers = e.target.checked ? "1" : ""; } }), el("span", { text: t("waivers") })]);
+  c.appendChild(el("div", { class: "actions", style: "flex-wrap:wrap;gap:8px;align-items:center" }, [
+    el("div", { class: "grow" }, [el("h2", { style: "margin:0;font-size:15px", text: t("filters") })]),
+    el("button", { class: "sm", text: t("exportCsv"), onclick: () => exportResignCsv() }),
+  ]));
+  c.appendChild(el("div", { class: "actions", style: "flex-wrap:wrap;gap:8px;margin-top:8px" }, [q, dept, loc, statusSel, lwdSel, pending, waivers,
+    el("button", { class: "primary sm", text: t("applyFilters"), onclick: () => loadResignList() }),
+    el("button", { class: "sm", text: t("clearFilters"), onclick: () => { _lcFilters = {}; renderLcFilters(); loadResignList(); } }),
+  ]));
+}
+let _lcRows = [];
+async function loadResignList() {
+  const c = document.getElementById("lc_list"); if (!c) return;
+  clear(c); c.appendChild(el("div", { class: "muted", text: "…" }));
+  const qs = canManageEmployees() ? "?" + Object.entries(_lcFilters).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&") : "";
   try {
-    const { resignations, manage } = await api("/api/lifecycle/resignations");
-    clear(wrap);
-    const card = el("div", { class: "card" }, [el("h2", { text: t("resignations") })]);
-    if (!resignations.length) card.appendChild(el("div", { class: "muted", text: t("noResignations") }));
-    for (const r of resignations) card.appendChild(resignRow(r, manage));
-    wrap.appendChild(card);
-    wrap.appendChild(el("div", { class: "card", id: "fnf_card", style: "display:none" }));
-  } catch (ex) { clear(wrap); wrap.appendChild(el("div", { class: "msg err", text: ex.message })); }
-}
-function resignRow(r, manage) {
-  const lwdInput = el("input", { type: "date", value: r.accepted_lwd || r.requested_lwd || "" });
-  const act = async (action, extra) => {
-    try { await api(`/api/admin/lifecycle/resignations/${encodeURIComponent(r.id)}/decide`, { method: "POST", body: Object.assign({ action }, extra || {}) }); flash("ok", t("saved")); loadLifecycleView(); }
-    catch (ex) { flash("err", ex.message); }
-  };
-  const actions = el("div", { class: "actions", style: "flex-wrap:wrap;gap:6px;margin-top:6px" });
-  if (manage) {
-    if (r.status === "submitted" || r.status === "accepted") {
-      actions.appendChild(el("span", { class: "muted", style: "font-size:12px", text: t("lwdLabel") }));
-      actions.appendChild(lwdInput);
-      actions.appendChild(el("button", { class: "primary sm", text: r.status === "accepted" ? t("updateLwd") : t("acceptResign"), onclick: () => act("accept", { acceptedLwd: lwdInput.value }) }));
+    const { resignations, manage } = await api("/api/lifecycle/resignations" + qs);
+    _lcRows = resignations || [];
+    clear(c);
+    c.appendChild(el("h2", { text: t("resignations") + ` · ${_lcRows.length}` }));
+    if (!_lcRows.length) { c.appendChild(el("div", { class: "muted", text: t("noResignations") })); return; }
+    for (const r of _lcRows) {
+      const remain = r.accepted_lwd ? daysBetween(istToday(), r.accepted_lwd) : null;
+      c.appendChild(el("div", { class: "row", style: "cursor:pointer", role: "button", tabindex: "0", onclick: () => openResignDetail(r.id), onkeydown: (e) => { if (e.key === "Enter") openResignDetail(r.id); } }, [
+        el("div", { class: "k" }, [
+          el("div", { text: r.employee_name || t("you") }),
+          el("div", { class: "muted", style: "font-size:12px", text: [r.department, r.location].filter(Boolean).join(" · ") || `${t("tenderedOn")} ${fmtDate(r.resignation_date)}` }),
+        ]),
+        el("div", { class: "v" }, [
+          el("span", { class: "pill " + rPill(r.status), text: rStatusText(r.status) }),
+          r.waived ? el("span", { class: "pill", style: "margin-left:6px", text: t("rstat_notice_waived") }) : null,
+          r.withdraw_requested ? el("span", { class: "pill pending", style: "margin-left:6px", text: t("withdrawReqPill") }) : null,
+          r.accepted_lwd ? el("span", { style: "margin-left:8px;font-size:12px", text: `${t("lwdLabel")} ${fmtDate(r.accepted_lwd)}${remain != null && remain >= 0 && r.status !== "relieved" ? ` · ${remain}${t("dShort")}` : ""}` }) : null,
+        ]),
+      ]));
     }
-    if (r.status === "submitted") actions.appendChild(el("button", { class: "sm", text: t("reject"), onclick: () => act("reject") }));
-    if (r.status === "accepted") actions.appendChild(el("button", { class: "sm", text: t("completeExit"), onclick: () => { if (confirm(t("completeExitConfirm"))) act("complete"); } }));
-    if (canViewPayroll() && (r.status === "accepted" || r.status === "completed")) actions.appendChild(el("button", { class: "sm", text: t("viewFnf"), onclick: () => loadFnF(r.employee_id) }));
-  }
-  return el("div", { class: "row" }, [
-    el("div", { class: "k" }, [el("div", { text: r.employee_name || t("you") }), el("div", { class: "muted", style: "font-size:12px", text: `${t("tenderedOn")} ${fmtDate(r.resignation_date)}` }), r.reason ? el("div", { class: "muted", style: "font-size:11px;font-style:italic", text: r.reason }) : null]),
-    el("div", { class: "v" }, [
-      el("div", {}, [el("span", { class: "pill " + statusPillClass(r.status), text: t("rstat_" + r.status) || r.status }), r.accepted_lwd ? el("span", { style: "margin-left:8px;font-size:12px", text: `${t("lwdLabel")} ${fmtDate(r.accepted_lwd)}` }) : null]),
-      actions,
-    ]),
-  ]);
+  } catch (ex) { clear(c); c.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
-async function loadFnF(employeeId) {
-  const card = document.getElementById("fnf_card"); if (!card) return;
-  card.style.display = "block"; clear(card); card.appendChild(el("div", { class: "muted", text: "…" }));
+function exportResignCsv() {
+  if (!_lcRows.length) { flash("err", t("noResignations")); return; }
+  const cols = ["employee_name", "department", "location", "status", "resignation_date", "created_at", "accepted_lwd", "notice_days", "waived", "fnf_date"];
+  const esc = (v) => { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [cols.join(",")].concat(_lcRows.map((r) => cols.map((k) => esc(r[k])).join(",")));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `resignations-${istToday()}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+// Clearance-owner card: only the actor's department tasks, no reason/approval remarks.
+async function loadClearanceOwnerCard() {
+  const c = document.getElementById("lc_clearance"); if (!c) return;
+  try {
+    const { tasks } = await api("/api/lifecycle/clearance");
+    clear(c); c.appendChild(h2help(t("clearanceTasks"), t("clearance_help")));
+    if (!tasks.length) { c.appendChild(el("div", { class: "muted", text: t("noClearance") })); return; }
+    for (const tk of tasks) {
+      const sel = el("select", {});
+      for (const [v, k] of [["pending", "ck_pending"], ["in_progress", "clr_inprogress"], ["completed", "ck_done"]]) sel.appendChild(el("option", { value: v, text: t(k), ...(tk.status === v ? { selected: "" } : {}) }));
+      const remarks = el("input", { placeholder: t("remarks"), value: tk.remarks || "", style: "max-width:160px" });
+      const saveBtn = el("button", { class: "sm", text: t("save"), onclick: async () => { try { await api(`/api/admin/lifecycle/clearance/${encodeURIComponent(tk.id)}`, { method: "POST", body: { status: sel.value, remarks: remarks.value } }); flash("ok", t("saved")); loadClearanceOwnerCard(); } catch (ex) { flash("err", ex.message); } } });
+      c.appendChild(el("div", { class: "row" }, [
+        el("div", { class: "k" }, [el("div", { text: tk.employee_name || tk.employee_id }), el("div", { class: "muted", style: "font-size:12px", text: `${tk.department}${tk.due_date ? " · " + t("dueBy") + " " + fmtDate(tk.due_date) : ""}` })]),
+        el("div", { class: "v" }, [el("div", { class: "actions", style: "flex-wrap:wrap;gap:6px" }, [sel, remarks, saveBtn])]),
+      ]));
+    }
+  } catch (ex) { clear(c); c.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+// Resignation detail + workflow actions (HR / manager).
+async function openResignDetail(id) {
+  const panel = document.getElementById("lc_detail"); if (!panel) return;
+  clear(panel); panel.appendChild(el("div", { class: "card", id: "lc_detail_card" }, [el("div", { class: "muted", text: "…" })]));
+  try {
+    const d = await api(`/api/lifecycle/resignations/${encodeURIComponent(id)}`);
+    const r = d.resignation;
+    const card = document.getElementById("lc_detail_card"); clear(card);
+    card.appendChild(el("div", { class: "actions" }, [el("div", { class: "grow" }, [el("h2", { style: "margin:0", text: r.employee_name || t("you") })]), el("span", { class: "pill " + rPill(r.status), text: rStatusText(r.status) })]));
+    // tracker chips
+    card.appendChild(trackerChips(d.stageOrder, d.stageIndex, r.status));
+    // key facts
+    const facts = el("div", { style: "margin-top:8px" });
+    facts.appendChild(row(t("resignReasonLbl"), el("span", { text: (r.reason_code ? t("rreason_" + r.reason_code) || r.reason_code : "") + (r.reason ? " — " + r.reason : "") || t("none") })));
+    facts.appendChild(row(t("tenderDate"), el("span", { text: fmtDate(r.resignation_date) })));
+    facts.appendChild(row(t("submittedAt"), el("span", { text: r.created_at ? fmtDate(String(r.created_at).slice(0, 10)) : t("none") })));
+    facts.appendChild(row(t("noticePeriod"), el("span", { text: (r.notice_days != null ? r.notice_days + " " + t("daysWord") : t("none")) + (r.waived ? " · " + t("rstat_notice_waived") : "") })));
+    facts.appendChild(row(t("lwdLabel"), el("span", { text: r.accepted_lwd ? fmtDate(r.accepted_lwd) : (r.requested_lwd ? fmtDate(r.requested_lwd) + " (" + t("suggestedWord") + ")" : t("none")) })));
+    if (r.manager_decision) facts.appendChild(row(t("managerDecision"), el("span", { text: t("dec_" + r.manager_decision) + (r.manager_remarks ? " — " + r.manager_remarks : "") })));
+    if (r.hr_decision) facts.appendChild(row(t("hrDecision"), el("span", { text: t("dec_" + r.hr_decision) + (r.hr_remarks ? " — " + r.hr_remarks : "") })));
+    if (r.fnf_amount_paise != null) facts.appendChild(row(t("fnfSettled"), el("span", { text: fmtINR(r.fnf_amount_paise / 100) + (r.fnf_date ? " · " + fmtDate(r.fnf_date) : "") })));
+    card.appendChild(facts);
+    // clearance progress
+    if (d.clearance && d.clearance.length) {
+      const prog = el("div", { style: "margin-top:8px" }, [el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: t("clearanceProgress") })]);
+      for (const tk of d.clearance) prog.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: tk.department }), el("div", { class: "v" }, [el("span", { class: "pill " + (tk.status === "completed" ? "approved" : tk.status === "in_progress" ? "pending" : ""), text: t("clr_" + tk.status) || tk.status })])]));
+      card.appendChild(prog);
+    }
+    // actions
+    card.appendChild(resignActions(r, id));
+    // F&F worksheet container
+    card.appendChild(el("div", { id: "lc_fnf", style: "margin-top:10px" }));
+    // history
+    const hist = el("details", { style: "margin-top:10px" }, [el("summary", { style: "cursor:pointer;font-weight:600", text: t("history") })]);
+    for (const ev of (d.events || [])) hist.appendChild(el("div", { class: "row" }, [el("div", { class: "k", style: "font-size:12px", text: String(ev.at).slice(0, 16).replace("T", " ") }), el("div", { class: "v", style: "font-size:12px" }, [el("span", { text: `${ev.prev_status ? rStatusText(ev.prev_status) + " → " : ""}${rStatusText(ev.new_status)}` }), ev.remarks ? el("div", { class: "muted", style: "font-size:11px", text: ev.remarks }) : null])]));
+    card.appendChild(hist);
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (ex) { const card = document.getElementById("lc_detail_card"); if (card) { clear(card); card.appendChild(el("div", { class: "msg err", text: ex.message })); } }
+}
+function trackerChips(order, idx, status) {
+  const wrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:6px;margin-top:4px" });
+  if (status === "rejected" || status === "withdrawn") { wrap.appendChild(el("span", { class: "pill rejected", text: rStatusText(status) })); return wrap; }
+  (order || []).forEach((s, i) => {
+    const done = i < idx, cur = i === idx;
+    wrap.appendChild(el("span", { class: "pill " + (done ? "approved" : cur ? "pending" : ""), style: cur ? "font-weight:700" : (done ? "" : "opacity:.5"), text: t("rstage_" + s) || s }));
+  });
+  return wrap;
+}
+function resignActions(r, id) {
+  const wrap = el("div", { class: "actions", style: "flex-wrap:wrap;gap:6px;margin-top:10px" });
+  const post = async (sub, body, confirmMsg) => { if (confirmMsg && !confirm(confirmMsg)) return; try { await api(`/api/admin/lifecycle/resignations/${encodeURIComponent(id)}/${sub}`, { method: "POST", body: body || {} }); flash("ok", t("saved")); openResignDetail(id); loadResignList(); } catch (ex) { flash("err", ex.message); } };
+  const postPub = async (sub, body) => { try { await api(`/api/lifecycle/resignations/${encodeURIComponent(id)}/${sub}`, { method: "POST", body: body || {} }); flash("ok", t("saved")); openResignDetail(id); loadResignList(); } catch (ex) { flash("err", ex.message); } };
+  const askRemarks = (label) => { const x = prompt(label); return x == null ? null : x; };
+  const isHr = canManageEmployees();
+  const isMgr = state.role === "manager";
+  // Manager decision
+  if (r.status === "pending_manager" && (isHr || isMgr)) {
+    wrap.appendChild(el("button", { class: "primary sm", text: t("approve"), onclick: () => { const m = askRemarks(t("remarksRequired")); if (!m) return; postPub("manager-decide", { decision: "approve", remarks: m }); } }));
+    wrap.appendChild(el("button", { class: "sm", text: t("reject"), onclick: () => { const m = askRemarks(t("remarksRequired")); if (!m) return; postPub("manager-decide", { decision: "reject", remarks: m }); } }));
+  }
+  // HR review
+  if (r.status === "pending_hr" && isHr) {
+    const lwd = el("input", { type: "date", value: r.requested_lwd || "", title: t("lwdLabel") });
+    wrap.appendChild(lwd);
+    wrap.appendChild(el("button", { class: "primary sm", text: t("hrApprove"), onclick: () => { const m = prompt(t("remarksOptional")) || ""; post("hr-decide", { decision: "approve", acceptedLwd: lwd.value || undefined, remarks: m }); } }));
+    wrap.appendChild(el("button", { class: "sm", text: t("reject"), onclick: () => { const m = askRemarks(t("remarksRequired")); if (!m) return; post("hr-decide", { decision: "reject", remarks: m }); } }));
+  }
+  if (isHr) {
+    if (r.status === "notice_period") {
+      wrap.appendChild(el("button", { class: "primary sm", text: t("startClearance"), onclick: () => post("start-clearance") }));
+      wrap.appendChild(el("button", { class: "sm", text: t("waiveNotice"), onclick: () => { const nl = prompt(t("newLwdPrompt")); if (!nl) return; const rs = prompt(t("reasonRequired")); if (!rs) return; post("waive", { newLwd: nl, reason: rs }); } }));
+    }
+    if (r.status === "clearance_completed") wrap.appendChild(el("button", { class: "primary sm", text: t("fnfStart"), onclick: () => post("fnf-start") }));
+    if (r.status === "fnf_pending") wrap.appendChild(el("button", { class: "primary sm", text: t("fnfRecord"), onclick: () => { const amt = prompt(t("fnfAmountPrompt")); if (amt == null) return; const dt = prompt(t("fnfDatePrompt"), istToday()) || istToday(); const rm = prompt(t("remarksOptional")) || ""; post("fnf-complete", { amountRupees: amt, date: dt, remarks: rm }); } }));
+    if (r.status === "fnf_completed") wrap.appendChild(el("button", { class: "primary sm", text: t("markRelieved"), onclick: () => post("relieve", {}, t("relieveConfirm")) }));
+    // exception relieve for any active non-final state
+    if (!["relieved", "rejected", "withdrawn", "fnf_completed"].includes(r.status)) wrap.appendChild(el("button", { class: "sm", text: t("relieveException"), onclick: () => { const rs = prompt(t("exceptionReasonPrompt")); if (!rs) return; post("relieve", { exception: true, reason: rs }); } }));
+    // edit terms (active states)
+    if (!["relieved", "rejected", "withdrawn"].includes(r.status)) wrap.appendChild(el("button", { class: "sm", text: t("editTerms"), onclick: () => { const nd = prompt(t("noticeDaysPrompt"), String(r.notice_days || 60)); if (nd == null) return; const rs = prompt(t("reasonRequired")); if (!rs) return; post("edit-terms", { noticeDays: nd, reason: rs }); } }));
+    // withdrawal request decision
+    if (r.withdraw_requested) {
+      wrap.appendChild(el("button", { class: "sm", text: t("approveWithdraw"), onclick: () => post("withdraw-decide", { decision: "approve" }) }));
+      wrap.appendChild(el("button", { class: "sm", text: t("rejectWithdraw"), onclick: () => post("withdraw-decide", { decision: "reject" }) }));
+    }
+    if (canViewPayroll() && r.accepted_lwd) wrap.appendChild(el("button", { class: "sm", text: t("viewFnf"), onclick: () => loadFnF(r.employee_id, "lc_fnf") }));
+  }
+  return wrap;
+}
+async function loadFnF(employeeId, containerId) {
+  const card = document.getElementById(containerId || "lc_fnf"); if (!card) return;
+  clear(card); card.appendChild(el("div", { class: "muted", text: "…" }));
   try {
     const d = await api(`/api/admin/lifecycle/employees/${encodeURIComponent(employeeId)}/fnf`);
     const w = d.worksheet; clear(card);
-    card.appendChild(el("h2", { text: t("fnfTitle") + " — " + d.employee.name }));
+    card.appendChild(el("h2", { style: "font-size:15px", text: t("fnfTitle") }));
     card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:6px", text: `${t("lwdLabel")} ${fmtDate(d.lwd)} · ${t("tenureWord")}: ${w.tenure.completedYears} ${t("yrWord")} · ${t("basisWord")}: ${d.basisLabel}` }));
-    for (const l of w.lines) {
-      card.appendChild(el("div", { class: "row" }, [
-        el("div", { class: "k" }, [el("div", { text: l.label }), l.note ? el("div", { class: "muted", style: "font-size:11px", text: l.note }) : null]),
-        el("div", { class: "v" }, [el("span", { style: "color:" + (l.kind === "deduction" ? "var(--bad)" : "var(--ok)"), text: (l.kind === "deduction" ? "− " : "+ ") + fmtINR(l.amountPaise / 100) })]),
-      ]));
-    }
-    card.appendChild(el("div", { class: "row", style: "font-weight:700;border-top:1px solid rgba(128,128,128,.25);margin-top:4px;padding-top:8px" }, [
-      el("div", { class: "k", text: t("fnfNet") }),
-      el("div", { class: "v" }, [el("span", { text: fmtINR(w.estimatedNetPaise / 100) })]),
+    for (const l of w.lines) card.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "k" }, [el("div", { text: l.label }), l.note ? el("div", { class: "muted", style: "font-size:11px", text: l.note }) : null]),
+      el("div", { class: "v" }, [el("span", { style: "color:" + (l.kind === "deduction" ? "var(--bad)" : "var(--ok)"), text: (l.kind === "deduction" ? "− " : "+ ") + fmtINR(l.amountPaise / 100) })]),
     ]));
+    card.appendChild(el("div", { class: "row", style: "font-weight:700;border-top:1px solid rgba(128,128,128,.25);margin-top:4px;padding-top:8px" }, [el("div", { class: "k", text: t("fnfNet") }), el("div", { class: "v" }, [el("span", { text: fmtINR(w.estimatedNetPaise / 100) })])]));
     if (w.gratuity && w.gratuity.eligible === false) card.appendChild(el("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: t("gratNotEligible") }));
     card.appendChild(el("div", { class: "msg", style: "font-size:11px;margin-top:8px;background:color-mix(in srgb,var(--warn) 10%,var(--card));color:var(--warn)", text: w.disclaimer }));
-    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (ex) { clear(card); card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
-// Employee self-service resignation card (My profile).
+// Employee self-service resignation card + progress tracker (My profile).
 async function loadResignCard() {
   const card = document.getElementById("resign_card"); if (!card) return;
   clear(card); card.appendChild(h2help(t("resignTitle"), t("resign_help")));
   try {
-    const { resignations } = await api("/api/lifecycle/resignations");
-    const open = (resignations || []).find((r) => r.status === "submitted" || r.status === "accepted");
+    const d = await api("/api/lifecycle/resignations");
+    const open = (d.resignations || []).find((r) => !["rejected", "withdrawn", "relieved"].includes(r.status));
     if (open) {
-      card.appendChild(row(t("statusLbl"), el("span", { class: "pill " + statusPillClass(open.status), text: t("rstat_" + open.status) || open.status })));
-      card.appendChild(row(t("tenderedOn"), el("span", { text: fmtDate(open.resignation_date) })));
-      card.appendChild(row(t("lwdLabel"), el("span", { text: open.accepted_lwd ? fmtDate(open.accepted_lwd) : (open.requested_lwd ? fmtDate(open.requested_lwd) + " (" + t("suggestedWord") + ")" : t("none")) })));
-      if (open.status === "submitted") {
-        card.appendChild(el("div", { class: "actions", style: "margin-top:8px" }, [el("button", { class: "sm", text: t("withdraw"), onclick: async () => { if (!confirm(t("withdrawConfirm"))) return; try { await api(`/api/lifecycle/resignations/${encodeURIComponent(open.id)}/withdraw`, { method: "POST" }); flash("ok", t("saved")); loadResignCard(); } catch (ex) { flash("err", ex.message); } } })]));
+      const detail = await api(`/api/lifecycle/resignations/${encodeURIComponent(open.id)}`);
+      const r = detail.resignation;
+      card.appendChild(trackerChips(detail.stageOrder, detail.stageIndex, r.status));
+      card.appendChild(row(t("statusLbl"), el("span", { class: "pill " + rPill(r.status), text: rStatusText(r.status) })));
+      card.appendChild(row(t("tenderDate"), el("span", { text: fmtDate(r.resignation_date) })));
+      card.appendChild(row(t("submittedAt"), el("span", { text: r.created_at ? fmtDate(String(r.created_at).slice(0, 10)) : t("none") })));
+      card.appendChild(row(t("noticePeriod"), el("span", { text: r.notice_days != null ? r.notice_days + " " + t("daysWord") : t("none") })));
+      const remain = r.accepted_lwd ? daysBetween(istToday(), r.accepted_lwd) : null;
+      card.appendChild(row(t("lwdLabel"), el("span", { text: r.accepted_lwd ? fmtDate(r.accepted_lwd) + (remain != null && remain >= 0 ? ` · ${remain} ${t("daysRemaining")}` : "") : (r.requested_lwd ? fmtDate(r.requested_lwd) + " (" + t("suggestedWord") + ")" : t("none")) })));
+      if (detail.clearance && detail.clearance.length) {
+        const done = detail.clearance.filter((c) => c.status === "completed").length;
+        card.appendChild(row(t("clearanceProgress"), el("span", { text: `${done}/${detail.clearance.length}` })));
       }
+      if (r.withdraw_requested) card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-top:6px", text: t("withdrawPending") }));
+      // withdraw / request withdrawal
+      if (!r.withdraw_requested) {
+        const pre = r.status === "pending_manager" || r.status === "pending_hr";
+        card.appendChild(el("div", { class: "actions", style: "margin-top:8px" }, [el("button", { class: "sm", text: pre ? t("withdraw") : t("requestWithdraw"), onclick: async () => { const m = prompt(t("remarksRequired")); if (!m) return; try { await api(`/api/lifecycle/resignations/${encodeURIComponent(open.id)}/withdraw`, { method: "POST", body: { remarks: m } }); flash("ok", t("saved")); loadResignCard(); } catch (ex) { flash("err", ex.message); } } })]));
+      }
+      const hist = el("details", { style: "margin-top:10px" }, [el("summary", { style: "cursor:pointer;font-weight:600", text: t("history") })]);
+      for (const ev of (detail.events || [])) hist.appendChild(el("div", { class: "row" }, [el("div", { class: "k", style: "font-size:12px", text: String(ev.at).slice(0, 16).replace("T", " ") }), el("div", { class: "v", style: "font-size:12px", text: `${ev.prev_status ? rStatusText(ev.prev_status) + " → " : ""}${rStatusText(ev.new_status)}` })]));
+      card.appendChild(hist);
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
-    const date = el("input", { type: "date", value: today });
-    const reason = el("input", { placeholder: t("reasonOptional") });
+    // tender form
+    const yesterday = new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+    const date = el("input", { type: "date", value: yesterday, max: yesterday });
+    const reasonSel = el("select", {});
+    reasonSel.appendChild(el("option", { value: "", text: "—" }));
+    for (const rc of RESIGN_REASONS) reasonSel.appendChild(el("option", { value: rc, text: t("rreason_" + rc) }));
+    const remarks = el("input", { placeholder: t("remarksOptional") });
+    const n = state.emp && state.emp.noticePeriodDays != null ? state.emp.noticePeriodDays : 60;
+    const lwdPreview = el("div", { class: "muted", style: "font-size:12px;margin-top:4px" });
+    const updatePreview = () => { lwdPreview.textContent = date.value ? `${t("expectedLwd")}: ${fmtDate(addDaysISOc(date.value, n))} (${n} ${t("daysWord")})` : ""; };
+    date.addEventListener("input", updatePreview); updatePreview();
     const submit = el("button", { class: "primary sm", text: t("tenderResign") });
     submit.addEventListener("click", async () => {
+      if (!reasonSel.value) { flash("err", t("reasonRequired")); return; }
       if (!confirm(t("tenderConfirm"))) return;
       submit.disabled = true;
-      try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reason: reason.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
+      try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
       catch (ex) { flash("err", ex.message); submit.disabled = false; }
     });
     const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
-    const n = state.emp && state.emp.noticePeriodDays != null ? state.emp.noticePeriodDays : 30;
     card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:6px", text: t("noticeOnFile").replace("{n}", n) }));
+    card.appendChild(fr(t("resignReasonLbl"), reasonSel));
     card.appendChild(fr(t("tenderDate"), date));
-    card.appendChild(fr(t("reasonOptional"), reason));
+    card.appendChild(fr(t("remarksOptional"), remarks));
+    card.appendChild(lwdPreview);
     card.appendChild(el("div", { class: "actions", style: "margin-top:8px" }, [submit]));
   } catch (ex) { card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
+// Local calendar-day add for the LWD preview (mirrors the server's suggestLWD).
+function addDaysISOc(iso, n) { const t2 = new Date(Date.parse(iso + "T00:00:00Z") + n * 86400000); return t2.toISOString().slice(0, 10); }
 // Fetch a stored cheque/passbook data URL and open it (image or PDF) in a new tab.
 async function openBankProof(url) {
   try {

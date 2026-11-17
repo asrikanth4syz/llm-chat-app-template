@@ -159,10 +159,21 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | GET | `/api/me/bank-proof` | owner | own stored cancelled-cheque / passbook data URL (kept out of list/profile payloads) |
 | GET | `/api/admin/employees/:id/bank-proof` | sensitive-read-all | an employee's cancelled-cheque / passbook (audited `BANK_PROOF_VIEW`) |
 | POST | `/api/admin/profile/changes/:id/approve`·`/reject` | hr_admin, super_admin | verify a pending bank/identity change (`profile.verify`) |
-| POST | `/api/lifecycle/resign` | any login (self); employee.manage (on behalf) | tender a resignation `{resignationDate?,reason?,requestedLwd?,employeeId?}` — snapshots the notice term; 409 if one is already open |
-| GET | `/api/lifecycle/resignations` | any login | own resignations; employee.manage sees all (with names) |
-| POST | `/api/lifecycle/resignations/:id/withdraw` | owner | withdraw own resignation while still `submitted` |
-| POST | `/api/admin/lifecycle/resignations/:id/decide` | employee.manage | `{action: accept\|reject\|complete, acceptedLwd?, hrNotes?}` — accept→notice, complete→exited (+date_of_exit) |
+| POST | `/api/lifecycle/resign` | any login (self); employee.manage (on behalf) | tender a resignation `{reasonCode*,resignationDate?,reason?,noticeDays?(HR),employeeId?}` — date must be ≤ yesterday (IST); 409 if one is active |
+| GET | `/api/lifecycle/resignations` | any login | own; manager sees team; employee.manage sees all + filters (`status,department,location,q,lwdWithin,pending,waivers`) |
+| GET | `/api/lifecycle/resignations/:id` | owner / manager / HR | full detail + immutable history + clearance (F&F amount hidden from manager) |
+| GET | `/api/lifecycle/resignations/:id/history` | owner / manager / HR | immutable event trail (prev→new, actor, timestamp, remarks) |
+| POST | `/api/lifecycle/resignations/:id/manager-decide` | reporting manager / HR | `{decision: approve\|reject, remarks*}` — approve → pending HR |
+| POST | `/api/lifecycle/resignations/:id/withdraw` | owner | `{remarks*}` — direct before HR approval; a request (HR-decided) afterwards |
+| POST | `/api/admin/lifecycle/resignations/:id/hr-decide` | employee.manage | `{decision, remarks, acceptedLwd?, noticeDays?}` — approve → notice period |
+| POST | `/api/admin/lifecycle/resignations/:id/start-clearance` | employee.manage | seed department clearance tasks → clearance_pending |
+| POST | `/api/admin/lifecycle/resignations/:id/fnf-start` · `/fnf-complete` | employee.manage | start F&F; record `{amountRupees,date,remarks}` |
+| POST | `/api/admin/lifecycle/resignations/:id/relieve` | employee.manage | `{exception?,reason?}` — from fnf_completed, or exception w/ reason |
+| POST | `/api/admin/lifecycle/resignations/:id/waive` | employee.manage | `{newLwd*,reason*}` — notice waiver, recalculates LWD |
+| POST | `/api/admin/lifecycle/resignations/:id/edit-terms` | employee.manage | `{noticeDays?,lwd?,reason*}` — authorised notice/LWD change |
+| POST | `/api/admin/lifecycle/resignations/:id/withdraw-decide` | employee.manage | `{decision}` — approve/reject a post-HR withdrawal request |
+| GET | `/api/lifecycle/clearance` | Finance/IT (own dept) / HR (all) | clearance tasks only; no reason/approval remarks |
+| POST | `/api/admin/lifecycle/clearance/:taskId` | dept owner / HR | `{status,remarks,completionDate?,dueDate?}` — recomputes overall clearance |
 | GET | `/api/admin/lifecycle/employees/:id/fnf` | payroll.read_all | Full & Final **estimate** (review-only; `?recover=0` drops notice recovery) |
 | GET·POST | `/api/lifecycle/employees/:id/checklist?kind=` | GET own/read_all; POST (init) employee.manage | onboarding/offboarding checklist (seed + read) |
 | POST | `/api/admin/lifecycle/checklist/:itemId` | employee.manage | tick a checklist item `{status: pending\|done\|na, note?}` |
@@ -452,15 +463,42 @@ From the mock/Section-17 design review (`docs/design-review-mock-and-section17.m
 
 ## Lifecycle / tenure (resignation → notice → LWD → F&F + checklists)
 
-Migration `0023`; pure engine `src/lifecycle.ts` (9 unit tests).
+Migrations `0023` (base) + `0024` (full workflow); pure engines `src/lifecycle.ts` (F&F, 10
+unit tests) and `src/resignation.ts` (state machine, 10 unit tests). All resignation date logic
+uses **IST** (org time zone). Config lives in `portal_config` (notice default 60, reminder
+intervals, clearance departments, clearance auto-days) — nothing is hardcoded.
 
-- **Resignation flow.** An employee tenders their own resignation from **My profile →
-  Resignation / exit** (date + reason); HR can also record one on an employee's behalf. The
-  **notice term** (`employees.notice_period_days`) is snapshotted at tender and drives the
-  suggested **last working day** (`suggestLWD` = tender + notice). HR works the queue in the
-  new **Lifecycle** tab: **accept** (sets the LWD, moves the employee to `notice`), **reject**,
-  or **complete** (sets `exited` + `date_of_exit` + exit reason). The employee can **withdraw**
-  while still `submitted`. One open resignation per employee.
+- **Resignation form.** Reason is a **mandatory dropdown** (`reason_code`) plus free-text
+  remarks. Resignation date **defaults to yesterday (IST)** and must be yesterday-or-earlier —
+  today and future are blocked. The submission timestamp (`created_at`) is stored separately.
+  Notice period defaults to **60 calendar days**, is **read-only for the employee** (HR may set
+  it), and the expected LWD auto-calculates (`resignation_date + notice`, calendar days). A
+  second request is blocked while any request is active (every state except Rejected, Withdrawn,
+  Relieved); Rejected/Withdrawn may be resubmitted.
+- **Workflow** (state machine, `src/resignation.ts`): `pending_manager → pending_hr →
+  notice_period → clearance_pending → clearance_in_progress → clearance_completed →
+  fnf_pending → fnf_completed → relieved`; side states `rejected`, `withdrawn`, and a
+  `notice_waived` flag. **Manager approval routes to HR and never starts notice on its own; only
+  HR approval does.** Remarks are mandatory on every rejection (and on manager approval). If the
+  employee has no manager, submission auto-routes to HR. HR can **waive notice** (new LWD +
+  reason), **edit notice/LWD** on any active request (reason mandatory, LWD recalculated), and
+  **relieve** — normally from `fnf_completed`, or earlier via an **authorised exception**
+  (reason recorded). Every transition writes an **immutable** `resignation_events` row
+  (prev→new status, actor, timestamp, remarks; UPDATE/DELETE blocked by triggers) and shows in
+  the employee's history.
+- **Clearance.** Starting clearance seeds department tasks (Finance, IT, Admin, HR + the
+  employee's own department) in `resignation_clearance_tasks`; overall clearance status is
+  **derived** from the tasks. Clearance owners (Finance → `finance*`, IT → `it_admin`) see and
+  update **only their department's tasks** (status/remarks/completion/due) and never the
+  resignation reason or approval remarks; HR sees all.
+- **Roles.** Employee: submit/view own/withdraw. Reporting manager (or delegate): approve/reject
+  direct reports with remarks. HR/Admin (`employee.manage`): review, waiver, LWD edits, clearance,
+  F&F, relieve, exceptions, withdrawal decisions. Finance/IT: their clearance tasks only.
+- **Dashboards.** Employee progress tracker (stage chips + dates + remaining days + clearance +
+  history) on **My profile**. HR **Lifecycle** dashboard: filters (status, department, location,
+  search, upcoming-LWD 7/15/30, pending, waivers), **CSV export**, and a per-request detail panel
+  with every workflow action. Upcoming LWDs also surface as dashboard alerts; pending approvals /
+  clearance tasks surface in the action centre.
 - **Full & Final — estimate, review-only.** `GET …/fnf` runs the pure engine over the
   employee's current salary, tenure and leave balance to produce a settlement **estimate**:
   earned salary to LWD (pro-rated on the payroll divisor), **leave encashment** (configured
