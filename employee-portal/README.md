@@ -183,6 +183,9 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/lifecycle/resignations/:id/withdraw-decide` | employee.manage | `{decision}` — approve/reject a post-HR withdrawal request |
 | GET | `/api/lifecycle/clearance` | Finance/IT (own dept) / HR (all) | clearance tasks only; no reason/approval remarks |
 | POST | `/api/admin/lifecycle/clearance/:taskId` | dept owner / HR | `{status,remarks,completionDate?,dueDate?}` — recomputes overall clearance |
+| GET | `/api/admin/lifecycle/legacy-dates` | employee.manage / audit.read | **read-only** list of resignations dated today/future (for review; never modified) |
+| GET | `/api/admin/lifecycle/reminders` | employee.manage | reminder feed (last 14 days) produced by the daily cron |
+| POST | `/api/admin/lifecycle/run-reminders` | employee.manage | run the reminder job on demand (same body as the cron) |
 | GET | `/api/admin/lifecycle/employees/:id/fnf` | payroll.read_all | Full & Final **estimate** (review-only; `?recover=0` drops notice recovery) |
 | GET·POST | `/api/lifecycle/employees/:id/checklist?kind=` | GET own/read_all; POST (init) employee.manage | onboarding/offboarding checklist (seed + read) |
 | POST | `/api/admin/lifecycle/checklist/:itemId` | employee.manage | tick a checklist item `{status: pending\|done\|na, note?}` |
@@ -508,6 +511,15 @@ intervals, clearance departments, clearance auto-days) — nothing is hardcoded.
   search, upcoming-LWD 7/15/30, pending, waivers), **CSV export**, and a per-request detail panel
   with every workflow action. Upcoming LWDs also surface as dashboard alerts; pending approvals /
   clearance tasks surface in the action centre.
+- **Reminder cron (migration `0025`).** A daily Cloudflare cron (`triggers.crons` in
+  `wrangler.jsonc`, 09:00 IST) runs `scheduled()` → `runResignationReminders`, writing idempotent
+  rows to `resignation_reminders`: approval reminders after `resign_remind_approval_days` (2),
+  escalation after `resign_escalate_days` (5), and LWD reminders at `resign_lwd_reminders`
+  (15/7/3/1). HR sees them on the Lifecycle **Reminders** card (with a **Run now** button) and an
+  action-centre count. Delivery is in-app (no email/push channel is configured yet).
+- **Date rule is locked** in `docs/resignation-date-rule.md` (default yesterday; yesterday-or-earlier
+  only; today/future blocked; IST, date-only; enforced at UI + submit + server). **Notice default is
+  60** calendar days — migration `0025` bumped the old seeded 30 to 60 and new employees default to 60.
 - **Full & Final — estimate, review-only.** `GET …/fnf` runs the pure engine over the
   employee's current salary, tenure and leave balance to produce a settlement **estimate**:
   earned salary to LWD (pro-rated on the payroll divisor), **leave encashment** (configured

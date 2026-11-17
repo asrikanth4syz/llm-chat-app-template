@@ -624,7 +624,7 @@ async function handleEmployeeCreate(actor: Actor, env: Env, request: Request): P
     _s(b.employeeCode), first || null, last || null, _s(b.dob), _s(b.gender), _s(b.department), _s(b.employmentType), String(b.employmentStatus || "active"),
     _s(b.phone), _s(b.personalEmail), _s(b.address), _s(b.emergencyContact), _s(b.dateOfJoining), _s(b.dateOfExit),
     _s(b.probationStart), _s(b.probationEnd), _s(b.confirmedOn), _s(b.contractStart), _s(b.contractEnd), _s(b.exitReason), _s(b.exitStatus),
-    _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : null,
+    _s(b.emergencyContact2), b.noticePeriodDays != null && b.noticePeriodDays !== "" ? Math.max(0, Math.round(Number(b.noticePeriodDays))) : 60,
     _s(b.bankPayeeName), _ifsc(b.bankIfsc), _acctType(b.bankAccountType), _s(b.bankName), proof || null, b.bankVerified ? 1 : 0,
     panE, bankE, aadE, b.ctc != null && b.ctc !== "" ? Number(b.ctc) : null).run();
   await audit(env, actor.userId, "EMPLOYEE_CREATE", "employee", id, `${name} ${_s(b.employeeCode) ?? ""}`);
@@ -1996,6 +1996,58 @@ async function handleChecklistUpdate(actor: Actor, env: Env, itemId: string, req
   return json({ ok: true, status });
 }
 
+// Read-only diagnostic: resignations whose date is today or in the future (IST). Lists them for
+// review per the date rule; NEVER modifies any record.
+async function handleLegacyDates(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage") && !hasPermission(actor.role, "audit.read")) return json({ error: "forbidden" }, 403);
+  const today = istTodayISO();
+  const rows = (await env.DB.prepare(
+    "SELECT r.id, r.employee_id, e.name AS employee_name, r.resignation_date, r.status, r.created_at FROM resignations r LEFT JOIN employees e ON e.id=r.employee_id WHERE r.resignation_date >= ? ORDER BY r.resignation_date"
+  ).bind(today).all()).results;
+  return json({ today, count: rows.length, resignations: rows });
+}
+
+// HR reminders feed (last 14 days), populated by the daily cron.
+async function handleRemindersList(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const rows = (await env.DB.prepare(
+    "SELECT m.id, m.resignation_id, m.employee_id, e.name AS employee_name, m.kind, m.message, m.for_date, m.created_at FROM resignation_reminders m LEFT JOIN employees e ON e.id=m.employee_id WHERE m.for_date >= ? ORDER BY m.created_at DESC LIMIT 200"
+  ).bind(addDaysISO(istTodayISO(), -14)).all()).results;
+  return json({ reminders: rows });
+}
+
+// The reminder cron body: compute due reminders and upsert them (idempotent per IST day).
+// Called by the scheduled() handler, and by an authorised manual trigger for ops/testing.
+async function runResignationReminders(env: Env): Promise<number> {
+  const today = istTodayISO();
+  const remindDays = Number(await cfg(env, "resign_remind_approval_days", "2")) || 2;
+  const escalateDays = Number(await cfg(env, "resign_escalate_days", "5")) || 5;
+  const lwdOffsets = (await cfg(env, "resign_lwd_reminders", "15,7,3,1")).split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
+  const stmts: D1PreparedStatement[] = [];
+  const add = (rid: string, empId: string, kind: string, msg: string) => stmts.push(
+    env.DB.prepare("INSERT OR IGNORE INTO resignation_reminders (id, resignation_id, employee_id, kind, message, for_date) VALUES (?,?,?,?,?,?)")
+      .bind("rmd_" + uid().replace(/-/g, "").slice(0, 12), rid, empId, kind, msg, today));
+  const pend = (await env.DB.prepare("SELECT id, employee_id, status, created_at FROM resignations WHERE status IN ('pending_manager','pending_hr')").all<{ id: string; employee_id: string; status: string; created_at: string }>()).results;
+  for (const r of pend) {
+    const ageDays = Math.floor((Date.parse(today) - Date.parse(String(r.created_at).slice(0, 10))) / 86400000);
+    if (ageDays >= escalateDays) add(r.id, r.employee_id, "escalation", `Approval overdue ${ageDays}d — escalate (${r.status})`);
+    else if (ageDays >= remindDays) add(r.id, r.employee_id, r.status === "pending_manager" ? "manager_approval" : "hr_approval", `Approval pending ${ageDays}d (${r.status})`);
+  }
+  const active = (await env.DB.prepare("SELECT id, employee_id, accepted_lwd FROM resignations WHERE accepted_lwd IS NOT NULL AND status IN ('notice_period','clearance_pending','clearance_in_progress','clearance_completed','fnf_pending','fnf_completed')").all<{ id: string; employee_id: string; accepted_lwd: string }>()).results;
+  for (const r of active) {
+    const daysLeft = Math.round((Date.parse(r.accepted_lwd) - Date.parse(today)) / 86400000);
+    if (lwdOffsets.includes(daysLeft)) add(r.id, r.employee_id, "lwd", `Last working day in ${daysLeft} day(s): ${r.accepted_lwd}`);
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return stmts.length;
+}
+async function handleRunReminders(actor: Actor, env: Env): Promise<Response> {
+  if (!hasPermission(actor.role, "employee.manage")) return json({ error: "forbidden" }, 403);
+  const n = await runResignationReminders(env);
+  await audit(env, actor.userId, "RESIGNATION_REMINDERS_RUN", "payroll", null, `${n} reminders`);
+  return json({ ok: true, generated: n });
+}
+
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
 function isApprover(actor: Actor): boolean {
   return hasPermission(actor.role, "leave.approve_team") || hasPermission(actor.role, "leave.approve_all")
@@ -2378,6 +2430,7 @@ async function handleNotifications(actor: Actor, env: Env): Promise<Response> {
   }
   if (actor.employeeId) rp += await cnt("SELECT COUNT(*) AS n FROM resignations r JOIN employees e ON e.id=r.employee_id WHERE r.status='pending_manager' AND e.manager_id=?", [actor.employeeId]);
   if (rp) items.push({ kind: "resignations", view: "lifecycle", count: rp });
+  if (hasPermission(actor.role, "employee.manage")) { const rm = await cnt("SELECT COUNT(*) AS n FROM resignation_reminders WHERE for_date = ?", [istTodayISO()]); if (rm) items.push({ kind: "reminders", view: "lifecycle", count: rm }); }
   // Clearance tasks assigned to the actor's department(s).
   const cdepts = clearanceDeptsForRole(actor.role);
   if (cdepts === "ALL" || cdepts.length) {
@@ -2535,6 +2588,9 @@ export default {
       if (rwdd && method === "POST") return await handleWithdrawDecide(actor, env, decodeURIComponent(rwdd[1]), request);
       const rctu = path.match(/^\/api\/admin\/lifecycle\/clearance\/([^/]+)$/);
       if (rctu && method === "POST") return await handleClearanceUpdate(actor, env, decodeURIComponent(rctu[1]), request);
+      if (path === "/api/admin/lifecycle/legacy-dates" && method === "GET") return await handleLegacyDates(actor, env);
+      if (path === "/api/admin/lifecycle/reminders" && method === "GET") return await handleRemindersList(actor, env);
+      if (path === "/api/admin/lifecycle/run-reminders" && method === "POST") return await handleRunReminders(actor, env);
       const fnf = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/fnf$/);
       if (fnf && method === "GET") return await handleFnF(actor, env, decodeURIComponent(fnf[1]), url);
       const ckinit = path.match(/^\/api\/admin\/lifecycle\/employees\/([^/]+)\/checklist$/);
@@ -2679,5 +2735,9 @@ export default {
     } catch (e) {
       return json({ error: "internal error", detail: (e as Error).message }, 500);
     }
+  },
+  // Daily reminder cron (see wrangler.jsonc triggers.crons): compute due approval/LWD reminders.
+  async scheduled(_event: { scheduledTime: number; cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runResignationReminders(env).catch(() => {}));
   },
 };

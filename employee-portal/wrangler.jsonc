@@ -15,7 +15,9 @@
       "database_id": "7aad493c-17bc-48b2-b86c-a3dd7f604512",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  // Daily reminder cron (09:00 IST = 03:30 UTC): resignation approval/LWD reminders.
+  "triggers": { "crons": ["30 3 * * *"] }
   // Secrets (not vars) — set with `wrangler secret put <NAME>`:
   //   JWT_SECRET     — signs session JWTs (separate realm from SmartPantry).
   //   FIELD_ENC_KEY  — NFR-03 AES-GCM key (base64 of 32 bytes) for bank/PAN/Aadhaar.

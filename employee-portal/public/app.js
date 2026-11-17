@@ -441,6 +441,9 @@ Object.assign(DICT.en, {
   requestWithdraw: "Request withdrawal", withdrawPending: "Withdrawal request pending HR decision.",
   language: "Language", account: "Account", dateYestOrEarlier: "Resignation date must be yesterday or an earlier date.",
   m_dashboard: "Home", m_attendance: "Attendance", m_leave: "Leave", m_approvals: "Requests", m_profile: "Profile", moreNav: "More", close: "Close", navigation: "Navigation",
+  reminders: "Reminders", reminders_help: "Approval and last-working-day reminders generated daily by the scheduled job. Run on demand with the button.", runRemindersNow: "Run now", remindersGenerated: "{n} reminder(s) generated.", noReminders: "No reminders in the last 14 days.",
+  dataCheck: "Data check", legacyNote: "{n} resignation(s) with a today/future date (listed for review, not modified):",
+  rem_manager_approval: "Manager approval", rem_hr_approval: "HR approval", rem_escalation: "Escalation", rem_lwd: "Last working day", notif_reminders: "Resignation reminders",
 });
 Object.assign(DICT.kn, {
   rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
@@ -461,6 +464,9 @@ Object.assign(DICT.kn, {
   requestWithdraw: "ಹಿಂಪಡೆ ಕೋರಿ", withdrawPending: "ಹಿಂಪಡೆ ಕೋರಿಕೆ HR ನಿರ್ಧಾರ ಬಾಕಿ.",
   language: "ಭಾಷೆ", account: "ಖಾತೆ", dateYestOrEarlier: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ನಿನ್ನೆ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹಿಂದಿನ ದಿನಾಂಕ ಆಗಿರಬೇಕು.",
   m_dashboard: "ಮುಖಪುಟ", m_attendance: "ಹಾಜರಾತಿ", m_leave: "ರಜೆ", m_approvals: "ವಿನಂತಿಗಳು", m_profile: "ಪ್ರೊಫೈಲ್", moreNav: "ಇನ್ನಷ್ಟು", close: "ಮುಚ್ಚಿ", navigation: "ನ್ಯಾವಿಗೇಶನ್",
+  reminders: "ಜ್ಞಾಪನೆಗಳು", reminders_help: "ಅನುಮೋದನೆ ಮತ್ತು ಕೊನೆಯ ಕೆಲಸದ ದಿನದ ಜ್ಞಾಪನೆಗಳು ಪ್ರತಿದಿನ ನಿಗದಿತ ಕಾರ್ಯದಿಂದ ರಚಿಸಲಾಗುತ್ತದೆ. ಬಟನ್‌ನಿಂದ ಈಗಲೇ ಚಲಾಯಿಸಿ.", runRemindersNow: "ಈಗ ಚಲಾಯಿಸಿ", remindersGenerated: "{n} ಜ್ಞಾಪನೆ(ಗಳು) ರಚಿಸಲಾಗಿದೆ.", noReminders: "ಕಳೆದ 14 ದಿನಗಳಲ್ಲಿ ಜ್ಞಾಪನೆಗಳಿಲ್ಲ.",
+  dataCheck: "ಡೇಟಾ ಪರಿಶೀಲನೆ", legacyNote: "ಇಂದು/ಭವಿಷ್ಯದ ದಿನಾಂಕದ {n} ರಾಜೀನಾಮೆ(ಗಳು) (ಪರಿಶೀಲನೆಗಾಗಿ ಪಟ್ಟಿ, ಬದಲಾಯಿಸಿಲ್ಲ):",
+  rem_manager_approval: "ಮೇಲಧಿಕಾರಿ ಅನುಮೋದನೆ", rem_hr_approval: "HR ಅನುಮೋದನೆ", rem_escalation: "ಉಲ್ಬಣ", rem_lwd: "ಕೊನೆಯ ಕೆಲಸದ ದಿನ", notif_reminders: "ರಾಜೀನಾಮೆ ಜ್ಞಾಪನೆಗಳು",
 });
 Object.assign(DICT.hi, {
   rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
@@ -481,6 +487,9 @@ Object.assign(DICT.hi, {
   requestWithdraw: "वापसी का अनुरोध करें", withdrawPending: "वापसी अनुरोध HR निर्णय हेतु लंबित।",
   language: "भाषा", account: "खाता", dateYestOrEarlier: "इस्तीफ़ा तिथि कल या उससे पहले की होनी चाहिए।",
   m_dashboard: "होम", m_attendance: "उपस्थिति", m_leave: "छुट्टी", m_approvals: "अनुरोध", m_profile: "प्रोफ़ाइल", moreNav: "और", close: "बंद करें", navigation: "नेविगेशन",
+  reminders: "अनुस्मारक", reminders_help: "अनुमोदन और अंतिम कार्यदिवस अनुस्मारक प्रतिदिन शेड्यूल्ड जॉब द्वारा बनाए जाते हैं। बटन से तुरंत चलाएँ।", runRemindersNow: "अभी चलाएँ", remindersGenerated: "{n} अनुस्मारक बनाए गए।", noReminders: "पिछले 14 दिनों में कोई अनुस्मारक नहीं।",
+  dataCheck: "डेटा जाँच", legacyNote: "आज/भविष्य की तिथि वाले {n} इस्तीफ़े (समीक्षा हेतु सूचीबद्ध, बदले नहीं गए):",
+  rem_manager_approval: "प्रबंधक अनुमोदन", rem_hr_approval: "HR अनुमोदन", rem_escalation: "एस्केलेशन", rem_lwd: "अंतिम कार्यदिवस", notif_reminders: "इस्तीफ़ा अनुस्मारक",
 });
 
 // FR-04 Approvals + inline-help strings.
@@ -2763,11 +2772,40 @@ async function loadLifecycleView() {
   body.appendChild(el("div", { class: "actions" }, [el("div", { class: "grow" }, [h2help(t("navLifecycle"), t("lifecycle_help"))])]));
   if (isClearanceOwner() && !canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
   if (canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
+  if (canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_reminders" }, [el("div", { class: "muted", text: "…" })])); loadRemindersCard(); }
   body.appendChild(el("div", { class: "card", id: "lc_filters" }));
   body.appendChild(el("div", { class: "card", id: "lc_list" }, [el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { id: "lc_detail" }));
   if (canManageEmployees()) renderLcFilters();
   loadResignList();
+}
+async function loadRemindersCard() {
+  const c = document.getElementById("lc_reminders"); if (!c) return;
+  try {
+    const { reminders } = await api("/api/admin/lifecycle/reminders");
+    clear(c);
+    c.appendChild(el("div", { class: "actions" }, [
+      el("div", { class: "grow" }, [h2help(t("reminders"), t("reminders_help"))]),
+      el("button", { class: "sm", text: t("runRemindersNow"), onclick: async () => { try { const r = await api("/api/admin/lifecycle/run-reminders", { method: "POST" }); flash("ok", t("remindersGenerated").replace("{n}", r.generated)); loadRemindersCard(); } catch (ex) { flash("err", ex.message); } } }),
+      el("button", { class: "sm", text: t("dataCheck"), onclick: () => loadLegacyDates() }),
+    ]));
+    if (!reminders.length) { c.appendChild(el("div", { class: "muted", text: t("noReminders") })); }
+    else for (const m of reminders.slice(0, 50)) c.appendChild(el("div", { class: "row" }, [
+      el("div", { class: "k" }, [el("div", { text: m.employee_name || m.employee_id }), el("div", { class: "muted", style: "font-size:11px", text: fmtDate(m.for_date) })]),
+      el("div", { class: "v" }, [el("span", { class: "pill " + (m.kind === "escalation" ? "rejected" : "pending"), style: "margin-right:6px", text: t("rem_" + m.kind) || m.kind }), el("span", { style: "font-size:13px", text: m.message })]),
+    ]));
+    c.appendChild(el("div", { id: "lc_legacy" }));
+  } catch (ex) { clear(c); c.appendChild(el("div", { class: "msg err", text: ex.message })); }
+}
+async function loadLegacyDates() {
+  const c = document.getElementById("lc_legacy"); if (!c) return;
+  clear(c); c.appendChild(el("div", { class: "muted", text: "…" }));
+  try {
+    const d = await api("/api/admin/lifecycle/legacy-dates");
+    clear(c);
+    c.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-top:8px", text: t("legacyNote").replace("{n}", d.count) }));
+    for (const r of d.resignations) c.appendChild(el("div", { class: "row" }, [el("div", { class: "k", text: r.employee_name || r.employee_id }), el("div", { class: "v", text: `${fmtDate(r.resignation_date)} · ${rStatusText(r.status)}` })]));
+  } catch (ex) { clear(c); c.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 function renderLcFilters() {
   const c = document.getElementById("lc_filters"); if (!c) return; clear(c);
