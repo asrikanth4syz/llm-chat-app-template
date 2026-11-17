@@ -439,6 +439,7 @@ Object.assign(DICT.en, {
   markRelieved: "Mark relieved", relieveConfirm: "Mark this employee relieved?", relieveException: "Relieve (exception)", exceptionReasonPrompt: "Authorised exception — reason:",
   editTerms: "Edit notice/LWD", noticeDaysPrompt: "Notice period (days):", approveWithdraw: "Approve withdrawal", rejectWithdraw: "Reject withdrawal",
   requestWithdraw: "Request withdrawal", withdrawPending: "Withdrawal request pending HR decision.",
+  language: "Language", account: "Account", dateNotPast: "Resignation date cannot be before today — pick today or a later date.",
 });
 Object.assign(DICT.kn, {
   rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
@@ -457,6 +458,7 @@ Object.assign(DICT.kn, {
   markRelieved: "ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸಿ", relieveConfirm: "ಈ ಉದ್ಯೋಗಿಯನ್ನು ಬಿಡುಗಡೆ ಎಂದು ಗುರುತಿಸುವುದೇ?", relieveException: "ಬಿಡುಗಡೆ (ವಿನಾಯಿತಿ)", exceptionReasonPrompt: "ಅಧಿಕೃತ ವಿನಾಯಿತಿ — ಕಾರಣ:",
   editTerms: "ನೋಟಿಸ್/LWD ಸಂಪಾದಿಸಿ", noticeDaysPrompt: "ನೋಟಿಸ್ ಅವಧಿ (ದಿನಗಳು):", approveWithdraw: "ಹಿಂಪಡೆ ಅನುಮೋದಿಸಿ", rejectWithdraw: "ಹಿಂಪಡೆ ತಿರಸ್ಕರಿಸಿ",
   requestWithdraw: "ಹಿಂಪಡೆ ಕೋರಿ", withdrawPending: "ಹಿಂಪಡೆ ಕೋರಿಕೆ HR ನಿರ್ಧಾರ ಬಾಕಿ.",
+  language: "ಭಾಷೆ", account: "ಖಾತೆ", dateNotPast: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿಗಿಂತ ಹಿಂದಿನದಾಗಿರಬಾರದು — ಇಂದು ಅಥವಾ ನಂತರದ ದಿನಾಂಕ ಆರಿಸಿ.",
 });
 Object.assign(DICT.hi, {
   rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
@@ -475,6 +477,7 @@ Object.assign(DICT.hi, {
   markRelieved: "कार्यमुक्त करें", relieveConfirm: "इस कर्मचारी को कार्यमुक्त करें?", relieveException: "कार्यमुक्त (अपवाद)", exceptionReasonPrompt: "अधिकृत अपवाद — कारण:",
   editTerms: "नोटिस/LWD संपादित करें", noticeDaysPrompt: "नोटिस अवधि (दिन):", approveWithdraw: "वापसी स्वीकारें", rejectWithdraw: "वापसी अस्वीकारें",
   requestWithdraw: "वापसी का अनुरोध करें", withdrawPending: "वापसी अनुरोध HR निर्णय हेतु लंबित।",
+  language: "भाषा", account: "खाता", dateNotPast: "इस्तीफ़ा तिथि आज से पहले नहीं हो सकती — आज या बाद की तिथि चुनें।",
 });
 
 // FR-04 Approvals + inline-help strings.
@@ -819,8 +822,22 @@ function initials(s) { return (s || "?").trim().split(/\s+/).map((w) => w[0] || 
 
 function avatarNode(emp) { return emp && emp.photo ? el("img", { class: "avatar", src: emp.photo, alt: "" }) : el("div", { class: "avatar", text: initials((emp && emp.name) || state.role) }); }
 function avatarBig(emp) { return emp && emp.photo ? el("img", { class: "avatar avatar-lg", src: emp.photo, alt: "" }) : el("div", { class: "avatar avatar-lg", text: initials((emp && emp.name) || state.role) }); }
-function userChip() { return [el("span", { text: (state.emp && state.emp.name) || state.role || "" }), avatarNode(state.emp)]; }
-function updateChip() { const c = document.getElementById("userchip"); if (c) { clear(c); for (const n of userChip()) c.appendChild(n); } }
+function userChip() { return [el("span", { class: "uc-name", text: (state.emp && state.emp.name) || state.role || "" }), avatarNode(state.emp)]; }
+function updateChip() { const c = document.getElementById("userchip"); if (c) { clear(c); for (const n of userChip()) c.appendChild(n); } const m = document.getElementById("usermenu"); if (m) { clear(m); for (const n of userMenu()) m.appendChild(n); } }
+// Top-right account menu: photo + name/role, language selector, logout. Works on every width
+// (the sidebar footer used to hold language/logout but is hidden on mobile).
+function userMenu() {
+  const head = el("div", { class: "usermenu-head" }, [avatarBig(state.emp), el("div", { style: "min-width:0" }, [el("div", { style: "font-weight:600;word-break:break-word", text: (state.emp && state.emp.name) || state.role || "" }), el("div", { class: "muted", style: "font-size:12px", text: t("role_" + state.role) || state.role || "" })])]);
+  const langRow = el("div", { class: "usermenu-row" }, [el("span", { class: "muted", style: "font-size:13px", text: t("language") }), langSelect()]);
+  const logout = el("button", { class: "sm", style: "width:100%;margin-top:10px", text: t("logout"), onclick: doLogout });
+  return [head, langRow, logout];
+}
+function toggleUserMenu() {
+  const m = document.getElementById("usermenu"); if (!m) return;
+  const open = m.style.display === "block";
+  m.style.display = open ? "none" : "block";
+  const p = document.getElementById("notifpanel"); if (p) p.style.display = "none";
+}
 function greeting() { const h = new Date().getHours(); return h < 12 ? t("greetMorning") : h < 17 ? t("greetAfternoon") : t("greetEvening"); }
 
 function resizeImage(file, max) {
@@ -877,8 +894,18 @@ function sidebar() {
     el("div", { class: "brand" }, [el("div", { class: "logo", text: "4S" }), el("div", {}, [document.createTextNode("4SYZ"), el("small", { text: t("appTitle") })])]),
     ...items,
     el("div", { class: "spacer" }),
-    el("div", { class: "side-foot" }, [langSelect(), el("button", { class: "sm", text: t("logout"), onclick: doLogout })]),
   ]);
+}
+// Close the account / notification popovers on an outside click (registered once).
+function ensureMenuAutoClose() {
+  if (window.__epMenuClose) return;
+  window.__epMenuClose = true;
+  document.addEventListener("click", (e) => {
+    const um = document.getElementById("usermenu"), ub = document.getElementById("userchip");
+    if (um && um.style.display === "block" && !um.contains(e.target) && ub && !ub.contains(e.target)) um.style.display = "none";
+    const np = document.getElementById("notifpanel"), nb = document.getElementById("notifbtn");
+    if (np && np.style.display === "block" && !np.contains(e.target) && nb && !nb.contains(e.target)) np.style.display = "none";
+  });
 }
 
 async function renderApp() {
@@ -889,13 +916,17 @@ async function renderApp() {
     el("div", { class: "topbar" }, [
       el("h1", { id: "pagetitle", text: "" }),
       el("button", { class: "notifbtn", id: "notifbtn", title: t("notifications"), "aria-label": t("notifications"), onclick: toggleNotif }, [icon("bell"), el("span", { class: "notif-badge", id: "notifbadge", style: "display:none" })]),
-      el("div", { class: "userchip", id: "userchip" }, userChip()),
+      el("div", { class: "usermenu-wrap" }, [
+        el("button", { class: "userchip", id: "userchip", "aria-label": t("account"), "aria-haspopup": "menu", onclick: toggleUserMenu }, userChip()),
+        el("div", { class: "usermenu", id: "usermenu", role: "menu", style: "display:none" }, userMenu()),
+      ]),
       el("div", { class: "notifpanel", id: "notifpanel", style: "display:none" }),
     ]),
     el("div", { id: "flash" }),
     content,
   ]);
   app().appendChild(el("div", { class: "shell" }, [sidebar(), main]));
+  ensureMenuAutoClose();
   // Restore the last view across refreshes, but only if the role may still see it.
   const want = state.view || "dashboard";
   const allowed = VIEWS.find((x) => x.id === want && (!x.when || x.when()));
@@ -2899,9 +2930,9 @@ async function loadResignCard() {
       card.appendChild(hist);
       return;
     }
-    // tender form
-    const yesterday = new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
-    const date = el("input", { type: "date", value: yesterday, max: yesterday });
+    // tender form — resignation date is today or later (never before submission day)
+    const today = istToday();
+    const date = el("input", { type: "date", value: today, min: today });
     const reasonSel = el("select", {});
     reasonSel.appendChild(el("option", { value: "", text: "—" }));
     for (const rc of RESIGN_REASONS) reasonSel.appendChild(el("option", { value: rc, text: t("rreason_" + rc) }));
@@ -2913,6 +2944,7 @@ async function loadResignCard() {
     const submit = el("button", { class: "primary sm", text: t("tenderResign") });
     submit.addEventListener("click", async () => {
       if (!reasonSel.value) { flash("err", t("reasonRequired")); return; }
+      if (date.value && date.value < today) { flash("err", t("dateNotPast")); return; }
       if (!confirm(t("tenderConfirm"))) return;
       submit.disabled = true;
       try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }

@@ -1605,10 +1605,10 @@ async function handleResignSubmit(actor: Actor, env: Env, request: Request): Pro
   if (!emp) return json({ error: "employee not found" }, 404);
   const reasonCode = _s(b.reasonCode);
   if (!reasonCode) return json({ error: "resignation reason is required" }, 400);
-  const yest = istTodayISO();
-  const resignationDate = _s(b.resignationDate) || new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+  const today = istTodayISO();
+  const resignationDate = _s(b.resignationDate) || today;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(resignationDate)) return json({ error: "valid resignation date (YYYY-MM-DD) required" }, 400);
-  if (resignationDate >= yest) return json({ error: "resignation date must be yesterday or earlier (today and future dates are not allowed)" }, 400);
+  if (resignationDate < today) return json({ error: "resignation date cannot be before today (it may be today or a future date)" }, 400);
   const active = await env.DB.prepare("SELECT id FROM resignations WHERE employee_id = ? AND status NOT IN ('rejected','withdrawn','relieved')").bind(empId).first();
   if (active) return json({ error: "an open resignation already exists for this employee" }, 409);
   const defNotice = Number(await cfg(env, "resign_notice_default_days", "60")) || 60;
